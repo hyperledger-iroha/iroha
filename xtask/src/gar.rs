@@ -2,16 +2,16 @@
 //!
 //! Collects NORITO/JSON receipts and optional ACK records, then emits a single
 //! JSON summary (and optional Markdown) for governance/compliance exports.
+use eyre::{Result, WrapErr, eyre};
+use hex::{decode_to_slice, encode};
+use iroha_data_model::sorafs::gar::{GarEnforcementActionV1, GarEnforcementReceiptV1};
+use norito::json::{self, Map, Number, Value};
 use std::{
     collections::BTreeMap,
     fmt::Write as FmtWrite,
     fs,
     path::{Path, PathBuf},
 };
-use eyre::{Result, WrapErr, eyre};
-use hex::{decode_to_slice, encode};
-use iroha_data_model::sorafs::gar::{GarEnforcementActionV1, GarEnforcementReceiptV1};
-use norito::json::{self, Map, Number, Value};
 use walkdir::WalkDir;
 /// Options controlling receipt export.
 #[derive(Debug, Clone)]
@@ -449,10 +449,10 @@ impl AckRecord {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::account::AccountId;
     use norito::json;
     use tempfile::TempDir;
-    use super::*;
     #[test]
     fn exports_receipts_and_acks() -> Result<()> {
         let temp = TempDir::new()?;

@@ -1,20 +1,5 @@
 //! High-level orchestrator facade wiring SoraFS scoreboards to the async
 //! multi-source fetch loop implemented in `sorafs_car`.
-use std::{
-    cmp::Ordering as CmpOrdering,
-    collections::{HashMap, VecDeque},
-    future::Future,
-    io::Cursor,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    num::{NonZeroU32, NonZeroUsize},
-    pin::Pin,
-    str::FromStr,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering as AtomicOrdering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use futures::future::join_all;
 use iroha_core::prelude::Hash;
 use iroha_data_model::{
@@ -48,6 +33,21 @@ use sorafs_car::{
 use sorafs_manifest::{
     GovernanceProofs,
     validation::{PinPolicyConstraints, validate_manifest},
+};
+use std::{
+    cmp::Ordering as CmpOrdering,
+    collections::{HashMap, VecDeque},
+    future::Future,
+    io::Cursor,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    num::{NonZeroU32, NonZeroUsize},
+    pin::Pin,
+    str::FromStr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 use tokio::{
@@ -299,6 +299,10 @@ async fn resolve_and_validate_host(
         })?;
     validate_resolved_addresses(host, addresses, policy)
 }
+use crate::proxy::{
+    BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle, PROXY_MANIFEST_ID,
+    PROXY_PROTOCOL_LABEL, ProxyError, ProxyMode, spawn_local_quic_proxy,
+};
 use compliance::{CompliancePolicy, ComplianceReason};
 use soranet::{
     CircuitEvent, CircuitId, CircuitInfo, CircuitManager, CircuitManagerConfig,
@@ -311,27 +315,8 @@ use taikai_cache::{
     TaikaiCacheHandle, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats, TaikaiPullRequest,
     TaikaiPullTicket, TaikaiQueueError,
 };
-use crate::proxy::{
-    BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle, PROXY_MANIFEST_ID,
-    PROXY_PROTOCOL_LABEL, ProxyError, ProxyMode, spawn_local_quic_proxy,
-};
 /// Convenient re-exports for downstream callers.
 pub mod prelude {
-    pub use blake3::Hash as Blake3Hash;
-    pub use sorafs_car::{
-        CarBuildPlan, CarChunk, ChunkStore, FilePlan, InMemoryPayload, PorProof,
-        gateway::{GatewayFetchConfig, GatewayProviderInput},
-        multi_fetch::{
-            CapabilityMismatch, ChunkObserver, ChunkResponse, FetchOptions, FetchOutcome,
-            FetchProvider, FetchRequest, ProviderMetadata, RangeCapability, StreamBudget,
-            TransportHint,
-        },
-        scoreboard::{
-            Eligibility, IneligibilityReason, ProviderTelemetry, Scoreboard, ScoreboardConfig,
-            ScoreboardEntry, TelemetrySnapshot,
-        },
-    };
-    pub use sorafs_chunker::ChunkProfile;
     pub use crate::{
         AnonymityPolicy, CircuitRefreshReport, FetchSession, GatewayCarVerification,
         GatewayOrchestratorError, ManifestVerificationContext, ManifestVerificationError,
@@ -374,6 +359,21 @@ pub mod prelude {
             RewardLedgerSnapshot,
         },
     };
+    pub use blake3::Hash as Blake3Hash;
+    pub use sorafs_car::{
+        CarBuildPlan, CarChunk, ChunkStore, FilePlan, InMemoryPayload, PorProof,
+        gateway::{GatewayFetchConfig, GatewayProviderInput},
+        multi_fetch::{
+            CapabilityMismatch, ChunkObserver, ChunkResponse, FetchOptions, FetchOutcome,
+            FetchProvider, FetchRequest, ProviderMetadata, RangeCapability, StreamBudget,
+            TransportHint,
+        },
+        scoreboard::{
+            Eligibility, IneligibilityReason, ProviderTelemetry, Scoreboard, ScoreboardConfig,
+            ScoreboardEntry, TelemetrySnapshot,
+        },
+    };
+    pub use sorafs_chunker::ChunkProfile;
 }
 /// Outcome captured after reconciling the circuit manager with the current SoraNet state.
 #[derive(Debug, Clone, PartialEq)]
@@ -987,9 +987,11 @@ impl Default for OrchestratorConfig {
 }
 /// Helper utilities for configuring the orchestrator via Norito JSON payloads.
 pub mod bindings {
-    use std::{collections::BTreeSet, convert::TryFrom, num::NonZeroU32, path::PathBuf, time::Duration};
-    use norito::json::{Map, Value};
     use super::*;
+    use norito::json::{Map, Value};
+    use std::{
+        collections::BTreeSet, convert::TryFrom, num::NonZeroU32, path::PathBuf, time::Duration,
+    };
     /// Errors that may occur while parsing [`OrchestratorConfig`] from JSON.
     #[derive(Debug, Error)]
     #[error("{0}")]
@@ -6057,22 +6059,6 @@ pub async fn fetch_via_gateway(
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeSet, HashMap},
-        convert::TryInto,
-        fmt,
-        fs::File,
-        io::{Read, Write},
-        net::{TcpListener, TcpStream},
-        num::{NonZeroU32, NonZeroUsize},
-        path::PathBuf,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering as AtomicOrdering},
-        },
-        thread,
-        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-    };
     use super::*;
     use crate::{
         bindings::{config_from_json, config_to_json},
@@ -6102,6 +6088,22 @@ mod tests {
     };
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
+    use std::{
+        collections::{BTreeSet, HashMap},
+        convert::TryInto,
+        fmt,
+        fs::File,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        num::{NonZeroU32, NonZeroUsize},
+        path::PathBuf,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        },
+        thread,
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    };
     use tokio::sync::Mutex as AsyncMutex;
     fn relay_id(byte: u8) -> [u8; 32] {
         [byte; 32]

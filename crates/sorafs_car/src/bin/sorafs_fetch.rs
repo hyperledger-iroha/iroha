@@ -65,6 +65,8 @@ const KNOWN_CAPABILITIES: &[CapabilityType; 5] = &[
     CapabilityType::SoraNetHybridPq,
     CapabilityType::PotrMlDsa,
 ];
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::{HashMap, HashSet},
     env,
@@ -77,8 +79,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
@@ -2868,12 +2868,7 @@ fn parse_bps(value: &Value, field: &'static str, idx: usize) -> Result<u16, Stri
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        env,
-        path::{Path, PathBuf},
-        sync::Arc,
-    };
+    use super::*;
     use assert_cmd::Command as AssertCommand;
     use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
     use norito::to_bytes;
@@ -2890,8 +2885,13 @@ mod tests {
         TransportHintV1, TransportProtocol, deal::XorQuantity, hybrid_envelope::HybridKemBundleV1,
         provider_advert::ProviderCapabilitySoranetPqV1,
     };
+    use std::{
+        collections::HashMap,
+        env,
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
     use tempfile::{NamedTempFile, TempDir, tempdir};
-    use super::*;
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");

@@ -69,7 +69,7 @@ const GALOIS_PROVIDER_READ_BYTES_V1: usize = GALOIS_TARGET_A_DERIVED_BYTES_V1;
 
 // This is a deliberately narrow live-payload ledger. It covers only this
 // module's limb, product, row, encoding, and typed-B replay buffers. It omits
-// borrowed proof bytes, owned membership evidence, response-MSM transients,
+// borrowed proof bytes and six membership views, response-MSM transients,
 // target-A sampler frames, allocator overhead, transaction metadata, and stack
 // frames. It is not a whole-verifier RSS claim or release certification.
 const GALOIS_ROW_ZERO_BASE_BYTES_V1: usize =
@@ -143,6 +143,10 @@ where
     verify_predecoded_direct_galois_semantic_candidate_v1(context, objects, proof, provider)
 }
 
+#[allow(
+    clippy::drop_non_drop,
+    reason = "the explicit membership-view drops are source-contract pinned"
+)]
 fn verify_predecoded_direct_galois_semantic_candidate_v1<P>(
     context: ZkAmsMkheDirectCeremonyContextV1,
     objects: DirectRelationPublicObjectsV1,
@@ -152,35 +156,37 @@ fn verify_predecoded_direct_galois_semantic_candidate_v1<P>(
 where
     P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
 {
+    let PredecodedDirectRelationProofV1 {
+        capability,
+        relation,
+        statement_digest,
+        transcript_context,
+        membership_frames,
+        responses,
+        blind_responses,
+        challenge_seed,
+    } = proof;
     validate_rns_live_payload_accounting()?;
-    if proof.relation != PersistentDirectRelationV1::Galois
-        || proof.statement_digest == [0; 32]
-        || proof.transcript_context.round_tag != PersistentDirectRelationV1::Galois as u8
+    if relation != PersistentDirectRelationV1::Galois
+        || statement_digest == [0; 32]
+        || transcript_context.round_tag != PersistentDirectRelationV1::Galois as u8
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let DirectRelationPublicObjectsV1::Galois { .. } = objects else {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     };
-    proof.capability.validate()?;
-    let challenges = provisional_challenges(proof.challenge_seed);
+    capability.validate()?;
+    let challenges = provisional_challenges(challenge_seed);
 
-    for evidence in &proof.bound_one_membership {
-        evidence
-            .verify()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-    }
-    for evidence in &proof.bound_two_membership {
-        evidence
-            .verify()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-    }
+    membership_frames.verify_replayable()?;
+    let membership_commitments = membership_frames.copied_commitments();
+    drop(membership_frames);
     let commitment_digests = reconstruct_commitment_first_messages(
-        proof.relation,
-        &proof.bound_one_membership,
-        &proof.bound_two_membership,
-        proof.responses,
-        proof.blind_responses,
+        relation,
+        &membership_commitments,
+        responses,
+        blind_responses,
         challenges,
     )?;
 
@@ -189,25 +195,29 @@ where
             DirectRelationRnsFirstMessageHasherV1::new(PersistentDirectRelationV1::Galois)
         });
     let mut target_a =
-        direct_galois_target_a_v1::DirectGaloisTargetAReplayV1::begin(context, &proof.capability)?;
+        direct_galois_target_a_v1::DirectGaloisTargetAReplayV1::begin(context, &capability)?;
     let mut public_b =
-        DirectGaloisBStatementReplayV1::begin(context, &proof.capability, objects, provider)?;
+        DirectGaloisBStatementReplayV1::begin(context, &capability, objects, provider)?;
     replay_galois_row_zero(
         context,
         provider,
         &mut target_a,
         &mut public_b,
-        proof.responses,
+        responses,
         challenges,
         &mut hashers,
     )?;
 
     // Both opaque completions stay live through the final challenge equality.
     let completed_replays = (target_a.finish()?, public_b.finish(provider)?);
-    reconstruct_forced_zero_rows(proof.responses, &mut hashers)?;
+    reconstruct_forced_zero_rows(responses, &mut hashers)?;
     let rns_digests = finish_rns_hashers(&mut hashers)?;
     let first_messages = DirectRelationFirstMessageDigestsV1::new(rns_digests, commitment_digests)?;
-    let reconstructed_challenges = proof.validate_reconstructed_challenge(first_messages)?;
+    let reconstructed_challenges = super::validate_reconstructed_challenge(
+        transcript_context,
+        challenge_seed,
+        first_messages,
+    )?;
     if reconstructed_challenges != challenges {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
@@ -234,28 +244,19 @@ fn provisional_challenges(challenge_seed: [u8; 32]) -> [u32; CHALLENGE_REPETITIO
     clippy::needless_range_loop,
     reason = "fixed protocol chunk indices are source-contract pinned"
 )]
-fn reconstruct_commitment_first_messages<BoundOne, BoundTwo>(
+fn reconstruct_commitment_first_messages(
     relation: PersistentDirectRelationV1,
-    bound_one: &[BoundOne; 2],
-    bound_two: &[BoundTwo; 4],
+    membership_commitments: &[[Point; CHUNKS_PER_WITNESS_V1]; WITNESS_COUNT_V1],
     responses: &[u8],
     blind_responses: &[u8],
     challenges: [u32; CHALLENGE_REPETITIONS_V1],
-) -> Result<[[u8; 32]; CHALLENGE_REPETITIONS_V1], ZkAmsMkheErrorV1>
-where
-    BoundOne: MembershipCommitmentsV1,
-    BoundTwo: MembershipCommitmentsV1,
-{
+) -> Result<[[u8; 32]; CHALLENGE_REPETITIONS_V1], ZkAmsMkheErrorV1> {
     let mut digests = [[0_u8; 32]; CHALLENGE_REPETITIONS_V1];
     for repetition in 0..CHALLENGE_REPETITIONS_V1 {
         let mut encoded = [0_u8; RECONSTRUCTED_COMMITMENT_BYTES_V1];
         let mut cursor: usize = 0;
         for slot in 0..WITNESS_COUNT_V1 {
-            let commitments = if slot < 2 {
-                bound_one[slot].commitments()
-            } else {
-                bound_two[slot - 2].commitments()
-            };
+            let commitments = &membership_commitments[slot];
             for chunk in 0..CHUNKS_PER_WITNESS_V1 {
                 let coefficient_start = chunk * super::super::super::WITNESS_CHUNK_COEFFICIENTS_V1;
                 let response_start = response_offset(repetition, slot, coefficient_start)
@@ -306,24 +307,6 @@ where
         digests[repetition] = commitment_first_message_digest(relation, &encoded)?;
     }
     Ok(digests)
-}
-
-trait MembershipCommitmentsV1 {
-    fn commitments(&self) -> [Point; CHUNKS_PER_WITNESS_V1];
-}
-
-impl<R> MembershipCommitmentsV1
-    for crate::vega::zk_ams::mkhe::exact_eight_chunk_membership::ExactEightChunkMembershipEvidenceV1<
-        R,
-    >
-where
-    R: crate::vega::zk_ams::mkhe::exact_eight_chunk_membership::ExactEightChunkMembershipRoleV1,
-{
-    fn commitments(&self) -> [Point; CHUNKS_PER_WITNESS_V1] {
-        crate::vega::zk_ams::mkhe::exact_eight_chunk_membership::ExactEightChunkMembershipEvidenceV1::<
-            R,
-        >::commitments(self)
-    }
 }
 
 fn decode_response_chunk(

@@ -422,20 +422,17 @@ fn post_seal_compaction_accounting_is_only_a_logical_lower_bound() {
     const ORIGINAL_WRAPPER: usize = 11_576;
     const PERSISTENT_SECRET: usize = 1_048_576;
     const PUBLIC_ERROR: usize = 1_048_576;
-    const DECODED_MEMBERSHIPS: usize = 71_568;
     const GENERATORS: usize = 12_584_544;
     const RNS_LEDGER: usize = 87_031_808;
     let saving = COMMON_A + RKG_ONE_ERRORS + PERSISTENT_NARROWING;
-    let candidate = PROOF + EPHEMERAL_U + ORIGINAL_WRAPPER;
-    let lower_bound = candidate
-        + PERSISTENT_SECRET
-        + PUBLIC_ERROR
-        + DECODED_MEMBERSHIPS
-        + GENERATORS
-        + RNS_LEDGER;
+    let compact_candidate = PROOF + EPHEMERAL_U + ORIGINAL_WRAPPER;
+    // The 48 borrowed membership-proof payloads remain inside `PROOF`; adding
+    // their 71_568 bytes separately would double-count retained proof bytes.
+    let lower_bound =
+        compact_candidate + PERSISTENT_SECRET + PUBLIC_ERROR + GENERATORS + RNS_LEDGER;
     assert_eq!(saving, 42_074_112);
-    assert_eq!(candidate, 26_308_918);
-    assert_eq!(lower_bound, 128_093_990);
+    assert_eq!(compact_candidate, 26_308_918);
+    assert_eq!(lower_bound, 128_022_422);
     let sealed = include_str!("../direct_rkg_one_sealed_candidate_v1.rs");
     for disclaimer in [
         "logical payload lower bounds",

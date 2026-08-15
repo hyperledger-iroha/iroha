@@ -1,9 +1,3 @@
-use std::{
-    error::Error,
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hex::encode_upper;
 use iroha_crypto::{
@@ -14,6 +8,12 @@ use iroha_crypto::{
 };
 use norito::json::{self, Value};
 use rand_core_06::OsRng;
+use std::{
+    error::Error,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 use zeroize::Zeroize;
 #[derive(Clone)]
 pub enum OutputTarget {

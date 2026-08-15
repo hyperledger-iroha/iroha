@@ -1,6 +1,6 @@
 //! Bounded HTTP helpers for integration tests.
-use std::time::Duration;
 use crate::timeouts::read_env_duration;
+use std::time::Duration;
 /// Environment override for default integration-test HTTP request timeout.
 pub const HTTP_REQUEST_TIMEOUT_ENV: &str = "IROHA_TEST_HTTP_REQUEST_TIMEOUT_MS";
 const HTTP_REQUEST_TIMEOUT_DEFAULT: Duration = Duration::from_secs(30);

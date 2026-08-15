@@ -1,8 +1,8 @@
 //! Regression tests for HashMap decode performance path.
 //! Ensures functional equivalence after optimizing allocations.
-use std::collections::{BTreeMap, HashMap, HashSet};
 use norito::{decode_from_bytes, to_bytes};
 use rand::{Rng, SeedableRng, rngs::StdRng};
+use std::collections::{BTreeMap, HashMap, HashSet};
 fn gen_map(n: usize) -> HashMap<String, u32> {
     let mut rng = StdRng::seed_from_u64(12345);
     let mut hm = HashMap::with_capacity(n);

@@ -1,9 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Bridge finality endpoints expose only Kura's exact Sumeragi-v2 artifact.
-use std::{
-    num::{NonZeroU64, NonZeroUsize},
-    sync::Arc,
-};
 use axum::{
     Router,
     body::{Body, Bytes, to_bytes},
@@ -38,6 +34,10 @@ use iroha_data_model::{
 };
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use norito::codec::Encode as _;
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+};
 use tower::ServiceExt as _;
 struct EndpointFixture {
     app: Router,

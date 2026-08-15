@@ -1,72 +1,10 @@
 //! Deterministic manifest for native first-release privacy engines.
 //!
-//! Governance does not get to turn arbitrary non-zero digests into executable
-//! consensus code. Every activatable protocol must have one compiled profile
-//! whose parameter, verifier, structurally derived statement-schema,
-//! engine-manifest, and limit
-//! bindings exactly match the proposed activation record. A protocol whose
-//! complete verifier is not compiled is rejected before it enters world state.
-use std::{collections::BTreeMap, sync::OnceLock};
-#[cfg(feature = "zk-stark")]
-use iroha_data_model::privacy::ZkAcePqAuthorizationStatementV1;
-use iroha_data_model::privacy::{
-    ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
-    AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
-    BOOTLE_LANTERN_APPLICATION_MODULUS_V1 as BOOTLE_LANTERN_MODEL_APPLICATION_MODULUS_V1,
-    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 as BOOTLE_LANTERN_MODEL_ATTRIBUTE_COUNT_V1,
-    BOOTLE_LANTERN_RING_DEGREE_V1 as BOOTLE_LANTERN_MODEL_RING_DEGREE_V1,
-    BootleLanternIssuerPolicyV1, FCMP_MAX_INPUTS_V1, FCMP_MAX_OUTPUTS_V1, FcmpActivationLimitsV1,
-    IVM_PRIVATE_NOTE_MAX_INPUTS_V1, IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
-    IrohaBootleLanternAnoncredStatementV1, IrohaIvmPrivateNoteStarkStatementV1,
-    IrohaJindoPolynomialCommitmentStatementV1, IrohaZkAmsStatementV1,
-    IrohaZkX509StarkP256StatementV1, IvmPrivateNoteActivationLimitsV1, JindoActivationLimitsV1,
-    MoneroFcmpPlusPlusStatementV1, ORCHARD_MAX_ACTIONS_V1 as ORCHARD_MODEL_MAX_ACTIONS_V1,
-    OrchardActivationLimitsV1, OrchardHalo2ActionsStatementV1, PQ_MASP_MAX_INPUTS_V1,
-    PQ_MASP_MAX_OUTPUTS_V1, PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
-    PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1, PRIVACY_FCMP_ENCRYPTED_OUTPUT_BYTES_V1,
-    PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1,
-    PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
-    PqMaspActivationLimitsV1, PqMaspStarkStatementV1, PrivacyAssuranceV1, PrivacyCapabilityRowV1,
-    PrivacyCapabilitySnapshotV1, PrivacyCapabilitySnapshotValidationErrorV1,
-    PrivacyCompiledProfileCatalogArchiveValidationStatusV1, PrivacyCompiledProfileCatalogRowV1,
-    PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1,
-    PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
-    PrivacyCompiledProfileUnavailableReasonV1, PrivacyCompiledStatementSchemaErrorV1,
-    PrivacyConsensusPolicyV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
-    PrivacyFcmpPoolBootstrapV1, PrivacyIvmPrivateNotePoolBootstrapV1,
-    PrivacyOrchardPoolBootstrapV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-    PrivacyPgcAccountBootstrapV1, PrivacyPqMaspPoolBootstrapV1, PrivacyProofSystemIdV1,
-    PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-    PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
-    TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1,
-    TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1, VEGA_ISSUER_GOVERNANCE_RECORD_VERSION_V1,
-    VEGA_ISSUER_RECORD_DIGEST_DOMAIN_V1, VEGA_ISSUER_RECORD_HASH_FRAME_DOMAIN_V1,
-    VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
-    VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,
-    VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
-    VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MAX_PRESENTATION_YEAR_V1,
-    VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
-    VEGA_MDL_MSO_PAYLOAD_BYTES_V1, VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1,
-    VERANGE_HARD_MAX_AGGREGATION_COUNT_V1, VeRangeActivationLimitsV1,
-    VeRangeTransparentRangeStatementV1, VegaExistingCredentialStatementV1,
-    ZK_AMS_MAX_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1,
-    ZK_AMS_RING_SIZES_V1 as ZK_AMS_MODEL_RING_SIZES_V1, ZkAmsActivationLimitsV1,
-    validate_privacy_compiled_profile_catalog_archive_v1,
-};
-use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
-#[cfg(test)]
-use iroha_zkp_halo2::vega::vega_mdl_verifier_digest_v1;
-use iroha_zkp_halo2::vega::{
-    MAX_VEGA_PROOF_BYTES_V1, MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
-    VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1, VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
-    VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1, ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1,
-    ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1, vega_mdl_canonical_relation_digest_v1,
-    vega_mdl_compiled_profile_digest_v1, zk_ams_admission_relation_dimensions_v1,
-    zk_ams_compiled_profile_digest_v1, zk_ams_mkhe_readiness_v1,
-    zk_ams_release_candidate_profile_digest_v1, zk_ams_t256_generator_digest_v1,
-};
-use sha2::{Digest, Sha256};
-use thiserror::Error;
+//! Governance does not get to turn arbitrary non-zero digests into executable consensus code. Every
+//! activatable protocol must have one compiled profile whose parameter, verifier, structurally
+//! derived statement-schema, engine-manifest, and limit bindings exactly match the proposed
+//! activation record. A protocol whose complete verifier is not compiled is rejected before it
+//! enters world state.
 #[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{
     ZK_ACE_AIR_RELATION_SCHEMA_V1, ZK_ACE_AUTHORIZATION_PROJECTION_V1,
@@ -233,6 +171,67 @@ use crate::privacy_engines::{
         stark::{ZK_X509_MAIN_PROOF_DESCRIPTOR_V1, ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1},
     },
 };
+#[cfg(feature = "zk-stark")]
+use iroha_data_model::privacy::ZkAcePqAuthorizationStatementV1;
+use iroha_data_model::privacy::{
+    ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
+    AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
+    BOOTLE_LANTERN_APPLICATION_MODULUS_V1 as BOOTLE_LANTERN_MODEL_APPLICATION_MODULUS_V1,
+    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 as BOOTLE_LANTERN_MODEL_ATTRIBUTE_COUNT_V1,
+    BOOTLE_LANTERN_RING_DEGREE_V1 as BOOTLE_LANTERN_MODEL_RING_DEGREE_V1,
+    BootleLanternIssuerPolicyV1, FCMP_MAX_INPUTS_V1, FCMP_MAX_OUTPUTS_V1, FcmpActivationLimitsV1,
+    IVM_PRIVATE_NOTE_MAX_INPUTS_V1, IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
+    IrohaBootleLanternAnoncredStatementV1, IrohaIvmPrivateNoteStarkStatementV1,
+    IrohaJindoPolynomialCommitmentStatementV1, IrohaZkAmsStatementV1,
+    IrohaZkX509StarkP256StatementV1, IvmPrivateNoteActivationLimitsV1, JindoActivationLimitsV1,
+    MoneroFcmpPlusPlusStatementV1, ORCHARD_MAX_ACTIONS_V1 as ORCHARD_MODEL_MAX_ACTIONS_V1,
+    OrchardActivationLimitsV1, OrchardHalo2ActionsStatementV1, PQ_MASP_MAX_INPUTS_V1,
+    PQ_MASP_MAX_OUTPUTS_V1, PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+    PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1, PRIVACY_FCMP_ENCRYPTED_OUTPUT_BYTES_V1,
+    PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1,
+    PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
+    PqMaspActivationLimitsV1, PqMaspStarkStatementV1, PrivacyAssuranceV1, PrivacyCapabilityRowV1,
+    PrivacyCapabilitySnapshotV1, PrivacyCapabilitySnapshotValidationErrorV1,
+    PrivacyCompiledProfileCatalogArchiveValidationStatusV1, PrivacyCompiledProfileCatalogRowV1,
+    PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1,
+    PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+    PrivacyCompiledProfileUnavailableReasonV1, PrivacyCompiledStatementSchemaErrorV1,
+    PrivacyConsensusPolicyV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
+    PrivacyFcmpPoolBootstrapV1, PrivacyIvmPrivateNotePoolBootstrapV1,
+    PrivacyOrchardPoolBootstrapV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+    PrivacyPgcAccountBootstrapV1, PrivacyPqMaspPoolBootstrapV1, PrivacyProofSystemIdV1,
+    PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+    PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
+    TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1,
+    TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1, VEGA_ISSUER_GOVERNANCE_RECORD_VERSION_V1,
+    VEGA_ISSUER_RECORD_DIGEST_DOMAIN_V1, VEGA_ISSUER_RECORD_HASH_FRAME_DOMAIN_V1,
+    VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
+    VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,
+    VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
+    VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MAX_PRESENTATION_YEAR_V1,
+    VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
+    VEGA_MDL_MSO_PAYLOAD_BYTES_V1, VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1,
+    VERANGE_HARD_MAX_AGGREGATION_COUNT_V1, VeRangeActivationLimitsV1,
+    VeRangeTransparentRangeStatementV1, VegaExistingCredentialStatementV1,
+    ZK_AMS_MAX_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1,
+    ZK_AMS_RING_SIZES_V1 as ZK_AMS_MODEL_RING_SIZES_V1, ZkAmsActivationLimitsV1,
+    validate_privacy_compiled_profile_catalog_archive_v1,
+};
+use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
+#[cfg(test)]
+use iroha_zkp_halo2::vega::vega_mdl_verifier_digest_v1;
+use iroha_zkp_halo2::vega::{
+    MAX_VEGA_PROOF_BYTES_V1, MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
+    VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1, VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
+    VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1, ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1,
+    ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1, vega_mdl_canonical_relation_digest_v1,
+    vega_mdl_compiled_profile_digest_v1, zk_ams_admission_relation_dimensions_v1,
+    zk_ams_compiled_profile_digest_v1, zk_ams_mkhe_readiness_v1,
+    zk_ams_release_candidate_profile_digest_v1, zk_ams_t256_generator_digest_v1,
+};
+use sha2::{Digest, Sha256};
+use std::{collections::BTreeMap, sync::OnceLock};
+use thiserror::Error;
 const PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.compiled-profile.digest.v1";
 const PARAMETER_ID_DOMAIN_V1: &[u8] = b"iroha.privacy.compiled-profile.parameter-id.v1";
 const PARAMETER_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.compiled-profile.parameter-digest.v1";
@@ -480,11 +479,10 @@ fn build_compiled_privacy_profile_catalog_v1()
 }
 /// Validate an archive as the exact compiled-profile catalog of this binary.
 ///
-/// The data-model validator first enforces canonical bounded decoding and the
-/// exact twelve-row shape. This second layer then requires byte-equivalent
-/// typed content to the catalog derived from the current binary, preventing a
-/// canonical but substituted profile digest from being accepted as local build
-/// metadata. Success still does not establish network activation or readiness.
+/// The data-model validator first enforces canonical bounded decoding and the exact twelve-row
+/// shape. This second layer then requires byte-equivalent typed content to the catalog derived from
+/// the current binary, preventing a canonical but substituted profile digest from being accepted as
+/// local build metadata. Success still does not establish network activation or readiness.
 #[must_use]
 pub fn validate_local_privacy_compiled_profile_catalog_archive_v1(
     archive: &[u8],
@@ -541,13 +539,11 @@ pub fn committed_privacy_capability_snapshot_v1(
 ///
 /// # Errors
 ///
-/// Returns [`CompiledPrivacyProfileErrorV1::EngineUnavailable`] for a protocol
-/// whose complete end-to-end verifier is not compiled or whose independent
-/// release-readiness gates remain closed, or
-/// [`CompiledPrivacyProfileErrorV1::ProfileInitializationFailed`] if fixed
-/// transparent parameters cannot be derived, or
-/// [`CompiledPrivacyProfileErrorV1::StatementSchemaInvalid`] when the emitted
-/// schema is ambiguous or internally unresolved.
+/// Returns [`CompiledPrivacyProfileErrorV1::EngineUnavailable`] for a protocol whose complete
+/// end-to-end verifier is not compiled or whose independent release-readiness gates remain closed,
+/// or [`CompiledPrivacyProfileErrorV1::ProfileInitializationFailed`] if fixed transparent
+/// parameters cannot be derived, or [`CompiledPrivacyProfileErrorV1::StatementSchemaInvalid`] when
+/// the emitted schema is ambiguous or internally unresolved.
 pub fn compiled_privacy_profile_v1(
     protocol_id: PrivacyProtocolIdV1,
 ) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
@@ -587,13 +583,11 @@ fn compiled_zk_x509_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
 }
 /// Derive the deterministic ZK-X509 release-candidate profile material.
 ///
-/// This accessor exists only for unsigned/offline intent preparation, release
-/// KATs, and isolated resource measurements that must bind the exact profile
-/// candidate before activation. Success does not imply compiled readiness,
-/// activation, verifier availability, or permission to sign or submit a proof.
-/// Production proof paths must use [`compiled_privacy_profile_v1`], which keeps
-/// returning `EngineUnavailable` until every activation-readiness capture is
-/// canonically admitted.
+/// This accessor exists only for unsigned/offline intent preparation, release KATs, and isolated
+/// resource measurements that must bind the exact profile candidate before activation. Success does
+/// not imply compiled readiness, activation, verifier availability, or permission to sign or submit
+/// a proof. Production proof paths must use [`compiled_privacy_profile_v1`], which keeps returning
+/// `EngineUnavailable` until every activation-readiness capture is canonically admitted.
 pub fn zk_x509_release_candidate_profile_material_v1()
 -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
@@ -1494,10 +1488,9 @@ pub fn validate_compiled_privacy_activation_v1(
 }
 /// Validate a governance record against an already selected compiled profile.
 ///
-/// This contains the consensus-critical binding comparison shared by normal
-/// activation admission and pre-activation release-candidate evidence. The
-/// caller selecting `compiled` is responsible for the separate availability
-/// and readiness decision.
+/// This contains the consensus-critical binding comparison shared by normal activation admission
+/// and pre-activation release-candidate evidence. The caller selecting `compiled` is responsible
+/// for the separate availability and readiness decision.
 pub(crate) fn validate_compiled_privacy_activation_against_profile_v1(
     activation: &PrivacyProtocolActivationRecordV1,
     compiled: &CompiledPrivacyProfileV1,
@@ -1653,11 +1646,10 @@ fn compiled_zk_ams_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
 }
 /// Derive the deterministic ZK-AMS release-candidate profile material.
 ///
-/// This accessor is restricted to unsigned/offline intent construction,
-/// release KATs, adversarial tests, and resource measurements that must bind
-/// the exact candidate before activation. Success does not imply that the MKHE
-/// release gates are closed or that the profile may be activated, signed, or
-/// submitted. Production paths must use [`compiled_privacy_profile_v1`].
+/// This accessor is restricted to unsigned/offline intent construction, release KATs, adversarial
+/// tests, and resource measurements that must bind the exact candidate before activation. Success
+/// does not imply that the MKHE release gates are closed or that the profile may be activated,
+/// signed, or submitted. Production paths must use [`compiled_privacy_profile_v1`].
 pub fn zk_ams_release_candidate_profile_material_v1()
 -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkAmsV1;
@@ -2834,15 +2826,13 @@ fn append_digest_field_v1(hash: &mut Sha256, field: &[u8]) {
 }
 /// Hash the complete structural schema of `T` in a platform-independent order.
 ///
-/// The `iroha_schema` map is keyed internally by Rust [`core::any::TypeId`],
-/// whose ordering is not a wire contract. This function replaces every such
-/// reference with its declared stable string identifier, collapses only
-/// representation aliases with identical canonical metadata, rejects
-/// conflicting reuse of an identifier, sorts top-level entries by that stable
-/// identifier, and preserves field/variant order where order is part of the
-/// representation. Consequently, adding, deleting, reordering, or retyping a
-/// statement field changes the governed digest without relying on a
-/// hand-maintained schema string.
+/// The `iroha_schema` map is keyed internally by Rust [`core::any::TypeId`], whose ordering is not
+/// a wire contract. This function replaces every such reference with its declared stable string
+/// identifier, collapses only representation aliases with identical canonical metadata, rejects
+/// conflicting reuse of an identifier, sorts top-level entries by that stable identifier, and
+/// preserves field/variant order where order is part of the representation. Consequently, adding,
+/// deleting, reordering, or retyping a statement field changes the governed digest without relying
+/// on a hand-maintained schema string.
 ///
 /// # Errors
 ///

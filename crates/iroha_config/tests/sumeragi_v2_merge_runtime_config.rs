@@ -1,7 +1,7 @@
 //! Validate explicit Sumeragi v2 merge-sidecar and signing-guard overrides.
-use std::{path::PathBuf, time::Duration};
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+use std::{path::PathBuf, time::Duration};
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()

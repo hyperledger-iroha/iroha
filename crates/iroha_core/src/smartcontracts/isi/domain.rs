@@ -1,17 +1,24 @@
 //! This module contains [`Domain`] structure and related implementations and trait implementations.
+use super::super::isi::prelude::*;
 use eyre::Result;
 use iroha_data_model::{account::rekey::AccountRekeyRecord, prelude::*, query::error::FindError};
 use iroha_telemetry::metrics;
-use super::super::isi::prelude::*;
 /// ISI module contains all instructions related to domains:
 /// - creating/changing assets
 /// - registering/unregistering accounts
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
-    use std::{
-        collections::{BTreeSet, btree_map::Entry},
-        str::FromStr,
+    use super::*;
+    use crate::{
+        alias::{
+            authority_can_manage_account_alias, authority_can_manage_account_alias_scope,
+            authority_can_manage_asset_definition_alias,
+        },
+        state::{
+            WorldReadOnly as _, account_label_is_pii, public_lane_reward_record_matches_key,
+            public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
+        },
     };
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
@@ -34,16 +41,9 @@ pub mod isi {
     };
     use iroha_logger::prelude::*;
     use norito::codec::Decode as _;
-    use super::*;
-    use crate::{
-        alias::{
-            authority_can_manage_account_alias, authority_can_manage_account_alias_scope,
-            authority_can_manage_asset_definition_alias,
-        },
-        state::{
-            WorldReadOnly as _, account_label_is_pii, public_lane_reward_record_matches_key,
-            public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
-        },
+    use std::{
+        collections::{BTreeSet, btree_map::Entry},
+        str::FromStr,
     };
     /// Alias grace window after lease expiry (369 hours).
     const ASSET_ALIAS_GRACE_MS: u64 = 369u64 * 60 * 60 * 1_000;
@@ -3187,7 +3187,11 @@ pub mod isi {
 }
 /// Implementations for domain queries.
 pub mod query {
-    use std::collections::BTreeSet;
+    use super::*;
+    use crate::{
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::{StateReadOnly, WorldReadOnly},
+    };
     use iroha_data_model::{
         domain::Domain,
         query::{
@@ -3197,11 +3201,7 @@ pub mod query {
         },
     };
     use norito::json::Value;
-    use super::*;
-    use crate::{
-        smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::{StateReadOnly, WorldReadOnly},
-    };
+    use std::collections::BTreeSet;
     #[derive(Debug, Default)]
     struct DomainPredicateView {
         ids: BTreeSet<DomainId>,
@@ -3453,7 +3453,21 @@ pub mod query {
 #[cfg(test)]
 mod tests {
     include!("domain_restricted_asset_definition_tests.rs");
-    use std::sync::Arc;
+    use super::isi::upsert_account_rekey_record;
+    use super::*;
+    use crate::{
+        kura::Kura,
+        nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
+        prelude::World,
+        query::store::LiveQueryStore,
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::{
+            GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
+            GovernanceParliamentSnapshot, GovernancePipeline, GovernanceProposalRecord,
+            GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
+            GovernanceReferendumStatus, GovernanceStageApprovals, State, WorldReadOnly,
+        },
+    };
     use iroha_crypto::{
         Algorithm, Hash, KeyPair,
         blake2::{Blake2b512, digest::Digest as _},
@@ -3523,21 +3537,7 @@ mod tests {
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
-    use super::isi::upsert_account_rekey_record;
-    use super::*;
-    use crate::{
-        kura::Kura,
-        nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
-        prelude::World,
-        query::store::LiveQueryStore,
-        smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::{
-            GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
-            GovernanceParliamentSnapshot, GovernancePipeline, GovernanceProposalRecord,
-            GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
-            GovernanceReferendumStatus, GovernanceStageApprovals, State, WorldReadOnly,
-        },
-    };
+    use std::sync::Arc;
     fn test_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();

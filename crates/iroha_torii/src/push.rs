@@ -5,16 +5,7 @@
 //! count-bounded so corrupted local persistence cannot determine peak memory.
 //! Remote provider bodies are streamed under one source-coupled ceiling, and
 //! successful delivery responses are not buffered.
-#[cfg(test)]
-use std::sync::Mutex;
-use std::{
-    fs,
-    io::{self, Read as _, Write as _},
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use crate::account_activity::AccountActivityRole;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD};
 use dashmap::DashMap;
@@ -36,7 +27,16 @@ use nonzero_ext::nonzero;
 use parking_lot::Mutex as StorageMutex;
 use reqwest::StatusCode as HttpStatusCode;
 use sha2::{Digest as _, Sha256};
-use crate::account_activity::AccountActivityRole;
+#[cfg(test)]
+use std::sync::Mutex;
+use std::{
+    fs,
+    io::{self, Read as _, Write as _},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 const PUSH_DIR: &str = "push";
 const DEVICES_DIR: &str = "devices";
 const QUEUE_DIR: &str = "queue";

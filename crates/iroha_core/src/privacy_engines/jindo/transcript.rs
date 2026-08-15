@@ -1,10 +1,4 @@
 //! Canonically framed Fiat--Shamir transcript for revised Jindo.
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
-use thiserror::Error;
-use crate::privacy_engines::p256::{P256EngineError, TranscriptBindingV1};
 use super::{
     JINDO_RING_DEGREE_V1,
     field::JindoFieldElementV1,
@@ -13,6 +7,12 @@ use super::{
         JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1,
     },
 };
+use crate::privacy_engines::p256::{P256EngineError, TranscriptBindingV1};
+use sha3::{
+    Shake256,
+    digest::{ExtendableOutput, Update, XofReader},
+};
+use thiserror::Error;
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.current.transcript.v1";
 const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.current.challenge.v1";
 const TRANSCRIPT_VERSION_V1: u8 = 2;

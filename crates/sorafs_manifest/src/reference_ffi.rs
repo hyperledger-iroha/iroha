@@ -1,13 +1,10 @@
 //! C ABI facade for SoraFS reference validators.
 //!
-//! The facade returns `ValidationOutcomeV1` encoded as Norito JSON so mobile and
-//! scripting SDKs can call the Rust reference validators without duplicating
-//! SoraFS wire-format logic.
+//! The facade returns `ValidationOutcomeV1` encoded as Norito JSON so mobile and scripting SDKs can
+//! call the Rust reference validators without duplicating SoraFS wire-format logic.
 // The FFI surface returns full validation outcomes as errors so every caller
 // receives the same machine-readable diagnostics as the Rust reference CLI.
 #![allow(clippy::result_large_err)]
-use std::{mem, panic, slice, str};
-use norito::json;
 use crate::{
     FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, HedgingValidationPayloadKindV1,
     OrderbookValidationPayloadKindV1, PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
@@ -26,6 +23,8 @@ use crate::{
     validate_provider_advert_bytes, validate_repair_payload_bytes,
     validate_replication_order_bytes, validate_signed_replication_order_bytes,
 };
+use norito::json;
+use std::{mem, panic, slice, str};
 /// FFI repair payload kind selector for `RepairEvidenceV1`.
 pub const SORAFS_REFERENCE_REPAIR_KIND_EVIDENCE: u32 = 1;
 /// FFI repair payload kind selector for `RepairReportV1`.
@@ -153,8 +152,7 @@ const _: () = assert!(
 struct FfiInputScope;
 /// Owned bytes returned from the SoraFS reference FFI.
 ///
-/// Call [`sorafs_reference_free_buffer`] exactly once when the caller is done
-/// reading the bytes.
+/// Call [`sorafs_reference_free_buffer`] exactly once when the caller is done reading the bytes.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SorafsReferenceFfiBuffer {
@@ -223,9 +221,8 @@ pub unsafe extern "C" fn sorafs_reference_free_buffer(buffer: SorafsReferenceFfi
 /// Validate a Norito-encoded `ProviderAdvertV1` and return outcome JSON.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_provider_advert_json(
     bytes_ptr: *const u8,
@@ -262,9 +259,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_provider_advert_json(
 /// Validate a Norito-encoded `ProviderAdmissionEnvelopeV1` and return outcome JSON.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_provider_admission_json(
     bytes_ptr: *const u8,
@@ -293,9 +289,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_provider_admission_json(
 /// Validate a Norito-encoded `ProviderAdmissionRenewalV1` against an envelope.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_provider_admission_renewal_json(
     envelope_ptr: *const u8,
@@ -350,9 +345,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_provider_admission_renewal_js
 /// Validate a Norito-encoded `ProviderAdmissionRevocationV1` against an envelope.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_provider_admission_revocation_json(
     envelope_ptr: *const u8,
@@ -407,9 +401,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_provider_admission_revocation
 /// Validate a canonical appeal-finance `CancelAssetLock` V1 payload.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
     bytes_ptr: *const u8,
@@ -444,9 +437,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_appeal_finance_cancel_asset_l
 /// Validate a Norito-encoded `ReplicationOrderV1` and return outcome JSON.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_replication_order_json(
     bytes_ptr: *const u8,
@@ -471,9 +463,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_replication_order_json(
 /// Validate a Norito-encoded `SignedReplicationOrderV1` and return outcome JSON.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_signed_replication_order_json(
     bytes_ptr: *const u8,
@@ -510,9 +501,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_signed_replication_order_json
 /// `kind` must be one of the `SORAFS_REFERENCE_ORDERBOOK_KIND_*` constants.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_orderbook_json(
     kind: u32,
@@ -546,9 +536,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_orderbook_json(
 /// `kind` must be one of the `SORAFS_REFERENCE_POP_KIND_*` constants.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_pop_json(
     kind: u32,
@@ -571,9 +560,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_pop_json(
 /// `kind` must be one of the `SORAFS_REFERENCE_HEDGING_KIND_*` constants.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_hedging_json(
     kind: u32,
@@ -607,9 +595,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_hedging_json(
 /// Success is diagnostic-only and never authorizes production acceptance.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_pdp_commitment_json(
     bytes_ptr: *const u8,
@@ -637,9 +624,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_commitment_json(
 /// Success is diagnostic-only and never authorizes production acceptance.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_pdp_challenge_json(
     bytes_ptr: *const u8,
@@ -667,9 +653,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_challenge_json(
 /// Success does not evaluate signer admission or the commitment roots.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_pdp_proof_json(
     bytes_ptr: *const u8,
@@ -697,9 +682,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_proof_json(
 /// Success does not evaluate provider admission or proof witnesses.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_pdp_commitment_challenge_json(
     commitment_ptr: *const u8,
@@ -758,9 +742,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_commitment_challenge_json
 /// Success does not evaluate provider admission or commitment roots.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_pdp_challenge_proof_json(
     challenge_ptr: *const u8,
@@ -816,14 +799,12 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_challenge_proof_json(
 }
 /// Exhaustively diagnose PDP commitment, challenge, proof, and both roots.
 ///
-/// This FFI does not receive governed admission state. Success therefore uses
-/// `SFS-PDP-DIAG-000` with `production_acceptance=false` and must never be
-/// treated as production proof acceptance.
+/// This FFI does not receive governed admission state. Success therefore uses `SFS-PDP-DIAG-000`
+/// with `production_acceptance=false` and must never be treated as production proof acceptance.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_pdp_json(
     commitment_ptr: *const u8,
@@ -901,9 +882,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_json(
 /// Validate Norito-encoded `PorChallengeV1` and `PorProofV1` bytes.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_por_json(
     challenge_ptr: *const u8,
@@ -954,9 +934,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_por_json(
 /// `profile` must be one of the `SORAFS_REFERENCE_PROFILE_*` constants.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_potr_json(
     bytes_ptr: *const u8,
@@ -984,9 +963,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_potr_json(
 /// `kind` must be one of the `SORAFS_REFERENCE_REPAIR_KIND_*` constants.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_repair_json(
     kind: u32,
@@ -1015,9 +993,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_repair_json(
 /// CID that belongs to the governance log node.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_governance_json(
     bytes_ptr: *const u8,
@@ -1060,9 +1037,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_json(
 /// validator always recomputes and validates the block's canonical CID.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_block_json(
     bytes_ptr: *const u8,
@@ -1125,15 +1101,13 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_block_json(
 }
 /// Validate a signed `GovernanceDagHeadV1` against a bounded block chain.
 ///
-/// `blocks_ptr` references `blocks_len` payload/label descriptors ordered from
-/// either the root-history start or the exact checkpoint-window start through
-/// the signed head block.
+/// `blocks_ptr` references `blocks_len` payload/label descriptors ordered from either the
+/// root-history start or the exact checkpoint-window start through the signed head block.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. Descriptor pointers and every nested pointer must remain
-/// valid for the duration of the call. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns.
+/// Descriptor pointers and every nested pointer must remain valid for the duration of the call. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_head_chain_json(
     head_ptr: *const u8,
@@ -1229,9 +1203,8 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_head_chain_jso
 /// kind must be one of the `SORAFS_REFERENCE_BUNDLE_KIND_*` constants.
 ///
 /// # Safety
-/// Non-null pointers must be valid for their corresponding lengths until the
-/// function returns. The returned buffer must be freed with
-/// [`sorafs_reference_free_buffer`].
+/// Non-null pointers must be valid for their corresponding lengths until the function returns. The
+/// returned buffer must be freed with [`sorafs_reference_free_buffer`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sorafs_reference_validate_bundle_json(
     payloads_ptr: *const SorafsReferenceFfiBundlePayload,
@@ -1786,9 +1759,7 @@ fn ffi_error(
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, slice};
-    use ed25519_dalek::{SIGNATURE_LENGTH, Signer, SigningKey};
-    use norito::json::Value;
+    use super::*;
     use crate::{
         BillingLineDirectionV1, BillingLineItemKindV1, BillingStatementV1, ByteRangeV1,
         GovernanceLogNodeV1, HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1,
@@ -1800,7 +1771,9 @@ mod tests {
         build_billing_statement_v1, derive_reference_price_decision_v1,
         sign_pop_credential_ed25519_v1, sign_settlement_receipt_ed25519_v1,
     };
-    use super::*;
+    use ed25519_dalek::{SIGNATURE_LENGTH, Signer, SigningKey};
+    use norito::json::Value;
+    use std::{fs, path::PathBuf, slice};
     fn workspace_fixture(path: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")

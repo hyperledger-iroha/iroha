@@ -1,10 +1,6 @@
 //! Shared helpers for compute fixtures, SLO reports, and the lightweight gateway.
 //! The helpers mirror the minimal entrypoints shipped in the `compute_gateway`
 //! binary so tests and CLI fixtures stay in sync.
-use std::{
-    collections::BTreeMap,
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-};
 use iroha_config::parameters::defaults::compute as compute_defaults;
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -14,6 +10,10 @@ use iroha_data_model::{
         ComputeRoute, ComputeRouteId, ComputeSandboxRules, ComputeValidationError,
     },
     name::Name,
+};
+use std::{
+    collections::BTreeMap,
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
 };
 /// Minimal error surface used by the compute harness.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -244,8 +244,8 @@ pub struct SloTargets {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::compute::{ComputeAuthz, ComputeCodec};
     use super::*;
+    use iroha_data_model::compute::{ComputeAuthz, ComputeCodec};
     #[test]
     fn entrypoint_respects_gas_and_size_caps() {
         let manifest = default_manifest();

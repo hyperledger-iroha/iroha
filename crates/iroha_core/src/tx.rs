@@ -10,14 +10,21 @@
 //!
 //! This is also where the actual execution of instructions, as well
 //! as various forms of validation are performed.
-use core::{fmt, str::FromStr as _};
-use std::{
-    borrow::Cow,
-    collections::BTreeSet,
-    sync::{Arc, LazyLock, OnceLock},
-    time::{Duration, SystemTime, SystemTimeError},
+use crate::{
+    compliance::{LaneComplianceContext, LaneComplianceEvaluation},
+    governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
+    interlane::verify_lane_privacy_proofs,
+    nexus::space_directory::{
+        LaneIdentityMetadataError,
+        extract_authority_domains as extract_directory_authority_domains,
+        extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
+    },
+    queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
+    smartcontracts::{code, ivm::cache::IvmCache},
+    state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use core::{fmt, str::FromStr as _};
 use eyre::Result;
 use hex;
 pub use iroha_data_model::prelude::*;
@@ -47,18 +54,11 @@ use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
-use crate::{
-    compliance::{LaneComplianceContext, LaneComplianceEvaluation},
-    governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
-    interlane::verify_lane_privacy_proofs,
-    nexus::space_directory::{
-        LaneIdentityMetadataError,
-        extract_authority_domains as extract_directory_authority_domains,
-        extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
-    },
-    queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
-    smartcontracts::{code, ivm::cache::IvmCache},
-    state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
+use std::{
+    borrow::Cow,
+    collections::BTreeSet,
+    sync::{Arc, LazyLock, OnceLock},
+    time::{Duration, SystemTime, SystemTimeError},
 };
 #[cfg(feature = "telemetry")]
 type StateTelemetry = crate::telemetry::StateTelemetry;
@@ -930,8 +930,8 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
 }
 #[cfg(test)]
 mod confidential_policy_admission_tests {
-    use iroha_data_model::asset::definition::ConfidentialPolicyMode;
     use super::{ConfidentialPolicyAdmissionAction, confidential_policy_allows_action};
+    use iroha_data_model::asset::definition::ConfidentialPolicyMode;
     #[test]
     fn kagemusha_value_movement_requires_convertible_policy() {
         for action in [
@@ -4105,6 +4105,23 @@ fn enforce_lane_policies(
         | Executable::IvmProved(_)
         | Executable::Ivm(_) => false,
     };
+    let eligible_lanes = crate::state::nexus_manifest_authority_eligible_lanes_at_height(
+        lane_id,
+        dataspace_id,
+        &state_transaction.nexus,
+        state_transaction.block_height(),
+    );
+    if !eligible_lanes.contains(&lane_id) {
+        return Err(reject_lane_policy(
+            &lane_alias,
+            "lane is not active in the routed dataspace at the current block height".to_string(),
+        ));
+    }
+    // Validators, account-to-peer bindings, and quorum are dataspace authority. Hooks and
+    // protected namespaces remain sourced from the exact target-lane rules below.
+    let dataspace_authority_rules = manifest_registry
+        .dataspace_authority_rules_for_lanes(lane_id, dataspace_id, &eligible_lanes)
+        .map_err(|err| reject_not_permitted(err.message()))?;
     let mut runtime_upgrade_present = false;
     if let Some(status) = manifest_status.as_ref() {
         if let Some(rules) = status.rules() {
@@ -4112,11 +4129,9 @@ fn enforce_lane_policies(
             let governance_sensitive =
                 governance_manifest && tx_requires_manifest_validator_gating(rules, tx);
             if governance_sensitive {
-                let manifest_validators = if rules.validators.is_empty() {
-                    None
-                } else {
-                    Some(canonical_manifest_validators(&lane_alias, rules)?)
-                };
+                let manifest_validators = dataspace_authority_rules
+                    .map(|rules| canonical_manifest_validators(&lane_alias, rules))
+                    .transpose()?;
                 if let Some(validators) = manifest_validators.as_ref()
                     && !allows_multisig_envelope_authority
                 {
@@ -4134,11 +4149,11 @@ fn enforce_lane_policies(
                         ));
                     }
                 }
-                let quorum_required = !allows_multisig_envelope_authority
-                    && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
-                    && !rules.validators.is_empty();
-                if quorum_required {
-                    enforce_manifest_quorum(&lane_alias, rules, tx)?;
+                if !allows_multisig_envelope_authority
+                    && let Some(authority_rules) = dataspace_authority_rules
+                    && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+                {
+                    enforce_manifest_quorum(&lane_alias, authority_rules, tx)?;
                 }
             }
             if governance_manifest {
@@ -5004,16 +5019,22 @@ fn expected_band_from_score(score_bps: u16) -> iroha_config::parameters::actual:
 #[cfg(test)]
 /// Tests for transaction acceptance and validation.
 pub mod tests {
-    use core::panic;
-    use std::sync::LazyLock; // for Name::from_str in tests
-    use std::{
-        borrow::Cow,
-        collections::{BTreeMap, BTreeSet},
-        num::{NonZeroU16, NonZeroU32, NonZeroU64},
-        path::PathBuf,
-        str::FromStr,
-        sync::Arc,
+    use super::*;
+    use crate::{
+        block::{BlockBuilder, CommittedBlock, ValidBlock},
+        compliance::LaneComplianceEngine,
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, RuntimeUpgradeHook,
+        },
+        kura::Kura,
+        nexus::space_directory::{
+            SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
+        },
+        query::store::LiveQueryStore,
+        smartcontracts::{Execute, ivm::cache::IvmCache},
+        state::{State, StateBlock, StateReadOnly, World},
     };
+    use core::panic;
     use iroha_crypto::{
         Algorithm, Hash, KeyPair, MerkleProof,
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
@@ -5072,20 +5093,14 @@ pub mod tests {
     use iroha_schema::Ident;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{
-        block::{BlockBuilder, CommittedBlock, ValidBlock},
-        compliance::LaneComplianceEngine,
-        governance::manifest::{
-            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, RuntimeUpgradeHook,
-        },
-        kura::Kura,
-        nexus::space_directory::{
-            SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
-        },
-        query::store::LiveQueryStore,
-        smartcontracts::{Execute, ivm::cache::IvmCache},
-        state::{State, StateBlock, StateReadOnly, World},
+    use std::sync::LazyLock; // for Name::from_str in tests
+    use std::{
+        borrow::Cow,
+        collections::{BTreeMap, BTreeSet},
+        num::{NonZeroU16, NonZeroU32, NonZeroU64},
+        path::PathBuf,
+        str::FromStr,
+        sync::Arc,
     };
     fn checked_signature_of<T: norito::codec::Encode>(
         private_key: &PrivateKey,
@@ -5142,6 +5157,113 @@ pub mod tests {
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
         let account = new_account_in_domain(&authority_id, &domain_id).build(&authority_id);
         (World::with([domain], [account], []), authority_id, key_pair)
+    }
+    fn configure_active_same_dataspace_lanes(state: &State, lane_count: NonZeroU32) {
+        let lanes = (0..lane_count.get())
+            .map(|index| LaneConfig {
+                id: TestLaneId::new(index),
+                alias: format!("lane-{index}"),
+                dataspace_id: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                ..LaneConfig::default()
+            })
+            .collect();
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = false;
+        nexus.lane_catalog =
+            LaneCatalog::new(lane_count, lanes).expect("same-dataspace lane catalog");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    }
+
+    fn configure_active_autoscale_sibling(state: &State) {
+        let mut elastic_lane = LaneConfig {
+            id: TestLaneId::new(1),
+            alias: "elastic-lane-1".to_owned(),
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
+
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero!(2_u32);
+        nexus.lane_catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                .expect("static and autoscale lane catalog");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    }
+
+    fn lane_manifest_status(
+        lane: TestLaneId,
+        governance: Option<&str>,
+        rules: GovernanceRules,
+    ) -> LaneManifestStatus {
+        LaneManifestStatus {
+            lane,
+            alias: format!("lane-{}", lane.as_u32()),
+            dataspace: TestDataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: governance.map(str::to_owned),
+            manifest_path: Some(PathBuf::from(format!(
+                "/tmp/lane-{}.manifest.json",
+                lane.as_u32()
+            ))),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        }
+    }
+
+    fn runtime_upgrade_rules(allow: bool) -> GovernanceRules {
+        let mut rules = GovernanceRules::default();
+        rules.hooks.runtime_upgrade = Some(RuntimeUpgradeHook {
+            allow,
+            require_metadata: false,
+            metadata_key: None,
+            allowed_ids: None,
+        });
+        rules
+    }
+
+    fn runtime_upgrade_transaction(authority: AccountId, keypair: &KeyPair) -> SignedTransaction {
+        TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
+                manifest_bytes: vec![0x01],
+            },
+        ])
+        .sign(keypair.private_key())
+    }
+
+    fn assert_not_permitted_contains(
+        result: Result<(), TransactionRejectionReason>,
+        expected: &str,
+    ) {
+        match result {
+            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))) => {
+                assert!(
+                    message.contains(expected),
+                    "expected rejection containing `{expected}`, got `{message}`"
+                );
+            }
+            other => panic!("expected NotPermitted rejection, got {other:?}"),
+        }
     }
     fn world_with_uaid_account(
         uaid: UniversalAccountId,
@@ -6063,6 +6185,371 @@ pub mod tests {
             "lane validator gating should ignore plain transactions that do not touch governance surfaces: {result:?}"
         );
     }
+    #[test]
+    fn lane_validator_gating_inherits_same_dataspace_manifest_authority() {
+        let chain: ChainId = "same-dataspace-lane-validator-gating".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let (validator, _) = gen_account_in("wonderland");
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+        configure_active_same_dataspace_lanes(&state, nonzero!(2_u32));
+
+        let authority_rules = GovernanceRules {
+            validators: vec![validator],
+            quorum: Some(1),
+            ..GovernanceRules::default()
+        };
+        let statuses = BTreeMap::from([
+            (
+                TestLaneId::SINGLE,
+                lane_manifest_status(TestLaneId::SINGLE, None, authority_rules),
+            ),
+            (
+                TestLaneId::new(1),
+                lane_manifest_status(
+                    TestLaneId::new(1),
+                    Some("parliament"),
+                    runtime_upgrade_rules(true),
+                ),
+            ),
+        ]);
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let tx = runtime_upgrade_transaction(authority, &keypair);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = super::LaneAssignment {
+            lane_id: TestLaneId::new(1),
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
+            dataspace_catalog: &stx.nexus.dataspace_catalog,
+        };
+
+        assert_not_permitted_contains(
+            super::enforce_lane_policies(&tx, &stx, &assignment),
+            "authority not part of lane validator set",
+        );
+    }
+
+    #[test]
+    fn lane_validator_gating_inherits_same_dataspace_manifest_quorum() {
+        let chain: ChainId = "same-dataspace-lane-validator-quorum".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let (secondary_validator, _) = gen_account_in("wonderland");
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+        configure_active_same_dataspace_lanes(&state, nonzero!(2_u32));
+
+        let authority_rules = GovernanceRules {
+            validators: vec![authority.clone(), secondary_validator],
+            quorum: Some(2),
+            ..GovernanceRules::default()
+        };
+        let statuses = BTreeMap::from([
+            (
+                TestLaneId::SINGLE,
+                lane_manifest_status(TestLaneId::SINGLE, None, authority_rules),
+            ),
+            (
+                TestLaneId::new(1),
+                lane_manifest_status(
+                    TestLaneId::new(1),
+                    Some("parliament"),
+                    runtime_upgrade_rules(true),
+                ),
+            ),
+        ]);
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let tx = runtime_upgrade_transaction(authority, &keypair);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = super::LaneAssignment {
+            lane_id: TestLaneId::new(1),
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
+            dataspace_catalog: &stx.nexus.dataspace_catalog,
+        };
+
+        assert_not_permitted_contains(
+            super::enforce_lane_policies(&tx, &stx, &assignment),
+            "lane manifest quorum requires 2 validator approvals",
+        );
+    }
+
+    #[test]
+    fn lane_validator_gating_keeps_hooks_and_protected_namespaces_lane_local() {
+        let chain: ChainId = "same-dataspace-lane-local-hook".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+        configure_active_same_dataspace_lanes(&state, nonzero!(2_u32));
+
+        let mut authority_rules = runtime_upgrade_rules(true);
+        authority_rules.validators = vec![authority.clone()];
+        authority_rules.quorum = Some(1);
+        authority_rules
+            .protected_namespaces
+            .insert(Name::from_str("apps").expect("protected namespace"));
+        let statuses = BTreeMap::from([
+            (
+                TestLaneId::SINGLE,
+                lane_manifest_status(TestLaneId::SINGLE, None, authority_rules),
+            ),
+            (
+                TestLaneId::new(1),
+                lane_manifest_status(
+                    TestLaneId::new(1),
+                    Some("parliament"),
+                    runtime_upgrade_rules(false),
+                ),
+            ),
+        ]);
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let tx = runtime_upgrade_transaction(authority.clone(), &keypair);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = super::LaneAssignment {
+            lane_id: TestLaneId::new(1),
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
+            dataspace_catalog: &stx.nexus.dataspace_catalog,
+        };
+
+        assert_not_permitted_contains(
+            super::enforce_lane_policies(&tx, &stx, &assignment),
+            "runtime upgrade hook prohibits runtime upgrade instructions",
+        );
+
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &test_network_id(),
+            &authority,
+            0,
+            TestDataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let contract_tx = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([ActivateContractInstance {
+            contract_address,
+            code_hash: Hash::prehashed([0_u8; 32]),
+        }])
+        .sign(keypair.private_key());
+        let result = super::enforce_lane_policies(&contract_tx, &stx, &assignment);
+        assert!(
+            result.is_ok(),
+            "a sibling lane's protected namespaces must not gate target-lane policy: {result:?}"
+        );
+    }
+
+    #[test]
+    fn lane_validator_gating_separates_static_and_autoscale_manifest_authority() {
+        let chain: ChainId = "static-autoscale-manifest-authority".parse().unwrap();
+        let (world, static_validator, static_keypair) = world_with_authority("wonderland");
+        let (elastic_validator, elastic_keypair) = gen_account_in("wonderland");
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+        configure_active_autoscale_sibling(&state);
+
+        let mut static_rules = runtime_upgrade_rules(false);
+        static_rules.validators = vec![static_validator.clone()];
+        let mut elastic_rules = runtime_upgrade_rules(false);
+        elastic_rules.validators = vec![elastic_validator.clone()];
+        let statuses = BTreeMap::from([
+            (
+                TestLaneId::SINGLE,
+                lane_manifest_status(TestLaneId::SINGLE, Some("parliament"), static_rules),
+            ),
+            (
+                TestLaneId::new(1),
+                lane_manifest_status(TestLaneId::new(1), Some("parliament"), elastic_rules),
+            ),
+        ]);
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let static_tx = runtime_upgrade_transaction(static_validator, &static_keypair);
+        let elastic_tx = runtime_upgrade_transaction(elastic_validator, &elastic_keypair);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let static_assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
+        let elastic_assignment = super::LaneAssignment {
+            lane_id: TestLaneId::new(1),
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
+            dataspace_catalog: &stx.nexus.dataspace_catalog,
+        };
+
+        for (tx, assignment) in [
+            (&static_tx, &static_assignment),
+            (&elastic_tx, &elastic_assignment),
+        ] {
+            assert_not_permitted_contains(
+                super::enforce_lane_policies(tx, &stx, assignment),
+                "runtime upgrade hook prohibits runtime upgrade instructions",
+            );
+        }
+    }
+
+    #[test]
+    fn lane_validator_gating_rejects_conflicting_same_dataspace_authority() {
+        let chain: ChainId = "same-dataspace-lane-validator-conflict".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let (conflicting_validator, _) = gen_account_in("wonderland");
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+        configure_active_same_dataspace_lanes(&state, nonzero!(3_u32));
+
+        let first_authority = GovernanceRules {
+            validators: vec![authority.clone()],
+            quorum: Some(1),
+            ..GovernanceRules::default()
+        };
+        let conflicting_authority = GovernanceRules {
+            validators: vec![conflicting_validator],
+            quorum: Some(1),
+            ..GovernanceRules::default()
+        };
+        let statuses = BTreeMap::from([
+            (
+                TestLaneId::SINGLE,
+                lane_manifest_status(TestLaneId::SINGLE, None, first_authority),
+            ),
+            (
+                TestLaneId::new(1),
+                lane_manifest_status(
+                    TestLaneId::new(1),
+                    Some("parliament"),
+                    runtime_upgrade_rules(true),
+                ),
+            ),
+            (
+                TestLaneId::new(2),
+                lane_manifest_status(TestLaneId::new(2), None, conflicting_authority),
+            ),
+        ]);
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let tx = runtime_upgrade_transaction(authority, &keypair);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = super::LaneAssignment {
+            lane_id: TestLaneId::new(1),
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
+            dataspace_catalog: &stx.nexus.dataspace_catalog,
+        };
+
+        assert_not_permitted_contains(
+            super::enforce_lane_policies(&tx, &stx, &assignment),
+            "conflicting manifest validator pools",
+        );
+    }
+
+    #[test]
+    fn lane_validator_gating_rejects_missing_active_authority_source_manifest() {
+        let chain: ChainId = "same-dataspace-missing-authority-manifest".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+        configure_active_same_dataspace_lanes(&state, nonzero!(2_u32));
+
+        let mut missing_source = lane_manifest_status(
+            TestLaneId::SINGLE,
+            Some("parliament"),
+            GovernanceRules::default(),
+        );
+        missing_source.manifest_path = None;
+        missing_source.governance_rules = None;
+        let statuses = BTreeMap::from([
+            (TestLaneId::SINGLE, missing_source),
+            (
+                TestLaneId::new(1),
+                lane_manifest_status(
+                    TestLaneId::new(1),
+                    Some("parliament"),
+                    runtime_upgrade_rules(true),
+                ),
+            ),
+        ]);
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let tx = runtime_upgrade_transaction(authority, &keypair);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = super::LaneAssignment {
+            lane_id: TestLaneId::new(1),
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
+            dataspace_catalog: &stx.nexus.dataspace_catalog,
+        };
+
+        assert_not_permitted_contains(
+            super::enforce_lane_policies(&tx, &stx, &assignment),
+            "no manifest was loaded",
+        );
+    }
+
+    #[test]
+    fn lane_validator_gating_preserves_exact_lane_authority_when_nexus_is_disabled() {
+        let chain: ChainId = "disabled-nexus-lane-validator-gating".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let (validator, _) = gen_account_in("wonderland");
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+
+        let mut rules = runtime_upgrade_rules(true);
+        rules.validators = vec![validator];
+        rules.quorum = Some(1);
+        let statuses = BTreeMap::from([(
+            TestLaneId::SINGLE,
+            lane_manifest_status(TestLaneId::SINGLE, Some("parliament"), rules),
+        )]);
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let tx = runtime_upgrade_transaction(authority, &keypair);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
+
+        assert_not_permitted_contains(
+            super::enforce_lane_policies(&tx, &stx, &assignment),
+            "authority not part of lane validator set",
+        );
+    }
+
     #[test]
     fn missing_authority_rejected_for_non_multisig_transaction() {
         let chain: ChainId = "missing-authority-regular".parse().unwrap();
@@ -8856,8 +9343,8 @@ pub mod tests {
     }
     #[test]
     fn invalid_signature_is_rejected() {
-        use std::time::Duration;
         use iroha_data_model::prelude::*;
+        use std::time::Duration;
         let (authority_id, keypair) = gen_account_in("wonderland");
         let instruction = SetKeyValue::account(authority_id.clone(), "k".parse().unwrap(), "v");
         let tx = TransactionBuilder::new(
@@ -8906,8 +9393,8 @@ pub mod tests {
     }
     #[test]
     fn ivm_bytecode_oversize_is_rejected_at_admission() {
-        use std::time::Duration;
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use std::time::Duration;
         // Build a valid signed transaction with an oversized IVM bytecode blob
         let (authority_id, kp) = gen_account_in("wonderland");
         // Limit bytecode size to 1024 bytes for this test
@@ -8946,8 +9433,8 @@ pub mod tests {
     }
     #[test]
     fn ivm_bytecode_at_limit_is_accepted_at_admission() {
-        use std::time::Duration;
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
         // Use an exact bytecode-size limit that can be represented by the 17-byte
         // IVM metadata header plus a valid literal-prefix alignment.
@@ -8986,8 +9473,8 @@ pub mod tests {
     }
     #[test]
     fn ivm_missing_gas_bound_rejected_at_admission() {
-        use std::time::Duration;
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
         let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
         let tx = TransactionBuilder::new(
@@ -9045,8 +9532,8 @@ pub mod tests {
     }
     #[test]
     fn ivm_proved_missing_gas_bound_rejected_at_admission() {
-        use std::time::Duration;
         use iroha_data_model::transaction::{Executable, IvmProved, TransactionBuilder};
+        use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
         let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
         let tx = TransactionBuilder::new(
@@ -9086,10 +9573,10 @@ pub mod tests {
     }
     #[test]
     fn contract_call_missing_gas_bound_rejected_at_admission() {
-        use std::time::Duration;
         use iroha_data_model::transaction::{
             Executable, TransactionBuilder, executable::ContractInvocation,
         };
+        use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -9393,9 +9880,9 @@ pub mod tests {
     }
     #[test]
     fn accept_transaction_requires_expires_at_height_when_configured() {
-        use std::time::Duration;
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
+        use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -9435,9 +9922,9 @@ pub mod tests {
     }
     #[test]
     fn accept_transaction_requires_tx_sequence_when_configured() {
-        use std::time::Duration;
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
+        use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -9618,9 +10105,9 @@ pub mod tests {
     }
     #[test]
     fn retired_heartbeat_marker_rejects_non_empty_transactions() {
-        use std::time::Duration;
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
+        use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(true));
@@ -9654,11 +10141,11 @@ pub mod tests {
     }
     #[test]
     fn transaction_expired_at_height_is_rejected_by_state() {
-        use std::time::Duration;
         use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
+        use std::time::Duration;
         let (mut world, authority_id, kp) = world_with_authority("wonderland");
         let mut params = iroha_data_model::parameter::system::Parameters::default();
         params.transaction = params.transaction.with_ingress_enforcement(true, false);
@@ -9718,11 +10205,11 @@ pub mod tests {
     }
     #[test]
     fn sequence_not_increasing_is_rejected_by_state() {
-        use std::time::Duration;
         use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
+        use std::time::Duration;
         let (mut world, authority_id, kp) = world_with_authority("wonderland");
         world.tx_sequences.insert(authority_id.clone(), 5);
         let mut params = iroha_data_model::parameter::system::Parameters::default();
@@ -9783,11 +10270,11 @@ pub mod tests {
     }
     #[test]
     fn sequence_increasing_is_accepted_by_state() {
-        use std::time::Duration;
         use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
+        use std::time::Duration;
         let (mut world, authority_id, kp) = world_with_authority("wonderland");
         world.tx_sequences.insert(authority_id.clone(), 5);
         let mut params = iroha_data_model::parameter::system::Parameters::default();
@@ -11439,7 +11926,9 @@ pub mod tests {
     }
     #[test]
     fn lane_block_execution_input_uses_descriptor_indices_and_routing_context() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder, executable::IvmBytecode};
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::IvmBytecode,
+        };
         let chain: ChainId = "lane-execution-input-route".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {
@@ -11520,7 +12009,9 @@ pub mod tests {
     }
     #[test]
     fn lane_block_execution_input_rejects_forged_hashes_before_state_execution() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder, executable::IvmBytecode};
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::IvmBytecode,
+        };
         let chain: ChainId = "lane-execution-input-forged".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {
@@ -11557,7 +12048,9 @@ pub mod tests {
     }
     #[test]
     fn lane_block_execution_input_rejects_duplicate_signed_entrypoints_before_state_execution() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder, executable::IvmBytecode};
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::IvmBytecode,
+        };
         let chain: ChainId = "lane-execution-input-duplicate".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {
@@ -11593,7 +12086,9 @@ pub mod tests {
     }
     #[test]
     fn lane_block_execution_input_preserves_full_width_entrypoint_indices() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder, executable::IvmBytecode};
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::IvmBytecode,
+        };
         let chain: ChainId = "lane-execution-input-full-width-index".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {

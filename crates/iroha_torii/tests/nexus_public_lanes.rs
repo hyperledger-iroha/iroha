@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for the Nexus public-lane REST endpoints.
 #![cfg(feature = "app_api")]
-use std::{net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
 use axum::{body::Body, http::Request};
 use http::{Method, StatusCode, header};
 use http_body_util::BodyExt;
@@ -36,6 +35,7 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::ErrorEnvelope;
 use norito::json::{self, Value};
+use std::{net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
 use tokio::sync::broadcast;
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]

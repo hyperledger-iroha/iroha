@@ -1,14 +1,16 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Observer/sync-only node catches up behind a small validator swarm.
-use std::collections::{HashMap, HashSet};
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_config::base::toml::WriteExt as _;
 use iroha_primitives::unique_vec::UniqueVec;
-use iroha_test_network::{NetworkBuilder, NetworkPeer, NetworkPeerBuilder, init_instruction_registry};
+use iroha_test_network::{
+    NetworkBuilder, NetworkPeer, NetworkPeerBuilder, init_instruction_registry,
+};
 use iroha_test_samples::ALICE_ID;
 use norito::json::Value as JsonValue;
+use std::collections::{HashMap, HashSet};
 use toml::{Table, Value as TomlValue};
 #[test]
 #[allow(clippy::too_many_lines)]

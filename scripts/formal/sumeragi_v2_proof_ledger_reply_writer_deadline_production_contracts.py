@@ -147,7 +147,7 @@ _REPLY_WRITER_DEADLINE_WORKER_ITEM_SHA256 = {
 
 _REPLY_WRITER_DEADLINE_WORKER_TEST_SHA256 = {
     "ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses": (
-        "a15228b661ee53543cadcc0f6dd6f6b02f6bde59816a33ff83d78e19d9e312bc"
+        "9921c8135a2cae120a03e930d644f10ace06d9956d12eb64fad2c70ac6e9d027"
     ),
     "closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance": (
         "0f3fc3fc6668817adf3cf4092b6143fabe9a96dce60bf406c5d0d751c70cff7d"
@@ -206,6 +206,15 @@ def _reply_writer_deadline_production_source_fidelity_errors(
         / "sumeragi"
         / "v2_worker.rs"
     )
+    worker_test_path = (
+        repo_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "tests"
+        / "v2_worker_main_01.rs"
+    )
     errors: list[str] = []
     sources: dict[Path, str] = {}
     for path, description in (
@@ -215,12 +224,22 @@ def _reply_writer_deadline_production_source_fidelity_errors(
         (network_path, "exact reply peer-writer source"),
         (merge_path, "exact sidecar reply-attempt regression source"),
         (worker_path, "exact reply adaptive-attempt worker source"),
+        (worker_test_path, "exact reply adaptive-attempt regression source"),
     ):
         if not path.is_file() or path.is_symlink():
             errors.append(f"{path}: {description} must be a regular file")
             sources[path] = ""
         else:
             sources[path] = path.read_text(encoding="utf-8")
+
+    _loaded_worker_path, reviewed_worker_source = _read_reviewed_rust_source(
+        repo_root,
+        worker_path.relative_to(repo_root).as_posix(),
+        errors,
+        "exact reply adaptive-attempt worker source",
+    )
+    if reviewed_worker_source:
+        sources[worker_path] = reviewed_worker_source
 
     token_cache = {
         path: rust_code_tokens(source) for path, source in sources.items()
@@ -242,6 +261,13 @@ def _reply_writer_deadline_production_source_fidelity_errors(
                 f"{path}: {description} must occur exactly {count} time(s) in "
                 f"executable Rust source; found {observed}"
             )
+
+    worker_test_include = 'include!("tests/v2_worker_main_01.rs");'
+    if sources[worker_path].count(worker_test_include) != 1:
+        errors.append(
+            f"{worker_path}: adaptive reply-attempt worker regressions must "
+            "compile exactly once from their canonical split owner"
+        )
 
     require(
         defaults_path,
@@ -380,6 +406,7 @@ connect_startup_delay_until,
     network_source = sources[network_path]
     merge_source = sources[merge_path]
     worker_source = sources[worker_path]
+    worker_test_source = sources[worker_test_path]
     identity_context = (("impl", "NetworkReplyFlushIdentity"),)
     ack_context = (("impl", "NetworkReplyFlushAck"),)
     deadline_context = (("impl", "ExactReplyWriterDeadline"),)
@@ -420,12 +447,7 @@ connect_startup_delay_until,
     )
     worker_context = (("impl", "PendingExactOutput"),)
     fanout_context = (("impl", "PendingExactFanout"),)
-    worker_test_context = (
-        (
-            "#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super",
-            ")", "mod", "tests",
-        ),
-    )
+    worker_test_context: tuple[tuple[str, ...], ...] = ()
     merge_test_context = (
         ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
     )
@@ -1390,10 +1412,10 @@ if matches!(status, NetworkReplyFlushAckStatus::TimedOut) {
         _REPLY_WRITER_DEADLINE_WORKER_TEST_SHA256.items()
     ):
         test = _require_rust_item(
-            worker_path, worker_source, test_name, errors
+            worker_test_path, worker_test_source, test_name, errors
         )
         _require_rust_item_context(
-            worker_path,
+            worker_test_path,
             test,
             worker_test_context,
             f"adaptive reply-attempt regression {test_name}",
@@ -1401,7 +1423,7 @@ if matches!(status, NetworkReplyFlushAckStatus::TimedOut) {
             expected_attributes=("#[test]",),
         )
         _require_rust_item_token_sha256(
-            worker_path,
+            worker_test_path,
             test,
             expected_sha256,
             f"adaptive reply-attempt regression {test_name}",

@@ -23,10 +23,10 @@ SPEC.loader.exec_module(MODULE)
 def test_checked_in_compile_time_assets_and_preimages_are_exact() -> None:
     counts = MODULE.audit_repository(ROOT)
     assert counts == MODULE.AuditCounts(
-        manifests=8,
-        assets=54,
-        bytes=129_618,
-        source_preimages=62,
+        manifests=9,
+        assets=81,
+        bytes=188_882,
+        source_preimages=89,
     )
 
 
@@ -57,3 +57,40 @@ def test_raw_string_payload_recovers_exact_literal_bytes() -> None:
         MODULE.rust_raw_string_payload(b'let value = "ordinary";\n')
     with pytest.raises(MODULE.AssetError, match="no raw string terminator"):
         MODULE.rust_raw_string_payload(b'let value = r#"unterminated\n')
+
+
+def test_soracloud_format_template_transform_is_exact_and_strict() -> None:
+    span = b'''fn demo(service_name: &str, prelude: &str) -> String {
+    format!(r#"{{"service": {service_name:?}, "literal": "{{literal}}"}}
+{prelude}
+"#)
+}
+'''
+    assert MODULE.soracloud_format_template_payload(span) == (
+        b'{"service": __SORACLOUD_SERVICE_NAME_DEBUG__, "literal": "{literal}"}\n'
+        b"__SORACLOUD_SHELL_PRELUDE__\n"
+    )
+    with pytest.raises(MODULE.AssetError, match="unsupported Soracloud format field"):
+        MODULE.soracloud_format_template_payload(
+            b'fn demo() { format!(r#"{unknown}"#) }\n'
+        )
+
+
+def test_suffix_include_inventory_rejects_unmanifested_consumers(tmp_path: Path) -> None:
+    root = tmp_path.resolve()
+    manifest_path = root / "crate/src/assets/template_manifest.json"
+    manifested = manifest_path.parent / "manifested.tmpl"
+    extra = root / "crate/src/other/extra.tmpl"
+    consumer = MODULE.IncludeConsumer(root / "crate/src/lib.rs", "include_str", None)
+
+    MODULE._verify_suffix_include_inventory(
+        root, manifest_path, {manifested}, {manifested: [consumer]}, ".tmpl"
+    )
+    with pytest.raises(MODULE.AssetError, match=r"extra=\['extra\.tmpl'\]"):
+        MODULE._verify_suffix_include_inventory(
+            root,
+            manifest_path,
+            {manifested},
+            {manifested: [consumer], extra: [consumer]},
+            ".tmpl",
+        )

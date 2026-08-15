@@ -1,10 +1,10 @@
 //! Time event and filter
-use std::{convert::TryFrom, ops::Range, string::String, time::Duration};
+pub use self::model::*;
+use super::*;
 use derive_more::Constructor;
 use getset::Getters;
 use iroha_data_model_derive::model;
-pub use self::model::*;
-use super::*;
+use std::{convert::TryFrom, ops::Range, string::String, time::Duration};
 #[model]
 mod model {
     use super::*;
@@ -96,8 +96,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TimeEventFilter {
 }
 // Internal wire helper with a stable Norito tuple layout
 mod wire {
-    use norito::core as ncore;
     use super::*;
+    use norito::core as ncore;
     pub(super) struct TimeIntervalWire(pub u64, pub u64);
     impl From<TimeInterval> for TimeIntervalWire {
         fn from(t: TimeInterval) -> Self {
@@ -592,7 +592,9 @@ impl From<TimeInterval> for Range<Duration> {
 }
 /// Exports common structs and enums from this module.
 pub mod prelude {
-    pub use super::{ExecutionTime, Schedule as TimeSchedule, TimeEvent, TimeEventFilter, TimeInterval};
+    pub use super::{
+        ExecutionTime, Schedule as TimeSchedule, TimeEvent, TimeEventFilter, TimeInterval,
+    };
 }
 #[cfg(test)]
 mod json_tests {

@@ -1,11 +1,11 @@
 //! Shadow-price calculation for deterministic XOR liabilities.
-use norito::{
-    NoritoDeserialize, NoritoSerialize,
-    json::{JsonDeserialize, JsonSerialize},
-};
 use crate::{
     Numeric, NumericOperationError, Quantity, RoundingMode, XOR_QUANTITY_SCALE, XorQuantity,
     XorQuantityError, config::SettlementConfig, haircut::HaircutTier, volatility::VolatilityBucket,
+};
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    json::{JsonDeserialize, JsonSerialize},
 };
 /// Result of a shadow-price computation.
 #[derive(
@@ -111,8 +111,6 @@ impl ShadowPriceCalculator {
 }
 #[cfg(test)]
 mod tests {
-    use expect_test::expect;
-    use time::Duration;
     use crate::{
         EpsilonBps, Numeric, Quantity,
         config::SettlementConfig,
@@ -120,6 +118,8 @@ mod tests {
         price::{ShadowPriceCalculator, ShadowPriceError},
         volatility::VolatilityBucket,
     };
+    use expect_test::expect;
+    use time::Duration;
     fn calculator() -> ShadowPriceCalculator {
         ShadowPriceCalculator::new(SettlementConfig {
             twap_window: crate::DurationSeconds::new(Duration::seconds(60)),

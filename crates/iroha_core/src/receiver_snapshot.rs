@@ -1,5 +1,8 @@
 //! Witness-side proof construction for active-receiver snapshots.
-use std::collections::{BTreeMap, BTreeSet};
+use crate::sumeragi::{
+    consensus::ExecWitness,
+    smt::{KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KvPair},
+};
 use iroha_crypto::Hash;
 use iroha_data_model::offline::{
     KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1, KagemushaActiveReceiverWitnessProofV1,
@@ -7,10 +10,7 @@ use iroha_data_model::offline::{
 use iroha_data_model::validation_fee::{
     VALIDATION_FEE_POLICY_WITNESS_KEY_V1, ValidationFeePolicyWitnessProofV1,
 };
-use crate::sumeragi::{
-    consensus::ExecWitness,
-    smt::{KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KvPair},
-};
+use std::collections::{BTreeMap, BTreeSet};
 /// Construct the exact fixed-key proof against the ordinary-write SMT.
 pub(crate) fn active_receiver_witness_proof_v1(
     witness: &ExecWitness,

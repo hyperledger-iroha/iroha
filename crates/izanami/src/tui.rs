@@ -1,3 +1,4 @@
+use crate::config::{ChaosConfig, IzanamiArgs, MIN_PIPELINE_TIME, WorkloadProfile};
 use color_eyre::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -12,7 +13,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
-use crate::config::{ChaosConfig, IzanamiArgs, MIN_PIPELINE_TIME, WorkloadProfile};
 const HELP_TEXT: &str = "↑/↓ or Tab/Shift+Tab move  •  Enter edit/run  •  Esc/q exit";
 pub fn launch(args: IzanamiArgs) -> Result<Option<(ChaosConfig, IzanamiArgs)>> {
     let mut stdout = std::io::stdout();

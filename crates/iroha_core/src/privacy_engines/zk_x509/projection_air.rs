@@ -14,13 +14,6 @@
 //! binds sparse source tokens to each compact SHA message. A separate
 //! four-lane copy product binds every repeated byte occurrence. Padding rows
 //! and unused hash slots are algebraically zero.
-use std::collections::BTreeMap;
-use iroha_data_model::privacy::{
-    IrohaZkX509StarkP256StatementV1, PrivacyStatementV1, ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
-    ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1,
-};
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::io_air::{
     ZkX509IoChannelDeclarationV1, ZkX509IoChannelWitnessV1, ZkX509IoEndpointV1,
@@ -33,6 +26,13 @@ use super::profile::{
     ZK_X509_SCOPED_KEY_DOMAIN_V1, ZK_X509_SOURCE_PROFILE_V1, ZK_X509_SUITE_V1,
 };
 use crate::privacy_engines::transparent_stark::{GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F};
+use iroha_data_model::privacy::{
+    IrohaZkX509StarkP256StatementV1, PrivacyStatementV1, ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
+    ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1,
+};
+use sha2::{Digest as _, Sha256};
+use std::collections::BTreeMap;
+use thiserror::Error;
 /// Exact manifest descriptor for the projection chip.
 #[cfg(test)]
 pub(crate) const ZK_X509_PROJECTION_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-projection-air-v1:trace=32768:base-width=17:aux-width=32:hash-slots=7:sha-buffer=2048:private-length-prefix:source-compaction-permutation-4lane:byte-copy-dual-products-4lane:governance-scoped-leaf-spki+stable-issuer-serial-nullifier+4-disclosures+ownership:fixed-three-spki-input-channels:optional-third-slot-canonical-zero:verifier-fixed-public-digests:zero-padding:first-release";
@@ -3202,6 +3202,8 @@ pub(crate) fn validate_zk_x509_projection_trace_v1(
 }
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::*;
+    use crate::privacy_engines::zk_x509::io_air::build_zk_x509_io_base_tables_v1;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -3218,8 +3220,6 @@ pub(crate) mod tests {
             PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509TrustAnchorRecordDigestV1,
         },
     };
-    use super::*;
-    use crate::privacy_engines::zk_x509::io_air::build_zk_x509_io_base_tables_v1;
     fn raw(byte: u8) -> [u8; 32] {
         [byte; 32]
     }

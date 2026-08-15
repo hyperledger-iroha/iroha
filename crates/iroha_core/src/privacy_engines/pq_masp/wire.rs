@@ -4,6 +4,10 @@
 //! ciphertext bytes. Wallets retain the large ML-KEM secret keys and decrypted
 //! note plaintexts locally. There is exactly one byte layout for each object;
 //! no suite identifiers, optional fields, or compatibility decoders exist.
+use super::relation::{
+    PqMaspNotePlaintextV1, derive_pq_masp_note_commitment_v1,
+    derive_pq_masp_note_encryption_keys_digest_v1,
+};
 use chacha20poly1305::{
     XChaCha20Poly1305,
     aead::{Aead as _, KeyInit as _, Payload},
@@ -22,10 +26,6 @@ use soranet_pq::{
 };
 use thiserror::Error;
 use zeroize::Zeroizing;
-use super::relation::{
-    PqMaspNotePlaintextV1, derive_pq_masp_note_commitment_v1,
-    derive_pq_masp_note_encryption_keys_digest_v1,
-};
 /// Exact canonical ML-DSA-65 public-key length.
 pub const ML_DSA_65_PUBLIC_KEY_BYTES_V1: usize = 1_952;
 /// Exact canonical ML-DSA-65 signature length.
@@ -676,7 +676,8 @@ pub fn validate_pq_masp_note_encryption_key_digest_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
+    use super::*;
+    use crate::privacy_engines::pq_masp::relation::derive_pq_masp_nullifier_key_digest_v1;
     use iroha_data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,
@@ -691,8 +692,7 @@ mod tests {
     };
     use rand::{SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
     use soranet_pq::{generate_mldsa_keypair_from_seed, generate_mlkem_keypair_from_seed};
-    use super::*;
-    use crate::privacy_engines::pq_masp::relation::derive_pq_masp_nullifier_key_digest_v1;
+    use std::str::FromStr as _;
     fn raw(byte: u8) -> [u8; 32] {
         [byte; 32]
     }

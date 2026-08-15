@@ -1,25 +1,10 @@
 //! FFI bridge exposing Norito/Connect helpers for the mobile SDKs and bridge targets.
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::missing_safety_doc)]
-#[cfg(test)]
-use core::ffi::c_void;
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    fs::{File, OpenOptions},
-    io::{Read as _, Seek as _, SeekFrom, Write as _},
-    num::{NonZeroU32, NonZeroU64},
-    path::PathBuf,
-    ptr, slice,
-    str::FromStr as _,
-    sync::{
-        Arc, Mutex, OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
 use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
+#[cfg(test)]
+use core::ffi::c_void;
 use iroha_core::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
@@ -109,6 +94,21 @@ use sorafs_manifest::{
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1, derive_orderbook_order_id_v1,
     reference_ffi as sorafs_reference_ffi, sign_orderbook_payload_bytes_ed25519_v1,
+};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    fs::{File, OpenOptions},
+    io::{Read as _, Seek as _, SeekFrom, Write as _},
+    num::{NonZeroU32, NonZeroU64},
+    path::PathBuf,
+    ptr, slice,
+    str::FromStr as _,
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 use zeroize::{Zeroize, Zeroizing};
 mod account_onboarding;
@@ -13620,7 +13620,7 @@ fn bridge_source() -> &'static str {
 }
 #[cfg(test)]
 mod detached_transaction_scaffold_tests {
-    use std::{num::NonZeroU32, ptr};
+    use super::*;
     use iroha_data_model::{
         asset::AssetId,
         nexus::DataSpaceId,
@@ -13631,7 +13631,7 @@ mod detached_transaction_scaffold_tests {
             signed::{MultisigSignatures, TransactionBuilder},
         },
     };
-    use super::*;
+    use std::{num::NonZeroU32, ptr};
     fn detached_test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
@@ -14233,6 +14233,7 @@ pub extern "C" fn iroha_privacy_free_buffer(ptr_: *mut c_uchar) {
 }
 #[cfg(test)]
 mod kagemusha_bridge_tests {
+    use super::*;
     use iroha_core::zk::confidential_v2;
     use iroha_data_model::{
         asset::{AssetDefinitionId, AssetId},
@@ -14244,7 +14245,6 @@ mod kagemusha_bridge_tests {
         },
     };
     use p256::ecdsa::{SigningKey, signature::Signer as _};
-    use super::*;
     #[cfg(feature = "privacy-production-enabled")]
     const KAGEMUSHA_V4_GUARD_FD_ENV: &str = "IROHA_KAGEMUSHA_V4_GUARD_FD";
     const CURRENT_TAIRA_NETWORK_ID: &str =
@@ -25455,15 +25455,15 @@ mod test_support {
 }
 #[cfg(test)]
 mod accel_tests {
+    use super::*;
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::prelude::TransferBox;
     use std::{
         collections::BTreeMap,
         ffi::CString,
         num::{NonZeroU16, NonZeroU32, NonZeroU64},
         ptr, slice,
     };
-    use iroha_crypto::KeyPair;
-    use iroha_data_model::prelude::TransferBox;
-    use super::*;
     const AUTHORITY_FEE_PAYMENT_JSON: &[u8] =
         br#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}"#;
     fn fixture_key_pair(seed: u8) -> KeyPair {
@@ -27368,8 +27368,8 @@ mod accel_tests {
 }
 #[cfg(test)]
 mod secp256k1_tests {
-    use hex::decode;
     use super::*;
+    use hex::decode;
     const PRIVATE_KEY: &str = "e4f21b38e005d4f895a29e84948d7cc83eac79041aeb644ee4fab8d9da42f713";
     const PUBLIC_KEY: &str = "0242c1e1f775237a26da4fd51b8d75ee2709711f6e90303e511169a324ef0789c0";
     const SIGNATURE: &str = "0aab347be3530a3fd7d91c354956561101e6f273b8a1ea3d414f82fbd5939db34b99c54c16c45bf4cde8193b58d718e7efa8c055e7add7d9c9cbe8935e849200";
@@ -30642,10 +30642,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate
 }
 #[cfg(test)]
 mod tests {
-    use std::{ffi::CString, mem::MaybeUninit};
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
     use iroha_data_model::isi::rwa::RwaInstructionBox;
-    use super::*;
+    use std::{ffi::CString, mem::MaybeUninit};
     #[test]
     fn native_signer_jni_contract_revision_is_the_v5_network_id_hard_cut() {
         assert_eq!(native_signer_jni_contract_revision(), 5);

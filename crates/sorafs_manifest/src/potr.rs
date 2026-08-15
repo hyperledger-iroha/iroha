@@ -1,9 +1,9 @@
 //! Proof-of-Timed Retrieval (PoTR) receipt schemas.
+use crate::{AdmissionRecord, proof_stream::ProofStreamTier};
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use soranet_pq::MlDsaSuite;
 use thiserror::Error;
-use crate::{AdmissionRecord, proof_stream::ProofStreamTier};
 /// Current PoTR receipt schema version.
 pub const POTR_RECEIPT_VERSION_V1: u8 = 1;
 /// Domain separator prepended to canonical unsigned receipt bytes before signing.
@@ -731,9 +731,9 @@ pub enum PotrReceiptValidationError {
 }
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
     use super::*;
     use crate::proof_stream::ProofStreamTier;
+    use ed25519_dalek::{Signer, SigningKey};
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

@@ -42,8 +42,8 @@
 //! - Compares per-wave sort vs BinaryHeap ready-queue schedulers (both
 //!   deterministic by a synthetic key `(call_hash, idx)`).
 //! - No external deps are used; timings are rough but comparable.
-use std::time::{Duration, Instant};
 use iroha_core::pipeline::access::AccessSet;
+use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DistKind {
     Uniform,

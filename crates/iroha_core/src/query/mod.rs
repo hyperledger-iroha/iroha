@@ -11,6 +11,9 @@ pub mod provider_ingest_finalized;
 pub mod reputation_finalized;
 pub mod snapshot;
 pub mod store;
+use crate::state::{WorldReadOnly, WorldStateSnapshot};
+use iroha_data_model::block::consensus::EvidenceRecord;
+use mv::storage::StorageReadOnly;
 use std::{
     convert::TryFrom,
     num::{NonZeroU64, NonZeroUsize},
@@ -19,9 +22,6 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
-use iroha_data_model::block::consensus::EvidenceRecord;
-use mv::storage::StorageReadOnly;
-use crate::state::{WorldReadOnly, WorldStateSnapshot};
 /// Return the number of persisted evidence entries currently stored in WSV.
 pub fn evidence_count(state: &impl WorldStateSnapshot) -> usize {
     evidence_count_from_world(state.world())
@@ -50,13 +50,13 @@ pub fn evidence_list_snapshot_from_world(world: &impl WorldReadOnly) -> Vec<Evid
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
+    use std::sync::Arc;
     #[test]
     fn evidence_world_helpers_match_state_snapshot_helpers_on_empty_state() {
         let kura = Kura::blank_kura_for_testing();

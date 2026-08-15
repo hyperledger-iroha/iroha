@@ -6,16 +6,16 @@
 //! semantics. It has no scheduler, credential loader, network client, private
 //! key, or filesystem fallback. Deployments own those concerns and inject the
 //! publisher at runtime.
-use std::{fmt, sync::Arc};
-use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
 use super::{
     EvidenceViewerRuntimeProviderQualificationErrorV1,
     EvidenceViewerRuntimeProviderQualificationV1, EvidenceViewerRuntimeProviderV1,
     EvidenceViewerSignedCheckpointAnchorV1, EvidenceViewerSignedCompactionArchiveHeadV1,
     EvidenceViewerTransparencyProjectionV1, QualifiedEvidenceViewerProviderV1, is_zero_digest,
 };
+use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
+use std::{fmt, sync::Arc};
+use thiserror::Error;
 /// Canonical public transparency-head schema version.
 pub const EVIDENCE_VIEWER_TRANSPARENCY_HEAD_VERSION_V1: u16 = 1;
 const TRANSPARENCY_OPERATION_DOMAIN_V1: &[u8] =
@@ -735,11 +735,6 @@ fn map_publisher_external_error(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
-    };
-    use ed25519_dalek::{Signer as _, SigningKey};
     use super::super::{
         EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1, EVIDENCE_VIEWER_COMPACTION_ARCHIVE_VERSION_V1,
         EVIDENCE_VIEWER_RECEIPT_VERSION_V1, EVIDENCE_VIEWER_TRANSPARENCY_PROJECTION_VERSION_V1,
@@ -751,6 +746,11 @@ mod tests {
         transparency_projection_digest,
     };
     use super::*;
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
     const RECEIPT_SIGNER_HANDLE: &str = "pkcs11:prod-evidence-receipts";
     const CHECKPOINT_STORE_HANDLE: &str = "sealed:prod-evidence-checkpoints";
     const ARCHIVE_HANDLE: &str = "object-lock:prod-evidence-archive";

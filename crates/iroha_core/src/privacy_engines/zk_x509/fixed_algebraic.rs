@@ -17,13 +17,13 @@
 //! residue group.  Consequently the working set is
 //! `O(native_size + query_count * width + atom_count)`, never a materialized
 //! `native_size * width` matrix or an LDE table.
-use core::cmp::Ordering;
-use std::vec::Vec;
-use thiserror::Error;
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
     goldilocks_batch_invert_v1, goldilocks_primitive_root_v1, sha256_frame_v1,
 };
+use core::cmp::Ordering;
+use std::vec::Vec;
+use thiserror::Error;
 /// Exact first-release semantics committed alongside every schedule digest.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] = b"zk-x509-fixed-algebraic-v1-incompatible:verifier-derived-only:no-proof-fixed-material:no-artifact:no-merkle:additive-canonical-atoms=affine-range+repeated-affine-stride+sparse:overlap=goldilocks-field-addition:exact-duplicate-atoms-rejected:semantically-equivalent-alternate-decompositions-have-distinct-descriptor-digests:goldilocks-modulus=0xffffffff00000001:native-root-domain:generator-shifted-lde-coset:coset-disjoint-from-lde-subgroup:query-index-derived-point:residue-grouped-barycentric-lagrange:batch-inverted-native-denominators:cyclic-prefix-affine-sums:repeated-sums=generic-gcd-cycles+reduced-stride-modular-inverse+cyclic-weight-and-ordinal-prefixes+per-stride-min-direct-occurrence-work-vs-native-prefix-work:one-column-native-streaming:no-native-times-width-or-lde-table:bounded-native20-lde25-blowup8-width472-atoms65536-queries116-output-fields54752-work2pow28:wire=X5K1+u16be-version1+u16be-header24+native-log2-u8+lde-log2-u8+width-u16be+atom-count-u32be+coset-shift-u64be+canonical-variable-atoms:first-release-no-legacy";
 const ZK_X509_FIXED_ALGEBRAIC_MAGIC_V1: [u8; 4] = *b"X5K1";

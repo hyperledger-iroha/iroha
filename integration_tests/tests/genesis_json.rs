@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Load `genesis.json` and ensure assets minted in genesis appear on all peers.
-use std::{borrow::Cow, io::Write, path::PathBuf, sync::Arc};
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
@@ -9,6 +8,7 @@ use iroha_genesis::{GenesisBuilder, RawGenesisTransaction, init_instruction_regi
 use iroha_primitives::{json::Json, numeric::NumericSpec};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use std::{borrow::Cow, io::Write, path::PathBuf, sync::Arc};
 use tempfile::NamedTempFile;
 use tokio::time::timeout;
 use toml::Table;

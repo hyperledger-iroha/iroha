@@ -4,19 +4,6 @@
 //! filter at 16 KiB. Loads pin one direct regular-file identity, read its exact
 //! metadata length plus a growth sentinel, and decode under explicit Norito
 //! allocation limits before the configuration can influence a chaos run.
-use std::{
-    fs::{self, Metadata, OpenOptions},
-    io::{self, Read},
-    path::{Path, PathBuf},
-    time::Duration,
-};
-use color_eyre::{Result, eyre::eyre};
-use dirs::config_dir;
-use norito::{
-    DecodeLimits,
-    codec::{Decode, Encode},
-};
-use tracing::warn;
 use crate::config::{
     ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT,
     DEFAULT_SHUTDOWN_DRAIN_TIMEOUT, DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
@@ -24,6 +11,19 @@ use crate::config::{
     WorkloadProfile,
 };
 use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
+use color_eyre::{Result, eyre::eyre};
+use dirs::config_dir;
+use norito::{
+    DecodeLimits,
+    codec::{Decode, Encode},
+};
+use std::{
+    fs::{self, Metadata, OpenOptions},
+    io::{self, Read},
+    path::{Path, PathBuf},
+    time::Duration,
+};
+use tracing::warn;
 const APP_DIR: &str = "izanami";
 const CONFIG_FILE: &str = "config.bin";
 /// First-release ceiling for one persisted Izanami configuration frame.
@@ -569,13 +569,13 @@ mod portable_tests {
 }
 #[cfg(all(test, unix, target_os = "linux"))]
 mod tests {
+    use super::*;
     use std::{
         env, fs,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
         sync::{Mutex as StdMutex, OnceLock},
     };
-    use super::*;
     struct EnvGuard {
         key: &'static str,
         previous: Option<String>,

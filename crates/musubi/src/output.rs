@@ -4,8 +4,8 @@
 //! always emits exactly one versioned document on stdout and leaves stderr
 //! empty, including for command failures. Exit status remains independent of
 //! the selected presentation mode.
-use std::{collections::BTreeMap, io::Write};
 use norito::json::{Map, Value};
+use std::{collections::BTreeMap, io::Write};
 /// Stable schema name for one-document Musubi CLI output.
 pub const OUTPUT_SCHEMA: &str = "musubi-cli-output";
 /// First-release Musubi CLI output schema version.
@@ -594,8 +594,8 @@ fn redact_bearer_tokens(input: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
     use super::*;
+    use std::collections::BTreeSet;
     #[test]
     fn v1_error_codes_and_exit_codes_are_stable_and_unique() {
         let spellings = ErrorCode::ALL

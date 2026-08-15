@@ -1,5 +1,4 @@
 //! End-to-end checks for the sorafs-node CLI helpers.
-use std::{fs, io, path::Path};
 use assert_cmd::cargo::cargo_bin_cmd;
 use ed25519_dalek::{Signer as _, SigningKey};
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
@@ -11,6 +10,7 @@ use sorafs_manifest::{
     },
     provider_advert::{AdvertSignature, SignatureAlgorithm},
 };
+use std::{fs, io, path::Path};
 use tempfile::TempDir;
 fn ingest_tests_enabled() -> bool {
     std::env::var("SORAFS_NODE_SKIP_INGEST_TESTS").map_or(true, |value| value != "1")

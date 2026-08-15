@@ -1,9 +1,9 @@
 //! Kotodama structs: field access lowering via pointer-ABI to CoreHost.
-use std::collections::HashMap;
 use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
+use std::collections::HashMap;
 mod common;
 #[test]
 fn struct_fields_lower_to_syscall_args() {

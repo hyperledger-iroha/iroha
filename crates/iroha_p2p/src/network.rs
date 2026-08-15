@@ -9543,7 +9543,10 @@ include!("network/handle_update_tests.rs");
 #[cfg(test)]
 mod accept_stream_tests {
     use super::*;
-    use crate::peer::test_support::{SpawnPath, snapshot};
+    use crate::peer::{
+        SoranetHandshakeConfig,
+        test_support::{SpawnPath, snapshot},
+    };
     use iroha_config::parameters::actual::{
         LaneProfile, Network as NetCfg, RelayMode, SoranetHandshake as ActualSoranetHandshake,
         SoranetPow, SoranetPrivacy as ActualSoranetPrivacy,
@@ -9561,7 +9564,8 @@ mod accept_stream_tests {
     #[cfg(feature = "quic")]
     #[allow(unused_imports)]
     use quinn::crypto::rustls::QuicClientConfig;
-    use std::time::Duration;
+    use std::{collections::HashSet, sync::Arc, time::Duration};
+    use tokio::{net::TcpListener, sync::mpsc};
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     fn test_node_key_pair() -> KeyPair {

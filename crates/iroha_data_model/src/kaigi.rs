@@ -1,8 +1,5 @@
 //! Data structures supporting Kaigi instructions.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-};
+use crate::{account::AccountId, domain::DomainId, metadata::Metadata, name::Name};
 use derive_more::Display;
 use getset::Getters;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
@@ -11,7 +8,10 @@ use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
-use crate::{account::AccountId, domain::DomainId, metadata::Metadata, name::Name};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+};
 /// Domain separation tag for Kaigi roster commitment leaves.
 const KAIGI_ROSTER_LEAF_TAG: &[u8] = b"iroha:kaigi:roster:leaf:v1\x00";
 /// Seed used for the deterministic empty Kaigi roster root.
@@ -783,10 +783,10 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use super::*;
     use iroha_crypto::KeyPair;
     use norito::codec::{decode_adaptive, encode_adaptive};
-    use super::*;
+    use std::str::FromStr;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked Kaigi fixture keypair")
     }

@@ -1,7 +1,5 @@
 //! Council gating for governance proposals: referenda open only after quorum.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::collections::BTreeMap;
-use std::num::NonZeroU64;
 use iroha_core::{
     governance::draw,
     kura::Kura,
@@ -24,6 +22,8 @@ use iroha_data_model::{
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 fn sample_contract_address(
     account_id: &iroha_data_model::account::AccountId,
     deploy_nonce: u64,

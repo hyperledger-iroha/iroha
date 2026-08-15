@@ -1,4 +1,3 @@
-use std::{env, fs, process, str::FromStr};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_data_model::{
     account::AccountId,
@@ -24,6 +23,7 @@ use norito::{
     to_bytes,
 };
 use sorafs_manifest::capacity::{CapacityDeclarationV1, ReplicationOrderV1};
+use std::{env, fs, process, str::FromStr};
 fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");

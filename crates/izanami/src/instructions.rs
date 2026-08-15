@@ -1,11 +1,4 @@
 //! Workload generation utilities for Izanami, covering diverse ISI mixes and trigger flavours.
-#[cfg(test)]
-use std::sync::Mutex as StdMutex;
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use color_eyre::{Result, eyre::eyre};
 use iroha_config::parameters::defaults as config_defaults;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -83,11 +76,18 @@ use sorafs_manifest::{
     },
     chunker_registry,
 };
+#[cfg(test)]
+use std::sync::Mutex as StdMutex;
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 /// Base seed used for deterministic peer identity derivation in Izanami networks.
 pub const IZANAMI_BASE_SEED: &str = "izanami-chaos";
-use tokio::sync::Mutex;
 use crate::config::WorkloadProfile;
 use crate::smart_contracts;
+use tokio::sync::Mutex;
 fn quantity_to_u64_exact(quantity: &Quantity) -> Option<u64> {
     if quantity.scale() != 0 {
         return None;
@@ -2904,14 +2904,14 @@ impl ChaosState {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::config::{NexusProfile, WorkloadProfile};
     use iroha_data_model::isi::{
         MintBox, RegisterBox, RemoveKeyValueBox, SetKeyValueBox, UnregisterBox,
     };
     use norito::codec::Decode;
     use rand::SeedableRng;
     use tokio::runtime::Builder;
-    use super::*;
-    use crate::config::{NexusProfile, WorkloadProfile};
     fn minted_asset_destination(plan: &TransactionPlan) -> AssetId {
         plan.instructions
             .iter()

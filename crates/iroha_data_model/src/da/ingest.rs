@@ -1,6 +1,3 @@
-use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -13,6 +10,9 @@ use crate::{
     nexus::LaneId,
     sorafs::pin_registry::StorageClass,
 };
+use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Domain separator for version-one DA ingest request signatures.
 pub const DA_INGEST_REQUEST_SIGNING_DOMAIN_V1: &[u8] = b"iroha:da-ingest-request:v1\0";
 /// Domain separator for the immutable request-content commitment carried into consensus.

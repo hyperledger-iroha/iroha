@@ -6,10 +6,10 @@
 //! unbounded retry with a public ceiling.  AES is CPU-only safe Rust with a
 //! fixed-control-flow algebraic S-box; neither secret-indexed tables nor
 //! accelerator/device dispatch are used.
+use super::{holder_aes256::ConstantTimeAes256KeyV1, ring::ApplicationPolynomialV1};
 use rand_core_06::{CryptoRng, RngCore};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-use super::{holder_aes256::ConstantTimeAes256KeyV1, ring::ApplicationPolynomialV1};
 pub(crate) const CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1: usize = 16;
 pub(crate) const CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1: u64 =
     super::params::RANDOMNESS_NORM_SQUARED_BOUND_V1;
@@ -350,9 +350,9 @@ pub(crate) enum CredentialRandomnessErrorV1 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rand_core_06::Error as RngError;
     use sha2::{Digest as _, Sha256};
-    use super::*;
     struct FailingRng;
     impl RngCore for FailingRng {
         fn next_u32(&mut self) -> u32 {

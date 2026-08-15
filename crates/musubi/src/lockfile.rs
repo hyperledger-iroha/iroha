@@ -3,12 +3,9 @@
 //! The lock records only stable registry identities and immutable commitments.
 //! It deliberately contains no cache paths, provider URLs, source plans,
 //! timestamps, credentials, or bearer material.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    fmt::Write as _,
-    io,
-    path::Path,
+use crate::{
+    atomic_io::{AtomicWriteError, AtomicWriteRoot},
+    local_file::read_bounded_single_link_regular_file_v1,
 };
 use iroha_data_model::{
     NetworkId,
@@ -23,9 +20,12 @@ use iroha_data_model::{
     },
     nexus::DataSpaceId,
 };
-use crate::{
-    atomic_io::{AtomicWriteError, AtomicWriteRoot},
-    local_file::read_bounded_single_link_regular_file_v1,
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    fmt::Write as _,
+    io,
+    path::Path,
 };
 /// Canonical schema label required in every first-release lock.
 pub const LOCK_SCHEMA: &str = "musubi-lock";
@@ -1001,9 +1001,9 @@ impl fmt::Write for BoundedLockDocumentV1 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::fs::{self, File};
     use tempfile::tempdir;
-    use super::*;
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()

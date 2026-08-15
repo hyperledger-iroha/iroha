@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii Space Directory manifest endpoint tests.
 #![cfg(feature = "app_api")]
-use std::sync::Arc;
 use axum::{Router, http::Request, response::IntoResponse as _, routing::post};
 use base64::Engine as _;
 use hex::ToHex;
@@ -30,6 +29,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use norito::codec::Decode;
 use norito::json::{self, Value};
+use std::sync::Arc;
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;

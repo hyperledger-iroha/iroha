@@ -1,7 +1,7 @@
 //! Module with telemetry future telemetry processing
-use std::{collections::HashMap, marker::Unpin, time::Duration};
 use iroha_futures::FuturePollTelemetry;
 use iroha_logger::telemetry::Event as Telemetry;
+use std::{collections::HashMap, marker::Unpin, time::Duration};
 use tokio::time;
 use tokio_stream::{Stream, StreamExt, wrappers::errors::BroadcastStreamRecvError};
 pub mod post_process {
@@ -101,8 +101,8 @@ pub fn get_stream(
 }
 #[cfg(test)]
 mod tests {
-    use tokio_stream::empty;
     use super::*;
+    use tokio_stream::empty;
     #[tokio::test]
     async fn collect_info_handles_empty_stream() {
         let info = post_process::collect_info(empty()).await;

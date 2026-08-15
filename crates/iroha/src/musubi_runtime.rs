@@ -3,16 +3,7 @@
 //! The public Torii `SoraFS` upload route is deliberately not used here. Every request
 //! targets one fixed publication-specific route, carries a bounded canonical Norito
 //! authorization approved by the configured Iroha account controller, and rejects redirects.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    io::Read,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use crate::{client::Client, crypto::KeyPair};
 use base64::Engine as _;
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_data_model::{
@@ -54,8 +45,17 @@ use sorafs_car::{
         MusubiBundleVerifierV1,
     },
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    io::Read,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use url::Url;
-use crate::{client::Client, crypto::KeyPair};
 mod publication_clock;
 mod publication_journal;
 #[cfg(unix)]

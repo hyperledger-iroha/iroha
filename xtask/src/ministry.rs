@@ -1,9 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-};
+use crate::ministry_panel::{self, SynthesizeOptions as PanelSynthesizeOptions};
 use blake3::Hasher;
 use iroha_data_model::ministry::{ReviewPanelSummaryV1, TransparencyReleaseV1};
 use norito::{
@@ -15,8 +10,13 @@ use rand_chacha::ChaCha20Rng;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as SerdeJsonValue;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use crate::ministry_panel::{self, SynthesizeOptions as PanelSynthesizeOptions};
 pub enum Command {
     Ingest(Box<IngestOptions>),
     Build(Box<BuildOptions>),
@@ -1688,6 +1688,7 @@ fn now_rfc3339() -> String {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, PublicKey, Signature, SignatureOf};
     use iroha_data_model::{
         ministry::{
@@ -1705,7 +1706,6 @@ mod tests {
     };
     use norito::decode_from_bytes;
     use tempfile::{NamedTempFile, TempDir};
-    use super::*;
     #[test]
     fn volunteer_validator_accepts_template() {
         let raw =

@@ -6,6 +6,11 @@
 //! family. Windows uses `NtCreateFile` for root-directory-relative opens and
 //! `SetFileInformationByHandle` for rename/disposition. Other targets fail
 //! closed because they are not V1 native release targets.
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt as _;
 use std::{
     ffi::{OsStr, OsString},
     fmt,
@@ -18,11 +23,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt as _;
 #[cfg(unix)]
 unsafe extern "C" {
     fn geteuid() -> std::os::raw::c_uint;
@@ -680,6 +680,7 @@ pub(super) fn is_atomic_retained_candidate_for(name: &str, target: &str) -> bool
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform {
+    use super::{FileIdentity, RootedDirectory, file_identity};
     #[cfg(target_os = "macos")]
     use std::os::raw::c_void;
     use std::{
@@ -693,7 +694,6 @@ mod platform {
         },
         path::Path,
     };
-    use super::{FileIdentity, RootedDirectory, file_identity};
     #[cfg(target_os = "linux")]
     const O_CREATE: c_int = 0x40;
     #[cfg(target_os = "macos")]
@@ -1280,6 +1280,7 @@ mod platform {
 }
 #[cfg(windows)]
 mod platform {
+    use super::{FileIdentity, RootedDirectory, file_identity, windows_dacl};
     use std::{
         ffi::{OsStr, OsString, c_void},
         fs::{self, File, OpenOptions},
@@ -1293,7 +1294,6 @@ mod platform {
         path::{Component, Path, PathBuf},
         ptr,
     };
-    use super::{FileIdentity, RootedDirectory, file_identity, windows_dacl};
     type Handle = *mut c_void;
     type NtStatus = i32;
     const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
@@ -2249,8 +2249,8 @@ mod platform {
     }
     #[cfg(test)]
     mod tests {
-        use std::process::Command;
         use super::*;
+        use std::process::Command;
         use tempfile::tempdir;
         fn write_entry(
             buffer: &mut [u8],
@@ -2362,12 +2362,12 @@ mod platform {
 }
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod platform {
+    use super::{FileIdentity, RootedDirectory};
     use std::{
         ffi::{OsStr, OsString},
         fs::{self, File},
         io,
     };
-    use super::{FileIdentity, RootedDirectory};
     pub(super) fn unsupported() -> io::Error {
         io::Error::new(
             io::ErrorKind::Unsupported,

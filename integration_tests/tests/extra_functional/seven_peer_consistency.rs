@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that all peers in a seven-peer network maintain consistent asset balances with DA enabled.
-use std::time::{Duration, Instant};
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::{sandbox, sync::get_status_with_retry_or_storage};
 use iroha::{
@@ -22,6 +21,7 @@ use iroha::{
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
+use std::time::{Duration, Instant};
 #[test]
 #[allow(clippy::too_many_lines)]
 fn seven_peer_cross_peer_consistency_basic() -> Result<()> {

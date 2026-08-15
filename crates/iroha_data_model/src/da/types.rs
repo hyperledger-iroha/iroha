@@ -1,13 +1,13 @@
 #![allow(clippy::useless_let_if_seq)]
-use std::ops::{Deref, DerefMut};
+use crate::sorafs::pin_registry::StorageClass;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_primitives::numeric::{RoundingMode, XorQuantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sorafs_manifest::deal::BASIS_POINTS_PER_UNIT;
+use std::ops::{Deref, DerefMut};
 use thiserror::Error;
-use crate::sorafs::pin_registry::StorageClass;
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 /// Blake3-based digest used across DA ingest structures (blob identifiers, manifests, tickets).
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
@@ -644,8 +644,8 @@ impl RentRatioField {
 }
 #[cfg(test)]
 mod erasure_profile_tests {
-    use norito::json;
     use super::*;
+    use norito::json;
     #[test]
     fn skips_zero_row_parity_stripes_in_json() {
         let profile = ErasureProfile {

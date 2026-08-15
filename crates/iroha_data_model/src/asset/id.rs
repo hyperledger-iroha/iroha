@@ -1,5 +1,6 @@
 //! Asset identifiers.
-use std::{array, fmt, format, str::FromStr, string::String};
+pub use self::model::*;
+use crate::{Name, account::prelude::*, domain::prelude::*, error::ParseError, nexus::DataSpaceId};
 use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
@@ -7,8 +8,7 @@ use norito::{
     NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
 };
-pub use self::model::*;
-use crate::{Name, account::prelude::*, domain::prelude::*, error::ParseError, nexus::DataSpaceId};
+use std::{array, fmt, format, str::FromStr, string::String};
 #[model]
 mod model {
     use super::*;
@@ -372,9 +372,9 @@ impl FromStr for AssetId {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
     use super::*;
     use crate::account::AccountId;
+    use iroha_crypto::KeyPair;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked asset id fixture keypair")
     }

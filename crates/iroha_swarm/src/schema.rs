@@ -1,9 +1,9 @@
 //! Docker Compose schema.
-use norito::json::{self, Map, Value};
 use crate::{
     GenesisArtifactSettings, ImageSettings, PeerSettings, PreparedRuntimeConfig,
     PreparedRuntimeSource, base64_standard, path, peer,
 };
+use norito::json::{self, Map, Value};
 fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
     let mut map = Map::new();
     map.insert(
@@ -87,9 +87,9 @@ fn trusted_peers_pop_map(
 }
 #[cfg(test)]
 mod json_value_tests {
-    use norito::json::{self, Map, Value};
     use super::*;
     use crate::peer;
+    use norito::json::{self, Map, Value};
     type SampleTopology = (
         peer::ExposedKeyPair,
         peer::ExposedKeyPair,
@@ -1084,9 +1084,9 @@ impl<'a> DockerCompose<'a> {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
     use super::*;
     use crate::{BASE_PORT_API, BASE_PORT_P2P};
+    use std::collections::{BTreeMap, HashMap};
     impl<'a> From<PeerEnv<'a>> for iroha_config::base::env::MockEnv {
         fn from(env: PeerEnv<'a>) -> Self {
             mock_env_from_value(peer_env_to_value(&env))

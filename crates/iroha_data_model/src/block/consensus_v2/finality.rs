@@ -4,17 +4,17 @@
 //! every redundant protocol, context, height, subject, and block-hash binding,
 //! but deliberately leaves aggregate-signature verification to the consensus
 //! cryptography adapter.
-use core::fmt;
-use std::vec::Vec;
-use iroha_crypto::{Algorithm, HashOf};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
 use super::{
     BlockSubject, ConsensusMode, DualQuorum, GlobalPhase, Height, HeightContext, HeightContextId,
     PROTOCOL_VERSION, QuorumCertificate, ValidationError, ValidatorPower, Vote,
 };
 use crate::block::BlockHeader;
+use core::fmt;
+use iroha_crypto::{Algorithm, HashOf};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::vec::Vec;
+use thiserror::Error;
 /// Current Norito layout version of [`V2FinalityArtifact`].
 pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 4;
 /// Maximum encoded BLS proof-of-possession bytes retained per validator.
@@ -694,14 +694,14 @@ impl fmt::Display for V2FinalityValidationError {
 impl std::error::Error for V2FinalityValidationError {}
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use norito::codec::{DecodeAll, Encode};
     use super::*;
     use crate::block::consensus_v2::{
         ConsensusRound, DataAvailabilityLayout, PayloadEncoding, ValidatorIndex,
     };
     use crate::{NetworkId, peer::PeerId};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use norito::codec::{DecodeAll, Encode};
+    use std::num::NonZeroU64;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),

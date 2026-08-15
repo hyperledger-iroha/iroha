@@ -3,14 +3,14 @@
 //! These events mirror the lifecycle described in `gov.md` and the roadmap,
 //! providing typed Norito-serialisable payloads which higher layers can emit
 //! once the corresponding execution paths are implemented.
-use std::string::String;
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     account::AccountId,
     governance::types::{ParliamentBodies, ProposalId, VoteChoice},
 };
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::string::String;
 /// Root/sudo execution outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub enum SudoExecutionResult {

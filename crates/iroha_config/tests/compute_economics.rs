@@ -1,10 +1,10 @@
 //! Tests for compute economics governance bounds and sponsor caps.
-use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
 use iroha_config::parameters::{actual::ComputeEconomics, defaults};
 use iroha_data_model::{
     compute::{ComputeGovernanceError, ComputePriceWeights},
     name::Name,
 };
+use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
 fn default_price_families() -> BTreeMap<Name, ComputePriceWeights> {
     defaults::compute::price_families()
 }

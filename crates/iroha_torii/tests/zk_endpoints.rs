@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level tests for ZK convenience endpoints.
 #![cfg(feature = "app_api")]
-use std::{collections::HashSet, sync::Arc};
 use axum::{Router, extract::State, routing::post};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -11,6 +10,7 @@ use iroha_core::{
 };
 use iroha_data_model::{NewAccount, prelude::*};
 use nonzero_ext::nonzero;
+use std::{collections::HashSet, sync::Arc};
 use tower::ServiceExt as _; // for Router::oneshot
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";

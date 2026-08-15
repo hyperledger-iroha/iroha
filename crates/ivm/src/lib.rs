@@ -92,8 +92,8 @@ mod vector;
 pub mod zk;
 mod zk_poseidon;
 pub mod zk_verify;
-use std::sync::{Mutex, OnceLock};
 use iroha_telemetry::metrics::{StackSettingsSnapshot, record_stack_limits};
+use std::sync::{Mutex, OnceLock};
 // Deterministic parallel execution utilities.
 pub mod parallel;
 /// Canonical host-independent builders for generated executor fixtures.
@@ -134,6 +134,7 @@ pub use crate::metadata::{
     VECTOR_LENGTH_MAX, contract_code_hash, decode_literal_descriptor, encode_literal_descriptor,
 };
 pub use crate::prepared::PreparedContract;
+pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 pub use crate::{
     aes::{
         aes128_decrypt_many, aes128_encrypt_many, aes128_expand_key, aesdec, aesdec_impl,
@@ -181,23 +182,6 @@ pub use crate::{
     sha3::{keccak_f1600, sha3_absorb_block},
     zk_poseidon::{pair_hash_bytes, pair_hash_u64},
 };
-pub use iroha_crypto::{MerkleProof, MerkleTree};
-/// Syscall policy determined by `ProgramMetadata.abi_version`.
-pub use ivm_abi::SyscallPolicy;
-/// Canonical Kotodama V1 dynamic state-access hint validation.
-pub use ivm_abi::access_hints;
-/// Canonical Norito framing helpers shared by ABI producers and consumers.
-pub use ivm_abi::codec;
-/// Stable V1 typed core-query tags, projections, and bounded page records.
-pub use ivm_abi::core_query;
-/// Exact schemas and typed nested-return records encoded at public contract boundaries.
-pub use ivm_abi::entrypoint::{
-    EntrypointArgumentSchemaV1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
-    EntrypointValueTypeV1,
-};
-/// Canonical schemas and records used for durable Kotodama V1 state values.
-pub use ivm_abi::state_value;
-pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 pub use crate::{
     mock_wsv::{
         AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
@@ -218,10 +202,26 @@ pub use crate::{
     },
     zk::{MemEvent, RegEvent, RegisterState},
 };
-/// Public Norito-typed request envelopes for VRF syscalls.
-pub mod vrf;
+pub use iroha_crypto::{MerkleProof, MerkleTree};
+/// Syscall policy determined by `ProgramMetadata.abi_version`.
+pub use ivm_abi::SyscallPolicy;
+/// Canonical Kotodama V1 dynamic state-access hint validation.
+pub use ivm_abi::access_hints;
+/// Canonical Norito framing helpers shared by ABI producers and consumers.
+pub use ivm_abi::codec;
+/// Stable V1 typed core-query tags, projections, and bounded page records.
+pub use ivm_abi::core_query;
+/// Exact schemas and typed nested-return records encoded at public contract boundaries.
+pub use ivm_abi::entrypoint::{
+    EntrypointArgumentSchemaV1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
+    EntrypointValueTypeV1,
+};
+/// Canonical schemas and records used for durable Kotodama V1 state values.
+pub use ivm_abi::state_value;
 #[cfg(test)]
 mod ptx_tests;
+/// Public Norito-typed request envelopes for VRF syscalls.
+pub mod vrf;
 /// Optional acceleration policy applied at runtime by hosts.
 ///
 /// By default, the VM will use all available hardware backends (SIMD, Metal, CUDA)

@@ -3,15 +3,15 @@
 //! The JavaScript boundary deliberately accepts one already-existing parent, one private
 //! directory, and one leaf filename. Keeping the namespace this small lets the host validate
 //! every object identity and reject indirection before publishing security-sensitive state.
+use napi::bindgen_prelude::Buffer;
+use napi_derive::napi;
+use rand_core_06::{OsRng, RngCore as _};
 use std::{
     fmt, fs, io,
     io::{Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     sync::Mutex,
 };
-use napi::bindgen_prelude::Buffer;
-use napi_derive::napi;
-use rand_core_06::{OsRng, RngCore as _};
 const MAXIMUM_BYTES_HARD_LIMIT: u32 = 64 * 1024 * 1024;
 const TEMP_NAME_ATTEMPTS: usize = 32;
 static STORAGE_LOCK: Mutex<()> = Mutex::new(());
@@ -810,12 +810,12 @@ pub fn secure_private_file_write_atomic(
 }
 #[cfg(unix)]
 mod platform {
+    use super::SecureFsError;
     use std::{
         fs, io,
         os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _},
         path::Path,
     };
-    use super::SecureFsError;
     const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
     const PRIVATE_FILE_MODE: u32 = 0o600;
     pub(super) fn validate_root_syntax(_root: &Path) -> Result<(), SecureFsError> {
@@ -970,6 +970,7 @@ mod platform {
     #[cfg(target_os = "macos")]
     #[allow(unsafe_code)]
     mod extended_acl {
+        use super::SecureFsError;
         use std::{
             ffi::{CString, c_char, c_int, c_void},
             fs, io,
@@ -977,7 +978,6 @@ mod platform {
             path::Path,
             ptr,
         };
-        use super::SecureFsError;
         const ACL_TYPE_EXTENDED: c_int = 0x0000_0100;
         const ACL_FIRST_ENTRY: c_int = 0;
         const ACL_NEXT_ENTRY: c_int = -1;
@@ -1157,8 +1157,8 @@ mod platform {
     }
     #[cfg(not(target_os = "macos"))]
     mod extended_acl {
-        use std::{fs, io, path::Path};
         use super::SecureFsError;
+        use std::{fs, io, path::Path};
         pub(super) fn validate_ancestor_path(_path: &Path) -> Result<(), SecureFsError> {
             Ok(())
         }
@@ -1179,6 +1179,7 @@ mod platform {
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod platform {
+    use super::SecureFsError;
     use std::{
         ffi::{OsStr, c_void},
         fs, io, mem,
@@ -1226,7 +1227,6 @@ mod platform {
             Threading::{GetCurrentProcess, OpenProcessToken},
         },
     };
-    use super::SecureFsError;
     const ANCESTOR_REPLACEMENT_OR_CONTROL_RIGHTS: u32 =
         FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL;
     const PARENT_CREATION_RIGHTS: u32 = FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
@@ -2142,8 +2142,8 @@ mod platform {
 }
 #[cfg(not(any(unix, windows)))]
 mod platform {
-    use std::{fs, io, path::Path};
     use super::SecureFsError;
+    use std::{fs, io, path::Path};
     fn unsupported() -> SecureFsError {
         SecureFsError::unsafe_storage(
             "secure private filesystem is supported only on Unix and Windows",

@@ -1,9 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests that Torii fails to bind to an occupied port and exits with a non-zero status.
-use std::{net::TcpListener, time::Duration};
 use integration_tests::sandbox;
 use iroha_primitives::addr::socket_addr;
 use iroha_test_network::{NetworkBuilder, PeerLifecycleEvent};
+use std::{net::TcpListener, time::Duration};
 use tokio::time::timeout;
 #[tokio::test]
 async fn torii_bind_failure_results_in_non_zero_exit() -> eyre::Result<()> {

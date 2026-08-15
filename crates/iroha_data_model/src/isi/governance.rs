@@ -4,17 +4,17 @@
 //! executed by the corresponding core governance paths. They also define the
 //! exact CLI and Torii draft surfaces; endpoint-local aliases are not part of
 //! the instruction format.
-use std::{string::String, vec::Vec};
 #[cfg(feature = "governance")]
 use crate::governance::types::ParliamentBody;
+use std::{string::String, vec::Vec};
 #[cfg(not(feature = "governance"))]
 type ParliamentBody = ();
-use iroha_primitives::numeric::Quantity;
-use norito::codec::{Decode, Encode};
 #[cfg(not(feature = "governance"))]
 pub use self::at_window_placeholder::AtWindow;
 #[cfg(feature = "governance")]
 pub use crate::governance::types::AtWindow;
+#[cfg(test)]
+use crate::isi::bridge::SccpRouteGovernanceActionV1;
 use crate::{
     isi::sorafs::SorafsProviderGovernanceActionV1,
     prelude::*,
@@ -25,8 +25,8 @@ use crate::{
         ValidationFeeTreasuryPayoutBindingV1,
     },
 };
-#[cfg(test)]
-use crate::isi::bridge::SccpRouteGovernanceActionV1;
+use iroha_primitives::numeric::Quantity;
+use norito::codec::{Decode, Encode};
 #[cfg(not(feature = "governance"))]
 mod at_window_placeholder {
     use super::*;
@@ -668,10 +668,10 @@ impl_governance_decode_from_slice!(RegisterCitizen {
 impl_governance_decode_from_slice!(UnregisterCitizen { owner: AccountId });
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::core::DecodeFromSlice;
-    use super::*;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked governance fixture account keypair");

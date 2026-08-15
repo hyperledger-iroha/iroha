@@ -29,7 +29,7 @@ pub fn has_npos_parameters(manifest: &RawGenesisTransaction) -> Result<bool> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use super::*;
     use iroha_data_model::{
         isi::Grant,
         parameter::{
@@ -40,8 +40,8 @@ mod tests {
     };
     use iroha_genesis::{GenesisBuilder, RawGenesisTransaction};
     use iroha_test_samples::ALICE_ID;
+    use std::{fs, path::PathBuf};
     use tempfile::NamedTempFile;
-    use super::*;
     fn manifest_with_params(
         params: Parameter,
         consensus_mode: SumeragiConsensusMode,

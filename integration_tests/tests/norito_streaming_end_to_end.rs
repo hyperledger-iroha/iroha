@@ -1,9 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end Norito Streaming harness covering manifest + chunk delivery.
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr},
-    time::Duration,
-};
 use crate::streaming::{
     self, StreamingTestVector, baseline_test_vector, make_peer, manifest_announce_for_viewer,
     streaming_handle, test_keypairs,
@@ -17,6 +13,10 @@ use iroha_p2p::streaming::{
 };
 use norito::streaming::{
     CapabilityReport, CapabilityRole, ChunkAcknowledgeFrame, ControlFrame, TransportCapabilities,
+};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr},
+    time::Duration,
 };
 use tokio::time::{sleep, timeout};
 const ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(15);

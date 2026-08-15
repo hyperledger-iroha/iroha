@@ -386,11 +386,11 @@ impl Default for FrontendBudget {
 }
 #[cfg(test)]
 mod tests {
+    use super::{MAX_SOURCE_BYTES, SourceFile, SourceId, SourceReadError, read_source_file};
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
     };
-    use super::{MAX_SOURCE_BYTES, SourceFile, SourceId, SourceReadError, read_source_file};
     static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
     fn with_temp_source(bytes: &[u8], test: impl FnOnce(&std::path::Path)) {
         let nonce = NEXT_FILE.fetch_add(1, Ordering::Relaxed);

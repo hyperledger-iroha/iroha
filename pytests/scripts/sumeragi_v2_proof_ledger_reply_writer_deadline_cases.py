@@ -417,7 +417,7 @@ def test_reply_writer_deadline_production_global_source_mutations_fail_closed(
             "reply_flush_test_fixture_distinguishes_success_timeout_and_close",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs",
             "reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance",
             "fn reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance()",
             "fn reply_flush_attempt_identity_mismatch_advances_mutant()",

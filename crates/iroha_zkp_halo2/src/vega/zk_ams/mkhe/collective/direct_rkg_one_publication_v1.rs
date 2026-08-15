@@ -337,5 +337,5 @@ fn validate_publication_axes_v1(
 }
 
 #[cfg(test)]
-#[path = "direct_rkg_one_publication_v1_tests.rs"]
+#[path = "direct_rkg_one_publication_v1/direct_rkg_one_publication_v1_tests.rs"]
 mod tests;

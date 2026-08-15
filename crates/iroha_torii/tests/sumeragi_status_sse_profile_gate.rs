@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Profile gate test for `/v1/sumeragi/status/sse`.
 #![cfg(feature = "telemetry")]
-use std::sync::Arc;
 use axum::http::Request;
 use http::StatusCode;
 use iroha_config::parameters::actual::TelemetryProfile;
@@ -13,6 +12,7 @@ use iroha_core::{
 };
 use iroha_data_model::ChainId;
 use iroha_torii::{MaybeTelemetry, Torii};
+use std::sync::Arc;
 use tower::ServiceExt as _;
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()

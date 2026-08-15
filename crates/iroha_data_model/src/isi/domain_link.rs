@@ -90,13 +90,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAccountAliasBinding {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         account::rekey::{AccountAlias, AccountAliasDomain},
         nexus::DataSpaceId,
     };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive alias-binding fixture keypair");

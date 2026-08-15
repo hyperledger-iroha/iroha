@@ -3,13 +3,10 @@
 //! This module wires the relay metrics into the SoraNet VPN cell format so ingress/egress
 //! accounting works end-to-end while the tunnel runtime handles fixed-size framing,
 //! pacing, and cover injection.
-use std::{
-    cmp::max,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+use crate::{
+    config::{ConfigError, VpnConfig},
+    metrics::Metrics,
+    vpn_adapter::{VpnAdapter, VpnBridge},
 };
 use iroha_data_model::soranet::{
     RelayId,
@@ -21,15 +18,18 @@ use iroha_data_model::soranet::{
     },
 };
 use iroha_primitives::numeric::Quantity;
+use std::{
+    cmp::max,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     time::{Instant as TokioInstant, sleep_until},
-};
-use crate::{
-    config::{ConfigError, VpnConfig},
-    metrics::Metrics,
-    vpn_adapter::{VpnAdapter, VpnBridge},
 };
 fn unix_time_ms(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
@@ -802,12 +802,12 @@ impl VpnSessionHandle {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::metrics::Metrics;
     use std::{
         sync::Arc,
         time::{Duration, UNIX_EPOCH},
     };
-    use crate::metrics::Metrics;
-    use super::*;
     #[test]
     fn unix_time_ms_saturates_pre_epoch_clock() {
         assert_eq!(unix_time_ms(UNIX_EPOCH - Duration::from_secs(1)), 0);

@@ -3,7 +3,6 @@
 //!
 //! These tests focus on making sure the queue rejects expired payloads and that the
 //! ready/pending drain helpers stay panic-free under concurrent pressure.
-use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
     kura::Kura,
@@ -16,6 +15,7 @@ use iroha_crypto::KeyPair;
 use iroha_data_model::{domain::Domain, prelude::*};
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
+use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::time::sleep;
 /// Helper trait exposing queue drain helpers for the integration tests.
 ///

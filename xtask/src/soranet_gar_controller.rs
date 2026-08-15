@@ -3,13 +3,6 @@
 //! Reads a GAR controller config, emits NATS dispatch events, and records GAR
 //! enforcement receipts for each PoP so compliance/export pipelines can ship a
 //! single evidence bundle.
-use std::{
-    collections::BTreeSet,
-    fs::{self, File},
-    io::Write,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
 use blake3::Hasher;
 use eyre::{Result, WrapErr, eyre};
 use hex::encode as hex_encode;
@@ -20,6 +13,13 @@ use iroha_data_model::{
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
+};
+use std::{
+    collections::BTreeSet,
+    fs::{self, File},
+    io::Write,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 /// CLI options accepted by the controller generator.
 #[derive(Debug, Clone)]
@@ -740,10 +740,10 @@ fn current_unix() -> u64 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::sorafs::gar::GarCdnPolicyV1;
     use norito::json;
     use tempfile::TempDir;
-    use super::*;
     fn empty_cdn_policy() -> GarCdnPolicyV1 {
         GarCdnPolicyV1 {
             ttl_override_secs: None,

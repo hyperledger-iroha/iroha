@@ -3,9 +3,9 @@
 //! These instructions anchor Ministry transparency and agenda workflows in the
 //! canonical ISI registry so Torii and SDKs can build signed transactions
 //! without introducing ad-hoc payload formats.
+use crate::ministry::AgendaProposalV1;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use crate::ministry::AgendaProposalV1;
 /// Submit a citizen agenda proposal to the Ministry intake ledger.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -38,12 +38,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitAgendaProposal {
 }
 #[cfg(test)]
 mod tests {
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::ministry::{
         AGENDA_PROPOSAL_VERSION_V1, AgendaEvidenceAttachment, AgendaEvidenceKind,
         AgendaProposalAction, AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget,
     };
+    use norito::core::DecodeFromSlice;
     fn proposal() -> AgendaProposalV1 {
         AgendaProposalV1 {
             version: AGENDA_PROPOSAL_VERSION_V1,

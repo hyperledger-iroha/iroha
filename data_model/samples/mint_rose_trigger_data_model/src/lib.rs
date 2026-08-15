@@ -1,13 +1,13 @@
 //! Arguments to mint rose with args trigger
-#[allow(unused_imports)]
-use std::eprintln;
-use std::string::String;
 use iroha_data_model::prelude::Json;
 use norito::{
     Error as NoritoError,
     core::{NoritoDeserialize, NoritoSerialize},
     json::{self, JsonDeserialize, JsonSerialize, Parser},
 };
+#[allow(unused_imports)]
+use std::eprintln;
+use std::string::String;
 /// Arguments to mint rose with args trigger
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MintRoseArgs {

@@ -5,7 +5,6 @@
 //! `/v1/sumeragi/telemetry` snapshots against the Prometheus metrics surface
 //! over multiple block heights, then injects a large RBC payload with
 //! deterministic chunk loss and validates the backlog telemetry.
-use std::time::{Duration, Instant};
 use eyre::{Context as _, Result, ensure};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::{
@@ -20,6 +19,7 @@ use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::Value;
 use reqwest::Client as HttpClient;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 const EPOCH_LENGTH_BLOCKS: u64 = 6;
 const DROP_EVERY_NTH_CHUNK: i64 = 3;

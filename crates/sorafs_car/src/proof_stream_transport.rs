@@ -4,16 +4,16 @@
 //! streaming NDJSON proof items. This module centralises the decompression
 //! logic so callers (CLI, orchestrator, tests) can share a hardened
 //! implementation.
+use crate::proof_stream::{
+    ProofStreamItem, ProofStreamSequenceVerifier, ProofStreamVerificationContext,
+};
+use flate2::read::{DeflateDecoder, GzDecoder};
 use std::{
     fmt,
     io::{BufRead, Cursor, Read},
     str,
 };
-use flate2::read::{DeflateDecoder, GzDecoder};
 use thiserror::Error;
-use crate::proof_stream::{
-    ProofStreamItem, ProofStreamSequenceVerifier, ProofStreamVerificationContext,
-};
 /// Maximum compressed or decoded bytes accepted for one proof-stream response.
 pub const MAX_PROOF_STREAM_TRANSPORT_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum bytes accepted for one proof-stream NDJSON record, excluding newline.
@@ -350,14 +350,14 @@ pub fn decode_transport_items(
 }
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use super::*;
+    use crate::proof_stream::{ProofKind, ProofStreamItem};
     use flate2::{
         Compression,
         write::{DeflateEncoder, GzEncoder},
     };
-    use super::*;
-    use crate::proof_stream::{ProofKind, ProofStreamItem};
     use sorafs_manifest::ProofStreamRequestV1;
+    use std::io::Write;
     fn sample_por_fixture(
         request: &ProofStreamRequestV1,
     ) -> (Vec<(usize, crate::PorProof)>, [u8; 32]) {

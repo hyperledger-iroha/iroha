@@ -3,7 +3,6 @@
 //! Run with `cargo run -p iroha_data_model --features dev-tools,test-fixtures --bin axt_fixtures`
 //! to refresh `tests/fixtures/*.json`. Use `--check` to verify the checked-in
 //! fixtures are up to date without rewriting them.
-use std::{env, error::Error, fs, path::Path};
 use hex::{decode, encode};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -24,6 +23,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use iroha_zkp_halo2::poseidon::{poseidon2_params_width3, poseidon2_params_width6};
 use norito::{json, to_bytes};
+use std::{env, error::Error, fs, path::Path};
 const DESCRIPTOR_FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/axt_descriptor_multi_ds.json"

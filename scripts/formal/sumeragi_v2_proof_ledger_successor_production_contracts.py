@@ -117,33 +117,43 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
     runner_path, runner_source = load(
         "crates/iroha_core/src/sumeragi/v2_runner.rs"
     )
+    height_binding_path, height_binding_source = load(
+        "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs"
+    )
+    lifecycle_runner_path, lifecycle_runner_source = load(
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
+    )
+    pending_runner_path, pending_runner_source = load(
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"
+    )
     ordinary_consumer_path, ordinary_consumer_source = load(
         "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"
     )
-    if runner_source:
+    if height_binding_source:
         for item_name, expected_sha256 in (
             _PRODUCTION_RECOVERY_EAGER_BLOCK_SYNC_ITEM_SHA256.items()
         ):
             item = _require_rust_item(
-                runner_path,
-                runner_source,
+                height_binding_path,
+                height_binding_source,
                 item_name,
                 errors,
             )
             _require_rust_item_context(
-                runner_path,
+                height_binding_path,
                 item,
                 (),
                 f"recovery-scoped eager block-sync {item_name} production item",
                 errors,
             )
             _require_rust_item_token_sha256(
-                runner_path,
+                height_binding_path,
                 item,
                 expected_sha256,
                 f"recovery-scoped eager block-sync {item_name}",
                 errors,
             )
+    if runner_source:
         run_inner_item = _require_rust_item(
             runner_path,
             runner_source,
@@ -162,15 +172,15 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
             runner_path,
             run_inner_item,
             """
-let mut pending_kura_apply = recovered.pending_kura_apply();
+let pending_kura_apply = recovered.pending_kura_apply();
 let (
-    mut verified_context,
+    verified_context,
     context_store,
-    mut signature_policy,
-    _lifecycle_storage_authority,
-    _authenticated_genesis,
+    signature_policy,
+    lifecycle_storage_authority,
+    first_height_authenticated_genesis,
     recovered_successor_activation,
-    mut staged_genesis_nexus_amx_context,
+    staged_genesis_nexus_amx_context,
 ) = recovered.into_parts();
 """,
             "durable recovered ownership must retain the recovered successor owners",
@@ -180,7 +190,7 @@ let (
             runner_path,
             run_inner_item,
             """
-let mut eager_block_sync =
+let eager_block_sync =
     recovered_successor_activation.is_some() || pending_kura_apply.is_some();
 """,
             "durable recovered ownership must initialize eager block-sync",
@@ -192,73 +202,83 @@ let mut eager_block_sync =
                 "durable recovered ownership eager block-sync initialization",
                 run_inner_item.source,
                 (
-                    "let mut pending_kura_apply = recovered.pending_kura_apply();",
+                    "let pending_kura_apply = recovered.pending_kura_apply();",
                     ") = recovered.into_parts();",
-                    "let mut eager_block_sync =",
+                    "let eager_block_sync =",
                     "recovered_successor_activation.is_some() || pending_kura_apply.is_some();",
                 ),
             )
+        active_height = _require_rust_item(
+            lifecycle_runner_path,
+            lifecycle_runner_source,
+            "run_lifecycle_active_height",
+            errors,
+        )
         _require_rust_token_sequence(
-            runner_path,
-            run_inner_item,
+            lifecycle_runner_path,
+            active_height,
             """
-let mut next_block_sync_attempt = initial_block_sync_deadline(
-    height_started_at, round_timeout, eager_block_sync
-);
+let mut next_block_sync_attempt =
+    initial_block_sync_deadline(height_started_at, round_timeout, *eager_block_sync);
 """,
             "height startup must derive its first block-sync deadline from the recovery hint",
             errors,
         )
         _require_rust_token_sequence(
-            runner_path,
-            run_inner_item,
+            lifecycle_runner_path,
+            active_height,
             """
-let discovery_was_outstanding = block_sync_request.is_some();
-drain_v2_ingress(
-    &block_rx,
-    &mut executor,
-    &mut services,
-    &mut lane_work,
-    &output_guard,
-    kura.as_ref(),
-    &common_config.key_pair,
-    block_sync_server
-        .as_mut()
-        .expect("block-sync server initialized before ingress"),
-    &mut block_sync,
-    &mut block_sync_request,
-    &mut npos_vrf,
-    V2IngressDrainMode::Ordinary,
-    body_queue_capacity,
-)?;
-if discovery_was_outstanding && block_sync_request.is_none() {
-    admitted_discovered_commit_qc = true;
-}
+let discovery_was_outstanding = activated.with_runner_runtime(
 """,
-            "only authenticated discovered CommitQC admission/coalescing with "
-            "serialized reducer ownership may turn an outstanding request from "
-            "Some to None and retain eager block-sync",
+            "serialized lifecycle ownership must sample the outstanding discovery request",
             errors,
         )
-        _require_rust_token_sequence(
-            runner_path,
-            run_inner_item,
-            """
-let (receipt, artifact, lane_work, mut finalized_services) = finality;
-eager_block_sync =
-    retain_eager_block_sync(recovering_interrupted_tip, admitted_discovered_commit_qc);
-let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)?;
-""",
-            "successor startup must carry interrupted-tip or admitted discovered "
-            "CommitQC recovery and clear ordinary live finality",
-            errors,
-        )
-        construction = region(
+        if active_height is not None:
+            require_order(
+                lifecycle_runner_path,
+                "only authenticated discovered CommitQC admission/coalescing may retain eager block-sync",
+                active_height.source,
+                (
+                    "Ok::<_, V2RunnerError>(block_sync_request.is_some())",
+                    "drain_lifecycle_v2_ingress(",
+                    "if discovery_was_outstanding && block_sync_request.is_none()",
+                    "admitted_discovered_commit_qc = true",
+                    "*eager_block_sync = retain_eager_block_sync(false, admitted_discovered_commit_qc)",
+                ),
+            )
+            require_order(
+                lifecycle_runner_path,
+                "ordinary lifecycle successor handoff",
+                active_height.source,
+                (
+                    "DurableV2PredecessorIdentity::authenticate(artifact, receipt)",
+                    "PendingSuccessorConstruction::begin(predecessor)",
+                    "build_verified_successor(",
+                    "into_parts_with_lifecycle_storage_authority(",
+                    "activation.bind(successor_authority)",
+                    "retain_eager_block_sync(false, admitted_discovered_commit_qc)",
+                ),
+            )
+        construction_begin = _require_qualified_rust_item(
             runner_path,
             runner_source,
             "PendingSuccessorConstruction",
-            "impl PendingSuccessorConstruction {",
-            "/// One-shot ownership of an authenticated successor's activation handoff.",
+            "begin",
+            errors,
+            "applied successor construction begin",
+        )
+        construction_bind = _require_qualified_rust_item(
+            runner_path,
+            runner_source,
+            "PendingSuccessorConstruction",
+            "bind",
+            errors,
+            "applied successor construction bind",
+        )
+        construction = "\n".join(
+            item.source
+            for item in (construction_begin, construction_bind)
+            if item is not None
         )
         require_tokens(
             runner_path,
@@ -285,33 +305,33 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             ),
         )
         activation = region(
-            runner_path,
-            runner_source,
+            lifecycle_runner_path,
+            lifecycle_runner_source,
             "PendingSuccessorActivation",
-            "impl PendingSuccessorActivation {",
-            "#[derive(Clone, Copy, Debug, PartialEq, Eq)]",
+            "pub(super) enum PendingSuccessorActivation",
+            "#[derive(Clone, Copy, Debug, PartialEq, Eq)]\nenum CanonicalRecoveryControlV1",
         )
         recovered_activation = _require_qualified_rust_item(
-            runner_path,
-            runner_source,
+            lifecycle_runner_path,
+            lifecycle_runner_source,
             "PendingSuccessorActivation",
             "recovered",
             errors,
             "recovered successor activation",
         )
         require_tokens(
-            runner_path,
+            lifecycle_runner_path,
             "PendingSuccessorActivation",
             activation,
             (
                 "RecoveredSuccessorActivationAuthority::CompleteTip(authority)",
                 "RecoveredSuccessorActivationAuthority::SnapshotBootstrap(authority)",
-                "let published_height = super::status::v2_status().map_or(0, |status| status.height);",
+                "let published_height = super::super::status::v2_status().map_or(0, |status| status.height);",
                 "stage_before: SUCCESSOR_STAGE_NONE, stage_after: SUCCESSOR_STAGE_NONE, published_height_before: published_height, published_height_after: published_height, restart_required_before: false, restart_required_after: false,",
                 "let Some(checked_lifecycle) = check_production_successor_startup_lifecycle_transition(lifecycle) else",
                 "return Err(V2RunnerError::SuccessorRefinementRejected);",
                 "let _authorized_lifecycle = checked_lifecycle.into_projection();",
-                "super::status::activate_v2_successor_height( expected_predecessor, authority, successor, )?;",
+                "super::super::status::activate_v2_successor_height( expected_predecessor, authority, successor, )?;",
                 "authority.into_canonical_predecessor_storage(local_signer)?",
                 ".retire()?",
                 "Self::RecoveredCompleteTip { authority: retired }",
@@ -319,17 +339,17 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "authority.authorizes_successor_status(successor)",
                 "V2RunnerError::CompleteTipSuccessorAuthorityInvalid",
                 "predecessor: authority.predecessor()",
-                "super::status::activate_recovered_complete_tip_v2_height(authority, successor)?;",
-                "super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;",
+                "super::super::status::activate_recovered_complete_tip_v2_height( authority, successor, )?;",
+                "super::super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;",
             ),
         )
         require_order(
-            runner_path,
+            lifecycle_runner_path,
             "PendingSuccessorActivation::recovered",
             recovered_activation.source if recovered_activation is not None else "",
             (
                 "match &authority",
-                "let published_height = super::status::v2_status()",
+                "let published_height = super::super::status::v2_status()",
                 "ProductionSuccessorStartupLifecycleProjection",
                 "let Some(checked_lifecycle) = check_production_successor_startup_lifecycle_transition(lifecycle) else",
                 "return Err(V2RunnerError::SuccessorRefinementRejected)",
@@ -346,7 +366,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             ),
         )
         reject_tokens(
-            runner_path,
+            lifecycle_runner_path,
             "PendingSuccessorActivation::recovered",
             recovered_activation.source if recovered_activation is not None else "",
             (
@@ -396,36 +416,92 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "PendingSuccessorActivation::recovered(authority, &common_config.key_pair)",
                 "activation.preflight_recovered_startup()?",
                 "guard.complete()",
-                "SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(",
+                "match pending_kura_apply",
             ),
         )
         require_order(
             runner_path,
-            "run_inner live successor startup",
+            "run_inner lifecycle branch ownership",
             run_inner,
             (
-                "SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(",
-                "SerializedV2Runtime::new_with_lifecycle_ordinals(",
-                "V2EffectExecutor::open_with_body_store(",
-                "ProductionV2Services::start(",
-                "executor.consume_effects(std::mem::take(&mut startup_effects), &mut services)?",
-                "executor.arm_live_clocks(height_started_at)?",
-                "successor_activation_status_snapshot()",
-                "open_ingress_for_active_height(",
+                "match pending_kura_apply",
+                "None => lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+                "Some(pending) => lifecycle_pending_kura::run_pending_kura_lifecycle_height(",
             ),
         )
-        require_order(
+        require_tokens(
             runner_path,
-            "run_inner applied successor handoff",
+            "runner retains recovered lifecycle storage authority",
             run_inner,
             (
-                "DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)?",
-                "PendingSuccessorConstruction::begin(predecessor)?",
-                "build_verified_successor(",
-                "let (next_verified_context, successor_authority) = successor.into_parts()",
-                "activation.bind(successor_authority)?",
+                "lifecycle_storage_authority",
+                "first_height_authenticated_genesis",
             ),
         )
+        require_token_count(
+            runner_path,
+            "runner dispatches the recovery-scoped eager block-sync owner to exactly one lifecycle branch",
+            run_inner,
+            "eager_block_sync",
+            3,
+        )
+        non_pending_loop = _require_rust_item(
+            lifecycle_runner_path,
+            lifecycle_runner_source,
+            "run_non_pending_lifecycle_loop",
+            errors,
+        )
+        if non_pending_loop is not None:
+            require_order(
+                lifecycle_runner_path,
+                "non-pending lifecycle live successor startup",
+                non_pending_loop.source,
+                (
+                    "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry(",
+                    "authenticate_final_wal_startup_authority()",
+                    "bind_production_lifecycle_owner_factory_inputs_v1(",
+                    "open_production_lifecycle_owner_v1(",
+                    "launch_non_pending_lifecycle_height(",
+                    "initialize_recovered_local_proposal(setup_runner)",
+                    "preactivation.activate(height_started_at, local_proposal)",
+                    "run_lifecycle_active_height(",
+                ),
+            )
+        pending_loop = _require_rust_item(
+            pending_runner_path,
+            pending_runner_source,
+            "run_pending_kura_lifecycle_height",
+            errors,
+        )
+        if pending_loop is not None:
+            require_order(
+                pending_runner_path,
+                "pending-Kura lifecycle recovery enters the ordinary live successor loop",
+                pending_loop.source,
+                (
+                    "bind_pending_kura_apply(pending_kura_apply)",
+                    "open_production_lifecycle_owner_v1(",
+                    "owner.launch(launch_inputs)",
+                    "install_pending_kura_apply(&mut setup_runner)",
+                    "drive_apply_recovery_turn(&mut setup_runner, control_queue_capacity)",
+                    "prepare_lane_recovery(",
+                    "activate_no_clock(activation)",
+                    "run_pending_active_height(",
+                    "run_non_pending_lifecycle_loop(",
+                ),
+            )
+            require_order(
+                pending_runner_path,
+                "pending-Kura successor handoff",
+                pending_loop.source,
+                (
+                    "run_pending_active_height(",
+                    "successor.verified_context",
+                    "Some(successor.pending_activation)",
+                    "false",
+                    "true",
+                ),
+            )
         historical_ingress = region(
             runner_path,
             runner_source,

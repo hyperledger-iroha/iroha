@@ -1,5 +1,5 @@
-use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 use super::*;
+use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 #[derive(Clone)]
 struct TestRng(u64);
 impl RngCore for TestRng {

@@ -3,7 +3,6 @@
 //! Cross-dataspace STARK verification tests that validate proof outcomes while
 //! ensuring proof payload details are not exposed to other dataspaces.
 use super::localnet_npos::npos_override_transactions;
-use std::{collections::BTreeSet, num::NonZeroU64, time::Duration};
 use base64::Engine as _;
 use eyre::{Result, ensure, eyre};
 use futures_util::StreamExt;
@@ -57,6 +56,7 @@ use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use reqwest::{Client as HttpClient, StatusCode};
+use std::{collections::BTreeSet, num::NonZeroU64, time::Duration};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},

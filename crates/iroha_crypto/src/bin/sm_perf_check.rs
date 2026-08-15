@@ -1,4 +1,5 @@
 //! Validate SM performance benchmark output against reference medians.
+use norito::json::{self, Map, Value};
 use std::{
     collections::BTreeMap,
     convert::TryFrom,
@@ -10,7 +11,6 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use norito::json::{self, Map, Value};
 struct BenchSpec {
     key: &'static str,
     path: &'static [&'static str],
@@ -735,9 +735,9 @@ fn write_capture_json(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::fmt::Write as _;
     use tempfile::TempDir;
-    use super::*;
     fn complete_benchmark_entries() -> Vec<(&'static str, f64)> {
         BENCH_SPECS.iter().map(|spec| (spec.key, 1.0)).collect()
     }

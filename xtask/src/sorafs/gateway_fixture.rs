@@ -1,8 +1,4 @@
 //! Utilities for generating the canonical SoraFS gateway fixture bundle.
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
 use blake3::{Hasher, hash as blake3_hash};
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use norito::{
@@ -20,6 +16,10 @@ use sorafs_manifest::{
         SORAFS_GATEWAY_PROFILE_VERSION,
     },
     por::{PorChallengeV1, PorProofV1},
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
 };
 use thiserror::Error;
 const CHALLENGE_FIXTURE_BYTES: &[u8] = include_bytes!(concat!(
@@ -656,8 +656,8 @@ fn ensure_digest_match(label: &str, expected: &str, actual: &str) -> Result<(), 
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
     use super::*;
+    use tempfile::tempdir;
     #[test]
     fn verify_bundle_accepts_pristine_output() {
         let dir = tempdir().expect("temp dir");

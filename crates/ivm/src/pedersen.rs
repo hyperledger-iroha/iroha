@@ -1,7 +1,7 @@
-use std::sync::LazyLock;
 use blstrs::{G1Affine, G1Projective, Scalar};
 use group::{Curve, Group};
 use ivm_abi::private_input::PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1;
+use std::sync::LazyLock;
 static H_GENERATOR: LazyLock<G1Projective> = LazyLock::new(|| {
     let affine = Option::<G1Affine>::from(G1Affine::from_compressed(
         &PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1,
@@ -38,8 +38,10 @@ pub fn pedersen_commit_truncated(value: u64, blind: u64) -> u64 {
 }
 #[cfg(test)]
 mod tests {
-    use ivm_abi::private_input::{PRIVATE_NUMERIC_VALCOM_H_DST_V1, PRIVATE_NUMERIC_VALCOM_H_MESSAGE_V1};
     use super::*;
+    use ivm_abi::private_input::{
+        PRIVATE_NUMERIC_VALCOM_H_DST_V1, PRIVATE_NUMERIC_VALCOM_H_MESSAGE_V1,
+    };
     #[test]
     fn pedersen_commit_preserves_bytes() {
         let bytes = pedersen_commit(5, 7);

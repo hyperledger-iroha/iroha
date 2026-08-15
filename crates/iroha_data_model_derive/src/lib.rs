@@ -9,13 +9,13 @@ mod id;
 mod model;
 mod registrable_builder;
 mod utils;
+use crate::utils::darling_error;
 use darling::{FromMeta, ast::NestedMeta};
 use emitter_ext::EmitterExt;
 use manyhow::{Emitter, Result, emit, manyhow};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Item;
-use crate::utils::darling_error;
 /// Construct a matching enum with references in place of enum variant fields
 ///
 /// # Example

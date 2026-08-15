@@ -78,6 +78,37 @@ class ToriiEventStreamClientTest {
     }
 
     @Test
+    fun insertsOptionQueryBeforeUriFragment() {
+        var recorded: TransportRequest? = null
+        val client = ToriiEventStreamClient(
+            baseUri = URI.create("http://example.com"),
+            transport = object : TransportExecutor {
+                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+                    recorded = request
+                    return okSse()
+                }
+            },
+        )
+        val options = ToriiEventStreamOptions.builder()
+            .putQueryParameter("kind", "blocks")
+            .build()
+
+        for ((path, expectedQuery) in listOf(
+            "/v1/events/sse#client-state" to "kind=blocks",
+            "/v1/events/sse?existing=1#client-state" to "existing=1&kind=blocks",
+        )) {
+            recorded = null
+            client.openSseStream(path, options, noopListener())
+                .completion()
+                .get(1, TimeUnit.SECONDS)
+
+            val request = assertNotNull(recorded)
+            assertEquals(expectedQuery, request.uri.rawQuery)
+            assertEquals("client-state", request.uri.rawFragment)
+        }
+    }
+
+    @Test
     fun exposesTerminalStreamErrorAsStrictTypedEvent() {
         val events = ArrayList<ServerSentEvent>()
         val body = """

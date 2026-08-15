@@ -1,12 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Kagami localnet bootstrap coverage for permissioned Sumeragi.
-use std::{
-    any::Any,
-    fs,
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{kagami::resolve_kagami_bin, process as test_process, sandbox};
 use iroha::{
@@ -16,6 +9,13 @@ use iroha::{
 };
 use iroha_test_network::{
     Program, fslock_ports::AllocatedPortBlock, init_instruction_registry, repo_root,
+};
+use std::{
+    any::Any,
+    fs,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    time::{Duration, Instant},
 };
 use tempfile::TempDir;
 use tokio::time::sleep;

@@ -1,11 +1,11 @@
+use crate::{Outcome, RunArgs, tui};
+use clap::{Parser, ValueEnum};
+use color_eyre::eyre::eyre;
+use iroha_genesis::{NormalizedGenesis, RawGenesisTransaction};
 use std::{
     io::{BufWriter, Write},
     path::PathBuf,
 };
-use clap::{Parser, ValueEnum};
-use color_eyre::eyre::eyre;
-use iroha_genesis::{NormalizedGenesis, RawGenesisTransaction};
-use crate::{Outcome, RunArgs, tui};
 /// Show the fully expanded genesis block (after injections and ordering).
 #[derive(Clone, Debug, Parser)]
 pub struct Args {
@@ -160,11 +160,11 @@ fn render_text<T: Write>(
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use super::*;
     use iroha_data_model::{ChainId, parameter::system::SumeragiConsensusMode};
     use iroha_genesis::GenesisBuilder;
+    use std::{fs, path::PathBuf};
     use tempfile::NamedTempFile;
-    use super::*;
     fn minimal_genesis() -> NamedTempFile {
         let genesis_file = NamedTempFile::new().expect("create temp genesis");
         let manifest =

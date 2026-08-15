@@ -1,20 +1,17 @@
 //! Canonical numeric aggregate adapter for strict DER.
 //!
-//! This adapter is deliberately independent of the host parser used to build
-//! witnesses. Verification operates on one 76-column numeric micro-trace:
-//! byte-consuming parser rows, non-consuming header/boundary rows, and SET OF
-//! comparator rows all share the adapter's native `2^19` subgroup. A constant
-//! public registration fixes maximum parser/comparator regions; committed
-//! private activity prefixes and document metadata bind the exact execution
-//! without disclosing its geometry. No row enum, host parse result, or
-//! reduced-domain proof is consulted by the extension-domain evaluator.
+//! This adapter is deliberately independent of the host parser used to build witnesses.
+//! Verification operates on one 76-column numeric micro-trace: byte-consuming parser rows,
+//! non-consuming header/boundary rows, and SET OF comparator rows all share the adapter's native
+//! `2^19` subgroup. A constant public registration fixes maximum parser/comparator regions;
+//! committed private activity prefixes and document metadata bind the exact execution without
+//! disclosing its geometry. No row enum, host parse result, or reduced-domain proof is consulted by
+//! the extension-domain evaluator.
 //!
-//! The parser keeps its constructed-value stack as a push/pop permutation.
-//! Its byte table is exposed through a logarithmic-derivative lookup terminal,
-//! node and SET-pair events through four-lane products, and every terminal is
-//! carried to the final aggregate row. RFC 5280 consumes those terminals in
-//! its own adapter through the sole complete MAIN aggregate registration.
-use thiserror::Error;
+//! The parser keeps its constructed-value stack as a push/pop permutation. Its byte table is
+//! exposed through a logarithmic-derivative lookup terminal, node and SET-pair events through
+//! four-lane products, and every terminal is carried to the final aggregate row. RFC 5280 consumes
+//! those terminals in its own adapter through the sole complete MAIN aggregate registration.
 use super::{
     der_air::{
         ZK_X509_DER_AIR_MAX_DOCUMENTS_V1, ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1,
@@ -34,6 +31,7 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
+use thiserror::Error;
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.
 #[cfg(test)]
 pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:constraints898:degree7:two-base-and-four-aux-physical-chunks:registered-expression-degree-ceiling7:multi-direction-affine-audit-attains-seven:mask-multiplier-degree801:mask-coefficients802:quotient-bound3151335:quotient-coset-capacity4194303:fri-chunk-capacity1048575:four-chunk-composition-capacity4194303:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:cross-adapter-claims:rfc5280-and-byte-memory-consumer-registrations=complete:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
@@ -45,8 +43,7 @@ pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_SHA256_V1: [u8; 32] = [
 /// The aggregate native domain shared with SHA, projection, and every bus.
 pub(crate) const ZK_X509_DER_STARK_TRACE_LOG2_V1: u8 = 19;
 pub(crate) const ZK_X509_DER_STARK_TRACE_SIZE_V1: usize = 1 << ZK_X509_DER_STARK_TRACE_LOG2_V1;
-/// Base columns, including committed private activity and document-count
-/// metadata.
+/// Base columns, including committed private activity and document-count metadata.
 pub(crate) const ZK_X509_DER_STARK_BASE_WIDTH_V1: usize = 76;
 pub(crate) const ZK_X509_DER_STARK_AUX_WIDTH_V1: usize = 196;
 pub(crate) const ZK_X509_DER_STARK_FIXED_WIDTH_V1: usize = 14;
@@ -69,9 +66,8 @@ pub(crate) const ZK_X509_DER_STARK_MAX_DOCUMENTS_V1: usize =
 pub(crate) const ZK_X509_DER_STARK_MAX_TOTAL_DOCUMENT_BYTES_V1: usize = 32_768;
 /// Defensive proof-facing SET comparator cap.
 pub(crate) const ZK_X509_DER_STARK_MAX_COMPARATOR_ROWS_V1: usize = 262_144;
-/// Fixed parser registration capacity. Every input byte contributes one row
-/// and every DER node contributes exactly two non-consuming rows; at most
-/// `total_bytes / 2` nodes are possible.
+/// Fixed parser registration capacity. Every input byte contributes one row and every DER node
+/// contributes exactly two non-consuming rows; at most `total_bytes / 2` nodes are possible.
 pub(crate) const ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1: usize =
     2 * ZK_X509_DER_STARK_MAX_TOTAL_DOCUMENT_BYTES_V1;
 /// Fixed public parser/comparator registration envelope.
@@ -425,14 +421,12 @@ impl ZkX509DerStarkChallengesV1 {
         Ok(())
     }
 }
-/// Derive the strict-DER copy and lookup challenges in canonical lane-major
-/// order after the DER base commitment and before constructing its auxiliary
-/// trace.
+/// Derive the strict-DER copy and lookup challenges in canonical lane-major order after the DER
+/// base commitment and before constructing its auxiliary trace.
 ///
-/// Each lane samples all twelve tuple slots followed by its byte-lookup shift.
-/// The labels are stable even though a tuple slot has adapter-specific meaning;
-/// its numeric position, rather than a witness-selected event kind, determines
-/// the compression coefficient.
+/// Each lane samples all twelve tuple slots followed by its byte-lookup shift. The labels are
+/// stable even though a tuple slot has adapter-specific meaning; its numeric position, rather than
+/// a witness-selected event kind, determines the compression coefficient.
 pub(crate) fn derive_zk_x509_der_stark_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
 ) -> Result<ZkX509DerStarkChallengesV1, TransparentStarkErrorV1> {
@@ -529,10 +523,9 @@ fn zk_x509_der_stark_compact_row_native_index_v1(
 pub(crate) struct ZkX509DerStarkPublicTerminalsV1;
 /// Prover-supplied cross-adapter terminal claims.
 ///
-/// These values are absorbed after auxiliary roots and before composition
-/// challenges. The final-row identities bind them to the committed DER
-/// accumulators; byte-memory and RFC 5280 adapters consume them in the same
-/// verifier-fixed role order.
+/// These values are absorbed after auxiliary roots and before composition challenges. The final-row
+/// identities bind them to the committed DER accumulators; byte-memory and RFC 5280 adapters
+/// consume them in the same verifier-fixed role order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkTerminalClaimsV1 {
     pub(crate) input_byte: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
@@ -540,9 +533,8 @@ pub(crate) struct ZkX509DerStarkTerminalClaimsV1 {
 }
 /// Exact node-event fields exported to the RFC 5280 consumer.
 ///
-/// The order is the DER adapter's committed node tuple order.  Exposing the
-/// typed event and compression helper avoids a second, subtly divergent host
-/// encoding in a downstream adapter.
+/// The order is the DER adapter's committed node tuple order. Exposing the typed event and
+/// compression helper avoids a second, subtly divergent host encoding in a downstream adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkNodeEventV1 {
     pub(crate) document: F,
@@ -1212,9 +1204,8 @@ fn encode_comparator_row_v1(
 }
 /// Build the exact active numeric base trace.
 ///
-/// The logical parser is used only as a prover-side witness compiler and
-/// differential oracle. The verifier consumes `rows`, `shape`, and numeric
-/// residues and never calls the host parser.
+/// The logical parser is used only as a prover-side witness compiler and differential oracle. The
+/// verifier consumes `rows`, `shape`, and numeric residues and never calls the host parser.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_der_stark_base_v1(
     documents: &[&[u8]],
@@ -2340,9 +2331,8 @@ fn push_zero_test_residues_v1(residues: &mut Vec<F>, value: F, selector: F, inve
     residues.push(value.mul(inverse).sub(F::ONE.sub(selector)));
     residues.push(selector.mul(inverse));
 }
-/// Constrain a total, event-gated inverse. `zero` is one exactly when an
-/// active event's denominator is zero; inactive events canonically use
-/// `(zero, inverse) = (0, 0)`.
+/// Constrain a total, event-gated inverse. `zero` is one exactly when an active event's denominator
+/// is zero; inactive events canonically use `(zero, inverse) = (0, 0)`.
 fn push_gated_zero_safe_inverse_residues_v1(
     residues: &mut Vec<F>,
     gate: F,
@@ -3814,9 +3804,8 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
 /// Evaluate every base/fixed strict-DER identity as one numeric polynomial
 /// vector. The inventory is independent of witness values and row phases.
 ///
-/// Challenge-dependent stack, event, and byte-lookup identities are appended
-/// by the full evaluator below; keeping this base evaluator separate makes
-/// pre-commitment mutation audits exhaustive.
+/// Challenge-dependent stack, event, and byte-lookup identities are appended by the full evaluator
+/// below; keeping this base evaluator separate makes pre-commitment mutation audits exhaustive.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_zk_x509_der_stark_base_residues_v1(
     current: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
@@ -4100,9 +4089,8 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
 }
 /// Allocate and evaluate the complete strict-DER constraint vector.
 ///
-/// Streaming composition builders should use
-/// [`evaluate_zk_x509_der_stark_residues_into_v1`] to reuse one bounded
-/// scratch vector across every common-domain row.
+/// Streaming composition builders should use [`evaluate_zk_x509_der_stark_residues_into_v1`] to
+/// reuse one bounded scratch vector across every common-domain row.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_zk_x509_der_stark_residues_v1(
     current: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
@@ -4132,8 +4120,8 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_v1(
 }
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest as _, Sha256};
     use super::*;
+    use sha2::{Digest as _, Sha256};
     fn challenges() -> ZkX509DerStarkChallengesV1 {
         ZkX509DerStarkChallengesV1 {
             tuple: core::array::from_fn(|lane| {

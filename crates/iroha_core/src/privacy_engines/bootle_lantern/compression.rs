@@ -4,10 +4,10 @@
 //! `q - 1` therefore needs the explicit `(high, low) = (0, -1)` branch from
 //! the Lantern construction; ordinary integer division would emit the
 //! non-canonical high part `m`.
-use thiserror::Error;
 use super::params::{
     COMPRESSION_GAMMA_V1, COMPRESSION_MODULUS_V1, DECOMPOSITION_BITS_V1, PROOF_MODULUS_V1,
 };
+use thiserror::Error;
 const POWER_OF_TWO_V1: u64 = 1_u64 << DECOMPOSITION_BITS_V1;
 const POWER_OF_TWO_HALF_V1: i64 = (POWER_OF_TWO_V1 / 2) as i64;
 const GAMMA_HALF_V1: i64 = (COMPRESSION_GAMMA_V1 / 2) as i64;

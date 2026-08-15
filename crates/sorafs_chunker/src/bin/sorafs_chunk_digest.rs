@@ -1,10 +1,10 @@
+use blake3::{Hash, Hasher};
+use sorafs_chunker::{Chunk, ChunkProfile, Chunker, fixtures::FixtureProfile};
 use std::{
     env,
     io::{self, Write},
     process,
 };
-use blake3::{Hash, Hasher};
-use sorafs_chunker::{Chunk, ChunkProfile, Chunker, fixtures::FixtureProfile};
 const TOTAL_LEN: usize = 1 << 30; // 1 GiB
 fn collect_chunks(template: &[u8]) -> Result<Vec<Chunk>, String> {
     if template.is_empty() {

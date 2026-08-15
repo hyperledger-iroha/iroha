@@ -5,18 +5,6 @@
 //! tip means application/finality for that exact height must resume, while a
 //! present sidecar authorizes construction of exactly one successor context.
 //! Context records are persisted before the height WAL is opened.
-use std::{
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-};
-use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
-use iroha_data_model::{
-    account::AccountId,
-    block::{BlockHeader, consensus_v2 as wire},
-    nexus::PublicLaneValidatorStatus,
-};
-use mv::storage::StorageReadOnly;
-use thiserror::Error;
 use super::{
     v2::{
         AdapterError, RecoveredLifecycleOwnerKuraBindingV1, RecoveredLifecycleStorageAuthorityV1,
@@ -48,6 +36,18 @@ use crate::{
         public_lane_validator_record_matches_key,
     },
 };
+use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
+use iroha_data_model::{
+    account::AccountId,
+    block::{BlockHeader, consensus_v2 as wire},
+    nexus::PublicLaneValidatorStatus,
+};
+use mv::storage::StorageReadOnly;
+use std::{
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+};
+use thiserror::Error;
 /// Authenticated boundary between generic Kura replay and one recoverable v2 tip.
 ///
 /// Every full-body height through [`Self::complete_prefix_height`] has an exact WSV checkpoint,
@@ -2474,27 +2474,6 @@ pub(crate) enum V2RecoveryError {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::Write,
-        num::{NonZeroU16, NonZeroU64, NonZeroUsize},
-        path::{Path, PathBuf},
-        sync::Arc,
-    };
-    use iroha_config::parameters::actual::LaneConfig;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{
-        ChainId,
-        account::AccountId,
-        block::{
-            BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext, SignedBlock,
-            builder::BlockBuilder, consensus::SumeragiLanePayloadOwnership, consensus_v2 as wire,
-        },
-        consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-        nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
-        peer::PeerId,
-        transaction::{TransactionBuilder, signed::TransactionResultInner},
-        trigger::DataTriggerSequence,
-    };
     use super::{
         BlockSignaturePolicy, RecoveredCompleteTipActivationAuthority,
         RecoveredLifecycleStorageMintPermitV1, RecoveredSuccessorActivationAuthority,
@@ -2515,6 +2494,27 @@ mod tests {
             v2::{RecoveredLifecycleStorageAuthorityV1, VerifiedHeightContext},
             v2_context_store::{PersistedHeightContext, V2ContextStore},
         },
+    };
+    use iroha_config::parameters::actual::LaneConfig;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::{
+        ChainId,
+        account::AccountId,
+        block::{
+            BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext, SignedBlock,
+            builder::BlockBuilder, consensus::SumeragiLanePayloadOwnership, consensus_v2 as wire,
+        },
+        consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
+        nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+        peer::PeerId,
+        transaction::{TransactionBuilder, signed::TransactionResultInner},
+        trigger::DataTriggerSequence,
+    };
+    use std::{
+        io::Write,
+        num::{NonZeroU16, NonZeroU64, NonZeroUsize},
+        path::{Path, PathBuf},
+        sync::Arc,
     };
     fn verified_context() -> (VerifiedHeightContext, Vec<KeyPair>) {
         let mut keys = (1_u8..=4)

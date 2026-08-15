@@ -1,20 +1,20 @@
 //! Module with telemetry layer for tracing
+use crate::layer::{EventInspectorTrait, EventSubscriber};
+use derive_more::{Deref, DerefMut};
+use iroha_config::parameters::actual::{TelemetryRedaction, TelemetryRedactionMode};
+use iroha_data_model::nexus::{DataSpaceId, LaneId};
+use norito::json::{Value, native::Map as JsonMap};
 use std::{
     collections::BTreeSet,
     error::Error,
     fmt::Debug,
     sync::{Arc, OnceLock, RwLock},
 };
-use derive_more::{Deref, DerefMut};
-use iroha_config::parameters::actual::{TelemetryRedaction, TelemetryRedactionMode};
-use iroha_data_model::nexus::{DataSpaceId, LaneId};
-use norito::json::{Value, native::Map as JsonMap};
 use tokio::sync::mpsc;
 use tracing::{
     Event as TracingEvent, Subscriber,
     field::{Field, Visit},
 };
-use crate::layer::{EventInspectorTrait, EventSubscriber};
 /// Target for telemetry in `tracing`
 pub const TARGET_PREFIX: &str = "telemetry::";
 /// Target for telemetry future in `tracing`
@@ -452,12 +452,12 @@ pub enum Channel {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use norito::json::{self, Value};
     use std::sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
     };
-    use norito::json::{self, Value};
-    use super::*;
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     fn with_test_lock<F: FnOnce()>(f: F) {
         let lock = TEST_LOCK.get_or_init(|| Mutex::new(()));

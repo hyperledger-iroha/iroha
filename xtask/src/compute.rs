@@ -1,9 +1,7 @@
 //! Compute lane SLO harness and SDK/CLI parity fixtures.
-use std::{
-    collections::BTreeMap,
-    fs,
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
+use crate::compute_harness::{
+    ComputeHarnessError, SloTargets, build_call_for_route, charge_units, default_manifest,
+    execute_entrypoint, meter, payload_with_len, slo_targets,
 };
 use eyre::{Result, WrapErr};
 use iroha_config::parameters::defaults::compute as compute_defaults;
@@ -14,9 +12,11 @@ use norito::{
     derive::{JsonDeserialize as DeriveJsonDeserialize, JsonSerialize as DeriveJsonSerialize},
     json::{self, JsonSerialize},
 };
-use crate::compute_harness::{
-    ComputeHarnessError, SloTargets, build_call_for_route, charge_units, default_manifest,
-    execute_entrypoint, meter, payload_with_len, slo_targets,
+use std::{
+    collections::BTreeMap,
+    fs,
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
 };
 /// Options for generating an SLO report.
 #[derive(Debug, Clone)]
@@ -338,9 +338,9 @@ fn rejection_catalog(route: &ComputeRouteId) -> Vec<RejectionCase> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::compute::ComputeCall;
     use tempfile::TempDir;
-    use super::*;
     #[test]
     fn percentile_handles_small_sets() {
         assert_eq!(percentile(&[], 0.5), 0);

@@ -7,16 +7,7 @@
 //! uniformly and prevents direct world state mutations from the VM.
 //!
 //! Helper syscalls that do not touch WSV are forwarded to the IVM default host.
-use std::{
-    any::Any,
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    mem,
-    num::{NonZeroU16, NonZeroU64, NonZeroUsize},
-    ops::Bound,
-    str::FromStr,
-    sync::Arc,
-};
+use super::cache::PreparedContractCache;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
@@ -35,7 +26,9 @@ use crate::{
 };
 use iroha_crypto::{Hash, HashOf, PublicKey, streaming::TransportCapabilityResolutionSnapshot};
 #[cfg(test)]
-use iroha_data_model::soracloud::{SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudEgressFetchRequestV1};
+use iroha_data_model::soracloud::{
+    SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudEgressFetchRequestV1,
+};
 use iroha_data_model::{
     DataSpaceId, NetworkId, ValidationFail,
     account::rekey::AccountAlias,
@@ -126,7 +119,16 @@ use norito::{
     json,
     streaming::CapabilityFlags,
 };
-use super::cache::PreparedContractCache;
+use std::{
+    any::Any,
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    mem,
+    num::{NonZeroU16, NonZeroU64, NonZeroUsize},
+    ops::Bound,
+    str::FromStr,
+    sync::Arc,
+};
 const AXT_PROOF_CACHE_HIT: &str = "hit";
 const AXT_PROOF_CACHE_MISS: &str = "miss";
 const AXT_PROOF_CACHE_EXPIRED: &str = "expired";
@@ -1442,9 +1444,9 @@ fn visit_merged_durable_state_keys(
 }
 #[cfg(test)]
 mod durable_state_merge_tests {
+    use super::*;
     use iroha_data_model::state_path::MAX_STATE_PATH_BYTES;
     use iroha_test_samples::ALICE_ID;
-    use super::*;
     fn state_path(value: &str) -> StatePath {
         value.parse().expect("durable-state test path")
     }
@@ -11879,7 +11881,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
 }
 #[cfg(test)]
 mod pointer_abi_tests {
-    use core::{num::NonZeroU16, str::FromStr};
     use super::{
         tests::{
             begin_axt_envelope, contract_test_state, fixture_public_key_from_seed,
@@ -11894,6 +11895,7 @@ mod pointer_abi_tests {
         smartcontracts::isi::triggers::specialized::SpecializedAction,
         state::{State, World},
     };
+    use core::{num::NonZeroU16, str::FromStr};
     use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
     use iroha_data_model::{
         events::execute_trigger::ExecuteTriggerEventFilter,
@@ -15986,7 +15988,18 @@ fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Arc};
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
+        smartcontracts::{
+            Execute,
+            isi::triggers::specialized::{SpecializedAction, SpecializedTrigger},
+            ivm::host::pointer_abi_tests::make_tlv,
+        },
+        state::{ElectionState, State, World, ZkAssetState},
+    };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         parameter::{CustomParameter, Parameter, SmartContractParameter},
@@ -16010,18 +16023,7 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
-        smartcontracts::{
-            Execute,
-            isi::triggers::specialized::{SpecializedAction, SpecializedTrigger},
-            ivm::host::pointer_abi_tests::make_tlv,
-        },
-        state::{ElectionState, State, World, ZkAssetState},
-    };
+    use std::{collections::BTreeMap, sync::Arc};
     #[cfg(feature = "zk-halo2-ipa")]
     fn sample_open_verify_envelope() -> iroha_data_model::zk::OpenVerifyEnvelope {
         let fixture =

@@ -1,16 +1,16 @@
+use crate::state::{BundleDiff, BundleSnapshot, ExpiryDiff, ResolverDiff, ResolverInvalidation};
+use eyre::Result;
+use norito::json;
+use norito_derive::{JsonDeserialize, JsonSerialize, NoritoSerialize};
 use std::{
     fs::OpenOptions,
     io::Write,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use eyre::Result;
-use norito::json;
-use norito_derive::{JsonDeserialize, JsonSerialize, NoritoSerialize};
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
-use crate::state::{BundleDiff, BundleSnapshot, ExpiryDiff, ResolverDiff, ResolverInvalidation};
 /// Resolver event payload emitted via logs and streaming interfaces.
 #[derive(Clone, Debug, NoritoSerialize, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "event", content = "value")]
@@ -199,10 +199,12 @@ impl EventEmitter {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::state::{
+        BundleDiff, BundleSnapshot, ExpiryDiff, ResolverDiff, ResolverInvalidation,
+    };
     use std::fs;
     use tempfile::NamedTempFile;
-    use super::*;
-    use crate::state::{BundleDiff, BundleSnapshot, ExpiryDiff, ResolverDiff, ResolverInvalidation};
     #[test]
     fn logs_bundle_events_when_path_configured() {
         let file = NamedTempFile::new().expect("create temp log file");

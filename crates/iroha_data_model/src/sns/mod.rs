@@ -1,4 +1,9 @@
 //! Sora Name Service data structures for registrar APIs.
+use crate::{
+    account::{AccountAddress, AccountId},
+    metadata::Metadata,
+    name,
+};
 use blake3::Hasher;
 use derive_more::Display;
 use iroha_crypto::PublicKey;
@@ -6,11 +11,6 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-use crate::{
-    account::{AccountAddress, AccountId},
-    metadata::Metadata,
-    name,
-};
 /// Unique identifier assigned to a top-level suffix (e.g., `.sora`).
 pub type SuffixId = u16;
 /// Fixed suffix id for full account-alias lease records.
@@ -495,9 +495,9 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
+    use super::{TokenValue, fixtures};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
-    use super::{TokenValue, fixtures};
     #[derive(Encode)]
     struct ForgedTokenValue {
         asset_id: String,

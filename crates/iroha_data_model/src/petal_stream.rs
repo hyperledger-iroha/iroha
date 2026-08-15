@@ -478,11 +478,17 @@ fn capacity_bits(size_cells: u16, options: PetalStreamOptions) -> Result<usize, 
         ));
     }
     let side_len = usize::try_from(side_len_i32).expect("grid validated as positive");
-    let total = side_len * side_len;
-    let border_cells = side_len * 4 - 4;
+    let border_width = usize::from(options.border);
+    let inner_side = side_len - border_width * 2;
+    let inner_cells = inner_side * inner_side;
     let anchor_size = usize::from(options.anchor_size);
     let anchor_cells = anchor_size * anchor_size * 4;
-    let data_cells = total.saturating_sub(border_cells + anchor_cells);
+    let data_cells =
+        inner_cells
+            .checked_sub(anchor_cells)
+            .ok_or(PetalStreamError::InvalidOptions(
+                "grid size too small for anchors",
+            ))?;
     Ok(data_cells)
 }
 fn cell_role(x: u16, y: u16, grid_size: u16, options: PetalStreamOptions) -> CellRole {
@@ -594,6 +600,25 @@ mod tests {
         let decoded =
             PetalStreamDecoder::decode_grid(&grid, PetalStreamOptions::default()).expect("decode");
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn petal_capacity_accounts_for_wide_borders() {
+        let options = PetalStreamOptions {
+            grid_size: 33,
+            border: 2,
+            anchor_size: 3,
+        };
+        let fitting_payload = vec![0u8; 91];
+        let grid = PetalStreamEncoder::encode_grid(&fitting_payload, options).expect("encode");
+        let decoded = PetalStreamDecoder::decode_grid(&grid, options).expect("decode");
+        assert_eq!(decoded, fitting_payload);
+
+        let oversized_payload = vec![0u8; 92];
+        assert_eq!(
+            PetalStreamEncoder::encode_grid(&oversized_payload, options).unwrap_err(),
+            PetalStreamError::CapacityExceeded
+        );
     }
     #[test]
     fn petal_grid_rejects_crc_mismatch() {

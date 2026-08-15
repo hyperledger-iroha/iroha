@@ -1,19 +1,19 @@
-use std::{
-    io::{BufWriter, Write},
-    path::PathBuf,
+use crate::{
+    Outcome, RunArgs,
+    genesis::{ConsensusPolicy, build_line_from_env, validate_consensus_mode_for_line},
+    tui,
 };
-#[cfg(test)]
-use std::fs;
 use clap::Parser;
 use color_eyre::eyre::{WrapErr as _, eyre};
 use iroha_data_model::{account::address::ChainDiscriminantGuard, name::Name};
 use iroha_genesis::{
     ManifestCrypto, RawGenesisTransaction, genesis_instructions_json, read_genesis_manifest_bytes,
 };
-use crate::{
-    Outcome, RunArgs,
-    genesis::{ConsensusPolicy, build_line_from_env, validate_consensus_mode_for_line},
-    tui,
+#[cfg(test)]
+use std::fs;
+use std::{
+    io::{BufWriter, Write},
+    path::PathBuf,
 };
 /// Validate a genesis JSON file and report offending fields (e.g., invalid `Name`s)
 #[derive(Clone, Debug, Parser)]
@@ -169,7 +169,7 @@ fn validate_instructions_array(
 }
 #[cfg(test)]
 mod tests {
-    use std::{io::BufWriter, path::PathBuf};
+    use super::*;
     use iroha_data_model::{
         ChainId,
         parameter::{
@@ -178,8 +178,8 @@ mod tests {
         },
     };
     use iroha_genesis::GenesisBuilder;
+    use std::{io::BufWriter, path::PathBuf};
     use tempfile::NamedTempFile;
-    use super::*;
     fn manifest_file_with_protocols(versions: &[u32]) -> NamedTempFile {
         let manifest = GenesisBuilder::new_without_executor(ChainId::from("v2-only"), ".")
             .build_raw()

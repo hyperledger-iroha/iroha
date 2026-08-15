@@ -5,24 +5,6 @@
 //! indexes in place with exact node-authoritative generation updates. Coordinator
 //! persistence retains only exact report publication state once the projection
 //! has been installed.
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    ops::Bound,
-    path::{Component, Path, PathBuf},
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
-#[cfg(feature = "app_api")]
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs as _},
-    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
-    time::Duration as StdDuration,
-};
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
 #[cfg(feature = "app_api")]
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -57,6 +39,24 @@ use sorafs_node::{
 use sorafs_node::{
     PorMutationFailureV1, PorStatusAuthoritySnapshotV1, PorStatusAuthorityUpdateV1,
     por_repair_source_identity_v1,
+};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    fs::{self, File, OpenOptions},
+    io::{Read as _, Write as _},
+    ops::Bound,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+#[cfg(feature = "app_api")]
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs as _},
+    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
+    time::Duration as StdDuration,
 };
 use thiserror::Error;
 use time::{Date, Duration, OffsetDateTime, Weekday};
@@ -2038,7 +2038,7 @@ fn canonical_weekly_report_generated_at(
 // ------------- Tests -------------
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc as StdArc, Barrier};
+    use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     #[cfg(feature = "app_api")]
     use sorafs_manifest::{ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1};
@@ -2049,8 +2049,8 @@ mod tests {
         },
         provider_advert::{AdvertSignature, SignatureAlgorithm},
     };
+    use std::sync::{Arc as StdArc, Barrier};
     use tempfile::tempdir;
-    use super::*;
     fn canonical_temp_root(dir: &tempfile::TempDir) -> PathBuf {
         let root = fs::canonicalize(dir.path()).expect("canonical temp root");
         #[cfg(unix)]
@@ -4526,6 +4526,8 @@ mod tests {
     }
     #[cfg(feature = "app_api")]
     mod runtime {
+        use super::*;
+        use crate::sorafs::por::{RandomnessProvider, VrfProvider};
         use std::{
             collections::HashMap,
             sync::{
@@ -4533,8 +4535,6 @@ mod tests {
                 atomic::{AtomicUsize, Ordering as AtomicOrdering},
             },
         };
-        use super::*;
-        use crate::sorafs::por::{RandomnessProvider, VrfProvider};
         #[derive(Clone)]
         struct StaticRandomnessProvider {
             randomness: PorRandomness,

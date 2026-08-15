@@ -1,6 +1,6 @@
 //! Streaming decode enforces the configured max archive length.
-use std::io::Cursor;
 use norito::{Error, core, stream_vec_collect_from_reader};
+use std::io::Cursor;
 struct MaxArchiveGuard {
     prev: u64,
 }

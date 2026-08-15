@@ -5,7 +5,7 @@
 //! only need a compact view that says which accounts are permitted to act inside
 //! which dataspaces. This module provides that mapping; higher-level services
 //! are responsible for keeping it in sync with manifest activation/revocation.
-use std::collections::{BTreeMap, BTreeSet};
+use crate::state::WorldReadOnly;
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     account::{AccountId, rekey::AccountAliasDomain},
@@ -16,8 +16,8 @@ use iroha_data_model::{
 use iroha_schema::IntoSchema;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
-use crate::state::WorldReadOnly;
 /// Failure to resolve the one issuer key authorized by committed AXT policy.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum AxtIssuerResolutionError {
@@ -523,14 +523,14 @@ impl SpaceDirectoryManifestSet {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::state::World;
     use base64::Engine as _;
     use iroha_crypto::Hash;
     use iroha_data_model::nexus::ManifestVersion;
     use iroha_data_model::{account::Account, domain::Domain, prelude::*};
     use iroha_test_samples::gen_account_in;
     use norito::json;
-    use super::*;
-    use crate::state::World;
     fn sample_manifest(dataspace: u32) -> AssetPermissionManifest {
         AssetPermissionManifest {
             version: ManifestVersion::default(),

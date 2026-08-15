@@ -2,23 +2,6 @@
 #![allow(clippy::result_large_err)]
 //! HTTP handlers for SoraFS discovery endpoints.
 mod stream_token_enforcement;
-use stream_token_enforcement::{RangeFetchConcurrencyGuard, enforce_stream_token_for_request};
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    convert::{Infallible, TryInto},
-    fs,
-    io::{self, Cursor},
-    net::SocketAddr,
-    num::{NonZeroU32, NonZeroUsize},
-    path::{Component, Path as StdPath, PathBuf},
-    str::FromStr,
-    sync::{
-        Arc, LazyLock, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use axum::{
     Json,
     body::{Body, Bytes},
@@ -43,7 +26,9 @@ use blake3::hash as blake3_hash;
 use ed25519_dalek::VerifyingKey as Ed25519VerifyingKey;
 use futures::{SinkExt, StreamExt, stream};
 use hex::{ToHex, encode};
-use http::header::{AGE, CACHE_CONTROL, ETAG, HeaderName, IF_NONE_MATCH, RETRY_AFTER, VARY, WARNING};
+use http::header::{
+    AGE, CACHE_CONTROL, ETAG, HeaderName, IF_NONE_MATCH, RETRY_AFTER, VARY, WARNING,
+};
 use hyper::body::Body as HyperBody;
 use iroha_core::{
     smartcontracts::{
@@ -224,6 +209,23 @@ use sorafs_node::{
     PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
     store::{StorageError as StorageBackendError, StoredFileRecord, StoredManifest},
 };
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    convert::{Infallible, TryInto},
+    fs,
+    io::{self, Cursor},
+    net::SocketAddr,
+    num::{NonZeroU32, NonZeroUsize},
+    path::{Component, Path as StdPath, PathBuf},
+    str::FromStr,
+    sync::{
+        Arc, LazyLock, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use stream_token_enforcement::{RangeFetchConcurrencyGuard, enforce_stream_token_for_request};
 #[cfg(test)]
 fn canonical_fixture_manifest_root_cid() -> ManifestRootCid {
     let manifest: ManifestV1 = norito::decode_from_bytes(include_bytes!(
@@ -233,16 +235,10 @@ fn canonical_fixture_manifest_root_cid() -> ManifestRootCid {
     ManifestRootCid::try_from_slice(&manifest.root_cid)
         .expect("fixture manifest root CID must be canonical")
 }
-use sorafs_orchestrator::appeals::{
-    AppealClass, AppealDecision, AppealDisbursementInput, AppealDisbursementPlan,
-    AppealPricingConfig, AppealQuote, AppealQuoteInput, AppealSettlementBreakdown,
-    AppealSettlementConfig, AppealUrgency, AppealVerdict, parse_appeal_quantity_literal,
-};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use tokio::sync::{RwLock, broadcast};
-use urlencoding::decode;
 #[cfg(test)]
-use crate::sorafs::registry::{PinRegistryMetricsSummary, PinRegistrySnapshot, collect_pin_registry};
+use crate::sorafs::registry::{
+    PinRegistryMetricsSummary, PinRegistrySnapshot, collect_pin_registry,
+};
 use crate::{
     JsonBody, SharedAppState, json_entry, json_object,
     routing::MaybeTelemetry,
@@ -275,6 +271,14 @@ use crate::{
     },
     utils::extractors::{ExtractAccept, JsonOnly, JsonOrNoritoVersioned, NoritoJson},
 };
+use sorafs_orchestrator::appeals::{
+    AppealClass, AppealDecision, AppealDisbursementInput, AppealDisbursementPlan,
+    AppealPricingConfig, AppealQuote, AppealQuoteInput, AppealSettlementBreakdown,
+    AppealSettlementConfig, AppealUrgency, AppealVerdict, parse_appeal_quantity_literal,
+};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tokio::sync::{RwLock, broadcast};
+use urlencoding::decode;
 const HEADER_SORA_REQ_BLINDED_CID: &str = "sora-req-blinded-cid";
 const HEADER_SORA_REQ_SALT_EPOCH: &str = "sora-req-salt-epoch";
 const HEADER_SORA_REQ_NONCE: &str = "sora-req-nonce";
@@ -5952,11 +5956,12 @@ fn parse_governance_dag_mirror_index(
     Ok((index, metadata))
 }
 fn validate_governance_dag_mirror_index(index: &Value) -> Result<(), Response> {
-    const MIRROR_INDEX_FIELDS: [&str; 11] = [
+    const MIRROR_INDEX_FIELDS: [&str; 12] = [
         "schema",
         "generation",
         "generated_at",
         "head",
+        "archive",
         "block_count",
         "indexed_block_count",
         "blocks",
@@ -5972,6 +5977,8 @@ fn validate_governance_dag_mirror_index(index: &Value) -> Result<(), Response> {
         "ipfs_cid",
         "blake3",
     ];
+    const MIRROR_ARCHIVE_FIELDS: [&str; 4] =
+        ["generation", "archived_block_count", "blake3", "ipfs_cid"];
     const MIRROR_BLOCK_FIELDS: [&str; 11] = [
         "position",
         "sequence",
@@ -6000,6 +6007,46 @@ fn validate_governance_dag_mirror_index(index: &Value) -> Result<(), Response> {
         ));
     }
     required_value_u64(index, "generated_at", context)?;
+    let archive = index
+        .get("archive")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "governance DAG mirror index is missing `archive` object",
+            )
+        })?;
+    require_exact_map_fields(
+        archive,
+        &MIRROR_ARCHIVE_FIELDS,
+        "governance DAG mirror archive",
+    )?;
+    let archive_generation = required_map_u64(archive, "generation", context)?;
+    let archived_block_count = required_map_u64(archive, "archived_block_count", context)?;
+    let archive_blake3 = required_nullable_governance_string(archive, "blake3", context)?;
+    let archive_ipfs_cid = required_nullable_governance_string(archive, "ipfs_cid", context)?;
+    let archive_is_canonical = if archive_generation == 0 {
+        archived_block_count == 0 && archive_blake3.is_none() && archive_ipfs_cid.is_none()
+    } else {
+        archived_block_count != 0
+            && archive_generation <= archived_block_count
+            && archive_blake3
+                .as_deref()
+                .is_some_and(|digest| digest.len() == 64 && is_canonical_lower_hex(digest, 64))
+            && archive_ipfs_cid.as_deref().is_some_and(|value| {
+                decode_content_cid(value).is_some_and(|bytes| {
+                    bytes.len() == 36
+                        && bytes.starts_with(&[0x01, 0x55, 0x12, 0x20])
+                        && encode_content_cid(&bytes) == value
+                })
+            })
+    };
+    if !archive_is_canonical {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance DAG mirror archive metadata is noncanonical",
+        ));
+    }
     let head = index
         .get("head")
         .and_then(Value::as_object)
@@ -6155,12 +6202,17 @@ fn validate_governance_dag_mirror_index(index: &Value) -> Result<(), Response> {
         append_governance_lookup_position(&mut by_kind, payload_kind, position_u64);
     }
     let last = blocks.last().expect("nonempty mirror blocks checked above");
-    if last.get("block_cid_hex").and_then(Value::as_str) != Some(head_block_cid.as_str())
+    if blocks
+        .first()
+        .and_then(|block| block.get("sequence"))
+        .and_then(Value::as_u64)
+        != Some(archived_block_count)
+        || last.get("block_cid_hex").and_then(Value::as_str) != Some(head_block_cid.as_str())
         || previous_sequence.and_then(|sequence| sequence.checked_add(1)) != Some(head_count)
     {
         return Err(json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG mirror history does not end at its head",
+            "governance DAG mirror history does not exactly bridge its archive and head",
         ));
     }
     for (field, expected) in [
@@ -16298,8 +16350,8 @@ fn native_signer_returned_exact_transaction(
 }
 #[cfg(test)]
 mod native_signer_returned_transaction_tests {
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
     fn fixture_payload(authority: AccountId) -> TransactionPayload {
         TransactionBuilder::new(
             crate::signed_query_test_network_id(),
@@ -17467,7 +17519,9 @@ async fn enqueue_sorafs_finalized_native_repair_work(
     cursor: &mut SorafsRepairTransactionForwarderCursorV1,
     scan: &mut SorafsRepairTransactionForwarderScanV1,
 ) {
-    use sorafs_node::repair_transaction_forwarder::{RepairOperationV1, RepairTransactionContextV1};
+    use sorafs_node::repair_transaction_forwarder::{
+        RepairOperationV1, RepairTransactionContextV1,
+    };
     let repair_generation_enabled = state.sorafs_node.repair_config().enabled();
     if !repair_generation_enabled {
         return;
@@ -26515,10 +26569,10 @@ fn gateway_policy_violation_response(violation: PolicyViolation) -> Response {
 }
 #[cfg(test)]
 mod gateway_policy_violation_tests {
-    use std::{collections::HashMap, fs, path::PathBuf};
-    use axum::body::to_bytes;
-    use tokio::runtime::Runtime;
     use super::*;
+    use axum::body::to_bytes;
+    use std::{collections::HashMap, fs, path::PathBuf};
+    use tokio::runtime::Runtime;
     fn response_json(response: Response) -> Value {
         let runtime = Runtime::new().expect("tokio runtime");
         runtime.block_on(async {
@@ -29450,16 +29504,11 @@ fn range_not_satisfiable(total_length: u64, message: String) -> Response {
 }
 #[cfg(all(test, feature = "app_api"))]
 mod app_api_tests {
-    use std::{
-        fmt, fs,
-        io::Write,
-        num::NonZeroU32,
-        path::PathBuf,
-        sync::{
-            Arc, RwLock,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
+    use super::*;
+    use crate::{
+        mk_app_state_for_tests,
+        sorafs::{AdmissionRegistry, StreamTokenIssuer},
+        utils::extractors::JsonOnly,
     };
     use axum::{body, http::Uri};
     use ed25519_dalek::{Signer as _, SigningKey};
@@ -29486,13 +29535,18 @@ mod app_api_tests {
         provider_admission::ProviderAdmissionEnvelopeV1,
     };
     use sorafs_node::{config::StorageConfig, store::StorageBackend};
-    use tempfile::{TempDir, tempdir};
-    use super::*;
-    use crate::{
-        mk_app_state_for_tests,
-        sorafs::{AdmissionRegistry, StreamTokenIssuer},
-        utils::extractors::JsonOnly,
+    use std::{
+        fmt, fs,
+        io::Write,
+        num::NonZeroU32,
+        path::PathBuf,
+        sync::{
+            Arc, RwLock,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
+    use tempfile::{TempDir, tempdir};
     fn canonical_fixture_car_stats(
         plan: &CarBuildPlan,
         payload: &[u8],
@@ -30429,13 +30483,13 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
 }
 #[cfg(test)]
 mod storage_backend_error_tests {
-    use std::time::Duration;
-    use sorafs_manifest::retention::RetentionMetadataError;
-    use sorafs_node::scheduler::{FetchRateScope, SchedulerAdmissionError};
     use super::{
         NodeStorageError, RETRY_AFTER, StorageBackendError, node_storage_error_response,
         storage_backend_error,
     };
+    use sorafs_manifest::retention::RetentionMetadataError;
+    use sorafs_node::scheduler::{FetchRateScope, SchedulerAdmissionError};
+    use std::time::Duration;
     #[test]
     fn retention_metadata_maps_to_bad_request() {
         let err = StorageBackendError::RetentionMetadata(RetentionMetadataError::DuplicateKey {
@@ -31163,14 +31217,19 @@ pub(crate) fn init_cache(
 }
 #[cfg(test)]
 mod advert_tests {
-    use std::{
-        num::NonZeroU64,
-        str::FromStr,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicU64, AtomicUsize, Ordering},
+    use super::*;
+    use crate::{
+        build_sorafs_gateway_security, mk_app_state_for_tests, sorafs,
+        sorafs::{
+            StreamTokenIssuer, StreamTokenRuntimeSigner, StreamTokenRuntimeSignerProbeErrorV1,
+            StreamTokenRuntimeSignerQualificationV1, StreamTokenSigningError,
+            registry::{
+                RegistryCreditLedgerEntry, RegistryDeclaration, RegistryDispute,
+                RegistryFeeLedgerEntry,
+            },
         },
-        time::{Duration, SystemTime, UNIX_EPOCH},
+        tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_network_app_headers},
+        utils::extractors::JsonOnly,
     };
     use axum::{
         Router,
@@ -31310,11 +31369,9 @@ mod advert_tests {
         GovernanceDagSealedStateSlot, GovernanceDagServiceRuntimeProviders,
         ModerationQuarantineKeyOperationErrorV1, ModerationQuarantineKeyProviderQualificationV1,
         ModerationQuarantineKeyProviderReadinessErrorV1, ModerationQuarantineKeyWrapper,
-        NodeRuntimeDeps, PrivacyCyclePrfOutputV1, PrivacyCyclePrfProviderErrorV1,
-        PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestV1, PrivacyReleaseAnchorErrorV1,
-        PrivacyReleaseAnchorHeadV1, PrivacyReleaseAnchorV1,
-        ProductionTransparencyRuntimeProviderV1, TransparencyRuntimeProviderBindingV1,
-        TransparencyRuntimeProviderQualificationV1,
+        NodeRuntimeDeps, PrivacyReleaseAnchorErrorV1, PrivacyReleaseAnchorHeadV1,
+        PrivacyReleaseAnchorV1, ProductionTransparencyRuntimeProviderV1,
+        TransparencyRuntimeProviderBindingV1, TransparencyRuntimeProviderQualificationV1,
         config::{StorageConfig, StorageConfigBuilder},
         prepare_governance_dag_service_from_view,
         reputation::runtime::{
@@ -31324,23 +31381,113 @@ mod advert_tests {
         },
     };
     use std::collections::{BTreeMap, HashSet};
+    use std::{
+        num::NonZeroU64,
+        str::FromStr,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, AtomicUsize, Ordering},
+        },
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
     use tempfile::TempDir;
     use tokio::net::TcpListener;
     use tower::ServiceExt as _;
-    use super::*;
-    use crate::{
-        build_sorafs_gateway_security, mk_app_state_for_tests, sorafs,
-        sorafs::{
-            StreamTokenIssuer, StreamTokenRuntimeSigner, StreamTokenRuntimeSignerProbeErrorV1,
-            StreamTokenRuntimeSignerQualificationV1, StreamTokenSigningError,
-            registry::{
-                RegistryCreditLedgerEntry, RegistryDeclaration, RegistryDispute,
-                RegistryFeeLedgerEntry,
-            },
-        },
-        tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_network_app_headers},
-        utils::extractors::JsonOnly,
-    };
+    trait JsonTestValueExt {
+        fn json_at(&self, path: &[&str]) -> Option<&Value>;
+
+        fn json_str(&self, path: &[&str]) -> Option<&str> {
+            self.json_at(path).and_then(Value::as_str)
+        }
+
+        fn json_u64(&self, path: &[&str]) -> Option<u64> {
+            self.json_at(path).and_then(Value::as_u64)
+        }
+
+        fn json_bool(&self, path: &[&str]) -> Option<bool> {
+            self.json_at(path).and_then(Value::as_bool)
+        }
+
+        fn json_array(&self, path: &[&str]) -> Option<&Vec<Value>> {
+            self.json_at(path).and_then(Value::as_array)
+        }
+
+        fn json_object(&self, path: &[&str]) -> Option<&Map> {
+            self.json_at(path).and_then(Value::as_object)
+        }
+
+        fn json_len(&self, path: &[&str]) -> Option<usize> {
+            self.json_array(path).map(Vec::len)
+        }
+
+        fn json_first(&self, path: &[&str]) -> Option<&Value> {
+            self.json_array(path).and_then(|values| values.first())
+        }
+
+        fn json_first_at(&self, array_path: &[&str], item_path: &[&str]) -> Option<&Value> {
+            self.json_first(array_path)?.json_at(item_path)
+        }
+    }
+
+    impl JsonTestValueExt for Value {
+        fn json_at(&self, path: &[&str]) -> Option<&Value> {
+            path.iter().try_fold(self, |value, key| value.get(*key))
+        }
+    }
+
+    impl JsonTestValueExt for Map {
+        fn json_at(&self, path: &[&str]) -> Option<&Value> {
+            let (first, tail) = path.split_first()?;
+            tail.iter()
+                .try_fold(self.get(*first)?, |value, key| value.get(*key))
+        }
+    }
+
+    fn insert_static_api_test_header(
+        headers: &mut HeaderMap,
+        name: &'static str,
+        value: &'static str,
+    ) {
+        headers.insert(
+            HeaderName::from_static(name),
+            HeaderValue::from_static(value),
+        );
+    }
+
+    fn insert_api_test_header(headers: &mut HeaderMap, name: &'static str, value: impl AsRef<str>) {
+        headers.insert(HeaderName::from_static(name), header_value(value, name));
+    }
+
+    fn refresh_api_test_gateway_security(app: &mut crate::AppState) {
+        let components = build_sorafs_gateway_security(
+            &app.sorafs_gateway_config,
+            app.sorafs_admission.clone(),
+            None,
+            None,
+        );
+        app.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
+        app.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+    }
+
+    fn install_api_test_gateway_security(
+        app: &mut crate::AppState,
+        config: iroha_config::parameters::actual::SorafsGateway,
+    ) {
+        app.sorafs_gateway_config = config;
+        refresh_api_test_gateway_security(app);
+    }
+
+    async fn api_test_response_body(response: Response) -> Bytes {
+        body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect API test response body")
+    }
+
+    async fn api_test_response_json(response: Response) -> Value {
+        let body = api_test_response_body(response).await;
+        norito::json::from_slice(&body).expect("decode API test JSON response")
+    }
+
     include!("api/exact_network_auth_tests.rs");
     include!("api/alias_page_tests.rs");
     #[test]
@@ -31482,10 +31629,11 @@ mod advert_tests {
             if state.records[index].as_ref().map(|record| record.revision) != expected_revision {
                 return Err("compare-and-swap conflict".to_owned());
             }
-            if next.generation <= state.generation_floors[index]
-                || next.payload.is_empty()
-                || !next.has_valid_revision(slot)
-            {
+            let generation_valid = next.generation > state.generation_floors[index]
+                || (matches!(slot, GovernanceDagSealedStateSlot::PublishIntent)
+                    && state.records[index].is_some()
+                    && next.generation == state.generation_floors[index]);
+            if !generation_valid || next.payload.is_empty() || !next.has_valid_revision(slot) {
                 return Err("invalid or non-monotonic checkpoint".to_owned());
             }
             state.generation_floors[index] = next.generation;
@@ -32107,233 +32255,45 @@ mod advert_tests {
             handle_get_sorafs_storage_peers(State(state.clone()), axum::extract::RawQuery(None))
                 .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read peer discovery response");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode JSON");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("gateway_base_url").and_then(Value::as_str),
+            value.json_str(&["gateway_base_url"]),
             Some("https://taira.sora.org")
         );
         let urls = value
-            .get("pin_torii_urls")
-            .and_then(Value::as_array)
+            .json_array(&["pin_torii_urls"])
             .expect("pin URL array");
         assert_eq!(urls.len(), 3);
         assert_eq!(
             urls.first().and_then(Value::as_str),
             Some("https://taira-validator-1.sora.org")
         );
-        assert_eq!(value.get("count").and_then(Value::as_u64), Some(3));
-        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(3));
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(50));
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
+        assert_eq!(value.json_u64(&["count"]), Some(3));
+        assert_eq!(value.json_u64(&["returned_count"]), Some(3));
+        assert_eq!(value.json_u64(&["limit"]), Some(50));
+        assert_eq!(value.json_bool(&["truncated"]), Some(false));
+
         let response = handle_get_sorafs_storage_peers(
             State(state),
             axum::extract::RawQuery(Some("limit=1".to_owned())),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read capped peer discovery response");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode capped JSON");
+        let value = api_test_response_json(response).await;
         let urls = value
-            .get("pin_torii_urls")
-            .and_then(Value::as_array)
+            .json_array(&["pin_torii_urls"])
             .expect("capped pin URL array");
         assert_eq!(urls.len(), 1);
-        assert_eq!(value.get("count").and_then(Value::as_u64), Some(3));
-        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(value.json_u64(&["count"]), Some(3));
+        assert_eq!(value.json_u64(&["returned_count"]), Some(1));
+        assert_eq!(value.json_u64(&["limit"]), Some(1));
+        assert_eq!(value.json_bool(&["truncated"]), Some(true));
     }
-    fn governance_mirror_fixture() -> (
-        SharedAppState,
-        TempDir,
-        Value,
-        GovernanceDagSourceMetadata,
-        String,
-        String,
-        String,
-    ) {
-        let (app, temp_dir, _digest_hex, block_cid_hex, node_cid_hex) =
-            sorafs_app_state_with_governance_runtime_index();
-        let ((runtime_index, _runtime_metadata), verified) =
-            load_verified_governance_dag_runtime_index(&app)
-                .expect("load verified runtime fixture");
-        let runtime_blocks = runtime_index
-            .get("blocks")
-            .and_then(Value::as_array)
-            .expect("generated runtime blocks");
-        let mut blocks = Vec::with_capacity(runtime_blocks.len());
-        let mut by_block_cid_hex = Map::new();
-        let mut by_node_cid_hex = Map::new();
-        let mut by_encoded_blake3 = Map::new();
-        let mut by_payload_kind = Map::new();
-        for (position, runtime_block) in runtime_blocks.iter().enumerate() {
-            let position_u64 = u64::try_from(position).expect("mirror position fits u64");
-            let block_cid = runtime_block
-                .get("block_cid_hex")
-                .and_then(Value::as_str)
-                .expect("runtime block CID");
-            let node_cid = runtime_block
-                .get("node_cid_hex")
-                .and_then(Value::as_str)
-                .expect("runtime node CID");
-            let encoded_blake3 = verified
-                .encoded_blake3_hex
-                .get(position)
-                .expect("verified runtime block digest");
-            let payload_kind = runtime_block
-                .get("payload_kind")
-                .and_then(Value::as_str)
-                .expect("runtime payload kind");
-            let mut block = Map::new();
-            block.insert("position".into(), Value::from(position_u64));
-            for field in [
-                "sequence",
-                "node_cid_hex",
-                "block_cid_hex",
-                "payload_kind",
-                "encoded_len",
-                "submission_publisher_account_digest_hex",
-                "submission_origin",
-            ] {
-                block.insert(
-                    field.to_owned(),
-                    runtime_block.get(field).cloned().unwrap_or(Value::Null),
-                );
-            }
-            block.insert(
-                "timestamp".into(),
-                runtime_block
-                    .get("published_at_unix")
-                    .cloned()
-                    .expect("runtime published timestamp"),
-            );
-            block.insert("blake3".into(), Value::from(encoded_blake3.clone()));
-            block.insert(
-                "ipfs_cid".into(),
-                Value::from(
-                    verified
-                        .raw_ipfs_cid
-                        .get(position)
-                        .expect("verified runtime block IPFS CID")
-                        .clone(),
-                ),
-            );
-            blocks.push(Value::Object(block));
-            by_block_cid_hex.insert(block_cid.to_owned(), Value::from(position_u64));
-            by_node_cid_hex.insert(node_cid.to_owned(), Value::from(position_u64));
-            by_encoded_blake3.insert(encoded_blake3.clone(), Value::from(position_u64));
-            append_governance_lookup_position(
-                &mut by_payload_kind,
-                payload_kind.to_owned(),
-                position_u64,
-            );
-        }
-        let mut head = Map::new();
-        head.insert(
-            "head_block_cid_hex".into(),
-            Value::from(encode(&verified.head.head_block_cid)),
-        );
-        head.insert("block_count".into(), Value::from(verified.head.block_count));
-        head.insert(
-            "generated_at".into(),
-            Value::from(verified.head.generated_at),
-        );
-        head.insert(
-            "ipfs_cid".into(),
-            Value::from(verified.head_raw_ipfs_cid.clone()),
-        );
-        head.insert(
-            "blake3".into(),
-            Value::from(verified.head_blake3_hex.clone()),
-        );
-        let mut index = Map::new();
-        index.insert(
-            "schema".into(),
-            Value::from("sorafs.governance_dag.mirror.v1"),
-        );
-        index.insert("generation".into(), Value::from(7_u64));
-        index.insert(
-            "generated_at".into(),
-            Value::from(verified.head.generated_at),
-        );
-        index.insert("head".into(), Value::Object(head));
-        index.insert("block_count".into(), Value::from(verified.head.block_count));
-        index.insert(
-            "indexed_block_count".into(),
-            Value::from(u64::try_from(blocks.len()).expect("mirror block count fits u64")),
-        );
-        index.insert("blocks".into(), Value::Array(blocks));
-        index.insert("by_block_cid_hex".into(), Value::Object(by_block_cid_hex));
-        index.insert("by_node_cid_hex".into(), Value::Object(by_node_cid_hex));
-        index.insert("by_encoded_blake3".into(), Value::Object(by_encoded_blake3));
-        index.insert("by_payload_kind".into(), Value::Object(by_payload_kind));
-        let index = Value::Object(index);
-        let canonical_bytes = json::to_json_pretty(&index)
-            .expect("encode canonical mirror fixture")
-            .into_bytes();
-        let metadata = GovernanceDagSourceMetadata::new(
-            GOVERNANCE_DAG_MIRROR_SOURCE_V1,
-            (3, [0xA3; 32]),
-            &canonical_bytes,
-            Some((7, [0xB7; 32])),
-        );
-        let (index, metadata) = parse_governance_dag_mirror_index(&canonical_bytes, metadata)
-            .expect("validate canonical mirror fixture");
-        let head_block_cid_hex = encode(&verified.head.head_block_cid);
-        (
-            app,
-            temp_dir,
-            index,
-            metadata,
-            block_cid_hex,
-            node_cid_hex,
-            head_block_cid_hex,
-        )
+
+    fn is_current_wall_clock(timestamp: Option<u64>) -> bool {
+        timestamp.is_some_and(|timestamp| timestamp != 0 && timestamp <= unix_timestamp_now())
     }
-    fn assert_governance_source_metadata(
-        value: &Value,
-        expected_source: &str,
-        expect_checkpoint: bool,
-    ) {
-        assert_eq!(
-            value.get("source").and_then(Value::as_str),
-            Some(expected_source)
-        );
-        assert!(
-            value
-                .get("source_generation")
-                .and_then(Value::as_u64)
-                .is_some_and(|generation| generation > 0)
-        );
-        let record_digest = value
-            .get("source_record_blake3")
-            .and_then(Value::as_str)
-            .expect("source record digest");
-        assert!(is_canonical_lower_hex(record_digest, 64));
-        assert!(value.get("source_path").is_none());
-        assert!(value.get("head_path").is_none());
-        if expect_checkpoint {
-            assert!(
-                value
-                    .get("source_checkpoint_generation")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|generation| generation > 0)
-            );
-            let revision = value
-                .get("source_checkpoint_revision")
-                .and_then(Value::as_str)
-                .expect("source checkpoint revision");
-            assert!(is_canonical_lower_hex(revision, 64));
-        } else {
-            assert!(value.get("source_checkpoint_generation").is_none());
-            assert!(value.get("source_checkpoint_revision").is_none());
-        }
-    }
+
     fn read_publication_state_fixture(app: &SharedAppState) -> Value {
         let snapshot = app
             .sorafs_node
@@ -32366,42 +32326,31 @@ mod advert_tests {
             .and_then(Value::as_array)
             .expect("publication entries")
             .iter()
-            .filter(|entry| entry.get("payload_kind").and_then(Value::as_str) == Some(payload_kind))
+            .filter(|entry| entry.json_str(&["payload_kind"]) == Some(payload_kind))
             .map(|entry| {
                 let encoded = entry
-                    .get("encoded_path")
-                    .and_then(Value::as_str)
+                    .json_str(&["encoded_path"])
                     .expect("encoded source path");
-                let json = entry
-                    .get("json_path")
-                    .and_then(Value::as_str)
-                    .expect("JSON source path");
+                let json = entry.json_str(&["json_path"]).expect("JSON source path");
                 (governance_root.join(encoded), governance_root.join(json))
             })
             .collect()
     }
     fn set_canonical_publication_entry_paths(entry: &mut Map) {
         let payload_kind = entry
-            .get("payload_kind")
-            .and_then(Value::as_str)
+            .json_str(&["payload_kind"])
             .expect("fixture payload kind")
             .to_owned();
         let encoded_len = entry
-            .get("encoded_len")
-            .and_then(Value::as_u64)
+            .json_u64(&["encoded_len"])
             .expect("fixture encoded length");
         let encoded_blake3 = entry
-            .get("encoded_blake3")
-            .and_then(Value::as_str)
+            .json_str(&["encoded_blake3"])
             .expect("fixture encoded digest")
             .to_owned();
-        let json_len = entry
-            .get("json_len")
-            .and_then(Value::as_u64)
-            .expect("fixture JSON length");
+        let json_len = entry.json_u64(&["json_len"]).expect("fixture JSON length");
         let json_blake3 = entry
-            .get("json_blake3")
-            .and_then(Value::as_str)
+            .json_str(&["json_blake3"])
             .expect("fixture JSON digest")
             .to_owned();
         let (encoded_path, json_path) = governance_source_pair_relative_paths(
@@ -32443,8 +32392,9 @@ mod advert_tests {
             publisher,
         )
         .expect("publish typed appeal-finance rollup fixture");
-        node.publish_transparency_ledger_publication(transparency_publication_fixture())
-            .expect("publish typed transparency fixture");
+        node.publish_appeal_finance_settlement_receipt(appeal_finance_settlement_receipt_fixture())
+            .expect("publish typed appeal-finance settlement fixture");
+
         let token_request = transparency_proof_token_issuance_request(0x67);
         let signer_key: [u8; 32] = hex::decode(&token_request.signer_key_hex)
             .expect("decode token signer key")
@@ -32579,10 +32529,7 @@ mod advert_tests {
             .expect("parse typed publication fixture");
         let car_archive_hex = publication
             .car_queue
-            .get("segments")
-            .and_then(Value::as_array)
-            .and_then(|segments| segments.first())
-            .and_then(|segment| segment.get("car_archive_blake3"))
+            .json_first_at(&["segments"], &["car_archive_blake3"])
             .and_then(Value::as_str)
             .expect("typed CAR archive digest")
             .to_owned();
@@ -32628,23 +32575,18 @@ mod advert_tests {
         let index: Value = norito::json::from_slice(runtime_snapshot.index_bytes())
             .expect("decode generated runtime index");
         let first = index
-            .get("blocks")
-            .and_then(Value::as_array)
-            .and_then(|blocks| blocks.first())
+            .json_first(&["blocks"])
             .expect("generated runtime index first block");
         let digest_hex = first
-            .get("encoded_blake3")
-            .and_then(Value::as_str)
+            .json_str(&["encoded_blake3"])
             .expect("generated runtime block digest")
             .to_owned();
         let block_cid_hex = first
-            .get("block_cid_hex")
-            .and_then(Value::as_str)
+            .json_str(&["block_cid_hex"])
             .expect("generated runtime block CID")
             .to_owned();
         let node_cid_hex = first
-            .get("node_cid_hex")
-            .and_then(Value::as_str)
+            .json_str(&["node_cid_hex"])
             .expect("generated runtime node CID")
             .to_owned();
         Arc::get_mut(&mut app)
@@ -32666,8 +32608,7 @@ mod advert_tests {
             .and_then(Value::as_object_mut)
             .expect("transparency publish entry");
         let old_encoded_path = entry
-            .get("encoded_path")
-            .and_then(Value::as_str)
+            .json_str(&["encoded_path"])
             .expect("old encoded path")
             .to_owned();
         let encoded_path = governance_dir.join(&old_encoded_path);
@@ -32678,8 +32619,7 @@ mod advert_tests {
         entry.insert("encoded_len".into(), Value::from(encoded.len() as u64));
         set_canonical_publication_entry_paths(entry);
         let new_encoded_path = entry
-            .get("encoded_path")
-            .and_then(Value::as_str)
+            .json_str(&["encoded_path"])
             .expect("new encoded path")
             .to_owned();
         fs::create_dir_all(
@@ -32692,9 +32632,7 @@ mod advert_tests {
         fs::write(governance_dir.join(&new_encoded_path), &encoded)
             .expect("write noncanonical transparency publication");
         let entry = index
-            .get("entries")
-            .and_then(Value::as_array)
-            .and_then(|entries| entries.first())
+            .json_first(&["entries"])
             .expect("noncanonical transparency entry")
             .clone();
         let response = match load_verified_transparency_publication(&app, &[entry], &cycle_id_hex) {
@@ -32718,66 +32656,34 @@ mod advert_tests {
             .get(ETAG)
             .cloned()
             .expect("proof-token issuance etag");
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect proof-token issuance dashboard body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode proof-token issuance dashboard");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.transparency.proof_token_issuances.v1")
         );
         assert_eq!(
-            value.get("payload_kind").and_then(Value::as_str),
+            value.json_str(&["payload_kind"]),
             Some(PROOF_TOKEN_ISSUANCE_KIND)
         );
-        assert_eq!(
-            value.get("published_token_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("returned_token_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("limit").and_then(Value::as_u64),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
-        assert_eq!(
-            value.get("distinct_token_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("distinct_signer_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("bound_entry_count_total").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value.get("expiring_token_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("evidence_digest_count").and_then(Value::as_u64),
-            Some(1)
-        );
+        assert_eq!(value.json_u64(&["published_token_count"]), Some(1));
+        assert_eq!(value.json_u64(&["returned_token_count"]), Some(1));
+        assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
+        assert_eq!(value.json_bool(&["truncated"]), Some(false));
+        assert_eq!(value.json_u64(&["distinct_token_count"]), Some(1));
+        assert_eq!(value.json_u64(&["distinct_signer_count"]), Some(1));
+        assert_eq!(value.json_u64(&["bound_entry_count_total"]), Some(2));
+        assert_eq!(value.json_u64(&["expiring_token_count"]), Some(1));
+        assert_eq!(value.json_u64(&["evidence_digest_count"]), Some(1));
         assert_eq!(
             value
-                .get("action_code_counts")
-                .and_then(Value::as_object)
+                .json_object(&["action_code_counts"])
                 .and_then(|counts| counts.get("2"))
                 .and_then(Value::as_u64),
             Some(1)
         );
         assert_eq!(
             value
-                .get("entries")
-                .and_then(Value::as_array)
-                .and_then(|entries| entries.first())
-                .and_then(|entry| entry.get("payload_kind"))
+                .json_first_at(&["entries"], &["payload_kind"])
                 .and_then(Value::as_str),
             Some(PROOF_TOKEN_ISSUANCE_KIND)
         );
@@ -32840,9 +32746,7 @@ mod advert_tests {
             response.headers().get(CACHE_CONTROL),
             Some(&HeaderValue::from_static("no-store"))
         );
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect transparency explorer UI body");
+        let body_bytes = api_test_response_body(response).await;
         let body = String::from_utf8(body_bytes.to_vec()).expect("HTML body is UTF-8");
         assert!(body.contains("SoraFS Transparency Explorer"));
         assert!(body.contains("/v1/sorafs/transparency/explorer"));
@@ -32864,70 +32768,41 @@ mod advert_tests {
             .get(ETAG)
             .cloned()
             .expect("explorer snapshot etag");
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect explorer snapshot body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode explorer snapshot");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.transparency.explorer_snapshot.v1")
         );
+        assert_eq!(value.json_u64(&["published_cycle_count"]), Some(0));
+        assert_eq!(value.json_u64(&["returned_cycle_count"]), Some(0));
+        assert_eq!(value.json_u64(&["proof_token_issuance_count"]), Some(1));
         assert_eq!(
-            value.get("published_cycle_count").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            value.get("returned_cycle_count").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            value
-                .get("proof_token_issuance_count")
-                .and_then(Value::as_u64),
+            value.json_u64(&["returned_proof_token_issuance_count"]),
             Some(1)
         );
+        assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
+        assert_eq!(value.json_bool(&["truncated_cycles"]), Some(false));
         assert_eq!(
-            value
-                .get("returned_proof_token_issuance_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("limit").and_then(Value::as_u64),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(
-            value.get("truncated_cycles").and_then(Value::as_bool),
+            value.json_bool(&["truncated_proof_token_issuances"]),
             Some(false)
         );
         assert_eq!(
             value
-                .get("truncated_proof_token_issuances")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            value
-                .get("payload_kind_counts")
-                .and_then(Value::as_object)
+                .json_object(&["payload_kind_counts"])
                 .and_then(|counts| counts.get(PROOF_TOKEN_ISSUANCE_KIND))
                 .and_then(Value::as_u64),
             Some(1)
         );
         assert_eq!(
             value
-                .get("proof_token_summary")
-                .and_then(Value::as_object)
+                .json_object(&["proof_token_summary"])
                 .and_then(|summary| summary.get("distinct_token_count"))
                 .and_then(Value::as_u64),
             Some(1)
         );
         assert_eq!(
             value
-                .get("proof_token_issuances")
-                .and_then(Value::as_array)
-                .and_then(|entries| entries.first())
-                .and_then(|entry| entry.get("payload_kind"))
+                .json_first_at(&["proof_token_issuances"], &["payload_kind"])
                 .and_then(Value::as_str),
             Some(PROOF_TOKEN_ISSUANCE_KIND)
         );
@@ -32953,32 +32828,18 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect explorer cycle snapshot body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode explorer cycle snapshot");
-        assert_eq!(
-            value.get("published_cycle_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("returned_cycle_count").and_then(Value::as_u64),
-            Some(1)
-        );
+        let value = api_test_response_json(response).await;
+        assert_eq!(value.json_u64(&["published_cycle_count"]), Some(1));
+        assert_eq!(value.json_u64(&["returned_cycle_count"]), Some(1));
         assert_eq!(
             value
-                .get("cycles")
-                .and_then(Value::as_array)
-                .and_then(|cycles| cycles.first())
-                .and_then(|cycle| cycle.get("cycle_id_hex"))
+                .json_first_at(&["cycles"], &["cycle_id_hex"])
                 .and_then(Value::as_str),
             Some(cycle_id_hex.as_str())
         );
         assert_eq!(
             value
-                .get("proof_token_summary")
-                .and_then(Value::as_object)
+                .json_object(&["proof_token_summary"])
                 .and_then(|summary| summary.get("distinct_token_count"))
                 .and_then(Value::as_u64),
             Some(0)
@@ -32995,69 +32856,33 @@ mod advert_tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         let etag = response.headers().get(ETAG).cloned().expect("report etag");
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect appeal finance report dashboard body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode report dashboard");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.appeal_finance.reports.v1")
         );
         assert_eq!(
-            value.get("payload_kind").and_then(Value::as_str),
+            value.json_str(&["payload_kind"]),
             Some(APPEAL_FINANCE_REPORT_KIND)
         );
+        assert_eq!(value.json_u64(&["published_report_count"]), Some(1));
+        assert_eq!(value.json_u64(&["returned_report_count"]), Some(1));
+        assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
+        assert_eq!(value.json_bool(&["truncated"]), Some(false));
+        assert_eq!(value.json_u64(&["distinct_case_count"]), Some(1));
+        assert_eq!(value.json_str(&["total_deposit_xor"]), Some("420"));
+        assert_eq!(value.json_str(&["total_refund_xor"]), Some("420"));
+        assert_eq!(value.json_str(&["total_treasury_xor"]), Some("50"));
+        assert_eq!(value.json_str(&["total_held_xor"]), Some("0"));
+        assert_eq!(value.json_str(&["total_panel_reward_xor"]), Some("85"));
+        assert_eq!(value.json_str(&["total_rewards_paid_xor"]), Some("60"));
         assert_eq!(
-            value.get("published_report_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("returned_report_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("limit").and_then(Value::as_u64),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
-        assert_eq!(
-            value.get("distinct_case_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("total_deposit_xor").and_then(Value::as_str),
-            Some("420")
-        );
-        assert_eq!(
-            value.get("total_refund_xor").and_then(Value::as_str),
-            Some("420")
-        );
-        assert_eq!(
-            value.get("total_treasury_xor").and_then(Value::as_str),
-            Some("25")
-        );
-        assert_eq!(
-            value.get("total_held_xor").and_then(Value::as_str),
-            Some("0")
-        );
-        assert_eq!(
-            value.get("total_panel_reward_xor").and_then(Value::as_str),
-            Some("85")
-        );
-        assert_eq!(
-            value.get("total_rewards_paid_xor").and_then(Value::as_str),
-            Some("60")
-        );
-        assert_eq!(
-            value
-                .get("total_rewards_forfeited_treasury_xor")
-                .and_then(Value::as_str),
+            value.json_str(&["total_rewards_forfeited_treasury_xor"]),
             Some("25")
         );
         assert_eq!(
             value
-                .get("outcomes")
-                .and_then(Value::as_object)
+                .json_object(&["outcomes"])
                 .and_then(|outcomes| outcomes.get("overturn"))
                 .and_then(|outcome| outcome.get("published_report_count"))
                 .and_then(Value::as_u64),
@@ -33065,19 +32890,15 @@ mod advert_tests {
         );
         assert_eq!(
             value
-                .get("outcomes")
-                .and_then(Value::as_object)
+                .json_object(&["outcomes"])
                 .and_then(|outcomes| outcomes.get("overturn"))
                 .and_then(|outcome| outcome.get("treasury_xor"))
                 .and_then(Value::as_str),
-            Some("25")
+            Some("50")
         );
         assert_eq!(
             value
-                .get("entries")
-                .and_then(Value::as_array)
-                .and_then(|entries| entries.first())
-                .and_then(|entry| entry.get("payload_kind"))
+                .json_first_at(&["entries"], &["payload_kind"])
                 .and_then(Value::as_str),
             Some(APPEAL_FINANCE_REPORT_KIND)
         );
@@ -33137,54 +32958,25 @@ mod advert_tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         let etag = response.headers().get(ETAG).cloned().expect("rollup etag");
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect weekly rollup dashboard body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode weekly rollup dashboard");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.appeal_finance.weekly_rollups.v1")
         );
         assert_eq!(
-            value.get("payload_kind").and_then(Value::as_str),
+            value.json_str(&["payload_kind"]),
             Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
         );
-        assert_eq!(
-            value.get("published_rollup_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("returned_rollup_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("limit").and_then(Value::as_u64),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
+        assert_eq!(value.json_u64(&["published_rollup_count"]), Some(1));
+        assert_eq!(value.json_u64(&["returned_rollup_count"]), Some(1));
+        assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
+        assert_eq!(value.json_bool(&["truncated"]), Some(false));
+        assert_eq!(value.json_u64(&["source_report_count_total"]), Some(1));
+        assert_eq!(value.json_u64(&["reported_case_count_total"]), Some(1));
+        assert_eq!(value.json_u64(&["juror_payout_count_total"]), Some(2));
         assert_eq!(
             value
-                .get("source_report_count_total")
-                .and_then(Value::as_u64),
-            Some(3)
-        );
-        assert_eq!(
-            value
-                .get("reported_case_count_total")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value
-                .get("juror_payout_count_total")
-                .and_then(Value::as_u64),
-            Some(7)
-        );
-        assert_eq!(
-            value
-                .get("cycles")
-                .and_then(Value::as_object)
+                .json_object(&["cycles"])
                 .and_then(|cycles| cycles.get("2026-W26"))
                 .and_then(|cycle| cycle.get("published_rollup_count"))
                 .and_then(Value::as_u64),
@@ -33192,10 +32984,7 @@ mod advert_tests {
         );
         assert_eq!(
             value
-                .get("entries")
-                .and_then(Value::as_array)
-                .and_then(|entries| entries.first())
-                .and_then(|entry| entry.get("payload_kind"))
+                .json_first_at(&["entries"], &["payload_kind"])
                 .and_then(Value::as_str),
             Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
         );
@@ -33221,52 +33010,26 @@ mod advert_tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         let etag = response.headers().get(ETAG).cloned().expect("receipt etag");
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect settlement receipt dashboard body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode settlement receipt dashboard");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.appeal_finance.settlement_receipts.v1")
         );
         assert_eq!(
-            value.get("payload_kind").and_then(Value::as_str),
+            value.json_str(&["payload_kind"]),
             Some(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND)
         );
-        assert_eq!(
-            value.get("published_receipt_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("returned_receipt_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("limit").and_then(Value::as_u64),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
-        assert_eq!(
-            value.get("distinct_case_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("total_step_amount_xor").and_then(Value::as_str),
-            Some("420")
-        );
-        assert_eq!(
-            value.get("total_treasury_xor").and_then(Value::as_str),
-            Some("210")
-        );
-        assert_eq!(
-            value.get("total_held_xor").and_then(Value::as_str),
-            Some("210")
-        );
+        assert_eq!(value.json_u64(&["published_receipt_count"]), Some(1));
+        assert_eq!(value.json_u64(&["returned_receipt_count"]), Some(1));
+        assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
+        assert_eq!(value.json_bool(&["truncated"]), Some(false));
+        assert_eq!(value.json_u64(&["distinct_case_count"]), Some(1));
+        assert_eq!(value.json_str(&["total_step_amount_xor"]), Some("420"));
+        assert_eq!(value.json_str(&["total_treasury_xor"]), Some("210"));
+        assert_eq!(value.json_str(&["total_held_xor"]), Some("210"));
         assert_eq!(
             value
-                .get("steps")
-                .and_then(Value::as_object)
+                .json_object(&["steps"])
                 .and_then(|steps| steps.get("drawdown_non_refund"))
                 .and_then(|step| step.get("published_receipt_count"))
                 .and_then(Value::as_u64),
@@ -33274,28 +33037,21 @@ mod advert_tests {
         );
         assert_eq!(
             value
-                .get("reconciliation_statuses")
-                .and_then(Value::as_object)
-                .and_then(|statuses| statuses.get("pending_forwarder_submission"))
+                .json_object(&["reconciliation_statuses"])
+                .and_then(|statuses| statuses.get("settled"))
                 .and_then(Value::as_u64),
             Some(1)
         );
         assert_eq!(
             value
-                .get("entries")
-                .and_then(Value::as_array)
-                .and_then(|entries| entries.first())
-                .and_then(|entry| entry.get("payload_kind"))
+                .json_first_at(&["entries"], &["payload_kind"])
                 .and_then(Value::as_str),
             Some(APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND)
         );
         let expected_policy_digest_hex = "44".repeat(32);
         assert_eq!(
             value
-                .get("entries")
-                .and_then(Value::as_array)
-                .and_then(|entries| entries.first())
-                .and_then(|entry| entry.get("labels"))
+                .json_first_at(&["entries"], &["labels"])
                 .and_then(|labels| labels.get("appeal_finance_policy_digest_hex"))
                 .and_then(Value::as_str),
             Some(expected_policy_digest_hex.as_str())
@@ -33521,12 +33277,10 @@ mod advert_tests {
         let publish_index = read_publication_section_fixture(&publish_app, "publish_index");
         validate_governance_dag_publish_index(&publish_index)
             .expect("typed publish index remains valid");
-        let mut entries = governance_publish_index_lookup_entries(
-            &publish_index,
-            "by_payload_kind",
-            "repair_audit",
-        )
-        .expect("resolve typed publish entries");
+        let kind = APPEAL_FINANCE_REPORT_KIND;
+        let mut entries =
+            governance_publish_index_lookup_entries(&publish_index, "by_payload_kind", kind)
+                .expect("resolve typed publish entries");
         assert_eq!(entries.len(), 1);
         entries.push(entries[0].clone());
         let (entries, truncated) = limit_governance_readback_values(entries, 1);
@@ -33537,7 +33291,7 @@ mod advert_tests {
         let car_queue = read_publication_section_fixture(&car_app, "car_queue");
         validate_governance_dag_car_queue(&car_queue).expect("typed CAR queue remains valid");
         let mut segments =
-            governance_car_queue_lookup_segments(&car_queue, "by_payload_kind", "repair_audit")
+            governance_car_queue_lookup_segments(&car_queue, "by_payload_kind", kind)
                 .expect("resolve typed CAR segments");
         assert_eq!(segments.len(), 1);
         segments.push(segments[0].clone());
@@ -33560,28 +33314,20 @@ mod advert_tests {
                 .and_then(|value| value.to_str().ok()),
             Some(GOVERNANCE_DAG_CACHE_CONTROL)
         );
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect CAR queue body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode CAR queue");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.governance_dag.car_queue.v1")
         );
         assert_governance_source_metadata(&value, GOVERNANCE_DAG_PUBLICATION_SOURCE_V1, false);
         assert_eq!(
-            value
-                .get("queue")
-                .and_then(|queue| queue.get("root"))
-                .and_then(Value::as_str),
+            value.json_str(&["queue", "root"]),
             Some(GOVERNANCE_DAG_LOGICAL_ROOT)
         );
-        assert_eq!(value.get("segment_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            value.get("assembled_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(value.get("pending_count").and_then(Value::as_u64), Some(0));
+        assert_eq!(value.json_u64(&["segment_count"]), Some(4));
+        assert_eq!(value.json_u64(&["assembled_count"]), Some(4));
+        assert_eq!(value.json_u64(&["pending_count"]), Some(0));
+
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, queue_etag.clone());
         let response =
@@ -33596,46 +33342,34 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect digest lookup body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode digest lookup");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.governance_dag.car_queue.digest.lookup.v1")
         );
-        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.json_u64(&["count"]), Some(1));
         assert_eq!(
             value
-                .get("segments")
-                .and_then(Value::as_array)
-                .and_then(|segments| segments.first())
-                .and_then(|segment| segment.get("payload_kind"))
+                .json_first_at(&["segments"], &["payload_kind"])
                 .and_then(Value::as_str),
-            Some("repair_audit")
+            Some(APPEAL_FINANCE_REPORT_KIND)
         );
         let response = handle_get_sorafs_governance_dag_car_queue_kind(
             State(app.clone()),
             HeaderMap::new(),
-            Path("repair_audit".to_string()),
+            Path(APPEAL_FINANCE_REPORT_KIND.to_string()),
             axum::extract::RawQuery(None),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect kind lookup body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode kind lookup");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.governance_dag.car_queue.kind.lookup.v1")
         );
         assert_eq!(
             value
-                .get("segments")
-                .and_then(Value::as_array)
-                .and_then(|segments| segments.first())
-                .and_then(|segment| segment.get("encoded_blake3"))
+                .json_first_at(&["segments"], &["encoded_blake3"])
                 .and_then(Value::as_str),
             Some(digest_hex.as_str())
         );
@@ -33647,18 +33381,14 @@ mod advert_tests {
         let governance_dir = temp_dir.path().join("governance");
         let queue = read_publication_section_fixture(&app, "car_queue");
         let segment = queue
-            .get("segments")
-            .and_then(Value::as_array)
-            .and_then(|segments| segments.first())
+            .json_first(&["segments"])
             .expect("producer CAR segment");
         let archive_digest = segment
-            .get("car_archive_blake3")
-            .and_then(Value::as_str)
+            .json_str(&["car_archive_blake3"])
             .expect("producer archive digest")
             .to_owned();
         let car_path = segment
-            .get("car_path")
-            .and_then(Value::as_str)
+            .json_str(&["car_path"])
             .expect("producer CAR path")
             .to_owned();
         let response = handle_get_sorafs_governance_dag_car_queue_archive(
@@ -33673,19 +33403,13 @@ mod advert_tests {
             .get(ETAG)
             .cloned()
             .expect("archive lookup etag");
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect archive lookup body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode archive lookup");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.governance_dag.car_queue.archive.lookup.v1")
         );
         assert_eq!(
-            value
-                .get("segment")
-                .and_then(|segment| segment.get("car_archive_blake3"))
-                .and_then(Value::as_str),
+            value.json_str(&["segment", "car_archive_blake3"]),
             Some(archive_digest.as_str())
         );
         fs::remove_file(governance_dir.join(car_path)).expect("remove retained producer CAR");
@@ -33717,8 +33441,8 @@ mod advert_tests {
     fn governance_dag_car_queue_rejects_noncanonical_artifact_paths() {
         let (app, _temp_dir, _digest_hex, _car_archive_hex) =
             sorafs_app_state_with_governance_car_queue();
-        let mut queue = read_publication_section_fixture(&app, "car_queue");
-        queue
+        let mut state = read_publication_state_fixture(&app);
+        publication_state_section_mut(&mut state, "car_queue")
             .get_mut("segments")
             .and_then(Value::as_array_mut)
             .and_then(|segments| segments.first_mut())
@@ -33728,8 +33452,12 @@ mod advert_tests {
                 "car_path".into(),
                 Value::from("car-segments/00000000000000000000_substituted.car"),
             );
-        let response = validate_governance_dag_car_queue(&queue)
-            .expect_err("substituted CAR artifact path must fail");
+
+        let response = validate_governance_publication_cross_sections(
+            state.get("publish_index").expect("publish index fixture"),
+            state.get("car_queue").expect("CAR queue fixture"),
+        )
+        .expect_err("substituted CAR artifact path must fail");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
     #[tokio::test]
@@ -33790,39 +33518,29 @@ mod advert_tests {
                 .and_then(|value| value.to_str().ok()),
             Some(GOVERNANCE_DAG_CACHE_CONTROL)
         );
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect runtime body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime index");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.governance_dag.runtime_index.v1")
         );
         assert_governance_source_metadata(&value, GOVERNANCE_DAG_RUNTIME_SOURCE_V1, true);
         assert_eq!(
-            value
-                .get("index")
-                .and_then(|index| index.get("root"))
-                .and_then(Value::as_str),
+            value.json_str(&["index", "root"]),
             Some(GOVERNANCE_DAG_LOGICAL_ROOT)
         );
-        assert_eq!(value.get("block_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            value.get("indexed_block_count").and_then(Value::as_u64),
-            Some(2)
-        );
+        assert_eq!(value.json_u64(&["block_count"]), Some(2));
+        assert_eq!(value.json_u64(&["indexed_block_count"]), Some(2));
         assert_eq!(
             value
-                .get("payload_kind_counts")
-                .and_then(Value::as_object)
+                .json_object(&["payload_kind_counts"])
                 .and_then(|counts| counts.get(APPEAL_FINANCE_REPORT_KIND))
                 .and_then(Value::as_u64),
             Some(1)
         );
-        assert_eq!(
-            value.get("last_published_at").and_then(Value::as_u64),
-            Some(1_800_000_100)
-        );
+        assert!(is_current_wall_clock(
+            value.json_u64(&["last_published_at"])
+        ));
+
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, runtime_etag.clone());
         let response = handle_get_sorafs_governance_dag_runtime(State(app.clone()), headers).await;
@@ -33839,19 +33557,13 @@ mod advert_tests {
             .cloned()
             .expect("runtime head etag");
         assert_ne!(runtime_head_etag, runtime_etag);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect runtime head body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime head");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.governance_dag.runtime_head.v1")
         );
         assert_eq!(
-            value
-                .get("latest_block")
-                .and_then(|block| block.get("payload_kind"))
-                .and_then(Value::as_str),
+            value.json_str(&["latest_block", "payload_kind"]),
             Some(APPEAL_FINANCE_WEEKLY_ROLLUP_KIND)
         );
         let response = handle_get_sorafs_governance_dag_runtime_block(
@@ -33866,19 +33578,13 @@ mod advert_tests {
             .get(ETAG)
             .cloned()
             .expect("runtime block etag");
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect runtime block body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime block");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.governance_dag.runtime.block.lookup.v1")
         );
         assert_eq!(
-            value
-                .get("block")
-                .and_then(|block| block.get("block_cid_hex"))
-                .and_then(Value::as_str),
+            value.json_str(&["block", "block_cid_hex"]),
             Some(block_cid_hex.as_str())
         );
         let mut headers = HeaderMap::new();
@@ -33897,19 +33603,13 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect runtime node body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime node");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.governance_dag.runtime.node.lookup.v1")
         );
         assert_eq!(
-            value
-                .get("block")
-                .and_then(|block| block.get("node_cid_hex"))
-                .and_then(Value::as_str),
+            value.json_str(&["block", "node_cid_hex"]),
             Some(node_cid_hex.as_str())
         );
         let response = handle_get_sorafs_governance_dag_runtime_digest(
@@ -33920,21 +33620,15 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect runtime digest body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime digest");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.governance_dag.runtime.digest.lookup.v1")
         );
-        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.json_u64(&["count"]), Some(1));
         assert_eq!(
             value
-                .get("blocks")
-                .and_then(Value::as_array)
-                .and_then(|blocks| blocks.first())
-                .and_then(|block| block.get("payload_kind"))
+                .json_first_at(&["blocks"], &["payload_kind"])
                 .and_then(Value::as_str),
             Some(APPEAL_FINANCE_REPORT_KIND)
         );
@@ -33946,20 +33640,14 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect runtime kind body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode runtime kind");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.governance_dag.runtime.kind.lookup.v1")
         );
         assert_eq!(
             value
-                .get("blocks")
-                .and_then(Value::as_array)
-                .and_then(|blocks| blocks.first())
-                .and_then(|block| block.get("encoded_blake3"))
+                .json_first_at(&["blocks"], &["encoded_blake3"])
                 .and_then(Value::as_str),
             Some(digest_hex.as_str())
         );
@@ -34111,19 +33799,12 @@ mod advert_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("application/json")
         );
-        let body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect reputation terminal JSON body");
-        let value: Value =
-            norito::json::from_slice(&body).expect("decode reputation terminal JSON body");
+        let value = api_test_response_json(response).await;
         let object = value
             .as_object()
             .expect("reputation terminal response must be a JSON object");
         assert_eq!(object.len(), 1);
-        assert_eq!(
-            object.get("error").and_then(Value::as_str),
-            Some(expected_message)
-        );
+        assert_eq!(object.json_str(&["error"]), Some(expected_message));
     }
     fn reputation_framework_test_router(state: SharedAppState, body_limit: usize) -> Router {
         Router::new()
@@ -34830,22 +34511,15 @@ mod advert_tests {
         .await;
         if response.status() != StatusCode::ACCEPTED {
             let status = response.status();
-            let error_body = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect moderation screening seed error body");
+            let error_body = api_test_response_body(response).await;
             panic!(
                 "moderation screening seed returned {status}: {}",
                 String::from_utf8_lossy(&error_body)
             );
         }
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect screening body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode screening body");
+        let value = api_test_response_json(response).await;
         value
-            .get("quarantine")
-            .and_then(|record| record.get("quarantine_id_hex"))
-            .and_then(Value::as_str)
+            .json_str(&["quarantine", "quarantine_id_hex"])
             .expect("quarantine id")
             .to_owned()
     }
@@ -35432,21 +35106,14 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect registry repro admission body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode registry repro admission");
+        let value = api_test_response_json(response).await;
         let expected_repro_manifest_id_hex = "12".repeat(16);
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.moderation.model_registry.repro_manifest_admission.v1")
         );
         assert_eq!(
-            value
-                .get("record")
-                .and_then(|record| record.get("manifest_id_hex"))
-                .and_then(Value::as_str),
+            value.json_str(&["record", "manifest_id_hex"]),
             Some(expected_repro_manifest_id_hex.as_str())
         );
         let response = post_moderation_registry_repro_manifest(
@@ -35470,51 +35137,26 @@ mod advert_tests {
         .await;
         if response.status() != StatusCode::OK {
             let status = response.status();
-            let error_body = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect moderation model registry snapshot error body");
+            let error_body = api_test_response_body(response).await;
             panic!(
                 "moderation model registry snapshot returned {status}: {}",
                 String::from_utf8_lossy(&error_body)
             );
         }
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect registry snapshot body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode registry snapshot");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.moderation.model_registry.snapshot.v1")
         );
-        assert_eq!(
-            value.get("repro_manifest_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value
-                .get("returned_repro_manifest_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value
-                .get("truncated_repro_manifests")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(value.get("corpus_count").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            value.get("returned_corpus_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("truncated_corpora").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.json_u64(&["repro_manifest_count"]), Some(2));
+        assert_eq!(value.json_u64(&["returned_repro_manifest_count"]), Some(1));
+        assert_eq!(value.json_bool(&["truncated_repro_manifests"]), Some(true));
+        assert_eq!(value.json_u64(&["corpus_count"]), Some(1));
+        assert_eq!(value.json_u64(&["returned_corpus_count"]), Some(1));
+        assert_eq!(value.json_bool(&["truncated_corpora"]), Some(false));
+        assert_eq!(value.json_u64(&["limit"]), Some(1));
         let repro = value
-            .get("repro_manifests")
-            .and_then(Value::as_array)
+            .json_array(&["repro_manifests"])
             .expect("repro manifests array");
         assert_eq!(repro.len(), 1);
         assert_eq!(
@@ -35522,8 +35164,7 @@ mod advert_tests {
             Some(expected_repro_manifest_id_hex.as_str())
         );
         let corpora = value
-            .get("adversarial_corpora")
-            .and_then(Value::as_array)
+            .json_array(&["adversarial_corpora"])
             .expect("corpora array");
         assert_eq!(corpora.len(), 1);
     }
@@ -35545,27 +35186,14 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect screening quarantine body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode screening quarantine body");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.moderation.screening_result.authenticated_ingest.v1")
         );
+        assert_eq!(value.json_str(&["record", "verdict"]), Some("quarantine"));
         assert_eq!(
-            value
-                .get("record")
-                .and_then(|record| record.get("verdict"))
-                .and_then(Value::as_str),
-            Some("quarantine")
-        );
-        assert_eq!(
-            value
-                .get("quarantine")
-                .and_then(|record| record.get("state"))
-                .and_then(Value::as_str),
+            value.json_str(&["quarantine", "state"]),
             Some("pending_review")
         );
         let response = post_moderation_screening_result(
@@ -35583,11 +35211,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect screening pass body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode screening pass body");
+        let value = api_test_response_json(response).await;
         assert_eq!(value.get("quarantine"), Some(&Value::Null));
         let response = handle_get_sorafs_moderation_screening_results(
             State(app.clone()),
@@ -35595,75 +35219,38 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect screening snapshot body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode screening snapshot body");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.moderation.screening_results.v1")
         );
-        assert_eq!(
-            value.get("screening_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value
-                .get("authenticated_admission_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value
-                .get("returned_screening_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("truncated_screening").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            value.get("quarantine_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value
-                .get("returned_quarantine_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.json_u64(&["screening_count"]), Some(2));
+        assert_eq!(value.json_u64(&["authenticated_admission_count"]), Some(2));
+        assert_eq!(value.json_u64(&["returned_screening_count"]), Some(1));
+        assert_eq!(value.json_bool(&["truncated_screening"]), Some(true));
+        assert_eq!(value.json_u64(&["quarantine_count"]), Some(1));
+        assert_eq!(value.json_u64(&["returned_quarantine_count"]), Some(1));
+        assert_eq!(value.json_u64(&["limit"]), Some(1));
         let records = value
-            .get("records")
-            .and_then(Value::as_array)
+            .json_array(&["records"])
             .expect("bounded screening records");
         assert_eq!(records.len(), 1);
         let quarantines = value
-            .get("quarantine_records")
-            .and_then(Value::as_array)
+            .json_array(&["quarantine_records"])
             .expect("bounded quarantine records");
         assert_eq!(quarantines.len(), 1);
         let response =
             handle_get_sorafs_moderation_quarantine(State(app), axum::extract::RawQuery(None))
                 .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect quarantine body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode quarantine body");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.moderation.quarantine.v1")
         );
-        assert_eq!(
-            value.get("quarantine_count").and_then(Value::as_u64),
-            Some(1)
-        );
+        assert_eq!(value.json_u64(&["quarantine_count"]), Some(1));
         let quarantines = value
-            .get("quarantine_records")
-            .and_then(Value::as_array)
+            .json_array(&["quarantine_records"])
             .expect("quarantine records");
         assert_eq!(quarantines.len(), 1);
         assert_eq!(
@@ -35695,31 +35282,18 @@ mod advert_tests {
             post_moderation_screening_result(app.clone(), &auth.provider, request_body.clone())
                 .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let first_body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect first authenticated screening response");
-        let first_value: Value =
-            norito::json::from_slice(&first_body).expect("decode first screening response");
+        let first_value = api_test_response_json(response).await;
         let first_receipt_digest = first_value
-            .get("admission")
-            .and_then(|admission| admission.get("receipt_digest_hex"))
-            .and_then(Value::as_str)
+            .json_str(&["admission", "receipt_digest_hex"])
             .expect("first receipt digest")
             .to_owned();
         let response =
             post_moderation_screening_result(app.clone(), &auth.provider, request_body.clone())
                 .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let retry_body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect idempotent authenticated screening response");
-        let retry_value: Value =
-            norito::json::from_slice(&retry_body).expect("decode idempotent screening response");
+        let retry_value = api_test_response_json(response).await;
         assert_eq!(
-            retry_value
-                .get("admission")
-                .and_then(|admission| admission.get("receipt_digest_hex"))
-                .and_then(Value::as_str),
+            retry_value.json_str(&["admission", "receipt_digest_hex"]),
             Some(first_receipt_digest.as_str())
         );
         let mut replay_request: ModerationScreeningResultRequestDto =
@@ -35793,14 +35367,9 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect screening body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode screening body");
+        let value = api_test_response_json(response).await;
         let quarantine_id_hex = value
-            .get("quarantine")
-            .and_then(|record| record.get("quarantine_id_hex"))
-            .and_then(Value::as_str)
+            .json_str(&["quarantine", "quarantine_id_hex"])
             .expect("quarantine id")
             .to_owned();
         let response = post_moderation_quarantine_release(
@@ -35834,30 +35403,15 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect review body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode review body");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.moderation.quarantine.review.v1")
         );
+        assert_eq!(value.json_str(&["status"]), Some("reviewed"));
+        assert_eq!(value.json_str(&["record", "state"]), Some("reviewed"));
         assert_eq!(
-            value.get("status").and_then(Value::as_str),
-            Some("reviewed")
-        );
-        assert_eq!(
-            value
-                .get("record")
-                .and_then(|record| record.get("state"))
-                .and_then(Value::as_str),
-            Some("reviewed")
-        );
-        assert_eq!(
-            value
-                .get("record")
-                .and_then(|record| record.get("reviewed_by"))
-                .and_then(Value::as_str),
+            value.json_str(&["record", "reviewed_by"]),
             Some("operator@moderation")
         );
         let response = post_moderation_quarantine_release(
@@ -35868,44 +35422,24 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect release body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode release body");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.moderation.quarantine.release.v1")
         );
+        assert_eq!(value.json_str(&["status"]), Some("released"));
+        assert_eq!(value.json_str(&["record", "state"]), Some("released"));
         assert_eq!(
-            value.get("status").and_then(Value::as_str),
-            Some("released")
-        );
-        assert_eq!(
-            value
-                .get("record")
-                .and_then(|record| record.get("state"))
-                .and_then(Value::as_str),
-            Some("released")
-        );
-        assert_eq!(
-            value
-                .get("record")
-                .and_then(|record| record.get("release_authority"))
-                .and_then(Value::as_str),
+            value.json_str(&["record", "release_authority"]),
             Some("release-authority@moderation")
         );
         let response =
             handle_get_sorafs_moderation_quarantine(State(app), axum::extract::RawQuery(None))
                 .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect quarantine readback body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode quarantine readback body");
+        let value = api_test_response_json(response).await;
         let quarantines = value
-            .get("quarantine_records")
-            .and_then(Value::as_array)
+            .json_array(&["quarantine_records"])
             .expect("quarantine records");
         assert_eq!(quarantines.len(), 1);
         assert_eq!(
@@ -35979,64 +35513,45 @@ mod advert_tests {
         .await;
         if response.status() != StatusCode::OK {
             let status = response.status();
-            let error_body = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect appeal handoff error body");
+            let error_body = api_test_response_body(response).await;
             panic!(
                 "moderation appeal handoff returned {status}: {}",
                 String::from_utf8_lossy(&error_body)
             );
         }
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect appeal handoff body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode appeal handoff body");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.moderation.quarantine.appeal_handoff.v1")
         );
         assert_eq!(
-            value.get("status").and_then(Value::as_str),
+            value.json_str(&["status"]),
             Some("ready_for_native_intake_deposit")
         );
         assert!(
             value
-                .get("appealed_decision_digest_hex")
-                .and_then(Value::as_str)
+                .json_str(&["appealed_decision_digest_hex"])
                 .is_some_and(|digest| digest.len() == 64)
         );
-        assert_eq!(
-            value
-                .get("record")
-                .and_then(|record| record.get("state"))
-                .and_then(Value::as_str),
-            Some("reviewed")
-        );
+        assert_eq!(value.json_str(&["record", "state"]), Some("reviewed"));
         let pricing_quote = value
-            .get("pricing_quote")
-            .and_then(Value::as_object)
+            .json_object(&["pricing_quote"])
             .expect("pricing quote");
-        assert_eq!(
-            pricing_quote.get("class").and_then(Value::as_str),
-            Some("content")
-        );
+        assert_eq!(pricing_quote.json_str(&["class"]), Some("content"));
         let deposit_request = value
-            .get("deposit_request")
-            .and_then(Value::as_object)
+            .json_object(&["deposit_request"])
             .expect("deposit request");
         assert_eq!(
-            deposit_request.get("case_id").and_then(Value::as_str),
+            deposit_request.json_str(&["case_id"]),
             Some("quarantine-native-case")
         );
         let payer_account = auth.provider.account.to_string();
         assert_eq!(
-            deposit_request.get("payer_account").and_then(Value::as_str),
+            deposit_request.json_str(&["payer_account"]),
             Some(payer_account.as_str())
         );
         let evidence_hashes = deposit_request
-            .get("evidence_hashes_hex")
-            .and_then(Value::as_array)
+            .json_array(&["evidence_hashes_hex"])
             .expect("evidence hashes");
         assert_eq!(evidence_hashes.len(), 1);
         assert_eq!(
@@ -36047,18 +35562,15 @@ mod advert_tests {
             Some(Hash::prehashed([0xD3; Hash::LENGTH]).to_string())
         );
         let deposit_instruction = value
-            .get("deposit_instruction")
-            .and_then(Value::as_object)
+            .json_object(&["deposit_instruction"])
             .expect("deposit instruction");
         assert_eq!(
-            deposit_instruction.get("status").and_then(Value::as_str),
+            deposit_instruction.json_str(&["status"]),
             Some("ready_for_durable_submission")
         );
         assert_eq!(
-            deposit_instruction
-                .get("deposit_xor")
-                .and_then(Value::as_str),
-            pricing_quote.get("deposit_xor").and_then(Value::as_str)
+            deposit_instruction.json_str(&["deposit_xor"]),
+            pricing_quote.json_str(&["deposit_xor"])
         );
         assert!(deposit_instruction.get("tx_instructions").is_none());
     }
@@ -36148,9 +35660,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let error_body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect plaintext-note rejection");
+        let error_body = api_test_response_body(response).await;
         assert!(!String::from_utf8_lossy(&error_body).contains(private_note));
         let response = post_moderation_quarantine_object(
             app.clone(),
@@ -36160,66 +35670,44 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect object store body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode object store body");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.moderation.quarantine.object.store.v1")
         );
-        assert_eq!(value.get("status").and_then(Value::as_str), Some("stored"));
-        let record = value
-            .get("record")
-            .and_then(Value::as_object)
-            .expect("object store record");
+        assert_eq!(value.json_str(&["status"]), Some("stored"));
+        let record = value.json_object(&["record"]).expect("object store record");
         assert_eq!(
-            record.get("quarantine_id_hex").and_then(Value::as_str),
+            record.json_str(&["quarantine_id_hex"]),
             Some(quarantine_id_hex.as_str())
         );
         assert_eq!(
-            record.get("payload_digest_hex").and_then(Value::as_str),
+            record.json_str(&["payload_digest_hex"]),
             Some(expected_digest_hex.as_str())
         );
         assert_eq!(
-            record.get("payload_len").and_then(Value::as_u64),
+            record.json_u64(&["payload_len"]),
             Some(payload.len() as u64)
         );
         assert_eq!(
-            record.get("content_type").and_then(Value::as_str),
+            record.json_str(&["content_type"]),
             Some("application/octet-stream")
         );
         assert!(record.get("notes").is_none());
+        assert_eq!(record.json_str(&["object_id_hex"]).map(str::len), Some(32));
         assert_eq!(
-            record
-                .get("object_id_hex")
-                .and_then(Value::as_str)
-                .map(str::len),
-            Some(32)
-        );
-        assert_eq!(
-            record
-                .get("ciphertext_digest_hex")
-                .and_then(Value::as_str)
-                .map(str::len),
+            record.json_str(&["ciphertext_digest_hex"]).map(str::len),
             Some(64)
         );
         assert_eq!(
-            record
-                .get("nonce_prefix_hex")
-                .and_then(Value::as_str)
-                .map(str::len),
+            record.json_str(&["nonce_prefix_hex"]).map(str::len),
             Some(16)
         );
-        assert_eq!(
-            record.get("chunk_plaintext_bytes").and_then(Value::as_u64),
-            Some(64 * 1024)
-        );
-        assert_eq!(record.get("chunk_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(record.json_u64(&["chunk_plaintext_bytes"]), Some(64 * 1024));
+        assert_eq!(record.json_u64(&["chunk_count"]), Some(1));
         assert!(
             record
-                .get("envelope_path")
-                .and_then(Value::as_str)
+                .json_str(&["envelope_path"])
                 .is_some_and(|path| path.contains(&quarantine_id_hex))
         );
         let response =
@@ -36240,28 +35728,19 @@ mod advert_tests {
         assert!(vary.contains("X-Iroha-Account"));
         assert!(vary.contains("X-Iroha-Signature"));
         assert!(vary.contains("X-Iroha-Witness"));
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect object read body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode object read body");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            value.json_str(&["schema"]),
             Some("sorafs.moderation.quarantine.object.payload.v1")
         );
-        assert_eq!(value.get("status").and_then(Value::as_str), Some("read"));
-        let payload_b64 = value
-            .get("payload_b64")
-            .and_then(Value::as_str)
-            .expect("payload b64");
+        assert_eq!(value.json_str(&["status"]), Some("read"));
+        let payload_b64 = value.json_str(&["payload_b64"]).expect("payload b64");
         let decoded = BASE64_STANDARD
             .decode(payload_b64.as_bytes())
             .expect("decode payload b64");
         assert_eq!(decoded, payload);
         assert_eq!(
-            value
-                .get("record")
-                .and_then(|record| record.get("payload_digest_hex"))
-                .and_then(Value::as_str),
+            value.json_str(&["record", "payload_digest_hex"]),
             Some(expected_digest_hex.as_str())
         );
     }
@@ -36354,15 +35833,8 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect object digest mismatch body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode object digest mismatch body");
-        let message = value
-            .get("error")
-            .and_then(Value::as_str)
-            .expect("digest mismatch error");
+        let value = api_test_response_json(response).await;
+        let message = value.json_str(&["error"]).expect("digest mismatch error");
         assert!(
             message.contains("digest mismatch"),
             "unexpected error message: {message}"
@@ -36373,15 +35845,11 @@ mod advert_tests {
         let routes = moderation_quarantine_operator_panel_routes_json("001122");
         let routes = routes.as_object().expect("operator routes object");
         assert_eq!(
-            routes
-                .get("signed_viewer_audit_receipts")
-                .and_then(Value::as_str),
+            routes.json_str(&["signed_viewer_audit_receipts"]),
             Some(EVIDENCE_ROUTE_SIGNED_AUDIT)
         );
         assert_eq!(
-            routes
-                .get("signed_viewer_audit_status")
-                .and_then(Value::as_str),
+            routes.json_str(&["signed_viewer_audit_status"]),
             Some(EVIDENCE_ROUTE_SIGNED_STATUS)
         );
         assert!(!routes.contains_key("viewer_audit_reports"));
@@ -36409,22 +35877,11 @@ mod advert_tests {
         };
         let frame: Value = norito::json::from_str(&orderbook_finalized_websocket_frame(&event))
             .expect("decode frame");
-        assert_eq!(
-            frame.get("event").and_then(Value::as_str),
-            Some("receipt_recorded")
-        );
-        let data = frame
-            .get("data")
-            .and_then(Value::as_object)
-            .expect("frame data");
-        assert_eq!(data.get("sequence").and_then(Value::as_u64), Some(42));
-        assert_eq!(data.get("block_height").and_then(Value::as_u64), Some(7));
-        assert_eq!(
-            data.get("event")
-                .and_then(|event| event.get("book_revision"))
-                .and_then(Value::as_u64),
-            Some(9)
-        );
+        assert_eq!(frame.json_str(&["event"]), Some("receipt_recorded"));
+        let data = frame.json_object(&["data"]).expect("frame data");
+        assert_eq!(data.json_u64(&["sequence"]), Some(42));
+        assert_eq!(data.json_u64(&["block_height"]), Some(7));
+        assert_eq!(data.json_u64(&["event", "book_revision"]), Some(9));
     }
     #[test]
     fn reputation_path_identifiers_are_exact_canonical_hard_cuts() {
@@ -36816,9 +36273,7 @@ mod advert_tests {
         )
         .await;
         assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
-        let response_body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect reputation authentication failure body");
+        let response_body = api_test_response_body(response).await;
         assert!(
             response_body.is_empty(),
             "canonical authentication failures must be payload-free"
@@ -36856,9 +36311,7 @@ mod advert_tests {
         )
         .await;
         assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
-        let invalid_auth_body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect invalid reputation authentication failure body");
+        let invalid_auth_body = api_test_response_body(response).await;
         assert!(invalid_auth_body.is_empty());
         let response = handle_get_sorafs_reputation_latest(
             State(app.clone()),
@@ -37103,32 +36556,18 @@ mod advert_tests {
                 .and_then(|value| value.to_str().ok()),
             Some(REPUTATION_CACHE_CONTROL)
         );
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect latest body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode latest JSON");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("merkle_root_hex").and_then(Value::as_str),
+            value.json_str(&["merkle_root_hex"]),
             Some(hex::encode(snapshot.merkle_root).as_str())
         );
-        let providers = value
-            .get("providers")
-            .and_then(Value::as_array)
-            .expect("providers array");
+        let providers = value.json_array(&["providers"]).expect("providers array");
         assert_eq!(providers.len(), 2);
-        assert_eq!(value.get("provider_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            value.get("returned_provider_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value.get("limit").and_then(Value::as_u64),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(
-            value.get("truncated_providers").and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_eq!(value.json_u64(&["provider_count"]), Some(2));
+        assert_eq!(value.json_u64(&["returned_provider_count"]), Some(2));
+        assert_eq!(value.json_u64(&["limit"]), Some(DEFAULT_LIST_LIMIT as u64));
+        assert_eq!(value.json_bool(&["truncated_providers"]), Some(false));
+
         let capped_uri = Uri::from_static("/v1/sorafs/reputation/latest?limit=1");
         let response = handle_get_sorafs_reputation_latest(
             State(app.clone()),
@@ -37142,24 +36581,13 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::OK);
         let capped_etag = response.headers().get(ETAG).cloned().expect("capped etag");
         assert_ne!(latest_etag, capped_etag);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect capped latest body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode capped latest JSON");
-        assert_eq!(value.get("provider_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            value.get("returned_provider_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            value.get("truncated_providers").and_then(Value::as_bool),
-            Some(true)
-        );
+        let value = api_test_response_json(response).await;
+        assert_eq!(value.json_u64(&["provider_count"]), Some(2));
+        assert_eq!(value.json_u64(&["returned_provider_count"]), Some(1));
+        assert_eq!(value.json_u64(&["limit"]), Some(1));
+        assert_eq!(value.json_bool(&["truncated_providers"]), Some(true));
         let providers = value
-            .get("providers")
-            .and_then(Value::as_array)
+            .json_array(&["providers"])
             .expect("capped providers array");
         assert_eq!(providers.len(), 1);
         let conditional_uri = Uri::from_static("/v1/sorafs/reputation/latest");
@@ -37188,59 +36616,30 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect provider body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode provider JSON");
-        let provider = value
-            .get("provider")
-            .and_then(Value::as_object)
-            .expect("provider object");
+        let value = api_test_response_json(response).await;
+        let provider = value.json_object(&["provider"]).expect("provider object");
+        assert_eq!(provider.json_str(&["provider_id"]), Some("provider-a"));
+        let proof = value.json_object(&["proof"]).expect("proof object");
+        assert_eq!(proof.json_str(&["provider_id"]), Some("provider-a"));
         assert_eq!(
-            provider.get("provider_id").and_then(Value::as_str),
-            Some("provider-a")
-        );
-        let proof = value
-            .get("proof")
-            .and_then(Value::as_object)
-            .expect("proof object");
-        assert_eq!(
-            proof.get("provider_id").and_then(Value::as_str),
-            Some("provider-a")
-        );
-        assert_eq!(
-            proof.get("leaf_index").and_then(Value::as_u64),
+            proof.json_u64(&["leaf_index"]),
             Some(u64::from(expected_proof.leaf_index))
         );
         assert_eq!(
-            proof.get("leaf_count").and_then(Value::as_u64),
+            proof.json_u64(&["leaf_count"]),
             Some(u64::from(expected_proof.leaf_count))
         );
-        let siblings = proof
-            .get("siblings_hex")
-            .and_then(Value::as_array)
-            .expect("siblings array");
+        let siblings = proof.json_array(&["siblings_hex"]).expect("siblings array");
         assert_eq!(siblings.len(), expected_proof.siblings.len());
         let reconstructed_proof = ReputationMerkleProofV1 {
             provider_id: proof
-                .get("provider_id")
-                .and_then(Value::as_str)
+                .json_str(&["provider_id"])
                 .expect("proof provider id")
                 .to_owned(),
-            leaf_index: u32::try_from(
-                proof
-                    .get("leaf_index")
-                    .and_then(Value::as_u64)
-                    .expect("proof leaf index"),
-            )
-            .expect("proof leaf index fits u32"),
-            leaf_count: u32::try_from(
-                proof
-                    .get("leaf_count")
-                    .and_then(Value::as_u64)
-                    .expect("proof leaf count"),
-            )
-            .expect("proof leaf count fits u32"),
+            leaf_index: u32::try_from(proof.json_u64(&["leaf_index"]).expect("proof leaf index"))
+                .expect("proof leaf index fits u32"),
+            leaf_count: u32::try_from(proof.json_u64(&["leaf_count"]).expect("proof leaf count"))
+                .expect("proof leaf count fits u32"),
             siblings: siblings
                 .iter()
                 .map(|value| {
@@ -37275,12 +36674,9 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect historical body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode historical JSON");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("snapshot_id_hex").and_then(Value::as_str),
+            value.json_str(&["snapshot_id_hex"]),
             Some(hex::encode(snapshot.snapshot_id).as_str())
         );
         let weights_uri = Uri::from_static("/v1/sorafs/reputation/weights");
@@ -37294,15 +36690,13 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect weights body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode weights JSON");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("alpha_bps").and_then(Value::as_u64),
+            value.json_u64(&["alpha_bps"]),
             Some(u64::from(snapshot.alpha_bps))
         );
-        assert!(value.get("weights").and_then(Value::as_object).is_some());
+        assert!(value.json_object(&["weights"]).is_some());
+
         let events_uri = Uri::from_static("/v1/sorafs/reputation/events?since=0&limit=1");
         let response = handle_get_sorafs_reputation_events(
             State(app.clone()),
@@ -37315,23 +36709,17 @@ mod advert_tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         let events_etag = response.headers().get(ETAG).cloned().expect("events etag");
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect events body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode events JSON");
-        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("next_since").and_then(Value::as_u64), Some(1));
-        let events = value
-            .get("events")
-            .and_then(Value::as_array)
-            .expect("events array");
+        let value = api_test_response_json(response).await;
+        assert_eq!(value.json_u64(&["count"]), Some(1));
+        assert_eq!(value.json_u64(&["next_since"]), Some(1));
+        let events = value.json_array(&["events"]).expect("events array");
         let event = events
             .first()
             .and_then(Value::as_object)
             .expect("event object");
-        assert_eq!(event.get("sequence").and_then(Value::as_u64), Some(1));
+        assert_eq!(event.json_u64(&["sequence"]), Some(1));
         assert_eq!(
-            event.get("snapshot_id_hex").and_then(Value::as_str),
+            event.json_str(&["snapshot_id_hex"]),
             Some(hex::encode(snapshot.snapshot_id).as_str())
         );
         let stream_uri = Uri::from_static("/v1/sorafs/reputation/events/stream?since=0&limit=1");
@@ -37421,17 +36809,13 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect retained historical body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode retained historical JSON");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("snapshot_id_hex").and_then(Value::as_str),
+            value.json_str(&["snapshot_id_hex"]),
             Some(hex::encode(older.snapshot.snapshot_id).as_str())
         );
         assert_ne!(
-            value.get("snapshot_id_hex").and_then(Value::as_str),
+            value.json_str(&["snapshot_id_hex"]),
             Some(hex::encode(newer.snapshot.snapshot_id).as_str()),
             "the snapshot-id route must not substitute the latest snapshot"
         );
@@ -37461,25 +36845,19 @@ mod advert_tests {
         let frame_text =
             reputation_snapshot_websocket_frame(&event).expect("serialize websocket frame");
         let frame: Value = norito::json::from_str(&frame_text).expect("decode websocket frame");
+        assert_eq!(frame.json_str(&["event"]), Some("reputation_snapshot"));
+        let data = frame.json_object(&["data"]).expect("websocket frame data");
+        assert_eq!(data.json_u64(&["sequence"]), Some(9));
         assert_eq!(
-            frame.get("event").and_then(Value::as_str),
-            Some("reputation_snapshot")
-        );
-        let data = frame
-            .get("data")
-            .and_then(Value::as_object)
-            .expect("websocket frame data");
-        assert_eq!(data.get("sequence").and_then(Value::as_u64), Some(9));
-        assert_eq!(
-            data.get("snapshot_id_hex").and_then(Value::as_str),
+            data.json_str(&["snapshot_id_hex"]),
             Some(hex::encode(snapshot.snapshot.snapshot_id).as_str())
         );
         let lagged_text =
             reputation_lagged_websocket_frame(3).expect("serialize lagged websocket frame");
         let lagged: Value =
             norito::json::from_str(&lagged_text).expect("decode lagged websocket frame");
-        assert_eq!(lagged.get("event").and_then(Value::as_str), Some("lagged"));
-        assert_eq!(lagged.get("skipped").and_then(Value::as_u64), Some(3));
+        assert_eq!(lagged.json_str(&["event"]), Some("lagged"));
+        assert_eq!(lagged.json_u64(&["skipped"]), Some(3));
     }
     #[tokio::test]
     async fn reputation_stream_serialization_fails_closed_without_fallback_frames() {
@@ -37623,17 +37001,11 @@ mod advert_tests {
         assert_eq!(backlog.frames.len(), 2);
         let lagged: Value =
             norito::json::from_str(&backlog.frames[0]).expect("decode retained lag frame");
-        assert_eq!(lagged.get("event").and_then(Value::as_str), Some("lagged"));
-        assert_eq!(lagged.get("skipped").and_then(Value::as_u64), Some(1_024));
+        assert_eq!(lagged.json_str(&["event"]), Some("lagged"));
+        assert_eq!(lagged.json_u64(&["skipped"]), Some(1_024));
         let event: Value =
             norito::json::from_str(&backlog.frames[1]).expect("decode retained event frame");
-        assert_eq!(
-            event
-                .get("data")
-                .and_then(|data| data.get("sequence"))
-                .and_then(Value::as_u64),
-            Some(1_025)
-        );
+        assert_eq!(event.json_u64(&["data", "sequence"]), Some(1_025));
     }
     #[test]
     fn proof_stream_envelope_rejects_pdp_without_challenge_identity() {
@@ -37663,6 +37035,8 @@ mod advert_tests {
             "sample_count": 1,
             "nonce_b64": (canonical_nonce.clone()),
             "tier": "hot",
+            "expected_finalized_height": 1,
+            "expected_finalized_block_hash_hex": ("44".repeat(32)),
         });
         ProofStreamHttpRequestV1::from_json_value(&base).expect("canonical proof request");
         for (field, invalid) in [
@@ -37894,7 +37268,7 @@ mod advert_tests {
             sampled_bytes: 0,
             issued_at_unix: challenge.issued_at_unix,
             response_deadline_unix: challenge.response_deadline_unix,
-            decided_at_unix: challenge.response_deadline_unix,
+            decided_at_unix: challenge.response_deadline_unix + 1,
             admission_envelope_digest: PROOF_OUTCOME_TEST_ADMISSION_DIGEST,
             canonical_challenge,
             canonical_proof: None,
@@ -38496,7 +37870,8 @@ mod advert_tests {
         let chunker_handle = default_chunker_handle();
         let chunk_digest = [0xAA; 32];
         let issuer = test_account();
-        let policy = RegistryPinPolicy::default();
+        let mut policy = RegistryPinPolicy::default();
+        policy.retention_epoch = 10;
         let content_length = 1024;
         let amount = pricing
             .public_pin_fee(
@@ -38947,6 +38322,13 @@ mod advert_tests {
             0,
         )
     }
+
+    fn push_finalized_block_hash(app: &mut SharedAppState, header: &BlockHeader) {
+        Arc::get_mut(&mut Arc::get_mut(app).expect("unique app state").state)
+            .expect("unique core state")
+            .push_block_hash_for_testing(HashOf::new(header));
+    }
+
     fn default_chunker_handle() -> ChunkerProfileHandle {
         let descriptor = chunker_registry::default_descriptor();
         ChunkerProfileHandle {
@@ -39203,60 +38585,40 @@ mod advert_tests {
         .expect("advert serialises");
         let obj = json.as_object().expect("top-level object");
         let stream_budget = obj
-            .get("stream_budget")
-            .and_then(Value::as_object)
+            .json_object(&["stream_budget"])
             .expect("stream_budget object");
+        assert_eq!(stream_budget.json_u64(&["max_in_flight"]), Some(4));
         assert_eq!(
-            stream_budget.get("max_in_flight").and_then(Value::as_u64),
-            Some(4)
-        );
-        assert_eq!(
-            stream_budget
-                .get("max_bytes_per_sec")
-                .and_then(Value::as_u64),
+            stream_budget.json_u64(&["max_bytes_per_sec"]),
             Some(5_000_000)
         );
-        assert_eq!(
-            stream_budget.get("burst_bytes").and_then(Value::as_u64),
-            Some(2_500_000)
-        );
+        assert_eq!(stream_budget.json_u64(&["burst_bytes"]), Some(2_500_000));
+
         let transport_hints = obj
-            .get("transport_hints")
-            .and_then(Value::as_array)
+            .json_array(&["transport_hints"])
             .expect("transport_hints array");
         assert_eq!(transport_hints.len(), 1);
         let hint = transport_hints[0]
             .as_object()
             .expect("transport hint object");
-        assert_eq!(
-            hint.get("protocol").and_then(Value::as_str),
-            Some("torii_http_range")
-        );
-        assert_eq!(hint.get("priority").and_then(Value::as_u64), Some(0));
+        assert_eq!(hint.json_str(&["protocol"]), Some("torii_http_range"));
+        assert_eq!(hint.json_u64(&["priority"]), Some(0));
+
         let capabilities = obj
-            .get("capabilities")
-            .and_then(Value::as_array)
+            .json_array(&["capabilities"])
             .expect("capabilities array");
         let range_cap = capabilities
             .iter()
             .find_map(|cap| {
                 let cap_obj = cap.as_object()?;
-                (cap_obj.get("type").and_then(Value::as_str) == Some("chunk_range_fetch"))
-                    .then_some(cap_obj)
+                (cap_obj.json_str(&["type"]) == Some("chunk_range_fetch")).then_some(cap_obj)
             })
             .expect("range capability present");
         let range_obj = range_cap
-            .get("range")
-            .and_then(Value::as_object)
+            .json_object(&["range"])
             .expect("range metadata present");
-        assert_eq!(
-            range_obj.get("max_chunk_span").and_then(Value::as_u64),
-            Some(32)
-        );
-        assert_eq!(
-            range_obj.get("min_granularity").and_then(Value::as_u64),
-            Some(8)
-        );
+        assert_eq!(range_obj.json_u64(&["max_chunk_span"]), Some(32));
+        assert_eq!(range_obj.json_u64(&["min_granularity"]), Some(8));
     }
     use tokio::sync::RwLock;
     const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
@@ -39610,25 +38972,14 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(chunker_handle, "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            header_value(nonce, "X-SoraFS-Nonce"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
-            HeaderValue::from_static("dummy-envelope"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(&mut headers, HEADER_SORA_CHUNKER, chunker_handle);
+        insert_api_test_header(&mut headers, HEADER_SORA_NONCE, nonce);
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, token_base64);
+        insert_static_api_test_header(
+            &mut headers,
+            HEADER_SORA_MANIFEST_ENVELOPE,
+            "dummy-envelope",
         );
         headers
     }
@@ -39639,26 +38990,15 @@ mod advert_tests {
         nonce: &str,
     ) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(chunker_handle, "X-SoraFS-Chunker"),
+        insert_api_test_header(&mut headers, HEADER_SORA_CHUNKER, chunker_handle);
+        insert_api_test_header(&mut headers, HEADER_SORA_NONCE, nonce);
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, token_base64);
+        insert_static_api_test_header(
+            &mut headers,
+            HEADER_SORA_MANIFEST_ENVELOPE,
+            "dummy-envelope",
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            header_value(nonce, "X-SoraFS-Nonce"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
-            HeaderValue::from_static("dummy-envelope"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNK_DIGEST),
-            header_value(chunk_digest_hex, "X-SoraFS-Chunk-Digest"),
-        );
+        insert_api_test_header(&mut headers, HEADER_SORA_CHUNK_DIGEST, chunk_digest_hex);
         headers
     }
     fn capability_token_context(fixture: &ProviderFixture, payload: Vec<u8>) -> TokenTestContext {
@@ -39698,17 +39038,12 @@ mod advert_tests {
         gateway_config.enforce_admission = false;
         gateway_config.require_manifest_envelope = false;
         app.sorafs_gateway_config = gateway_config;
-        let components = build_sorafs_gateway_security(
-            &app.sorafs_gateway_config,
-            app.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        app.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        refresh_api_test_gateway_security(&mut app);
+
         let issuer = stream_token_issuer_for_tests();
         let verifying_key_hex = hex::encode(issuer.verifying_key_bytes());
         app.stream_token_issuer = Some(Arc::new(issuer));
+
         TokenTestContext {
             app: Arc::new(app),
             manifest_id_hex,
@@ -39729,7 +39064,13 @@ mod advert_tests {
     }
     fn manifest_for_payload(seed: u8, payload: &[u8]) -> ManifestV1 {
         let plan = CarBuildPlan::single_file(payload).expect("canonical fixture chunk plan");
-        let car_stats = canonical_fixture_car_stats(&plan, payload);
+        manifest_for_plan(seed, payload, &plan)
+    }
+
+    fn manifest_for_plan(seed: u8, payload: &[u8], plan: &CarBuildPlan) -> ManifestV1 {
+        let car_stats = canonical_fixture_car_stats(plan, payload);
+        let mut pin_policy = PinPolicy::default();
+        pin_policy.retention_epoch = 10;
         let manifest = ManifestBuilder::new()
             .root_cid(car_stats.root_cids[0].clone())
             .dag_codec(DagCodecId(car_stats.dag_codec))
@@ -39739,13 +39080,13 @@ mod advert_tests {
             )
             .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .por_root(
-                sorafs_car::compute_por_root(payload, &plan)
+                sorafs_car::compute_por_root(payload, plan)
                     .expect("derive canonical fixture PoR root"),
             )
             .content_length(plan.content_length)
             .car_digest(car_stats.car_archive_digest.into())
             .car_size(car_stats.car_size)
-            .pin_policy(PinPolicy::default())
+            .pin_policy(pin_policy)
             .governance(test_governance_proofs())
             .push_alias(AliasClaim {
                 name: "test".into(),
@@ -39831,6 +39172,16 @@ mod advert_tests {
         client_id: String,
         _storage_dir: TempDir,
     }
+
+    impl TokenTestContext {
+        fn manifest(&self) -> sorafs_node::store::StoredManifest {
+            self.app
+                .sorafs_node
+                .manifest_metadata(&self.manifest_id_hex)
+                .expect("manifest")
+        }
+    }
+
     fn token_test_context() -> TokenTestContext {
         token_test_context_with_payload(b"stream token payload fixture".to_vec())
     }
@@ -39893,14 +39244,8 @@ mod advert_tests {
         );
         seed_capacity_declaration(&app.sorafs_node, provider_id, &chunker_handle);
         app.sorafs_gateway_config.enforce_admission = false;
-        let components = build_sorafs_gateway_security(
-            &app.sorafs_gateway_config,
-            app.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        app.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        refresh_api_test_gateway_security(&mut app);
+
         let client_id = "gateway-beta".to_string();
         let app = Arc::new(app);
         TokenTestContext {
@@ -39914,14 +39259,9 @@ mod advert_tests {
     }
     async fn issue_token_base64(context: &TokenTestContext, overrides: TokenOverrides) -> String {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            header_value(&context.client_id, "X-SoraFS-Client"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("issuer-nonce"),
-        );
+        insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "issuer-nonce");
+
         let request = StreamTokenRequestDto {
             manifest_id_hex: context.manifest_id_hex.clone(),
             provider_id_hex: context.provider_id_hex.clone(),
@@ -39943,8 +39283,7 @@ mod advert_tests {
             .expect("collect token body");
         let value: Value = norito::json::from_slice(&body_bytes).expect("decode token response");
         value
-            .get("token_base64")
-            .and_then(Value::as_str)
+            .json_str(&["token_base64"])
             .expect("token base64 present")
             .to_string()
     }
@@ -39955,10 +39294,7 @@ mod advert_tests {
     }
     fn enforcement_headers(token_base64: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(token_base64, "X-SoraFS-Stream-Token"),
-        );
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, token_base64);
         headers
     }
     fn enforcement_route(requested_bytes: u64) -> StreamTokenRequestRouteV1 {
@@ -40137,73 +39473,23 @@ mod advert_tests {
         };
         let json = snapshot_to_json(snapshot, 1).expect("serialize limited snapshot");
         let map = json.as_object().expect("json object");
-        assert_eq!(
-            map.get("declaration_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(map.get("ledger_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            map.get("credit_ledger_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(map.get("dispute_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            map.get("returned_declaration_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            map.get("returned_ledger_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            map.get("returned_credit_ledger_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            map.get("returned_dispute_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(map.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            map.get("truncated_declarations").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            map.get("truncated_fee_ledger").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            map.get("truncated_credit_ledger").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            map.get("truncated_disputes").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            map.get("declarations")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            map.get("fee_ledger")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            map.get("credit_ledger")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            map.get("disputes").and_then(Value::as_array).map(Vec::len),
-            Some(1)
-        );
+        assert_eq!(map.json_u64(&["declaration_count"]), Some(2));
+        assert_eq!(map.json_u64(&["ledger_count"]), Some(2));
+        assert_eq!(map.json_u64(&["credit_ledger_count"]), Some(2));
+        assert_eq!(map.json_u64(&["dispute_count"]), Some(2));
+        assert_eq!(map.json_u64(&["returned_declaration_count"]), Some(1));
+        assert_eq!(map.json_u64(&["returned_ledger_count"]), Some(1));
+        assert_eq!(map.json_u64(&["returned_credit_ledger_count"]), Some(1));
+        assert_eq!(map.json_u64(&["returned_dispute_count"]), Some(1));
+        assert_eq!(map.json_u64(&["limit"]), Some(1));
+        assert_eq!(map.json_bool(&["truncated_declarations"]), Some(true));
+        assert_eq!(map.json_bool(&["truncated_fee_ledger"]), Some(true));
+        assert_eq!(map.json_bool(&["truncated_credit_ledger"]), Some(true));
+        assert_eq!(map.json_bool(&["truncated_disputes"]), Some(true));
+        assert_eq!(map.json_len(&["declarations"]), Some(1));
+        assert_eq!(map.json_len(&["fee_ledger"]), Some(1));
+        assert_eq!(map.json_len(&["credit_ledger"]), Some(1));
+        assert_eq!(map.json_len(&["disputes"]), Some(1));
     }
     #[tokio::test]
     async fn provider_list_limit_bounds_cached_adverts() {
@@ -40218,22 +39504,12 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect provider list body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode provider list JSON");
-        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
-        assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            value
-                .get("providers")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
+        let value = api_test_response_json(response).await;
+        assert_eq!(value.json_u64(&["count"]), Some(2));
+        assert_eq!(value.json_u64(&["returned_count"]), Some(1));
+        assert_eq!(value.json_u64(&["limit"]), Some(1));
+        assert_eq!(value.json_bool(&["truncated"]), Some(true));
+        assert_eq!(value.json_len(&["providers"]), Some(1));
     }
     #[tokio::test]
     async fn post_provider_advert_accepts_valid_payload() {
@@ -40242,9 +39518,7 @@ mod advert_tests {
         let bytes = Bytes::from(norito::to_bytes(fixture.advert()).expect("encode advert"));
         let response = handle_post_sorafs_provider_advert(State(app.clone()), bytes).await;
         let status = response.status();
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
+        let body_bytes = api_test_response_body(response).await;
         assert_eq!(
             status,
             StatusCode::OK,
@@ -40252,7 +39526,8 @@ mod advert_tests {
             String::from_utf8_lossy(&body_bytes)
         );
         let value: Value = norito::json::from_slice(&body_bytes).expect("decode JSON");
-        assert_eq!(value.get("status").and_then(Value::as_str), Some("stored"));
+        assert_eq!(value.json_str(&["status"]), Some("stored"));
+
         let cache = app
             .sorafs_cache
             .as_ref()
@@ -40349,7 +39624,9 @@ mod advert_tests {
             Arc::try_unwrap(app).unwrap_or_else(|_| panic!("no other references to app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
         inner.sorafs_node = node;
-        let app = Arc::new(inner);
+        let mut app = Arc::new(inner);
+        push_finalized_block_hash(&mut app, &default_block_header());
+
         let response = handle_get_sorafs_pin_registry(
             State(app),
             axum::extract::RawQuery(None),
@@ -40365,9 +39642,8 @@ mod advert_tests {
             .and_then(|value| value.to_str().ok())
             .expect("content-type header");
         assert_eq!(content_type, crate::utils::NORITO_MIME_TYPE);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
+
+        let body_bytes = api_test_response_body(response).await;
         let page: PinManifestPageV1 = norito::decode_from_bytes(&body_bytes)
             .expect("decode the typed finalized pin-manifest page");
         assert!(page.manifests.is_empty());
@@ -40375,8 +39651,9 @@ mod advert_tests {
     }
     #[tokio::test]
     async fn pin_manifest_readback_is_finalized_native_state_without_local_storage() {
-        let app = mk_app_state_for_tests();
-        let mut block = app.state.block(default_block_header());
+        let mut app = mk_app_state_for_tests();
+        let header = default_block_header();
+        let mut block = app.state.block(header.clone());
         let mut tx = block.transaction();
         let manifest_digest = ManifestDigest::new([0x61; 32]);
         let manifest_root_cid = canonical_fixture_manifest_root_cid();
@@ -40422,6 +39699,8 @@ mod advert_tests {
             .insert(manifest_digest.clone(), manifest_record);
         tx.apply();
         block.commit().expect("commit pin manifest readback seed");
+        push_finalized_block_hash(&mut app, &header);
+
         let response = handle_get_sorafs_pin_manifest(
             State(app.clone()),
             Path(hex::encode(manifest_digest.as_bytes())),
@@ -40437,9 +39716,7 @@ mod advert_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("no-store, max-age=0")
         );
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
+        let body_bytes = api_test_response_body(response).await;
         let finalized: iroha_data_model::sorafs::pin_registry::PinManifestFinalizedRecordV1 =
             norito::json::from_slice(&body_bytes).expect("decode finalized native record");
         assert_eq!(finalized.manifest.digest, manifest_digest);
@@ -40470,7 +39747,7 @@ mod advert_tests {
         let list = handle_get_sorafs_pin_registry(
             State(app.clone()),
             axum::extract::RawQuery(Some(list_query.clone())),
-            None,
+            Some(ExtractAccept(HeaderValue::from_static("application/json"))),
         )
         .await;
         assert_eq!(list.status(), StatusCode::OK);
@@ -40480,9 +39757,7 @@ mod advert_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("no-store, max-age=0")
         );
-        let list_body = body::to_bytes(list.into_body(), usize::MAX)
-            .await
-            .expect("collect bounded pin page");
+        let list_body = api_test_response_body(list).await;
         let page: PinManifestPageV1 =
             norito::json::from_slice(&list_body).expect("decode bounded pin page");
         assert_eq!(page.finalized_cursor, finalized.finalized_cursor);
@@ -40497,13 +39772,11 @@ mod advert_tests {
                 "{list_query}&after_digest_hex={}",
                 hex::encode(manifest_digest.as_bytes())
             ))),
-            None,
+            Some(ExtractAccept(HeaderValue::from_static("application/json"))),
         )
         .await;
         assert_eq!(exhausted.status(), StatusCode::OK);
-        let exhausted_body = body::to_bytes(exhausted.into_body(), usize::MAX)
-            .await
-            .expect("collect exhausted pin page");
+        let exhausted_body = api_test_response_body(exhausted).await;
         let exhausted_page: PinManifestPageV1 =
             norito::json::from_slice(&exhausted_body).expect("decode exhausted pin page");
         assert!(exhausted_page.manifests.is_empty());
@@ -40549,22 +39822,11 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode JSON");
-        assert_eq!(
-            value.get("declaration_count").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(value.get("ledger_count").and_then(Value::as_u64), Some(0));
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            value
-                .get("returned_declaration_count")
-                .and_then(Value::as_u64),
-            Some(0)
-        );
+        let value = api_test_response_json(response).await;
+        assert_eq!(value.json_u64(&["declaration_count"]), Some(0));
+        assert_eq!(value.json_u64(&["ledger_count"]), Some(0));
+        assert_eq!(value.json_u64(&["limit"]), Some(1));
+        assert_eq!(value.json_u64(&["returned_declaration_count"]), Some(0));
         assert!(
             !value
                 .as_object()
@@ -40634,39 +39896,25 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode manifest response");
+
+        let value = api_test_response_json(response).await;
+
         assert_eq!(
-            value
-                .get("manifest_id_hex")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            value.json_str(&["manifest_id_hex"]).map(str::to_owned),
             Some(manifest_id.clone())
         );
         assert_eq!(
-            value.get("content_length").and_then(Value::as_u64),
+            value.json_u64(&["content_length"]),
             Some(plan.content_length)
         );
-        assert_eq!(value.get("file_count").and_then(Value::as_u64), Some(3));
-        assert_eq!(
-            value.get("returned_file_count").and_then(Value::as_u64),
-            Some(3)
-        );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(3));
-        assert_eq!(value.get("offset").and_then(Value::as_u64), Some(0));
-        assert_eq!(
-            value.get("truncated_files").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            value.get("files").and_then(Value::as_array).map(Vec::len),
-            Some(3)
-        );
+        assert_eq!(value.json_u64(&["file_count"]), Some(3));
+        assert_eq!(value.json_u64(&["returned_file_count"]), Some(3));
+        assert_eq!(value.json_u64(&["limit"]), Some(3));
+        assert_eq!(value.json_u64(&["offset"]), Some(0));
+        assert_eq!(value.json_bool(&["truncated_files"]), Some(false));
+        assert_eq!(value.json_len(&["files"]), Some(3));
         let manifest_b64 = value
-            .get("manifest_b64")
-            .and_then(Value::as_str)
+            .json_str(&["manifest_b64"])
             .expect("manifest_b64 present");
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(manifest_b64.as_bytes())
@@ -40679,26 +39927,13 @@ mod advert_tests {
         )
         .await;
         assert_eq!(paged_response.status(), StatusCode::OK);
-        let paged_body = body::to_bytes(paged_response.into_body(), usize::MAX)
-            .await
-            .expect("collect paged manifest body");
-        let paged: Value =
-            norito::json::from_slice(&paged_body).expect("decode paged manifest response");
-        assert_eq!(paged.get("file_count").and_then(Value::as_u64), Some(3));
-        assert_eq!(
-            paged.get("returned_file_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(paged.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(paged.get("offset").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            paged.get("truncated_files").and_then(Value::as_bool),
-            Some(true)
-        );
-        let paged_files = paged
-            .get("files")
-            .and_then(Value::as_array)
-            .expect("paged files");
+        let paged = api_test_response_json(paged_response).await;
+        assert_eq!(paged.json_u64(&["file_count"]), Some(3));
+        assert_eq!(paged.json_u64(&["returned_file_count"]), Some(1));
+        assert_eq!(paged.json_u64(&["limit"]), Some(1));
+        assert_eq!(paged.json_u64(&["offset"]), Some(1));
+        assert_eq!(paged.json_bool(&["truncated_files"]), Some(true));
+        let paged_files = paged.json_array(&["files"]).expect("paged files");
         assert_eq!(paged_files.len(), 1);
         assert_eq!(
             paged_files[0]
@@ -40715,21 +39950,11 @@ mod advert_tests {
         )
         .await;
         assert_eq!(remaining_response.status(), StatusCode::OK);
-        let remaining_body = body::to_bytes(remaining_response.into_body(), usize::MAX)
-            .await
-            .expect("collect remaining manifest body");
-        let remaining: Value =
-            norito::json::from_slice(&remaining_body).expect("decode remaining manifest response");
-        assert_eq!(
-            remaining.get("returned_file_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(remaining.get("limit").and_then(Value::as_u64), Some(2));
-        assert_eq!(remaining.get("offset").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            remaining.get("truncated_files").and_then(Value::as_bool),
-            Some(false)
-        );
+        let remaining = api_test_response_json(remaining_response).await;
+        assert_eq!(remaining.json_u64(&["returned_file_count"]), Some(2));
+        assert_eq!(remaining.json_u64(&["limit"]), Some(2));
+        assert_eq!(remaining.json_u64(&["offset"]), Some(1));
+        assert_eq!(remaining.json_bool(&["truncated_files"]), Some(false));
     }
     #[tokio::test]
     async fn site_binding_serves_manifest_and_spa_fallback() {
@@ -40752,7 +39977,7 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("directory plan");
-        let manifest = manifest_for_payload(0xD4, &payload);
+        let manifest = manifest_for_plan(0xD4, &payload, &plan);
         let content_cid = encode_content_cid(&manifest.root_cid);
         let manifest_digest_hex =
             hex::encode(manifest.digest().expect("manifest digest").as_bytes());
@@ -40784,9 +40009,7 @@ mod advert_tests {
             root_response.headers().get(header::CONTENT_TYPE),
             Some(&HeaderValue::from_static("text/html; charset=utf-8"))
         );
-        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
-            .await
-            .expect("read root body");
+        let root_body = api_test_response_body(root_response).await;
         assert_eq!(root_body, &index_bytes[..]);
         let mut manifest_headers = HeaderMap::new();
         manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
@@ -40797,42 +40020,20 @@ mod advert_tests {
         )
         .await;
         assert_eq!(manifest_response.status(), StatusCode::OK);
-        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
-            .await
-            .expect("read manifest body");
-        let manifest_value: Value =
-            norito::json::from_slice(&manifest_body).expect("decode manifest response");
+        let manifest_value = api_test_response_json(manifest_response).await;
         assert_eq!(
-            manifest_value.get("hostname").and_then(Value::as_str),
+            manifest_value.json_str(&["hostname"]),
             Some("taira.sora.org")
         );
+        assert_eq!(manifest_value.json_len(&["files"]), Some(2));
+        assert_eq!(manifest_value.json_u64(&["file_count"]), Some(2));
+        assert_eq!(manifest_value.json_u64(&["returned_file_count"]), Some(2));
         assert_eq!(
-            manifest_value
-                .get("files")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
-        assert_eq!(
-            manifest_value.get("file_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            manifest_value
-                .get("returned_file_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            manifest_value.get("limit").and_then(Value::as_u64),
+            manifest_value.json_u64(&["limit"]),
             Some(DEFAULT_LIST_LIMIT as u64)
         );
-        assert_eq!(
-            manifest_value
-                .get("truncated_files")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_eq!(manifest_value.json_bool(&["truncated_files"]), Some(false));
+
         let capped_manifest_response = handle_get_sorafs_site_manifest(
             State(state.clone()),
             manifest_headers,
@@ -40840,34 +40041,15 @@ mod advert_tests {
         )
         .await;
         assert_eq!(capped_manifest_response.status(), StatusCode::OK);
-        let capped_manifest_body = body::to_bytes(capped_manifest_response.into_body(), usize::MAX)
-            .await
-            .expect("read capped manifest body");
-        let capped_manifest_value: Value =
-            norito::json::from_slice(&capped_manifest_body).expect("decode capped manifest");
+        let capped_manifest_value = api_test_response_json(capped_manifest_response).await;
+        assert_eq!(capped_manifest_value.json_len(&["files"]), Some(1));
+        assert_eq!(capped_manifest_value.json_u64(&["file_count"]), Some(2));
         assert_eq!(
-            capped_manifest_value
-                .get("files")
-                .and_then(Value::as_array)
-                .map(Vec::len),
+            capped_manifest_value.json_u64(&["returned_file_count"]),
             Some(1)
         );
         assert_eq!(
-            capped_manifest_value
-                .get("file_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            capped_manifest_value
-                .get("returned_file_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            capped_manifest_value
-                .get("truncated_files")
-                .and_then(Value::as_bool),
+            capped_manifest_value.json_bool(&["truncated_files"]),
             Some(true)
         );
         let mut spa_headers = HeaderMap::new();
@@ -40876,9 +40058,7 @@ mod advert_tests {
             handle_get_sorafs_site_path(State(state.clone()), spa_headers, Path("swap".to_owned()))
                 .await;
         assert_eq!(spa_response.status(), StatusCode::OK);
-        let spa_body = body::to_bytes(spa_response.into_body(), usize::MAX)
-            .await
-            .expect("read spa body");
+        let spa_body = api_test_response_body(spa_response).await;
         assert_eq!(spa_body, &index_bytes[..]);
         let mut asset_headers = HeaderMap::new();
         asset_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
@@ -40893,9 +40073,7 @@ mod advert_tests {
             asset_response.headers().get(header::CONTENT_TYPE),
             Some(&HeaderValue::from_static("text/javascript; charset=utf-8"))
         );
-        let asset_body = body::to_bytes(asset_response.into_body(), usize::MAX)
-            .await
-            .expect("read asset body");
+        let asset_body = api_test_response_body(asset_response).await;
         assert_eq!(asset_body, &asset_bytes[..]);
         let mut range_headers = HeaderMap::new();
         range_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
@@ -40914,9 +40092,7 @@ mod advert_tests {
                     .expect("content range")
             )
         );
-        let range_body = body::to_bytes(range_response.into_body(), usize::MAX)
-            .await
-            .expect("read ranged asset body");
+        let range_body = api_test_response_body(range_response).await;
         assert_eq!(range_body, &asset_bytes[1..=4]);
         let cid_lookup = handle_get_sorafs_cid_lookup(
             State(state.clone()),
@@ -40925,33 +40101,19 @@ mod advert_tests {
         )
         .await;
         assert_eq!(cid_lookup.status(), StatusCode::OK);
-        let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
-            .await
-            .expect("read cid lookup body");
-        let cid_lookup_value: Value =
-            norito::json::from_slice(&cid_lookup_body).expect("decode cid lookup response");
+        let cid_lookup_value = api_test_response_json(cid_lookup).await;
         assert_eq!(
-            cid_lookup_value.get("content_cid").and_then(Value::as_str),
+            cid_lookup_value.json_str(&["content_cid"]),
             Some(content_cid.as_str())
         );
+        assert_eq!(cid_lookup_value.json_u64(&["file_count"]), Some(2));
+        assert_eq!(cid_lookup_value.json_u64(&["returned_file_count"]), Some(2));
         assert_eq!(
-            cid_lookup_value.get("file_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            cid_lookup_value
-                .get("returned_file_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            cid_lookup_value.get("limit").and_then(Value::as_u64),
+            cid_lookup_value.json_u64(&["limit"]),
             Some(DEFAULT_LIST_LIMIT as u64)
         );
         assert_eq!(
-            cid_lookup_value
-                .get("truncated_files")
-                .and_then(Value::as_bool),
+            cid_lookup_value.json_bool(&["truncated_files"]),
             Some(false)
         );
         assert!(cid_lookup_value.get("moderation").is_none());
@@ -40962,34 +40124,15 @@ mod advert_tests {
         )
         .await;
         assert_eq!(capped_cid_lookup.status(), StatusCode::OK);
-        let capped_cid_lookup_body = body::to_bytes(capped_cid_lookup.into_body(), usize::MAX)
-            .await
-            .expect("read capped cid lookup body");
-        let capped_cid_lookup_value: Value =
-            norito::json::from_slice(&capped_cid_lookup_body).expect("decode capped cid lookup");
+        let capped_cid_lookup_value = api_test_response_json(capped_cid_lookup).await;
+        assert_eq!(capped_cid_lookup_value.json_len(&["files"]), Some(1));
+        assert_eq!(capped_cid_lookup_value.json_u64(&["file_count"]), Some(2));
         assert_eq!(
-            capped_cid_lookup_value
-                .get("files")
-                .and_then(Value::as_array)
-                .map(Vec::len),
+            capped_cid_lookup_value.json_u64(&["returned_file_count"]),
             Some(1)
         );
         assert_eq!(
-            capped_cid_lookup_value
-                .get("file_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            capped_cid_lookup_value
-                .get("returned_file_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            capped_cid_lookup_value
-                .get("truncated_files")
-                .and_then(Value::as_bool),
+            capped_cid_lookup_value.json_bool(&["truncated_files"]),
             Some(true)
         );
         let mut cid_headers = HeaderMap::new();
@@ -41008,9 +40151,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(cid_root.status(), StatusCode::OK);
-        let cid_root_body = body::to_bytes(cid_root.into_body(), usize::MAX)
-            .await
-            .expect("read cid root body");
+        let cid_root_body = api_test_response_body(cid_root).await;
         assert_eq!(cid_root_body, &index_bytes[..]);
         let cid_asset = handle_get_sorafs_cid_path(
             State(state.clone()),
@@ -41048,7 +40189,7 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("old directory plan");
-        let old_manifest = manifest_for_payload(0xD6, &old_payload);
+        let old_manifest = manifest_for_plan(0xD6, &old_payload, &old_plan);
         let old_manifest_digest_hex = hex::encode(
             old_manifest
                 .digest()
@@ -41064,7 +40205,7 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("new directory plan");
-        let new_manifest = manifest_for_payload(0xE6, &new_payload);
+        let new_manifest = manifest_for_plan(0xE6, &new_payload, &new_plan);
         let new_content_cid = encode_content_cid(&new_manifest.root_cid);
         let new_manifest_digest_hex = hex::encode(
             new_manifest
@@ -41151,9 +40292,7 @@ mod advert_tests {
         root_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
         let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
         assert_eq!(root_response.status(), StatusCode::OK);
-        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
-            .await
-            .expect("read authoritative root body");
+        let root_body = api_test_response_body(root_response).await;
         assert_eq!(root_body, &new_index_bytes[..]);
         let mut manifest_headers = HeaderMap::new();
         manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
@@ -41164,13 +40303,9 @@ mod advert_tests {
         )
         .await;
         assert_eq!(manifest_response.status(), StatusCode::OK);
-        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
-            .await
-            .expect("read authoritative manifest body");
-        let manifest_value: Value =
-            norito::json::from_slice(&manifest_body).expect("decode manifest response");
+        let manifest_value = api_test_response_json(manifest_response).await;
         assert_eq!(
-            manifest_value.get("content_cid").and_then(Value::as_str),
+            manifest_value.json_str(&["content_cid"]),
             Some(new_content_cid.as_str())
         );
     }
@@ -41186,7 +40321,7 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("old directory plan");
-        let old_manifest = manifest_for_payload(0xD7, &old_payload);
+        let old_manifest = manifest_for_plan(0xD7, &old_payload, &old_plan);
         let old_content_cid = encode_content_cid(&old_manifest.root_cid);
         let old_manifest_digest_hex = hex::encode(
             old_manifest
@@ -41203,7 +40338,8 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("new directory plan");
-        let new_manifest = manifest_for_payload(0xE7, &new_payload);
+        let new_manifest = manifest_for_plan(0xE7, &new_payload, &new_plan);
+
         let mut old_reader = old_payload.as_slice();
         node.ingest_manifest(&old_manifest, &old_plan, &mut old_reader)
             .expect("ingest old site payload");
@@ -41263,9 +40399,7 @@ mod advert_tests {
         root_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
         let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
         assert_eq!(root_response.status(), StatusCode::OK);
-        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
-            .await
-            .expect("read root body");
+        let root_body = api_test_response_body(root_response).await;
         assert_eq!(root_body, &old_index_bytes[..]);
         let mut manifest_headers = HeaderMap::new();
         manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
@@ -41276,13 +40410,9 @@ mod advert_tests {
         )
         .await;
         assert_eq!(manifest_response.status(), StatusCode::OK);
-        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
-            .await
-            .expect("read manifest body");
-        let manifest_value: Value =
-            norito::json::from_slice(&manifest_body).expect("decode manifest response");
+        let manifest_value = api_test_response_json(manifest_response).await;
         assert_eq!(
-            manifest_value.get("content_cid").and_then(Value::as_str),
+            manifest_value.json_str(&["content_cid"]),
             Some(old_content_cid.as_str())
         );
     }
@@ -41307,7 +40437,7 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("directory plan");
-        let manifest = manifest_for_payload(0xD5, &payload);
+        let manifest = manifest_for_plan(0xD5, &payload, &plan);
         let content_cid = encode_content_cid(&manifest.root_cid);
         let cid_host = format!("{content_cid}.sorafs.taira.sora.org");
         let mut reader = payload.as_slice();
@@ -41333,9 +40463,7 @@ mod advert_tests {
         );
         let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
         assert_eq!(root_response.status(), StatusCode::OK);
-        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
-            .await
-            .expect("read cid host root body");
+        let root_body = api_test_response_body(root_response).await;
         assert_eq!(root_body, &index_bytes[..]);
         let mut manifest_headers = HeaderMap::new();
         manifest_headers.insert(
@@ -41349,23 +40477,17 @@ mod advert_tests {
         )
         .await;
         assert_eq!(manifest_response.status(), StatusCode::OK);
-        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
-            .await
-            .expect("read cid host manifest body");
-        let manifest_value: Value =
-            norito::json::from_slice(&manifest_body).expect("decode cid host manifest");
+        let manifest_value = api_test_response_json(manifest_response).await;
         assert_eq!(
-            manifest_value.get("hostname").and_then(Value::as_str),
+            manifest_value.json_str(&["hostname"]),
             Some(cid_host.as_str())
         );
         assert_eq!(
-            manifest_value.get("index_document").and_then(Value::as_str),
+            manifest_value.json_str(&["index_document"]),
             Some("index.html")
         );
-        assert_eq!(
-            manifest_value.get("spa_fallback").and_then(Value::as_bool),
-            Some(true)
-        );
+        assert_eq!(manifest_value.json_bool(&["spa_fallback"]), Some(true));
+
         let mut spa_headers = HeaderMap::new();
         spa_headers.insert(
             header::HOST,
@@ -41378,9 +40500,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(spa_response.status(), StatusCode::OK);
-        let spa_body = body::to_bytes(spa_response.into_body(), usize::MAX)
-            .await
-            .expect("read cid host spa body");
+        let spa_body = api_test_response_body(spa_response).await;
         assert_eq!(spa_body, &index_bytes[..]);
         let mut asset_headers = HeaderMap::new();
         asset_headers.insert(
@@ -41394,9 +40514,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(asset_response.status(), StatusCode::OK);
-        let asset_body = body::to_bytes(asset_response.into_body(), usize::MAX)
-            .await
-            .expect("read cid host asset body");
+        let asset_body = api_test_response_body(asset_response).await;
         assert_eq!(asset_body, &asset_bytes[..]);
     }
     #[tokio::test]
@@ -41434,7 +40552,7 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("directory plan");
-        let manifest = manifest_for_payload(0xD7, &payload);
+        let manifest = manifest_for_plan(0xD7, &payload, &plan);
         let content_cid = encode_content_cid(&manifest.root_cid);
         let mut reader = payload.as_slice();
         node.ingest_manifest(&manifest, &plan, &mut reader)
@@ -41503,7 +40621,7 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("directory plan");
-        let manifest = manifest_for_payload(0xD8, &payload);
+        let manifest = manifest_for_plan(0xD8, &payload, &plan);
         let content_cid = encode_content_cid(&manifest.root_cid);
         let mut reader = payload.as_slice();
         node.ingest_manifest(&manifest, &plan, &mut reader)
@@ -41561,9 +40679,7 @@ mod advert_tests {
             passive.headers().get("x-content-type-options"),
             Some(&HeaderValue::from_static("nosniff"))
         );
-        let passive_body = body::to_bytes(passive.into_body(), usize::MAX)
-            .await
-            .expect("read passive asset body");
+        let passive_body = api_test_response_body(passive).await;
         assert_eq!(passive_body, &png_bytes[..]);
     }
     #[tokio::test]
@@ -41572,29 +40688,46 @@ mod advert_tests {
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
         let index_bytes = b"<!doctype html><title>Preferred site</title>";
-        let asset_bytes = b"console.log('preferred-site');";
-        let files = vec![
-            FileEntry {
-                path: vec!["assets".to_owned(), "app.js".to_owned()],
-                data: asset_bytes.to_vec(),
-            },
-            FileEntry {
-                path: vec!["index.html".to_owned()],
-                data: index_bytes.to_vec(),
-            },
-        ];
-        let (site_plan, payload) = CarBuildPlan::from_files_with_profile(
-            files.clone(),
-            sorafs_chunker::ChunkProfile::DEFAULT,
-        )
-        .expect("directory plan");
-        let blob_manifest = manifest_for_payload(0xD6, &payload);
-        let site_manifest = manifest_for_payload(0xD6, &payload);
+        let payload = index_bytes.to_vec();
+        let blob_plan = CarBuildPlan::single_file(&payload).expect("single-file blob plan");
+        let mut site_plan = blob_plan.clone();
+        site_plan.files[0].path = vec!["index.html".to_owned()];
+        let blob_manifest = manifest_for_plan(0xD6, &payload, &blob_plan);
+        let site_manifest = manifest_for_plan(0xE6, &payload, &blob_plan);
+        assert_eq!(blob_manifest.root_cid, site_manifest.root_cid);
         let content_cid = encode_content_cid(&site_manifest.root_cid);
-        let blob_plan = CarBuildPlan::single_file(&payload).expect("single-file plan");
+
         let mut blob_reader = payload.as_slice();
         node.ingest_manifest(&blob_manifest, &blob_plan, &mut blob_reader)
             .expect("ingest blob manifest");
+        let mut site_reader = payload.as_slice();
+        let site_manifest_id = node
+            .ingest_manifest(&site_manifest, &blob_plan, &mut site_reader)
+            .expect("provider-internal site fixture ingest");
+        node.storage()
+            .expect("storage backend")
+            .attach_plan_metadata(&site_manifest_id, &site_plan, None, None)
+            .expect("attach site file metadata");
+        let variants = node
+            .stored_manifests()
+            .expect("same-CID manifest variants")
+            .into_iter()
+            .filter(|manifest| manifest.manifest_cid() == site_manifest.root_cid)
+            .collect::<Vec<_>>();
+        assert_eq!(variants.len(), 2);
+        assert_eq!(
+            variants
+                .iter()
+                .filter(|manifest| {
+                    manifest
+                        .files()
+                        .iter()
+                        .any(|file| file.path.len() == 1 && file.path[0] == "index.html")
+                })
+                .count(),
+            1
+        );
+
         inner.sorafs_node = node;
         inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
         inner
@@ -41603,11 +40736,7 @@ mod advert_tests {
             .cid_host_suffixes
             .taira = "sorafs.taira.sora.org".to_owned();
         let state = Arc::new(inner);
-        let mut site_reader = payload.as_slice();
-        state
-            .sorafs_node
-            .ingest_manifest(&site_manifest, &site_plan, &mut site_reader)
-            .expect("provider-internal site fixture ingest");
+
         let mut cid_headers = HeaderMap::new();
         cid_headers.insert(
             header::HOST,
@@ -41624,9 +40753,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(cid_root.status(), StatusCode::OK);
-        let cid_root_body = body::to_bytes(cid_root.into_body(), usize::MAX)
-            .await
-            .expect("read cid root body");
+        let cid_root_body = api_test_response_body(cid_root).await;
         assert_eq!(cid_root_body, &index_bytes[..]);
         let cid_lookup = handle_get_sorafs_cid_lookup(
             State(state.clone()),
@@ -41635,30 +40762,34 @@ mod advert_tests {
         )
         .await;
         assert_eq!(cid_lookup.status(), StatusCode::OK);
-        let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
-            .await
-            .expect("read cid lookup body");
-        let cid_lookup_value: Value =
-            norito::json::from_slice(&cid_lookup_body).expect("decode cid lookup response");
+        let cid_lookup_value = api_test_response_json(cid_lookup).await;
         assert_eq!(
-            cid_lookup_value
-                .get("index_document")
-                .and_then(Value::as_str),
+            cid_lookup_value.json_str(&["index_document"]),
             Some("index.html")
         );
-        assert_eq!(
-            cid_lookup_value
-                .get("files")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
+        assert_eq!(cid_lookup_value.json_len(&["files"]), Some(1));
         assert!(cid_lookup_value.get("moderation").is_none());
     }
     #[tokio::test]
     async fn cid_gateway_cache_miss_requires_capability_before_remote_work() {
-        let payload = b"remote hydration must not be attempted".to_vec();
-        let manifest = manifest_for_payload(0xE4, &payload);
+        let index_bytes = b"<!doctype html><title>Gateway</title>";
+        let asset_bytes = b"console.log('gateway-cache');";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "app.js".to_owned()],
+                    data: asset_bytes.to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: index_bytes.to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let mut manifest = manifest_for_plan(0xE4, &payload, &plan);
+        manifest.governance.council_signatures.clear();
         let manifest_digest: [u8; 32] = manifest.digest().expect("compute manifest digest").into();
         let content_cid = encode_content_cid(&manifest.root_cid);
         let fixture = make_signed_advert_with_host("https://provider.invalid");
@@ -41720,7 +40851,7 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("app api manifest plan");
-        let manifest = manifest_for_payload(0xE5, &payload);
+        let manifest = manifest_for_plan(0xE5, &payload, &plan);
         let manifest_digest: [u8; 32] = manifest.digest().expect("compute manifest digest").into();
         let manifest_id_hex = hex::encode(manifest_digest);
         let content_cid = encode_content_cid(&manifest.root_cid);
@@ -41901,89 +41032,51 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode plan response");
+
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value
-                .get("manifest_id_hex")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            value.json_str(&["manifest_id_hex"]).map(str::to_owned),
             Some(manifest_id.clone())
         );
-        let plan_value = value
-            .get("plan")
-            .and_then(Value::as_object)
-            .expect("plan object");
+
+        let plan_value = value.json_object(&["plan"]).expect("plan object");
         assert_eq!(
-            plan_value.get("chunk_count").and_then(Value::as_u64),
+            plan_value.json_u64(&["chunk_count"]),
             Some(plan.chunks.len() as u64)
         );
         assert_eq!(
-            plan_value
-                .get("returned_chunk_count")
-                .and_then(Value::as_u64),
+            plan_value.json_u64(&["returned_chunk_count"]),
             Some(plan.chunks.len() as u64)
         );
         assert_eq!(
-            plan_value
-                .get("returned_chunk_digest_count")
-                .and_then(Value::as_u64),
+            plan_value.json_u64(&["returned_chunk_digest_count"]),
             Some(plan.chunks.len() as u64)
         );
+        assert_eq!(plan_value.json_u64(&["file_count"]), Some(2));
+        assert_eq!(plan_value.json_u64(&["returned_file_count"]), Some(2));
         assert_eq!(
-            plan_value.get("file_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            plan_value
-                .get("returned_file_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            plan_value.get("limit").and_then(Value::as_u64),
+            plan_value.json_u64(&["limit"]),
             Some(DEFAULT_LIST_LIMIT as u64)
         );
-        assert_eq!(plan_value.get("offset").and_then(Value::as_u64), Some(0));
+        assert_eq!(plan_value.json_u64(&["offset"]), Some(0));
+        assert_eq!(plan_value.json_bool(&["truncated_chunks"]), Some(false));
         assert_eq!(
-            plan_value.get("truncated_chunks").and_then(Value::as_bool),
+            plan_value.json_bool(&["truncated_chunk_digests"]),
             Some(false)
         );
+        assert_eq!(plan_value.json_bool(&["truncated_files"]), Some(false));
         assert_eq!(
-            plan_value
-                .get("truncated_chunk_digests")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            plan_value.get("truncated_files").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            plan_value.get("content_length").and_then(Value::as_u64),
+            plan_value.json_u64(&["content_length"]),
             Some(plan.content_length)
         );
-        let chunks = plan_value
-            .get("chunks")
-            .and_then(Value::as_array)
-            .expect("chunks array");
+        let chunks = plan_value.json_array(&["chunks"]).expect("chunks array");
         assert_eq!(chunks.len(), plan.chunks.len());
         assert_eq!(
-            plan_value
-                .get("chunk_digests_blake3")
-                .and_then(Value::as_array)
-                .map(Vec::len),
+            plan_value.json_len(&["chunk_digests_blake3"]),
             Some(plan.chunks.len())
         );
-        assert_eq!(
-            plan_value
-                .get("files")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
+        assert_eq!(plan_value.json_len(&["files"]), Some(2));
+
         let capped_response = handle_get_sorafs_storage_plan(
             State(state.clone()),
             Path(manifest_id.clone()),
@@ -41991,72 +41084,33 @@ mod advert_tests {
         )
         .await;
         assert_eq!(capped_response.status(), StatusCode::OK);
-        let capped_body = body::to_bytes(capped_response.into_body(), usize::MAX)
-            .await
-            .expect("collect capped body");
-        let capped_value: Value =
-            norito::json::from_slice(&capped_body).expect("decode capped plan response");
+        let capped_value = api_test_response_json(capped_response).await;
         let capped_plan = capped_value
-            .get("plan")
-            .and_then(Value::as_object)
+            .json_object(&["plan"])
             .expect("capped plan object");
         assert_eq!(
-            capped_plan.get("chunk_count").and_then(Value::as_u64),
+            capped_plan.json_u64(&["chunk_count"]),
             Some(plan.chunks.len() as u64)
         );
-        assert_eq!(capped_plan.get("offset").and_then(Value::as_u64), Some(0));
-        assert_eq!(capped_plan.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(capped_plan.json_u64(&["offset"]), Some(0));
+        assert_eq!(capped_plan.json_u64(&["limit"]), Some(1));
+        assert_eq!(capped_plan.json_u64(&["returned_chunk_count"]), Some(1));
+        assert_eq!(capped_plan.json_u64(&["file_count"]), Some(2));
+        assert_eq!(capped_plan.json_u64(&["returned_file_count"]), Some(1));
+        assert_eq!(capped_plan.json_bool(&["truncated_chunks"]), Some(true));
         assert_eq!(
-            capped_plan
-                .get("returned_chunk_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            capped_plan.get("file_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            capped_plan
-                .get("returned_file_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            capped_plan.get("truncated_chunks").and_then(Value::as_bool),
+            capped_plan.json_bool(&["truncated_chunk_digests"]),
             Some(true)
         );
+        assert_eq!(capped_plan.json_bool(&["truncated_files"]), Some(true));
         assert_eq!(
-            capped_plan
-                .get("truncated_chunk_digests")
-                .and_then(Value::as_bool),
+            capped_plan.json_bool(&["truncated_chunk_digests"]),
             Some(true)
         );
-        assert_eq!(
-            capped_plan.get("truncated_files").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            capped_plan
-                .get("chunks")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            capped_plan
-                .get("chunk_digests_blake3")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            capped_plan
-                .get("files")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
+        assert_eq!(capped_plan.json_len(&["chunks"]), Some(1));
+        assert_eq!(capped_plan.json_len(&["chunk_digests_blake3"]), Some(1));
+        assert_eq!(capped_plan.json_len(&["files"]), Some(1));
+
         let paged_response = handle_get_sorafs_storage_plan(
             State(state),
             Path(manifest_id),
@@ -42064,61 +41118,32 @@ mod advert_tests {
         )
         .await;
         assert_eq!(paged_response.status(), StatusCode::OK);
-        let paged_body = body::to_bytes(paged_response.into_body(), usize::MAX)
-            .await
-            .expect("collect paged plan body");
-        let paged_value: Value =
-            norito::json::from_slice(&paged_body).expect("decode paged plan response");
+        let paged_value = api_test_response_json(paged_response).await;
         let paged_plan = paged_value
-            .get("plan")
-            .and_then(Value::as_object)
+            .json_object(&["plan"])
             .expect("paged plan object");
-        assert_eq!(paged_plan.get("offset").and_then(Value::as_u64), Some(1));
-        assert_eq!(paged_plan.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(paged_plan.json_u64(&["offset"]), Some(1));
+        assert_eq!(paged_plan.json_u64(&["limit"]), Some(1));
+        assert_eq!(paged_plan.json_u64(&["returned_chunk_count"]), Some(1));
         assert_eq!(
-            paged_plan
-                .get("returned_chunk_count")
-                .and_then(Value::as_u64),
+            paged_plan.json_u64(&["returned_chunk_digest_count"]),
             Some(1)
         );
+        assert_eq!(paged_plan.json_u64(&["returned_file_count"]), Some(1));
+        assert_eq!(paged_plan.json_bool(&["truncated_chunks"]), Some(true));
         assert_eq!(
-            paged_plan
-                .get("returned_chunk_digest_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            paged_plan
-                .get("returned_file_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            paged_plan.get("truncated_chunks").and_then(Value::as_bool),
+            paged_plan.json_bool(&["truncated_chunk_digests"]),
             Some(true)
         );
-        assert_eq!(
-            paged_plan
-                .get("truncated_chunk_digests")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            paged_plan.get("truncated_files").and_then(Value::as_bool),
-            Some(false)
-        );
-        let paged_chunks = paged_plan
-            .get("chunks")
-            .and_then(Value::as_array)
-            .expect("paged chunks");
+        assert_eq!(paged_plan.json_bool(&["truncated_files"]), Some(false));
+        let paged_chunks = paged_plan.json_array(&["chunks"]).expect("paged chunks");
         assert_eq!(paged_chunks.len(), 1);
         assert_eq!(
             paged_chunks[0].get("chunk_index").and_then(Value::as_u64),
             Some(1)
         );
         let paged_digests = paged_plan
-            .get("chunk_digests_blake3")
-            .and_then(Value::as_array)
+            .json_array(&["chunk_digests_blake3"])
             .expect("paged chunk digests");
         assert_eq!(paged_digests.len(), 1);
         let expected_paged_digest = hex::encode(plan.chunks[1].digest);
@@ -42126,10 +41151,7 @@ mod advert_tests {
             paged_digests[0].as_str(),
             Some(expected_paged_digest.as_str())
         );
-        let paged_files = paged_plan
-            .get("files")
-            .and_then(Value::as_array)
-            .expect("paged files");
+        let paged_files = paged_plan.json_array(&["files"]).expect("paged files");
         assert_eq!(paged_files.len(), 1);
         assert_eq!(
             paged_files[0]
@@ -42186,29 +41208,16 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode ingestion response");
+        let value = api_test_response_json(response).await;
         assert_eq!(
-            value.get("manifest_digest_hex").and_then(Value::as_str),
+            value.json_str(&["manifest_digest_hex"]),
             Some(hex::encode(challenge.manifest_digest).as_str())
         );
-        assert_eq!(value.get("provider_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            value.get("returned_provider_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            value.get("truncated_providers").and_then(Value::as_bool),
-            Some(true)
-        );
-        let providers = value
-            .get("providers")
-            .and_then(Value::as_array)
-            .expect("providers array");
+        assert_eq!(value.json_u64(&["provider_count"]), Some(2));
+        assert_eq!(value.json_u64(&["returned_provider_count"]), Some(1));
+        assert_eq!(value.json_u64(&["limit"]), Some(1));
+        assert_eq!(value.json_bool(&["truncated_providers"]), Some(true));
+        let providers = value.json_array(&["providers"]).expect("providers array");
         assert_eq!(providers.len(), 1);
         assert_eq!(
             providers[0]
@@ -42230,14 +41239,7 @@ mod advert_tests {
             let mut app_inner = Arc::try_unwrap(context.app)
                 .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
             app_inner.sorafs_gateway_config.enforce_capabilities = true;
-            let components = build_sorafs_gateway_security(
-                &app_inner.sorafs_gateway_config,
-                app_inner.sorafs_admission.clone(),
-                None,
-                None,
-            );
-            app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-            app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+            refresh_api_test_gateway_security(&mut app_inner);
             context.app = Arc::new(app_inner);
         }
         let declaration = CapacityDeclarationV1 {
@@ -42291,10 +41293,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode refusal");
+        let value = api_test_response_json(response).await;
         assert_eq!(
             value.get("error"),
             Some(&Value::String("unsupported_chunker".into()))
@@ -42315,14 +41314,7 @@ mod advert_tests {
         inner.sorafs_node = sorafs_node::NodeHandle::new(cfg);
         inner.sorafs_gateway_config.require_manifest_envelope = false;
         inner.sorafs_gateway_config.enforce_admission = false;
-        let components = build_sorafs_gateway_security(
-            &inner.sorafs_gateway_config,
-            inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        refresh_api_test_gateway_security(&mut inner);
         let state = Arc::new(inner);
         let payload = b"sorafs restart persistence check payload".to_vec();
         let manifest = manifest_for_payload(0xAB, &payload);
@@ -42349,17 +41341,12 @@ mod advert_tests {
         inner_after.sorafs_gateway_tls_state = Some(Arc::clone(&components_after.tls_state));
         let state_after = Arc::new(inner_after);
         let mut fetch_headers = HeaderMap::new();
-        fetch_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("restart-fetch"),
-        );
-        fetch_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("restart-client"),
-        );
-        fetch_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            HeaderValue::from_static("alice@banka.dataspace"),
+        insert_static_api_test_header(&mut fetch_headers, HEADER_SORA_NONCE, "restart-fetch");
+        insert_static_api_test_header(&mut fetch_headers, HEADER_SORA_CLIENT, "restart-client");
+        insert_static_api_test_header(
+            &mut fetch_headers,
+            HEADER_SORA_NAME,
+            "alice@banka.dataspace",
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
@@ -42378,15 +41365,8 @@ mod advert_tests {
         )
         .await;
         assert_eq!(fetch_response.status(), StatusCode::OK);
-        let fetch_bytes = body::to_bytes(fetch_response.into_body(), usize::MAX)
-            .await
-            .expect("collect fetch body");
-        let fetch_value: Value =
-            norito::json::from_slice(&fetch_bytes).expect("decode fetch response");
-        let data_b64 = fetch_value
-            .get("data_b64")
-            .and_then(Value::as_str)
-            .expect("payload data");
+        let fetch_value = api_test_response_json(fetch_response).await;
+        let data_b64 = fetch_value.json_str(&["data_b64"]).expect("payload data");
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(data_b64.as_bytes())
             .expect("decode persisted payload");
@@ -42396,14 +41376,9 @@ mod advert_tests {
     async fn storage_token_issues_signed_response() {
         let context = token_test_context();
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-token-1"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            header_value(&context.client_id, "X-SoraFS-Client"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-token-1");
+        insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
+
         let request = StreamTokenRequestDto {
             manifest_id_hex: context.manifest_id_hex.clone(),
             provider_id_hex: context.provider_id_hex.clone(),
@@ -42455,40 +41430,27 @@ mod advert_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("no-store")
         );
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect token body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode token response");
-        let token_obj = value
-            .get("token")
-            .and_then(Value::as_object)
-            .expect("token object");
+
+        let value = api_test_response_json(response).await;
+        let token_obj = value.json_object(&["token"]).expect("token object");
         let signature_hex = token_obj
-            .get("signature_hex")
-            .and_then(Value::as_str)
+            .json_str(&["signature_hex"])
             .expect("signature hex");
         assert_eq!(signature_hex.len(), 64 * 2);
         assert!(signature_hex.chars().all(|c| c.is_ascii_hexdigit()));
-        let body_obj = token_obj
-            .get("body")
-            .and_then(Value::as_object)
-            .expect("token body");
+        let body_obj = token_obj.json_object(&["body"]).expect("token body");
         assert!(
-            body_obj.get("token_id").and_then(Value::as_str).is_some(),
+            body_obj.json_str(&["token_id"]).is_some(),
             "token body must include token_id"
         );
         let token_base64 = value
-            .get("token_base64")
-            .and_then(Value::as_str)
+            .json_str(&["token_base64"])
             .expect("token base64 present");
         assert!(!token_base64.is_empty());
         let decoded = decode_token_base64(token_base64).expect("decode token base64");
         assert_eq!(
             decoded.body.token_id,
-            body_obj
-                .get("token_id")
-                .and_then(Value::as_str)
-                .expect("token id"),
+            body_obj.json_str(&["token_id"]).expect("token id"),
         );
         decoded
             .verify(
@@ -42509,13 +41471,15 @@ mod advert_tests {
                 mode,
             );
             let mut headers = HeaderMap::new();
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_NONCE),
-                HeaderValue::from_static("runtime-signer-failure"),
+            insert_static_api_test_header(
+                &mut headers,
+                HEADER_SORA_NONCE,
+                "runtime-signer-failure",
             );
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                HeaderValue::from_static("gateway-runtime-signer-test"),
+            insert_static_api_test_header(
+                &mut headers,
+                HEADER_SORA_CLIENT,
+                "gateway-runtime-signer-test",
             );
             let request = StreamTokenRequestDto {
                 manifest_id_hex: context.manifest_id_hex,
@@ -42536,13 +41500,9 @@ mod advert_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("1")
         );
-        let unavailable_body = body::to_bytes(unavailable.into_body(), usize::MAX)
-            .await
-            .expect("collect unavailable response");
-        let unavailable_value: Value =
-            norito::json::from_slice(&unavailable_body).expect("decode unavailable response");
+        let unavailable_value = api_test_response_json(unavailable).await;
         assert_eq!(
-            unavailable_value.get("error").and_then(Value::as_str),
+            unavailable_value.json_str(&["error"]),
             Some("stream token issuance is temporarily unavailable")
         );
         let drifted = issue_with_mode(ApiTestStreamTokenSignerMode::QualificationDrift).await;
@@ -42554,13 +41514,11 @@ mod advert_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("1")
         );
-        let drifted_body = body::to_bytes(drifted.into_body(), usize::MAX)
-            .await
-            .expect("collect drifted response");
+        let drifted_body = api_test_response_body(drifted).await;
         let drifted_value: Value =
             norito::json::from_slice(&drifted_body).expect("decode drifted response");
         assert_eq!(
-            drifted_value.get("error").and_then(Value::as_str),
+            drifted_value.json_str(&["error"]),
             Some("stream token issuance is temporarily unavailable")
         );
         assert!(!String::from_utf8_lossy(&drifted_body).contains("qualification"));
@@ -42571,13 +41529,11 @@ mod advert_tests {
             let response = issue_with_mode(mode).await;
             assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
             assert!(response.headers().get(RETRY_AFTER).is_none());
-            let response_body = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect signer failure response");
+            let response_body = api_test_response_body(response).await;
             let response_value: Value =
                 norito::json::from_slice(&response_body).expect("decode signer failure response");
             assert_eq!(
-                response_value.get("error").and_then(Value::as_str),
+                response_value.json_str(&["error"]),
                 Some("failed to issue stream token")
             );
             let rendered = String::from_utf8_lossy(&response_body);
@@ -42601,24 +41557,15 @@ mod advert_tests {
             State(context.app.clone()),
             {
                 let mut headers = HeaderMap::new();
-                headers.insert(
-                    header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                    header_value(&context.client_id, "X-SoraFS-Client"),
-                );
+                insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
                 headers
             },
             JsonOnly(request),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect error body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error payload");
-        let error_message = value
-            .get("error")
-            .and_then(Value::as_str)
-            .expect("error string");
+        let value = api_test_response_json(response).await;
+        let error_message = value.json_str(&["error"]).expect("error string");
         assert!(
             error_message.contains("missing X-SoraFS-Nonce"),
             "unexpected error message: {error_message}"
@@ -42642,14 +41589,8 @@ mod advert_tests {
             (HEADER_SORA_NONCE, "nonce with spaces".to_string()),
         ] {
             let mut headers = HeaderMap::new();
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                HeaderValue::from_static("client-a"),
-            );
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_NONCE),
-                HeaderValue::from_static("nonce-a"),
-            );
+            insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "client-a");
+            insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-a");
             headers.insert(
                 header::HeaderName::from_static(name),
                 HeaderValue::from_str(&value).expect("test header"),
@@ -42667,14 +41608,8 @@ mod advert_tests {
             );
         }
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("client-a"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-a"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "client-a");
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-a");
         let mut noncanonical_manifest = request();
         noncanonical_manifest.manifest_id_hex.push('A');
         let response = handle_post_sorafs_storage_token(
@@ -42699,14 +41634,8 @@ mod advert_tests {
         let context = token_test_context();
         let headers = || {
             let mut headers = HeaderMap::new();
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                HeaderValue::from_static("client-a"),
-            );
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_NONCE),
-                HeaderValue::from_static("nonce-a"),
-            );
+            insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "client-a");
+            insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-a");
             headers
         };
         let request = |provider_id_hex: String, overrides: TokenOverrides| StreamTokenRequestDto {
@@ -42767,11 +41696,7 @@ mod advert_tests {
     #[tokio::test]
     async fn stream_token_enforcement_rejects_temporal_policy_and_binding_attacks() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let valid_encoded = issue_token_base64(&context, TokenOverrides::default()).await;
         let valid = decode_token_base64(&valid_encoded).expect("decode issued token");
         let now = SystemTime::now()
@@ -42872,14 +41797,8 @@ mod advert_tests {
             requests_per_minute: None,
         };
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("operator-auth-test"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("operator-auth-nonce"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "operator-auth-test");
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "operator-auth-nonce");
         let missing = handle_post_sorafs_storage_token_authenticated(
             None,
             State(context.app.clone()),
@@ -42919,13 +41838,15 @@ mod advert_tests {
         let expected = ["2", "1", "0"];
         for (idx, quota_remaining) in expected.into_iter().enumerate() {
             let mut headers = HeaderMap::new();
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_NONCE),
-                header_value(format!("nonce-quota-{idx}"), "X-SoraFS-Nonce"),
+            insert_api_test_header(
+                &mut headers,
+                HEADER_SORA_NONCE,
+                format!("nonce-quota-{idx}"),
             );
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                header_value(format!("rotating-label-{idx}"), "X-SoraFS-Client"),
+            insert_api_test_header(
+                &mut headers,
+                HEADER_SORA_CLIENT,
+                format!("rotating-label-{idx}"),
             );
             let response = handle_post_sorafs_storage_token(
                 State(context.app.clone()),
@@ -42942,14 +41863,9 @@ mod advert_tests {
             assert_eq!(remaining, quota_remaining);
         }
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            header_value("nonce-quota-3", "X-SoraFS-Nonce"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("fresh-label-after-quota"),
-        );
+        insert_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-quota-3");
+        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "fresh-label-after-quota");
+
         let response = handle_post_sorafs_storage_token(
             State(context.app.clone()),
             headers,
@@ -42986,14 +41902,8 @@ mod advert_tests {
         // Leave stream_token_issuer unset to emulate disabled tokens.
         let state = Arc::new(app);
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-disabled"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("gateway-disabled"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-disabled");
+        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "gateway-disabled");
         let request = StreamTokenRequestDto {
             manifest_id_hex,
             provider_id_hex: hex::encode([0xEF; 32]),
@@ -43005,14 +41915,8 @@ mod advert_tests {
         let response =
             handle_post_sorafs_storage_token(State(state), headers, JsonOnly(request)).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect error body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error response");
-        let error_message = value
-            .get("error")
-            .and_then(Value::as_str)
-            .expect("error string");
+        let value = api_test_response_json(response).await;
+        let error_message = value.json_str(&["error"]).expect("error string");
         assert!(
             error_message.contains("stream token issuance is not enabled"),
             "unexpected error: {error_message}"
@@ -43022,10 +41926,7 @@ mod advert_tests {
     async fn storage_token_requires_client_header() {
         let (app, _dir, manifest_id) = token_enabled_state();
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-test"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-test");
         let request = StreamTokenRequestDto {
             manifest_id_hex: manifest_id,
             provider_id_hex: hex::encode([0x55; 32]),
@@ -43049,14 +41950,9 @@ mod advert_tests {
             hex::encode(issuer.verifying_key_bytes())
         };
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-123"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("gateway-alpha"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-123");
+        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "gateway-alpha");
+
         let request = StreamTokenRequestDto {
             manifest_id_hex: manifest_id,
             provider_id_hex: hex::encode([0x66; 32]),
@@ -43106,10 +42002,8 @@ mod advert_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("no-store")
         );
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("token JSON");
+
+        let value = api_test_response_json(response).await;
         assert!(
             value.get("token").is_some(),
             "response should contain token payload"
@@ -43118,33 +42012,21 @@ mod advert_tests {
     #[tokio::test]
     async fn car_range_requires_stream_token() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let mut headers = HeaderMap::new();
         headers.insert(
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
+        insert_api_test_header(&mut headers, HEADER_SORA_NAME, "alias/test");
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -43161,25 +42043,20 @@ mod advert_tests {
     #[tokio::test]
     async fn car_range_missing_dag_scope_returns_structured_refusal() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let mut headers = HeaderMap::new();
         headers.insert(
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
+
         let response = handle_get_sorafs_storage_car_range(
             State(context.app.clone()),
             Path(context.manifest_id_hex.clone()),
@@ -43199,25 +42076,19 @@ mod advert_tests {
             !request_id.is_empty(),
             "request id header should not be empty"
         );
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect refusal body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("parse refusal body");
+
+        let value = api_test_response_json(response).await;
         assert_eq!(
             value.get("error"),
             Some(&Value::String("missing_header".into()))
         );
-        let reason = value
-            .get("reason")
-            .and_then(Value::as_str)
-            .expect("reason field present");
+        let reason = value.json_str(&["reason"]).expect("reason field present");
         assert!(
             reason.contains("dag-scope"),
             "reason should mention dag-scope"
         );
         let header_value = value
-            .get("details")
-            .and_then(Value::as_object)
+            .json_object(&["details"])
             .and_then(|map| map.get("header"))
             .and_then(Value::as_str)
             .expect("details.header present");
@@ -43227,11 +42098,7 @@ mod advert_tests {
     #[tokio::test]
     async fn car_range_missing_dag_scope_increments_refusal_metric() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest metadata");
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let label_values = [
             "missing_header",
@@ -43249,14 +42116,13 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
+
         let response = handle_get_sorafs_storage_car_range(
             State(context.app.clone()),
             Path(context.manifest_id_hex.clone()),
@@ -43279,11 +42145,7 @@ mod advert_tests {
     #[tokio::test]
     async fn car_range_accepts_valid_stream_token() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
         let expected_length = manifest.content_length();
@@ -43292,26 +42154,15 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_api_test_header(&mut headers, HEADER_SORA_NAME, "alias/test");
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -43394,11 +42245,7 @@ mod advert_tests {
             .map(|idx| (idx as u8).wrapping_mul(37).wrapping_add(11))
             .collect::<Vec<_>>();
         let context = token_test_context_with_payload(payload);
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         assert!(
             manifest.chunk_count() >= 3,
             "fixture must produce at least three chunks"
@@ -43420,26 +42267,15 @@ mod advert_tests {
             HeaderValue::from_str(&format!("bytes={range_start}-{range_end}"))
                 .expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("middle-window"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "middle-window");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_api_test_header(&mut headers, HEADER_SORA_NAME, "alias/test");
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -43499,11 +42335,7 @@ mod advert_tests {
     #[tokio::test]
     async fn car_range_emits_gateway_headers() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest metadata");
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
         let mut headers = HeaderMap::new();
@@ -43511,26 +42343,15 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_api_test_header(&mut headers, HEADER_SORA_NAME, "alias/test");
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -43565,11 +42386,7 @@ mod advert_tests {
     #[tokio::test]
     async fn car_range_enforces_request_quota() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest metadata");
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let token_base64 = issue_token_base64(
             &context,
@@ -43584,26 +42401,15 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        first_headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut first_headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut first_headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        first_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        first_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("quota-nonce"),
-        );
-        first_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        first_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_static_api_test_header(&mut first_headers, HEADER_SORA_NONCE, "quota-nonce");
+        insert_api_test_header(&mut first_headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_api_test_header(&mut first_headers, HEADER_SORA_NAME, "alias/test");
         first_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -43621,26 +42427,15 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        second_headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut second_headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut second_headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        second_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        second_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("quota-nonce"),
-        );
-        second_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        second_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_static_api_test_header(&mut second_headers, HEADER_SORA_NONCE, "quota-nonce");
+        insert_api_test_header(&mut second_headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_api_test_header(&mut second_headers, HEADER_SORA_NAME, "alias/test");
         second_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -43665,10 +42460,7 @@ mod advert_tests {
             (1..=60).contains(&retry_after),
             "retry-after must be between 1 and 60 seconds (got {retry_after})"
         );
-        let body_bytes = body::to_bytes(second_response.into_body(), usize::MAX)
-            .await
-            .expect("collect quota response body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode quota response");
+        let value = api_test_response_json(second_response).await;
         assert_eq!(
             value.get("error"),
             Some(&Value::String(
@@ -43682,20 +42474,10 @@ mod advert_tests {
         let mut app_inner = Arc::try_unwrap(context.app)
             .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
         app_inner.sorafs_gateway_config.require_manifest_envelope = true;
-        let components = build_sorafs_gateway_security(
-            &app_inner.sorafs_gateway_config,
-            app_inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        refresh_api_test_gateway_security(&mut app_inner);
         context.app = Arc::new(app_inner);
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
         let mut headers = HeaderMap::new();
@@ -43703,22 +42485,15 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+
         let response = handle_get_sorafs_storage_car_range(
             State(context.app.clone()),
             Path(context.manifest_id_hex.clone()),
@@ -43727,10 +42502,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body bytes");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error JSON");
+        let value = api_test_response_json(response).await;
         assert_eq!(
             value.get("error"),
             Some(&Value::String("manifest_envelope_required".into()))
@@ -43744,14 +42516,7 @@ mod advert_tests {
         inner.sorafs_node = node;
         inner.sorafs_gateway_config.enforce_admission = false;
         inner.sorafs_gateway_config.require_manifest_envelope = true;
-        let components = build_sorafs_gateway_security(
-            &inner.sorafs_gateway_config,
-            inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        refresh_api_test_gateway_security(&mut inner);
         let state = Arc::new(inner);
         let payload = b"sorafs fetch manifest envelope enforcement payload";
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
@@ -43781,14 +42546,9 @@ mod advert_tests {
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("provider-internal envelope fixture ingest");
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("fetch-nonce"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("fetch-client"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "fetch-nonce");
+        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "fetch-client");
+
         let fetch_request = StorageFetchRequestDto {
             manifest_id_hex,
             offset: 0,
@@ -43802,10 +42562,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect fetch body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode fetch response");
+        let value = api_test_response_json(response).await;
         assert_eq!(
             value.get("error"),
             Some(&Value::String("manifest_envelope_required".into()))
@@ -43822,14 +42579,7 @@ mod advert_tests {
         inner.sorafs_gateway_config.enforce_admission = true;
         inner.sorafs_gateway_config.enforce_capabilities = true;
         inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
-        let components = build_sorafs_gateway_security(
-            &inner.sorafs_gateway_config,
-            inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        refresh_api_test_gateway_security(&mut inner);
         let state = Arc::new(inner);
         let payload = b"sorafs fetch provider enforcement payload";
         let manifest = manifest_for_payload(0x23, payload);
@@ -43844,14 +42594,9 @@ mod advert_tests {
             "fixture should not advertise a provider id"
         );
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("missing-provider"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("provider-check"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "missing-provider");
+        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "provider-check");
+
         let fetch_request = StorageFetchRequestDto {
             manifest_id_hex,
             offset: 0,
@@ -43865,10 +42610,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect response body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode provider response");
+        let value = api_test_response_json(response).await;
         assert_eq!(
             value.get("error"),
             Some(&Value::String("gateway_compliance_unavailable".into()))
@@ -43877,39 +42619,24 @@ mod advert_tests {
     #[tokio::test]
     async fn storage_chunk_requires_manifest_envelope_when_policy_enabled() {
         let mut context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let chunk_digest_hex =
             hex::encode(manifest.chunk(0).expect("chunk metadata present").digest);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("chunk-nonce"),
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "chunk-nonce");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+
         // Enable manifest envelope enforcement for this test and rebuild policy handles.
         let mut app_inner = Arc::try_unwrap(context.app)
             .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
         app_inner.sorafs_gateway_config.require_manifest_envelope = true;
-        let components = build_sorafs_gateway_security(
-            &app_inner.sorafs_gateway_config,
-            app_inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        refresh_api_test_gateway_security(&mut app_inner);
         context.app = Arc::new(app_inner);
         let response = handle_get_sorafs_storage_chunk(
             State(context.app.clone()),
@@ -43919,10 +42646,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect chunk body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode chunk response");
+        let value = api_test_response_json(response).await;
         assert_eq!(
             value.get("error"),
             Some(&Value::String("manifest_envelope_required".into()))
@@ -43936,14 +42660,7 @@ mod advert_tests {
         inner.sorafs_node = node;
         inner.sorafs_gateway_config.enforce_admission = false;
         inner.sorafs_gateway_config.require_manifest_envelope = false;
-        let components = build_sorafs_gateway_security(
-            &inner.sorafs_gateway_config,
-            inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        refresh_api_test_gateway_security(&mut inner);
         let state = Arc::new(inner);
         let payload = b"sorafs fetch manifest envelope optional payload";
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
@@ -43973,14 +42690,9 @@ mod advert_tests {
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("provider-internal optional-envelope fixture ingest");
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("fetch-nonce-optional"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("fetch-client-optional"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "fetch-nonce-optional");
+        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "fetch-client-optional");
+
         let fetch_request = StorageFetchRequestDto {
             manifest_id_hex,
             offset: 0,
@@ -43995,10 +42707,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect fetch body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode fetch response");
+        let value = api_test_response_json(response).await;
         assert_eq!(
             value.get("manifest_id_hex"),
             Some(&Value::String(expected_manifest_id))
@@ -44007,48 +42716,29 @@ mod advert_tests {
     #[tokio::test]
     async fn car_range_allows_missing_manifest_envelope_when_policy_disabled() {
         let mut context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
         let mut inner = Arc::try_unwrap(context.app)
             .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
         let mut gateway_config = inner.sorafs_gateway_config.clone();
         gateway_config.require_manifest_envelope = false;
-        let components = build_sorafs_gateway_security(
-            &gateway_config,
-            inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        inner.sorafs_gateway_config = gateway_config;
-        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        install_api_test_gateway_security(&mut inner, gateway_config);
         context.app = Arc::new(inner);
         let mut headers = HeaderMap::new();
         headers.insert(
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-optional-envelope"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-optional-envelope");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+
         let response = handle_get_sorafs_storage_car_range(
             State(context.app.clone()),
             Path(context.manifest_id_hex.clone()),
@@ -44063,39 +42753,21 @@ mod advert_tests {
         let fixture = make_signed_advert();
         let mut inner = Arc::try_unwrap(app_state_with_seeded_cache(&fixture))
             .unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _storage_dir) = sorafs_node_with_temp_storage();
+        seed_capacity_declaration(
+            &node,
+            fixture.provider_id(),
+            &fixture.advert.body.profile_id,
+        );
+        inner.sorafs_node = node;
         inner.sorafs_gateway_config.enforce_admission = false;
         inner.sorafs_gateway_config.enforce_capabilities = true;
-        let components = build_sorafs_gateway_security(
-            &inner.sorafs_gateway_config,
-            inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        refresh_api_test_gateway_security(&mut inner);
         let state = Arc::new(inner);
         let payload = b"sorafs capability enforcement payload";
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
-        let car_stats = canonical_fixture_car_stats(&plan, payload);
-        let manifest = ManifestBuilder::new()
-            .root_cid(car_stats.root_cids[0].clone())
-            .dag_codec(DagCodecId(car_stats.dag_codec))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-            .por_root(
-                sorafs_car::compute_por_root(payload, &plan)
-                    .expect("derive canonical capability fixture PoR root"),
-            )
-            .content_length(plan.content_length)
-            .car_digest(car_stats.car_archive_digest.into())
-            .car_size(car_stats.car_size)
-            .pin_policy(PinPolicy::default())
-            .governance(test_governance_proofs())
-            .build()
-            .expect("manifest");
+        let manifest = manifest_for_plan(0x4C, payload, &plan);
+
         seed_paid_pin_record_for_payload(&state, &manifest, payload);
         let mut reader = payload.as_slice();
         let manifest_id_hex = state
@@ -44112,13 +42784,11 @@ mod advert_tests {
                 header::HeaderName::from_static(HEADER_SORA_NONCE),
                 HeaderValue::from_str(nonce).expect("nonce header must be ASCII"),
             );
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                HeaderValue::from_static("capability-client"),
-            );
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_NAME),
-                HeaderValue::from_static("alias@capability.dataspace"),
+            insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "capability-client");
+            insert_static_api_test_header(
+                &mut headers,
+                HEADER_SORA_NAME,
+                "alias@capability.dataspace",
             );
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_PROOF),
@@ -44156,27 +42826,20 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response_missing.status(), StatusCode::PRECONDITION_FAILED);
-        let missing_body = body::to_bytes(response_missing.into_body(), usize::MAX)
-            .await
-            .expect("collect missing capability body");
-        let missing_value: Value =
-            norito::json::from_slice(&missing_body).expect("decode missing capability response");
+        let missing_value = api_test_response_json(response_missing).await;
         assert_eq!(
             missing_value.get("error"),
             Some(&Value::String("capability_missing".into()))
         );
         let missing_details = missing_value
-            .get("details")
-            .and_then(Value::as_object)
+            .json_object(&["details"])
             .expect("missing capability details");
         assert_eq!(
-            missing_details
-                .get("provider_id_hex")
-                .and_then(Value::as_str),
+            missing_details.json_str(&["provider_id_hex"]),
             Some(provider_id_hex.as_str())
         );
         assert_eq!(
-            missing_details.get("capability").and_then(Value::as_str),
+            missing_details.json_str(&["capability"]),
             Some("chunk_range_fetch")
         );
         // Drop override so capability state becomes unknown.
@@ -44195,27 +42858,20 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response_unknown.status(), StatusCode::PRECONDITION_FAILED);
-        let unknown_body = body::to_bytes(response_unknown.into_body(), usize::MAX)
-            .await
-            .expect("collect unknown capability body");
-        let unknown_value: Value =
-            norito::json::from_slice(&unknown_body).expect("decode unknown capability response");
+        let unknown_value = api_test_response_json(response_unknown).await;
         assert_eq!(
             unknown_value.get("error"),
             Some(&Value::String("capability_state_unknown".into()))
         );
         let unknown_details = unknown_value
-            .get("details")
-            .and_then(Value::as_object)
+            .json_object(&["details"])
             .expect("unknown capability details");
         assert_eq!(
-            unknown_details
-                .get("provider_id_hex")
-                .and_then(Value::as_str),
+            unknown_details.json_str(&["provider_id_hex"]),
             Some(provider_id_hex.as_str())
         );
         assert_eq!(
-            unknown_details.get("capability").and_then(Value::as_str),
+            unknown_details.json_str(&["capability"]),
             Some("chunk_range_fetch")
         );
         // Advertise capability (override) and ensure the fetch succeeds.
@@ -44230,14 +42886,9 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response_restored.status(), StatusCode::OK);
-        let restored_body = body::to_bytes(response_restored.into_body(), usize::MAX)
-            .await
-            .expect("collect restored fetch body");
-        let restored_value: Value =
-            norito::json::from_slice(&restored_body).expect("decode restored fetch response");
+        let restored_value = api_test_response_json(response_restored).await;
         let data_b64 = restored_value
-            .get("data_b64")
-            .and_then(Value::as_str)
+            .json_str(&["data_b64"])
             .expect("payload base64");
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(data_b64.as_bytes())
@@ -44289,23 +42940,16 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response_missing.status(), StatusCode::PRECONDITION_FAILED);
-        let missing_body = body::to_bytes(response_missing.into_body(), usize::MAX)
-            .await
-            .expect("collect missing capability body");
-        let missing_value: Value =
-            norito::json::from_slice(&missing_body).expect("decode missing capability response");
+        let missing_value = api_test_response_json(response_missing).await;
         assert_eq!(
             missing_value.get("error"),
             Some(&Value::String("capability_missing".into()))
         );
         let missing_details = missing_value
-            .get("details")
-            .and_then(Value::as_object)
+            .json_object(&["details"])
             .expect("missing capability details");
         assert_eq!(
-            missing_details
-                .get("provider_id_hex")
-                .and_then(Value::as_str),
+            missing_details.json_str(&["provider_id_hex"]),
             Some(provider_id_hex.as_str())
         );
         context
@@ -44332,23 +42976,16 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response_unknown.status(), StatusCode::PRECONDITION_FAILED);
-        let unknown_body = body::to_bytes(response_unknown.into_body(), usize::MAX)
-            .await
-            .expect("collect unknown capability body");
-        let unknown_value: Value =
-            norito::json::from_slice(&unknown_body).expect("decode unknown capability response");
+        let unknown_value = api_test_response_json(response_unknown).await;
         assert_eq!(
             unknown_value.get("error"),
             Some(&Value::String("capability_state_unknown".into()))
         );
         let unknown_details = unknown_value
-            .get("details")
-            .and_then(Value::as_object)
+            .json_object(&["details"])
             .expect("unknown capability details");
         assert_eq!(
-            unknown_details
-                .get("provider_id_hex")
-                .and_then(Value::as_str),
+            unknown_details.json_str(&["provider_id_hex"]),
             Some(provider_id_hex.as_str())
         );
     }
@@ -44399,23 +43036,16 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response_missing.status(), StatusCode::PRECONDITION_FAILED);
-        let missing_body = body::to_bytes(response_missing.into_body(), usize::MAX)
-            .await
-            .expect("collect missing capability body");
-        let missing_value: Value =
-            norito::json::from_slice(&missing_body).expect("decode missing capability response");
+        let missing_value = api_test_response_json(response_missing).await;
         assert_eq!(
             missing_value.get("error"),
             Some(&Value::String("capability_missing".into()))
         );
         let missing_details = missing_value
-            .get("details")
-            .and_then(Value::as_object)
+            .json_object(&["details"])
             .expect("missing capability details");
         assert_eq!(
-            missing_details
-                .get("provider_id_hex")
-                .and_then(Value::as_str),
+            missing_details.json_str(&["provider_id_hex"]),
             Some(provider_id_hex.as_str())
         );
         context
@@ -44442,23 +43072,16 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response_unknown.status(), StatusCode::PRECONDITION_FAILED);
-        let unknown_body = body::to_bytes(response_unknown.into_body(), usize::MAX)
-            .await
-            .expect("collect unknown capability body");
-        let unknown_value: Value =
-            norito::json::from_slice(&unknown_body).expect("decode unknown capability response");
+        let unknown_value = api_test_response_json(response_unknown).await;
         assert_eq!(
             unknown_value.get("error"),
             Some(&Value::String("capability_state_unknown".into()))
         );
         let unknown_details = unknown_value
-            .get("details")
-            .and_then(Value::as_object)
+            .json_object(&["details"])
             .expect("unknown capability details");
         assert_eq!(
-            unknown_details
-                .get("provider_id_hex")
-                .and_then(Value::as_str),
+            unknown_details.json_str(&["provider_id_hex"]),
             Some(provider_id_hex.as_str())
         );
     }
@@ -44470,21 +43093,10 @@ mod advert_tests {
         app_inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
         let mut gateway_config = app_inner.sorafs_gateway_config.clone();
         gateway_config.enforce_admission = true;
-        let components = build_sorafs_gateway_security(
-            &gateway_config,
-            app_inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        app_inner.sorafs_gateway_config = gateway_config;
-        app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        install_api_test_gateway_security(&mut app_inner, gateway_config);
         context.app = Arc::new(app_inner);
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
         let mut headers = HeaderMap::new();
@@ -44492,26 +43104,16 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-admission"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
-            HeaderValue::from_static("dummy"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-admission");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_static_api_test_header(&mut headers, HEADER_SORA_MANIFEST_ENVELOPE, "dummy");
+
         let response = handle_get_sorafs_storage_car_range(
             State(context.app.clone()),
             Path(context.manifest_id_hex.clone()),
@@ -44520,10 +43122,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body bytes");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error JSON");
+        let value = api_test_response_json(response).await;
         assert_eq!(
             value.get("error"),
             Some(&Value::String("provider_not_admitted".into()))
@@ -44543,21 +43142,10 @@ mod advert_tests {
         gateway_config.rate_limit.max_requests = Some(NonZeroU32::new(1).expect("non-zero"));
         gateway_config.rate_limit.window = Duration::from_mins(1);
         gateway_config.rate_limit.ban = None;
-        let components = build_sorafs_gateway_security(
-            &gateway_config,
-            app_inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        app_inner.sorafs_gateway_config = gateway_config;
-        app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        install_api_test_gateway_security(&mut app_inner, gateway_config);
         context.app = Arc::new(app_inner);
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
         let mut headers = HeaderMap::new();
@@ -44565,30 +43153,17 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-rate-0"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
-            HeaderValue::from_static("dummy"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("gateway-alpha"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-rate-0");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_static_api_test_header(&mut headers, HEADER_SORA_MANIFEST_ENVELOPE, "dummy");
+        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "gateway-alpha");
+
         let success_response = handle_get_sorafs_storage_car_range(
             State(context.app.clone()),
             Path(context.manifest_id_hex.clone()),
@@ -44607,10 +43182,8 @@ mod advert_tests {
             "header value should advertise ECH state"
         );
         let mut throttled_headers = headers;
-        throttled_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-rate-1"),
-        );
+        insert_static_api_test_header(&mut throttled_headers, HEADER_SORA_NONCE, "nonce-rate-1");
+
         let throttled = handle_get_sorafs_storage_car_range(
             State(context.app.clone()),
             Path(context.manifest_id_hex.clone()),
@@ -44619,10 +43192,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
-        let body_bytes = body::to_bytes(throttled.into_body(), usize::MAX)
-            .await
-            .expect("collect body bytes");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error JSON");
+        let value = api_test_response_json(throttled).await;
         assert_eq!(
             value.get("error"),
             Some(&Value::String("rate_limited".into()))
@@ -44638,23 +43208,12 @@ mod advert_tests {
         gateway_config.rate_limit.max_requests = Some(NonZeroU32::new(1).expect("non-zero"));
         gateway_config.rate_limit.window = Duration::from_mins(1);
         gateway_config.rate_limit.ban = None;
-        let components = build_sorafs_gateway_security(
-            &gateway_config,
-            app_inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        app_inner.sorafs_gateway_config = gateway_config;
-        app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        install_api_test_gateway_security(&mut app_inner, gateway_config);
         app_inner.trusted_proxy_nets =
             Arc::new(crate::limits::parse_cidrs(&["127.0.0.0/8".into()]));
         context.app = Arc::new(app_inner);
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let trusted_token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
         let untrusted_token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
@@ -44667,30 +43226,19 @@ mod advert_tests {
                     header::RANGE,
                     HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
                 );
-                headers.insert(
-                    header::HeaderName::from_static(HEADER_DAG_SCOPE),
-                    HeaderValue::from_static("block"),
-                );
-                headers.insert(
-                    header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-                    header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
+                insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+                insert_api_test_header(
+                    &mut headers,
+                    HEADER_SORA_CHUNKER,
+                    manifest.chunk_profile_handle(),
                 );
                 headers.insert(
                     header::HeaderName::from_static(HEADER_SORA_NONCE),
                     HeaderValue::from_static(nonce),
                 );
-                headers.insert(
-                    header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-                    header_value(token_base64, "X-SoraFS-Stream-Token"),
-                );
-                headers.insert(
-                    header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
-                    HeaderValue::from_static("dummy"),
-                );
-                headers.insert(
-                    header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                    HeaderValue::from_static("gateway-alpha"),
-                );
+                insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, token_base64);
+                insert_static_api_test_header(&mut headers, HEADER_SORA_MANIFEST_ENVELOPE, "dummy");
+                insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "gateway-alpha");
                 if let Some(ip) = forwarded_ip {
                     headers.insert(
                         header::HeaderName::from_static(crate::limits::FORWARDED_FOR_HEADER),
@@ -44751,11 +43299,7 @@ mod advert_tests {
     #[tokio::test]
     async fn car_range_rejects_corrupted_payload() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let chunker_handle = manifest.chunk_profile_handle().to_string();
         let chunk_path = manifest.chunk(0).expect("chunk metadata").path.clone();
@@ -44770,26 +43314,11 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(&chunker_handle, "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(&mut headers, HEADER_SORA_CHUNKER, &chunker_handle);
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_api_test_header(&mut headers, HEADER_SORA_NAME, "alias/test");
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -44809,10 +43338,7 @@ mod advert_tests {
             .expect("collect error body bytes");
         let value: Value =
             norito::json::from_slice(&body_bytes).expect("decode error response JSON");
-        let error_str = value
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let error_str = value.json_str(&["error"]).unwrap_or_default();
         assert!(
             error_str.contains("car verification failed"),
             "unexpected error message: {error_str}"
@@ -44821,11 +43347,7 @@ mod advert_tests {
     #[tokio::test]
     async fn car_range_enforces_rate_limit_bytes() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let end = manifest.content_length().saturating_sub(1);
         let limited_bytes = manifest.content_length().saturating_sub(1);
         let overrides = TokenOverrides {
@@ -44838,26 +43360,15 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_api_test_header(&mut headers, HEADER_SORA_NAME, "alias/test");
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -44878,7 +43389,7 @@ mod advert_tests {
         let value: Value =
             norito::json::from_slice(&body_bytes).expect("decode rate-limit response");
         assert_eq!(
-            value.get("error").and_then(Value::as_str),
+            value.json_str(&["error"]),
             Some("stream token rate limit exceeded")
         );
     }
@@ -44886,11 +43397,7 @@ mod advert_tests {
     async fn car_range_accepts_multi_chunk_requests_with_small_stream_budget() {
         let payload = vec![0xDD; 2 * 1024 * 1024];
         let context = token_test_context_with_payload(payload);
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         assert!(
             manifest.chunk_count() > 4,
             "expected multi-chunk manifest for test"
@@ -44918,22 +43425,15 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-download");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+
         let response = handle_get_sorafs_storage_car_range(
             State(context.app.clone()),
             Path(context.manifest_id_hex.clone()),
@@ -44957,31 +43457,19 @@ mod advert_tests {
     #[tokio::test]
     async fn chunk_range_accepts_valid_stream_token() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let chunk_record = manifest.chunk(0).expect("chunk record");
         let chunk_digest_hex = hex::encode(chunk_record.digest);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-chunk"),
+        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-chunk");
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_api_test_header(
+            &mut headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_api_test_header(&mut headers, HEADER_SORA_NAME, "alias/test");
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -45009,11 +43497,7 @@ mod advert_tests {
     #[tokio::test]
     async fn chunk_range_records_metrics() {
         let context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let chunk_record = manifest.chunk(0).expect("chunk record");
         let chunk_digest_hex = hex::encode(chunk_record.digest);
         let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
@@ -45043,26 +43527,15 @@ mod advert_tests {
             header::RANGE,
             HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
         );
-        range_headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
+        insert_static_api_test_header(&mut range_headers, HEADER_DAG_SCOPE, "block");
+        insert_api_test_header(
+            &mut range_headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        range_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        range_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
-        range_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        range_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_static_api_test_header(&mut range_headers, HEADER_SORA_NONCE, "nonce-download");
+        insert_api_test_header(&mut range_headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_api_test_header(&mut range_headers, HEADER_SORA_NAME, "alias/test");
         range_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -45075,27 +43548,17 @@ mod advert_tests {
         )
         .await;
         assert_eq!(car_response.status(), StatusCode::PARTIAL_CONTENT);
-        let car_body_bytes = body::to_bytes(car_response.into_body(), usize::MAX)
-            .await
-            .expect("car range body");
+        let car_body_bytes = api_test_response_body(car_response).await;
         let car_payload_len = car_body_bytes.len() as u64;
         let mut chunk_headers = HeaderMap::new();
-        chunk_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-chunk"),
+        insert_static_api_test_header(&mut chunk_headers, HEADER_SORA_NONCE, "nonce-chunk");
+        insert_api_test_header(&mut chunk_headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+        insert_api_test_header(
+            &mut chunk_headers,
+            HEADER_SORA_CHUNKER,
+            manifest.chunk_profile_handle(),
         );
-        chunk_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        chunk_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        chunk_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
+        insert_api_test_header(&mut chunk_headers, HEADER_SORA_NAME, "alias/test");
         chunk_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
             alias_proof_header("alias/test"),
@@ -45108,9 +43571,7 @@ mod advert_tests {
         )
         .await;
         assert_eq!(chunk_response.status(), StatusCode::OK);
-        let chunk_body_bytes = body::to_bytes(chunk_response.into_body(), usize::MAX)
-            .await
-            .expect("chunk body");
+        let chunk_body_bytes = api_test_response_body(chunk_response).await;
         let chunk_payload_len = chunk_body_bytes.len() as u64;
         let metrics_after = context.app.telemetry.metrics().await;
         let car_requests_after = metrics_after
@@ -45138,21 +43599,15 @@ mod advert_tests {
     async fn stream_token_enforces_concurrency_budget() {
         let payload = vec![0xEE; 128 * 1024];
         let context = token_test_context_with_payload(payload);
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let overrides = TokenOverrides {
             max_streams: Some(1),
             ..TokenOverrides::default()
         };
         let token_base64 = issue_token_base64(&context, overrides).await;
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_base64);
+
         let requested_bytes = manifest.content_length();
         let route = enforcement_route(requested_bytes);
         let (first_guard, _) = enforce_stream_token_for_request(
@@ -45255,11 +43710,7 @@ mod advert_tests {
     async fn stream_token_records_range_fetch_throttle_metrics() {
         let payload = vec![0xDD; 64 * 1024];
         let context = token_test_context_with_payload(payload);
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
+        let manifest = context.manifest();
         let requested_bytes = manifest.content_length();
         let baseline_metrics = context.app.telemetry.metrics().await;
         let baseline_concurrency = baseline_metrics
@@ -45282,10 +43733,8 @@ mod advert_tests {
         };
         let token_quota = issue_token_base64(&context, overrides_quota).await;
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_quota, "X-SoraFS-Stream-Token"),
-        );
+        insert_api_test_header(&mut headers, HEADER_SORA_STREAM_TOKEN, &token_quota);
+
         let route = enforcement_route(requested_bytes);
         let (quota_guard, _) = enforce_stream_token_for_request(
             &context.app,
@@ -45322,10 +43771,8 @@ mod advert_tests {
         };
         let token_rate = issue_token_base64(&context, overrides_rate).await;
         let mut rate_headers = HeaderMap::new();
-        rate_headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_rate, "X-SoraFS-Stream-Token"),
-        );
+        insert_api_test_header(&mut rate_headers, HEADER_SORA_STREAM_TOKEN, &token_rate);
+
         let rate_error = enforce_stream_token_for_request(
             &context.app,
             &rate_headers,

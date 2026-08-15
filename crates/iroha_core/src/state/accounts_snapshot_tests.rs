@@ -1,6 +1,6 @@
+use super::*;
 use core::num::NonZeroU64;
 use iroha_test_samples::ALICE_ID;
-use super::*;
 fn test_state_with_account() -> (State, AccountId) {
     let kura = crate::kura::Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();

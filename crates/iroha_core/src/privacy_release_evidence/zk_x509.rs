@@ -1,7 +1,6 @@
 //! Release stage and authoritative-state verification for zk-X.509.
 // This is a private continuation of the parent release-evidence module.
 use super::*;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::privacy_engines::zk_x509::{
     engine::construct_zk_x509_compiled_profile_v1,
     profile::{
@@ -26,6 +25,7 @@ use iroha_data_model::{
     },
     transaction::SignedTransaction,
 };
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 const ZK_X509_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0x95; 32];
 const ZK_X509_RELEASE_ACTION_INDEX_V1: u32 = 0;
 /// Canonical native Linux environment bound into the X.509 resource capture.

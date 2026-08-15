@@ -1,11 +1,11 @@
 //! Golden checks for hybrid packed-struct bitset sizing behavior.
-use std::{
-    collections::BTreeMap,
-    panic::{AssertUnwindSafe, catch_unwind},
-};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{self as norito_core, DecodeFlagsGuard, Error, header_flags},
+};
+use std::{
+    collections::BTreeMap,
+    panic::{AssertUnwindSafe, catch_unwind},
 };
 fn encode_bare_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
     let _guard = DecodeFlagsGuard::enter(flags);

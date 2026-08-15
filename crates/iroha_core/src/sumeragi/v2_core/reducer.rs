@@ -1,8 +1,3 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    error::Error,
-    fmt,
-};
 use super::{
     CertificateRef, Committee, CommitteeRole, ConsensusMessageV2, DurableState, EventTag,
     Generation, HeightContext, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest,
@@ -32,6 +27,11 @@ use super::{
         check_production_durable_intent_transition, locked_commit_progress_witness_is_valid,
     },
     types::timeout_vote_view_is_admissible,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    error::Error,
+    fmt,
 };
 /// Progress of an exact block body through the durable validation boundary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

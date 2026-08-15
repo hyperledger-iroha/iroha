@@ -1,13 +1,4 @@
 //! Production CLI for constructing and verifying SoraFS provider advertisements.
-use std::{
-    env,
-    fs::{self, OpenOptions},
-    io::{self, Read, Write},
-    path::{Component, Path, PathBuf},
-    process,
-};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use ed25519_dalek::VerifyingKey;
 use iroha_crypto::sha256;
 use norito::json::{Map, Value, to_string_pretty};
@@ -18,6 +9,15 @@ use sorafs_manifest::{
     ProviderAdvertV1, ProviderCapabilityRangeV1, REFRESH_RECOMMENDATION_SECS, RendezvousTopic,
     SignatureAlgorithm, StreamBudgetV1, TransportHintV1, TransportProtocol, deal::XorQuantity,
     decode_provider_advert_v1, provider_advert::ProviderCapabilitySoranetPqV1,
+};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::{
+    env,
+    fs::{self, OpenOptions},
+    io::{self, Read, Write},
+    path::{Component, Path, PathBuf},
+    process,
 };
 const ED25519_PUBLIC_KEY_BYTES: usize = 32;
 const ED25519_SIGNATURE_BYTES: usize = 64;

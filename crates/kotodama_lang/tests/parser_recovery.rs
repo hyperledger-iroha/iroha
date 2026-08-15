@@ -1,10 +1,10 @@
 //! Parser recovery, progress, and diagnostic-fanout coverage.
-use std::fmt::Write as _;
 use kotodama_lang::{
     diagnostic::DiagnosticPhase,
     source::{FrontendBudget, MAX_DIAGNOSTICS, SourceFile, SourceId},
     syntax::{SyntaxKind, parse},
 };
+use std::fmt::Write as _;
 #[test]
 fn recovers_multiple_errors_inside_one_block_and_across_items() {
     let text = r#"seiyaku Broken {

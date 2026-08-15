@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {

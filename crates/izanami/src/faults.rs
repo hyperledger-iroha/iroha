@@ -1,12 +1,4 @@
 //! Fault-injection utilities used by Izanami to emulate Byzantine peers.
-use std::{
-    io::{self, Write},
-    ops::RangeInclusive,
-    path::PathBuf,
-    pin::Pin,
-    sync::{Arc, atomic::AtomicBool},
-    time::{Duration, Instant},
-};
 use color_eyre::{
     Result,
     eyre::{WrapErr, eyre},
@@ -17,6 +9,14 @@ use iroha_genesis::GenesisBlock;
 use iroha_test_network::NetworkPeer;
 use iroha_test_samples::ALICE_ID;
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng, seq::IndexedRandom};
+use std::{
+    io::{self, Write},
+    ops::RangeInclusive,
+    path::PathBuf,
+    pin::Pin,
+    sync::{Arc, atomic::AtomicBool},
+    time::{Duration, Instant},
+};
 use tokio::{sync::Notify, task, time::sleep};
 use toml::{Table, Value};
 use tracing::{debug, error, info, warn};
@@ -890,6 +890,9 @@ impl FaultPeer for NetworkPeer {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use iroha_primitives::unique_vec::UniqueVec;
+    use iroha_test_network::genesis_factory;
     use std::{
         collections::HashSet,
         sync::{
@@ -897,13 +900,10 @@ mod tests {
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
     };
-    use iroha_primitives::unique_vec::UniqueVec;
-    use iroha_test_network::genesis_factory;
     use tokio::{
         sync::{Mutex as AsyncMutex, Notify},
         time::{sleep, timeout},
     };
-    use super::*;
     #[derive(Debug, Clone, Default)]
     struct MockClient {
         submissions: Arc<StdMutex<usize>>,

@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensure Torii account endpoints accept canonical I105 account path segments.
 #![cfg(all(feature = "app_api", feature = "telemetry"))]
-use std::sync::Arc;
 use axum::{
     Router,
     body::Body,
@@ -30,6 +29,7 @@ use iroha_torii::{
 };
 use norito::json;
 use prometheus::core::Collector;
+use std::sync::Arc;
 use tower::ServiceExt as _;
 use urlencoding::encode;
 #[path = "fixtures.rs"]

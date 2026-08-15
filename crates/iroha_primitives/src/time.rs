@@ -2,11 +2,11 @@
 //!
 //! Callers can use real time, capture one immutable instant for deterministic
 //! work, or substitute a manually controlled clock via [`MockTimeHandle`].
+use parking_lot::Mutex;
 use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
-use parking_lot::Mutex;
 #[derive(Debug, Clone, Default)]
 enum TimeSourceInner {
     /// The time will come from the system clock ([`std::time::SystemTime::now()`]

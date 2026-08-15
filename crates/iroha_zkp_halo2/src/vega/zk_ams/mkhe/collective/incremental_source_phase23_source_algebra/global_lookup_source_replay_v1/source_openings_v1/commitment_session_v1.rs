@@ -7,6 +7,13 @@
 //! source.
 
 #![allow(dead_code, reason = "later commitment purposes remain uninhabited")]
+#![cfg_attr(
+    not(test),
+    allow(
+        unused_variables,
+        reason = "production proof-session entropy is intentionally uninhabited"
+    )
+)]
 
 use super::super::super::super::super::super::super::MAX_RANDOM_REJECTION_ATTEMPTS_V1;
 use super::{
@@ -629,7 +636,7 @@ fn sample_blinding_v1(
             chunk.as_mut_slice_v1(),
         )?;
         let encoded: &[u8; 32] = chunk
-            .as_mut_slice_v1()
+            .as_slice_v1()
             .try_into()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
         if let Ok(mut scalar) = Scalar::from_be_bytes_exact_ref(encoded) {

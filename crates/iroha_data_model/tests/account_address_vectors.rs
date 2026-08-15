@@ -1,11 +1,11 @@
 //! Compliance-suite validation for account address vectors.
-use std::path::Path;
 use hex::{FromHex, encode_upper};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::account::{
     AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy,
 };
 use norito::json::{self, JsonDeserialize};
+use std::path::Path;
 #[derive(Debug, JsonDeserialize)]
 struct Root {
     format_version: u32,

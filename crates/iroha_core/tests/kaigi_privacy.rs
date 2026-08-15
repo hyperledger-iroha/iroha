@@ -6,7 +6,6 @@
     feature = "halo2-dev-tests"
 ))]
 use core::num::NonZeroU64;
-use std::{str::FromStr, time::Duration};
 use halo2_proofs::{
     SerdeFormat,
     halo2curves::{
@@ -54,6 +53,7 @@ use kaigi_zk::{
     roster_root_limbs,
 };
 use rand_core_06::OsRng;
+use std::{str::FromStr, time::Duration};
 #[path = "common/world_fixture.rs"]
 mod test_world;
 const ROSTER_VK_NAME: &str = "kaigi_roster_current";

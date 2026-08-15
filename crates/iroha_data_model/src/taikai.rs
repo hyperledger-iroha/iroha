@@ -5,13 +5,6 @@
 //! manifest, CAR commitments, and playback descriptors. Hosts and clients use
 //! the envelope to anchor CMAF ladders, enforce policy, and build viewer
 //! dashboards without re-deriving ingest metadata.
-use core::{fmt, str::FromStr};
-use std::collections::{BTreeMap, BTreeSet};
-use derive_more::Display;
-use iroha_crypto::{PublicKey, SignatureOf};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -23,6 +16,13 @@ use crate::{
         pin_registry::{ManifestAliasBinding, StorageClass},
     },
 };
+use core::{fmt, str::FromStr};
+use derive_more::Display;
+use iroha_crypto::{PublicKey, SignatureOf};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::{BTreeMap, BTreeSet};
+use thiserror::Error;
 /// Identifier assigned to a Taikai event (e.g., a live stream or conference day).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[repr(transparent)]
@@ -1197,8 +1197,6 @@ impl TaikaiCacheProfileError {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, str::FromStr};
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
     use crate::{
         da::types::{
@@ -1206,6 +1204,8 @@ mod tests {
         },
         domain::DomainId,
     };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use std::{collections::BTreeMap, str::FromStr};
     fn digest_from(value: u8) -> BlobDigest {
         let mut bytes = [0u8; 32];
         bytes.fill(value);

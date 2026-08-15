@@ -33,16 +33,16 @@ fn main() {
 }
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod tests {
-    use fastpq_prover::{
-        KernelKind, KernelStatsSample, PostTileSample, QueueDepthStats, QueueLaneStats,
-        TwiddleCacheStats,
-    };
-    use norito::json::Value;
     use super::harness::{
         self, BenchOperation, Config, OperationFilter, QueueDeltaAccumulator, Summary,
         ZeroFillSummary, kernel_stats_value, queue_stats_value, round3, twiddle_cache_value,
         zero_fill_value,
     };
+    use fastpq_prover::{
+        KernelKind, KernelStatsSample, PostTileSample, QueueDepthStats, QueueLaneStats,
+        TwiddleCacheStats,
+    };
+    use norito::json::Value;
     fn assert_close(actual: f64, expected: f64) {
         let delta = (actual - expected).abs();
         assert!(
@@ -590,10 +590,10 @@ mod tests {
 }
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod heuristics_value_tests {
+    use super::harness::heuristics_value;
     use fastpq_prover::{
         AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, CommandLimitSnapshot, CommandLimitSource,
     };
-    use super::harness::heuristics_value;
     #[test]
     fn poseidon_snapshot_serializes() {
         let snapshot = AdaptiveScheduleSnapshot {
@@ -648,16 +648,6 @@ mod heuristics_value_tests {
 }
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod harness {
-    use std::{
-        collections::BTreeMap,
-        env, fs,
-        hint::black_box,
-        mem,
-        path::{Path, PathBuf},
-        process::{Command, Stdio},
-        sync::{Arc, Mutex},
-        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-    };
     use fastpq_isi::{
         find_by_name,
         poseidon::{FIELD_MODULUS as GOLDILOCKS_MODULUS, PoseidonSponge as CpuPoseidonSponge},
@@ -681,6 +671,16 @@ mod harness {
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     use metal::{Device, MTLDeviceLocation};
     use norito::json::{self, Value};
+    use std::{
+        collections::BTreeMap,
+        env, fs,
+        hint::black_box,
+        mem,
+        path::{Path, PathBuf},
+        process::{Command, Stdio},
+        sync::{Arc, Mutex},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    };
     fn debug_env_var(name: &str) -> Option<String> {
         #[cfg(any(test, debug_assertions))]
         {
@@ -2966,8 +2966,8 @@ mod harness {
     }
     #[cfg(test)]
     mod speedup_tests {
-        use fastpq_prover::{KernelKind, KernelStatsSample};
         use super::{Speedup, Summary, poseidon_profiles_value, round3, speedup_value};
+        use fastpq_prover::{KernelKind, KernelStatsSample};
         #[test]
         fn speedup_between_reports_ratio_and_delta() {
             let cpu = Summary::from_samples(&[6.0, 6.0, 6.0]);

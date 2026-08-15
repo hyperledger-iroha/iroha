@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for GET /v1/zk/proof/{backend}/{hash} (`app_api`).
 #![allow(clippy::similar_names)]
-use std::sync::Arc;
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::defaults;
@@ -11,6 +10,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus, VerifyingKeyId};
+use std::sync::Arc;
 use tower::ServiceExt as _;
 fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String, String) {
     let kura = Kura::blank_kura_for_testing();

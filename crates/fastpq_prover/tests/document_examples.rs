@@ -1,6 +1,6 @@
 //! Sanity tests for documentation fixtures.
-use std::convert::TryFrom;
 use norito::json::{self, Value};
+use std::convert::TryFrom;
 fn parse_hex_u64(s: &str) -> u64 {
     let s = s.trim_start_matches("0x");
     u64::from_str_radix(s, 16).expect("hex u64")

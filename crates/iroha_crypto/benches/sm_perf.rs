@@ -1,6 +1,5 @@
 //! Criterion benchmarks comparing SM2/SM3/SM4 primitives against baseline algorithms.
 #![cfg(feature = "sm")]
-use std::{hint::black_box, time::Duration};
 use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit, Nonce, Tag,
     aead::{AeadInOut, inout::InOutBuf},
@@ -11,6 +10,7 @@ use iroha_crypto::{
     sm::{Sm2PrivateKey, Sm3Digest, Sm4Key, SmIntrinsicPolicy},
 };
 use sha2::{Digest, Sha256};
+use std::{hint::black_box, time::Duration};
 fn checked_signature(private_key: &PrivateKey, message: &[u8]) -> Signature {
     Signature::try_new(private_key, message).expect("bench Ed25519 signature should succeed")
 }

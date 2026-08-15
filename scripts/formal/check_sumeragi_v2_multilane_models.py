@@ -442,15 +442,7 @@ _CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS = frozenset(
         "CanonicalExecutedBlockRecovery::accept_response",
     )
 )
-_ALLOWED_MERGED_DUPLICATE_PRODUCTION_BINDINGS = frozenset(
-    {
-        (
-            "SumeragiV2NativeApplicationEvidence",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "run_inner",
-        )
-    }
-)
+_ALLOWED_MERGED_DUPLICATE_PRODUCTION_BINDINGS = frozenset()
 _PRODUCTION_TOKEN_REBINDINGS = {
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
@@ -472,11 +464,6 @@ _PRODUCTION_TOKEN_REBINDINGS = {
         "V2LaneWorkAdapter::has_pending_historical_recovery",
         "Err(_) => true",
     ): "!self.historical_recovery_sessions.is_empty()",
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "run_inner",
-        "service_next_native_participant_recovery_request",
-    ): "service_historical_recovery_tick",
     (
         "crates/iroha_core/src/queue.rs",
         "release_lane_reservations_in_order_inner",
@@ -859,22 +846,13 @@ EXPECTED_RELEASE_INVARIANT_SOURCE_PATHS = {
         "crates/iroha_torii/src/routing.rs",
         "crates/iroha_torii/src/tests/routing.rs",
     ),
-    "ML-MUT-API-02": (
-        "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
-        "python/iroha_torii_client/tests/test_client.py",
-        "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
-        "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift",
-    ),
+    "ML-MUT-API-02": reviewed_source.API_AUTHORITY_SEPARATION_SOURCE_PATHS,
     "ML-MUT-API-03": (
         "ci/run_native_amx_v2_grouped_sdk_parity.sh",
         "fixtures/sumeragi_v2/native_amx_v2_grouped.json",
         "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
     ),
-    "ML-MUT-API-04": (
-        "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
-        "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
-        "ci/check_sumeragi_v2_multilane_release_inventory.sh",
-    ),
+    "ML-MUT-API-04": reviewed_source.FIXTURE_CANONICAL_OWNER_SOURCE_PATHS,
     "ML-MUT-WIRE-01": reviewed_source.WIRE_RELEASE_INVARIANT_SOURCE_PATHS,
 }
 CLOSURE_MUTATION_ID_RE = re.compile(r"`(ML-MUT-[A-Z]+-[0-9]{2})`")
@@ -2334,7 +2312,9 @@ def _validate_closure_mutation_ledger(
             errors.append(
                 f"{mutation_id}: source checks differ from the exact reviewed paths"
             )
-        reviewed_source._validate_wire_release_invariant_source_checks(mutation_id, source_checks, errors)
+        reviewed_source._validate_exact_release_invariant_source_checks(
+            mutation_id, source_checks, errors
+        )
         seen_paths: set[str] = set()
         for check in source_checks:
             if not isinstance(check, dict) or set(check) != {

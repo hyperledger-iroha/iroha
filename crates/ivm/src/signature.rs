@@ -330,12 +330,12 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
 }
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
     use super::{
         Ed25519BatchEntry, Ed25519BatchError, Ed25519BatchItem, Ed25519BatchRequest,
         SignatureScheme, ed25519_challenge_scalar_bytes, verify_ed25519_batch,
         verify_ed25519_batch_items, verify_signature,
     };
+    use ed25519_dalek::{Signer, SigningKey};
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

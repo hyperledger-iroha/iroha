@@ -6,15 +6,15 @@
 //!   and each certificate reaches quorum.
 //! - All peers expose commit certificates for the same height and validator roster,
 //!   while allowing quorum signer subsets to differ.
-use std::{
-    collections::BTreeMap,
-    time::{Duration, Instant},
-};
 use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::{Level, consensus::Qc, isi::Log};
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json;
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 use tokio::{runtime::Runtime, time::sleep};
 const COMMIT_CERT_TIMEOUT: Duration = Duration::from_secs(120);
 const COMMIT_CERT_POLL: Duration = Duration::from_millis(200);

@@ -3,7 +3,6 @@
 //! Each entry records the storage ticket and digest information for a
 //! confidential lane alongside the resolved policy version. Payload bytes are
 //! never kept here; only deterministic metadata derived from commitments.
-use std::collections::{BTreeMap, BTreeSet};
 use iroha_data_model::{
     da::{
         commitment::{DaCommitmentLocation, DaCommitmentRecord},
@@ -13,6 +12,7 @@ use iroha_data_model::{
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
+use std::collections::{BTreeMap, BTreeSet};
 /// Deterministic record for a confidential-compute commitment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfidentialComputeReceipt {
@@ -132,6 +132,7 @@ impl ConfidentialComputeStore {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
@@ -140,7 +141,6 @@ mod tests {
         },
         nexus::LaneId,
     };
-    use super::*;
     fn policy(version: u32) -> ConfidentialComputePolicy {
         ConfidentialComputePolicy::new(
             ConfidentialComputeMechanism::Encryption,

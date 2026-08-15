@@ -1,7 +1,7 @@
-#[cfg(feature = "json")]
-use norito::json::{FastJsonWrite, JsonSerialize};
 use super::*;
 use crate::runtime::RuntimeUpgradeId;
+#[cfg(feature = "json")]
+use norito::json::{FastJsonWrite, JsonSerialize};
 isi! {
     /// Propose a runtime upgrade by submitting a manifest.
     pub struct ProposeRuntimeUpgrade {
@@ -159,8 +159,8 @@ impl FastJsonWrite for CancelRuntimeUpgrade {
 }
 #[cfg(test)]
 mod tests {
-    use norito::core::DecodeFromSlice;
     use super::*;
+    use norito::core::DecodeFromSlice;
     #[cfg(feature = "json")]
     fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         let legacy = norito::json::to_json(value).expect("serialize legacy JSON");

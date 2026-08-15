@@ -8,11 +8,6 @@
 //! bucket; otherwise the bucket is surfaced as suppressed so downstream
 //! dashboards can reason about withheld windows without leaking per-relay
 //! details.
-use std::{
-    collections::{BTreeMap, VecDeque, btree_map::Entry},
-    sync::Mutex,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use blake3::Hasher as Blake3Hasher;
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetGarAbuseCountV1, SoranetGarAbuseShareV1, SoranetLatencyPercentileV1,
@@ -22,6 +17,11 @@ use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyThrottleScopeV1,
 };
 use norito::json;
+use std::{
+    collections::{BTreeMap, VecDeque, btree_map::Entry},
+    sync::Mutex,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 /// Percentiles exposed for RTT measurements.
 /// Percentile configuration expressed as a rational ratio.
@@ -149,9 +149,9 @@ impl Default for PrivacyBucketConfig {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, time::Duration};
-    use iroha_data_model::soranet::privacy_metrics::SoranetPrivacyModeV1;
     use super::*;
+    use iroha_data_model::soranet::privacy_metrics::SoranetPrivacyModeV1;
+    use std::{collections::BTreeMap, time::Duration};
     fn base_config() -> PrivacyBucketConfig {
         PrivacyBucketConfig {
             bucket_secs: 1,

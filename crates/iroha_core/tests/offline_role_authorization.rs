@@ -1,5 +1,4 @@
 //! Public-boundary tests for Offline role-derived authorization.
-use std::{collections::BTreeSet, num::NonZeroU64};
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -16,6 +15,7 @@ use iroha_data_model::{
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
+use std::{collections::BTreeSet, num::NonZeroU64};
 const POLICY_PERMISSION: &str = "CanManageOfflineDeviceAttestationPolicy";
 const ESCROW_PERMISSION: &str = "CanManageOfflineEscrow";
 const POLICY_STATE_KEY: &str = "offline_device_attestation_policy";

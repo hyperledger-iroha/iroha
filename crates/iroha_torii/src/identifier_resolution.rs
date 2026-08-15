@@ -1,11 +1,4 @@
 //! Identifier resolution service plumbing for app-facing endpoints.
-use std::{
-    collections::BTreeMap,
-    fmt,
-    sync::{Arc, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
-    vec::Vec,
-};
 use iroha_crypto::{
     BfvIdentifierCiphertext, BfvIdentifierPublicParameters, BfvProgrammedPublicParameters,
     BfvRamProgramProfile, ClientRequest, EvalResponse, Hash, HiddenRamFheProgram, KeyPair,
@@ -25,6 +18,13 @@ use iroha_data_model::{
         RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
         RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
     },
+};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::{Arc, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
+    vec::Vec,
 };
 use thiserror::Error;
 struct ProgramRuntime {
@@ -511,7 +511,7 @@ pub(crate) fn program_id_bytes(program_id: &RamLfeProgramId) -> Vec<u8> {
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use super::*;
     use iroha_crypto::{
         Algorithm, BfvEvaluationKeyBundle, Hash, PolicyCommitment, RamLfeBackend,
         RamLfeVerificationMode, Signature, SignatureOf,
@@ -520,13 +520,13 @@ mod tests {
         ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
         try_bfv_programmed_public_parameters_with_program,
     };
-    use sha2::{Digest as _, Sha256};
     use iroha_data_model::ram_lfe::{
         RamLfeOutputOpening, RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramPolicy,
         RamLfeReceiptAttestation,
     };
     use norito::codec::Encode as _;
-    use super::*;
+    use sha2::{Digest as _, Sha256};
+    use std::str::FromStr;
     fn checked_fixture_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(seed, algorithm).expect("test fixture key derivation should succeed")
     }

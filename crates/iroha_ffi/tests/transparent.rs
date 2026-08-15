@@ -1,10 +1,10 @@
 //! Transparent type FFI tests.
 #![allow(unsafe_code)]
-use std::{marker::PhantomData, mem::MaybeUninit};
 use iroha_ffi::{
     FfiConvert, FfiOutPtrRead, FfiReturn, FfiType, ffi_export,
     slice::{OutBoxedSlice, RefSlice},
 };
+use std::{marker::PhantomData, mem::MaybeUninit};
 /// Transparent wrapper over `u64` with a phantom parameter.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, FfiType)]
 #[ffi_type(unsafe{robust})]

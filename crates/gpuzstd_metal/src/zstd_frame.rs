@@ -1,9 +1,9 @@
-use std::sync::OnceLock;
 use crate::{
     GpuZstdSequence,
     fse::{self, FseCTable, FseDTable},
     huffman::{self, HuffmanError, HuffmanTable},
 };
+use std::sync::OnceLock;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZstdEncodeError {
     InvalidInput,

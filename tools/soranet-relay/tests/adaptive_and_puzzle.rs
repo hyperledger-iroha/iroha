@@ -1,10 +1,3 @@
-use std::{
-    net::SocketAddr,
-    num::NonZeroU32,
-    sync::Arc,
-    thread,
-    time::{Duration, Instant},
-};
 use iroha_crypto::soranet::{
     handshake::DEFAULT_DESCRIPTOR_COMMIT,
     pow::Parameters as PowParameters,
@@ -17,6 +10,13 @@ use soranet_relay::{
     },
     dos::{DoSControls, ThrottleReason},
     metrics::Metrics,
+};
+use std::{
+    net::SocketAddr,
+    num::NonZeroU32,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
 };
 #[test]
 fn adaptive_difficulty_escalates_after_repeated_failures() {

@@ -1,9 +1,8 @@
 //! Canonical native FCMP++ prover.
 //!
-//! The public API accepts an output-opening and a complete alternating tree
-//! path for each input.  Re-randomization, branch blinding, divisor
-//! construction, both arithmetic-circuit proofs, SAL, root-blind proof, and
-//! IFC1 framing are all produced here; callers cannot inject opaque
+//! The public API accepts an output-opening and a complete alternating tree path for each input.
+//! Re-randomization, branch blinding, divisor construction, both arithmetic-circuit proofs, SAL,
+//! root-blind proof, and IFC1 framing are all produced here; callers cannot inject opaque
 //! precomputed circuit witnesses.
 #[cfg(test)]
 use super::field::edwards_to_wei25519;
@@ -492,10 +491,9 @@ fn ct_all_match_by<T, U>(
 }
 /// Require an already allocated slot before a private value is constructed.
 ///
-/// Calling this immediately before sampling/preparing and pushing a secret
-/// prevents `Vec::push` from copying previously inserted secrets during a
-/// growth operation. The caller's count is public, so capacity exhaustion is
-/// an arithmetic invariant rather than a secret-dependent branch.
+/// Calling this immediately before sampling/preparing and pushing a secret prevents `Vec::push`
+/// from copying previously inserted secrets during a growth operation. The caller's count is
+/// public, so capacity exhaustion is an arithmetic invariant rather than a secret-dependent branch.
 fn require_preallocated_push(
     current_len: usize,
     allocation_capacity: usize,
@@ -750,8 +748,7 @@ fn prover_secret_decode_nonzero_edwards_scalar_v1(
     }
     Ok(scalar)
 }
-/// Caller-selected rerandomization witness for one authoritative FCMP++
-/// public input.
+/// Caller-selected rerandomization witness for one authoritative FCMP++ public input.
 ///
 /// These values must be chosen with a cryptographically secure RNG before the
 /// typed statement is hashed. Keeping them explicit makes O~/I~/R/C~/L
@@ -859,11 +856,10 @@ impl core::fmt::Debug for FcmpInputRerandomizationV1 {
 }
 /// Secret input and complete tree path for the native FCMP++ prover.
 ///
-/// `additional_branches[0]` is the second-layer Helios branch (up to 18
-/// canonical Helioselene-field elements), index 1 is the third-layer Selene
-/// branch (up to 38 Field25519 elements), and the curves continue
-/// alternating. The last branch is the shared root branch. Missing capacity
-/// is canonically padded with zero by the prover.
+/// `additional_branches[0]` is the second-layer Helios branch (up to 18 canonical Helioselene-field
+/// elements), index 1 is the third-layer Selene branch (up to 38 Field25519 elements), and the
+/// curves continue alternating. The last branch is the shared root branch. Missing capacity is
+/// canonically padded with zero by the prover.
 pub struct FcmpProverInputV1 {
     output: FcmpOutputTupleV1,
     spend_x: Scalar,
@@ -1084,13 +1080,11 @@ impl FcmpProverInputV1 {
             key_image.expose_copy(),
         )
     }
-    /// Borrow the complete canonical origin set used by a non-shipping release
-    /// fixture.
+    /// Borrow the complete canonical origin set used by a non-shipping release fixture.
     ///
-    /// This is intentionally crate-private and feature-gated: production
-    /// wallets retain their own output set, while the release network builder
-    /// needs the public tuples to construct the exact authoritative bootstrap
-    /// without exposing any spend witness.
+    /// This is intentionally crate-private and feature-gated: production wallets retain their own
+    /// output set, while the release network builder needs the public tuples to construct the exact
+    /// authoritative bootstrap without exposing any spend witness.
     #[cfg(feature = "privacy-release-evidence")]
     pub(crate) fn release_origin_outputs_v1(&self) -> &[FcmpOutputTupleV1] {
         &self.leaves
@@ -2517,15 +2511,13 @@ fn preflight_fcmp_plus_plus_v1(
 }
 /// Prove a complete first-release FCMP++ statement in native Rust.
 ///
-/// Each input supplies its statement-visible rerandomization witness; all
-/// zero-knowledge proof nonces and vector-commitment masks are sampled
-/// internally. The supplied paths must resolve exactly to `root`, and all
-/// input paths must use the same canonical root branch. A transcript challenge
-/// can exhaust the public exceptional-point sampler or hit a hidden dlog
-/// denominator pole, exhaust its non-zero transcript challenge sampler, or
-/// produce an identity inner-product round point with negligible probability;
-/// the prover rebuilds the commitments and transcript with fresh randomness at
-/// a fixed bound instead of exposing an honest-abort failure.
+/// Each input supplies its statement-visible rerandomization witness; all zero-knowledge proof
+/// nonces and vector-commitment masks are sampled internally. The supplied paths must resolve
+/// exactly to `root`, and all input paths must use the same canonical root branch. A transcript
+/// challenge can exhaust the public exceptional-point sampler or hit a hidden dlog denominator
+/// pole, exhaust its non-zero transcript challenge sampler, or produce an identity inner-product
+/// round point with negligible probability; the prover rebuilds the commitments and transcript with
+/// fresh randomness at a fixed bound instead of exposing an honest-abort failure.
 pub fn prove_fcmp_plus_plus_v1(
     rng: &mut (impl RngCore + CryptoRng),
     context_hash: [u8; 32],

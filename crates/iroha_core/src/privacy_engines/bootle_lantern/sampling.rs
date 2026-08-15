@@ -6,18 +6,6 @@
 //! different roles.  Every probability is evaluated in Q256, every decision
 //! consumes one explicitly big-endian 256-bit draw, and every retry loop has a
 //! fixed public ceiling.
-use std::sync::OnceLock;
-use p256::elliptic_curve::bigint::{Encoding as _, Limb, NonZero, U256, U512, U1024};
-use rand_core_06::{CryptoRng, RngCore};
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
-use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
-use crate::privacy_engines::prover_randomness::{
-    CURVE_PROVER_RANDOMNESS_POLICY_V1, HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
-};
 use super::{
     params::{
         APPLICATION_RING_DEGREE_V1, GAUSSIAN_SIGMA_DENOMINATOR_V1, GAUSSIAN_SIGMA_NUMERATOR_V1,
@@ -28,6 +16,18 @@ use super::{
     },
     ring::ProofPolynomialV1,
 };
+use crate::privacy_engines::prover_randomness::{
+    CURVE_PROVER_RANDOMNESS_POLICY_V1, HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
+};
+use p256::elliptic_curve::bigint::{Encoding as _, Limb, NonZero, U256, U512, U1024};
+use rand_core_06::{CryptoRng, RngCore};
+use sha3::{
+    Shake256,
+    digest::{ExtendableOutput, Update, XofReader},
+};
+use std::sync::OnceLock;
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 const RANDOMNESS_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.prover-randomness.v1";
 const SAMPLING_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.sampling-profile-digest.v1";

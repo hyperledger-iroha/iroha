@@ -68,6 +68,104 @@ printf 'OpenAPI cooperative cancellation marker: %s\n' \
 
 CONFIGURED_ALLOWED_SIGNERS_PATH="${OPENAPI_ALLOWED_SIGNERS_FILE:-artifacts/openapi/allowed_signers.json}"
 REQUIRE_SIGNED="${OPENAPI_REQUIRE_SIGNED:-0}"
+SEALED_WORKTREE="${IROHA_RELEASE_SEALED_WORKTREE:-0}"
+
+case "${SEALED_WORKTREE}" in
+  0|1) ;;
+  *)
+    echo "error: IROHA_RELEASE_SEALED_WORKTREE must be 0 or 1." >&2
+    exit 2
+    ;;
+esac
+
+if [[ "${SEALED_WORKTREE}" == 1 ]]; then
+  if [[ -z "${OPENAPI_NODE_MODULES_ROOT:-}" \
+    || -z "${IROHA_RELEASE_SDK_INPUT_ROOT:-}" \
+    || "${OPENAPI_NODE_MODULES_ROOT}" \
+      != "${IROHA_RELEASE_SDK_INPUT_ROOT}/openapi/node_modules" ]]; then
+    echo "error: sealed OpenAPI replay requires its exact authenticated private Node dependency root." >&2
+    exit 2
+  fi
+  OPENAPI_PYTHON_BIN="${IROHA_RELEASE_PYTHON_BIN:-}"
+  if [[ "${OPENAPI_PYTHON_BIN}" != /* || ! -x "${OPENAPI_PYTHON_BIN}" ]]; then
+    echo "error: sealed OpenAPI replay requires the protected Python executable." >&2
+    exit 2
+  fi
+  OPENAPI_NODE_BIN="${OPENAPI_NODE_BIN:-}"
+  if [[ -z "${IROHA_RELEASE_NODE_BIN:-}" \
+    || "${OPENAPI_NODE_BIN}" != "${IROHA_RELEASE_NODE_BIN}" \
+    || "${OPENAPI_NODE_BIN}" \
+      != "${IROHA_RELEASE_INVOCATION_ROOT:-}/runtime/bin/node" ]]; then
+    echo "error: sealed OpenAPI replay requires the exact protected Node executable." >&2
+    exit 2
+  fi
+else
+  OPENAPI_NODE_MODULES_ROOT="${OPENAPI_NODE_MODULES_ROOT:-${REPO_ROOT}/tools/openapi/node_modules}"
+  OPENAPI_PYTHON_BIN="${PYTHON_BIN:-python3}"
+  if [[ -z "${OPENAPI_PYTHON_BIN}" ]] \
+    || ! command -v "${OPENAPI_PYTHON_BIN}" >/dev/null 2>&1; then
+    echo "error: OpenAPI replay requires Python 3." >&2
+    exit 2
+  fi
+  OPENAPI_NODE_BIN="${OPENAPI_NODE_BIN:-$(command -v node || true)}"
+  if [[ -n "${OPENAPI_NODE_BIN}" ]]; then
+    OPENAPI_NODE_BIN="$(
+      "${OPENAPI_PYTHON_BIN}" -I -S -c \
+        'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+        "${OPENAPI_NODE_BIN}"
+    )" || {
+      echo "error: OpenAPI Node executable could not be resolved." >&2
+      exit 2
+    }
+  fi
+fi
+if [[ "${OPENAPI_NODE_BIN}" != /* \
+  || ! -f "${OPENAPI_NODE_BIN}" \
+  || -L "${OPENAPI_NODE_BIN}" \
+  || ! -x "${OPENAPI_NODE_BIN}" ]]; then
+  echo "error: OpenAPI Node executable must be an absolute executable regular file." >&2
+  exit 2
+fi
+"${OPENAPI_PYTHON_BIN}" -I -S - "${OPENAPI_NODE_BIN}" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+path = Path(sys.argv[1])
+metadata = path.lstat()
+if (
+    path.resolve(strict=True) != path
+    or not stat.S_ISREG(metadata.st_mode)
+    or stat.S_ISLNK(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or metadata.st_nlink != 1
+    or metadata.st_mode & 0o111 == 0
+):
+    raise SystemExit("OpenAPI Node executable metadata is unsafe")
+PY
+if [[ "${OPENAPI_NODE_MODULES_ROOT}" != /* \
+  || ! -d "${OPENAPI_NODE_MODULES_ROOT}" \
+  || -L "${OPENAPI_NODE_MODULES_ROOT}" ]]; then
+  echo "error: OpenAPI Node dependency root must be an absolute regular directory." >&2
+  exit 2
+fi
+OPENAPI_NODE_MODULES_ROOT="$({
+  "${OPENAPI_PYTHON_BIN}" -I -S - "${OPENAPI_NODE_MODULES_ROOT}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+resolved = path.resolve(strict=True)
+if path != resolved:
+    raise SystemExit("OpenAPI Node dependency root must be canonical")
+print(resolved)
+PY
+} 2>/dev/null)" || {
+  echo "error: OpenAPI Node dependency root must be absolute and canonical." >&2
+  exit 2
+}
+readonly OPENAPI_NODE_BIN OPENAPI_NODE_MODULES_ROOT OPENAPI_PYTHON_BIN SEALED_WORKTREE
 
 case "${REQUIRE_SIGNED}" in
   0|1) ;;
@@ -123,7 +221,7 @@ require_clean_checkout() {
 
 stage_replay_openapi_dependencies() {
   local source_root="$1"
-  local source="${REPO_ROOT}/tools/openapi/node_modules"
+  local source="${OPENAPI_NODE_MODULES_ROOT}"
   local target="${source_root}/tools/openapi/node_modules"
   if [[ ! -d "${source}" || -L "${source}" ]]; then
     echo "error: install the pinned OpenAPI dependency graph before replay." >&2
@@ -137,16 +235,163 @@ stage_replay_openapi_dependencies() {
     echo "error: installed OpenAPI dependency graph must not contain symlinks." >&2
     exit 1
   fi
-  if ! npm --prefix "${REPO_ROOT}/tools/openapi" ls --all --omit=dev --json >/dev/null; then
-    echo "error: installed OpenAPI dependency graph does not match its lockfile." >&2
-    exit 1
-  fi
   mkdir "${target}"
   cp -R "${source}/." "${target}/"
   if ! diff -qr "${source}" "${target}" >/dev/null; then
     echo "error: immutable OpenAPI replay dependency copy is not exact." >&2
     exit 1
   fi
+  "${OPENAPI_PYTHON_BIN}" -I -S - \
+    "${source_root}/tools/openapi/package.json" \
+    "${source_root}/tools/openapi/package-lock.json" \
+    "${target}/.package-lock.json" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+package_path, source_lock_path, installed_lock_path = map(Path, sys.argv[1:])
+try:
+    package = json.loads(package_path.read_bytes())
+    source_lock = json.loads(source_lock_path.read_bytes())
+    installed_lock = json.loads(installed_lock_path.read_bytes())
+except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit("OpenAPI package metadata or installed lock is malformed") from error
+if not all(isinstance(value, dict) for value in (package, source_lock, installed_lock)):
+    raise SystemExit("OpenAPI package metadata or installed lock is not an object")
+source_packages = source_lock.get("packages")
+installed_packages = installed_lock.get("packages")
+root_policy_names = (
+    "name", "version", "license", "dependencies", "devDependencies",
+    "optionalDependencies", "peerDependencies", "peerDependenciesMeta",
+    "engines", "os", "cpu", "bin", "workspaces",
+)
+package_policy = {
+    name: package[name] for name in root_policy_names if name in package
+}
+if (
+    package.get("private") is not True
+    or not isinstance(package.get("name"), str)
+    or not isinstance(package.get("version"), str)
+    or source_lock.get("lockfileVersion") != 3
+    or installed_lock.get("lockfileVersion") != 3
+    or source_lock.get("name") != package["name"]
+    or source_lock.get("version") != package["version"]
+    or (source_lock.get("name"), source_lock.get("version"))
+    != (installed_lock.get("name"), installed_lock.get("version"))
+    or not isinstance(source_packages, dict)
+    or not isinstance(installed_packages, dict)
+    or "" not in source_packages
+    or source_packages[""] != package_policy
+    or not installed_packages
+    or installed_packages
+    != {name: value for name, value in source_packages.items() if name}
+):
+    raise SystemExit(
+        "OpenAPI package.json, package-lock.json, and installed package map differ"
+    )
+PY
+  if ! diff -qr "${source}" "${target}" >/dev/null; then
+    echo "error: authenticated OpenAPI dependency source changed during staging." >&2
+    exit 1
+  fi
+}
+
+openapi_dependency_state() {
+  local dependency_root="${1:-${OPENAPI_NODE_MODULES_ROOT}}"
+  "${OPENAPI_PYTHON_BIN}" -I -S - "${dependency_root}" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import stat
+import sys
+
+root = Path(sys.argv[1])
+euid = os.geteuid()
+
+
+def identity(metadata):
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_uid,
+        metadata.st_nlink,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def paths():
+    return [root, *sorted(root.rglob("*"))]
+
+
+members = paths()
+records = []
+identities = {}
+for path in members:
+    before = path.lstat()
+    relative = "." if path == root else path.relative_to(root).as_posix()
+    if stat.S_ISLNK(before.st_mode):
+        raise SystemExit("OpenAPI Node dependency root contains a symlink")
+    if before.st_uid != euid:
+        raise SystemExit("OpenAPI Node dependency root has the wrong owner")
+    fingerprint = identity(before)
+    identities[relative] = fingerprint
+    metadata_record = [
+        before.st_dev, before.st_ino, before.st_uid, before.st_nlink,
+        before.st_mode & 0o7777, before.st_size,
+        before.st_mtime_ns, before.st_ctime_ns,
+    ]
+    if stat.S_ISDIR(before.st_mode):
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            if identity(os.fstat(descriptor)) != fingerprint:
+                raise SystemExit("OpenAPI Node dependency directory changed while opened")
+        finally:
+            os.close(descriptor)
+        records.append([relative, "directory", *metadata_record])
+    elif stat.S_ISREG(before.st_mode):
+        if before.st_nlink != 1:
+            raise SystemExit("OpenAPI Node dependency root contains a hard-linked file")
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        digest = hashlib.sha256()
+        try:
+            if identity(os.fstat(descriptor)) != fingerprint:
+                raise SystemExit("OpenAPI Node dependency file changed while opened")
+            while block := os.read(descriptor, 1024 * 1024):
+                digest.update(block)
+            if identity(os.fstat(descriptor)) != fingerprint:
+                raise SystemExit("OpenAPI Node dependency file changed while read")
+        finally:
+            os.close(descriptor)
+        if identity(path.lstat()) != fingerprint:
+            raise SystemExit("OpenAPI Node dependency file changed after read")
+        records.append([
+            relative, "file", *metadata_record, digest.hexdigest(),
+        ])
+    else:
+        raise SystemExit("OpenAPI Node dependency root contains a special file")
+after_members = paths()
+if [path.relative_to(root).as_posix() if path != root else "." for path in members] != [
+    path.relative_to(root).as_posix() if path != root else "." for path in after_members
+]:
+    raise SystemExit("OpenAPI Node dependency membership changed during snapshot")
+for path in after_members:
+    relative = "." if path == root else path.relative_to(root).as_posix()
+    if identity(path.lstat()) != identities[relative]:
+        raise SystemExit("OpenAPI Node dependency metadata changed during snapshot")
+print(hashlib.sha256(json.dumps(
+    records, ensure_ascii=True, separators=(",", ":"),
+).encode("ascii")).hexdigest())
+PY
 }
 
 verify_replay_source_identity() {
@@ -182,7 +427,7 @@ create_replay_source() {
   git clone --quiet --local --no-hardlinks --no-checkout \
     "${REPO_ROOT}" "${source_root}"
   git -C "${source_root}" checkout --quiet --detach "${REPLAY_COMMIT}"
-  GIT_OPTIONAL_LOCKS=0 node --input-type=module - \
+  GIT_OPTIONAL_LOCKS=0 "${OPENAPI_NODE_BIN}" --input-type=module - \
     "${source_root}" \
     "${REPO_ROOT}/Cargo.lock" <<'NODE'
 import {realpath} from 'node:fs/promises';
@@ -242,7 +487,7 @@ sync_unsigned_replay_bundle() {
   local source_root="$1"
   local output_dir="$2"
   local allowed_signers_path="$3"
-  GIT_OPTIONAL_LOCKS=0 node --input-type=module - \
+  GIT_OPTIONAL_LOCKS=0 "${OPENAPI_NODE_BIN}" --input-type=module - \
     "${source_root}" \
     "${output_dir}" \
     "${allowed_signers_path}" <<'NODE'
@@ -409,11 +654,30 @@ EOF
 }
 
 require_clean_checkout
+OPENAPI_DEPENDENCY_STATE_BEFORE="$(openapi_dependency_state)"
+if [[ ! "${OPENAPI_DEPENDENCY_STATE_BEFORE}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "error: authenticated OpenAPI dependency state is invalid." >&2
+  exit 1
+fi
+readonly OPENAPI_DEPENDENCY_STATE_BEFORE
 REPLAY_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --verify "HEAD^{commit}")"
 REPLAY_TREE="$(git -C "${REPO_ROOT}" rev-parse --verify "${REPLAY_COMMIT}^{tree}")"
 release_gate_boundary "openapi:before-source-mirrors"
 create_replay_source "${REPLAY_SOURCE_FIRST}"
 create_replay_source "${REPLAY_SOURCE_SECOND}"
+OPENAPI_REPLAY_FIRST_DEPENDENCY_STATE_BEFORE="$(
+  openapi_dependency_state "${REPLAY_SOURCE_FIRST}/tools/openapi/node_modules"
+)"
+OPENAPI_REPLAY_SECOND_DEPENDENCY_STATE_BEFORE="$(
+  openapi_dependency_state "${REPLAY_SOURCE_SECOND}/tools/openapi/node_modules"
+)"
+if [[ ! "${OPENAPI_REPLAY_FIRST_DEPENDENCY_STATE_BEFORE}" =~ ^[0-9a-f]{64}$ \
+  || ! "${OPENAPI_REPLAY_SECOND_DEPENDENCY_STATE_BEFORE}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "error: staged OpenAPI dependency state is invalid." >&2
+  exit 1
+fi
+readonly OPENAPI_REPLAY_FIRST_DEPENDENCY_STATE_BEFORE
+readonly OPENAPI_REPLAY_SECOND_DEPENDENCY_STATE_BEFORE
 require_clean_checkout
 
 OPENAPI_DIR="${REPLAY_SOURCE_FIRST}/artifacts/openapi"
@@ -448,7 +712,8 @@ done
 # sealed candidate mirror used by every Cargo gate below.
 (
   cd "${REPLAY_SOURCE_FIRST}"
-  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-musubi-v1-contract.mjs
+  GIT_OPTIONAL_LOCKS=0 "${OPENAPI_NODE_BIN}" \
+    tools/openapi/scripts/verify-musubi-v1-contract.mjs
 )
 
 if ! diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}" >/dev/null; then
@@ -460,11 +725,13 @@ fi
 
 (
   cd "${REPLAY_SOURCE_FIRST}"
-  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-openapi-release-inputs.mjs \
+  GIT_OPTIONAL_LOCKS=0 "${OPENAPI_NODE_BIN}" \
+    tools/openapi/scripts/verify-openapi-release-inputs.mjs \
     >"${RELEASE_INPUT_SUMMARY_FIRST}"
   GIT_OPTIONAL_LOCKS=0 python3 scripts/check_sorafs_release_version_map.py \
     >"${VERSION_MAP_SUMMARY_FIRST}"
-  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-openapi-versions.mjs
+  GIT_OPTIONAL_LOCKS=0 "${OPENAPI_NODE_BIN}" \
+    tools/openapi/scripts/verify-openapi-versions.mjs
 )
 
 # Load the static authority through live Torii routers in two independent,
@@ -539,11 +806,14 @@ run_xtask_in_repo \
 
 (
   cd "${REPLAY_SOURCE_FIRST}"
-  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-openapi-versions.mjs
-  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/check-openapi-signatures.mjs \
+  GIT_OPTIONAL_LOCKS=0 "${OPENAPI_NODE_BIN}" \
+    tools/openapi/scripts/verify-openapi-versions.mjs
+  GIT_OPTIONAL_LOCKS=0 "${OPENAPI_NODE_BIN}" \
+    tools/openapi/scripts/check-openapi-signatures.mjs \
     --allowed-signers="${ALLOWED_SIGNERS_PATH}" \
     "${SIGNATURE_VERIFY_POLICY_ARGS[@]}"
-  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-openapi-release-inputs.mjs \
+  GIT_OPTIONAL_LOCKS=0 "${OPENAPI_NODE_BIN}" \
+    tools/openapi/scripts/verify-openapi-release-inputs.mjs \
     >"${RELEASE_INPUT_SUMMARY_SECOND}"
   GIT_OPTIONAL_LOCKS=0 python3 scripts/check_sorafs_release_version_map.py \
     >"${VERSION_MAP_SUMMARY_SECOND}"
@@ -570,6 +840,24 @@ verify_replay_source_identity "${REPLAY_SOURCE_SECOND}"
 if ! cmp -s "${REPO_ROOT}/Cargo.lock" "${REPLAY_SOURCE_FIRST}/Cargo.lock" || \
    ! cmp -s "${REPLAY_SOURCE_FIRST}/Cargo.lock" "${REPLAY_SOURCE_SECOND}/Cargo.lock"; then
   echo "error: immutable OpenAPI replay Cargo.lock identity changed between checkpoints." >&2
+  exit 1
+fi
+OPENAPI_DEPENDENCY_STATE_AFTER="$(openapi_dependency_state)"
+if [[ "${OPENAPI_DEPENDENCY_STATE_AFTER}" != "${OPENAPI_DEPENDENCY_STATE_BEFORE}" ]]; then
+  echo "error: authenticated OpenAPI dependency source changed across both mirror replays." >&2
+  exit 1
+fi
+OPENAPI_REPLAY_FIRST_DEPENDENCY_STATE_AFTER="$(
+  openapi_dependency_state "${REPLAY_SOURCE_FIRST}/tools/openapi/node_modules"
+)"
+OPENAPI_REPLAY_SECOND_DEPENDENCY_STATE_AFTER="$(
+  openapi_dependency_state "${REPLAY_SOURCE_SECOND}/tools/openapi/node_modules"
+)"
+if [[ "${OPENAPI_REPLAY_FIRST_DEPENDENCY_STATE_AFTER}" \
+    != "${OPENAPI_REPLAY_FIRST_DEPENDENCY_STATE_BEFORE}" \
+  || "${OPENAPI_REPLAY_SECOND_DEPENDENCY_STATE_AFTER}" \
+    != "${OPENAPI_REPLAY_SECOND_DEPENDENCY_STATE_BEFORE}" ]]; then
+  echo "error: staged OpenAPI dependency input changed during mirror replay." >&2
   exit 1
 fi
 require_clean_checkout
@@ -601,3 +889,7 @@ with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
     output.write("\n")
 PY
 release_gate_boundary "openapi:after-completion-publication"
+printf 'openapi-two-mirror-replay status=success candidate_oid=%s candidate_tree=%s mirrors=2 artifacts=5 require_signed=%s\n' \
+  "${REPLAY_COMMIT}" \
+  "${REPLAY_TREE}" \
+  "${REQUIRE_SIGNED}"

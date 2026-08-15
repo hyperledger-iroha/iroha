@@ -3,7 +3,7 @@
 //! Aggregate state is stored under one durable key.  The compiler emits a
 //! preorder schema, while the host converts the VM's flattened word table into
 //! a canonical Norito record bound to that schema.
-use std::io::{self, Write};
+use crate::pointer_abi::PointerType;
 use iroha_crypto::Hash;
 #[cfg(test)]
 use norito::core::serialize_to_buffer;
@@ -14,7 +14,7 @@ use norito::{
         serialize_to_writer,
     },
 };
-use crate::pointer_abi::PointerType;
+use std::io::{self, Write};
 /// Domain separator for hashes binding stored records to exact state schemas.
 pub const STATE_VALUE_SCHEMA_HASH_DOMAIN_V1: &[u8] = b"KOTODAMA_STATE_VALUE_SCHEMA_V1\0";
 /// Nominal Norito schema name for compiler-emitted durable-value schemas.

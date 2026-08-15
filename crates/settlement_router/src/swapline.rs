@@ -1,10 +1,10 @@
 //! Repo/reverse-repo style swap lines that supplement AMM liquidity.
+use crate::{Numeric, NumericOperationError, RoundingMode, XorQuantity, XorQuantityError};
 use derive_more::{Display, From};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
 };
-use crate::{Numeric, NumericOperationError, RoundingMode, XorQuantity, XorQuantityError};
 /// Uniquely identifies a swap line (per dataspace and collateral flavour).
 #[derive(
     Clone,

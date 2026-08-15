@@ -55,8 +55,8 @@ pub fn clear() {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, MutexGuard, OnceLock};
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
     fn report_test_guard() -> MutexGuard<'static, ()> {
         static REPORT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         REPORT_TEST_LOCK

@@ -1,0 +1,105 @@
+# __SORACLOUD_APP_NAME__ Single-API App Template
+
+This template provides:
+
+- `web/` root-bound Vue frontend intended for publication on the app hostname
+- `services/api/` deterministic IVM API bundle plus a local dev shim
+- `app_manifest.json` wiring both surfaces together
+- `dev.sh` to boot the frontend plus the local API shim
+- `build-and-sync.sh` to rebuild every artifact and refresh manifest hashes
+- `deploy.sh` to run the full publish + deploy flow from one command
+- `upgrade.sh` to rebuild, resync, and submit the app-wide upgrade flow
+
+## Local dev
+
+```bash
+./dev.sh
+```
+
+This starts the frontend dev server on `http://127.0.0.1:5173` and the API dev
+shim on `http://127.0.0.1:8787`. The generated Vite config keeps `/api`
+same-host and proxies it to the local API shim.
+
+The CLI can resolve and run the same manifest-adjacent entrypoint:
+
+```bash
+iroha soracloud app dev --manifest ./app_manifest.json --dry-run
+iroha soracloud app dev --manifest ./app_manifest.json
+```
+
+`iroha soracloud app plan --manifest ./app_manifest.json` also prints
+the root `manifest_path`, root `hostname`, the resolved child manifest paths,
+child `workspace_dir`, and child service scripts for service-scoped Soracloud
+commands.
+
+## Build everything
+
+```bash
+./build-and-sync.sh
+iroha soracloud app build --manifest ./app_manifest.json --dry-run
+iroha soracloud app build --manifest ./app_manifest.json
+```
+
+`build-and-sync.sh` runs the frontend build, `services/api/./build.sh`, and
+`services/api/./verify-build.sh` before refreshing manifest hashes.
+
+The root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`, then explicit source checkout settings (`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`), so single-API app
+workspaces can target a local `iroha_cli` checkout without requiring a
+globally installed source wrapper. If you are driving the fallback through
+`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`, set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to
+keep Cargo package and artifact state isolated from other local builds.
+
+The app manifest references `services/api/build/api-service.to`, so the app-wide
+sync path updates the bundle hash automatically.
+
+## Publish + deploy
+
+```bash
+TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+iroha soracloud app doctor --manifest ./app_manifest.json --dry-run
+iroha soracloud app doctor --manifest ./app_manifest.json
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud app deploy --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud app deploy --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+```
+
+Direct `iroha soracloud app deploy` responses keep the root
+`manifest_path`, root `hostname`, root `workspace_dir`, root
+`workspace_scripts`, the frontend publish projection, one manifest-derived
+child service entry per app service, and the top-level `routes` split that
+`app plan` reports.
+
+## Upgrade
+
+```bash
+TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
+iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+```
+
+Direct `iroha soracloud app upgrade` responses keep the same root
+manifest/hostname/workspace metadata, frontend, service, and top-level
+`routes` projection as app deploy.
+
+## Inspect deployed status
+
+```bash
+iroha soracloud app status --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+```
+
+`app status` keeps one entry per child service manifest and reports the child
+manifest paths, the root `manifest_path`, root `hostname`, root
+`workspace_dir`, root `workspace_scripts`, plane/runtime, route prefix, the
+top-level mixed `routes` split, the frontend publish projection, and the
+matched Torii control-plane status when present.
+
+Service-scoped Soracloud commands still operate on the child API manifests at
+`services/api/container_manifest.json` plus `services/api/service_manifest.json`.
+
+When those commands are driven by `--container` plus `--service`, their
+responses also attach the same local `service_plan` projection that
+`iroha soracloud service plan` reports.
+
+The frontend stays bound at `https://__SORACLOUD_PACKAGE_NAME__.sora/`, and the API stays on
+the same host under `https://__SORACLOUD_PACKAGE_NAME__.sora/api/healthz`.

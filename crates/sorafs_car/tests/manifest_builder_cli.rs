@@ -1,7 +1,7 @@
 //! CLI regression tests for the SoraFS manifest builder.
 #![cfg(feature = "cli")]
-use std::{env, fs, path::PathBuf};
 use assert_cmd::cargo::cargo_bin_cmd;
+use std::{env, fs, path::PathBuf};
 use tempfile::{Builder, TempDir};
 fn canonical_temp_base() -> PathBuf {
     env::temp_dir()

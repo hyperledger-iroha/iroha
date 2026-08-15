@@ -1,13 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for basic asset lifecycle operations.
-use std::{
-    sync::{
-        OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    thread::sleep,
-    time::{Duration, Instant},
-};
 use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::{
     sandbox,
@@ -23,6 +15,14 @@ use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::{
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread::sleep,
+    time::{Duration, Instant},
+};
 use toml::Value as TomlValue;
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static SERIAL_NETWORK_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLock::new();

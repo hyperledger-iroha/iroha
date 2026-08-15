@@ -1,0 +1,67 @@
+seiyaku __SORACLOUD_SEIYAKU_NAME__ {
+  view fn serve_auth_me(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    return json {
+      authenticated: false,
+      observed_height: observed_height,
+      wallet: Json::parse("null")
+    };
+  }
+
+  view fn serve_user_preferences(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    return json {
+      observed_height: observed_height,
+      preferences: json {}
+    };
+  }
+
+  view fn serve_saved_searches(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    return json {
+      observed_height: observed_height,
+      saved_searches: json []
+    };
+  }
+
+  view fn issue_auth_challenge(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json {
+      accepted: true,
+      challenge_id: execution_sequence,
+      observed_height: observed_height
+    };
+  }
+
+  view fn complete_auth_login(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json {
+      accepted: true,
+      action: "login",
+      observed_height: observed_height,
+      sequence: execution_sequence
+    };
+  }
+
+  view fn close_auth_session(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json {
+      accepted: true,
+      action: "logout",
+      observed_height: observed_height,
+      sequence: execution_sequence
+    };
+  }
+
+  view fn store_user_preferences(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json {
+      accepted: true,
+      action: "store_preferences",
+      observed_height: observed_height,
+      sequence: execution_sequence
+    };
+  }
+
+  view fn store_saved_search(bytes _request_body, int execution_sequence, int observed_height) -> Json {
+    return json {
+      accepted: true,
+      action: "store_saved_search",
+      observed_height: observed_height,
+      sequence: execution_sequence
+    };
+  }
+}

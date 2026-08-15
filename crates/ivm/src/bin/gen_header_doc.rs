@@ -144,13 +144,13 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        sync::atomic::{AtomicU64, Ordering},
-    };
     use super::{
         LAYOUT_BEGIN, LAYOUT_END, POLICY_BEGIN, POLICY_END, prepare_header_outputs,
         render_header_document,
+    };
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
     };
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
     #[test]

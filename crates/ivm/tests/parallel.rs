@@ -1,10 +1,3 @@
-use std::{
-    any::Any,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
 use ivm::{
     IVM, VMError, encoding,
     host::{AccessLog, IVMHost},
@@ -14,6 +7,13 @@ use ivm::{
         TxResult, execute_block_predicted,
     },
     syscalls,
+};
+use std::{
+    any::Any,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 mod common;
 use common::{assemble, assemble_syscalls};

@@ -5,11 +5,12 @@
 //! canonical JSON strings from `iroha_primitives::json::Json` for metadata maps.
 //!
 //! This module is internal and accessed from execution/merge paths and the actor.
-use core::str::FromStr as _;
-use std::{
-    collections::BTreeMap,
-    sync::{Mutex, MutexGuard, OnceLock},
+use super::{
+    consensus::{ExecKv, ExecWitness},
+    smt::{KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG},
 };
+use crate::state::{StateBlock, WorldReadOnly};
+use core::str::FromStr as _;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -21,11 +22,10 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
-use super::{
-    consensus::{ExecKv, ExecWitness},
-    smt::{KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG},
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, MutexGuard, OnceLock},
 };
-use crate::state::{StateBlock, WorldReadOnly};
 #[derive(Default)]
 struct BlockWitness {
     active: bool,
@@ -632,7 +632,7 @@ pub fn snapshot_exec_witness() -> ExecWitness {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, time::Duration};
+    use super::*;
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -647,7 +647,7 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
-    use super::*;
+    use std::{collections::BTreeMap, time::Duration};
     // The SMT helpers live under the sumeragi module.
     use crate::sumeragi::smt::{KvPair, compute_post_state_root};
     use crate::{

@@ -1,9 +1,4 @@
 //! Public-boundary regression tests for state-backed native FX routing plans.
-use std::{
-    collections::BTreeSet,
-    num::{NonZeroU32, NonZeroU64},
-    time::Duration,
-};
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
 use iroha_core::{
     kura::Kura,
@@ -35,7 +30,14 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::oracle::CanRegisterOracleFeed;
 use iroha_executor_data_model::permission::settlement::CanManageFxCorridors;
 use iroha_primitives::time::TimeSource;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID,
+};
+use std::{
+    collections::BTreeSet,
+    num::{NonZeroU32, NonZeroU64},
+    time::Duration,
+};
 const LEDGER_TIME_MS: u64 = 0;
 const SOURCE_DATASPACE: DataSpaceId = DataSpaceId::new(10);
 const DESTINATION_DATASPACE: DataSpaceId = DataSpaceId::new(12);

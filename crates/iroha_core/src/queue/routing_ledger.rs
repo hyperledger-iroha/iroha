@@ -5,15 +5,15 @@
 //! emitters (block processing, telemetry, APIs) can expose the correct
 //! lane/dataspace metadata. This module provides a global registry keyed by the
 //! transaction hash to keep those decisions alive across subsystem boundaries.
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::LazyLock,
-};
+use super::router::{RoutingDecision, RoutingPlan};
 use dashmap::DashMap;
 use iroha_crypto::HashOf;
 use iroha_data_model::transaction::SignedTransaction;
 use parking_lot::Mutex;
-use super::router::{RoutingDecision, RoutingPlan};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::LazyLock,
+};
 #[cfg(test)]
 const DEFAULT_MAX_ENTRIES: usize = iroha_config::parameters::defaults::queue::CAPACITY.get();
 static ROUTING_LEDGER: LazyLock<RoutingLedgerStore> = LazyLock::new(RoutingLedgerStore::new);
@@ -240,9 +240,9 @@ pub fn discard_plan_if_matches(hash: &HashOf<SignedTransaction>, expected: &Rout
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{DataSpaceId, nexus::LaneId, transaction::SignedTransaction};
-    use super::*;
     fn tx_hash(byte: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::new([byte; Hash::LENGTH]))
     }

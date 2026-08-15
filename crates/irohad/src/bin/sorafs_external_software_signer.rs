@@ -6,16 +6,6 @@ fn main() {
 }
 #[cfg(unix)]
 mod unix_main {
-    use std::{
-        env,
-        ffi::{OsStr, OsString},
-        fs::{self, File},
-        io::{Read as _, Write as _},
-        os::{fd::OwnedFd, unix::fs::MetadataExt as _},
-        path::{Component, Path, PathBuf},
-        process,
-        sync::Arc,
-    };
     use clap::{Args, Parser, Subcommand};
     use irohad::external_software_signer::{
         ExternalSoftwareSignerBackendsV1, ExternalSoftwareSignerBillingStatementAdapterV1,
@@ -36,6 +26,16 @@ mod unix_main {
         RuntimeProviderBrokerExecutableV1, load_runtime_provider_broker_catalog_file_v1,
     };
     use norito::{NoritoDeserialize, NoritoSerialize};
+    use std::{
+        env,
+        ffi::{OsStr, OsString},
+        fs::{self, File},
+        io::{Read as _, Write as _},
+        os::{fd::OwnedFd, unix::fs::MetadataExt as _},
+        path::{Component, Path, PathBuf},
+        process,
+        sync::Arc,
+    };
     const MAX_PUBLIC_ARTIFACT_BYTES_V1: usize = 64 * 1024;
     const MAX_SIGNING_PAYLOAD_BYTES_V1: usize = 32 * 1024 * 1024;
     #[derive(Debug, Parser)]
@@ -1426,9 +1426,9 @@ mod unix_main {
     }
     #[cfg(test)]
     mod tests {
-        use std::os::unix::fs::symlink;
-        use clap::CommandFactory as _;
         use super::*;
+        use clap::CommandFactory as _;
+        use std::os::unix::fs::symlink;
         #[test]
         fn credential_values_never_enter_the_cli() {
             let help = Cli::command().render_long_help().to_string();

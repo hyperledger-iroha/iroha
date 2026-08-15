@@ -2430,16 +2430,16 @@ def reviewed_run_inner_source_fidelity_errors(
     return module._exact_output_production_source_fidelity_errors(repo_root)
 
 
-def test_exact_serve_runtime_episode_production_contract_is_current(
+def test_direct_serve_predecessor_production_contract_is_current(
     tmp_path: Path,
 ) -> None:
-    """The final queue, runner, executor, and runtime episode form one seal."""
+    """The final queue, runner, executor, and direct predecessor turn form one seal."""
 
     module = load_checker()
     local_runner_service_fixture(tmp_path, module)
 
     errors = (
-        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+        module._direct_serve_predecessor_production_source_fidelity_errors(
             tmp_path
         )
     )
@@ -2607,74 +2607,178 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
     assert any(f"named {name}; found 0" in error for error in errors), errors
 
 
+
+
+
+
+# The direct-observation cut keeps the historical test entry-point names so
+# release manifests remain stable, but replaces the removed witness/episode
+# mutation matrix with item-scoped observation and RAII-admission mutations.
 @pytest.mark.parametrize(
-    ("relative", "old", "new", "expected_error"),
+    (
+        "relative",
+        "item_name",
+        "context",
+        "old",
+        "new",
+        "expected_error",
+    ),
     (
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "enum CertifiedServeRuntimeEpisodeState {\n"
-            "    Ready,\n"
-            "    Claimed {\n",
-            "enum CertifiedServeRuntimeEpisodeState {\n"
-            "    Claimed {\n",
-            "distinct ready, one-owner claimed, and irreversible complete states",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "matches_barrier",
+            (("impl", "V2IoCertifiedServeIngressReservation"),),
             "self.projection.request_hash == barrier.request_hash",
             "true",
             "episode claims must retain the exact Serve request hash",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "self.carrier_ordinal == Some(barrier.carrier_ordinal)",
-            "self.carrier_ordinal.is_some()",
-            "episode claims must retain the selected physical carrier occurrence",
+            None,
+            (),
+            "struct V2IoCompletionOwnership {\n"
+            "    retained_at: Instant,\n"
+            "    service_debt: u64,\n"
+            "    requires_runtime_capacity: bool,\n"
+            "    runtime_lifecycle_ordinal: Option<u128>,\n"
+            "    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,\n"
+            "    recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,\n"
+            "    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,\n"
+            "}\n",
+            "struct V2IoCompletionOwnership {\n"
+            "    retained_at: Instant,\n"
+            "    service_debt: u64,\n"
+            "    requires_runtime_capacity: bool,\n"
+            "    runtime_lifecycle_ordinal: Option<u128>,\n"
+            "    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,\n"
+            "    recovered_lifecycle_sign: Option<RecoveredDecisionApplyDispatchKeyV1>,\n"
+            "    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,\n"
+            "}\n",
+            "all three exact recovered dispatch keys",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "&& self.handed_off.is_some()",
-            "&& true",
-            "episode claims must retain the live fair-ingress handoff",
+            "runtime_lifecycle_ordinal",
+            (("impl", "V2IoCommand"),),
+            "            Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key().lifecycle_ordinal()),\n",
+            "            Self::RecoveredLifecycleSign(_) => None,\n",
+            "including recovered Apply, Sign, and Fetch",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "capture_recovered_decision_apply_capacity",
+            (("impl", "V2IoCommandQueue"),),
             "                    if command_ordinal >= reservation.id.0 {\n",
             "                    if command_ordinal > reservation.id.0 {\n",
             "equal or later causal work must not enter",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "start_inner",
+            (("impl", "ProductionV2Services"),),
+            "                    let recovered_lifecycle_sign_key = command.recovered_lifecycle_sign_key();\n",
+            "                    let recovered_lifecycle_sign_key = command.recovered_decision_apply_key();\n",
+            "generic owner, all three recovered dispatch keys",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "should_open_predecessor_admission",
+            (("impl", "ExactServePredecessorObservation"),),
+            "        self.first_target_observation || self.runnable_predecessor\n",
+            "        self.runnable_predecessor\n",
+            "initial observation or current runnable predecessor alone may open admission",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "exact_serve_predecessor_observation",
+            (
+                (
+                    "impl",
+                    "<",
+                    "D",
+                    ":",
+                    "RuntimeDriver",
+                    ">",
+                    "SerializedV2Runtime",
+                    "<",
+                    "D",
+                    ">",
+                ),
+            ),
+            "            if predecessor.is_none() {\n",
+            "            if predecessor.is_some() {\n",
+            "direct predecessor census",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "open_serve_predecessor_admission",
+            (("impl", "V2IoCommandQueue"),),
+            "                    predecessor_ordinal: None,\n",
+            "                    predecessor_ordinal: Some(barrier.scheduler_ordinal()),\n",
+            "queue-local predecessor-admission open",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "try_send_as",
+            (("impl", "V2IoCommandQueue"),),
             "                        } if existing == command_ordinal => Some(command_ordinal),\n",
             "                        } if existing <= command_ordinal => Some(command_ordinal),\n",
             "already-selected owner",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "        if exact_target_active && exact_predecessor_ordinal.is_none() {\n",
-            "        if false {\n",
-            "later causal, Control, Completion, and priority work must be blocked",
+            "try_send_as",
+            (("impl", "V2IoCommandQueue"),),
+            "matches!(&command, V2IoCommand::Shutdown)",
+            "class == V2IoAdmissionClass::Control",
+            "exact rolled-back shutdown bypass",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                        .certified_serve_runtime_predecessor_capacity_available(serve_barrier)\n",
-            "                        .certified_serve_runtime_predecessor_capacity_unchecked(serve_barrier)\n",
-            "serialized predecessor step must require both an older owner and physical capacity",
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            None,
+            (),
+            "fn send_tracked_completion_with_lifecycle_ordinal(\n"
+            "    sender: &mpsc::SyncSender<V2IoCompletion>,\n"
+            "    admission: &V2IoAdmission,\n"
+            "    completion: V2IoCompletion,\n"
+            "    runtime_lifecycle_ordinal: Option<u128>,\n"
+            ") -> Result<(), mpsc::SendError<V2IoCompletion>> {\n"
+            "    let recovered_decision_apply = completion.recovered_decision_apply_key();\n"
+            "    let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();\n"
+            "    let recovered_decision_fetch = completion.recovered_decision_fetch_key();\n",
+            "fn send_tracked_completion_with_lifecycle_ordinal(\n"
+            "    sender: &mpsc::SyncSender<V2IoCompletion>,\n"
+            "    admission: &V2IoAdmission,\n"
+            "    completion: V2IoCompletion,\n"
+            "    runtime_lifecycle_ordinal: Option<u128>,\n"
+            ") -> Result<(), mpsc::SendError<V2IoCompletion>> {\n"
+            "    let recovered_decision_apply = completion.recovered_decision_apply_key();\n"
+            "    let recovered_lifecycle_sign = completion.recovered_decision_apply_key();\n"
+            "    let recovered_decision_fetch = completion.recovered_decision_fetch_key();\n",
+            "blocking completion publication must derive every recovered key",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                        .finish_certified_serve_runtime_episode_turn(\n",
-            "                        .finish_certified_serve_runtime_episode_turn_unchecked(\n",
-            "re-publish/recheck the full owner set before settlement",
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            None,
+            (),
+            "    recovered_decision_fetch_bodies:\n"
+            "        BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>,\n",
+            "    recovered_decision_fetch_bodies:\n"
+            "        BTreeMap<RecoveredLifecycleSignDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>,\n",
+            "separate exact owner maps for recovered Apply, Sign, and Fetch work",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            None,
+            (),
             "self.ingress.oldest_active_lifecycle_ordinal()?",
             "self.ingress.oldest_lifecycle_ordinal()?",
             "complete runtime minimum must include latent Local FIFO reservations",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            None,
+            (),
             "        for reservation in &self.dormant_local_fifo_reservations {\n"
             "            if reservation.admission_ordinal == 0\n"
             "                || !self\n"
@@ -2701,6 +2805,8 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            None,
+            (),
             "if self\n"
             "            .dormant_local_fifo_reservations\n"
             "            .iter()\n"
@@ -2712,104 +2818,122 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
             "latent Local FIFO reservations must collide with reused exact-Serve ordinals",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                let claimed_older_runtime_episode = services\n"
-            "                    .claim_certified_serve_runtime_episode(serve_barrier)\n",
-            "                let claimed_older_runtime_episode = services\n"
-            "                    .claim_certified_serve_runtime_episode_unchecked(serve_barrier)\n",
-            "an exact target turn must claim before selecting one completed predecessor",
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            None,
+            (),
+            "                    PendingServiceCompletion::Io {\n"
+            "                        completion: V2IoCompletion::RecoveredDecisionApply(_),\n"
+            "                        ..\n"
+            "                    } => {\n"
+            "                        return Err(executor.external_service_failed(\n"
+            "                            \"recovered Decision Apply completion crossed the generic executor drain\",\n"
+            "                            self,\n"
+            "                        ));\n"
+            "                    }\n",
+            "                    PendingServiceCompletion::Io {\n"
+            "                        completion: V2IoCompletion::RecoveredDecisionApply(_),\n"
+            "                        ..\n"
+            "                    } => Ok(()),\n",
+            "dedicated V2IoCompletion::RecoveredDecisionApply",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                    services.drain_exact_serve_runtime_predecessor(\n"
-            "                        &mut executor,\n"
-            "                        serve_barrier.scheduler_ordinal(),\n"
-            "                    )?;\n",
-            "                    services.drain_exact_serve_runtime_predecessor(\n"
-            "                        &mut executor,\n"
-            "                        serve_barrier.lifecycle_ordinal(),\n"
-            "                    )?;\n",
-            "an exact target turn must claim before selecting one completed predecessor",
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "drop",
+            (("impl", "Drop", "for", "CertifiedServePredecessorAdmissionV1"),),
+            "            .close_serve_predecessor_admission(self.barrier)\n",
+            "            .serve_predecessor_capacity_available(self.barrier)\n",
+            "fail-stop predecessor-admission Drop",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                    if predecessor_witness.is_some()\n"
-            "                        && services\n",
-            "                    if predecessor_witness.is_none()\n"
-            "                        && services\n",
-            "serialized predecessor step must require both an older owner and physical capacity",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "service_certified_serve_barrier",
+            (),
+            "        .should_open_predecessor_admission()\n",
+            "        .has_runnable_predecessor()\n",
+            "ordinary direct selected-Serve predecessor turn",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "                    older_predecessor_remains = predecessor_witness.is_some();\n",
-            "                    older_predecessor_remains = predecessor_witness.is_none();\n",
-            "every claimed turn must re-publish/recheck the full owner set before settlement",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "            else {\n"
-            "                // Exact admission won the queue-locked race after the\n"
-            "                // observation above. Restart at the dedicated target turn.\n"
-            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
-            "                continue;\n"
-            "            };\n",
-            "            else {\n"
-            "                continue;\n"
-            "            };\n",
-            "queue-locked handoff to an exact target which won the admission race must retain the finite wake bound",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+            "service_pending_certified_serve_barrier",
+            (),
+            "            output_guard.close_admission_for_restart();\n"
+            "            return Err(V2RunnerError::Service(\n"
+            "                \"completed pending Kura recovery retained a runnable Serve predecessor\".to_owned(),\n",
+            "            let _ = output_guard;\n"
+            "            return Err(V2RunnerError::Service(\n"
+            "                \"completed pending Kura recovery retained a runnable Serve predecessor\".to_owned(),\n",
+            "pending-Kura direct selected-Serve predecessor turn",
         ),
     ),
 )
-def test_exact_serve_runtime_episode_rejects_semantic_mutations(
+def test_direct_serve_predecessor_rejects_semantic_mutations(
     tmp_path: Path,
     relative: str,
+    item_name: str | None,
+    context: tuple[tuple[str, ...], ...],
     old: str,
     new: str,
     expected_error: str,
 ) -> None:
-    """Every lasso-closing ownership boundary fails closed under mutation."""
+    """Direct observations and their transient worker guard fail closed."""
 
     module = load_checker()
     local_runner_service_fixture(tmp_path, module)
     path = tmp_path / relative
     source = path.read_text(encoding="utf-8")
-    assert source.count(old) == 1, old
-    path.write_text(source.replace(old, new, 1), encoding="utf-8")
-
-    errors = (
-        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+    if item_name is None:
+        assert source.count(old) == 1, (relative, old)
+        path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        errors = module._direct_serve_predecessor_production_source_fidelity_errors(
             tmp_path
         )
+        assert any(expected_error in error for error in errors), errors
+        return
+    items = tuple(
+        item
+        for item in module.rust_items(source, item_name)
+        if item.brace_context == context
     )
+    assert len(items) == 1, (relative, item_name, [item.brace_context for item in items])
+    item = items[0]
+    assert item.source.count(old) == 1, (relative, item_name, old)
+    path.write_text(
+        source.replace(item.source, item.source.replace(old, new, 1), 1),
+        encoding="utf-8",
+    )
+    if relative == "crates/iroha_core/src/sumeragi/v2_worker.rs":
+        rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
+    errors = module._direct_serve_predecessor_production_source_fidelity_errors(
+        tmp_path
+    )
     assert any(expected_error in error for error in errors), errors
 
 
-def test_exact_serve_runtime_episode_regression_cannot_be_deleted(
+def test_direct_serve_predecessor_regression_cannot_be_deleted(
     tmp_path: Path,
 ) -> None:
-    """The full-Control-prefix regression is part of the release source seal."""
+    """The guard-Drop regression remains part of the release source seal."""
 
     module = load_checker()
     local_runner_service_fixture(tmp_path, module)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
-    source = path.read_text(encoding="utf-8")
-    name = (
-        "exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission"
+    path = tmp_path / (
+        "crates/iroha_core/src/sumeragi/"
+        "v2_worker_io_and_selected_serve_cases_01_tests.rs"
     )
+    source = path.read_text(encoding="utf-8")
+    name = "dropping_exact_serve_predecessor_admission_closes_transient_aperture"
     declaration = f"fn {name}("
     assert source.count(declaration) == 1
     path.write_text(
         source.replace(declaration, f"fn removed_{name}(", 1),
         encoding="utf-8",
     )
+    rebind_changed_same_round_expanded_source_seal(module, tmp_path)
 
-    errors = (
-        module._exact_serve_runtime_episode_production_source_fidelity_errors(
-            tmp_path
-        )
+    errors = module._direct_serve_predecessor_production_source_fidelity_errors(
+        tmp_path
     )
-
     assert any(f"named {name}; found 0" in error for error in errors), errors
 
 
@@ -2826,12 +2950,16 @@ def test_local_runner_service_contract_source_fidelity_is_current(
     )
 
     assert errors == [], errors
-    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    runner_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/outer_ingress_cursor.rs"
+    )
+    canonical_cursor = runner_path.read_text(encoding="utf-8")
     mutate_rust_item_source_in_context(
         module,
         runner_path,
-        "next",
-        (("impl", "Iterator", "for", "OuterIngressTurns"),),
+        "advance_current",
+        (("impl", "OuterIngressTurns"),),
         "OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,",
         "OuterIngressTurn::Runtime => OuterIngressTurn::Completion,",
     )
@@ -2841,8 +2969,42 @@ def test_local_runner_service_contract_source_fidelity_is_current(
         formal_dir=formal_dir,
     )
     assert any(
-        "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns"
+        "cursor advance must preserve Completion/Runtime/Ingress and decrement only after Ingress"
         in error
+        for error in errors
+    ), errors
+    runner_path.write_text(canonical_cursor, encoding="utf-8")
+
+    worker_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    mutate_rust_item_source_in_context(
+        module,
+        worker_path,
+        "drain_completions_with_lifecycle",
+        (("impl", "ProductionV2Services"),),
+        "CompletionDrainPolicy::Fair,",
+        "CompletionDrainPolicy::IoOnly,",
+    )
+    mutated_helpers = tuple(
+        item
+        for item in module.rust_items(
+            worker_path.read_text(encoding="utf-8"),
+            "drain_completions_with_lifecycle",
+        )
+        if item.brace_context == (("impl", "ProductionV2Services"),)
+    )
+    assert len(mutated_helpers) == 1
+    module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256[
+        "ProductionV2Services::drain_completions_with_lifecycle"
+    ] = module._rust_item_token_sha256(mutated_helpers[0])
+    errors = module._local_runner_service_contract_source_fidelity_errors(
+        module.load_ledger(),
+        repo_root=tmp_path,
+        formal_dir=formal_dir,
+    )
+    assert any(
+        "typed completion service must delegate to the fixed finite fair-policy scan"
+        in error
+        and "exact reviewed token digest" not in error
         for error in errors
     ), errors
 
@@ -3047,7 +3209,7 @@ def test_local_runner_service_contract_rejects_disconnected_deadlock_obligation(
             "",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2.rs",
+            "crates/iroha_core/src/sumeragi/v2_adapter_inline_producer_recovery_02_tests.rs",
             "assert_restored_stage_seven_retirement_does_not_resurrect",
             """if !reserve_completion {
             assert!(

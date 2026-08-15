@@ -1,22 +1,22 @@
 //! Types representing executable parts of a transaction.
-use std::{fmt, iter::IntoIterator, ops::Deref, vec::Vec};
-use ::base64::{Engine as _, engine::general_purpose::STANDARD};
-use iroha_data_model_derive::model;
-use iroha_primitives::const_vec::ConstVec;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use norito::{NoritoDeserialize, core as ncore};
 pub use self::model::*;
 #[cfg(test)]
 use crate::isi::Instruction;
 use crate::{
     isi::InstructionBox, smart_contract::ContractAddress, transaction::signed::FeePaymentIntent,
 };
+use ::base64::{Engine as _, engine::general_purpose::STANDARD};
+use iroha_data_model_derive::model;
+use iroha_primitives::const_vec::ConstVec;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use norito::{NoritoDeserialize, core as ncore};
+use std::{fmt, iter::IntoIterator, ops::Deref, vec::Vec};
 #[model]
 mod model {
+    use super::*;
     use iroha_crypto::Hash;
     use iroha_primitives::const_vec::ConstVec;
-    use super::*;
     /// An executable transaction or trigger payload.
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -859,9 +859,9 @@ impl norito::json::FastJsonWrite for Executable {
 }
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-    use norito::core::DecodeFromSlice as _;
     use super::*;
+    use norito::core::DecodeFromSlice as _;
+    use std::any::Any;
     #[derive(Debug, Clone)]
     struct DummyInstruction(pub u32);
     impl crate::seal::Instruction for DummyInstruction {}

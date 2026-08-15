@@ -6,7 +6,10 @@
 //! never rely on process-local caches. This replaces the historical
 //! process-global map and ensures every node observes the same registry
 //! contents.
-use std::collections::BTreeMap;
+use crate::{
+    smartcontracts::Execute,
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -19,11 +22,8 @@ use iroha_data_model::{
     state_path::StatePath,
 };
 use mv::storage::StorageReadOnly;
+use std::collections::BTreeMap;
 use thiserror::Error;
-use crate::{
-    smartcontracts::Execute,
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
-};
 /// Consensus-persisted, irreversible subject identity for one contract address.
 ///
 /// Bindings are retained after deactivation so every historical contract subject remains
@@ -753,6 +753,12 @@ pub fn snapshot_bound_contract_records_by_subject(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         isi::{
@@ -767,12 +773,6 @@ mod tests {
         smart_contract::manifest::{EntryPointKind, EntrypointDescriptor},
     };
     use iroha_executor_data_model::permission::parameter::CanSetParameters;
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("smart contract code fixture key generation should succeed")
     }

@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level tests for Sumeragi commit QC endpoints.
 #![cfg(feature = "telemetry")]
-use std::{collections::HashSet, sync::Arc};
 use axum::http::{HeaderValue, StatusCode};
 use http_body_util::BodyExt;
 use iroha_core::{
@@ -15,6 +14,7 @@ use iroha_data_model::{
     consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},
 };
 use nonzero_ext::nonzero;
+use std::{collections::HashSet, sync::Arc};
 fn seed_commit_qc_state() -> (Arc<CoreState>, HashOf<BlockHeader>, iroha_crypto::Hash, Qc) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();

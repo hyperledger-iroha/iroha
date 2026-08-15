@@ -1,11 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Adversarial RBC scenarios exercising Sumeragi DA/RBC debug knobs.
-use std::{
-    cmp::Ordering,
-    fs,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
 use eyre::{Report, Result, WrapErr, ensure, eyre};
 use iroha::{
     client::{Client, Status},
@@ -14,6 +8,12 @@ use iroha::{
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::NetworkBuilder;
 use norito::json::{self, Map, Value};
+use std::{
+    cmp::Ordering,
+    fs,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tokio::time::sleep;
 use toml::Table;
 const DEFAULT_PAYLOAD_BYTES: usize = 512 * 1024; // 512 KiB

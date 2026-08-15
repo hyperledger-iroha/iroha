@@ -1,12 +1,4 @@
 //! Kotodama V1 exact numeric syscall implementation.
-use core::cmp::Ordering;
-use iroha_primitives::{
-    bigint::{BigInt, BigIntError},
-    numeric::{
-        MAX_MANTISSA_BYTES, Numeric, NumericOperationError, NumericWorkStep, ObservedNumericError,
-        Quantity, RoundingMode,
-    },
-};
 use crate::{
     IVM, VMError,
     numeric::{
@@ -17,6 +9,14 @@ use crate::{
     numeric_gas, numeric_tlv,
     syscall_metering::SyscallMeteringPhase,
     syscalls,
+};
+use core::cmp::Ordering;
+use iroha_primitives::{
+    bigint::{BigInt, BigIntError},
+    numeric::{
+        MAX_MANTISSA_BYTES, Numeric, NumericOperationError, NumericWorkStep, ObservedNumericError,
+        Quantity, RoundingMode,
+    },
 };
 #[derive(Clone, Copy)]
 enum FailureMode {

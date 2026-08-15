@@ -1,7 +1,6 @@
 //! Integration checks for BLS batching + `PoP` gating on transaction admission.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use core::time::Duration;
-use std::sync::Arc;
 use iroha_core::{
     block::{BlockValidationError, ValidBlock},
     da::proof_policy_bundle,
@@ -27,6 +26,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
+use std::sync::Arc;
 fn checked_random_bls_batch_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("generate checked BLS batch keypair")

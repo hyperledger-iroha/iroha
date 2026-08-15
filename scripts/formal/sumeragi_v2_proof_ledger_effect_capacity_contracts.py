@@ -214,7 +214,7 @@ if let Some(finality) = &self.finality_completion {
     }
 }
 """,
-        "durable runtime Apply tombstone must retain its candidate owner while recovered Apply finality remains height-authenticated",
+        "pending and durable Apply ownership must retain the exact runtime owner while recovered finality stays bound to this height context",
         errors,
     )
 

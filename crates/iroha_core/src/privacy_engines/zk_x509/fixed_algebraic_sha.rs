@@ -6,12 +6,6 @@
 //! proof-supplied fixed opening. Instead it walks the typed word-operation and
 //! word-memory schedules once and emits canonical affine, repeated, and sparse
 //! atoms for all four physical log19 SHA segments.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::OnceLock,
-};
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
 use super::{
     fixed_algebraic::{
         ZkX509FixedAlgebraicAtomV1, ZkX509FixedAlgebraicDomainV1, ZkX509FixedAlgebraicErrorV1,
@@ -52,6 +46,12 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, sha256_frame_v1,
 };
+use sha2::{Digest as _, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::OnceLock,
+};
+use thiserror::Error;
 /// Exact first-release algebraic SHA compiler description.
 pub(crate) const ZK_X509_SHA_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_V1: &[u8] =
     b"zk-x509-sha-fixed-algebraic-compiler-v1-incompatible:public-shapes=disclosed-attributes0through4:four-independent-physical-log19-generic-children:child-widths=118,118,118,118:combined-width472:segment-major-column-order:each-child-generic-cap65536:typed-composite-digest-binds-disclosure-shape+profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:typed-zero-capacity-sha-word-circuit-topology:word-operation-and-execution-sorted-memory-walk:authoritative-local-row-event-order-replay:definition-writes-immediately-before-consuming-operation:operation-input-reads-then-output-write:eight-digest-reads-last:derived-execution-sort-must-equal-circuit-canonical-sorted-memory:execution-write-axis-key=typed-word-phase(initial|input|expansion3|round8|final):compute+execution+sorted-memory-call-axis-transpose-on-exact-maximal-contiguous-same-segment-same-geometry-runs-iff-calls-strictly-greater-than-blocks:block-row-axis-on-ties:boolean-topology-three-way-exact-atom-planner(block-or-call=2048*min(calls,blocks)|round=32*blocks*calls|block-gap=416*calls):strict-lower-only:old-then-round-wins-ties:block-gap-axis-one-stride14-hull+12-negative-stride1064-gap-residues-per-lane:operation-read-typed-block+phase(expansion6|round18|final2)+read-slot-axis-with-exact-per-call-cost44*blocks-2:operation-read-axis-transpose-iff-exact-cost-strictly-less-than-existing-block-or-call-axis:sorted-memory-typed-initial-or-block+word-phase(initial|input|expansion3|round8|final)+access-occurrence-axis:sorted-memory-phase-axis-on-every-exact-geometry-run-iff-phase-cost=298*blocks*calls-is-strictly-less-than-existing-axis-cost(call=4952*blocks+32|block=(4952+32)*calls):old-axis-wins-ties:call-axis-key=local-column+family+block(initial-or-sha-index)+word-position+occurrence:remaining-sorted-memory-nontransposed-series-maximal-across-ordered-calls:no-native-row-matrix:no-lde-matrix:no-artifact:no-merkle-root:no-proof-supplied-fixed-values:affine+repeated+sparse-atoms:generator-coset-log19-to-log25:call-role-slot-boundaries+compact-ca-selectors+field-native-rfc-events+physical-padding:exact-shape-derived-rfc-channel-offsets:all-six-formerly-reconstructed-word-columns-native:first-release";

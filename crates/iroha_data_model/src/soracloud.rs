@@ -8,10 +8,15 @@
 //! and deterministic confidential-compute policy in a form suitable for
 //! validator admission and audit trails.
 #![allow(clippy::module_name_repetitions)]
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::{NonZeroU16, NonZeroU32, NonZeroU64},
-    sync::OnceLock,
+use crate::{
+    account::AccountId,
+    asset::AssetDefinitionId,
+    name::Name,
+    proof::ProofAttachment,
+    sorafs::pin_registry::{
+        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, StorageClass,
+    },
+    zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
 use iroha_crypto::{
     Hash, PublicKey, Signature,
@@ -38,17 +43,12 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, Parser, Value};
-use thiserror::Error;
-use crate::{
-    account::AccountId,
-    asset::AssetDefinitionId,
-    name::Name,
-    proof::ProofAttachment,
-    sorafs::pin_registry::{
-        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, StorageClass,
-    },
-    zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
+    sync::OnceLock,
 };
+use thiserror::Error;
 /// Schema version for [`SoraContainerManifestV1`].
 pub const SORA_CONTAINER_MANIFEST_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouManifestV1`].

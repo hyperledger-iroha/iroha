@@ -1,10 +1,3 @@
-use eyre::{Result, WrapErr};
-use iroha_data_model::soradns::{
-    GatewayHostSet, RAD_VERSION_V1, ResolverAttestationDocumentV1, ResolverTransportBundle,
-};
-use iroha_primitives::soradns::derive_gateway_hosts;
-use norito::{decode_from_bytes_with_limits, json};
-use thiserror::Error;
 use crate::{
     canonical::{canonicalize_norito_bytes, sha256_domain_digest},
     limits::{
@@ -12,6 +5,13 @@ use crate::{
         MAX_RAD_SNAPSHOT_BYTES, rad_snapshot_decode_limits,
     },
 };
+use eyre::{Result, WrapErr};
+use iroha_data_model::soradns::{
+    GatewayHostSet, RAD_VERSION_V1, ResolverAttestationDocumentV1, ResolverTransportBundle,
+};
+use iroha_primitives::soradns::derive_gateway_hosts;
+use norito::{decode_from_bytes_with_limits, json};
+use thiserror::Error;
 /// Convenience alias for the SoraDNS RAD payload.
 pub type ResolverAttestation = ResolverAttestationDocumentV1;
 /// Domain separator used when hashing RAD payloads.
@@ -411,6 +411,7 @@ pub enum ResolverAttestationValidationError {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use expect_test::expect;
     use iroha_crypto::{PublicKey, Signature};
     use iroha_data_model::{
@@ -420,7 +421,6 @@ mod tests {
             TlsProvisioningProfile, TlsTransportV1,
         },
     };
-    use super::*;
     fn base_rad() -> ResolverAttestation {
         let bindings = derive_gateway_hosts("docs.sora").expect("derive hosts");
         let operator_account = {

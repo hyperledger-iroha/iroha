@@ -1,8 +1,8 @@
 //! This module contains implementations of smart-contract traits and instructions for [`Account`] structure
 //! and implementations for account queries.
+use super::prelude::*;
 use iroha_data_model::{prelude::*, query::error::FindError};
 use iroha_telemetry::metrics;
-use super::prelude::*;
 /// All instructions related to accounts:
 /// - minting/burning public key into account signatories
 /// - minting/burning signature condition check
@@ -10,13 +10,13 @@ use super::prelude::*;
 /// - grant permissions and roles
 /// - Revoke permissions or roles
 pub mod isi {
+    use super::*;
+    use crate::{role::RoleIdWithOwner, state::StateTransaction};
     use iroha_data_model::isi::{
         InstructionType,
         error::{InvalidParameterError, MintabilityError, RepetitionError},
     };
     use iroha_executor_data_model::isi::multisig::MultisigSpec;
-    use super::*;
-    use crate::{role::RoleIdWithOwner, state::StateTransaction};
     fn is_idempotent_alias_permission(permission: &Permission) -> bool {
         iroha_executor_data_model::permission::account::CanManageAccountAlias::try_from(permission)
             .is_ok()
@@ -917,6 +917,14 @@ pub mod isi {
     }
     #[cfg(test)]
     mod test {
+        use crate::smartcontracts::isi::Registrable as _;
+        use crate::{
+            block::ValidBlock,
+            kura::Kura,
+            query::store::LiveQueryStore,
+            smartcontracts::Execute,
+            state::{State, World, WorldReadOnly},
+        };
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
@@ -927,14 +935,6 @@ pub mod isi {
         };
         use iroha_primitives::json::Json;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
-        use crate::smartcontracts::isi::Registrable as _;
-        use crate::{
-            block::ValidBlock,
-            kura::Kura,
-            query::store::LiveQueryStore,
-            smartcontracts::Execute,
-            state::{State, World, WorldReadOnly},
-        };
         #[test]
         fn cannot_forbid_minting_on_asset_mintable_infinitely() -> Result<(), ParseError> {
             let (authority, _authority_keypair) = gen_account_in("wonderland");
@@ -1038,7 +1038,11 @@ pub mod isi {
 }
 /// Implementations for account queries.
 pub mod query {
-    use std::{collections::BTreeSet, sync::Arc};
+    use super::*;
+    use crate::{
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::{StateReadOnly, WorldReadOnly},
+    };
     use eyre::Result;
     use iroha_crypto::PublicKey;
     use iroha_data_model::{
@@ -1051,11 +1055,7 @@ pub mod query {
         },
     };
     use norito::json::Value;
-    use super::*;
-    use crate::{
-        smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::{StateReadOnly, WorldReadOnly},
-    };
+    use std::{collections::BTreeSet, sync::Arc};
     fn account_from_entry(
         _world: &impl WorldReadOnly,
         account_id: &AccountId,
@@ -2016,12 +2016,6 @@ pub mod query {
     }
     #[cfg(test)]
     mod tests {
-        use core::num::NonZeroU64;
-        use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
-        use iroha_executor_data_model::permission::peer::CanManagePeers;
-        use iroha_primitives::json::Json;
-        use iroha_test_samples::{ALICE_ID, gen_account_in};
         use super::super::isi::ensure_recovery_request_targets_current_lineage;
         use super::*;
         use crate::{
@@ -2030,6 +2024,12 @@ pub mod query {
             query::store::LiveQueryStore,
             state::{State, World},
         };
+        use core::num::NonZeroU64;
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
+        use iroha_executor_data_model::permission::peer::CanManagePeers;
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::{ALICE_ID, gen_account_in};
         fn checked_keypair() -> KeyPair {
             KeyPair::try_random().expect("account query fixture key generation should succeed")
         }

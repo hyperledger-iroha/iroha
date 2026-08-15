@@ -1,12 +1,12 @@
 //! Validate FASTPQ Metal queue overrides parse correctly from env and reject invalid values.
+use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
+use iroha_config_base::{env::MockEnv, read::ConfigReader};
 use std::{
     collections::HashMap,
     panic::{self, AssertUnwindSafe},
     path::PathBuf,
     sync::Once,
 };
-use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
-use iroha_config_base::{env::MockEnv, read::ConfigReader};
 fn fixtures_dir() -> PathBuf {
     static INIT: Once = Once::new();
     INIT.call_once(|| {

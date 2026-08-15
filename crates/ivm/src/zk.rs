@@ -18,6 +18,9 @@
 /// cycles. As the proving backend and hardware improved we can handle larger
 /// traces, so the limit is now 2^17 cycles by default.
 pub const MAX_CYCLES: u64 = 1 << 17; // 131_072 cycles
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
+use rayon::prelude::*;
+use sha2::{Digest, Sha256};
 use std::{
     cell::RefCell,
     num::NonZeroU64,
@@ -26,9 +29,6 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
-use rayon::prelude::*;
-use sha2::{Digest, Sha256};
 thread_local! {
     /// Global pointer used by [`Registers`] to log Merkle proofs.
     pub(crate) static REG_LOGGER: RefCell<Option<*mut RegLog>> = const { RefCell::new(None) };

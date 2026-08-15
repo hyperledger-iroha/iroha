@@ -3,104 +3,6 @@
 //! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
 mod lane_geometry;
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fmt::Debug,
-    io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
-    num::{NonZeroU64, NonZeroUsize},
-    ops::Bound,
-    path::{Path, PathBuf},
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        mpsc::{self, RecvTimeoutError},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-use crate::telemetry::StateTelemetry;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_config::{
-    base::WithOrigin,
-    kura::{FsyncMode, InitMode},
-    parameters::{
-        actual::{
-            Fastpq as FastpqConfig, Kura as Config, LaneConfig, LaneConfigEntry,
-            SnapshotBootstrapPolicy, SumeragiV2RuntimeLimits,
-            kura_replica_advert_registry_key_capacity,
-        },
-        defaults::{
-            kura::{
-                BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS,
-                FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
-                REPLICA_ADVERT_EVICTABLE_WINDOW, REPLICA_ADVERT_REFRESH_INTERVAL,
-                REPLICA_ADVERT_TTL, ROSTER_SIDECAR_RETENTION,
-            },
-            sumeragi::{
-                V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
-                V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX, V2_PENDING_CONTROL_SIDECAR_BYTES,
-                V2_PENDING_CONTROL_SIDECAR_BYTES_MAX, V2_PENDING_CONTROL_SIDECAR_BYTES_MIN,
-                V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY,
-                V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX,
-            },
-            zk::fastpq as FASTPQ_DEFAULTS,
-        },
-    },
-};
-use iroha_crypto::KeyPair;
-use iroha_crypto::{
-    Algorithm, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment, PublicKey, Signature,
-};
-#[cfg(test)]
-use iroha_data_model::block::decode_versioned_signed_block;
-use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
-use iroha_data_model::{
-    AccountId, NetworkId,
-    block::{
-        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
-        consensus::{
-            CertPhase, ExecWitness, LaneBlockCommitment, LaneBlockDescriptorV1,
-            LaneBlockProposalV1, LaneBlockQcV1, LanePayloadAvailabilityBodyV1, NativeAmxReceipt,
-            SumeragiLanePayloadOwnership,
-        },
-        consensus_v2::{
-            BlockSubject, ConsensusMode, DataAvailabilityLayout, DualQuorum, ExecutionCommitment,
-            HeightContext, HeightContextId, MAX_EXECUTED_BLOCK_WIRE_BYTES,
-            NativeAmxApplicationManifestLeafV1, QuorumCertificate, QuorumCertificateRef,
-            SnapshotBootstrapAnchor, SnapshotV2BootstrapRecord, ValidatorPower,
-            finality::{
-                V2FinalityArtifact, V2FinalityValidationError, V2QuorumCertificateVerificationError,
-            },
-        },
-        decode_framed_signed_block,
-    },
-    consensus::{Qc, ValidatorSetCheckpoint},
-    isi::offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
-    merge::{
-        LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
-        MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
-    },
-    nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
-    offline::{
-        KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2, KagemushaActiveReceiverWitnessProofV1,
-        KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
-        KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
-    },
-    peer::PeerId,
-    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
-    validation_fee::ValidationFeePolicyWitnessProofV1,
-};
-use iroha_file_mmap::ReadOnlyMmap;
-use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
-use iroha_logger::prelude::*;
-#[cfg(test)]
-use iroha_primitives::time::TimeSource;
-#[cfg(test)]
-use norito::core::{Header, MAGIC};
-use norito::{
-    codec::{Decode, DecodeAll, Encode},
-    json::Value as JsonValue,
-};
-use parking_lot::{Condvar, Mutex, RwLock};
 use crate::lane_consensus::{
     CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
     DurableLaneBlockViewCheckpointV1, DurableLanePayloadAvailabilityCertificateV1,
@@ -110,6 +12,7 @@ use crate::lane_consensus::{
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
 use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
+use crate::telemetry::StateTelemetry;
 use crate::{
     block::CommittedBlock,
     commit_roster_journal::{
@@ -165,7 +68,104 @@ use crate::{
         },
     },
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use iroha_config::{
+    base::WithOrigin,
+    kura::{FsyncMode, InitMode},
+    parameters::{
+        actual::{
+            Fastpq as FastpqConfig, Kura as Config, LaneConfig, LaneConfigEntry,
+            SnapshotBootstrapPolicy, SumeragiV2RuntimeLimits,
+            kura_replica_advert_registry_key_capacity,
+        },
+        defaults::{
+            kura::{
+                BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS,
+                FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
+                REPLICA_ADVERT_EVICTABLE_WINDOW, REPLICA_ADVERT_REFRESH_INTERVAL,
+                REPLICA_ADVERT_TTL, ROSTER_SIDECAR_RETENTION,
+            },
+            sumeragi::{
+                V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
+                V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX, V2_PENDING_CONTROL_SIDECAR_BYTES,
+                V2_PENDING_CONTROL_SIDECAR_BYTES_MAX, V2_PENDING_CONTROL_SIDECAR_BYTES_MIN,
+                V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY,
+                V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX,
+            },
+            zk::fastpq as FASTPQ_DEFAULTS,
+        },
+    },
+};
+use iroha_crypto::KeyPair;
+use iroha_crypto::{
+    Algorithm, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment, PublicKey, Signature,
+};
+#[cfg(test)]
+use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
+use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
+use iroha_data_model::{
+    AccountId, NetworkId,
+    block::{
+        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
+        consensus::{
+            CertPhase, ExecWitness, LaneBlockCommitment, LaneBlockDescriptorV1,
+            LaneBlockProposalV1, LaneBlockQcV1, LanePayloadAvailabilityBodyV1, NativeAmxReceipt,
+            SumeragiLanePayloadOwnership,
+        },
+        consensus_v2::{
+            BlockSubject, ConsensusMode, DataAvailabilityLayout, DualQuorum, ExecutionCommitment,
+            HeightContext, HeightContextId, MAX_EXECUTED_BLOCK_WIRE_BYTES,
+            NativeAmxApplicationManifestLeafV1, QuorumCertificate, QuorumCertificateRef,
+            SnapshotBootstrapAnchor, SnapshotV2BootstrapRecord, ValidatorPower,
+            finality::{
+                V2FinalityArtifact, V2FinalityValidationError, V2QuorumCertificateVerificationError,
+            },
+        },
+        decode_framed_signed_block,
+    },
+    consensus::{Qc, ValidatorSetCheckpoint},
+    isi::offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
+    merge::{
+        LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
+        MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
+    },
+    nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
+    offline::{
+        KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2, KagemushaActiveReceiverWitnessProofV1,
+        KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
+        KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
+    },
+    peer::PeerId,
+    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    validation_fee::ValidationFeePolicyWitnessProofV1,
+};
+use iroha_file_mmap::ReadOnlyMmap;
+use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
+use iroha_logger::prelude::*;
+#[cfg(test)]
+use iroha_primitives::time::TimeSource;
+#[cfg(test)]
+use norito::core::{Header, MAGIC};
+use norito::{
+    codec::{Decode, DecodeAll, Encode},
+    json::Value as JsonValue,
+};
+use parking_lot::{Condvar, Mutex, RwLock};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt::Debug,
+    io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
+    num::{NonZeroU64, NonZeroUsize},
+    ops::Bound,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc::{self, RecvTimeoutError},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 impl From<CommittedBlock> for Arc<SignedBlock> {
     fn from(value: CommittedBlock) -> Self {
         Arc::new(value.into())

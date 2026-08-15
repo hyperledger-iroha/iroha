@@ -1,9 +1,8 @@
 //! Canonical bounded segmented transparent proof container for zk-X509 AIRs.
 //!
-//! This module is deliberately below the governed engine boundary. It
-//! implements the complete commitment, quotient, Merkle-opening, binary-FRI,
-//! grinding, and exact-codec machinery for the verifier-fixed cross-segment
-//! byte-memory table and the numeric output-projection AIR.
+//! This module is deliberately below the governed engine boundary. It implements the complete
+//! commitment, quotient, Merkle-opening, binary-FRI, grinding, and exact-codec machinery for the
+//! verifier-fixed cross-segment byte-memory table and the numeric output-projection AIR.
 //!
 //! The protocol order is fixed:
 //!
@@ -18,32 +17,9 @@
 //! 9. grind the completed commitment transcript;
 //! 10. derive 58 unique query positions from the post-grinding transcript.
 //!
-//! Proof dimensions are reconstructed from the verifier statement.  The wire
-//! contains no caller-selected parameter and the strict reader rejects every
-//! truncation and trailing suffix.
+//! Proof dimensions are reconstructed from the verifier statement. The wire contains no
+//! caller-selected parameter and the strict reader rejects every truncation and trailing suffix.
 mod main_aggregate;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) use main_aggregate::commit_zk_x509_main_base_phase_v1_with_rng;
-#[cfg(test)]
-use main_aggregate::{
-    MainOpenedProviderSetV1, MainOpenedRowEvaluatorV1, MainTraceColumnKindV1,
-    MainTracePolynomialSetV1, MainTraceProviderSetV1, P256OpenedRowEvaluatorV1,
-    ProjectionOpenedRowEvaluatorV1, add_main_composition_coefficient_chunks_v1,
-    main_opened_composition_value_v1, record_main_group_commitment_v1, validate_main_fri_mixes_v1,
-};
-#[cfg(test)]
-pub(crate) use main_aggregate::{ZkX509MainAwaitingCredentialBindingV1, ZkX509MainCompositionPhaseV1};
-use main_aggregate::{p256_opened_residues_v1, p256_scalar_opened_residues_v1};
-pub(crate) use main_aggregate::{
-    verify_zk_x509_main_aggregate_stark_v1, zk_x509_main_pre_aux_from_proof_v1,
-};
-use std::collections::BTreeMap;
-use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
-#[cfg(test)]
-use iroha_data_model::privacy::PrivacyStatementV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use rand::TryRngCore;
-use thiserror::Error;
 #[cfg(test)]
 use super::der_stark::ZkX509DerStarkChallengesV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -278,6 +254,30 @@ use crate::privacy_engines::{
         verify_grinding_nonce_v1,
     },
 };
+use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
+#[cfg(test)]
+use iroha_data_model::privacy::PrivacyStatementV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) use main_aggregate::commit_zk_x509_main_base_phase_v1_with_rng;
+#[cfg(test)]
+use main_aggregate::{
+    MainOpenedProviderSetV1, MainOpenedRowEvaluatorV1, MainTraceColumnKindV1,
+    MainTracePolynomialSetV1, MainTraceProviderSetV1, P256OpenedRowEvaluatorV1,
+    ProjectionOpenedRowEvaluatorV1, add_main_composition_coefficient_chunks_v1,
+    main_opened_composition_value_v1, record_main_group_commitment_v1, validate_main_fri_mixes_v1,
+};
+#[cfg(test)]
+pub(crate) use main_aggregate::{
+    ZkX509MainAwaitingCredentialBindingV1, ZkX509MainCompositionPhaseV1,
+};
+use main_aggregate::{p256_opened_residues_v1, p256_scalar_opened_residues_v1};
+pub(crate) use main_aggregate::{
+    verify_zk_x509_main_aggregate_stark_v1, zk_x509_main_pre_aux_from_proof_v1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use rand::TryRngCore;
+use std::collections::BTreeMap;
+use thiserror::Error;
 /// Complete proof-system descriptor for the implemented aggregate adapters.
 ///
 /// The descriptor is transcript-bound and records the first-release geometry.
@@ -295,9 +295,8 @@ const TERMINAL_DEGREE_BOUND: usize = ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1 as usi
 const COMPOSITION_DEGREE_CHUNKS: usize = ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1 as usize;
 /// Inclusive degree of the trace mask multiplier.
 ///
-/// Haböck--Al Kindi Equation (3), with reduced AIR degree six, Fp4
-/// extension degree four, one DEEP point, and 58 FRI queries, requires
-/// `h = 802` randomizer coefficients.
+/// Haböck--Al Kindi Equation (3), with reduced AIR degree six, Fp4 extension degree four, one DEEP
+/// point, and 58 FRI queries, requires `h = 802` randomizer coefficients.
 const MASK_DEGREE: usize = ZK_X509_TRACE_MASK_DEGREE_V1 as usize;
 const _: () = assert!(MASK_DEGREE == 801);
 const DER_QUOTIENT_COSET_LOG2_V1: u8 = 22;
@@ -320,8 +319,7 @@ const MIN_TRACE_LOG2: u8 = 4;
 ///
 /// At log nine the masked trace has degree 1313 while FRI accepts only degree
 /// 1023. Log ten raises the FRI input bound to 2047 and the four-chunk
-/// composition bound to 8191, covering masked degree 1825 and quotient degree
-/// 6276 respectively.
+/// composition bound to 8191, covering masked degree 1825 and quotient degree 6276 respectively.
 const IO_MIN_SECURE_TRACE_LOG2_V1: u8 = 10;
 const _: () = assert!((1_usize << 9) + MASK_DEGREE > 1_023);
 const _: () = assert!((1_usize << IO_MIN_SECURE_TRACE_LOG2_V1) + MASK_DEGREE <= 2_047);
@@ -770,8 +768,7 @@ pub(crate) fn encode_zk_x509_main_proof_envelope_v1(
     }
     Ok(encoded)
 }
-/// Absorb every MAIN cross-adapter terminal before deriving constraint
-/// coefficients.
+/// Absorb every MAIN cross-adapter terminal before deriving constraint coefficients.
 pub(crate) fn absorb_zk_x509_main_terminal_claims_v1(
     transcript: &mut TransparentTranscriptV1,
     claims: ZkX509MainTerminalClaimsV1,
@@ -1010,9 +1007,8 @@ fn p256_instance_parts_v1(instance: u16) -> Option<(usize, u16)> {
 /// Translate one verifier-owned MAIN slice into the sole central P-256
 /// registration identity and revalidate every shared native dimension.
 ///
-/// The MAIN layout represents the binding sink as value-bus local instance
-/// two, while the central source gives it its own adapter identity at local
-/// instance zero. All other mappings are exact.
+/// The MAIN layout represents the binding sink as value-bus local instance two, while the central
+/// source gives it its own adapter identity at local instance zero. All other mappings are exact.
 fn p256_main_registration_from_main_layout_v1(
     registration: RegisteredSegmentLayoutV1,
 ) -> Result<P256MainRegistrationV1, ZkX509StarkErrorV1> {
@@ -1738,10 +1734,9 @@ fn canonical_sha_segment_layouts_v1() -> Result<Vec<SegmentLayoutV1>, ZkX509Star
 }
 /// Reconstruct the sole complete fixed-capacity X5S1 registration.
 ///
-/// Private witness code never supplies an adapter, instance, width, active
-/// count, family boundary, order, or padding boundary. Public values affect
-/// verifier-fixed input bindings inside these registrations, never the proof
-/// container geometry.
+/// Private witness code never supplies an adapter, instance, width, active count, family boundary,
+/// order, or padding boundary. Public values affect verifier-fixed input bindings inside these
+/// registrations, never the proof container geometry.
 fn canonical_full_profile_segment_layouts_v1() -> Result<Vec<SegmentLayoutV1>, ZkX509StarkErrorV1> {
     let mut segments = Vec::new();
     segments
@@ -2215,9 +2210,8 @@ pub(crate) struct ZkX509MainRegistrationShapeV1 {
 }
 /// Reconstruct and validate the exact 49-registration MAIN topology.
 ///
-/// This is intentionally verifier-owned and accepts no witness-dependent
-/// dimensions.  MAIN assembly calls it before handing material to the
-/// aggregate prover.
+/// This is intentionally verifier-owned and accepts no witness-dependent dimensions. MAIN assembly
+/// calls it before handing material to the aggregate prover.
 pub(crate) fn validate_zk_x509_main_registration_shape_v1()
 -> Result<ZkX509MainRegistrationShapeV1, ZkX509StarkErrorV1> {
     let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
@@ -2250,8 +2244,7 @@ pub(crate) struct ZkX509MainVerifierProfileV1 {
     /// Digest of the complete 28-field algebraic release manifest.
     pub(crate) compiled_profile_digest: [u8; 32],
 }
-/// Construct the sole MAIN verifier profile from independently pinned
-/// release material.
+/// Construct the sole MAIN verifier profile from independently pinned release material.
 pub(crate) fn construct_zk_x509_main_verifier_profile_v1()
 -> Result<ZkX509MainVerifierProfileV1, ZkX509StarkErrorV1> {
     let registration = validate_zk_x509_main_registration_shape_v1()?;
@@ -2262,8 +2255,7 @@ pub(crate) fn construct_zk_x509_main_verifier_profile_v1()
         compiled_profile_digest: compiled.digest(),
     })
 }
-/// Reject any supplied MAIN profile that differs from the verifier-owned
-/// release pins.
+/// Reject any supplied MAIN profile that differs from the verifier-owned release pins.
 pub(crate) fn validate_zk_x509_main_verifier_profile_v1(
     supplied: ZkX509MainVerifierProfileV1,
 ) -> Result<(), ZkX509StarkErrorV1> {
@@ -2465,10 +2457,9 @@ impl ZkX509MainBaseCommitmentSessionV1 {
             verifier_profile.compiled_profile_digest,
         )
     }
-    /// Initialize chronology only after the caller has validated the release
-    /// profile. This remains private: production reaches it exclusively
-    /// through `new_v1`, while unit tests exercise the isolated chronology
-    /// state machine with explicit test profiles.
+    /// Initialize chronology only after the caller has validated the release profile. This remains
+    /// private: production reaches it exclusively through `new_v1`, while unit tests exercise the
+    /// isolated chronology state machine with explicit test profiles.
     fn new_after_profile_validation_v1(
         layout: &AggregateProofLayoutV1,
         consensus_context_digest: [u8; 32],
@@ -2887,13 +2878,11 @@ impl MainIoAccessTopologyV1 {
         self.channel == other.channel && self.offset == other.offset
     }
 }
-/// Verifier-owned MAIN I/O fixed schedule compiled only from public channel
-/// declarations.
+/// Verifier-owned MAIN I/O fixed schedule compiled only from public channel declarations.
 ///
-/// The schedule deliberately stores no byte value from an execution or sorted
-/// witness. Execution-order and address-order topology are compiled directly
-/// from declarations, and public bytes are retained only for the dedicated
-/// public-input selector.
+/// The schedule deliberately stores no byte value from an execution or sorted witness.
+/// Execution-order and address-order topology are compiled directly from declarations, and public
+/// bytes are retained only for the dedicated public-input selector.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MainIoFixedScheduleV1 {
     layout: SegmentLayoutV1,
@@ -6171,9 +6160,8 @@ pub(crate) fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
 }
 /// Prove the registered projection AIR with injected masking entropy.
 ///
-/// This bounded proof constrains the projection trace itself. Its SHA and DER
-/// byte channels remain deliberately outside this proof until the aggregate
-/// cross-segment I/O registration is complete.
+/// This bounded proof constrains the projection trace itself. Its SHA and DER byte channels remain
+/// deliberately outside this proof until the aggregate cross-segment I/O registration is complete.
 #[cfg(test)]
 pub(crate) fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore>(
     statement: &IrohaZkX509StarkP256StatementV1,
@@ -6854,9 +6842,8 @@ fn registered_opened_rows_v1<'a>(
 }
 /// One native trace-column implementation behind the unified MAIN boundary.
 ///
-/// The verifier-owned registration is passed into every operation. Providers
-/// never supply adapter identities, instances, ranges, widths, or native
-/// logarithms themselves.
+/// The verifier-owned registration is passed into every operation. Providers never supply adapter
+/// identities, instances, ranges, widths, or native logarithms themselves.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 trait MainTraceGroupSourceV1 {
     fn native_base_column_v1(
@@ -6870,8 +6857,7 @@ trait MainTraceGroupSourceV1 {
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>;
 }
-/// A copied witness column which is overwritten before its allocation is
-/// released.
+/// A copied witness column which is overwritten before its allocation is released.
 #[derive(Debug, PartialEq, Eq)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ZeroizingMainTraceColumnV1(Vec<F>);
@@ -7203,10 +7189,9 @@ const _: () = assert!(
 );
 /// Exact mixed log19 registration, including the six non-P-256 owners.
 ///
-/// This validation is deliberately stronger than selecting every segment
-/// whose logarithm happens to be 19. It fixes the registration identities,
-/// offsets, group geometry, and physical chunk count before a production
-/// verifier source can exist.
+/// This validation is deliberately stronger than selecting every segment whose logarithm happens to
+/// be 19. It fixes the registration identities, offsets, group geometry, and physical chunk count
+/// before a production verifier source can exist.
 fn canonical_main_log19_registrations_v1(
     layout: &AggregateProofLayoutV1,
 ) -> Result<Vec<RegisteredSegmentLayoutV1>, ZkX509StarkErrorV1> {
@@ -7262,9 +7247,8 @@ fn canonical_main_log19_registrations_v1(
 }
 /// Exact P-256 subset of MAIN's mixed native-log19 group.
 ///
-/// The six DER/RFC/SHA registrations occupy the fixed prefix. P-256 then
-/// appears as all five arithmetic registrations followed by execution/sorted
-/// value-bus pairs in global signature order.
+/// The six DER/RFC/SHA registrations occupy the fixed prefix. P-256 then appears as all five
+/// arithmetic registrations followed by execution/sorted value-bus pairs in global signature order.
 fn canonical_p256_main_log19_bindings_v1(
     layout: &AggregateProofLayoutV1,
 ) -> Result<Vec<MainP256RegistrationBindingV1>, ZkX509StarkErrorV1> {
@@ -7903,8 +7887,7 @@ impl MainTraceGroupSourceV1 for MainP256Log16TraceGroupSourceV1<'_> {
         Ok(output)
     }
 }
-/// Fixed-polynomial streaming and opened-row composition for the bound
-/// log-sixteen prover.
+/// Fixed-polynomial streaming and opened-row composition for the bound log-sixteen prover.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainP256Log16ProverConstraintSourceV1<'a> {
     source: &'a P256MainBoundSourceV1,
@@ -8016,9 +7999,8 @@ impl<'a> MainP256Log16ProverConstraintSourceV1<'a> {
 /// Witness-free fixed sampler and opened-row evaluator for all ten canonical
 /// log-sixteen registrations.
 ///
-/// Each registration owns an independent bounded cache. Missing rows are
-/// sampled into a temporary map and committed only after every generated
-/// opening succeeds.
+/// Each registration owns an independent bounded cache. Missing rows are sampled into a temporary
+/// map and committed only after every generated opening succeeds.
 struct MainP256Log16VerifierConstraintSourceV1<'a> {
     bindings: Vec<MainP256RegistrationBindingV1>,
     common_lde_log2: u8,
@@ -8464,10 +8446,9 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
     /// Consume every challenge-independent log19 child exactly once under the
     /// credential-derived X5B1 binding.
     ///
-    /// This is deliberately the only transition into the bound mixed group.
-    /// In particular, callers cannot provide a separately bound P-256 source:
-    /// P-256 and all four SHA segments are transitioned here from the same
-    /// opaque credential capability.
+    /// This is deliberately the only transition into the bound mixed group. In particular, callers
+    /// cannot provide a separately bound P-256 source: P-256 and all four SHA segments are
+    /// transitioned here from the same opaque credential capability.
     fn bind_from_phase_v1(
         layout: &AggregateProofLayoutV1,
         assembly: &'a ZkX509MainTraceAssemblyV1,
@@ -8722,8 +8703,7 @@ impl MainTraceGroupSourceV1 for MainLog19BoundTraceGroupSourceV1<'_> {
         Ok(ZeroizingMainTraceColumnV1(column))
     }
 }
-/// Native fixed-polynomial and quotient owner for the complete mixed log19
-/// prover group.
+/// Native fixed-polynomial and quotient owner for the complete mixed log19 prover group.
 ///
 /// The source borrows the already-bound trace owner, so it is impossible to
 /// evaluate a challenge-dependent residue against a pre-X5B1 trace.
@@ -10238,8 +10218,7 @@ fn zeroed_main_trace_column_v1(
     values.resize(rows, F::ZERO);
     Ok(ZeroizingMainTraceColumnV1(values))
 }
-/// Exact five-signature scalar-bit trace source for the canonical MAIN log-8
-/// group.
+/// Exact five-signature scalar-bit trace source for the canonical MAIN log-8 group.
 ///
 /// This is a non-owning projection of the one central P-256 provider. The base
 /// view is constructed before X5B1 and cannot expose auxiliary columns. After
@@ -10348,8 +10327,7 @@ impl MainTraceGroupSourceV1 for MainP256ScalarTraceGroupSourceV1<'_> {
         Ok(output)
     }
 }
-/// Fixed-polynomial and opened-row source for the five log-8 scalar buses on
-/// the prover side.
+/// Fixed-polynomial and opened-row source for the five log-8 scalar buses on the prover side.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainP256ScalarProverConstraintSourceV1<'a> {
     registrations: [MainP256RegistrationBindingV1; P256_SIGNATURE_COUNT_V1],
@@ -10856,10 +10834,9 @@ impl MainTraceGroupSourceV1 for MainIoTraceGroupSourceV1<'_> {
 }
 /// MAIN I/O fixed-polynomial and composition source for the log-18 prover.
 ///
-/// It uses the same statement-only fixed compiler as the verifier and
-/// independently revalidates the prover's witness topology against that
-/// schedule. `MainIoTraceGroupSourceV1` performs the same check before any base
-/// column can enter the MAIN commitment session.
+/// It uses the same statement-only fixed compiler as the verifier and independently revalidates the
+/// prover's witness topology against that schedule. `MainIoTraceGroupSourceV1` performs the same
+/// check before any base column can enter the MAIN commitment session.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainIoProverConstraintSourceV1 {
     registration: RegisteredSegmentLayoutV1,
@@ -10959,10 +10936,9 @@ impl MainIoProverConstraintSourceV1 {
 }
 /// Verifier-generated MAIN I/O fixed openings and opened-row evaluator.
 ///
-/// Fixed rows come only from the typed public statement. The cache is bounded
-/// to the two coordinates needed for each canonical query, and all
-/// caller-controlled coordinates and opened values are checked before that
-/// cache can change.
+/// Fixed rows come only from the typed public statement. The cache is bounded to the two
+/// coordinates needed for each canonical query, and all caller-controlled coordinates and opened
+/// values are checked before that cache can change.
 struct MainIoVerifierConstraintSourceV1 {
     registration: RegisteredSegmentLayoutV1,
     common_lde_log2: u8,
@@ -11213,10 +11189,9 @@ impl MainTraceGroupSourceV1 for MainProjectionTraceGroupSourceV1<'_> {
 }
 /// Projection fixed-polynomial and composition source for the MAIN prover.
 ///
-/// Fixed columns are interpolated one at a time and handed to the caller
-/// through a scoped zeroizing buffer. This is deliberately separate from the
-/// bounded sampled-opening verifier below: a full prover traversal cannot
-/// consume, or exhaust, the verifier's 116-opening cache.
+/// Fixed columns are interpolated one at a time and handed to the caller through a scoped zeroizing
+/// buffer. This is deliberately separate from the bounded sampled-opening verifier below: a full
+/// prover traversal cannot consume, or exhaust, the verifier's 116-opening cache.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainProjectionProverConstraintSourceV1 {
     registration: RegisteredSegmentLayoutV1,
@@ -11286,11 +11261,10 @@ impl MainProjectionProverConstraintSourceV1 {
 }
 /// Test-only verifier-minted projection fixed opening.
 ///
-/// The registration and both query coordinates travel with the sampled rows.
-/// Constraint evaluation revalidates all four fields against the source cache,
-/// allowing tests to prove that caller-provided rows cannot be substituted for
-/// verifier reconstruction. Production evaluation never manufactures or
-/// exports this capability.
+/// The registration and both query coordinates travel with the sampled rows. Constraint evaluation
+/// revalidates all four fields against the source cache, allowing tests to prove that
+/// caller-provided rows cannot be substituted for verifier reconstruction. Production evaluation
+/// never manufactures or exports this capability.
 #[cfg(test)]
 #[derive(Debug)]
 struct MainProjectionVerifierFixedOpeningV1 {
@@ -11302,10 +11276,9 @@ struct MainProjectionVerifierFixedOpeningV1 {
 }
 /// Verifier-generated projection fixed rows and opened constraint evaluator.
 ///
-/// The fixed trace is compiled exclusively from the public statement and
-/// sampled directly on MAIN's common coset. It never reads prover-native
-/// projection material. This source is verifier-only and bounded to the exact
-/// number of fixed openings required by the canonical query schedule.
+/// The fixed trace is compiled exclusively from the public statement and sampled directly on MAIN's
+/// common coset. It never reads prover-native projection material. This source is verifier-only and
+/// bounded to the exact number of fixed openings required by the canonical query schedule.
 struct MainProjectionVerifierConstraintSourceV1 {
     registration: RegisteredSegmentLayoutV1,
     common_lde_log2: u8,
@@ -11581,10 +11554,9 @@ impl MainTraceGroupProviderV1<'_> {
 /// Closed association between one verifier-safe opened-row implementation and
 /// one canonical MAIN native-log group.
 ///
-/// Production variants always name a concrete verifier implementation. The
-/// dynamic variants only exist in unit tests so malformed-provider behavior
-/// remains testable without creating a production extension point capable of
-/// fabricating fixed openings.
+/// Production variants always name a concrete verifier implementation. The dynamic variants only
+/// exist in unit tests so malformed-provider behavior remains testable without creating a
+/// production extension point capable of fabricating fixed openings.
 enum MainOpenedGroupProviderV1<'a> {
     Log5(&'a mut MainP256Log5VerifierConstraintSourceV1<'a>),
     Log16(&'a mut MainP256Log16VerifierConstraintSourceV1<'a>),

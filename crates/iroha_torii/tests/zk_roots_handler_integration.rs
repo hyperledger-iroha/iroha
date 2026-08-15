@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test for /v1/zk/roots using a minimal in-memory state.
 #![allow(clippy::too_many_lines)]
-use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
 use axum::{Router, routing::post};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -14,6 +13,7 @@ use iroha_data_model::{NewAccount, prelude::*};
 use iroha_torii::NoritoJson;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
 use tower::ServiceExt as _;
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";

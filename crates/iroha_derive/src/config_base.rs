@@ -11,12 +11,12 @@
 //! - `key = "name"` - replace the Rust field name with a nonempty, unique configuration key.
 #![allow(unused)]
 #![allow(clippy::large_enum_variant)]
+use self::ast::Input;
+use crate::DarlingErrorWrapper;
 use darling::{FromAttributes, FromDeriveInput};
 use iroha_derive_primitives::Emitter;
 use manyhow::emit;
 use proc_macro2::TokenStream;
-use self::ast::Input;
-use crate::DarlingErrorWrapper;
 /// Derive `iroha_config_base::reader::ReadConfig` trait.
 ///
 /// Example schema:
@@ -93,12 +93,12 @@ pub fn derive_read_config_impl(input: TokenStream) -> TokenStream {
 }
 /// Parsing proc-macro input
 mod ast {
-    use std::collections::HashSet;
+    use super::codegen;
     use iroha_derive_primitives::{Emitter, parse_single_list_attr_opt};
     use manyhow::{JoinToTokensError, emit};
     use proc_macro2::{Ident, Span, TokenStream, TokenTree};
+    use std::collections::HashSet;
     use syn::{Token, parse::ParseStream, punctuated::Punctuated};
-    use super::codegen;
     // Previously we used `attributes(config)` here which rejected all unknown
     // attributes with a generic error message. Struct-level attributes are now
     // handled explicitly in [`derive_read_config`], so no additional attribute
@@ -442,8 +442,8 @@ mod ast {
     }
     #[cfg(test)]
     mod tests {
-        use syn::parse_quote;
         use super::*;
+        use syn::parse_quote;
         #[test]
         fn parse_default() {
             let attrs: Attrs = syn::parse_quote!(default);
@@ -659,9 +659,9 @@ mod codegen {
     }
     #[cfg(test)]
     mod tests {
+        use super::*;
         use expect_test::expect;
         use syn::parse_quote;
-        use super::*;
         #[test]
         fn entry_with_env_reading() {
             let entry = Entry {

@@ -4,6 +4,7 @@
 //! (either passed as the first CLI argument or via `SUMERAGI_BASELINE_ARTIFACT_DIR`),
 //! groups runs per scenario, and renders a Markdown report containing aggregated
 //! throughput and latency measurements alongside per-run details.
+use norito::json::{self, Map, Value, native::Number};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::{self, Write as _},
@@ -11,7 +12,6 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
-use norito::json::{self, Map, Value, native::Number};
 type Result<T> = std::result::Result<T, ReportError>;
 fn main() -> ExitCode {
     match emit_report(io::stdout().lock()) {

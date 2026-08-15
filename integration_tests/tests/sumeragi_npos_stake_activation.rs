@@ -1,12 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! `NPoS` election respects staking constraints and delays activation by finality margin.
 #![allow(clippy::too_many_lines)]
-use std::{
-    num::NonZeroU64,
-    str::FromStr,
-    sync::atomic::{AtomicUsize, Ordering},
-    time::{Duration, Instant},
-};
 use eyre::{Context as _, ensure};
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -32,6 +26,12 @@ use iroha_test_network::{
 };
 use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use norito::json::{self, Value};
+use std::{
+    num::NonZeroU64,
+    str::FromStr,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{Duration, Instant},
+};
 use tokio::time::sleep;
 const EPOCH_LEN: NonZeroU64 = NonZeroU64::new(6).expect("fixture epoch length must be non-zero");
 const FINALITY_MARGIN: u64 = 2;

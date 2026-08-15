@@ -3570,7 +3570,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 2)
-            self.assertIn("exactly one DEFAULT_PROFILES_JSON", stderr)
+            self.assertIn("exactly one active DEFAULT_PROFILES_JSON", stderr)
 
     def test_profile_catalog_loader_rejects_non_finite_json_constants(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -8017,7 +8017,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             (
                 "missing-default-raw-string",
                 b"// profile catalog without active default\n",
-                "does not contain DEFAULT_PROFILES_JSON raw string",
+                "must contain exactly one active DEFAULT_PROFILES_JSON declaration",
             ),
             (
                 "malformed-default-json",

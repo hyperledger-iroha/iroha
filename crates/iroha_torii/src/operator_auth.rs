@@ -3,6 +3,26 @@
 //! Exact-network operator request signatures remain mandatory at the route
 //! middleware boundary; sessions and bootstrap tokens never authorize a route
 //! by themselves.
+use crate::{
+    JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value, limits,
+    routing::MaybeTelemetry,
+};
+use axum::{
+    extract::{ConnectInfo, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use ciborium::{de::from_reader, value::Value as CborValue};
+use dashmap::DashMap;
+use iroha_config::parameters::actual::{
+    OperatorAuthLockout, OperatorTokenFallback, OperatorTokenSource, OperatorWebAuthnAlgorithm,
+    OperatorWebAuthnConfig, ToriiOperatorAuth,
+};
+use iroha_crypto::{Algorithm, PublicKey, Signature};
+use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
+use rand::rand_core::{TryCryptoRng, TryRngCore as _};
+use sha2::{Digest as _, Sha256};
 use std::{
     collections::HashSet,
     fs,
@@ -13,27 +33,7 @@ use std::{
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use axum::{
-    extract::{ConnectInfo, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use ciborium::{de::from_reader, value::Value as CborValue};
-use dashmap::DashMap;
-use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
-use rand::rand_core::{TryCryptoRng, TryRngCore as _};
-use sha2::{Digest as _, Sha256};
 use url::Url;
-use iroha_config::parameters::actual::{
-    OperatorAuthLockout, OperatorTokenFallback, OperatorTokenSource, OperatorWebAuthnAlgorithm,
-    OperatorWebAuthnConfig, ToriiOperatorAuth,
-};
-use iroha_crypto::{Algorithm, PublicKey, Signature};
-use crate::{
-    JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value, limits,
-    routing::MaybeTelemetry,
-};
 const HEADER_OPERATOR_SESSION: &str = "x-iroha-operator-session";
 const HEADER_OPERATOR_TOKEN: &str = "x-iroha-operator-token";
 const HEADER_MTLS_FORWARD: &str = "x-forwarded-client-cert";
@@ -1713,7 +1713,7 @@ pub async fn handle_operator_login_verify(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
-    use std::{collections::HashSet, sync::Arc};
+    use super::*;
     use axum::http::HeaderValue;
     use ciborium::ser::into_writer;
     use ed25519_dalek::Signer as _;
@@ -1722,7 +1722,7 @@ mod tests {
         elliptic_curve::rand_core::OsRng,
     };
     use rand::rand_core::{TryCryptoRng, TryRngCore};
-    use super::*;
+    use std::{collections::HashSet, sync::Arc};
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

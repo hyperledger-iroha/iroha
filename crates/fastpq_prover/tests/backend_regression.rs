@@ -1,5 +1,5 @@
 //! Regression fixtures for FASTPQ V1 backend artifacts captured from transition batches.
-use std::fs;
+use crate::common::fixture_update_requested;
 use fastpq_prover::{
     ExecutionMode, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
     gadgets::transfer::attach_transfer_smt_witnesses,
@@ -14,7 +14,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
-use crate::common::fixture_update_requested;
+use std::fs;
 fn v1_captured_fixture_batch(rows: usize) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     let mut transcripts = Vec::new();

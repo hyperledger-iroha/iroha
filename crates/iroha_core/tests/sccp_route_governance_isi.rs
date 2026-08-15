@@ -1,6 +1,5 @@
 //! Exact SCCP route-governance ISI execution tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::num::NonZeroU64;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -34,6 +33,7 @@ use iroha_executor_data_model::permission::{
 use iroha_primitives::numeric::NumericSpec;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
+use std::num::NonZeroU64;
 #[path = "common/world_fixture.rs"]
 mod test_world;
 fn test_state() -> State {

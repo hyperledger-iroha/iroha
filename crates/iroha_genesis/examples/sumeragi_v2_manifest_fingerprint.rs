@@ -1,8 +1,8 @@
 //! Print canonical Sumeragi v2 metadata for raw genesis manifests.
-use std::{env, path::PathBuf, str::FromStr as _};
 use iroha_crypto::PublicKey;
 use iroha_data_model::account::AccountId;
 use iroha_genesis::RawGenesisTransaction;
+use std::{env, path::PathBuf, str::FromStr as _};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut raw_args = env::args_os().skip(1);
     if raw_args.next().as_deref() == Some(std::ffi::OsStr::new("--account")) {

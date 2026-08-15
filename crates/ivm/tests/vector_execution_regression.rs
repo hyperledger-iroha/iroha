@@ -1,6 +1,6 @@
 //! Regression tests for vector execution semantics and syscall policy guards.
-use std::any::Any;
 use ivm::{IVM, IVMHost, ProgramMetadata, VMError, encoding, instruction, ivm_mode};
+use std::any::Any;
 const VECTOR_BASE: usize = 32;
 fn program_with(meta: ProgramMetadata, words: &[u32]) -> Vec<u8> {
     let mut program = meta.encode();

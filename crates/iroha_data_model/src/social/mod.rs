@@ -1,8 +1,8 @@
 //! Social incentive helpers and escrow records for viral reward flows.
+use crate::{account::AccountId, oracle::KeyedHash};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use crate::{account::AccountId, oracle::KeyedHash};
 /// Rolling reward budget tracked per Unix day (milliseconds / `86_400_000`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(

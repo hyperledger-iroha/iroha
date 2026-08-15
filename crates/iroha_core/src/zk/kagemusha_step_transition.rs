@@ -1,27 +1,12 @@
 //! Exact field-neutral operation ABI and assigned Kagemusha Step transition.
 //!
-//! The recursive Step circuits receive operation values as unreduced `u32`
-//! limbs.  This module is deliberately independent of the legacy
-//! host-compiled transition trace: it constrains the exact cells already
-//! assigned by the Step circuit and never reloads a state or operation value
-//! from a host witness.
-use ff::{Field as _, PrimeField};
-use halo2_base::{
-    AssignedValue, Context, QuantumCell,
-    gates::{GateInstructions, RangeChip, RangeInstructions},
-    utils::BigPrimeField,
+//! The recursive Step circuits receive operation values as unreduced `u32` limbs. This module is
+//! deliberately independent of the legacy host-compiled transition trace: it constrains the exact
+//! cells already assigned by the Step circuit and never reloads a state or operation value from a
+//! host witness.
+use super::kagemusha_sha256_v4::{
+    KagemushaSha256BitV4, KagemushaSha256ByteV4, KagemushaSha256JobsV4,
 };
-use halo2_proofs::halo2curves::pasta::Fp;
-use iroha_data_model::offline::{
-    KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_DOMAIN_V2,
-    KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
-    KagemushaRecursiveSpendInitRequestV4, KagemushaRecursiveSpendOperationVectorV4,
-    KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendRedemptionIntentV4,
-    KagemushaRecursiveSpendSplitIntentV4, KagemushaRecursiveSpendTransitionV4,
-    kagemusha_confidential_amount_encoding_v2, kagemusha_recursive_spend_transition_tag_v2,
-};
-use norito::codec::{Decode, Encode};
-use super::kagemusha_sha256_v4::{KagemushaSha256BitV4, KagemushaSha256ByteV4, KagemushaSha256JobsV4};
 use super::kagemusha_v2::{
     I_APPEND_PROFILE as O_APPEND_PROFILE, I_ARTIFACT_MANIFEST_SHA256 as O_ARTIFACT_MANIFEST_SHA256,
     I_ASSET_ID_DIGEST as O_ASSET_ID_DIGEST, I_ASSET_SCALE as O_ASSET_SCALE,
@@ -83,6 +68,22 @@ use super::kagemusha_v2::{
     S_PEER_HOP_COUNT, S_PROOF_STEP_COUNT, S_TOPUP_ANCHOR_COUNT, S_TOPUP_ANCHORS, S_VERIFIER_KEY_ID,
     S_VERSION,
 };
+use ff::{Field as _, PrimeField};
+use halo2_base::{
+    AssignedValue, Context, QuantumCell,
+    gates::{GateInstructions, RangeChip, RangeInstructions},
+    utils::BigPrimeField,
+};
+use halo2_proofs::halo2curves::pasta::Fp;
+use iroha_data_model::offline::{
+    KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_DOMAIN_V2,
+    KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
+    KagemushaRecursiveSpendInitRequestV4, KagemushaRecursiveSpendOperationVectorV4,
+    KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendRedemptionIntentV4,
+    KagemushaRecursiveSpendSplitIntentV4, KagemushaRecursiveSpendTransitionV4,
+    kagemusha_confidential_amount_encoding_v2, kagemusha_recursive_spend_transition_tag_v2,
+};
+use norito::codec::{Decode, Encode};
 /// Number of canonical Pallas-field elements in one ABI-21 V4 operation row.
 pub const KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
 /// Exact number of little-endian `u32` limbs carrying the operation row.
@@ -166,12 +167,11 @@ impl KagemushaStepOperationVectorV4 {
     /// Match every operation field derivable from an ABI-21 terminal
     /// statement before accepting the proof pair.
     ///
-    /// The Step relation exposes the statement digest and the semantic
-    /// operation as separate public wires.  Proving either wire is therefore
-    /// insufficient at the terminal boundary: a verifier must also establish
-    /// that the operation's statement-derived fields describe the statement
-    /// it was asked to verify.  Fields that require the original confidential
-    /// operation context remain covered by the exact-operation verifier path.
+    /// The Step relation exposes the statement digest and the semantic operation as separate public
+    /// wires. Proving either wire is therefore insufficient at the terminal boundary: a verifier
+    /// must also establish that the operation's statement-derived fields describe the statement it
+    /// was asked to verify. Fields that require the original confidential operation context remain
+    /// covered by the exact-operation verifier path.
     pub(crate) fn validate_terminal_statement_v4(
         &self,
         statement: &KagemushaRecursiveSpendPublicStatementV4,
@@ -1439,19 +1439,16 @@ pub struct NamedTransitionBindings<F: BigPrimeField> {
     pub change_commitment: AssignedValue<F>,
     /// Statement digest as eight exact `u32` cells.
     pub statement_digest_limbs: [AssignedValue<F>; 8],
-    /// Init payer tag encoded in operation fields 67..=70 as exact `u32` limbs.
-    /// This aliases the append recipient-request digest and is meaningful only
-    /// when `is_init == 1`.
+    /// Init payer tag encoded in operation fields 67..=70 as exact `u32` limbs. This aliases the
+    /// append recipient-request digest and is meaningful only when `is_init == 1`.
     pub init_payer_tag_limbs: [AssignedValue<F>; 8],
-    /// Init operation tag encoded in operation fields 71..=74 as exact `u32`
-    /// limbs. This aliases the descendant operation-id digest and is selected
-    /// by `is_init` at the StepEq boundary.
+    /// Init operation tag encoded in operation fields 71..=74 as exact `u32` limbs. This aliases
+    /// the descendant operation-id digest and is selected by `is_init` at the StepEq boundary.
     pub init_operation_tag_limbs: [AssignedValue<F>; 8],
 }
-/// Reconstruct one exact little-endian 256-bit scalar from eight already
-/// range-checked operation limbs. The operation loader has proved that the
-/// value is below the Pallas base-field modulus, so this cannot wrap in either
-/// Pasta recursion parity.
+/// Reconstruct one exact little-endian 256-bit scalar from eight already range-checked operation
+/// limbs. The operation loader has proved that the value is below the Pallas base-field modulus, so
+/// this cannot wrap in either Pasta recursion parity.
 pub(crate) fn reconstruct_kagemusha_step_scalar_v4<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1863,18 +1860,16 @@ fn bind_digest_to_state_if<F: BigPrimeField>(
 }
 /// Constrain the exact two-input application transition over already-assigned cells.
 ///
-/// The relation is symmetric in the two parent slots. Absent parents are
-/// mandatory all-zero vectors. Active parents bind their exact note material,
-/// amount, and common historical root to the operation row; the historical
-/// root is field 36 (`record_root_before`) and is intentionally **not** field
-/// 38 (`transfer_root`). Top-up anchors and extended branch claims are
-/// constrained as canonical set unions with exact zero padding.
+/// The relation is symmetric in the two parent slots. Absent parents are mandatory all-zero
+/// vectors. Active parents bind their exact note material, amount, and common historical root to
+/// the operation row; the historical root is field 36 (`record_root_before`) and is intentionally
+/// **not** field 38 (`transfer_root`). Top-up anchors and extended branch claims are constrained as
+/// canonical set unions with exact zero padding.
 ///
-/// This function does not prove confidential openings or Merkle paths. StepEq,
-/// the pair's semantic authority, additionally copy-binds the returned cells to
-/// the assigned secure relation from `confidential_v2`. StepEp is the
-/// lineage-and-reciprocal wrapper: it shares StepEq's compact public header but
-/// intentionally does not duplicate this application relation.
+/// This function does not prove confidential openings or Merkle paths. StepEq, the pair's semantic
+/// authority, additionally copy-binds the returned cells to the assigned secure relation from
+/// `confidential_v2`. StepEp is the lineage-and-reciprocal wrapper: it shares StepEq's compact
+/// public header but intentionally does not duplicate this application relation.
 pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2738,13 +2733,15 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
-    use halo2_base::{AssignedValue, gates::circuit::builder::BaseCircuitBuilder, utils::BigPrimeField};
+    use halo2_base::{
+        AssignedValue, gates::circuit::builder::BaseCircuitBuilder, utils::BigPrimeField,
+    };
     use halo2_proofs::{
         dev::MockProver,
         halo2curves::pasta::{Fp, Fq},
     };
-    use super::*;
     #[test]
     fn step_binding_digest_ignores_ambient_norito_layout() {
         let binding = "kagemusha-step-binding".to_owned();

@@ -1,11 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! JS Norito fixture parity with Rust canonical encoding.
-use std::{fs, path::PathBuf, str::FromStr};
 use iroha_data_model::DomainId;
 use iroha_data_model::prelude::{
     AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Quantity, TriggerId,
 };
 use norito::codec::{Decode, Encode};
+use std::{fs, path::PathBuf, str::FromStr};
 const FIXTURE_PUBLIC_KEY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 fn fixture_asset_id() -> AssetId {

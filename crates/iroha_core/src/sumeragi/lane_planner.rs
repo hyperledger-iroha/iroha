@@ -3,13 +3,8 @@
 //! This module is independent of the global consensus reducer. Sumeragi v2
 //! invokes it only to derive bounded lane-local artifacts which become inputs
 //! to the authoritative reducer-owned block candidate.
-use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
-#[cfg(test)]
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
 use crate::queue::{LaneQueueReservationScopeV1, RoutingDecision};
+use crate::{kura::Kura, state::State};
 use iroha_config::parameters::actual::Nexus;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -23,8 +18,13 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::codec::Encode;
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
+#[cfg(test)]
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
-use crate::{kura::Kura, state::State};
 /// Resolve an autoscaled lane's immutable, incarnation-bound PoPs in exact
 /// validator-set order.
 ///

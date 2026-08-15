@@ -166,6 +166,14 @@ mod checked_ed25519_signature_tests {
         assert!(!super::inert_bytes(&[0, 1, 0]));
     }
 }
+pub use self::gateway_fixture::{
+    GatewayFixtureMetadata, SORAFS_GATEWAY_CAR_DIGEST_HEX,
+    SORAFS_GATEWAY_CHUNK_DIGEST_SHA3_256_HEX, SORAFS_GATEWAY_COUNCIL_ENVELOPE_DIGEST_HEX,
+    SORAFS_GATEWAY_FIXTURE_DIGEST_HEX, SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX,
+    SORAFS_GATEWAY_FIXTURE_VERSION, SORAFS_GATEWAY_MANIFEST_DIGEST_HEX,
+    SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX, SORAFS_GATEWAY_PROFILE_VERSION, gateway_fixture_digest_hex,
+    gateway_fixture_metadata,
+};
 pub use capacity::{
     AssignmentError, CAPACITY_DECLARATION_VERSION_V1, CAPACITY_DISPUTE_VERSION_V1,
     CAPACITY_TELEMETRY_VERSION_V1, CapacityDeclarationV1, CapacityDeclarationValidationError,
@@ -487,14 +495,6 @@ pub use validation::{
     PinPolicyConstraints, decode_manifest_v1_base64_canonical, decode_manifest_v1_canonical,
     encode_manifest_v1_base64_canonical, validate_chunker_handle, validate_manifest,
     validate_manifest_root_cid, validate_pin_policy, validate_registered_chunker_profile,
-};
-pub use self::gateway_fixture::{
-    GatewayFixtureMetadata, SORAFS_GATEWAY_CAR_DIGEST_HEX,
-    SORAFS_GATEWAY_CHUNK_DIGEST_SHA3_256_HEX, SORAFS_GATEWAY_COUNCIL_ENVELOPE_DIGEST_HEX,
-    SORAFS_GATEWAY_FIXTURE_DIGEST_HEX, SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX,
-    SORAFS_GATEWAY_FIXTURE_VERSION, SORAFS_GATEWAY_MANIFEST_DIGEST_HEX,
-    SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX, SORAFS_GATEWAY_PROFILE_VERSION, gateway_fixture_digest_hex,
-    gateway_fixture_metadata,
 };
 /// Manifest version identifier.
 pub const MANIFEST_VERSION_V1: u8 = 1;

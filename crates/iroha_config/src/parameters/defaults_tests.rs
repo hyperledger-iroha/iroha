@@ -1,7 +1,7 @@
 //! Tests for the built-in parameter defaults.
+use super::{governance, nexus::fees, oracle, pipeline, queue, torii};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
-use super::{governance, nexus::fees, oracle, pipeline, queue, torii};
 #[test]
 fn gas_technical_account_matches_default_bootstrap_identity() {
     let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(

@@ -1,4 +1,11 @@
 //! Circuit tracking and padding scheduler for the SoraNet relay runtime.
+use crate::{
+    capability::{ConstantRateCapability, KemId, NegotiatedCapabilities, SignatureId},
+    config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, PaddingConfig},
+    metrics::Metrics,
+};
+use bytes::Bytes;
+use quinn::Connection;
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -8,19 +15,12 @@ use std::{
     },
     time::Instant,
 };
-use bytes::Bytes;
-use quinn::Connection;
 use thiserror::Error;
 use tokio::{
     task::JoinHandle,
     time::{self, Duration, MissedTickBehavior},
 };
 use tracing::{debug, warn};
-use crate::{
-    capability::{ConstantRateCapability, KemId, NegotiatedCapabilities, SignatureId},
-    config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, PaddingConfig},
-    metrics::Metrics,
-};
 /// Tracks active circuits for introspection/debugging.
 #[derive(Debug)]
 pub struct CircuitRegistry {
@@ -329,14 +329,14 @@ impl PaddingBudget {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        net::{IpAddr, Ipv4Addr},
-        time::Duration,
-    };
     use super::*;
     use crate::{
         capability::{ConstantRateMode, KemAdvertisement, SignatureAdvertisement},
         constant_rate::CONSTANT_RATE_CELL_BYTES,
+    };
+    use std::{
+        net::{IpAddr, Ipv4Addr},
+        time::Duration,
     };
     fn sample_negotiated() -> NegotiatedCapabilities {
         NegotiatedCapabilities {

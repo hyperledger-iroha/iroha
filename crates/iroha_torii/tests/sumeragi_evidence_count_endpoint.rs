@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level test for GET /v1/sumeragi/evidence/count
 #![cfg(feature = "telemetry")]
-use std::sync::Arc;
 use axum::{Router, extract::State, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -19,6 +18,7 @@ use iroha_data_model::{
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
 };
 use iroha_torii::handle_v1_sumeragi_evidence_count;
+use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
 fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));

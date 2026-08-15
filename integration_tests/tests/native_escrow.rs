@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Native asset escrow integration scenarios.
-use std::time::{Duration, Instant};
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -17,6 +16,7 @@ use iroha_crypto::Hash;
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::time::{Duration, Instant};
 fn wait_for_escrow_status(
     client: &Client,
     escrow_id: EscrowId,

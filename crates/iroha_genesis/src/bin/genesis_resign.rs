@@ -1,15 +1,15 @@
 //! Re-sign a Norito-framed genesis block with the configured genesis key.
-use std::{
-    env,
-    fs::{self, File},
-    io::Read as _,
-    path::{Path, PathBuf},
-};
 use eyre::{Result, eyre};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::{
     block::SignedBlock,
     confidential::{CONFIDENTIAL_RULES_VERSION, ConfidentialFeatureDigest},
+};
+use std::{
+    env,
+    fs::{self, File},
+    io::Read as _,
+    path::{Path, PathBuf},
 };
 const MAX_GENESIS_PRIVATE_KEY_FILE_BYTES: usize = 4 * 1024;
 fn main() -> Result<()> {

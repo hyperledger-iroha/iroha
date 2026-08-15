@@ -7,17 +7,24 @@
 //! the fallback values in this module to avoid breaking operator dashboards.
 pub mod capability;
 #[cfg(feature = "telemetry")]
-use std::collections::btree_map::Entry as BTreeEntry;
-#[cfg(feature = "telemetry")]
-use std::sync::Mutex;
+use crate::pipeline::access::AccessSetSource;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
-    sync::{
-        Arc, RwLock as StdRwLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+use crate::smartcontracts::isi::settlement::{SETTLEMENT_KIND_DVP, SETTLEMENT_KIND_PVP};
+use crate::{
+    da::{DaPinIntentValidationError, DaShardCursorError},
+    gossiper::{GossipPlane, gossip_plane_label},
+    governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
+    json_macros::{JsonDeserialize, JsonSerialize},
+    kura::Kura,
+    nexus::space_directory::SpaceDirectoryManifestSet,
+    queue::{Queue, QueueLimits},
+    state::{State, WorldReadOnly},
+    sumeragi::{
+        da::{GateReason, GateSatisfaction},
+        message::BlockMessage,
+        status::{
+            self, DataspaceCommitmentSnapshot, LaneCommitmentSnapshot, SettlementOutcomeKind,
+        },
     },
 };
 use http::StatusCode;
@@ -31,7 +38,9 @@ use iroha_data_model::events::data::{
     space_directory::SpaceDirectoryEvent,
 };
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
-use iroha_data_model::soranet::privacy_metrics::{SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1};
+use iroha_data_model::soranet::privacy_metrics::{
+    SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1,
+};
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use iroha_data_model::{
     Identifiable,
@@ -92,28 +101,21 @@ use norito::streaming::{
 };
 use settlement_router::XorQuantity;
 use settlement_router::policy::BufferStatus;
-use tokio::sync::{RwLock, mpsc, oneshot, watch};
 #[cfg(feature = "telemetry")]
-use crate::pipeline::access::AccessSetSource;
+use std::collections::btree_map::Entry as BTreeEntry;
+#[cfg(feature = "telemetry")]
+use std::sync::Mutex;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
-use crate::smartcontracts::isi::settlement::{SETTLEMENT_KIND_DVP, SETTLEMENT_KIND_PVP};
-use crate::{
-    da::{DaPinIntentValidationError, DaShardCursorError},
-    gossiper::{GossipPlane, gossip_plane_label},
-    governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
-    json_macros::{JsonDeserialize, JsonSerialize},
-    kura::Kura,
-    nexus::space_directory::SpaceDirectoryManifestSet,
-    queue::{Queue, QueueLimits},
-    state::{State, WorldReadOnly},
-    sumeragi::{
-        da::{GateReason, GateSatisfaction},
-        message::BlockMessage,
-        status::{
-            self, DataspaceCommitmentSnapshot, LaneCommitmentSnapshot, SettlementOutcomeKind,
-        },
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+    sync::{
+        Arc, RwLock as StdRwLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
+use tokio::sync::{RwLock, mpsc, oneshot, watch};
 const PHASE_PREPARE: &str = "prepare";
 const PHASE_COMMIT: &str = "commit";
 const PHASE_NEW_VIEW: &str = "new_view";
@@ -9010,11 +9012,19 @@ pub fn start(
 #[cfg(all(feature = "telemetry", test))]
 #[allow(clippy::disallowed_types, clippy::float_cmp)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, HashSet},
-        path::PathBuf,
-        sync::Arc,
-        time::Duration,
+    #[cfg(feature = "telemetry")]
+    use super::StreamingTelemetry;
+    use super::*;
+    use crate::{
+        block::{BlockBuilder, CommittedBlock, NewBlock},
+        governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus},
+        nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
+        pipeline::access::AccessSetSource,
+        prelude::World,
+        query::store::LiveQueryStore,
+        state::StateReadOnly,
+        sumeragi::{consensus, message::BlockMessage, network_topology::Topology, status},
+        tx::AcceptedTransaction,
     };
     use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, SignatureOf};
@@ -9046,7 +9056,9 @@ mod tests {
         trigger::prelude::{Action, Repeats, Trigger, TriggerId},
     };
     #[cfg(feature = "telemetry")]
-    use iroha_data_model::{events::data::sorafs::SorafsProofHealthAlert, sorafs::capacity::ProviderId};
+    use iroha_data_model::{
+        events::data::sorafs::SorafsProofHealthAlert, sorafs::capacity::ProviderId,
+    };
     use iroha_primitives::{
         addr::{SocketAddr, socket_addr},
         time::{MockTimeHandle, TimeSource},
@@ -9059,21 +9071,13 @@ mod tests {
         SyncDiagnostics, TelemetryAuditOutcome, TelemetryDecodeStats, TelemetryEncodeStats,
         TelemetryEnergyStats, TelemetryNetworkStats,
     };
-    use tokio::task::spawn_blocking;
-    #[cfg(feature = "telemetry")]
-    use super::StreamingTelemetry;
-    use super::*;
-    use crate::{
-        block::{BlockBuilder, CommittedBlock, NewBlock},
-        governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus},
-        nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
-        pipeline::access::AccessSetSource,
-        prelude::World,
-        query::store::LiveQueryStore,
-        state::StateReadOnly,
-        sumeragi::{consensus, message::BlockMessage, network_topology::Topology, status},
-        tx::AcceptedTransaction,
+    use std::{
+        collections::{BTreeMap, HashSet},
+        path::PathBuf,
+        sync::Arc,
+        time::Duration,
     };
+    use tokio::task::spawn_blocking;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("telemetry fixture key generation should succeed")
     }
@@ -9892,6 +9896,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn status_exposes_tx_gossip_targets_with_aliases() {
+        use super::StateTelemetry;
         use iroha_data_model::{
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
@@ -9902,7 +9907,6 @@ mod tests {
         use iroha_telemetry::metrics::Status;
         use iroha_test_samples::PEER_KEYPAIR;
         use nonzero_ext::nonzero;
-        use super::StateTelemetry;
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_catalog = LaneCatalog::new(
@@ -12281,11 +12285,11 @@ mod tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn governance_events_drive_metrics_via_ingest() {
-        use std::sync::Arc;
+        use crate::state::GovernanceProposalStatus as GPS;
         use iroha_data_model::events::data::governance::{
             GovernanceEvent, GovernanceProposalApproved, GovernanceProposalEnacted,
         };
-        use crate::state::GovernanceProposalStatus as GPS;
+        use std::sync::Arc;
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let proposal_id = [0xAB; 32];
@@ -12328,11 +12332,11 @@ mod tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn council_persist_event_updates_gauges() {
-        use std::sync::Arc;
         use iroha_data_model::{
             events::data::governance::{GovernanceCouncilPersisted, GovernanceEvent},
             isi::governance::CouncilDerivationKind,
         };
+        use std::sync::Arc;
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.on_governance_event(&GovernanceEvent::CouncilPersisted(
@@ -12352,10 +12356,10 @@ mod tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn governance_bond_events_increment() {
-        use std::sync::Arc;
         use iroha_data_model::events::data::governance::{
             GovernanceEvent, GovernanceLockCreated, GovernanceLockExtended, GovernanceLockUnlocked,
         };
+        use std::sync::Arc;
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.ingest_data_event(&DataEvent::Governance(GovernanceEvent::LockCreated(
@@ -12406,8 +12410,8 @@ mod tests {
     #[cfg(feature = "telemetry")]
     #[test]
     fn citizen_service_events_increment() {
-        use std::sync::Arc;
         use iroha_data_model::isi::governance::CitizenServiceEvent;
+        use std::sync::Arc;
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.record_citizen_service_event(CitizenServiceEvent::Decline, &Quantity::zero());

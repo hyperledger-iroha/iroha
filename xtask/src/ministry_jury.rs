@@ -1,8 +1,3 @@
-use std::{
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-};
 use blake2::digest::Digest;
 use hex::{FromHex, decode as hex_decode};
 use iroha_crypto::Blake2b256;
@@ -20,6 +15,11 @@ use rand_chacha::ChaCha20Rng;
 use rand_core_06::{OsRng as SecureOsRng, RngCore as SecureRngCore};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 pub enum Command {
     Sortition(SortitionOptions),
@@ -448,8 +448,8 @@ pub fn parse_drawn_at(value: &str) -> Result<OffsetDateTime, Box<dyn Error>> {
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::NamedTempFile;
     use super::*;
+    use tempfile::NamedTempFile;
     #[test]
     fn parse_beacon_validates_length() {
         assert!(parse_beacon(&"ff".repeat(31)).is_err());

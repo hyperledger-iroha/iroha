@@ -1,5 +1,4 @@
 //! Rust-owned grouped Native AMX v2 JSON fixture generation.
-use std::{collections::BTreeSet, error::Error, fs, path::Path};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleTree, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -28,6 +27,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, Value};
+use std::{collections::BTreeSet, error::Error, fs, path::Path};
 pub const FIXTURE_BASENAME: &str = "native_amx_v2_grouped.json";
 const GROUP_SOURCE_COUNT: usize = 2;
 const VALIDATOR_COUNT: usize = 4;

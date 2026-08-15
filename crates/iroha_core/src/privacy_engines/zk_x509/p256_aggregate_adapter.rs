@@ -1,17 +1,13 @@
-//! Heterogeneous-domain numeric aggregate adapters for the exact P-256
-//! relation.
+//! Heterogeneous-domain numeric aggregate adapters for the exact P-256 relation.
 //!
-//! Every adapter uses its smallest protocol-supported power-of-two native
-//! domain. Cross-trace products consume cells projected directly from that
-//! adapter's committed base row. Explicit verifier-ordered terminal claims are
-//! transcript-bound after auxiliary commitments, constrained at each source's
-//! own final native row, then equality-checked by the verifier. There is no
-//! copied bridge trace or unconstrained host lift. Verifier preprocessing and
-//! challenge-dependent traces can both be replayed one native column at a
-//! time.
+//! Every adapter uses its smallest protocol-supported power-of-two native domain. Cross-trace
+//! products consume cells projected directly from that adapter's committed base row. Explicit
+//! verifier-ordered terminal claims are transcript-bound after auxiliary commitments, constrained
+//! at each source's own final native row, then equality-checked by the verifier. There is no copied
+//! bridge trace or unconstrained host lift. Verifier preprocessing and challenge-dependent traces
+//! can both be replayed one native column at a time.
 //!
 //! This is the first-release aggregate registration surface.
-use thiserror::Error;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::main_assembly::ZkX509MainTraceAssemblyV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -107,6 +103,7 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
+use thiserror::Error;
 /// Stable descriptor for the first-release heterogeneous-domain integration layer.
 #[cfg(test)]
 pub(crate) const ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_V1: &[u8] =
@@ -775,8 +772,7 @@ fn validate_p256_cross_trace_terminal_claims_v1(
     }
     Ok(())
 }
-/// Exact host-side terminal-claim equalities, ending at the independent
-/// binding sink.
+/// Exact host-side terminal-claim equalities, ending at the independent binding sink.
 ///
 /// The proof parser must absorb these claims after all auxiliary roots and
 /// before composition/query challenges. Each claim is separately constrained
@@ -842,9 +838,8 @@ pub(crate) fn evaluate_p256_bus_terminal_claim_equalities_v1(
 }
 /// Bind an explicit terminal claim to a product carried by one source trace.
 ///
-/// `last_selector` is verifier preprocessing for that source's own native
-/// final row, so this works across heterogeneous trace sizes without a host
-/// lift.
+/// `last_selector` is verifier preprocessing for that source's own native final row, so this works
+/// across heterogeneous trace sizes without a host lift.
 pub(crate) fn evaluate_p256_terminal_claim_binding_v1(
     last_selector: F,
     opened_terminal: [F; P256_CROSS_TRACE_LANES_V1],
@@ -1141,8 +1136,7 @@ pub(crate) struct P256ValueExecutionAggregateStreamV1<'a> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
-    /// Construct the execution aggregate only from an X5B1-bound value-bus
-    /// source.
+    /// Construct the execution aggregate only from an X5B1-bound value-bus source.
     pub(crate) fn new_v1(
         value_bus: &'a P256ValueBusBoundSourceV1,
     ) -> Result<Self, P256AggregateAdapterErrorV1> {
@@ -1273,8 +1267,7 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
     pub(crate) const fn terminal_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.writer_terminal
     }
-    /// Value-memory execution terminal carried by the native value-bus
-    /// substream.
+    /// Value-memory execution terminal carried by the native value-bus substream.
     pub(crate) fn value_terminal_v1(
         &self,
     ) -> Result<[F; P256_VALUE_BUS_LANES_V1], P256AggregateAdapterErrorV1> {
@@ -1756,8 +1749,7 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         self.next_row += 1;
         Ok(Some(aux))
     }
-    /// Replay this deterministic stream into one challenge-dependent
-    /// arithmetic auxiliary column.
+    /// Replay this deterministic stream into one challenge-dependent arithmetic auxiliary column.
     pub(crate) fn fill_aux_column_v1(
         &self,
         column: usize,
@@ -1970,8 +1962,7 @@ fn window_scalar_event_v1(
         bit: f_usize_v1(local + 1)?,
     })
 }
-/// Constant-memory base/fixed provider for the vertically packed 128-window
-/// adapter.
+/// Constant-memory base/fixed provider for the vertically packed 128-window adapter.
 #[derive(Clone, Copy, Debug)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256WindowAggregateRowsV1<'a> {
@@ -2137,8 +2128,7 @@ impl<'a> P256WindowAggregateAuxStreamV1<'a> {
         self.next_row += 1;
         Ok(Some(aux))
     }
-    /// Replay this deterministic stream into one challenge-dependent window
-    /// auxiliary column.
+    /// Replay this deterministic stream into one challenge-dependent window auxiliary column.
     pub(crate) fn fill_aux_column_v1(
         &self,
         column: usize,
@@ -2409,8 +2399,7 @@ impl<'a> P256ReductionAggregateRowsV1<'a> {
             .copied()
             .unwrap_or([F::ZERO; P256_REDUCTION_BASE_WIDTH_V1]))
     }
-    /// Copy one complete committed reduction column into caller-owned
-    /// storage.
+    /// Copy one complete committed reduction column into caller-owned storage.
     pub(crate) fn fill_base_column_v1(
         &self,
         column: usize,
@@ -2533,8 +2522,7 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
         self.next_row += 1;
         Ok(Some(aux))
     }
-    /// Replay this deterministic stream into one challenge-dependent
-    /// reduction auxiliary column.
+    /// Replay this deterministic stream into one challenge-dependent reduction auxiliary column.
     pub(crate) fn fill_aux_column_v1(
         &self,
         column: usize,
@@ -2852,8 +2840,7 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
         self.next_row += 1;
         Ok(Some(aux))
     }
-    /// Replay this deterministic stream into one challenge-dependent low-S
-    /// auxiliary column.
+    /// Replay this deterministic stream into one challenge-dependent low-S auxiliary column.
     pub(crate) fn fill_aux_column_v1(
         &self,
         column: usize,
@@ -3064,9 +3051,8 @@ impl P256BindingSinkFixedProviderV1 {
     pub(crate) fn new_v1(role: P256EcdsaRoleV1) -> Result<Self, P256AggregateAdapterErrorV1> {
         Self::new_with_optional_certificate_v1(role, false)
     }
-    /// Compile the role-exact schedule for the sole optional certificate
-    /// instance. The Boolean is verifier-derived from global signature index
-    /// two and is never accepted from proof metadata.
+    /// Compile the role-exact schedule for the sole optional certificate instance. The Boolean is
+    /// verifier-derived from global signature index two and is never accepted from proof metadata.
     pub(crate) fn new_with_optional_certificate_v1(
         role: P256EcdsaRoleV1,
         optional_certificate: bool,
@@ -3237,8 +3223,7 @@ impl<'a> P256BindingSinkAggregateStreamV1<'a> {
             .next_row_v1()?
             .map(flatten_regular_aux_v1))
     }
-    /// Replay this deterministic stream into one challenge-dependent sink
-    /// auxiliary column.
+    /// Replay this deterministic stream into one challenge-dependent sink auxiliary column.
     pub(crate) fn fill_aux_column_v1(
         &self,
         column: usize,
@@ -3778,13 +3763,11 @@ fn p256_main_value_fixed_source_v1(
         P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1,
     )?)
 }
-/// Closed verifier-only fixed preprocessing for every canonical P-256 MAIN
-/// registration.
+/// Closed verifier-only fixed preprocessing for every canonical P-256 MAIN registration.
 ///
-/// Construction depends solely on native verifier topology. It accepts no
-/// witness rows, proof metadata, roles, optional-selection flags, or
-/// challenges. The global signature position derives both the role and the
-/// sole optional-certificate sink at signature two.
+/// Construction depends solely on native verifier topology. It accepts no witness rows, proof
+/// metadata, roles, optional-selection flags, or challenges. The global signature position derives
+/// both the role and the sole optional-certificate sink at signature two.
 #[derive(Clone, Debug)]
 pub(crate) struct P256MainVerifierFixedSourceV1 {
     certificate_execution: P256ValueExecutionAggregateFixedProviderV1,
@@ -4917,8 +4900,7 @@ fn zeroize_p256_main_terminal_claims_v1(claims: &mut ZkX509P256TerminalClaimsV1)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainBaseSourceV1 {
-    /// Consume the exact five-signature base phase once under the opaque X5B1
-    /// token.
+    /// Consume the exact five-signature base phase once under the opaque X5B1 token.
     ///
     /// The source is poisoned before any fallible validation or child bind.
     /// A failed transition recursively clears every retained private trace and
@@ -5143,8 +5125,7 @@ impl P256MainBoundSourceV1 {
         self.ensure_bound_v1()?;
         canonical_p256_main_registrations_v1()
     }
-    /// Replay one complete challenge-independent committed column after
-    /// binding.
+    /// Replay one complete challenge-independent committed column after binding.
     pub(crate) fn fill_base_column_v1(
         &self,
         registration: P256MainRegistrationV1,
@@ -5239,8 +5220,7 @@ impl P256MainBoundSourceV1 {
             _ => Err(P256AggregateAdapterErrorV1::Topology),
         }
     }
-    /// Replay one complete witness-free verifier-preprocessed column after
-    /// binding.
+    /// Replay one complete witness-free verifier-preprocessed column after binding.
     pub(crate) fn fill_fixed_column_v1(
         &self,
         registration: P256MainRegistrationV1,
@@ -5540,7 +5520,6 @@ pub(crate) fn p256_main_base_source_fixture_for_test_v1()
 }
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest as _, Sha256};
     use super::super::{
         credential_pre_aux::{
             ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,
@@ -5560,6 +5539,7 @@ mod tests {
         },
     };
     use super::*;
+    use sha2::{Digest as _, Sha256};
     fn main_post_base_v1(seed: u8) -> ZkX509CredentialMainPostBaseChallengesV1 {
         let main = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [seed; 32],

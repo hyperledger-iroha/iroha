@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry JSON endpoint smoke tests for Sumeragi v2 diagnostics.
 #![cfg(feature = "telemetry")]
-use std::sync::Arc;
 use axum::{extract::ConnectInfo, http::Request};
 use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::{
@@ -11,6 +10,7 @@ use iroha_core::{
 };
 use iroha_data_model::ChainId;
 use iroha_torii::MaybeTelemetry;
+use std::sync::Arc;
 use tower::util::ServiceExt as _;
 mod fixtures;
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {

@@ -73,7 +73,7 @@ impl PreparedDirectRkgOneStatementCoreV1 {
     ) -> Result<FinalizedDirectRkgOneStatementV1, ZkAmsMkheErrorV1> {
         let mut bytes = [0_u8; RKG_ONE_STATEMENT_BYTES_V1];
         bytes[..PREPARED_RKG_ONE_STATEMENT_CORE_BYTES_V1].copy_from_slice(&self.bytes);
-        let trailer: &mut [u8; 64] = bytes[PREPARED_RKG_ONE_STATEMENT_CORE_BYTES_V1..]
+        let trailer: &mut [u8; 64] = (&mut bytes[PREPARED_RKG_ONE_STATEMENT_CORE_BYTES_V1..])
             .try_into()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
         finalized.write_statement_trailer_v1(trailer)?;

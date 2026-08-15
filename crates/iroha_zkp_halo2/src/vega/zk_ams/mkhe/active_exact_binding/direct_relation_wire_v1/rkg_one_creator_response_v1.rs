@@ -83,7 +83,7 @@ fn commitment_first_messages_v1(
     let mut digests = [[0_u8; 32]; CHALLENGE_REPETITIONS_V1];
     for repetition in 0..CHALLENGE_REPETITIONS_V1 {
         let mut encoded = [0_u8; RECONSTRUCTED_COMMITMENT_BYTES_V1];
-        let mut cursor = 0;
+        let mut cursor = 0_usize;
         for slot in 0..WITNESS_COUNT_V1 {
             for chunk in 0..CHUNKS_PER_WITNESS_V1 {
                 let coefficient = chunk * WITNESS_CHUNK_COEFFICIENTS_V1;

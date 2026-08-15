@@ -1,17 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests of the Iroha Client CLI
-use std::{
-    collections::BTreeMap,
-    net::{TcpListener, TcpStream},
-    num::NonZeroU32,
-    path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use integration_tests::{
     binary_resolver::{
         binary_supports_training_job_commands, cli_binary_name,
@@ -48,6 +36,18 @@ use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR};
 use norito::json::{self, Value};
 use reqwest::Url;
+use std::{
+    collections::BTreeMap,
+    net::{TcpListener, TcpStream},
+    num::NonZeroU32,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
 const SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM: Duration = Duration::from_secs(15);
 const SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT: Duration = Duration::from_secs(60);

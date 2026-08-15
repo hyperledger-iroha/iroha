@@ -63,10 +63,10 @@ fn print_world_memory_usage() {
     r#gen!(Domain, Account, AssetDefinition, Asset, Nft, Role,);
 }
 mod util {
-    use std::sync::atomic::{AtomicU64, Ordering};
     use iroha_core::smartcontracts::Registrable;
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_SYNTHETIC_VALUE: AtomicU64 = AtomicU64::new(1);
     fn next_synthetic_value() -> u64 {
         NEXT_SYNTHETIC_VALUE.fetch_add(1, Ordering::Relaxed)
@@ -110,8 +110,8 @@ mod util {
     }
     #[cfg(test)]
     mod tests {
-        use iroha_crypto::Algorithm;
         use super::*;
+        use iroha_crypto::Algorithm;
         #[test]
         fn try_gen_account_in_uses_checked_default_generation() {
             let domain = DomainId::try_new("wonderland", "universal").expect("domain");

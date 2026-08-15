@@ -48,12 +48,12 @@ pub use small::SmallPublicKey as BlsSmallPublicKey;
 // Select backend implementation module
 // - Default: compat w3f-bls (arkworks-based) when `bls-backend-blstrs` is NOT set
 // - New: pure blstrs backend when `bls-backend-blstrs` is set
+mod ethereum;
 #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
 mod implementation;
 #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
 #[path = "implementation_blstrs.rs"]
 mod implementation;
-mod ethereum;
 pub use ethereum::{
     ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,
     ethereum_bls_pop_validate_public_key,

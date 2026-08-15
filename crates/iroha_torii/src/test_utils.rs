@@ -2,15 +2,6 @@
 //!
 //! These helpers are intended for crate integration tests to avoid duplicating
 //! queue-drain and state-apply boilerplate when exercising app API endpoints.
-use std::{
-    borrow::Cow,
-    collections::BTreeMap,
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-    str::FromStr as _,
-    sync::Arc,
-    time::Duration,
-};
 use iroha_config::parameters::{defaults, defaults::zk::fastpq};
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
@@ -50,6 +41,15 @@ use iroha_executor_data_model::permission::{
     smart_contract::{CanInvokeContractEntrypoint, CanRegisterSmartContractCode},
 };
 use nonzero_ext::nonzero;
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+    str::FromStr as _,
+    sync::Arc,
+    time::Duration,
+};
 /// Exact genesis-lineage identity used by [`mk_minimal_root_cfg`].
 #[must_use]
 pub fn signed_query_network_id() -> NetworkId {
@@ -1484,8 +1484,11 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
 }
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, sync::Arc};
     use super::checked_random_keypair;
+    use super::{
+        apply_queued_in_one_block, contract_code_hash_hex, execution_context_for_routing_plan,
+        minimal_ivm_program,
+    };
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -1502,10 +1505,7 @@ mod tests {
         nexus::{DataSpaceId, LaneId},
         transaction::{TransactionBuilder, TransactionEntrypoint},
     };
-    use super::{
-        apply_queued_in_one_block, contract_code_hash_hex, execution_context_for_routing_plan,
-        minimal_ivm_program,
-    };
+    use std::{borrow::Cow, sync::Arc};
     #[test]
     fn contract_code_hash_hex_matches_domain_separated_full_artifact_hash() {
         let code = minimal_ivm_program(1);

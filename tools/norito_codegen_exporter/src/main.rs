@@ -4,12 +4,6 @@
 //! package library also owns canonical Norito RPC fixture generation and
 //! verification so SDK pipelines and repository automation share one
 //! implementation.
-use std::{
-    any::TypeId,
-    collections::HashMap,
-    fs,
-    path::{Path, PathBuf},
-};
 use anyhow::{Context, Result};
 use clap::Parser;
 use iroha_data_model::{instruction_registry, isi::InstructionRegistry, prelude as dm};
@@ -22,6 +16,12 @@ use norito::{
     json::{self, Map, Number, Value},
 };
 use sha2::{Digest, Sha256};
+use std::{
+    any::TypeId,
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 macro_rules! for_each_instruction_type {
     ($macro:ident) => {
@@ -796,10 +796,10 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use iroha_schema::IntoSchema;
-    use tempfile::NamedTempFile;
     use super::*;
+    use iroha_schema::IntoSchema;
+    use std::fs;
+    use tempfile::NamedTempFile;
     #[derive(IntoSchema)]
     struct Sample {
         value: u32,

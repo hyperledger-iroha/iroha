@@ -3,7 +3,7 @@
 //! The broadcaster de-duplicates envelopes by `(lane_id, dataspace_id, block_height,
 //! settlement_hash)`, validates each payload, persists it to the Sumeragi status snapshot,
 //! and emits a high-priority control-plane frame so peers can ingest the relay evidence.
-use std::collections::{BTreeMap, VecDeque};
+use crate::{IrohaNetwork, NetworkMessage, sumeragi::status};
 use iroha_data_model::{
     block::consensus::LaneBlockCommitment,
     nexus::{
@@ -18,7 +18,7 @@ use iroha_p2p::{
     },
 };
 use iroha_telemetry::metrics;
-use crate::{IrohaNetwork, NetworkMessage, sumeragi::status};
+use std::collections::{BTreeMap, VecDeque};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct LaneRelayKey {
     lane_id: LaneId,
@@ -310,12 +310,8 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZeroU64,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
+    use super::{
+        LaneRelayBroadcastError, LaneRelayBroadcaster, LaneRelaySendDisposition, LaneRelayTx,
     };
     use iroha_crypto::{Hash as UntypedHash, HashOf, MerkleProof};
     use iroha_data_model::{
@@ -328,8 +324,14 @@ mod tests {
             LaneRelayEnvelope,
         },
     };
-    use super::{LaneRelayBroadcastError, LaneRelayBroadcaster, LaneRelaySendDisposition, LaneRelayTx};
     use iroha_p2p::network::RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY;
+    use std::{
+        num::NonZeroU64,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
     #[derive(Clone, Default)]
     struct MockNetwork {
         sent: Arc<Mutex<Vec<LaneRelayEnvelope>>>,

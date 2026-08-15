@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smart contract query behaviour checks.
-use std::num::NonZeroU64;
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::{
@@ -10,6 +9,7 @@ use iroha::{
 use iroha_core::smartcontracts::ivm::gas_limit_for_meta;
 use iroha_test_network::*;
 use iroha_test_samples::load_sample_ivm;
+use std::num::NonZeroU64;
 fn fee_payment_with_gas_limit(bytecode: &IvmBytecode) -> Result<FeePaymentIntent> {
     let parsed =
         ivm::ProgramMetadata::parse(bytecode.as_ref()).wrap_err("parse IVM program metadata")?;

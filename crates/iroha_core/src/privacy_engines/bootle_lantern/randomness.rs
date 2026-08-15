@@ -4,13 +4,15 @@
 //! operation.  One health-checked 64-byte root is then split internally into
 //! fixed, non-interchangeable SHAKE256 streams.  Callers cannot accidentally
 //! supply identically seeded RNG objects for two different secret roles.
+use crate::privacy_engines::prover_randomness::{
+    HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
+};
 use rand_core_06::{CryptoRng, RngCore};
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
 };
 use zeroize::{Zeroize, Zeroizing};
-use crate::privacy_engines::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
 const MASTER_ROOT_BYTES_V1: usize = 64;
 const STREAM_KEY_BYTES_V1: usize = 64;
 const STREAM_BLOCK_BYTES_V1: usize = 64;
@@ -184,8 +186,8 @@ fn absorb_frame_v1(state: &mut Shake256, bytes: &[u8]) {
 }
 #[cfg(test)]
 mod tests {
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use super::*;
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     struct TestRng(u64);
     impl RngCore for TestRng {
         fn next_u32(&mut self) -> u32 {

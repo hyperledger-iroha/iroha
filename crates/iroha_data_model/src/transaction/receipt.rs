@@ -1,11 +1,11 @@
 //! Transaction submission receipt types and signing helpers.
+use super::{SignedTransaction, signed::TransactionEntrypoint};
 use iroha_crypto::{Algorithm, HashOf, KeyPair, PublicKey, Signature};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
     core::NoritoSerialize,
 };
-use super::{SignedTransaction, signed::TransactionEntrypoint};
 fn verify_signature_for_signer(
     signature: &Signature,
     signer: &PublicKey,

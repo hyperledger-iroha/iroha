@@ -1,15 +1,4 @@
 //! ACME automation controller wiring for the SoraFS gateway TLS surface.
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
-use iroha_futures::supervisor::ShutdownSignal;
-use iroha_logger::prelude::*;
-use tokio::{
-    sync::{Mutex, RwLock},
-    task::JoinHandle,
-    time as tokio_time,
-};
 #[cfg(feature = "telemetry")]
 use super::telemetry::record_renewal_metrics;
 use super::{
@@ -18,6 +7,17 @@ use super::{
     telemetry::{TlsRenewalResult, TlsStateSnapshot},
 };
 use crate::routing::MaybeTelemetry;
+use iroha_futures::supervisor::ShutdownSignal;
+use iroha_logger::prelude::*;
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
+use tokio::{
+    sync::{Mutex, RwLock},
+    task::JoinHandle,
+    time as tokio_time,
+};
 /// Default automation poll interval (seconds).
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_mins(1);
 /// Handle that manages TLS automation and updates gateway telemetry state.

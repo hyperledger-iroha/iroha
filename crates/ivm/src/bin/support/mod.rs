@@ -332,11 +332,13 @@ fn sync_directory(_path: &Path) -> std::io::Result<()> {
 }
 #[cfg(test)]
 mod tests {
+    use super::{
+        GeneratedOutput, GenerationMode, parse_generation_options, sync_generated_outputs,
+    };
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
     };
-    use super::{GeneratedOutput, GenerationMode, parse_generation_options, sync_generated_outputs};
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
     fn temp_directory(label: &str) -> std::path::PathBuf {
         let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);

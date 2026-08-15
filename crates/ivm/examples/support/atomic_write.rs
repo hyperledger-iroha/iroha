@@ -114,11 +114,11 @@ fn sync_directory(_path: &Path) -> io::Result<()> {
 }
 #[cfg(test)]
 mod tests {
+    use super::atomic_write;
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
     };
-    use super::atomic_write;
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
     fn test_directory(label: &str) -> std::path::PathBuf {
         let serial = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);

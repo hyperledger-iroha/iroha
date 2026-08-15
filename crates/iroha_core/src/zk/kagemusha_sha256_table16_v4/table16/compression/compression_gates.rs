@@ -10,11 +10,11 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::marker::PhantomData;
-use ff::PrimeField;
-use halo2_proofs::plonk::{Constraint, Constraints, Expression};
 use super::super::Gate;
 use crate::zk::kagemusha_sha256_table16_v4::util::MASK_EVEN_32;
+use ff::PrimeField;
+use halo2_proofs::plonk::{Constraint, Constraints, Expression};
+use std::marker::PhantomData;
 pub struct CompressionGate<F: PrimeField>(PhantomData<F>);
 impl<F: PrimeField> CompressionGate<F> {
     fn ones() -> Expression<F> {

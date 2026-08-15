@@ -1,7 +1,7 @@
 //! Structured diagnostics shared by the Kotodama compiler, CLI, and language tools.
-use std::{error::Error as StdError, fmt};
-use norito::json::{self, Value};
 use crate::source::{SourceFile, TextRange};
+use norito::json::{self, Value};
+use std::{error::Error as StdError, fmt};
 /// Maximum number of diagnostics returned for one compilation request.
 ///
 /// The cap bounds memory and renderer work for adversarial source files while

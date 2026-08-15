@@ -1,15 +1,4 @@
 //! Client side of the feature-isolated real-network consensus message controller.
-use std::{
-    collections::BTreeSet,
-    fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, Instant},
-};
 use color_eyre::eyre::{Result, eyre};
 use iroha_crypto::{Hash as CryptoHash, HashOf};
 use iroha_data_model::{
@@ -22,6 +11,17 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::json::{Map, Value};
+use std::{
+    collections::BTreeSet,
+    fs::{self, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 use tokio::time::sleep;
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const CONTROL_FILE: &str = "command.norito.json";

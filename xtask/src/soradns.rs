@@ -1,9 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-};
+use crate::normalize_path;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
 use data_encoding::BASE32_NOPAD;
@@ -25,9 +20,14 @@ use norito::{
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Value as SerdeJsonValue, json};
 use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use crate::normalize_path;
 const RAD_HASH_DOMAIN: &[u8] = b"rad-v1";
 const DEFAULT_CSP_TEMPLATE: &str = "default-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'";
 const DEFAULT_HSTS_TEMPLATE: &str = "max-age=63072000; includeSubDomains; preload";
@@ -2831,13 +2831,13 @@ impl From<norito::json::Error> for DirectoryReleaseError {
 }
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use super::*;
     use blake3::hash as blake3_hash;
     use iroha_primitives::soradns::{
         canonical_gateway_suffix, canonical_gateway_wildcard_pattern, pretty_gateway_suffix,
     };
+    use std::fs;
     use tempfile::tempdir;
-    use super::*;
     #[test]
     fn derives_host_summaries_with_normalisation() {
         let names = vec!["example.sora".to_string(), "Example.Dao.Sora".to_string()];

@@ -4,34 +4,14 @@ mod config;
 mod consensus_message_control;
 pub mod fslock_ports;
 pub mod genesis_support;
+use color_eyre::eyre::{Context, Report, Result, eyre};
+pub use config::chain_id;
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
     ConsensusMessageControlHeld, ConsensusMessageControlKind, ConsensusMessageControlRule,
     NativeAmxFaultAck, NativeAmxFaultPhase,
 };
 use core::{fmt, future::Future, time::Duration};
-use std::{
-    borrow::Cow,
-    collections::{BTreeSet, HashMap, HashSet, hash_map::DefaultHasher},
-    ffi::OsString,
-    fs,
-    hash::{Hash as StdHash, Hasher},
-    io::{ErrorKind, Read, Seek, SeekFrom, Write},
-    iter,
-    net::TcpListener,
-    num::NonZero,
-    ops::Deref,
-    path::{Component, Path, PathBuf},
-    process::{ExitStatus, Output, Stdio},
-    sync::{
-        Arc, Mutex as StdMutex, OnceLock,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-    },
-    thread,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
-use color_eyre::eyre::{Context, Report, Result, eyre};
-pub use config::chain_id;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
@@ -102,7 +82,30 @@ use iroha_test_samples::{
 use iroha_version::codec::EncodeVersioned;
 use nonzero_ext::nonzero;
 use norito::json::{self, Value as JsonValue};
+use std::{
+    borrow::Cow,
+    collections::{BTreeSet, HashMap, HashSet, hash_map::DefaultHasher},
+    ffi::OsString,
+    fs,
+    hash::{Hash as StdHash, Hasher},
+    io::{ErrorKind, Read, Seek, SeekFrom, Write},
+    iter,
+    net::TcpListener,
+    num::NonZero,
+    ops::Deref,
+    path::{Component, Path, PathBuf},
+    process::{ExitStatus, Output, Stdio},
+    sync::{
+        Arc, Mutex as StdMutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
+    thread,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 // no external dependency needed: versioned encoding is a single leading byte (1)
+use crate::config::ensure_genesis_results_with_runtime_config;
+/// Consensus mode frozen into the test network's signed genesis profile.
+pub use iroha_data_model::block::consensus_v2::ConsensusMode;
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
@@ -115,9 +118,6 @@ use tokio::{
 };
 use toml::{Table, Value, map::Entry};
 use tracing::{Instrument, debug, error, info, info_span, warn};
-use crate::config::ensure_genesis_results_with_runtime_config;
-/// Consensus mode frozen into the test network's signed genesis profile.
-pub use iroha_data_model::block::consensus_v2::ConsensusMode;
 const TEST_SNS_LEASE_PAYMENT: &str = "0.5";
 const TEST_SNS_POLICY_VERSION: u16 = 1;
 const TEST_SNS_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
@@ -9394,6 +9394,20 @@ pub async fn once_blocks_sync(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use iroha_config::parameters::defaults;
+    use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
+    use iroha_crypto::Algorithm;
+    use iroha_data_model::{
+        block::{
+            decode_framed_signed_block, decode_versioned_signed_block,
+            deframe_versioned_signed_block_bytes,
+        },
+        isi::{Instruction, SetParameter},
+        parameter::{Parameter, system::consensus_metadata},
+        transaction::{Executable, ExecutableBatchItem},
+    };
+    use iroha_version::{Version, codec::EncodeVersioned};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::{
@@ -9408,23 +9422,9 @@ mod tests {
         thread,
         time::Duration,
     };
-    use iroha_config::parameters::defaults;
-    use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
-    use iroha_crypto::Algorithm;
-    use iroha_data_model::{
-        block::{
-            decode_framed_signed_block, decode_versioned_signed_block,
-            deframe_versioned_signed_block_bytes,
-        },
-        isi::{Instruction, SetParameter},
-        parameter::{Parameter, system::consensus_metadata},
-        transaction::{Executable, ExecutableBatchItem},
-    };
-    use iroha_version::{Version, codec::EncodeVersioned};
     use tempfile::tempdir;
     use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
     use toml::Value as TomlValue;
-    use super::*;
     static LOG_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
     /// Serializes async tests that override `TEST_NETWORK_BIN_*` variables so they
     /// cannot leak into concurrently running cases.

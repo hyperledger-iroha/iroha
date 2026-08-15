@@ -1,5 +1,4 @@
 //! End-to-end acceptance coverage for Kotodama V1 runtime semantics.
-use std::{collections::BTreeMap, fmt::Write as _};
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::json::Json;
@@ -8,6 +7,7 @@ use ivm::{
     pointer_abi::PointerType,
 };
 use norito::json as njson;
+use std::{collections::BTreeMap, fmt::Write as _};
 mod common;
 const MAX_INT: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
 const MAX_INT_MINUS_ONE: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042046";

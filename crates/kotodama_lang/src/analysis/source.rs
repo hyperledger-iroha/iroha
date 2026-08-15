@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::{
     ast::{Block, Expr, Item, Program, Statement},
@@ -6,6 +5,7 @@ use crate::{
         self, ExprKind, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement,
     },
 };
+use std::collections::HashSet;
 /// Run static analysis on a parsed Kotodama program using the associated typed
 /// information produced by the semantic analyzer.
 pub fn run_static_analysis(program: &Program, typed: &TypedProgram) -> Vec<AnalysisFinding> {

@@ -1,5 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! SSE smoke test: verify that `/v1/events/sse` streams trigger and data events.
+use eyre::Result;
+use integration_tests::sandbox;
+use iroha::data_model::prelude::*;
+use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
+use iroha_test_network::NetworkBuilder;
+use iroha_test_samples::ALICE_ID;
+use norito::json::{self, Value as JsonValue};
 use std::{
     io::{BufRead, BufReader, ErrorKind, Write},
     net::{TcpStream, ToSocketAddrs},
@@ -11,13 +18,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use eyre::Result;
-use integration_tests::sandbox;
-use iroha::data_model::prelude::*;
-use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
-use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::ALICE_ID;
-use norito::json::{self, Value as JsonValue};
 // Match the client status timeout so slow test networks don't drop SSE readers early.
 const SSE_TIMEOUT: Duration = Duration::from_secs(300);
 struct SseReader {

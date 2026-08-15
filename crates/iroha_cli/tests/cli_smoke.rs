@@ -5,16 +5,6 @@
 //! catch regression where the clap command tree fails to build or the
 //! binary cannot launch in automated environments.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::{
-    ffi::OsStr,
-    fs,
-    io::{self, Read},
-    path::{Path, PathBuf},
-    process::{Command, ExitStatus, Output, Stdio},
-    sync::LazyLock,
-    thread,
-    time::{Duration, Instant},
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::hash;
 use iroha::{
@@ -45,6 +35,16 @@ use norito::{
     to_bytes,
 };
 use sorafs_orchestrator::treasury::{LedgerTransferRecord, TransferKind};
+use std::{
+    ffi::OsStr,
+    fs,
+    io::{self, Read},
+    path::{Path, PathBuf},
+    process::{Command, ExitStatus, Output, Stdio},
+    sync::LazyLock,
+    thread,
+    time::{Duration, Instant},
+};
 fn cli_binary() -> &'static str {
     env!("CARGO_BIN_EXE_iroha")
 }
@@ -2991,8 +2991,8 @@ fn da_submit_no_submit_emits_request_artifacts() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn iroha_da_submit_records_pdp_commitment_receipt() {
-    use core::convert::TryFrom;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use core::convert::TryFrom;
     use iroha_crypto::Signature;
     use iroha_data_model::{
         da::prelude::{BlobDigest, DaIngestReceipt, DaRentQuote, DaStripeLayout, StorageTicketId},
@@ -4707,6 +4707,7 @@ fn address_audit_rejects_domain_suffix() {
     );
 }
 include!("cli_smoke/address_audit_csv_test.rs");
+
 fn assert_address_audit_stats(stats_value: &Value) {
     let stats = stats_value
         .as_object()
@@ -4873,6 +4874,7 @@ fn space_directory_manifest_audit_bundle_cli() {
     );
 }
 mod torii_mock_support {
+    use norito::json;
     use std::{
         env, fmt, fs,
         io::{self, BufRead, BufReader, Read, Write},
@@ -4883,7 +4885,6 @@ mod torii_mock_support {
         thread,
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
-    use norito::json;
     use url::Url;
     const MOCK_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
     #[derive(Debug)]

@@ -1,21 +1,21 @@
 //! Built-in parameter definitions and validation logic.
+pub use self::model::*;
+#[cfg(feature = "json")]
+use super::custom::json_helpers;
+use super::custom::{CustomParameter, CustomParameterId, CustomParameters};
 use core::{
     convert::TryFrom,
     num::{NonZeroU16, NonZeroU64},
     time::Duration,
 };
-#[cfg(feature = "json")]
-use std::collections::BTreeMap;
-use std::sync::LazyLock;
 use iroha_crypto::Algorithm;
 use iroha_data_model_derive::model;
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-pub use self::model::*;
 #[cfg(feature = "json")]
-use super::custom::json_helpers;
-use super::custom::{CustomParameter, CustomParameterId, CustomParameters};
+use std::collections::BTreeMap;
+use std::sync::LazyLock;
 /// Maximum governed IVM heap size in bytes for ABI V1.
 ///
 /// The ABI V1 address map reserves the half-open range
@@ -140,8 +140,8 @@ impl ConsensusHandshakeMetadata {
 }
 #[cfg(feature = "json")]
 mod json_support {
-    use std::string::String;
     use super::*;
+    use std::string::String;
     pub(super) type Map = BTreeMap<String, json::Value>;
     pub(super) fn write_field<T: JsonSerialize>(
         out: &mut String,
@@ -244,11 +244,11 @@ fn parse_custom_parameters_value(value: json::Value) -> Result<CustomParameters,
 }
 #[model]
 mod model {
+    use super::*;
     use derive_more::Display;
     use getset::{CopyGetters, Getters};
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-    use super::*;
     /// Consensus runtime mode
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
@@ -1539,9 +1539,9 @@ impl Parameters {
 }
 /// Consensus handshake metadata helpers used during genesis provisioning.
 pub mod consensus_metadata {
-    use core::str::FromStr as _;
     use super::*;
     use crate::Name;
+    use core::str::FromStr as _;
     static HANDSHAKE_META_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("consensus_handshake_meta")
@@ -1555,9 +1555,9 @@ pub mod consensus_metadata {
 }
 /// Cryptography snapshot metadata helpers used during genesis provisioning.
 pub mod crypto_metadata {
-    use core::str::FromStr as _;
     use super::*;
     use crate::Name;
+    use core::str::FromStr as _;
     static MANIFEST_META_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("crypto_manifest_meta").expect("crypto_manifest_meta is a valid Name"),
@@ -1570,9 +1570,9 @@ pub mod crypto_metadata {
 }
 /// Confidential registry metadata helpers used during genesis provisioning.
 pub mod confidential_metadata {
-    use core::str::FromStr as _;
     use super::*;
     use crate::Name;
+    use core::str::FromStr as _;
     static REGISTRY_ROOT_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("confidential_registry_root")
@@ -1586,9 +1586,9 @@ pub mod confidential_metadata {
 }
 /// IVM metadata helpers stored in the custom parameter registry.
 pub mod ivm_metadata {
-    use core::str::FromStr as _;
     use super::*;
     use crate::Name;
+    use core::str::FromStr as _;
     static PUBLIC_INPUTS_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("ivm_public_inputs").expect("ivm_public_inputs is a valid Name"),
@@ -2356,15 +2356,15 @@ impl JsonDeserialize for SmartContractParameter {
 // Norito decoding now relies on derived implementations for parameter types.
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr as _;
-    use iroha_primitives::json::Json;
-    use norito::codec::{DecodeAll as _, Encode as _};
-    use norito::json::{Number, Value};
     use super::*;
     use crate::{
         name::Name,
         parameter::custom::{CustomParameter, CustomParameterId},
     };
+    use core::str::FromStr as _;
+    use iroha_primitives::json::Json;
+    use norito::codec::{DecodeAll as _, Encode as _};
+    use norito::json::{Number, Value};
     #[test]
     fn set_custom_parameter() {
         let mut params = Parameters::default();

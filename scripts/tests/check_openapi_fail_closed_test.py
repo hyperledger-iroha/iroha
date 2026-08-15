@@ -18,6 +18,9 @@ OPENAPI_AUTHORITIES = (
     REPO_ROOT / "crates" / "iroha_torii" / "assets" / "openapi" / "torii.json",
 )
 OPENAPI_GATE = REPO_ROOT / "ci" / "check_openapi_spec.sh"
+GROUPED_PARITY_HARNESS = (
+    REPO_ROOT / "ci" / "run_native_amx_v2_grouped_sdk_parity.sh"
+)
 OPENAPI_GENERATOR_WRAPPER = REPO_ROOT / "ci" / "run_openapi_generator.sh"
 RELEASE_PROCESS_POLICY = (
     REPO_ROOT / "scripts" / "sumeragi_v2_release_process_policy.sh"
@@ -230,17 +233,18 @@ def test_openapi_cargo_lock_pin_has_one_staging_only_owner() -> None:
 
 def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently() -> None:
     gate = OPENAPI_GATE.read_text(encoding="utf-8")
+    harness = GROUPED_PARITY_HARNESS.read_text(encoding="utf-8")
 
     assert gate.count(
-        "node tools/openapi/scripts/verify-musubi-v1-contract.mjs"
+        '"${OPENAPI_NODE_BIN}" \\\n    tools/openapi/scripts/verify-musubi-v1-contract.mjs'
     ) == 1
     assert gate.index("require_clean_checkout\n") < gate.index(
-        "node tools/openapi/scripts/verify-musubi-v1-contract.mjs"
+        '"${OPENAPI_NODE_BIN}" \\\n    tools/openapi/scripts/verify-musubi-v1-contract.mjs'
     )
     assert "require_clean_checkout" in gate
     assert "EXPECTED_GENERATOR_COMMIT" not in gate
     assert gate.count(
-        "node tools/openapi/scripts/verify-openapi-release-inputs.mjs"
+        'tools/openapi/scripts/verify-openapi-release-inputs.mjs'
     ) == 2
     assert gate.count(
         "python3 scripts/check_sorafs_release_version_map.py"
@@ -329,6 +333,29 @@ def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently
         '"${RELEASE_INPUT_SUMMARY_SECOND}"'
         in gate
     )
+    assert 'OPENAPI_NODE_MODULES_ROOT="${OPENAPI_NODE_MODULES_ROOT:-${REPO_ROOT}/tools/openapi/node_modules}"' in gate
+    assert '!= "${IROHA_RELEASE_SDK_INPUT_ROOT}/openapi/node_modules"' in gate
+    assert 'local source="${OPENAPI_NODE_MODULES_ROOT}"' in gate
+    assert '"${source_root}/tools/openapi/package.json"' in gate
+    assert '"${source_root}/tools/openapi/package-lock.json"' in gate
+    assert '"${target}/.package-lock.json"' in gate
+    assert 'source_packages[""] != package_policy' in gate
+    assert "{name: value for name, value in source_packages.items() if name}" in gate
+    assert "npm --prefix" not in gate
+    assert 'OPENAPI_DEPENDENCY_STATE_BEFORE="$(openapi_dependency_state)"' in gate
+    assert 'OPENAPI_DEPENDENCY_STATE_AFTER="$(openapi_dependency_state)"' in gate
+    assert 'openapi_dependency_state "${REPLAY_SOURCE_FIRST}/tools/openapi/node_modules"' in gate
+    assert 'openapi_dependency_state "${REPLAY_SOURCE_SECOND}/tools/openapi/node_modules"' in gate
+    assert "staged OpenAPI dependency input changed during mirror replay" in gate
+    assert "identity(os.fstat(descriptor)) != fingerprint" in gate
+    assert "before.st_dev, before.st_ino, before.st_uid, before.st_nlink" in gate
+    assert "before.st_mtime_ns, before.st_ctime_ns" in gate
+    assert "metadata changed during snapshot" in gate
+    assert 'OPENAPI_NODE_BIN="${OPENAPI_NODE_BIN:-}"' in gate
+    assert '"${OPENAPI_NODE_BIN}" != "${IROHA_RELEASE_NODE_BIN}"' in gate
+    assert "print(Path(sys.argv[1]).resolve(strict=True))" in gate
+    assert '"${OPENAPI_NODE_BIN}" --input-type=module -' in gate
+    assert "GIT_OPTIONAL_LOCKS=0 node" not in gate
     assert (
         'diff -u "${VERSION_MAP_SUMMARY_FIRST}" '
         '"${VERSION_MAP_SUMMARY_SECOND}"'
@@ -337,6 +364,37 @@ def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently
     assert "source-identity.json" in gate
     assert '"candidate_commit": commit' in gate
     assert '"candidate_tree": tree' in gate
+    assert (
+        "printf 'openapi-two-mirror-replay status=success "
+        "candidate_oid=%s candidate_tree=%s mirrors=2 artifacts=5 "
+        "require_signed=%s\\n'"
+        in gate
+    )
+    assert harness.count('bash "${repo_root}/ci/check_openapi_spec.sh"') == 1
+    assert "openapi_require_signed=0" in harness
+    assert "openapi_require_signed=1" in harness
+    assert (
+        'OPENAPI_NODE_BIN="$sdk_openapi_node_bin" \\\n'
+        '        OPENAPI_NODE_MODULES_ROOT="$sdk_openapi_node_modules_root" \\\n'
+        '        OPENAPI_REQUIRE_SIGNED="$openapi_require_signed" \\\n'
+        '        bash "${repo_root}/ci/check_openapi_spec.sh"'
+        in harness
+    )
+    assert 'sdk_openapi_node_modules_root="$sdk_input_root/openapi/node_modules"' in harness
+    assert 'sdk_openapi_node_modules_root="${repo_root}/tools/openapi/node_modules"' in harness
+    assert 'document.get("bindings", {}).get("openapi_node")' in harness
+    assert 'sdk_openapi_node_bin="${IROHA_RELEASE_NODE_BIN:-}"' in harness
+    assert 'protected OpenAPI Node executable disagrees with runtime inventory' in harness
+    assert "authenticated OpenAPI Node control metadata changed" in harness
+    assert 'record.get("mode") != format(stat.S_IMODE(metadata.st_mode), "04o")' in harness
+    assert "metadata.st_uid != os.geteuid()" in harness
+    assert harness.count("observed_test_count=7") == 1
+    assert "assert_openapi_replay_marker" in harness
+    assert (
+        "openapi-two-mirror-replay status=success "
+        "candidate_oid=${candidate_oid} candidate_tree=${candidate_tree} "
+        "mirrors=2 artifacts=5 require_signed=${require_signed}" in harness
+    )
     assert "VERSION_VERIFY_POLICY_ARGS" not in gate
 
 
@@ -413,7 +471,8 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
     gate_before = gate.index('release_gate_boundary "openapi:before-completion-publication"')
     gate_receipt = gate.index('"${OPENAPI_EVIDENCE_DIR}/source-identity.json"')
     gate_after = gate.index('release_gate_boundary "openapi:after-completion-publication"')
-    assert gate_before < gate_receipt < gate_after
+    gate_success = gate.index("printf 'openapi-two-mirror-replay status=success ")
+    assert gate_before < gate_receipt < gate_after < gate_success
 
     assert 'release_gate_boundary "openapi-generator:channels-ready"' in wrapper
     assert "OpenAPI generator authenticated artifact root" in wrapper

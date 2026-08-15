@@ -1,9 +1,4 @@
 //! CLI helpers for authoring capacity marketplace artefacts.
-use std::{
-    fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use hex::FromHex;
 use norito::json::{self, Map, Value};
@@ -18,6 +13,11 @@ use sorafs_manifest::{
     chunker_registry,
     deal::XorQuantity,
     provider_advert::{CapabilityType, StakePointer},
+};
+use std::{
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
 };
 /// Entry point for the `capacity` sub-commands.
 pub fn run<I>(mut args: I) -> Result<(), String>

@@ -1,35 +1,12 @@
 //! Native fixed-profile Bootle/Lantern P1/P2 prover and verifier.
 //!
-//! This module implements the blind-issuance-request (P1) and presentation
-//! (P2) paths over their distinct transcript purposes and nominal wire types:
-//! transparent commitments, projected norm witnesses, Schwartz compression,
-//! the generic quadratic linearization, ABDLOP response compression, strict
-//! proof construction, verifier-side challenge reconstruction, and prover
-//! self-verification. It also owns the sealed two-pass presentation transaction
-//! builder so no proof, statement, genesis, policy, or intent binding can be
-//! replaced between proving and signing.
-use core::{num::NonZeroU32, time::Duration};
-use iroha_crypto::{Hash, PrivateKey, PublicKey};
-use iroha_data_model::{
-    account::AccountId,
-    isi::privacy::SubmitPrivacyProofV1,
-    metadata::Metadata,
-    prelude::NetworkId,
-    privacy::{
-        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
-        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
-        PrivacyConsensusLimitsV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
-        PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
-        PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-    },
-    transaction::{
-        Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
-        signed::TransactionSignatureError,
-    },
-};
-use rand_core_06::{CryptoRng, OsRng, RngCore};
-use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
+//! This module implements the blind-issuance-request (P1) and presentation (P2) paths over their
+//! distinct transcript purposes and nominal wire types: transparent commitments, projected norm
+//! witnesses, Schwartz compression, the generic quadratic linearization, ABDLOP response
+//! compression, strict proof construction, verifier-side challenge reconstruction, and prover
+//! self-verification. It also owns the sealed two-pass presentation transaction builder so no
+//! proof, statement, genesis, policy, or intent binding can be replaced between proving and
+//! signing.
 use super::{
     bounds::{ResponseBoundErrorV1, validate_public_response_bounds_v1},
     codec::{
@@ -66,6 +43,28 @@ use super::{
         BlindIssuanceRequestTranscriptV1, PresentationTranscriptV1, ProofTranscriptCoreV1,
     },
 };
+use core::{num::NonZeroU32, time::Duration};
+use iroha_crypto::{Hash, PrivateKey, PublicKey};
+use iroha_data_model::{
+    account::AccountId,
+    isi::privacy::SubmitPrivacyProofV1,
+    metadata::Metadata,
+    prelude::NetworkId,
+    privacy::{
+        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
+        PrivacyConsensusLimitsV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
+        PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
+        PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+    },
+    transaction::{
+        Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
+        signed::TransactionSignatureError,
+    },
+};
+use rand_core_06::{CryptoRng, OsRng, RngCore};
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 const PROJECTION_R_STAGE_V1: &[u8] = b"projection-r-v1";
 const PROJECTION_R_PRIME_STAGE_V1: &[u8] = b"projection-r-prime-v1";
 const SCHWARTZ_WEIGHT_STAGE_V1: &[u8] = b"schwartz-weights-v1";
@@ -347,9 +346,8 @@ fn prove_with_transcript_core_v1<R: CryptoRng + RngCore>(
 ///
 /// # Errors
 ///
-/// Fails on any transcript/relation mismatch, public response bound,
-/// reconciliation equation, Schwartz commitment shape, or Fiat--Shamir
-/// challenge mismatch.
+/// Fails on any transcript/relation mismatch, public response bound, reconciliation equation,
+/// Schwartz commitment shape, or Fiat--Shamir challenge mismatch.
 pub fn verify_presentation_v1(
     relation: &BootleLanternApplicationRelationV1,
     transcript: PresentationTranscriptV1,
@@ -1350,11 +1348,9 @@ pub enum PresentationProofErrorV1 {
     InternalInvariant,
 }
 // INTEGER_ONLY_PROOF_PRODUCTION_END
-/// Sole privacy-action index in a canonical first-release Bootle/Lantern
-/// presentation transaction.
+/// Sole privacy-action index in a canonical first-release Bootle/Lantern presentation transaction.
 pub const BOOTLE_LANTERN_PRESENTATION_PRIVACY_ACTION_INDEX_V1: u32 = 0;
-/// Exact signature-bound transaction fields for one direct Bootle/Lantern
-/// presentation.
+/// Exact signature-bound transaction fields for one direct Bootle/Lantern presentation.
 #[derive(Clone, Debug)]
 pub struct BootleLanternPresentationPrivacyActionTransactionContextV1 {
     /// Exact genesis-header-derived transaction security domain.
@@ -1372,8 +1368,7 @@ pub struct BootleLanternPresentationPrivacyActionTransactionContextV1 {
     /// Exact transaction metadata.
     pub metadata: Metadata,
 }
-/// Exact ledger effect certified by a first-release Bootle/Lantern
-/// presentation.
+/// Exact ledger effect certified by a first-release Bootle/Lantern presentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootleLanternPresentationPrivacyActionEffectV1 {
     /// Consensus verifies and finalizes the presentation without inferring a
@@ -1382,11 +1377,10 @@ pub enum BootleLanternPresentationPrivacyActionEffectV1 {
 }
 /// Pure Bootle/Lantern proving output ready for transaction signing.
 ///
-/// The final payload, canonical genesis binding, and exact governed issuer
-/// policy are private. This type deliberately implements neither `Clone` nor a
-/// serialization trait. Its only public production transition is the
-/// consuming [`sign_prepared_bootle_lantern_presentation_privacy_action_v1`]
-/// boundary.
+/// The final payload, canonical genesis binding, and exact governed issuer policy are private. This
+/// type deliberately implements neither `Clone` nor a serialization trait. Its only public
+/// production transition is the consuming
+/// [`sign_prepared_bootle_lantern_presentation_privacy_action_v1`] boundary.
 pub struct BootleLanternPreparedPresentationPrivacyActionV1 {
     payload: TransactionPayload,
     canonical_genesis_hash: [u8; 32],
@@ -1417,8 +1411,7 @@ impl core::fmt::Debug for BootleLanternPreparedPresentationPrivacyActionV1 {
     }
 }
 impl BootleLanternPreparedPresentationPrivacyActionV1 {
-    /// Borrow the final revalidated payload for the isolated native release
-    /// runner.
+    /// Borrow the final revalidated payload for the isolated native release runner.
     #[cfg(feature = "privacy-release-evidence")]
     pub(crate) const fn release_evidence_payload_v1(&self) -> &TransactionPayload {
         &self.payload
@@ -1464,8 +1457,7 @@ impl BootleLanternPreparedPresentationPrivacyActionV1 {
         self.encoded_proof_envelope_bytes
     }
 }
-/// Complete signed result produced by the canonical Bootle/Lantern
-/// presentation path.
+/// Complete signed result produced by the canonical Bootle/Lantern presentation path.
 pub struct SignedBootleLanternPresentationPrivacyActionV1 {
     signed_transaction: SignedTransaction,
     transaction_hash: [u8; 32],
@@ -1594,8 +1586,7 @@ pub enum BootleLanternPresentationPrivacyActionIntentErrorV1 {
     #[error("the locally produced Bootle/Lantern presentation payload failed intent validation")]
     FinalIntentBinding,
 }
-/// Closed failure for the canonical prove-then-sign Bootle/Lantern
-/// presentation path.
+/// Closed failure for the canonical prove-then-sign Bootle/Lantern presentation path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum BootleLanternPresentationPrivacyActionBuildErrorV1 {
     /// Two-pass transaction-intent construction failed.
@@ -1783,9 +1774,8 @@ fn bootle_lantern_statement_matches_policy_v1(
 ///
 /// # Errors
 ///
-/// Returns a closed error for an invalid transaction context, unavailable
-/// compiled profile, non-active issuer policy, malformed disclosures, or final
-/// intent-binding drift.
+/// Returns a closed error for an invalid transaction context, unavailable compiled profile,
+/// non-active issuer policy, malformed disclosures, or final intent-binding drift.
 pub fn prepare_bootle_lantern_presentation_transaction_intent_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -1832,8 +1822,7 @@ pub fn prepare_bootle_lantern_presentation_transaction_intent_v1(
 ///
 /// # Errors
 ///
-/// Returns a closed error for context, profile, policy, statement, digest, or
-/// final intent drift.
+/// Returns a closed error for context, profile, policy, statement, digest, or final intent drift.
 pub fn validate_bootle_lantern_presentation_transaction_intent_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -2148,8 +2137,7 @@ where
         canonical_genesis_hash,
     )
 }
-/// Prepare and prove one canonical Bootle/Lantern presentation with operating
-/// system randomness.
+/// Prepare and prove one canonical Bootle/Lantern presentation with operating system randomness.
 ///
 /// # Errors
 ///
@@ -2174,8 +2162,7 @@ pub fn prepare_bootle_lantern_presentation_privacy_action_v1(
         &mut OsRng,
     )
 }
-/// Consume and sign a payload returned by the canonical Bootle/Lantern
-/// presentation prover.
+/// Consume and sign a payload returned by the canonical Bootle/Lantern presentation prover.
 ///
 /// The complete proof, statement, envelope, active issuer policy, genesis
 /// binding, and proof-independent transaction intent are independently
@@ -2314,20 +2301,6 @@ pub fn build_signed_bootle_lantern_presentation_privacy_action_v1(
 }
 #[cfg(test)]
 mod tests {
-    use core::num::NonZeroU64;
-    use std::sync::OnceLock;
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::privacy::{
-        BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
-        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
-        IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-        PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
-        PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
-        PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-        PrivacyVerifierDigestV1,
-    };
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-    use sha3::{Digest, Sha3_256};
     use super::*;
     use crate::privacy_engines::bootle_lantern::{
         BOOTLE_LANTERN_FULL_ENGINE_AVAILABLE_V1, BoundPresentationEncodedErrorV1,
@@ -2353,6 +2326,20 @@ mod tests {
         },
         verify_bound_presentation_encoded_v1, verify_bound_presentation_v1,
     };
+    use core::num::NonZeroU64;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::privacy::{
+        BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
+        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
+        IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+        PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
+        PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
+        PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyVerifierDigestV1,
+    };
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use sha3::{Digest, Sha3_256};
+    use std::sync::OnceLock;
     const H_START_TEST: usize = T_B_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
     const T_A1_START_TEST: usize = H_START_TEST + H_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
     const CHALLENGE_START_TEST: usize =

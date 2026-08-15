@@ -1,11 +1,11 @@
 //! Compile every canonical documentation fence that claims to contain Kotodama.
+use kotodama_lang::lexer::{TokenKind, lex};
+use kotodama_lang::session::{CompileRequest, CompilerSession};
 use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
-use kotodama_lang::lexer::{TokenKind, lex};
-use kotodama_lang::session::{CompileRequest, CompilerSession};
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

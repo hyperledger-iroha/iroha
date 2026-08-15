@@ -15,12 +15,6 @@
 //! privacy_exact12_zk_x509_network::canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart \
 //! -- --exact --nocapture --test-threads=1
 //! ```
-use std::{
-    fs,
-    num::{NonZeroU32, NonZeroU64},
-    path::Path,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -74,6 +68,12 @@ use iroha_core::{
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use std::{
+    fs,
+    num::{NonZeroU32, NonZeroU64},
+    path::Path,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::time::{Instant, sleep, timeout};
 const RELEASE_TEST_NAME: &str =
     "canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart";

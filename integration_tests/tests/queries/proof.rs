@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for proof queries.
-use std::{thread::sleep, time::Duration};
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{
@@ -16,6 +15,7 @@ use iroha::data_model::{
 use iroha_core::zk::{hash_vk, test_utils::halo2_fixture_envelope};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+use std::{thread::sleep, time::Duration};
 fn active_vk_record(
     circuit_id: &str,
     backend: BackendTag,

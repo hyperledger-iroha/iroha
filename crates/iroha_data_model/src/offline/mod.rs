@@ -4,22 +4,6 @@
 //! offline split/spend, and exact online redemption.
 mod receiver_snapshot;
 mod status;
-pub use receiver_snapshot::*;
-pub use status::*;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-#[cfg(test)]
-use iroha_crypto::KeyPair;
-use iroha_crypto::{Algorithm, Hash, PublicKey, SignatureOf, derive_non_signing_ed25519_public_key};
-use iroha_data_model_derive::model;
-use iroha_primitives::numeric::{Numeric, Quantity};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-#[cfg(test)]
-use norito::to_bytes;
-use p256::ecdsa::{
-    Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
-};
-use sha2::{Digest as _, Sha256};
 pub use self::model::*;
 use crate::{
     NetworkId,
@@ -34,6 +18,24 @@ use crate::{
     proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+#[cfg(test)]
+use iroha_crypto::KeyPair;
+use iroha_crypto::{
+    Algorithm, Hash, PublicKey, SignatureOf, derive_non_signing_ed25519_public_key,
+};
+use iroha_data_model_derive::model;
+use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(test)]
+use norito::to_bytes;
+use p256::ecdsa::{
+    Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
+};
+pub use receiver_snapshot::*;
+use sha2::{Digest as _, Sha256};
+pub use status::*;
 /// Prefix embedded into offline instruction rejection messages.
 ///
 /// Mobile SDKs parse the label after this prefix up to the first `:` to recover
@@ -94,11 +96,10 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2: u8 = 64;
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2: u32 = 8;
 /// Bytes retained from each domain-separated transition digest in a branch history.
 ///
-/// A 192-bit chosen-prefix tag gives a 96-bit birthday bound. At depth 64, two
-/// claims alone occupy 3,072 bytes, so this layout must not be certified against
-/// the 12 KiB peer gate until the complete proof-bearing archive is measured.
-/// The complete 256-bit transition digest remains proof-bound in the producing
-/// statement.
+/// A 192-bit chosen-prefix tag gives a 96-bit birthday bound. At depth 64, two claims alone occupy
+/// 3,072 bytes, so this layout must not be certified against the 12 KiB peer gate until the
+/// complete proof-bearing archive is measured. The complete 256-bit transition digest remains
+/// proof-bound in the producing statement.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2: usize = 24;
 /// Current compact top-up finality proof layout.
 pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2: u16 = 1;
@@ -110,22 +111,19 @@ pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2: u32 = 16;
 pub const KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2: usize = 4;
 /// Maximum validator count accepted by an offline roster artifact.
 ///
-/// This is deliberately identical to the live Sumeragi-v2 bound. A smaller
-/// offline bound would let consensus finalize a top-up for which no portable
-/// proof could subsequently be produced.
+/// This is deliberately identical to the live Sumeragi-v2 bound. A smaller offline bound would let
+/// consensus finalize a top-up for which no portable proof could subsequently be produced.
 pub const KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2: usize = MAX_VALIDATORS_PER_HEIGHT;
 /// Maximum roster activation windows in one authenticated finality artifact.
 ///
-/// A release binds exactly one immutable roster window. Rotation publishes a
-/// new content-addressed release instead of making every verifier ingest
-/// unrelated historical or future validator sets.
+/// A release binds exactly one immutable roster window. Rotation publishes a new content-addressed
+/// release instead of making every verifier ingest unrelated historical or future validator sets.
 pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 1;
 /// Maximum canonical Norito bytes accepted for one compact top-up finality proof.
 ///
-/// The epoch-boundary case can retain the complete next-epoch identity
-/// snapshot, including all 4,096 bounded `PoPs` plus current and parent signer
-/// lists. Canonical ingress enforces this 2 MiB cap before reconstruction and
-/// uses a frame-scaled allocation ceiling for the nested collections.
+/// The epoch-boundary case can retain the complete next-epoch identity snapshot, including all
+/// 4,096 bounded `PoPs` plus current and parent signer lists. Canonical ingress enforces this 2 MiB
+/// cap before reconstruction and uses a frame-scaled allocation ceiling for the nested collections.
 pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Native-width mirror of [`KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2`].
 const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_USIZE_V2: usize = 2 * 1024 * 1024;
@@ -144,10 +142,9 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2: usize = 2;
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2: usize = 2;
 /// Maximum raw Norito bytes accepted for one complete recursive peer archive.
 ///
-/// The exact-state Eq/Ep proof pair requires a larger release envelope than
-/// the retired digest-bound proof. Text transports must independently bound
-/// their base64url representation (at most 43,691 unpadded bytes, plus their
-/// transport discriminator) before allocation or decoding.
+/// The exact-state Eq/Ep proof pair requires a larger release envelope than the retired
+/// digest-bound proof. Text transports must independently bound their base64url representation (at
+/// most 43,691 unpadded bytes, plus their transport discriminator) before allocation or decoding.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2: usize = 32_768;
 /// Maximum canonical receiver-verification request including two complete
 /// finality proofs, two full anchors, and one authenticated roster artifact.
@@ -238,9 +235,8 @@ pub const KAGEMUSHA_UNSHIELD_PUBLIC_INPUTS_DIGEST_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:unshield-public-inputs";
 /// Native bridge ABI for the degree-parameterized recursive-spend V4 contract.
 ///
-/// V4 is deliberately not an alias for ABI 19: its public accumulator layout,
-/// fold transcripts, key parsing parameters, and artifact framing all depend
-/// on an authenticated IPA degree.
+/// V4 is deliberately not an alias for ABI 19: its public accumulator layout, fold transcripts, key
+/// parsing parameters, and artifact framing all depend on an authenticated IPA degree.
 pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22;
 /// Exact schema identifier for the degree-parameterized artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4: &str =
@@ -407,9 +403,8 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 220;
 pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [220];
 /// Reviewed first-release lookup-column profile for compact degree-17 generation.
 ///
-/// `BaseCircuitBuilder` reports the two unused challenge phases explicitly as
-/// zero-width suffixes even though the authenticated advice profile has only
-/// the populated phase-zero entry.
+/// `BaseCircuitBuilder` reports the two unused challenge phases explicitly as zero-width suffixes
+/// even though the authenticated advice profile has only the populated phase-zero entry.
 pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 3] = [25, 0, 0];
 /// Domain separator for canonical V4 circuit-parameter identities.
 pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_SHA256_DOMAIN_V4: &[u8] =
@@ -429,10 +424,9 @@ pub const KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4: u32 = 0;
 pub const KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4: u32 = 1;
 /// Absolute defensive ceiling for one measured V4 Step proof transcript.
 ///
-/// The reviewed compact composite profile is exactly 93,120 bytes.
-/// The 192 KiB bound leaves explicit evolution headroom while still rejecting
-/// unbounded or profile-incompatible proof payloads. Release promotion
-/// separately pins the candidate's exact transcript size.
+/// The reviewed compact composite profile is exactly 93,120 bytes. The 192 KiB bound leaves
+/// explicit evolution headroom while still rejecting unbounded or profile-incompatible proof
+/// payloads. Release promotion separately pins the candidate's exact transcript size.
 pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 192 * 1024;
 /// Exact transcript bytes for one Step proof in the reviewed release profile.
 pub const KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4: u32 = 93_120;
@@ -554,11 +548,10 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 
 const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_USIZE_V2: usize = 2 * 1024 * 1024;
 /// Production-promotion gate for the ABI-21/V4 paired recursive backend.
 ///
-/// This is false in default and candidate builds. It becomes true only when
-/// the non-default `kagemusha-production-enabled` Cargo feature is selected by
-/// an explicitly promoted bridge build. Runtime readiness additionally
-/// requires an installed, authenticated V4 release with the exact verifier and
-/// prover inventory; this compile-time gate never substitutes for release
+/// This is false in default and candidate builds. It becomes true only when the non-default
+/// `kagemusha-production-enabled` Cargo feature is selected by an explicitly promoted bridge build.
+/// Runtime readiness additionally requires an installed, authenticated V4 release with the exact
+/// verifier and prover inventory; this compile-time gate never substitutes for release
 /// authentication.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE: bool =
     cfg!(feature = "kagemusha-production-enabled");
@@ -930,11 +923,10 @@ mod model {
     }
     /// Canonical branch coordinate inside one top-up lineage.
     ///
-    /// The first `depth` most-significant bits of `path_bits` identify the
-    /// branch. Unused bits must be zero. A recipient output appends bit `0` and
-    /// a sender-change output appends bit `1`. This makes sibling redemptions
-    /// disjoint while allowing the ledger to reject an ancestor and any of its
-    /// descendants by a deterministic prefix check.
+    /// The first `depth` most-significant bits of `path_bits` identify the branch. Unused bits must
+    /// be zero. A recipient output appends bit `0` and a sender-change output appends bit `1`. This
+    /// makes sibling redemptions disjoint while allowing the ledger to reject an ancestor and any
+    /// of its descendants by a deterministic prefix check.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -952,12 +944,11 @@ mod model {
     }
     /// Replay-safe conflict claim for one independently spendable lineage leaf.
     ///
-    /// `transition_tags` is one contiguous byte string containing exactly
-    /// `path.depth` consecutive 24-byte entries. Entry `i` is the non-zero,
-    /// domain-separated 192-bit tag of the complete proof-bound transition
-    /// digest selected at the edge from depth `i` to `i + 1`.
-    /// Carrying every ancestor choice prevents recipient/change outputs from
-    /// alternative splits of the same parent from being mixed to inflate value.
+    /// `transition_tags` is one contiguous byte string containing exactly `path.depth` consecutive
+    /// 24-byte entries. Entry `i` is the non-zero, domain-separated 192-bit tag of the complete
+    /// proof-bound transition digest selected at the edge from depth `i` to `i + 1`. Carrying every
+    /// ancestor choice prevents recipient/change outputs from alternative splits of the same parent
+    /// from being mixed to inflate value.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -970,8 +961,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub transition_tags: Vec<u8>,
     }
-    /// Public inputs used by the native bridge to derive one receiver-owned
-    /// confidential output.
+    /// Public inputs used by the native bridge to derive one receiver-owned confidential output.
     ///
     /// The receiver's local note opening is deliberately not part of this
     /// archive. It is supplied through a separate native-only archive and must
@@ -1045,12 +1035,11 @@ mod model {
     }
     /// Receiver-created, nonce-bound and device-signed request for one exact offline payment.
     ///
-    /// `sender_output_prover_material` is part of the signed peer request but
-    /// remains opaque to wallet code. The native bridge derives it from a
-    /// receiver-held local note opening and the public request fields. It
-    /// contains only the amount opening, `rho`, and owner tag needed to prove
-    /// the requested commitment; it must never contain the receiver's spend
-    /// key or diversifier.
+    /// `sender_output_prover_material` is part of the signed peer request but remains opaque to
+    /// wallet code. The native bridge derives it from a receiver-held local note opening and the
+    /// public request fields. It contains only the amount opening, `rho`, and owner tag needed to
+    /// prove the requested commitment; it must never contain the receiver's spend key or
+    /// diversifier.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1088,9 +1077,8 @@ mod model {
     }
     /// Platform assertion made by the exact hardware key admitted at registration.
     ///
-    /// Both platforms carry the same canonical raw low-S P-256 signature. iOS
-    /// additionally carries the App Attest authenticator data that Apple binds
-    /// ahead of the client-data hash.
+    /// Both platforms carry the same canonical raw low-S P-256 signature. iOS additionally carries
+    /// the App Attest authenticator data that Apple binds ahead of the client-data hash.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1140,9 +1128,8 @@ mod model {
         pub asset_definition_id: AssetDefinitionId,
         /// Globally unique chain idempotency/replay identifier.
         ///
-        /// Unlike nonces and payload digests, this identifier is not scoped by
-        /// `authority`; every Kagemusha V2 chain operation shares one replay
-        /// namespace.
+        /// Unlike nonces and payload digests, this identifier is not scoped by `authority`; every
+        /// Kagemusha V2 chain operation shares one replay namespace.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
@@ -1206,14 +1193,12 @@ mod model {
     /// Bounded projection of the live Sumeragi-v2 height context needed to
     /// authenticate one Commit certificate offline.
     ///
-    /// `context_id` is copied from the persisted [`HeightContext`] and is part
-    /// of the exact live [`crate::block::consensus_v2::Vote::signature_preimage`]
-    /// through the certificate round. Every non-roster identity field is
-    /// retained so verification can reconstruct and validate the complete
-    /// context with the manifest-authenticated roster window, then require its
-    /// computed identifier to equal `context_id`. This avoids duplicating the
-    /// current roster in every proof without making the context identifier an
-    /// opaque, attacker-selected cross-network binding.
+    /// `context_id` is copied from the persisted [`HeightContext`] and is part of the exact live
+    /// [`crate::block::consensus_v2::Vote::signature_preimage`] through the certificate round.
+    /// Every non-roster identity field is retained so verification can reconstruct and validate the
+    /// complete context with the manifest-authenticated roster window, then require its computed
+    /// identifier to equal `context_id`. This avoids duplicating the current roster in every proof
+    /// without making the context identifier an opaque, attacker-selected cross-network binding.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2218,10 +2203,9 @@ mod model {
     }
     /// Canonical fields signed by a receiver after durable payment persistence.
     ///
-    /// The receiver must persist the final acknowledgement bytes under
-    /// `(operation_id, recipient_request_digest)` in the same atomic operation
-    /// that persists the accepted bundle. Duplicate delivery returns those
-    /// exact bytes instead of signing a new timestamp.
+    /// The receiver must persist the final acknowledgement bytes under `(operation_id,
+    /// recipient_request_digest)` in the same atomic operation that persists the accepted bundle.
+    /// Duplicate delivery returns those exact bytes instead of signing a new timestamp.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2316,9 +2300,8 @@ mod model {
     }
     /// Degree-parameterized Pasta-cycle envelope carried by a V4 proof wrapper.
     ///
-    /// The backend-native Eq/Ep pair remains canonical opaque bytes inside
-    /// `proof`; wallets and bridge carriers do not reinterpret its internal
-    /// accumulators or fold transcripts.
+    /// The backend-native Eq/Ep pair remains canonical opaque bytes inside `proof`; wallets and
+    /// bridge carriers do not reinterpret its internal accumulators or fold transcripts.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2363,9 +2346,8 @@ mod model {
     }
     /// Exact fixed-size ABI-21 public operation row bound by the terminal proof.
     ///
-    /// Each consecutive group of eight limbs is one canonical Pallas-field
-    /// element in little-endian `u32` order. Core rejects non-canonical field
-    /// encodings before proof verification.
+    /// Each consecutive group of eight limbs is one canonical Pallas-field element in little-endian
+    /// `u32` order. Core rejects non-canonical field encodings before proof verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -3030,9 +3012,8 @@ mod model {
 }
 /// Return the release-qualified verifier-key registry identifier for one ABI-21 parity.
 ///
-/// The manifest digest suffix keeps verifier records for overlapping retained
-/// releases distinct while preserving the fixed Eq/Ep circuit identity inside
-/// each [`VerifyingKeyRecord`].
+/// The manifest digest suffix keeps verifier records for overlapping retained releases distinct
+/// while preserving the fixed Eq/Ep circuit identity inside each [`VerifyingKeyRecord`].
 #[must_use]
 pub fn kagemusha_recursive_spend_verifier_key_id_v4(
     parity: KagemushaPastaCycleParityV1,
@@ -3049,10 +3030,9 @@ pub fn kagemusha_recursive_spend_verifier_key_id_v4(
 }
 /// On-chain platform-attested registration for a Kagemusha device key.
 ///
-/// This is the device-bound trust anchor used by top-up and redemption authorization.
-/// The report and evidence bytes are included so consensus has enough material to
-/// perform deterministic platform checks; the hashes provide stable replay keys and
-/// compact audit anchors.
+/// This is the device-bound trust anchor used by top-up and redemption authorization. The report
+/// and evidence bytes are included so consensus has enough material to perform deterministic
+/// platform checks; the hashes provide stable replay keys and compact audit anchors.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -3155,12 +3135,11 @@ pub struct OfflineAndroidKeyMintChallenge {
 }
 /// Governed Offline device-attestation verifier policy.
 ///
-/// Nodes require this policy to be installed in chain state before accepting
-/// hardware-backed offline registration or transaction authorization. The
-/// first-release platform roots are accepted only when included in that
-/// explicit governed policy; absence of policy state fails closed. Operators
-/// can rotate roots, publish deterministic revocations, and restrict accepted
-/// app identities without relying on external middleware state.
+/// Nodes require this policy to be installed in chain state before accepting hardware-backed
+/// offline registration or transaction authorization. The first-release platform roots are accepted
+/// only when included in that explicit governed policy; absence of policy state fails closed.
+/// Operators can rotate roots, publish deterministic revocations, and restrict accepted app
+/// identities without relying on external middleware state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -3606,14 +3585,12 @@ impl OfflineDeviceAttestationRegistration {
     }
     /// Deterministic challenge hash that platform attestation evidence must bind.
     ///
-    /// The preimage intentionally excludes the attestation report, evidence
-    /// hashes, and assertion public key because those values are learned from
-    /// the platform response after the challenge is created. Android `KeyMint`
-    /// additionally uses a platform-specific preimage without `key_id`, because
-    /// its canonical key id is the SHA-256 of that not-yet-generated assertion
-    /// public key. Admission binds the reported credential/certificate public
-    /// key to `assertion_public_key` and then validates `key_id` before
-    /// constructing the key certificate.
+    /// The preimage intentionally excludes the attestation report, evidence hashes, and assertion
+    /// public key because those values are learned from the platform response after the challenge
+    /// is created. Android `KeyMint` additionally uses a platform-specific preimage without
+    /// `key_id`, because its canonical key id is the SHA-256 of that not-yet-generated assertion
+    /// public key. Admission binds the reported credential/certificate public key to
+    /// `assertion_public_key` and then validates `key_id` before constructing the key certificate.
     ///
     /// # Errors
     ///
@@ -3996,8 +3973,7 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         }
         Ok(false)
     }
-    /// Return whether two claims select overlapping value or incompatible
-    /// transition histories.
+    /// Return whether two claims select overlapping value or incompatible transition histories.
     ///
     /// In addition to equal and ancestor/descendant coordinates, sibling
     /// outputs from different proof-bound transitions of the same parent
@@ -4072,9 +4048,8 @@ impl KagemushaRecipientOutputDerivationRequestV2 {
 impl KagemushaRecipientOutputDerivationResultV2 {
     /// Validate the native result against the exact public derivation request.
     ///
-    /// Native implementations additionally decode the opaque prover material
-    /// before returning it and enforce that its schema contains no receiver
-    /// spend secret or output diversifier.
+    /// Native implementations additionally decode the opaque prover material before returning it
+    /// and enforce that its schema contains no receiver spend secret or output diversifier.
     ///
     /// # Errors
     ///
@@ -4463,9 +4438,8 @@ impl KagemushaRequestAuthorizationV2 {
     }
     /// Verify structure and exact unsigned-payload binding.
     ///
-    /// Consensus verifies the signature only after resolving
-    /// `registration_hash` to the exact validated registration and its P-256
-    /// assertion public key.
+    /// Consensus verifies the signature only after resolving `registration_hash` to the exact
+    /// validated registration and its P-256 assertion public key.
     ///
     /// # Errors
     ///
@@ -4556,9 +4530,8 @@ impl KagemushaScaledAmountV2 {
     ///
     /// # Errors
     ///
-    /// Returns [`KagemushaValidationError`] when the amount is non-positive, wider
-    /// than `u128`, has more precision than the asset, or overflows while being
-    /// normalized to the asset scale.
+    /// Returns [`KagemushaValidationError`] when the amount is non-positive, wider than `u128`, has
+    /// more precision than the asset, or overflows while being normalized to the asset scale.
     pub fn from_public_quantity(
         amount: &Quantity,
         asset_scale: u32,
@@ -4667,9 +4640,8 @@ impl KagemushaConfidentialMerklePathV2 {
 impl KagemushaNoteMembershipWitnessV2 {
     /// Validate the public witness shape and shared-root relationship.
     ///
-    /// Native verification must additionally recompute both Poseidon paths:
-    /// the real path from the proof-bound note commitment and the dummy path
-    /// from the canonical empty leaf.
+    /// Native verification must additionally recompute both Poseidon paths: the real path from the
+    /// proof-bound note commitment and the dummy path from the canonical empty leaf.
     ///
     /// # Errors
     ///
@@ -4820,9 +4792,8 @@ impl KagemushaPastaPublicLayoutV4 {
 impl KagemushaStepCircuitParamsV4 {
     /// Construct and validate the single reviewed first-release generation profile.
     ///
-    /// Eq and Ep deliberately share this parameter carrier: parity-specific
-    /// circuit identities and keys remain separate, while their authenticated
-    /// Halo2 geometry is identical.
+    /// Eq and Ep deliberately share this parameter carrier: parity-specific circuit identities and
+    /// keys remain separate, while their authenticated Halo2 geometry is identical.
     ///
     /// # Errors
     ///
@@ -6720,9 +6691,8 @@ impl KagemushaRecursiveSpendArtifactBindingV4 {
 impl KagemushaRecursiveSpendNativeCapabilitiesV4 {
     /// Validate an installed ABI-21 backend capability record.
     ///
-    /// `max_proof_bytes` is deliberately release-specific: it must come from
-    /// the authenticated V4 manifest selected by the installed artifact
-    /// handle, rather than from a compile-time default.
+    /// `max_proof_bytes` is deliberately release-specific: it must come from the authenticated V4
+    /// manifest selected by the installed artifact handle, rather than from a compile-time default.
     ///
     /// # Errors
     ///
@@ -6884,9 +6854,8 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
 }
 /// Return whether `value` is a canonical cross-platform artifact identifier.
 ///
-/// Identifiers use the same single-component restrictions as artifact file
-/// names so release caches cannot alias punctuation-only or Windows device
-/// names across build hosts.
+/// Identifiers use the same single-component restrictions as artifact file names so release caches
+/// cannot alias punctuation-only or Windows device names across build hosts.
 #[must_use]
 pub fn is_kagemusha_portable_identifier(value: &str) -> bool {
     is_kagemusha_portable_file_name(value)
@@ -7214,9 +7183,8 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
         }
         Ok(())
     }
-    /// Validate the complete roster window, including every BLS proof of
-    /// possession. Callers handling repeated proofs should cache success by the
-    /// authenticated roster-archive digest.
+    /// Validate the complete roster window, including every BLS proof of possession. Callers
+    /// handling repeated proofs should cache success by the authenticated roster-archive digest.
     ///
     /// # Errors
     ///
@@ -7355,12 +7323,12 @@ impl KagemushaUnshieldPublicInputsBindingV2 {
 }
 #[cfg(test)]
 mod kagemusha_v4_artifact_contract_tests {
-    use norito::core::{DecodeFromSlice as _, NoritoDeserialize as _};
+    use super::*;
     use crate::{
         domain::DomainId,
         isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4},
     };
-    use super::*;
+    use norito::core::{DecodeFromSlice as _, NoritoDeserialize as _};
     fn digest(label: &[u8]) -> [u8; 32] {
         Sha256::digest(label).into()
     }
@@ -9979,9 +9947,8 @@ pub const KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4: usize = 4;
 pub const KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4: usize = 0;
 /// Extra frame-derived multiplier for a native redemption-build result.
 ///
-/// Canonical wire preflight rejects its nested oversized unshield proof before
-/// reconstruction, so the exact fixed allowance accounts for the remaining
-/// charged copies.
+/// Canonical wire preflight rejects its nested oversized unshield proof before reconstruction, so
+/// the exact fixed allowance accounts for the remaining charged copies.
 pub const KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4: usize = 0;
 /// Fixed allocation allowance for a maximum-shaped ABI-21 top-up request.
 pub const KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
@@ -10123,9 +10090,8 @@ fn preflight_kagemusha_unshield_proof_archive_v4<T: norito::NoritoSerialize>(
 ///
 /// # Errors
 ///
-/// Returns a Norito framing, layout, schema, checksum, length, or field-limit
-/// error when the archive cannot be safely classified or the proof exceeds the
-/// ABI-21 limit.
+/// Returns a Norito framing, layout, schema, checksum, length, or field-limit error when the
+/// archive cannot be safely classified or the proof exceeds the ABI-21 limit.
 pub fn preflight_kagemusha_redeem_request_archive_v4(frame: &[u8]) -> Result<(), norito::Error> {
     preflight_kagemusha_unshield_proof_archive_v4::<KagemushaRecursiveSpendRedeemRequestV4>(
         frame,
@@ -10137,9 +10103,8 @@ pub fn preflight_kagemusha_redeem_request_archive_v4(frame: &[u8]) -> Result<(),
 ///
 /// # Errors
 ///
-/// Returns a Norito framing, layout, schema, checksum, length, or field-limit
-/// error when the archive cannot be safely classified or the proof exceeds the
-/// ABI-21 limit.
+/// Returns a Norito framing, layout, schema, checksum, length, or field-limit error when the
+/// archive cannot be safely classified or the proof exceeds the ABI-21 limit.
 pub fn preflight_kagemusha_redeem_unsigned_archive_v4(frame: &[u8]) -> Result<(), norito::Error> {
     preflight_kagemusha_unshield_proof_archive_v4::<KagemushaRecursiveSpendRedeemUnsignedV4>(
         frame,
@@ -10151,9 +10116,8 @@ pub fn preflight_kagemusha_redeem_unsigned_archive_v4(frame: &[u8]) -> Result<()
 ///
 /// # Errors
 ///
-/// Returns a Norito framing, layout, schema, checksum, length, or field-limit
-/// error when the archive cannot be safely classified or the proof exceeds the
-/// ABI-21 limit.
+/// Returns a Norito framing, layout, schema, checksum, length, or field-limit error when the
+/// archive cannot be safely classified or the proof exceeds the ABI-21 limit.
 pub fn preflight_kagemusha_redeem_build_result_archive_v4(
     frame: &[u8],
 ) -> Result<(), norito::Error> {
@@ -10206,9 +10170,8 @@ struct KagemushaRequestOutputBindingDigestPreimageV4 {
     bundle_digest: [u8; 32],
 }
 impl KagemushaRecursiveSpendOperationVectorV4 {
-    /// Require all 135 encoded Pallas elements to be canonical and the row to
-    /// be non-empty. Comparison is exact on little-endian limbs and performs no
-    /// modular reduction.
+    /// Require all 135 encoded Pallas elements to be canonical and the row to be non-empty.
+    /// Comparison is exact on little-endian limbs and performs no modular reduction.
     ///
     /// # Errors
     ///

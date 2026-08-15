@@ -1,11 +1,4 @@
 //! Offline minting, inspection, and revocation tooling for SoraNet admission tokens.
-use std::{
-    fs::{self, File, Metadata as FsMetadata, OpenOptions},
-    io::{self, Read as _},
-    path::{Path, PathBuf},
-    process,
-    time::{Duration, SystemTime},
-};
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use norito::json::{self, Value};
 use rand::{RngCore, SeedableRng, rng, rngs::StdRng};
@@ -14,6 +7,13 @@ use soranet_relay::token_tool::{
     MintRequest, REVOCATION_LIST_MAX_ENTRIES_V1, RevocationList, TokenBundle, decode_token_string,
     encode_token_base64, encode_token_hex, inspect_token, mint_token, parse_hex_array,
     parse_hex_bytes, parse_rfc3339, read_revocation_file,
+};
+use std::{
+    fs::{self, File, Metadata as FsMetadata, OpenOptions},
+    io::{self, Read as _},
+    path::{Path, PathBuf},
+    process,
+    time::{Duration, SystemTime},
 };
 const DEFAULT_TTL_SECS: u64 = 900;
 // AdmissionToken v1 encodes a 4-byte magic, fixed body fields, and a u16
@@ -639,8 +639,8 @@ fn load_hex_source(
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
     use super::*;
+    use tempfile::tempdir;
     #[derive(Default)]
     struct CountingWriter {
         bytes: usize,

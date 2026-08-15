@@ -1,10 +1,10 @@
+use super::*;
 use std::{
     env,
     ffi::OsString,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
-use super::*;
 fn cli_env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))

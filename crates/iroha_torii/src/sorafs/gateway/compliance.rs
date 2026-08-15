@@ -7,6 +7,12 @@
 //! Enabled feed transports attest a stable V1 handle, revision, and canonical
 //! hostname/SPKI policy digest before checkpoint state is opened and again
 //! before and after every feed operation.
+use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
+use blake3::Hasher;
+use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
+use flate2::read::GzDecoder;
+use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{
     cmp::Ordering,
     collections::BTreeSet,
@@ -22,14 +28,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use blake3::Hasher;
-use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
-use flate2::read::GzDecoder;
-use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
 use url::{Host, Url};
-use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
 /// V1 schema version for compliance catalog payloads.
 pub const GATEWAY_COMPLIANCE_CATALOG_VERSION_V1: u8 = 1;
 /// V1 schema version for catalog signatures.
@@ -4160,6 +4160,9 @@ pub enum GatewayComplianceError {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use flate2::{Compression, write::GzEncoder};
     use std::{
         collections::{BTreeMap, BTreeSet, VecDeque},
         io::Write as _,
@@ -4168,9 +4171,6 @@ mod tests {
             atomic::{AtomicBool, AtomicUsize, Ordering as TestAtomicOrdering},
         },
     };
-    use ed25519_dalek::{Signer as _, SigningKey};
-    use flate2::{Compression, write::GzEncoder};
-    use super::*;
     const NOW: u64 = 1_800_000_000;
     #[derive(Debug, Default)]
     struct MemoryStore {

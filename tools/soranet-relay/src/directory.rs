@@ -1,10 +1,9 @@
 //! Guard directory snapshot tooling (builder, rotation, inspection).
 #![allow(unexpected_cfgs)]
-use std::{
-    collections::{HashMap, TryReserveError},
-    fs,
-    path::{Path, PathBuf},
+use crate::guard::{
+    GuardPinningProof, GuardPinningProofValidationError, verify_guard_pinning_proof,
 };
+use crate::{checked_ed25519_verifying_key_from_bytes, config::read_bounded_direct_regular_file};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use hex::FromHexError;
 use iroha_crypto::soranet::{
@@ -27,9 +26,12 @@ use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
 use soranet_pq::{
     MlDsaError, MlDsaKeyPair, MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
 };
+use std::{
+    collections::{HashMap, TryReserveError},
+    fs,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
-use crate::guard::{GuardPinningProof, GuardPinningProofValidationError, verify_guard_pinning_proof};
-use crate::{checked_ed25519_verifying_key_from_bytes, config::read_bounded_direct_regular_file};
 // The builder admits at most the encoded corpus that a full first-release
 // 64-relay directory can reference. JSON escaping can expand the source while
 // decoded strings remain under the separately audited 640 KiB budget.
@@ -1473,9 +1475,8 @@ fn update_field(
 }
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
-    #[cfg(unix)]
-    use std::os::unix::fs::symlink;
+    use super::*;
+    use crate::guard::{GuardDirectoryEntry, persist_guard_pinning_proof};
     use iroha_crypto::soranet::{
         certificate::{
             CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
@@ -1485,9 +1486,10 @@ mod tests {
     };
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::{MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+    use std::time::{Duration, SystemTime};
     use tempfile::tempdir;
-    use super::*;
-    use crate::guard::{GuardDirectoryEntry, persist_guard_pinning_proof};
     const SMALL_ORDER_ED25519_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

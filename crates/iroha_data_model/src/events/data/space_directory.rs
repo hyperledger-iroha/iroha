@@ -1,8 +1,8 @@
 //! Space Directory manifest lifecycle events.
-use iroha_crypto::Hash;
-use iroha_data_model_derive::model;
 pub use self::model::*;
 use super::*;
+use iroha_crypto::Hash;
+use iroha_data_model_derive::model;
 #[model]
 mod model {
     use super::*;

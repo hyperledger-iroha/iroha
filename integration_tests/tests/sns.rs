@@ -1,13 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! SNS registrar integration coverage.
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc::{self, TryRecvError},
-    },
-    time::Duration,
-};
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox::{self, start_network_async_or_skip};
 use iroha::{client::Client as IrohaClient, sns::SnsNamespacePath};
@@ -23,6 +15,14 @@ use iroha_data_model::{
 use iroha_primitives::{numeric::Quantity, soradns::derive_gateway_hosts};
 use iroha_test_network::{NetworkBuilder, domain_setup_instruction};
 use reqwest::{Client as HttpClient, Url};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, TryRecvError},
+    },
+    time::Duration,
+};
 use tokio::time::{sleep, timeout};
 const METRIC_READY_RETRIES: usize = 60;
 const METRIC_RETRY_DELAY_MS: u64 = 250;

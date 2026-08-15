@@ -1,13 +1,13 @@
+use crate::{Outcome, RunArgs, tui};
+use clap::{Args as ClapArgs, Subcommand};
+use color_eyre::eyre::{WrapErr as _, eyre};
+use iroha_core::kura::{BlockIndex, BlockStore, PipelineRecoverySidecar};
+use iroha_data_model::block::decode_framed_signed_block;
 use std::{
     fs::File,
     io::{BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
-use clap::{Args as ClapArgs, Subcommand};
-use color_eyre::eyre::{WrapErr as _, eyre};
-use iroha_core::kura::{BlockIndex, BlockStore, PipelineRecoverySidecar};
-use iroha_data_model::block::decode_framed_signed_block;
-use crate::{Outcome, RunArgs, tui};
 /// Kura inspector
 #[derive(Debug, ClapArgs, Clone)]
 pub struct Args {
@@ -274,7 +274,7 @@ fn read_indexed_sidecar(block_store_path: &Path, height: u64) -> Option<Pipeline
 }
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, fs, sync::Arc};
+    use super::*;
     use iroha_core::{block::BlockBuilder, kura::PipelineDagSnapshot, tx::AcceptedTransaction};
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -282,7 +282,7 @@ mod tests {
         prelude::*,
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-    use super::*;
+    use std::{borrow::Cow, fs, sync::Arc};
     fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
         let network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(

@@ -750,19 +750,19 @@ pub struct AccountReadResponse {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        account::{AccountAlias, AccountAliasDomain, AccountId},
-        name::Name,
-        nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId},
-        transaction::FeePaymentIntent,
-    };
     use super::{
         AccountReadResponse, ErrorDetails, ErrorEnvelope, FeeErrorDetails, FeeQuoteDecision,
         FeeQuoteObservation, FeeQuoteResponse, FeeSponsorProgramByIdRequest,
         MINAMOTO_CHAIN_DISCRIMINANT, NETWORK_PROFILE_MINAMOTO, NETWORK_PROFILE_TAIRA,
         PipelineTransactionStatus, PipelineTransactionStatusResponse, QueueErrorSnapshot,
         TAIRA_CHAIN_DISCRIMINANT, network_profile, network_profile_for_discriminant,
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::{AccountAlias, AccountAliasDomain, AccountId},
+        name::Name,
+        nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId},
+        transaction::FeePaymentIntent,
     };
     fn checked_test_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

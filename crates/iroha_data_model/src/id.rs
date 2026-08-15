@@ -1,4 +1,9 @@
-use std::borrow::Borrow;
+pub use self::model::*;
+use crate::error::ParseError;
+use crate::{
+    account, asset, block::BlockHeader, domain, nexus, nft, parameter, peer, permission, repo,
+    role, rwa, trigger,
+};
 use derive_more::Display;
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::{EnumRef, model};
@@ -6,12 +11,7 @@ use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use norito::core::{DecodeFromSlice, Error as NoritoError};
-pub use self::model::*;
-use crate::error::ParseError;
-use crate::{
-    account, asset, block::BlockHeader, domain, nexus, nft, parameter, peer, permission, repo,
-    role, rwa, trigger,
-};
+use std::borrow::Borrow;
 /// Maximum byte length of a canonical [`ChainId`].
 ///
 /// Chain identifiers are ASCII, so this is also the maximum character count.
@@ -443,8 +443,8 @@ impl_encode_as_id_box! {
 }
 #[cfg(test)]
 mod tests {
-    use norito::core::DecodeFromSlice as _;
     use super::*;
+    use norito::core::DecodeFromSlice as _;
     #[derive(Encode)]
     struct UncheckedChainIdWire(Box<str>);
     #[derive(Encode)]

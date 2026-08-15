@@ -4,6 +4,13 @@ fn ed25519_public_key_bytes_are_invalid(pk: &[u8; 32]) -> bool {
 }
 #[cfg(feature = "cuda")]
 mod imp {
+    use crate::bn254_vec::FieldElem;
+    use cust::{
+        context::CurrentContext,
+        memory::{AsyncCopyDestination, CopyDestination, DeviceCopy, LockedBuffer},
+        prelude::*,
+        sys::{cuStreamQuery, cudaError_enum},
+    };
     use std::cell::Cell;
     use std::mem::ManuallyDrop;
     use std::ops::{Deref, DerefMut};
@@ -15,13 +22,6 @@ mod imp {
         thread,
         time::{Duration, Instant},
     };
-    use cust::{
-        context::CurrentContext,
-        memory::{AsyncCopyDestination, CopyDestination, DeviceCopy, LockedBuffer},
-        prelude::*,
-        sys::{cuStreamQuery, cudaError_enum},
-    };
-    use crate::bn254_vec::FieldElem;
     static PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/add.ptx"));
     static VEC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/vector.ptx"));
     static SHA_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/sha256.ptx"));
@@ -2593,8 +2593,8 @@ mod imp {
     }
     #[cfg(all(test, feature = "cuda"))]
     mod tests {
-        use std::sync::atomic::Ordering;
         use super::*;
+        use std::sync::atomic::Ordering;
         fn with_cuda_selftest_running_for_tests<T>(func: impl FnOnce() -> T) -> T {
             struct ResetGuard(bool);
             impl Drop for ResetGuard {

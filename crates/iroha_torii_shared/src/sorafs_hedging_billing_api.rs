@@ -3,8 +3,8 @@
 //! Client and server code must use these shared types directly. Duplicating a
 //! structurally identical Norito type under another Rust name changes its
 //! schema hash unless an explicit schema name is retained.
-use std::{error::Error, fmt};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
+use std::{error::Error, fmt};
 /// Stable Norito schema name for one billing acknowledgement proof.
 pub const BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1: &str =
     "iroha.torii.v1.sorafs.billing.acknowledgement_proof";

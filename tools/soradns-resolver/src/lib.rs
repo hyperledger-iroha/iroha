@@ -14,16 +14,16 @@ pub mod limits;
 pub mod rad;
 pub mod state;
 pub mod transparency;
-use std::{
-    collections::HashMap,
-    convert::Infallible,
-    net::SocketAddr,
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicI64, AtomicU64, Ordering},
+use crate::{
+    bundle::ProofBundleV1,
+    config::{DotTlsConfig, ResolverConfig},
+    events::EventEmitter,
+    limits::{
+        MAX_STATE_BUNDLES, MAX_STATE_RAD_ENTRIES, MAX_STATE_RETAINED_BYTES, MAX_TLS_CERT_BYTES,
+        MAX_TLS_KEY_BYTES, read_bounded_file, replace_retained_bytes,
     },
-    time::Duration,
+    rad::{ResolverAttestation, rad_retained_bytes, validate_rad},
+    state::{ResolverState, ResolverStateMetrics},
 };
 use axum::{
     Router,
@@ -45,6 +45,17 @@ use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
 };
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    net::SocketAddr,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicI64, AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 use time::OffsetDateTime;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -57,17 +68,6 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{error, info, warn};
-use crate::{
-    bundle::ProofBundleV1,
-    config::{DotTlsConfig, ResolverConfig},
-    events::EventEmitter,
-    limits::{
-        MAX_STATE_BUNDLES, MAX_STATE_RAD_ENTRIES, MAX_STATE_RETAINED_BYTES, MAX_TLS_CERT_BYTES,
-        MAX_TLS_KEY_BYTES, read_bounded_file, replace_retained_bytes,
-    },
-    rad::{ResolverAttestation, rad_retained_bytes, validate_rad},
-    state::{ResolverState, ResolverStateMetrics},
-};
 const DNS_CONTENT_TYPE: &str = "application/dns-message";
 /// Shared resolver application state guarded by an async `RwLock`.
 pub type SharedState = Arc<RwLock<ResolverState>>;
@@ -812,7 +812,8 @@ fn escape_label_value(value: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use std::{io::ErrorKind, net::Ipv4Addr, sync::Arc};
+    use super::*;
+    use crate::config::StaticZone;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use hickory_proto::{
         op::{Message, MessageType, OpCode, Query, ResponseCode},
@@ -823,12 +824,11 @@ mod tests {
         Client as HttpClient, StatusCode as HttpStatus,
         header::{ACCEPT, CONTENT_TYPE},
     };
+    use std::{io::ErrorKind, net::Ipv4Addr, sync::Arc};
     use tokio::{
         net::UdpSocket,
         time::{Duration, sleep},
     };
-    use super::*;
-    use crate::config::StaticZone;
     #[tokio::test(flavor = "multi_thread")]
     async fn doq_roundtrip_resolves_static_record() -> Result<()> {
         let addr = match std::net::UdpSocket::bind("127.0.0.1:0") {

@@ -1,10 +1,10 @@
 #![allow(unused)]
+use crate::{emitter_ext::EmitterExt, utils::darling_result};
 use darling::{FromDeriveInput, FromVariant};
 use manyhow::Emitter;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{DeriveInput, Variant};
-use crate::{emitter_ext::EmitterExt, utils::darling_result};
 enum FieldsStyle {
     Unit,
     Unnamed,

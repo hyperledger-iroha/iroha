@@ -6,14 +6,6 @@
 //! attested endpoints. Councillors co-sign the canonical digest inside a
 //! `ProviderAdmissionEnvelopeV1`, which Torii and gateways use to authorise
 //! incoming `ProviderAdvertV1` payloads.
-use std::{collections::BTreeSet, num::NonZeroUsize};
-use blake3::Hasher;
-use iroha_crypto::{Algorithm, PublicKey};
-use norito::{
-    core::Error as NoritoError,
-    derive::{NoritoDeserialize, NoritoSerialize},
-};
-use thiserror::Error;
 #[cfg(test)]
 use crate::provider_advert::TransportProtocol;
 use crate::{
@@ -25,6 +17,14 @@ use crate::{
         StreamBudgetV1, TransportHintError, TransportHintV1, validate_potr_mldsa_capability,
     },
 };
+use blake3::Hasher;
+use iroha_crypto::{Algorithm, PublicKey};
+use norito::{
+    core::Error as NoritoError,
+    derive::{NoritoDeserialize, NoritoSerialize},
+};
+use std::{collections::BTreeSet, num::NonZeroUsize};
+use thiserror::Error;
 /// Current proposal schema version.
 pub const PROVIDER_ADMISSION_PROPOSAL_VERSION_V1: u8 = 1;
 /// Current envelope schema version.
@@ -1424,7 +1424,6 @@ pub enum EndpointAttestationError {
 }
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
     use super::*;
     use crate::{
         AdvertSignature, PROVIDER_ADVERT_VERSION_V1, SignatureAlgorithm,
@@ -1433,6 +1432,7 @@ mod tests {
             QosHints, RendezvousTopic,
         },
     };
+    use ed25519_dalek::{Signer, SigningKey};
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

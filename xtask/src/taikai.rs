@@ -1,14 +1,14 @@
+use crate::{JsonTarget, write_json_output};
+use blake3::Hasher;
+use eyre::{Context as _, Result, ensure, eyre};
+use iroha_data_model::taikai::{REPLICATION_PROOF_TOKEN_VERSION_V1, ReplicationProofTokenV1};
+use norito::{codec::Decode, derive::JsonSerialize, json};
 use std::{
     borrow::Cow,
     fs,
     io::Read,
     path::{Path, PathBuf},
 };
-use blake3::Hasher;
-use eyre::{Context as _, Result, ensure, eyre};
-use iroha_data_model::taikai::{REPLICATION_PROOF_TOKEN_VERSION_V1, ReplicationProofTokenV1};
-use norito::{codec::Decode, derive::JsonSerialize, json};
-use crate::{JsonTarget, write_json_output};
 #[derive(Debug)]
 pub struct RptVerifyOptions {
     pub envelope_path: PathBuf,
@@ -268,14 +268,14 @@ fn print_digest(label: &str, digest: &DigestCheck) {
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use super::*;
     use iroha_data_model::{
         name::Name,
         taikai::{TaikaiEventId, TaikaiRenditionId, TaikaiStreamId},
     };
     use norito::codec::Encode;
+    use std::str::FromStr;
     use tempfile::tempdir;
-    use super::*;
     fn sample_name(raw: &str) -> Name {
         Name::from_str(raw).expect("valid name")
     }

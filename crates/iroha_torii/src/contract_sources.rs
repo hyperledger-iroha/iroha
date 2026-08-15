@@ -1,14 +1,4 @@
 #![cfg(feature = "app_api")]
-use std::{
-    collections::BTreeSet,
-    fmt::{self, Write as _},
-    fs,
-    io::{self, Read as _},
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
 use crate::{Error, JsonBody, data_dir};
 use axum::{http::StatusCode, response::IntoResponse};
 use iroha_core::state::{State as CoreState, StateReadOnly, WorldReadOnly};
@@ -27,6 +17,16 @@ use iroha_data_model::{
 };
 use ivm::analysis::ProgramAnalysis;
 use mv::storage::StorageReadOnly;
+use std::{
+    collections::BTreeSet,
+    fmt::{self, Write as _},
+    fs,
+    io::{self, Read as _},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 const VERIFIED_SOURCE_VERSION: u32 = 1;
 const VERIFIED_SOURCE_LANGUAGE_KOTODAMA: &str = "kotodama";
 const FIXED_HEX_COMPONENT_BYTES_V1: usize = 32;
@@ -1587,7 +1587,8 @@ pub async fn handle_get_verified_source_job(
 }
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, num::NonZeroU64, time::Duration};
+    use super::*;
+    use crate::test_utils::TestDataDirGuard;
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
         kura::Kura,
@@ -1602,8 +1603,7 @@ mod tests {
     use iroha_executor_data_model::permission::{
         governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
     };
-    use super::*;
-    use crate::test_utils::TestDataDirGuard;
+    use std::{borrow::Cow, num::NonZeroU64, time::Duration};
     #[test]
     fn verified_source_request_bounds_accept_exact_and_reject_first_overflow() {
         assert_eq!(

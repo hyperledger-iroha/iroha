@@ -1,6 +1,6 @@
 //! Regression tests for collections containing zero-sized elements.
-use std::collections::{HashMap, VecDeque};
 use norito::core::{decode_from_bytes, to_bytes};
+use std::collections::{HashMap, VecDeque};
 #[test]
 fn hashmap_unit_roundtrip() {
     let mut map: HashMap<(), ()> = HashMap::new();

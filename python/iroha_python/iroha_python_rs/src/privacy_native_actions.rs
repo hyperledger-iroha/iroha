@@ -2614,7 +2614,7 @@ pub fn inspect_signed_privacy_pq_masp_note_action_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use super::*;
     use iroha_data_model::privacy::{
         PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1, PrivacyChallengeV1,
         PrivacyIssuerIdV1, PrivacyNullifierV1, PrivacyX509ExtendedKeyUsageV1,
@@ -2624,7 +2624,7 @@ mod tests {
         ZK_X509_HASH_FRAME_DOMAIN_V1,
     };
     use sha2::{Digest, Sha256};
-    use super::*;
+    use std::collections::BTreeSet;
     fn signing_key() -> PrivateKey {
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             .parse()

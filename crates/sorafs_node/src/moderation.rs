@@ -1,9 +1,4 @@
 //! SoraFS moderation screening, quarantine, and evidence-viewer runtimes.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ops::Range,
-    path::{Component, Path},
-};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::{
     PublicKey,
@@ -15,6 +10,11 @@ use iroha_data_model::sorafs::moderation::{
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use rand::{TryRngCore, rngs::OsRng};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+    path::{Component, Path},
+};
 use thiserror::Error;
 const MODERATION_SCREENING_RECORD_DOMAIN_V1: &[u8] = b"sorafs.moderation.local.screening-record.v1";
 const MODERATION_QUARANTINE_RECORD_DOMAIN_V1: &[u8] =
@@ -105,10 +105,9 @@ pub struct ModerationModelRegistrySnapshot {
 }
 /// Bounded read view of the local moderation model registry.
 ///
-/// Total counts describe authoritative retained state while the record vectors
-/// contain at most the caller's already-admitted response limit. This keeps
-/// HTTP readback allocation proportional to the response instead of cloning
-/// the full durable registry before pagination.
+/// Total counts describe authoritative retained state while the record vectors contain at most the
+/// caller's already-admitted response limit. This keeps HTTP readback allocation proportional to
+/// the response instead of cloning the full durable registry before pagination.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModerationModelRegistryReadView {
     /// Total admitted reproducibility manifests.
@@ -318,9 +317,8 @@ pub enum ModerationAuthenticatedScreeningAdmissionError {
 }
 /// Canonical, non-secret authority bundle loaded from an `iroha_config` path.
 ///
-/// The deployment configuration separately pins the BLAKE3 digest of the
-/// exact canonical Norito bytes, so replacing this local file cannot silently
-/// change the active screening authority.
+/// The deployment configuration separately pins the BLAKE3 digest of the exact canonical Norito
+/// bytes, so replacing this local file cannot silently change the active screening authority.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationScreeningAuthorityBundleV1 {
     /// Schema version.
@@ -339,9 +337,8 @@ impl ModerationScreeningAuthorityBundleV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for an unsupported version, a non-canonical or
-    /// unbounded anchor inventory, an invalid quorum, or any invalid
-    /// manifest/policy/signature/validity binding.
+    /// Returns an error for an unsupported version, a non-canonical or unbounded anchor inventory,
+    /// an invalid quorum, or any invalid manifest/policy/signature/validity binding.
     pub fn into_authority(
         self,
         now_unix: u64,
@@ -2929,13 +2926,11 @@ pub enum ModerationQuarantineKeyProviderReadinessErrorV1 {
 }
 /// Stable, payload-free failure classes for quarantine-key operations.
 ///
-/// An adapter must classify protected provider diagnostics at its own boundary,
-/// scrub the diagnostic with
-/// [`Self::after_scrubbing_provider_diagnostic`], and expose only one of these
-/// variants. `Unavailable`, `Rejected`, and `StaleOrRevoked` are definitive:
-/// the adapter knows that the requested wrap did not complete.
-/// `Ambiguous` is reserved for a wrap request that may have reached the
-/// provider before transport was lost. The caller must not replay that request.
+/// An adapter must classify protected provider diagnostics at its own boundary, scrub the
+/// diagnostic with [`Self::after_scrubbing_provider_diagnostic`], and expose only one of these
+/// variants. `Unavailable`, `Rejected`, and `StaleOrRevoked` are definitive: the adapter knows that
+/// the requested wrap did not complete. `Ambiguous` is reserved for a wrap request that may have
+/// reached the provider before transport was lost. The caller must not replay that request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ModerationQuarantineKeyOperationErrorV1 {
     /// The provider was unreachable before it could accept the operation.
@@ -3043,9 +3038,8 @@ impl ModerationQuarantineKeyProviderBindingV1 {
     ///
     /// # Errors
     ///
-    /// Fails for invalid or test-marked provider handles, substitutions,
-    /// unavailable or stale providers, invalid observations, and qualification
-    /// mismatches.
+    /// Fails for invalid or test-marked provider handles, substitutions, unavailable or stale
+    /// providers, invalid observations, and qualification mismatches.
     pub fn qualify(
         &self,
         provider: &dyn ModerationQuarantineKeyWrapper,
@@ -3097,28 +3091,23 @@ impl ModerationQuarantineKeyProviderBindingV1 {
 }
 /// Runtime-only adapter for wrapping per-object data-encryption keys.
 ///
-/// Production implementations are expected to call PKCS#11 or a KMS and keep
-/// all key material outside the process configuration and durable object
-/// envelope. Implementations must authenticate `context_digest` during both
-/// wrap and unwrap so a wrapped DEK cannot be replayed onto another object.
-/// `qualification` must fail for unavailable, revoked, stale, substituted, or
-/// test-marked adapters, and its revision or digest must change whenever the
-/// public adapter/key policy changes.
+/// Production implementations are expected to call PKCS#11 or a KMS and keep all key material
+/// outside the process configuration and durable object envelope. Implementations must authenticate
+/// `context_digest` during both wrap and unwrap so a wrapped DEK cannot be replayed onto another
+/// object. `qualification` must fail for unavailable, revoked, stale, substituted, or test-marked
+/// adapters, and its revision or digest must change whenever the public adapter/key policy changes.
 ///
-/// Wrapping is treated as mutating for retry purposes. An implementation must
-/// not retry after dispatch when it cannot prove whether the provider completed
-/// the request; it returns
-/// [`ModerationQuarantineKeyOperationErrorV1::Ambiguous`] instead. The object
-/// runtime never retries a wrap. Failed sealing discards its fresh DEK; failed
-/// rewrapping leaves the authoritative envelope unchanged and requires external
-/// reconciliation before another attempt. No ambiguous provider result is
-/// persisted as a completed envelope.
+/// Wrapping is treated as mutating for retry purposes. An implementation must not retry after
+/// dispatch when it cannot prove whether the provider completed the request; it returns
+/// [`ModerationQuarantineKeyOperationErrorV1::Ambiguous`] instead. The object runtime never retries
+/// a wrap. Failed sealing discards its fresh DEK; failed rewrapping leaves the authoritative
+/// envelope unchanged and requires external reconciliation before another attempt. No ambiguous
+/// provider result is persisted as a completed envelope.
 ///
-/// Unwrapping is read-only and idempotent for an exact key id, context digest,
-/// and wrapped DEK. Implementations must not return `Ambiguous` from
-/// [`Self::unwrap_dek`]; transport uncertainty is `Unavailable` and may be
-/// retried safely at a higher read boundary. The object runtime itself performs
-/// each unwrap at most once per invocation.
+/// Unwrapping is read-only and idempotent for an exact key id, context digest, and wrapped DEK.
+/// Implementations must not return `Ambiguous` from [`Self::unwrap_dek`]; transport uncertainty is
+/// `Unavailable` and may be retried safely at a higher read boundary. The object runtime itself
+/// performs each unwrap at most once per invocation.
 pub trait ModerationQuarantineKeyWrapper: Send + Sync + std::fmt::Debug {
     /// Return the stable, non-secret deployment handle for this provider.
     fn provider_handle(&self) -> &str;

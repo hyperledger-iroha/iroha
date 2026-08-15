@@ -1,16 +1,11 @@
 //! Native proof that a complete Anonymous-PGC account table starts from a
 //! bounded, nonnegative public total supply.
 //!
-//! Every encrypted balance receives both a generalized Schnorr
-//! well-formedness proof and an exact unsigned 32-bit bit-decomposition proof.
-//! A final Schnorr proof shows that the aggregate right component opens to the
-//! declared total supply.  Since the closed profile contains at most 64
-//! accounts, `64 * (2^32 - 1)` is far below the P-256 scalar order; aggregate
-//! equality in the group is therefore equality of the represented integers,
-//! not merely equality modulo the scalar field.
-use p256::{ProjectivePoint, Scalar};
-use rand_core_06::{CryptoRng, RngCore};
-use sha2::{Digest, Sha256};
+//! Every encrypted balance receives both a generalized Schnorr well-formedness proof and an exact
+//! unsigned 32-bit bit-decomposition proof. A final Schnorr proof shows that the aggregate right
+//! component opens to the declared total supply. Since the closed profile contains at most 64
+//! accounts, `64 * (2^32 - 1)` is far below the P-256 scalar order; aggregate equality in the group
+//! is therefore equality of the represented integers, not merely equality modulo the scalar field.
 use super::{
     AnonymousPgcError, AnonymousPgcParametersV1, TwistedElGamalCiphertextV1,
     TwistedElGamalPublicKeyV1,
@@ -19,6 +14,9 @@ use crate::privacy_engines::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
     TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar,
 };
+use p256::{ProjectivePoint, Scalar};
+use rand_core_06::{CryptoRng, RngCore};
+use sha2::{Digest, Sha256};
 /// Closed suite for the complete PGC account-bootstrap proof.
 pub const PGC_BOOTSTRAP_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.account-bootstrap.p256.sha256.v1";
 /// Canonical bootstrap-proof wire version.
@@ -72,19 +70,17 @@ pub struct AnonymousPgcBootstrapStatementV1<'a> {
 impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
     /// Construct a fully bound account-bootstrap statement.
     ///
-    /// `namespace_encoding` must be the exact canonical Norito encoding of the
-    /// already validated PGC [`iroha_data_model::privacy::PrivacyNamespaceV1`].
-    /// Keeping it as opaque bytes here avoids coupling the native
-    /// cryptographic substrate to the runtime data model while still binding
-    /// the complete namespace.
+    /// `namespace_encoding` must be the exact canonical Norito encoding of the already validated
+    /// PGC [`iroha_data_model::privacy::PrivacyNamespaceV1`]. Keeping it as opaque bytes here
+    /// avoids coupling the native cryptographic substrate to the runtime data model while still
+    /// binding the complete namespace.
     ///
     /// # Errors
     ///
-    /// Rejects an initial epoch other than the exact first-release value before
-    /// validating or allocating for any other statement field. Also rejects an
-    /// empty/oversized namespace, zero root/supply, unsupported account count,
-    /// length mismatch, unsorted or duplicate keys, malformed points, or
-    /// governed transcript-digest mismatches.
+    /// Rejects an initial epoch other than the exact first-release value before validating or
+    /// allocating for any other statement field. Also rejects an empty/oversized namespace, zero
+    /// root/supply, unsupported account count, length mismatch, unsorted or duplicate keys,
+    /// malformed points, or governed transcript-digest mismatches.
     pub fn new(
         namespace_encoding: &'a [u8],
         initial_root: [u8; 32],
@@ -273,10 +269,9 @@ impl AnonymousPgcBootstrapProofV1 {
     ///
     /// # Errors
     ///
-    /// Rejects oversized, truncated, trailing, malformed, noncanonical,
-    /// unknown-version, or incorrectly shaped proof bytes.  Canonicality is
-    /// enforced explicitly by byte-for-byte re-encoding before any equation is
-    /// attempted.
+    /// Rejects oversized, truncated, trailing, malformed, noncanonical, unknown-version, or
+    /// incorrectly shaped proof bytes. Canonicality is enforced explicitly by byte-for-byte
+    /// re-encoding before any equation is attempted.
     pub fn decode_exact(
         bytes: &[u8],
         statement: &AnonymousPgcBootstrapStatementV1<'_>,
@@ -848,14 +843,12 @@ fn validate_witness(
     }
     Ok(aggregate_randomness)
 }
-/// Prove bounded account openings and exact aggregate supply for a complete
-/// bootstrap table.
+/// Prove bounded account openings and exact aggregate supply for a complete bootstrap table.
 ///
 /// # Errors
 ///
-/// Rejects a false opening, wrong witness length, aggregate mismatch,
-/// prohibited identity intermediate, entropy exhaustion, or proof exceeding
-/// the closed 4 MiB wire cap.
+/// Rejects a false opening, wrong witness length, aggregate mismatch, prohibited identity
+/// intermediate, entropy exhaustion, or proof exceeding the closed 4 MiB wire cap.
 pub fn prove_bootstrap<R>(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     witness: &AnonymousPgcBootstrapWitnessV1<'_>,
@@ -910,9 +903,8 @@ where
 ///
 /// # Errors
 ///
-/// Rejects malformed proof material, any changed public/transcript field,
-/// failed ciphertext well-formedness, a value outside the unsigned 32-bit
-/// domain, or aggregate supply mismatch.
+/// Rejects malformed proof material, any changed public/transcript field, failed ciphertext
+/// well-formedness, a value outside the unsigned 32-bit domain, or aggregate supply mismatch.
 pub fn verify_bootstrap(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     proof: &AnonymousPgcBootstrapProofV1,
@@ -945,9 +937,9 @@ pub fn verify_bootstrap_encoded(
 }
 #[cfg(test)]
 mod tests {
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use super::*;
     use crate::privacy_engines::anonymous_pgc::TwistedElGamalKeyPairV1;
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     const TEST_NAMESPACE: &[u8] = b"canonical-norito:anonymous-pgc:taira-pool-7";
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyUnsignedRangeProofV1 {

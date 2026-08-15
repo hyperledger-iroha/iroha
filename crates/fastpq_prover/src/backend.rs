@@ -1,4 +1,20 @@
+use crate::{
+    Error, Result, TransitionBatch,
+    fft::Planner,
+    overrides, pack_bytes, poseidon,
+    proof::{AirConstraintOpening, FriQueryOpening, FriRoundOpening, PublicIO},
+    trace::{
+        PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
+        hash_columns_from_coefficients, hash_trace_merkle_pairs_with_mode,
+        merkle_root_with_first_level,
+    },
+};
 use core::convert::TryFrom;
+use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge};
+use iroha_crypto::Hash;
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+use metal::{Device, MTLDeviceLocation};
+use rayon::prelude::*;
 #[cfg(windows)]
 use std::env;
 #[cfg(unix)]
@@ -10,22 +26,6 @@ use std::{
     path::Path,
     process::{Command, Stdio},
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
-};
-use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge};
-use iroha_crypto::Hash;
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-use metal::{Device, MTLDeviceLocation};
-use rayon::prelude::*;
-use crate::{
-    Error, Result, TransitionBatch,
-    fft::Planner,
-    overrides, pack_bytes, poseidon,
-    proof::{AirConstraintOpening, FriQueryOpening, FriRoundOpening, PublicIO},
-    trace::{
-        PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
-        hash_columns_from_coefficients, hash_trace_merkle_pairs_with_mode,
-        merkle_root_with_first_level,
-    },
 };
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 const FIELD_ONE: u64 = 1;
@@ -534,8 +534,8 @@ fn system_root() -> Option<PathBuf> {
 }
 #[cfg(test)]
 mod detection_tests {
-    use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use super::*;
+    use fastpq_isi::CANONICAL_PARAMETER_SETS;
     fn availability(enabled: &[GpuBackend]) -> BackendAvailability {
         enabled
             .iter()
@@ -623,9 +623,9 @@ mod detection_tests {
 }
 #[cfg(test)]
 mod observer_tests {
+    use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
-    use super::*;
     struct ExecutionModeObserverGuard;
     impl Drop for ExecutionModeObserverGuard {
         fn drop(&mut self) {
@@ -2341,9 +2341,9 @@ fn mul_mod(a: u64, b: u64) -> u64 {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
     use super::*;
     use crate::{OperationKind, PublicInputs, StateTransition, trace::merkle_root};
+    use std::collections::BTreeSet;
     fn sample_batch(rows: usize) -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         for idx in 0..rows {
@@ -2824,9 +2824,9 @@ mod tests {
         assert_ne!(baseline_layers, mutated_layers);
     }
     mod fri_properties {
-        use fastpq_isi::CANONICAL_PARAMETER_SETS;
         use super::*;
         use crate::Planner;
+        use fastpq_isi::CANONICAL_PARAMETER_SETS;
         const MAX_TRACE_LOG: u32 = 4;
         fn fri_input_cases() -> Vec<(u32, Vec<u64>)> {
             let mut cases = Vec::new();

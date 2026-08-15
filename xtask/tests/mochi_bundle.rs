@@ -1,7 +1,7 @@
-use std::{env, fs};
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use sha2::{Digest, Sha256};
+use std::{env, fs};
 use tempfile::TempDir;
 #[test]
 fn mochi_bundle_command_generates_manifest() {

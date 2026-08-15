@@ -1,12 +1,12 @@
+use clap::{Parser, ValueEnum};
+use eyre::{Result, WrapErr};
+use norito::json;
+use soradns_resolver::transparency::{TransparencyRecord, TransparencyTailer};
 use std::{
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, Write},
     path::PathBuf,
 };
-use clap::{Parser, ValueEnum};
-use eyre::{Result, WrapErr};
-use norito::json;
-use soradns_resolver::transparency::{TransparencyRecord, TransparencyTailer};
 #[derive(Debug, Parser)]
 #[command(
     author,
@@ -155,10 +155,10 @@ fn write_record<W: Write + ?Sized>(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use soradns_resolver::transparency::{
         BundleEventKind, BundleRecord, BundleSnapshot, ResolverEventKind, ResolverRecord,
     };
-    use super::*;
     #[test]
     fn json_writer_outputs_line() {
         let mut buffer = Vec::new();

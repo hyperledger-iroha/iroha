@@ -1,4 +1,7 @@
 //! Async DA spool batching for Torii ingest persistence.
+use super::ReceiptInsertOutcome;
+use crate::routing::MaybeTelemetry;
+use iroha_logger::warn;
 use std::{
     any::Any,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -8,10 +11,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use iroha_logger::warn;
 use tokio::sync::{mpsc, oneshot};
-use super::ReceiptInsertOutcome;
-use crate::routing::MaybeTelemetry;
 const OUTCOME_OK: &str = "ok";
 const OUTCOME_PARTIAL_ERROR: &str = "partial_error";
 const OUTCOME_ERROR: &str = "error";
@@ -330,6 +330,7 @@ impl DaSpooler {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         num::NonZeroUsize,
         sync::{
@@ -337,7 +338,6 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
-    use super::*;
     #[test]
     fn queue_depth_increment_rejects_overflow_without_wrapping() {
         let depth = AtomicUsize::new(usize::MAX);

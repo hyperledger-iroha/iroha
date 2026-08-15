@@ -1,13 +1,4 @@
 //! Crash-safe replay and idempotency persistence for the private Musubi publication service.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    fs::{self, File, OpenOptions},
-    io::{self, Read as _, Write as _},
-    path::{Path, PathBuf},
-};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 #[cfg(unix)]
 use super::publication_filesystem_owner_probe;
 use super::{
@@ -20,7 +11,18 @@ use super::{
     MusubiPublicationServiceJournalV1, valid_storage_generation_target,
 };
 #[cfg(unix)]
-use crate::musubi_archive_fetch::{secure_directory_open_flags, secure_no_follow_nonblocking_flags};
+use crate::musubi_archive_fetch::{
+    secure_directory_open_flags, secure_no_follow_nonblocking_flags,
+};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    fs::{self, File, OpenOptions},
+    io::{self, Read as _, Write as _},
+    path::{Path, PathBuf},
+};
 const JOURNAL_STATE_FILE: &str = "publication-journal-v1.norito";
 const JOURNAL_LOCK_FILE: &str = "publication-journal-v1.lock";
 const JOURNAL_NEXT_FILE: &str = "publication-journal-v1.next";
@@ -1782,7 +1784,8 @@ fn metadata_owner(_metadata: &fs::Metadata) -> u32 {
 }
 #[cfg(all(test, unix))]
 mod tests {
-    use std::os::unix::fs::PermissionsExt as _;
+    use super::*;
+    use crate::musubi_runtime::MusubiPublicationServiceConfigurationV1;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -1791,8 +1794,7 @@ mod tests {
         musubi::{ArchiveId, MusubiContentDigestV1},
         sorafs::capacity::ProviderId,
     };
-    use super::*;
-    use crate::musubi_runtime::MusubiPublicationServiceConfigurationV1;
+    use std::os::unix::fs::PermissionsExt as _;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             [seed; 32],

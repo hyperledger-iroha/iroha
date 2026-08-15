@@ -21,8 +21,8 @@ pub fn read_env_duration(var: &str, default: Duration) -> Duration {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
     use super::*;
+    use std::sync::{Mutex, OnceLock};
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     struct EnvRestore {
         key: &'static str,

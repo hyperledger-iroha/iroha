@@ -5,8 +5,6 @@
 //! form. Before code generation, [`crate::ssa`] converts it to strict SSA MIR
 //! with explicit Phi nodes, verifies dominance and definition uniqueness, and
 //! deterministically lowers it back for register allocation.
-use std::collections::{BTreeSet, HashMap};
-use iroha_data_model::{smart_contract::manifest::DynamicAccessHint, state_path::StatePath};
 use super::{
     abi_schema::{json_construction_schema, state_value_kind_for_type, state_value_schema},
     ast::{BinaryOp, PatternBinding, STATE_MAP_GET_INTRINSIC, SumVariant, UnaryOp},
@@ -16,6 +14,8 @@ use super::{
         TypedStateDecl, TypedStatement,
     },
 };
+use iroha_data_model::{smart_contract::manifest::DynamicAccessHint, state_path::StatePath};
+use std::collections::{BTreeSet, HashMap};
 pub const TEST_TRIGGER_EVENT_OVERRIDE_KEY: &str = "__koto_test_trigger_event_json";
 const INVOKE_ENTRYPOINT_PREFIX: &str = "__invoke_entrypoint__";
 fn state_map_base_name(expr: &semantic::TypedExpr) -> Option<String> {

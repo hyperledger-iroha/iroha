@@ -1,11 +1,10 @@
 //! Zero-knowledge proof payloads and identifiers.
 //!
-//! This module defines an opaque container for proofs that can be attached to
-//! query responses and other messages without committing to a specific proving
-//! system. The container carries a backend identifier (`Ident`) and raw bytes
-//! produced by that backend. Norito serialization preserves both fields
-//! byte-for-byte to ensure stable hashing and compatibility across nodes.
-use std::io::Write;
+//! This module defines an opaque container for proofs that can be attached to query responses and
+//! other messages without committing to a specific proving system. The container carries a backend
+//! identifier (`Ident`) and raw bytes produced by that backend. Norito serialization preserves both
+//! fields byte-for-byte to ensure stable hashing and compatibility across nodes.
+use crate::{confidential::ConfidentialStatus, zk::BackendTag};
 #[cfg(feature = "json")]
 use base64::Engine as _;
 #[cfg(feature = "json")]
@@ -15,7 +14,7 @@ use norito::{
     codec::{Decode, Encode},
     core as ncore,
 };
-use crate::{confidential::ConfidentialStatus, zk::BackendTag};
+use std::io::Write;
 const MAX_BACKEND_FIELD_BYTES: usize = 4 * 1024;
 const MAX_REF_FIELD_BYTES: usize = 16 * 1024;
 /// Maximum canonical encoded size of a [`ProofBox`] nested in a proof attachment.
@@ -87,9 +86,8 @@ fn proof_box_canonical_encoded_len_for_lengths_v1(
         ncore::varint_len_prefix_len(proof_value_len).checked_add(proof_value_len)?;
     backend_field_len.checked_add(proof_field_len)
 }
-/// Return the largest proof payload that keeps the complete canonical nested
-/// [`ProofBox`] payload within [`PROOF_BOX_MAX_ENCODED_BYTES_V1`] for the
-/// supplied UTF-8 backend id.
+/// Return the largest proof payload that keeps the complete canonical nested [`ProofBox`] payload
+/// within [`PROOF_BOX_MAX_ENCODED_BYTES_V1`] for the supplied UTF-8 backend id.
 ///
 /// `None` means the backend and mandatory canonical framing alone exceed the
 /// closed first-release limit.
@@ -466,10 +464,9 @@ pub struct ProofAttachment {
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
     #[norito(default)]
     pub vk_commitment: Option<[u8; 32]>,
-    /// Optional hash of the verify envelope payload passed via pointer‑ABI TLV
-    /// (e.g., NoritoBytes(OpenVerifyEnvelope)). When present, it is used to
-    /// bind the verification inputs to the transaction `call_hash` in emitted
-    /// events and audit metadata.
+    /// Optional hash of the verify envelope payload passed via pointer‑ABI TLV (e.g.,
+    /// NoritoBytes(OpenVerifyEnvelope)). When present, it is used to bind the verification inputs
+    /// to the transaction `call_hash` in emitted events and audit metadata.
     #[cfg_attr(
         feature = "json",
         norito(
@@ -508,10 +505,9 @@ impl ProofAttachment {
     }
     /// Return the first structural field error for this attachment, if any.
     ///
-    /// This predicate is intentionally pure and layout-neutral so Norito
-    /// decoding, JSON decoding, transaction admission, and SDK callers can
-    /// enforce the same canonical attachment shape without changing the wire
-    /// format.
+    /// This predicate is intentionally pure and layout-neutral so Norito decoding, JSON decoding,
+    /// transaction admission, and SDK callers can enforce the same canonical attachment shape
+    /// without changing the wire format.
     #[must_use]
     pub fn structural_error(&self) -> Option<(&'static str, &'static str)> {
         self.backend_consistency_error().map_or_else(
@@ -870,8 +866,7 @@ fn proof_attachment_json_unknown_field(field: &str, parent: &str) -> norito::jso
         }
     }
 }
-/// A string whose exact decoded UTF-8 length is bounded before an owned
-/// allocation is created.
+/// A string whose exact decoded UTF-8 length is bounded before an owned allocation is created.
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonBoundedStringV1<const MAX: usize>(String);
 #[cfg(feature = "json")]
@@ -1721,11 +1716,10 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
 }
 /// Maximum complete canonical Norito frame for a first-release proof attachment list.
 ///
-/// This intrinsic 8 MiB binary ceiling leaves room beneath Taira's governed
-/// 10 MiB signed-transaction wire ceiling. It is not a claim that a maximal
-/// frame fits Torii's 8 MiB JSON proof body: base64 and JSON quotes expand the
-/// transport, whose exact largest decoded binary string at that body limit is
-/// 6,291,453 bytes.
+/// This intrinsic 8 MiB binary ceiling leaves room beneath Taira's governed 10 MiB
+/// signed-transaction wire ceiling. It is not a claim that a maximal frame fits Torii's 8 MiB JSON
+/// proof body: base64 and JSON quotes expand the transport, whose exact largest decoded binary
+/// string at that body limit is 6,291,453 bytes.
 pub const PROOF_ATTACHMENT_LIST_MAX_CANONICAL_FRAME_BYTES_V1: usize = 8 * 1024 * 1024;
 /// Maximum attachments carried by one first-release proof attachment list.
 ///
@@ -1844,11 +1838,9 @@ impl ProofAttachmentList {
     pub fn into_vec(self) -> Vec<ProofAttachment> {
         self.0
     }
-    /// Append one attachment while preserving the first-release count and
-    /// canonical-frame bounds.
+    /// Append one attachment while preserving the first-release count and canonical-frame bounds.
     ///
-    /// The list is left unchanged when the appended value would violate an
-    /// invariant.
+    /// The list is left unchanged when the appended value would violate an invariant.
     ///
     /// # Errors
     ///
@@ -2468,8 +2460,8 @@ impl ProofedCommittedTransaction {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Hash, HashOf, LaneCommitmentId, MerkleProof};
     use super::*;
+    use iroha_crypto::{Hash, HashOf, LaneCommitmentId, MerkleProof};
     fn write_test_field<T: norito::NoritoSerialize>(encoded: &mut Vec<u8>, value: &T) {
         let mut field = Vec::new();
         ncore::serialize_to_buffer(value, &mut field).expect("serialize test field");
@@ -4307,8 +4299,8 @@ mod tests {
     }
     #[test]
     fn proofed_committed_tx_roundtrip() {
-        use iroha_crypto::{Hash, HashOf};
         use crate::query::CommittedTransaction;
+        use iroha_crypto::{Hash, HashOf};
         // Minimal dummy CommittedTransaction with empty merkle items.
         let empty: [u8; 32] = [0; 32];
         let h_block =

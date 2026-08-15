@@ -1,17 +1,17 @@
 //! Proof-of-Retrievability (PoR) challenge, proof, and audit verdict schemas.
-use std::collections::BTreeSet;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use blake3::Hasher;
-use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
-use norito::core::NoritoSerialize as _;
-use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
 use crate::{
     CapacityMetadataEntry, XorQuantity,
     capacity::{MAX_REPLICATION_ORDER_METADATA_BYTES, MAX_REPLICATION_ORDER_METADATA_ENTRIES},
     chunker_registry,
     provider_advert::{AdvertSignature, SignatureAlgorithm},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use blake3::Hasher;
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
+use norito::core::NoritoSerialize as _;
+use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::collections::BTreeSet;
+use thiserror::Error;
 const POR_CHALLENGE_SEED_DOMAIN: &[u8] = b"sorafs:por:seed:v1";
 const POR_CHALLENGE_ID_DOMAIN: &[u8] = b"sorafs:por:id:v1";
 /// Domain separator used by provider PoR proof signatures.
@@ -2808,8 +2808,8 @@ pub fn decode_por_weekly_report_v1(bytes: &[u8]) -> Result<PorWeeklyReportV1, no
 }
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer as _, SigningKey};
     use super::*;
+    use ed25519_dalek::{Signer as _, SigningKey};
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut bytes = Vec::new();

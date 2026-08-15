@@ -23,9 +23,9 @@ pub const fn metric_label() -> &'static str {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{LazyLock, Mutex};
-    use iroha_test_samples::ALICE_ID;
     use super::*;
+    use iroha_test_samples::ALICE_ID;
+    use std::sync::{LazyLock, Mutex};
     static RESOLVER_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
     #[test]
     fn display_literal_and_from_literal_round_trip() {

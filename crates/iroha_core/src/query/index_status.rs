@@ -4,17 +4,17 @@
 //! needs a durable notion of the latest query snapshot that survived restarts.
 //! This journal stores the latest indexed block height and hash under the Kura
 //! root so aggregate responses can report a stable snapshot marker.
-use std::{
-    fs,
-    io::{Read, Write},
-    path::{Path, PathBuf},
-};
 use iroha_crypto::HashOf;
 use iroha_data_model::block::BlockHeader;
 use iroha_logger::warn;
 use norito::{
     codec::{Decode, Encode},
     decode_from_bytes, to_bytes,
+};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::{Path, PathBuf},
 };
 use thiserror::Error;
 /// Snapshot of the latest durable query index state.

@@ -1,4 +1,6 @@
 //! Validate GOST benchmark output against reference medians with a configurable tolerance.
+use iroha_crypto::Algorithm;
+use norito::json::{self, Map, Value};
 use std::{
     collections::BTreeMap,
     env,
@@ -8,8 +10,6 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
 };
-use iroha_crypto::Algorithm;
-use norito::json::{self, Map, Value};
 const EXPECTED_ALGORITHMS: &[(&str, Algorithm)] = &[
     ("ed25519", Algorithm::Ed25519),
     ("secp256k1", Algorithm::Secp256k1),

@@ -3,7 +3,7 @@
 def _serviced_candidate_production_source_fidelity_errors(
     repo_root: Path,
 ) -> list[str]:
-    """Seal the V3-decode/V4-emit producer lifecycle and runtime handoff."""
+    """Seal the V4-only producer lifecycle and runtime handoff."""
 
     base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
     paths = {
@@ -12,16 +12,18 @@ def _serviced_candidate_production_source_fidelity_errors(
         "store": base / "serviced_candidate_store.rs",
         "adapter": base / "v2.rs",
         "runtime": base / "v2_runtime.rs",
-        "runner": base / "v2_runner.rs",
+        "lifecycle_launch": base / "v2_lifecycle_launch.rs",
+        "pending_startup": base / "v2_pending_kura_recovery.rs",
         "worker": base / "v2_worker.rs",
     }
     descriptions = {
         "module": "serviced-candidate module registration",
         "safety_wal": "opened safety-WAL directory capability",
-        "store": "V3/V4 serviced-candidate durable store",
+        "store": "V4-only serviced-candidate durable store",
         "adapter": "producer-continuation adapter ownership",
         "runtime": "producer-continuation serialized runtime",
-        "runner": "producer-continuation high-water binding",
+        "lifecycle_launch": "producer-continuation lifecycle high-water binding",
+        "pending_startup": "serialized lifecycle runtime construction",
         "worker": "producer-continuation worker quarantine ownership",
     }
     errors: list[str] = []
@@ -53,12 +55,8 @@ def _serviced_candidate_production_source_fidelity_errors(
     )
     for literal, description in (
         (
-            "const FORMAT_VERSION_V3: u16 = 3;",
-            "decode-only compatibility version must remain exactly V3",
-        ),
-        (
             "const FORMAT_VERSION: u16 = 4;",
-            "the sole emitted serviced-candidate version must remain V4",
+            "the sole serviced-candidate version must remain V4",
         ),
         (
             'const FRAME_MAGIC: &[u8; 8] = b"SUMVCAND";',
@@ -75,6 +73,16 @@ def _serviced_candidate_production_source_fidelity_errors(
                 f"{paths['store']}: {description} must occur exactly once in "
                 f"executable source; found {observed}"
             )
+    for retired_identifier in (
+        "FORMAT_VERSION_V3",
+        "PersistedServicedCandidatesV3",
+        "encode_frame_v3",
+    ):
+        if retired_identifier in structural["store"]:
+            errors.append(
+                f"{paths['store']}: first-release V4 storage must not retain "
+                f"{retired_identifier}"
+            )
 
     store_struct_attributes = {
         "ServicedCandidateKey": (
@@ -83,10 +91,6 @@ def _serviced_candidate_production_source_fidelity_errors(
         ),
         "PersistedServicedCandidate": (
             "#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]",
-            "#[norito(deny_unknown_fields)]",
-        ),
-        "PersistedServicedCandidatesV3": (
-            "#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]",
             "#[norito(deny_unknown_fields)]",
         ),
         "ProducerContinuationAddress": (
@@ -301,7 +305,6 @@ def _serviced_candidate_production_source_fidelity_errors(
         ),
         ("encode_payload_frame", "encode_payload_frame"),
         ("encode_frame_v4", "encode_frame_v4"),
-        ("encode_frame_v3", "encode_frame_v3"),
         ("decode_frame", "decode_frame"),
     )
     store_items = collect_items(
@@ -309,18 +312,6 @@ def _serviced_candidate_production_source_fidelity_errors(
         store_specs,
         _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256,
     )
-    encode_v3 = _require_rust_item(
-        paths["store"], sources["store"], "encode_frame_v3", errors
-    )
-    _require_rust_item_context(
-        paths["store"],
-        encode_v3,
-        (),
-        "V3 compatibility encoder",
-        errors,
-        expected_attributes=("#[cfg(test)]",),
-    )
-
     adapter_specs = tuple(
         (name, name)
         for name in _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256
@@ -376,12 +367,16 @@ def _serviced_candidate_production_source_fidelity_errors(
         tuple(runtime_names.items()),
         _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256,
     )
-    runner_items = collect_items(
-        "runner",
-        (("run_inner", "run_inner"),),
-        _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256,
+    lifecycle_launch_items = collect_items(
+        "lifecycle_launch",
+        (("launch", "launch"),),
+        _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256,
     )
-
+    pending_startup_items = collect_items(
+        "pending_startup",
+        (("into_serialized_runtime", "into_serialized_runtime"),),
+        _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256,
+    )
     def require_item_sequence(
         source_key: str,
         items: dict[str, RustItem | None],
@@ -541,16 +536,16 @@ def _serviced_candidate_production_source_fidelity_errors(
             "fs::symlink_metadata(self.expected_path.join(name))",
             "non-Unix WAL-leaf revalidation",
         ),
-        "safety_open": select_item(
+        "safety_fixture_open": select_item(
             "safety_wal",
             "open",
             "BoundSafetyWalDirectory::bind(&parent)",
-            "SafetyWal open",
+            "test-path SafetyWal open",
         ),
         "safety_open_bound": select_item(
             "safety_wal",
             "open_bound",
-            "recover_wal_stream(&mut file, &path, identity, WAL_RETENTION_LIMITS)",
+            "let identity = WalFileIdentity::new(protocol_version, network_id, key_hash)",
             "bound SafetyWal open",
         ),
         "stream_recovery": select_item(
@@ -817,13 +812,13 @@ if !opened.is_file()
     require_item_monotone_order(
         "safety_wal",
         safety_items,
-        "safety_open",
+        "safety_fixture_open",
         (
             "fs::create_dir_all(&parent)",
             "BoundSafetyWalDirectory::bind(&parent)",
             "Self::open_bound(",
         ),
-        "SafetyWal fixture opening must bind its directory before delegating to the shared opener",
+        "test-path SafetyWal recovery must bind its directory before delegating to the reviewed bound open",
     )
     safety_open_bound = safety_items["safety_open_bound"]
     require_item_monotone_order(
@@ -831,6 +826,7 @@ if !opened.is_file()
         safety_items,
         "safety_open_bound",
         (
+            "let identity = WalFileIdentity::new(protocol_version, network_id, key_hash)",
             "directory.open_wal_leaf(&wal_name)",
             "directory.verify_leaf(&file, &wal_name)",
             "let read_metadata_before = file.metadata()",
@@ -844,7 +840,7 @@ if !opened.is_file()
             "directory.verify_leaf(&file, &wal_name)",
             "WalAppendState::from_verified_stream_recovery(",
         ),
-        "SafetyWal recovery must bind before opening and bracket exact bytes with revisions",
+        "bound SafetyWal recovery must open through its retained directory and bracket exact bytes with revisions",
     )
     for sequence, description in (
         (
@@ -1294,8 +1290,8 @@ frame.extend_from_slice(&payload);
         "store",
         store_items,
         "decode_frame",
-        "if !matches!(version, FORMAT_VERSION_V3 | FORMAT_VERSION)",
-        "decoding must accept exactly compatibility V3 and current V4",
+        "if version != FORMAT_VERSION",
+        "decoding must accept exactly V4",
     )
     require_item_sequence(
         "store",
@@ -1310,31 +1306,7 @@ if Hash::new(payload).as_ref() != &bytes[digest_offset..payload_offset] {
     return Err("serviced-candidate snapshot checksum mismatch".to_owned());
 }
 """,
-        "decoding must enforce exact length and checksum before schema selection",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "decode_frame",
-        """
-if state.format_version != FORMAT_VERSION_V3 || state.encode() != payload {
-    return Err("v3 serviced-candidate snapshot is not canonically encoded".to_owned());
-}
-""",
-        "V3 compatibility decoding must bind its inner version and canonical bytes",
-    )
-    require_item_sequence(
-        "store",
-        store_items,
-        "decode_frame",
-        """
-serviced_capacity: state.capacity,
-producer_continuation_capacity: state.capacity,
-decision_reclaimed: state.decision_reclaimed,
-records: state.records,
-producer_continuations: Vec::new(),
-""",
-        "V3 migration must map old capacity exactly and invent no producer lifecycle",
+        "decoding must enforce exact length and checksum before V4 decode",
     )
     require_item_sequence(
         "store",
@@ -2032,19 +2004,37 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         "leader-wire completion must retain exact runtime ordinal and causal key",
     )
     require_item_monotone_order(
-        "runner",
-        runner_items,
-        "run_inner",
+        "adapter",
+        adapter_items,
+        "prepare_leader_wire_launch",
         (
+            "adapter.mint_leader_wire_store_authority(expected_wal_path)",
             "adapter.restored_producer_continuation_ordinal_high_watermark()",
-            "lifecycle_ordinals.advance_past(high_watermark)",
-            "adapter.mint_leader_wire_store_authority(&wal_path)?",
-            "LeaderWireLifecycleStoreGate::open_with_safety_wal_authority",
-            "lifecycle_ordinals.advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
-            "LeaderWireIngressBinding::bind",
-            "SerializedV2Runtime::new_with_lifecycle_ordinals",
         ),
-        "both restored high-waters must advance the shared source before ingress/runtime construction",
+        "the sealed adapter must bind its WAL-adjacent store before projecting the restored producer high-water",
+    )
+    require_item_monotone_order(
+        "lifecycle_launch",
+        lifecycle_launch_items,
+        "launch",
+        (
+            "prepare_leader_wire_launch(launch_storage.wal_path())",
+            "ProductionV2Services::restore_lifecycle_ordinal_source",
+            "leader_wire_launch.restored_producer_ordinal_high_watermark()",
+            ".advance_past(high_watermark)",
+            "leader_wire_launch.open_gate",
+            "lifecycle_ordinals.advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
+            "ProductionLeaderWireIngressBindingV1::bind",
+            "adapter_startup.into_serialized_runtime",
+        ),
+        "both restored high-waters must advance the shared source before lifecycle ingress/runtime construction",
+    )
+    require_item_sequence(
+        "pending_startup",
+        pending_startup_items,
+        "into_serialized_runtime",
+        "crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals",
+        "the sealed lifecycle startup must construct the serialized runtime with the advanced shared ordinal source",
     )
 
     def seal_regressions(
@@ -2152,7 +2142,15 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256,
     )
 
-    for source_key in ("safety_wal", "store", "adapter", "runtime", "runner", "worker"):
+    for source_key in (
+        "safety_wal",
+        "store",
+        "adapter",
+        "runtime",
+        "lifecycle_launch",
+        "pending_startup",
+        "worker",
+    ):
         executable = structural[source_key]
         for forbidden in ("std::env", "var_os", "serde_json"):
             if forbidden in executable:

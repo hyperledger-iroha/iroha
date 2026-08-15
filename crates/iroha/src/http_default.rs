@@ -3,15 +3,15 @@
 //! These implementations rely on the `reqwest` and `tungstenite` crates and
 //! provide a simple, feature-complete transport layer used by the client. The
 //! module does not yet expose configuration hooks for alternative backends.
-use std::{net::TcpStream, sync::OnceLock, thread};
+use crate::http::{Method, RequestBuilder, Response};
 use eyre::{Error, Result, WrapErr, eyre};
 use http::header::{HeaderName, HeaderValue};
 use reqwest::blocking::Client as BlockingClient;
+use std::{net::TcpStream, sync::OnceLock, thread};
 pub use tungstenite::handshake::client::Response as WebSocketResponse;
 pub use tungstenite::{Error as WebSocketError, Message as WebSocketMessage};
 use tungstenite::{WebSocket, client::IntoClientRequest, stream::MaybeTlsStream};
 use url::Url;
-use crate::http::{Method, RequestBuilder, Response};
 type Bytes = Vec<u8>;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const RESPONSE_INITIAL_ALLOCATION_BYTES: usize = 16 * 1024;
@@ -479,13 +479,13 @@ impl TryFrom<ClientResponse> for Response<Bytes> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         io::{ErrorKind, Read, Write},
         net::TcpListener,
         sync::Arc,
         time::{Duration, Instant},
     };
-    use super::*;
     #[test]
     fn owned_http_client_does_not_follow_signed_body_redirects() {
         for (status_code, reason) in [

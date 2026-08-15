@@ -1,13 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    fmt::{self, Debug, Write as _},
-    fs::File,
-    io,
-    io::{BufRead, BufReader, BufWriter, Read, Write},
-    marker::PhantomData,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::{
     eyre::{Result, eyre},
@@ -19,7 +10,16 @@ use norito::{
     codec::{DecodeAll, Encode},
     json::{JsonDeserializeOwned, JsonSerialize},
 };
-use crate::{Outcome, RunArgs, tui};
+use std::{
+    collections::BTreeMap,
+    fmt::{self, Debug, Write as _},
+    fs::File,
+    io,
+    io::{BufRead, BufReader, BufWriter, Read, Write},
+    marker::PhantomData,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 // RawGenesisTransaction is the largest type registered by this first-release diagnostic. Reuse
 // the signed-genesis corridor so stdin, local files, decoded values, and rendered output cannot
 // grow beyond the artifact class the command is intended to inspect.
@@ -479,15 +479,15 @@ fn list_types<W: io::Write>(map: &ConverterMap, writer: &mut W) -> Result<()> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fmt::Write as _, path::PathBuf, sync::Arc};
-    use color_eyre::eyre::Result as EyreResult;
-    use iroha_data_model::{account::NewAccount, asset::AssetId, peer::Peer};
-    use iroha_genesis::RawGenesisTransaction;
-    use iroha_schema::{Compact, TypeId};
     use super::{
         BoundedDebugString, Converter, ConverterImpl, ConverterMap, NoritoToRustArgs,
         NoritoToRustDecoder, charge_guessed_output, generate_map, read_codec_input_bounded,
     };
+    use color_eyre::eyre::Result as EyreResult;
+    use iroha_data_model::{account::NewAccount, asset::AssetId, peer::Peer};
+    use iroha_genesis::RawGenesisTransaction;
+    use iroha_schema::{Compact, TypeId};
+    use std::{fmt::Write as _, path::PathBuf, sync::Arc};
     fn normalize_roundtrip_json(value: &mut norito::json::Value) {
         let norito::json::Value::Object(map) = value else {
             return;

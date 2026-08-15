@@ -9,7 +9,6 @@ use crate::{
 };
 #[cfg(feature = "ivm")]
 mod ivm {
-    use std::{boxed::Box, vec::Vec};
     use crate::{
         FfiReturn, Result,
         ir::{Robust, Transparent, transmute::SpecializedTransmute},
@@ -18,6 +17,7 @@ mod ivm {
             write_non_local,
         },
     };
+    use std::{boxed::Box, vec::Vec};
     /// Marker for an integer primitive type that is not recognized by the IVM.
     /// This struct is meant only to be used internally, i.e. there are no constructors.
     // NOTE: There are no blanket impls because it's meant to be used only on a specific set of types

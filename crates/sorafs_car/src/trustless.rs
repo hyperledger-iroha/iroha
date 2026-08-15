@@ -5,10 +5,7 @@
 //! finalized native [`PinManifestFinalizedRecordV1`]. Config is sourced from
 //! the gateway verifier TOML used in the SNNet-15 pack so operators and CI
 //! share the same thresholds.
-use std::{
-    fs, io,
-    path::{Path, PathBuf},
-};
+use crate::{CarVerificationReport, CarVerifier, StoredChunk};
 use hex::encode as hex_encode;
 use iroha_data_model::sorafs::pin_registry::{PinManifestFinalizedRecordV1, PinStatus};
 use norito::{
@@ -16,9 +13,12 @@ use norito::{
     json::{Map, Value},
 };
 use sorafs_manifest::ManifestV1;
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 use toml::Value as TomlValue;
-use crate::{CarVerificationReport, CarVerifier, StoredChunk};
 /// Configuration used to guide trustless verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustlessVerifierConfig {
@@ -438,6 +438,7 @@ fn read_string(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{
         account::AccountId,
         metadata::Metadata,
@@ -446,7 +447,6 @@ mod tests {
             PinManifestRecord, PinPolicy,
         },
     };
-    use super::*;
     #[test]
     fn parses_gateway_config() {
         let config = TrustlessVerifierConfig::from_toml_str(

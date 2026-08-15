@@ -1,13 +1,4 @@
 //! Generate the canonical ABI-21 Kagemusha peer-payment fixture used by Swift tests.
-use std::{
-    env,
-    ffi::OsString,
-    fs::{self, OpenOptions},
-    io::{self, Write},
-    path::{Path, PathBuf},
-    process,
-    sync::atomic::{AtomicU64, Ordering},
-};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -47,6 +38,15 @@ use iroha_data_model::{
     },
     peer::PeerId,
     proof::{ProofBox, VerifyingKeyId},
+};
+use std::{
+    env,
+    ffi::OsString,
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process,
+    sync::atomic::{AtomicU64, Ordering},
 };
 const HEX_LINE_WIDTH: usize = 64;
 const USAGE: &str = "usage: swift_kagemusha_peer_payment_v4 \

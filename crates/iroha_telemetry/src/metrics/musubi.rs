@@ -420,8 +420,8 @@ fn register<C: Collector + Clone + 'static>(registry: &Registry, metric: &C) {
 }
 #[cfg(test)]
 mod tests {
-    use prometheus::{Encoder as _, TextEncoder};
     use super::*;
+    use prometheus::{Encoder as _, TextEncoder};
     #[test]
     fn phase_age_series_remain_absent_until_a_successful_projection() {
         let registry = Registry::new();

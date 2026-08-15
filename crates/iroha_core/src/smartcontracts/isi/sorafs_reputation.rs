@@ -4,7 +4,11 @@
 //! consensus-owned `smart_contract_state`.  This uses the same checkpointed,
 //! state-root-covered storage path as the other first-release SoraFS ledgers;
 //! no daemon database is authoritative.
-use std::{str::FromStr, sync::OnceLock};
+use super::*;
+use crate::{
+    smartcontracts::ValidSingularQuery,
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+};
 use iroha_data_model::{
     account::AccountId,
     events::data::sorafs::{
@@ -47,11 +51,7 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
-use super::*;
-use crate::{
-    smartcontracts::ValidSingularQuery,
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
-};
+use std::{str::FromStr, sync::OnceLock};
 const ACTIVE_POLICY_STATE_KEY: &str = "sorafs_reputation_policy_active_v1";
 const POLICY_HISTORY_STATE_KEY_PREFIX: &str = "sorafs_reputation_policy_history_v1_";
 const JOURNAL_HEAD_STATE_KEY: &str = "sorafs_reputation_journal_head_v1";
@@ -2585,7 +2585,12 @@ impl ValidSingularQuery for FindSorafsReputationJournalEvents {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, SignatureOf};
     use iroha_data_model::{
         IntoKeyValue, Registrable,
@@ -2607,12 +2612,7 @@ mod tests {
         CanManageSorafsReputationJournalPolicy, CanRecordSorafsReputationJournal,
         CanResolveSorafsCapacityDispute,
     };
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
+    use std::sync::Arc;
     const TEST_NOW_MS: u64 = 1_700_000_000_000;
     fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])

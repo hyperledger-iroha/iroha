@@ -1,10 +1,4 @@
-use std::{
-    collections::VecDeque,
-    sync::{
-        Mutex,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-    },
-};
+use super::*;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
     NetworkId,
@@ -17,7 +11,13 @@ use iroha_data_model::{
     sorafs::capacity::ProviderId,
     sorafs::pin_registry::{ProviderIngestCompletionAuthorityV1, ProviderIngestFinalizedAnchorV1},
 };
-use super::*;
+use std::{
+    collections::VecDeque,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
+};
 #[derive(Debug, Clone, Copy)]
 struct FixedJournalTime(u64);
 impl MusubiProviderAttestationJournalTimeV1 for FixedJournalTime {

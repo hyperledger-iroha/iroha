@@ -6,13 +6,6 @@
 //! Multiple renditions can be supplied via repeated `--segment` flags to cover
 //! ABR ladders in one run.
 #![allow(unexpected_cfgs)]
-use std::{
-    collections::HashMap,
-    env, fs, io,
-    io::Write,
-    path::{Path, PathBuf},
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
 use blake3::hash as blake3_hash;
 use iroha_data_model::taikai::{CekRotationReceiptV1, TaikaiSegmentEnvelopeV1};
 use iroha_telemetry::metrics::Metrics;
@@ -22,6 +15,13 @@ use norito::{
 };
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    collections::HashMap,
+    env, fs, io,
+    io::Write,
+    path::{Path, PathBuf},
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 const USAGE: &str = "\
 taikai_viewer --segment envelope=PATH,car=PATH [--segment ...] [--cluster LABEL] [--lane LABEL]
               [--rebuffer-events N] [--pq-health PCT] [--cek-receipt PATH] [--cek-fetch-ms N]
@@ -566,8 +566,8 @@ fn parse_segment(raw: &str) -> Result<SegmentInput, Box<dyn std::error::Error>> 
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::{TempDir, tempdir};
     use super::*;
+    use tempfile::{TempDir, tempdir};
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");

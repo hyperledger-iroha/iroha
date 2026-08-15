@@ -2,15 +2,6 @@
 //!
 //! By default outputs are written to the checked-in PDP fixture directory.
 //! `--output-dir PATH` targets one existing isolated PDP directory instead.
-use std::{
-    env,
-    error::Error,
-    ffi::OsString,
-    fs::{self, File},
-    path::{Component, Path, PathBuf},
-};
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
 use ed25519_dalek::SigningKey;
 use hex::encode;
 use norito::{
@@ -26,6 +17,15 @@ use sorafs_manifest::{
     },
     validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
     validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
+};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+use std::{
+    env,
+    error::Error,
+    ffi::OsString,
+    fs::{self, File},
+    path::{Component, Path, PathBuf},
 };
 const VALIDATION_GENERATED_AT: u64 = 123;
 const DEFAULT_FIXTURE_DIR: &str = "fixtures/sorafs_manifest/pdp";

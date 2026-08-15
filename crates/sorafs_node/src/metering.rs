@@ -5,13 +5,13 @@
 //! surface deterministic counters (GiB reserved, GiB released, order counts,
 //! uptime, PoR/PDP/PoTR health, and egress totals) that higher layers can
 //! translate into Norito telemetry payloads and fee accrual reports.
+use crate::capacity::{DeclarationWindow, OutstandingOrder, ReplicationPlan, ReplicationRelease};
+use iroha_data_model::prelude::{Numeric, Quantity};
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
-use iroha_data_model::prelude::{Numeric, Quantity};
-use crate::capacity::{DeclarationWindow, OutstandingOrder, ReplicationPlan, ReplicationRelease};
 /// Outstanding replication order tracked for utilisation accounting.
 #[derive(Debug, Clone, Copy)]
 struct OutstandingAllocation {
@@ -637,9 +637,9 @@ fn ratio_to_bps(success: u64, total: u64) -> u32 {
 }
 #[cfg(test)]
 mod tests {
-    use sorafs_manifest::capacity::ReplicationOrderSlaV1;
     use super::*;
     use crate::capacity::ReplicationPlan;
+    use sorafs_manifest::capacity::ReplicationOrderSlaV1;
     #[test]
     fn meter_tracks_orders() {
         let meter = CapacityMeter::new();

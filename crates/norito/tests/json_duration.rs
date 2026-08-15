@@ -1,5 +1,5 @@
-use std::time::Duration;
 use norito::json;
+use std::time::Duration;
 #[test]
 fn duration_roundtrip() {
     let d = Duration::new(3, 42);

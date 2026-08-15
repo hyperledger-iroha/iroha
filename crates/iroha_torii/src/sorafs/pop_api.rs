@@ -4,7 +4,7 @@
 //! holder-secret, or Merkle-witness material over HTTP. Those values are
 //! supplied only by runtime-owned adapters and remain behind the authority and
 //! durability checks in [`sorafs_node::pop_credentials`].
-use std::{fmt, path::PathBuf, sync::Arc, time::Duration};
+use crate::{JsonBody, SharedAppState, utils::extractors::NoritoJson};
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, header},
@@ -38,8 +38,8 @@ use sorafs_node::pop_credentials::{
     PopOutboxSubmitOutcomeV1, PopRecipientOpenErrorV1, PopRegistrySubmitter, PopRequestAuthorityV1,
     PopWalletKeyWrapper, PopWalletRecipientV1, PopWalletVault,
 };
+use std::{fmt, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
-use crate::{JsonBody, SharedAppState, utils::extractors::NoritoJson};
 /// Dedicated credential header. The value is `PopV1 <base64url-no-pad>`.
 pub const POP_AUTHORIZATION_HEADER_V1: &str = "sora-pop-authorization";
 /// Maximum canonical approval or other small signed control payload.
@@ -2324,7 +2324,6 @@ fn valid_context(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use iroha_crypto::{Algorithm, HybridKeyPair, KeyPair, Signature};
     use sorafs_manifest::{
         hybrid_envelope::decrypt_payload,
@@ -2338,6 +2337,7 @@ mod tests {
     use sorafs_node::pop_credentials::{
         POP_FINALIZED_REGISTRY_PROJECTION_VERSION_V1, PopFinalizedCursorV1,
     };
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     #[derive(Debug)]
     struct FixedAuthenticator {
         principal_digest: [u8; 32],

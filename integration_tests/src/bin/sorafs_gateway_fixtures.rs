@@ -1,7 +1,7 @@
 //! CLI helper for generating the canonical `SoraFS` gateway fixture bundle.
-use std::{env, path::PathBuf};
 use eyre::WrapErr;
 use integration_tests::sorafs_gateway_conformance::{default_fixture_dir, write_fixture_bundle};
+use std::{env, path::PathBuf};
 fn main() -> eyre::Result<()> {
     let output_dir = parse_output_dir()?;
     let metadata =

@@ -5,8 +5,8 @@
 //! replaced with a production-grade backend (e.g., hedgehog/dasher) once
 //! those crates land in the workspace.
 #![allow(dead_code)]
-use rayon::prelude::*;
 use crate::poseidon::FIELD_MODULUS as GOLDILOCKS_MODULUS;
+use rayon::prelude::*;
 const PARALLEL_THRESHOLD: usize = 1 << 12;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Domain {

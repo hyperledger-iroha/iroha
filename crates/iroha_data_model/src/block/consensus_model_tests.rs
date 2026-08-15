@@ -1,9 +1,11 @@
-use std::num::NonZeroU64;
-use iroha_crypto::{Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommitment, SignatureOf};
+use super::*;
+use crate::consensus::VALIDATOR_SET_HASH_VERSION_V1;
+use iroha_crypto::{
+    Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommitment, SignatureOf,
+};
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::core::DecodeFromSlice;
-use crate::consensus::VALIDATOR_SET_HASH_VERSION_V1;
-use super::*;
+use std::num::NonZeroU64;
 fn dummy_hash() -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32]))
 }

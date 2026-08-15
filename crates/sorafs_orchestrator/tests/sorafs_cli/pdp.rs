@@ -4,6 +4,18 @@ use iroha_data_model::NetworkId;
 use sha2::Sha256;
 use sorafs_manifest::{PdpChallengeV1, PdpCommitmentV1, PdpProofV1};
 const PDP_OPERATOR_SIGNATURE_DOMAIN: &[u8] = b"iroha.operator.http-request.network.v1\0";
+
+fn pdp_tempdir() -> std::io::Result<CanonicalTempDir> {
+    let directory = tempdir()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(directory)
+}
+
 fn pdp_fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -142,7 +154,7 @@ fn pdp_json_mock<'a>(
     expected_public_key: &str,
     content_type: &str,
     response: &Value,
-) -> Mock<'a> {
+) -> httpmock::Mock<'a> {
     let path = path.to_owned();
     let matcher_path = path.clone();
     let expected_body = to_vec(expected_body).expect("encode expected PDP request");
@@ -170,7 +182,7 @@ fn pdp_no_content_mock<'a>(
     server: &'a MockServer,
     expected_body: &Value,
     expected_public_key: &str,
-) -> Mock<'a> {
+) -> httpmock::Mock<'a> {
     let expected_body = to_vec(expected_body).expect("encode expected PDP next request");
     let expected_public_key = expected_public_key.to_owned();
     server.mock(move |when, then| {
@@ -250,7 +262,7 @@ fn pdp_terminal_status(challenge: &PdpChallengeV1, proof: &PdpProofV1) -> Value 
 ))]
 #[test]
 fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
-    let directory = tempdir().expect("create canonical PDP CLI tempdir");
+    let directory = pdp_tempdir().expect("create canonical PDP CLI tempdir");
     let server = MockServer::start();
     let (key_path, public_key) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -426,7 +438,7 @@ fn pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes() {
 ))]
 #[test]
 fn pdp_next_accepts_exact_no_content_without_creating_output() {
-    let directory = tempdir().expect("create PDP no-content tempdir");
+    let directory = pdp_tempdir().expect("create PDP no-content tempdir");
     let server = MockServer::start();
     let (key_path, public_key) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -454,7 +466,7 @@ fn pdp_next_accepts_exact_no_content_without_creating_output() {
 ))]
 #[test]
 fn pdp_next_rejects_unknown_response_fields_before_output() {
-    let directory = tempdir().expect("create PDP unknown-field tempdir");
+    let directory = pdp_tempdir().expect("create PDP unknown-field tempdir");
     let server = MockServer::start();
     let (key_path, public_key) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -501,7 +513,7 @@ fn pdp_next_rejects_unknown_response_fields_before_output() {
 ))]
 #[test]
 fn pdp_next_rejects_enqueued_timestamp_after_challenge_deadline() {
-    let directory = tempdir().expect("create PDP next-timestamp tempdir");
+    let directory = pdp_tempdir().expect("create PDP next-timestamp tempdir");
     let server = MockServer::start();
     let (key_path, public_key) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -550,7 +562,7 @@ fn pdp_next_rejects_enqueued_timestamp_after_challenge_deadline() {
 ))]
 #[test]
 fn pdp_export_rejects_noncanonical_content_type_before_output() {
-    let directory = tempdir().expect("create PDP content-type tempdir");
+    let directory = pdp_tempdir().expect("create PDP content-type tempdir");
     let server = MockServer::start();
     let (key_path, public_key) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -587,7 +599,7 @@ fn pdp_export_rejects_noncanonical_content_type_before_output() {
 ))]
 #[test]
 fn pdp_outputs_are_create_new_and_fail_before_network() {
-    let directory = tempdir().expect("create PDP no-clobber tempdir");
+    let directory = pdp_tempdir().expect("create PDP no-clobber tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -621,7 +633,8 @@ fn pdp_outputs_are_create_new_and_fail_before_network() {
 #[test]
 fn pdp_rejects_symlink_inputs_and_outputs_before_network() {
     use std::os::unix::fs::symlink;
-    let directory = tempdir().expect("create PDP symlink tempdir");
+
+    let directory = pdp_tempdir().expect("create PDP symlink tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -662,7 +675,7 @@ fn pdp_rejects_symlink_inputs_and_outputs_before_network() {
 }
 #[test]
 fn pdp_operator_auth_rejects_non_ed25519_keys_before_network() {
-    let directory = tempdir().expect("create PDP key algorithm tempdir");
+    let directory = pdp_tempdir().expect("create PDP key algorithm tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Secp256k1);
     let common = pdp_common_args(&server, &key_path);
@@ -683,7 +696,7 @@ fn pdp_operator_auth_rejects_non_ed25519_keys_before_network() {
 }
 #[test]
 fn pdp_submit_rejects_canonical_proof_with_tampered_signed_payload_before_network() {
-    let directory = tempdir().expect("create PDP tampered-proof tempdir");
+    let directory = pdp_tempdir().expect("create PDP tampered-proof tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -717,7 +730,7 @@ fn pdp_submit_rejects_canonical_proof_with_tampered_signed_payload_before_networ
 }
 #[test]
 fn pdp_enqueue_rejects_canonical_commitment_window_and_sealing_mismatches_before_network() {
-    let directory = tempdir().expect("create PDP binding-mismatch tempdir");
+    let directory = pdp_tempdir().expect("create PDP binding-mismatch tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -789,7 +802,7 @@ fn pdp_enqueue_rejects_canonical_commitment_window_and_sealing_mismatches_before
 }
 #[test]
 fn pdp_submit_rejects_mismatched_response_proof_digest() {
-    let directory = tempdir().expect("create PDP response-binding tempdir");
+    let directory = pdp_tempdir().expect("create PDP response-binding tempdir");
     let server = MockServer::start();
     let (key_path, public_key) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -831,7 +844,7 @@ fn pdp_submit_rejects_mismatched_response_proof_digest() {
 }
 #[test]
 fn pdp_submit_rejects_accepted_response_with_mismatched_proof_scope() {
-    let directory = tempdir().expect("create PDP proof-scope tempdir");
+    let directory = pdp_tempdir().expect("create PDP proof-scope tempdir");
     let (key_path, public_key) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let challenge_bytes = fs::read(pdp_fixture("challenge_v1.to")).expect("read challenge");
     let proof_bytes = fs::read(pdp_fixture("proof_v1.to")).expect("read proof");
@@ -879,7 +892,7 @@ fn pdp_submit_rejects_accepted_response_with_mismatched_proof_scope() {
 }
 #[test]
 fn pdp_submit_rejects_terminal_reasons_that_cannot_result_from_proof_submission() {
-    let directory = tempdir().expect("create PDP submit-matrix tempdir");
+    let directory = pdp_tempdir().expect("create PDP submit-matrix tempdir");
     let (key_path, public_key) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let challenge_bytes = fs::read(pdp_fixture("challenge_v1.to")).expect("read challenge");
     let proof_bytes = fs::read(pdp_fixture("proof_v1.to")).expect("read proof");
@@ -934,7 +947,7 @@ fn pdp_submit_rejects_terminal_reasons_that_cannot_result_from_proof_submission(
 ))]
 #[test]
 fn pdp_export_rejects_duplicate_challenge_ids_and_provider_scopes() {
-    let directory = tempdir().expect("create PDP duplicate-export tempdir");
+    let directory = pdp_tempdir().expect("create PDP duplicate-export tempdir");
     let (key_path, public_key) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let challenge_bytes = fs::read(pdp_fixture("challenge_v1.to")).expect("read challenge");
     let challenge: PdpChallengeV1 = decode_from_bytes(&challenge_bytes).expect("decode challenge");
@@ -986,7 +999,7 @@ fn pdp_export_rejects_duplicate_challenge_ids_and_provider_scopes() {
 ))]
 #[test]
 fn pdp_export_rejects_oversized_response_before_output() {
-    let directory = tempdir().expect("create PDP oversized-response tempdir");
+    let directory = pdp_tempdir().expect("create PDP oversized-response tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -1008,7 +1021,8 @@ fn pdp_export_rejects_oversized_response_before_output() {
 #[test]
 fn pdp_inputs_reject_hardlinks_and_group_world_writable_files_before_network() {
     use std::os::unix::fs::PermissionsExt as _;
-    let directory = tempdir().expect("create PDP input-policy tempdir");
+
+    let directory = pdp_tempdir().expect("create PDP input-policy tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -1046,7 +1060,8 @@ fn pdp_inputs_reject_hardlinks_and_group_world_writable_files_before_network() {
 #[test]
 fn pdp_output_rejects_non_private_parent_before_network() {
     use std::os::unix::fs::PermissionsExt as _;
-    let directory = tempdir().expect("create PDP output-parent tempdir");
+
+    let directory = pdp_tempdir().expect("create PDP output-parent tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);
@@ -1085,7 +1100,7 @@ fn pdp_output_rejects_non_private_parent_before_network() {
 )))]
 #[test]
 fn pdp_file_outputs_fail_closed_without_private_descriptor_relative_creation() {
-    let directory = tempdir().expect("create unsupported-output tempdir");
+    let directory = pdp_tempdir().expect("create unsupported-output tempdir");
     let server = MockServer::start();
     let (key_path, _) = pdp_operator_key(directory.path(), Algorithm::Ed25519);
     let common = pdp_common_args(&server, &key_path);

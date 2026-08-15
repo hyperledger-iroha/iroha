@@ -3,7 +3,6 @@
 //! These tests ensure the JSON fixtures under `fixtures/oracle/` stay aligned
 //! with the data model helpers and the deterministic hashing rules used by
 //! aggregators and connectors.
-use std::{collections::BTreeMap, fs, num::NonZeroU64, path::Path, str::FromStr};
 use iroha_crypto::{Hash, Signature, SignatureOf};
 use iroha_data_model::{
     account::AccountId,
@@ -18,6 +17,7 @@ use norito::{
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
     literal,
 };
+use std::{collections::BTreeMap, fs, num::NonZeroU64, path::Path, str::FromStr};
 const PRICE_FEED_CONFIG_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/oracle/feed_config_price_xor_usd.json"

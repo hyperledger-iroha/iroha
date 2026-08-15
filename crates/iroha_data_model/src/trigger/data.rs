@@ -1,8 +1,8 @@
 //! Data trigger sequence and steps.
+use crate::{transaction::ExecutionStep, trigger::TriggerId};
 use derive_more::Display;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use crate::{transaction::ExecutionStep, trigger::TriggerId};
 /// Sequence of data trigger execution steps.
 pub type DataTriggerSequence = Vec<DataTriggerStep>;
 /// Single execution step of the data trigger.

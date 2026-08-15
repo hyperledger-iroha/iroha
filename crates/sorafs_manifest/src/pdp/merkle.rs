@@ -1,10 +1,10 @@
 //! Canonical Merkle construction for Sora-PDP v1.
-use thiserror::Error;
 use super::{
     PDP_HOT_LEAF_SIZE_V1, PDP_HOT_LEAVES_PER_SEGMENT_V1, PDP_MAX_HOT_LEAVES_PER_SEGMENT_SAMPLE_V1,
     PDP_MAX_SEGMENT_SAMPLES_V1, PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1, PDP_SEGMENT_SIZE_V1,
     PdpHotLeafProofV1, PdpProofLeafV1, PdpSampleV1,
 };
+use thiserror::Error;
 const HOT_LEAF_DOMAIN_V1: &[u8] = b"sorafs.pdp.hot-leaf.v1\0";
 const SEGMENT_HOT_NODE_DOMAIN_V1: &[u8] = b"sorafs.pdp.segment-hot-node.v1\0";
 const SEGMENT_LEAF_DOMAIN_V1: &[u8] = b"sorafs.pdp.segment-leaf.v1\0";
@@ -1304,12 +1304,12 @@ pub(super) fn merkle_path_depth(mut count: u64) -> usize {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         cell::Cell,
         io,
         mem::{size_of, size_of_val},
     };
-    use super::*;
     fn deterministic_payload(length: usize) -> Vec<u8> {
         (0..length)
             .map(|index| {

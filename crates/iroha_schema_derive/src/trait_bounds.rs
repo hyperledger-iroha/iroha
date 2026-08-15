@@ -2,13 +2,13 @@
 //!
 //! Based on the common derive strategy of adding bounds only for generic
 //! parameters that are used by generated schema fields.
-use std::iter;
+use crate::{IntoSchemaData, IntoSchemaField};
 use proc_macro2::Ident;
+use std::iter;
 use syn::{
     Generics, Type, TypePath, parse_quote,
     visit::{self, Visit},
 };
-use crate::{IntoSchemaData, IntoSchemaField};
 /// Visits the ast and checks if one of the given idents is found.
 struct ContainIdents<'a> {
     result: bool,

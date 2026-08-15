@@ -3,14 +3,6 @@
 //! The full async projection worker is not wired yet, but Torii already needs a
 //! stable contract for the reserved DA blob class/codec so clients can discover
 //! how cold query shards will be published once the worker is enabled.
-use std::collections::HashSet;
-use iroha_crypto::HashOf;
-use iroha_data_model::{
-    block::BlockHeader,
-    da::types::{BlobClass, BlobCodec, BlobDigest, Compression, StorageTicketId},
-};
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
 use crate::query::{
     index_status::QueryIndexStatus,
     projection_shard::{
@@ -18,6 +10,14 @@ use crate::query::{
         QueryProjectionShardArchive, QueryProjectionShardArchiveError,
     },
 };
+use iroha_crypto::HashOf;
+use iroha_data_model::{
+    block::BlockHeader,
+    da::types::{BlobClass, BlobCodec, BlobDigest, Compression, StorageTicketId},
+};
+use norito::codec::{Decode, Encode};
+use std::collections::HashSet;
+use thiserror::Error;
 /// Version of the checkpoint descriptor payload itself.
 pub const QUERY_PROJECTION_CHECKPOINT_VERSION: u16 = 1;
 /// Schema version for DA-backed query projection shard descriptors.

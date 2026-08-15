@@ -1,7 +1,6 @@
 //! Protected namespace admission gate test for IVM deploys.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::too_many_lines, clippy::items_after_statements)]
-use std::num::NonZeroU64;
 use iroha_config::parameters::actual::{GovernanceCatalog, LaneRegistry};
 use iroha_core::{
     governance::manifest::LaneManifestRegistry,
@@ -12,6 +11,7 @@ use iroha_core::{
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{NetworkId, nexus::DataSpaceId};
+use std::num::NonZeroU64;
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 fn fee_payment_with_gas_limit() -> iroha_data_model::transaction::FeePaymentIntent {
     iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -71,7 +71,6 @@ fn protected_gate_fixture_uses_checked_randomness() {
 }
 #[test]
 fn protected_namespace_requires_enacted_proposal() {
-    use std::str::FromStr;
     use iroha_data_model::{
         isi::governance::{EnactReferendum, ProposeDeployContract},
         permission::Permission,
@@ -82,6 +81,7 @@ fn protected_namespace_requires_enacted_proposal() {
         CanEnactGovernance, CanProposeContractDeployment,
     };
     use nonzero_ext::nonzero;
+    use std::str::FromStr;
     // Build minimal world with one authority
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();

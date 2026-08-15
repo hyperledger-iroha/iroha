@@ -1,6 +1,6 @@
 //! Gas schedule exposure helpers for host/runtime enforcement.
-use iroha_crypto::Hash;
 use crate::gas;
+use iroha_crypto::Hash;
 /// Single opcode entry in the canonical gas schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GasScheduleEntry {

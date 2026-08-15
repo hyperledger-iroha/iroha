@@ -5,7 +5,9 @@
 //!   cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --write --root /tmp/ivm-doc-stage
 use std::path::{Path, PathBuf};
 mod support;
-use support::{GeneratedOutput, GenerationOptions, parse_generation_options, sync_generated_outputs};
+use support::{
+    GeneratedOutput, GenerationOptions, parse_generation_options, sync_generated_outputs,
+};
 const BEGIN: &str = "<!-- BEGIN GENERATED ABI HASHES -->";
 const END: &str = "<!-- END GENERATED ABI HASHES -->";
 const RUNTIME_HASH_PREFIX: &str = "\"abi_hash_hex\": \"";
@@ -161,13 +163,13 @@ fn render_single_hash(text: &str, prefix: &str, hash: &str) -> Result<String, &'
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        sync::atomic::{AtomicU64, Ordering},
-    };
     use super::{
         BEGIN, END, prepare_outputs, render_abi_hash_golden, render_gas_schedule_golden,
         render_generated_hash_section, render_runtime_sample,
+    };
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
     };
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
     #[test]

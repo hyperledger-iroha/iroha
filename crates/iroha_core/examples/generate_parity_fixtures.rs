@@ -4,7 +4,6 @@
 //!   cargo run -p `iroha_core` --example `generate_parity_fixtures`
 //!
 //! It writes fixtures under `crates/iroha_core/tests/fixtures/`.
-use std::{error::Error, fs, io::Write, path::PathBuf, sync::Arc, time::Duration};
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -12,6 +11,7 @@ use iroha_core::{
 };
 use iroha_data_model::{prelude::*, transaction::signed::TransactionSignatureError};
 use iroha_primitives::time::TimeSource;
+use std::{error::Error, fs, io::Write, path::PathBuf, sync::Arc, time::Duration};
 // use mv::storage::StorageReadOnly; // not needed in example
 const FIXTURE_TIME: Duration = Duration::from_millis(1);
 fn fixture_network_id() -> NetworkId {

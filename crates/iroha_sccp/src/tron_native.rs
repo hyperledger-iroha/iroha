@@ -6,18 +6,18 @@
 //! solid-height state machine from an exact governed checkpoint.  Proofs that
 //! reach a maintenance boundary fail closed because block headers do not commit
 //! the post-maintenance active-witness roster or witness permission mapping.
-use alloc::{collections::BTreeSet, vec::Vec};
-use iroha_crypto::EcdsaSecp256k1Sha256;
-use iroha_data_model::bridge::sccp::{
-    SccpLaneIdV1, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
-};
-use sha2::{Digest, Sha256};
 use super::{
     H256, SCCP_CODEC_TRON_ADDRESS21, SccpPayloadV1, canonical_sccp_payload_bytes, keccak256_bytes,
     payload_hash, prefixed_blake2b, read_protobuf_varint_at, sccp_lane_id_hash_v1,
     sccp_lane_source_event_digest_v1, sccp_message_id, sccp_source_identity_hash_v1,
     tron_recoverable_signature_for_recovery, verify_sccp_payload_structure,
 };
+use alloc::{collections::BTreeSet, vec::Vec};
+use iroha_crypto::EcdsaSecp256k1Sha256;
+use iroha_data_model::bridge::sccp::{
+    SccpLaneIdV1, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
+};
+use sha2::{Digest, Sha256};
 const TRON_NATIVE_ANCHOR_PREFIX_V1: &[u8] = b"sccp:tron:native-dpos-anchor:v1";
 const TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1: &[u8] =
     b"type.googleapis.com/protocol.TriggerSmartContract";
@@ -2237,14 +2237,14 @@ mod tests {
     }
     #[test]
     fn native_admission_rejects_recomputed_envelope_for_changed_payload_nonce() {
-        use iroha_data_model::bridge::{
-            BridgeNativeProofBackendV1, SccpNativeTrustAnchorV1,
-            sccp::{SccpLaneIdV1, SccpTronSourceEmitterV1},
-        };
         use crate::{
             SccpNativeFinalityPointV1, SccpNativeInboundMessageProofV1,
             SccpNativeSourceProofEnvelopeV1, SccpNativeSourceProofV1,
             verify_sccp_native_inbound_message_proof_v1,
+        };
+        use iroha_data_model::bridge::{
+            BridgeNativeProofBackendV1, SccpNativeTrustAnchorV1,
+            sccp::{SccpLaneIdV1, SccpTronSourceEmitterV1},
         };
         let contract = [0x33; 20];
         let statement = test_transaction_statement();

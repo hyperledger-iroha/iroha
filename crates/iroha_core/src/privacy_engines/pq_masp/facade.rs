@@ -1,12 +1,4 @@
 //! Production proof and wallet facades for first-release PQ-MASP.
-use iroha_data_model::privacy::{
-    PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
-    PrivacyEncryptedOutputV1, PrivacyNativeConsensusBindingV1,
-    PrivacyNativeConsensusBindingValidationErrorV1, PrivacyStatementV1,
-};
-use rand::{TryCryptoRng, rngs::OsRng};
-use soranet_pq::HedgedRngSeed;
-use thiserror::Error;
 use super::{
     relation::{
         PqMaspNotePlaintextV1, PqMaspRelationErrorV1, PqMaspWitnessV1,
@@ -26,6 +18,14 @@ use crate::privacy_engines::{
         derive_healthy_try_crypto_seed_v1,
     },
 };
+use iroha_data_model::privacy::{
+    PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
+    PrivacyEncryptedOutputV1, PrivacyNativeConsensusBindingV1,
+    PrivacyNativeConsensusBindingValidationErrorV1, PrivacyStatementV1,
+};
+use rand::{TryCryptoRng, rngs::OsRng};
+use soranet_pq::HedgedRngSeed;
+use thiserror::Error;
 const PQ_MASP_AUTHORIZATION_HEDGE_PURPOSE_V1: &[u8] =
     b"iroha:privacy:pq-masp:authorization-hedge:v1";
 const PQ_MASP_NOTE_ENCRYPTION_PURPOSE_V1: &[u8] = b"iroha:privacy:pq-masp:note-encryption-seed:v1";
@@ -274,12 +274,12 @@ pub fn encrypt_pq_masp_note_v1(
 }
 #[cfg(test)]
 mod tests {
-    use rand::{TryCryptoRng, TryRngCore};
     use super::*;
     use crate::privacy_engines::pq_masp::{
         PQ_MASP_TREE_DEPTH_V1, PqMaspInputWitnessV1, PqMaspOutputWitnessV1, PqMaspWitnessV1,
         derive_pq_masp_authorization_key_digest_v1, derive_pq_masp_nullifier_key_digest_v1,
     };
+    use rand::{TryCryptoRng, TryRngCore};
     #[derive(Debug)]
     struct InjectedEntropyError;
     impl core::fmt::Display for InjectedEntropyError {

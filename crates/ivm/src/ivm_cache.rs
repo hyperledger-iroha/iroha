@@ -8,6 +8,8 @@
 //! intended to be a fully optimized LRU; it keeps a simple VecDeque order and
 //! a HashMap for lookups. On capacity overflow, it evicts the least-recently
 //! used item. Accessing an existing entry marks it as most-recently used.
+use crate::{decoder, metadata::ProgramMetadata};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     hash::{Hash, Hasher},
@@ -17,8 +19,6 @@ use std::{
     },
     time::Instant,
 };
-use sha2::{Digest, Sha256};
-use crate::{decoder, metadata::ProgramMetadata};
 /// A decoded instruction with its byte offset and length.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecodedOp {

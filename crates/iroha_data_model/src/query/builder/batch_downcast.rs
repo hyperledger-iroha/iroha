@@ -1,6 +1,3 @@
-use std::vec::{self, Vec};
-use iroha_crypto::{HashOf, PublicKey};
-use iroha_primitives::{json::Json, numeric::Numeric};
 use crate::{
     account::{Account, AccountId},
     asset::{AssetDefinitionId, AssetId, definition::AssetDefinition, value::Asset},
@@ -26,6 +23,9 @@ use crate::{
     transaction::{TransactionEntrypoint, TransactionResult as TxResultType},
     trigger::{Trigger, TriggerId, action::Action},
 };
+use iroha_crypto::{HashOf, PublicKey};
+use iroha_primitives::{json::Json, numeric::Numeric};
+use std::vec::{self, Vec};
 #[derive(Debug)]
 /// Iterator over a single-column typed query batch.
 pub struct TypedBatchIterUntupled<T> {

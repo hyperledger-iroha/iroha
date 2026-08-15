@@ -14,12 +14,6 @@
 //! for each arithmetic operation.  This avoids forward IDs and interleaved
 //! allocator state without introducing aliases or legacy layouts.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use p256::{
-    FieldBytes, FieldElement, ProjectivePoint, Scalar,
-    elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _},
-};
-use thiserror::Error;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     p256_air::{
         P256_BASE_MODULUS_BE_V1, P256_SCALAR_MODULUS_BE_V1, ZkX509P256AirErrorV1,
@@ -47,6 +41,12 @@ use super::{
     },
     p256_window_air::P256WindowScalarV1,
 };
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use p256::{
+    FieldBytes, FieldElement, ProjectivePoint, Scalar,
+    elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _},
+};
+use thiserror::Error;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const ZERO_BE_V1: [u8; 32] = [0; 32];
 const ONE_BE_V1: [u8; 32] = [
@@ -2048,9 +2048,9 @@ pub(crate) fn compile_p256_ecdsa_trace_material_v1(
 }
 #[cfg(test)]
 mod tests {
-    use p256::ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _};
     use super::*;
     use crate::privacy_engines::zk_x509::p256_group_air::P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1;
+    use p256::ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _};
     fn signing_key_v1(seed: u8) -> SigningKey {
         let mut bytes = [0_u8; 32];
         bytes[31] = seed.max(1);

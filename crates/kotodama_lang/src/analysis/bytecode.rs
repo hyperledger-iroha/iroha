@@ -1,6 +1,6 @@
-use std::{collections::HashSet, error::Error, fmt};
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::{VMError, encoding, instruction::wide, metadata::ProgramMetadata, syscalls};
+use std::{collections::HashSet, error::Error, fmt};
 /// Result of analysing a Kotodama bytecode artifact.
 #[derive(Debug)]
 pub struct BytecodeAnalysis {

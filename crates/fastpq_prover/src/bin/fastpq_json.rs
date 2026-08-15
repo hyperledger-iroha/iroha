@@ -1,10 +1,4 @@
 //! JSON CLI for FASTPQ measurement, proof generation, and verification.
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use fastpq_prover::gadgets::transfer::decode_transcripts;
@@ -28,6 +22,12 @@ use norito::{
     json, to_bytes,
 };
 use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 #[derive(Parser)]
 #[command(name = "fastpq_json")]
 #[command(about = "FASTPQ JSON helper for measured budgets and receipt-bound proofs")]

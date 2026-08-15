@@ -1,11 +1,4 @@
 //! Ensure the Norito consensus message types support encode/decode roundtrips.
-use std::{
-    convert::TryFrom,
-    fmt::Debug,
-    fs,
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleTree, SignatureOf};
 use iroha_data_model::{
     block::{
@@ -30,6 +23,13 @@ use iroha_data_model::{
 use norito::{
     NoritoDeserialize,
     codec::{Decode, Encode},
+};
+use std::{
+    convert::TryFrom,
+    fmt::Debug,
+    fs,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
 };
 use tempfile::tempdir;
 fn sample_hash(seed: u8) -> Hash {

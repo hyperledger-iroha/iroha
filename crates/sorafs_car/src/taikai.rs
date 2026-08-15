@@ -1,9 +1,4 @@
-use std::{
-    borrow::Cow,
-    fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
+use crate::{CarWriter, RAW_CODEC, ingest_single_file, verifier::ParsedCar};
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
     da::types::{BlobDigest, ExtraMetadata, StorageTicketId},
@@ -14,9 +9,14 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, Map, Value};
-use crate::{CarWriter, RAW_CODEC, ingest_single_file, verifier::ParsedCar};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    borrow::Cow,
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 /// Request describing a Taikai segment bundle operation.
 pub struct BundleRequest<'a> {
     pub payload_path: &'a Path,
@@ -635,11 +635,11 @@ fn encode_base32_lower(data: &[u8]) -> Result<String> {
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
     use iroha_data_model::{
         name::Name,
         taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution},
     };
+    use std::str::FromStr;
     use tempfile::{TempDir, tempdir};
     #[test]
     fn base32_lower_matches_rfc4648_unpadded_vectors() {

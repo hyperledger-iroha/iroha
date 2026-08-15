@@ -1,11 +1,9 @@
 //! Durable first-release privacy admission state.
 //!
-//! Privacy state is split across independent typed world-state maps. This keeps
-//! one admission proportional to its actual effects instead of cloning or
-//! conflicting with the complete privacy ledger. Every map still participates
-//! in the same [`crate::state::StateTransaction`], so a rejected transaction
-//! cannot leave a partial replay marker, commitment, or root behind.
-use std::collections::{BTreeMap, BTreeSet};
+//! Privacy state is split across independent typed world-state maps. This keeps one admission
+//! proportional to its actual effects instead of cloning or conflicting with the complete privacy
+//! ledger. Every map still participates in the same [`crate::state::StateTransaction`], so a
+//! rejected transaction cannot leave a partial replay marker, commitment, or root behind.
 use iroha_data_model::{
     AssetDefinitionId,
     account::AccountId,
@@ -52,6 +50,7 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 mod pgc_account_root;
 pub(crate) use pgc_account_root::compute_privacy_pgc_account_state_root_v1;
@@ -123,11 +122,10 @@ pub(crate) struct PrivacyActivationMissedProtocolLimitsV1 {
 }
 /// Prevalidate and plan every scheduled activation promotion due at `current_height`.
 ///
-/// This function is deliberately read-only. The block-start hook applies the
-/// returned ordered update set only after every persisted activation has been
-/// validated, so one malformed record cannot cause a partially promoted
-/// registry. A height jump promotes a due proposal with its original scheduled
-/// height, and a subsequent restart produces an empty plan.
+/// This function is deliberately read-only. The block-start hook applies the returned ordered
+/// update set only after every persisted activation has been validated, so one malformed record
+/// cannot cause a partially promoted registry. A height jump promotes a due proposal with its
+/// original scheduled height, and a subsequent restart produces an empty plan.
 ///
 /// # Errors
 ///
@@ -213,10 +211,9 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
 }
 /// Validate every restored activation against its exact committed height.
 ///
-/// A proposed activation or protocol-limit transition effective at `E` is
-/// valid in a snapshot committed at `E - 1` and invalid once committed height
-/// `E` has already been reached. No lifecycle may claim a transition height
-/// after the snapshot's committed height.
+/// A proposed activation or protocol-limit transition effective at `E` is valid in a snapshot
+/// committed at `E - 1` and invalid once committed height `E` has already been reached. No
+/// lifecycle may claim a transition height after the snapshot's committed height.
 pub(crate) fn validate_privacy_activations_at_committed_height_v1(
     activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
     committed_height: u64,
@@ -695,10 +692,9 @@ fn validate_pgc_successor_link_v1(
 }
 /// Validate an independently retained, newest-first-pruned PGC root window.
 ///
-/// The first retained item is either the canonical epoch-one bootstrap or a
-/// successor whose missing parent is the immediately preceding pruned prefix.
-/// Once the prefix boundary is crossed, every retained item must link exactly
-/// to its preceding `(epoch, root)` with no gap.
+/// The first retained item is either the canonical epoch-one bootstrap or a successor whose missing
+/// parent is the immediately preceding pruned prefix. Once the prefix boundary is crossed, every
+/// retained item must link exactly to its preceding `(epoch, root)` with no gap.
 fn validate_pgc_retained_root_chain_v1(
     namespace: PrivacyNamespaceV1,
     invariant: PrivacyPgcPoolInvariantV1,
@@ -2424,14 +2420,12 @@ fn validate_zk_ams_retained_root_chain_v1(
     }
     Ok(())
 }
-/// Load and validate every bounded authoritative component of one ZK-AMS
-/// AccountRegistry.
+/// Load and validate every bounded authoritative component of one ZK-AMS AccountRegistry.
 ///
 /// # Errors
 ///
-/// Rejects a missing or duplicate issuer record, cross-bootstrap provenance,
-/// malformed/pruned root chains, over-retention history, and a head that is
-/// not the exact newest retained root.
+/// Rejects a missing or duplicate issuer record, cross-bootstrap provenance, malformed/pruned root
+/// chains, over-retention history, and a head that is not the exact newest retained root.
 pub(crate) fn load_privacy_zk_ams_registry_snapshot_v1(
     namespace: PrivacyNamespaceV1,
     retained_root_count: u32,
@@ -2927,9 +2921,8 @@ impl PrivacyProofManagedAccumulatorStateV1 {
 }
 /// Closed protocol-specific accumulator state for one proof-managed pool.
 ///
-/// A pool always carries exactly one native frontier, and the enum
-/// discriminant prevents an FCMP++ curve frontier from being decoded or
-/// persisted as an IVM/PQ SHA-256 note frontier.
+/// A pool always carries exactly one native frontier, and the enum discriminant prevents an FCMP++
+/// curve frontier from being decoded or persisted as an IVM/PQ SHA-256 note frontier.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(tag = "kind", content = "state", deny_unknown_fields)]
 pub enum PrivacyProofManagedPoolAccumulatorStateV1 {
@@ -3072,12 +3065,10 @@ impl PrivacyProofManagedPoolSnapshotV1 {
             .any(|(key, _)| key.epoch() == self.current_epoch && key.root() == self.current_root)
             .then_some((self.current_epoch, self.current_root))
     }
-    /// Return whether the authoritative retained window contains this exact
-    /// epoch/root pair.
+    /// Return whether the authoritative retained window contains this exact epoch/root pair.
     ///
-    /// FCMP++ membership may anchor to any exactly retained append-only
-    /// output-set root, while every successful transition still mutates the
-    /// current frontier.
+    /// FCMP++ membership may anchor to any exactly retained append-only output-set root, while
+    /// every successful transition still mutates the current frontier.
     #[must_use]
     pub(crate) fn contains_retained_root(&self, epoch: u64, root: PrivacyRootV1) -> bool {
         self.retained_roots
@@ -4245,10 +4236,9 @@ pub(crate) fn load_privacy_proof_managed_pool_snapshot_v1(
 }
 /// Validate every cross-map invariant in restored first-release privacy state.
 ///
-/// Snapshot decoding invokes this before constructing `World`. Consequently a
-/// malformed key, unavailable activation, orphan state item, over-cap history,
-/// duplicate root epoch, missing/inconsistent head, or PGC account/root
-/// mismatch cannot enter consensus state.
+/// Snapshot decoding invokes this before constructing `World`. Consequently a malformed key,
+/// unavailable activation, orphan state item, over-cap history, duplicate root epoch,
+/// missing/inconsistent head, or PGC account/root mismatch cannot enter consensus state.
 pub(crate) fn validate_privacy_persisted_state_v1(
     policy: &PrivacyConsensusPolicyV1,
     activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
@@ -5303,8 +5293,7 @@ pub(crate) fn load_privacy_orchard_pool_references_v1(
 ///
 /// # Errors
 ///
-/// Rejects malformed Orchard state or a missing reserve account or asset
-/// definition.
+/// Rejects malformed Orchard state or a missing reserve account or asset definition.
 pub(crate) fn validate_privacy_orchard_public_dependencies_v1<
     AccountValue: mv::Value,
     AssetDefinitionValue: mv::Value,
@@ -5680,9 +5669,8 @@ pub(crate) fn load_privacy_orchard_pool_snapshot_v1(
 }
 /// Closed role-separated key for one consumed privacy replay marker.
 ///
-/// The enum discriminant is part of canonical Norito key bytes. A ZK-AMS key
-/// image therefore cannot alias a future protocol nullifier carrying the same
-/// 32 bytes.
+/// The enum discriminant is part of canonical Norito key bytes. A ZK-AMS key image therefore cannot
+/// alias a future protocol nullifier carrying the same 32 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub enum PrivacyNullifierKeyV1 {
     /// One consumed ZK-ACE authorization nullifier in its exact policy lineage.
@@ -6028,9 +6016,8 @@ impl PrivacyNullifierKeyV1 {
 }
 /// Closed role-separated key for one admitted privacy state item.
 ///
-/// Distinct canonical enum variants provide protocol-level domain separation:
-/// issuer records, PHC hashes, and seed keys cannot collide even when their
-/// inner 32-byte values happen to be equal.
+/// Distinct canonical enum variants provide protocol-level domain separation: issuer records, PHC
+/// hashes, and seed keys cannot collide even when their inner 32-byte values happen to be equal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub enum PrivacyCommitmentKeyV1 {
     /// Authoritative ZK-ACE policy selected by its stable identifier.
@@ -6751,8 +6738,7 @@ impl PrivacyRootKeyV1 {
     ///
     /// # Errors
     ///
-    /// Rejects an invalid namespace, incompatible root role, zero epoch, or
-    /// all-zero root.
+    /// Rejects an invalid namespace, incompatible root role, zero epoch, or all-zero root.
     pub fn new(
         namespace: PrivacyNamespaceV1,
         role: PrivacyRootRoleV1,
@@ -7024,9 +7010,8 @@ impl PrivacyRootProvenanceV1 {
     ///
     /// # Errors
     ///
-    /// Rejects malformed publication fields, a non-X.509 namespace, a root
-    /// not exactly carried by the trust-anchor record, or zero admission
-    /// height.
+    /// Rejects malformed publication fields, a non-X.509 namespace, a root not exactly carried by
+    /// the trust-anchor record, or zero admission height.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn zk_x509_ca_governance(
         publication_digest: PrivacyRootPublicationDigestV1,
@@ -7313,8 +7298,7 @@ impl PrivacyRootProvenanceV1 {
     ///
     /// # Errors
     ///
-    /// Rejects malformed statement, admission, parent, or pool-invariant
-    /// provenance.
+    /// Rejects malformed statement, admission, parent, or pool-invariant provenance.
     pub(crate) fn verified_pgc_successor(
         statement_digest: PrivacyStatementDigestV1,
         admitted_at_height: u64,
@@ -7382,8 +7366,7 @@ impl PrivacyRootProvenanceV1 {
             | Self::VerifiedBootstrap { .. } => None,
         }
     }
-    /// Return the immutable ZK-AMS registry origin carried by typed root
-    /// provenance.
+    /// Return the immutable ZK-AMS registry origin carried by typed root provenance.
     #[must_use]
     pub(crate) const fn zk_ams_bootstrap_digest(
         self,
@@ -8926,9 +8909,8 @@ pub enum PrivacyRootHistoryErrorV1 {
 }
 /// Validate root additions and return the exact oldest retained keys to prune.
 ///
-/// The returned plan is read-only and deterministic. Callers must complete all
-/// other admission checks before applying the removals and additions in the
-/// same state transaction.
+/// The returned plan is read-only and deterministic. Callers must complete all other admission
+/// checks before applying the removals and additions in the same state transaction.
 ///
 /// # Errors
 ///
@@ -9026,9 +9008,8 @@ pub(crate) struct PrivacyRootRetentionReductionPlanV1 {
 }
 /// Protocols whose complete typed root histories support anchored prefix pruning.
 ///
-/// Keep this closed list shared by policy prevalidation and block-start
-/// application so a newly prunable history cannot be admitted without also
-/// being reduced at the exact effective height.
+/// Keep this closed list shared by policy prevalidation and block-start application so a newly
+/// prunable history cannot be admitted without also being reduced at the exact effective height.
 pub(crate) const PRIVACY_ROOT_RETENTION_ANCHORED_PROTOCOLS_V1: [PrivacyProtocolIdV1; 7] = [
     PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
     PrivacyProtocolIdV1::IrohaZkAmsV1,
@@ -9076,8 +9057,7 @@ const fn privacy_root_history_supports_retention_anchor_v1(
 ///
 /// # Errors
 ///
-/// Rejects a zero retention policy, malformed existing key, or an
-/// unrepresentable count.
+/// Rejects a zero retention policy, malformed existing key, or an unrepresentable count.
 pub(crate) fn plan_privacy_root_retention_reduction_v1(
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     protocol_id: PrivacyProtocolIdV1,
@@ -9127,10 +9107,9 @@ pub(crate) fn plan_privacy_root_retention_reduction_v1(
 /// Validate that every unanchored history already satisfies a future retention cap.
 ///
 /// PGC account-state, ZK-AMS registry, Orchard note-commitment, proof-managed
-/// FCMP++/private-IVM/PQ-MASP, and typed X.509 CA/CRL histories carry exact
-/// provenance plus a pruned-prefix anchor and can therefore be reduced
-/// atomically at the scheduled height. Every other history must already fit the
-/// future cap; governance cannot silently orphan it.
+/// FCMP++/private-IVM/PQ-MASP, and typed X.509 CA/CRL histories carry exact provenance plus a
+/// pruned-prefix anchor and can therefore be reduced atomically at the scheduled height. Every
+/// other history must already fit the future cap; governance cannot silently orphan it.
 pub(crate) fn validate_unanchored_privacy_root_retention_v1(
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     retained_root_count: u32,
@@ -9216,7 +9195,7 @@ impl_validated_json_key!(PrivacyPgcAccountKeyV1);
 impl_validated_json_key!(PrivacyPgcPoolInvariantKeyV1);
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::privacy::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
@@ -9247,7 +9226,7 @@ mod tests {
     };
     use mv::{json::JsonKeyCodec, storage::Storage};
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
-    use super::*;
+    use std::str::FromStr as _;
     fn nonzero(byte: u8) -> [u8; 32] {
         [byte; 32]
     }

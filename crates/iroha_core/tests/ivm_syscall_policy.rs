@@ -1,12 +1,12 @@
 //! Ensure `CoreHost` enforces syscall policy by `abi_version` header.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::cast_possible_truncation)]
-use std::{num::NonZeroU64, sync::Arc};
 use iroha_core::{governance::manifest::LaneManifestRegistry, smartcontracts::ivm::host::CoreHost};
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use std::{num::NonZeroU64, sync::Arc};
 fn program_with_scall(sys: u8) -> Vec<u8> {
     let mut code = Vec::new();
     code.extend_from_slice(
@@ -78,7 +78,6 @@ fn allow_forwarded_alloc_in_current() {
 }
 #[test]
 fn unknown_syscall_is_rejected_at_admission() {
-    use std::borrow::Cow;
     use iroha_core::{
         kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
         state::State, tx::AcceptedTransaction,
@@ -90,6 +89,7 @@ fn unknown_syscall_is_rejected_at_admission() {
         transaction::error::TransactionRejectionReason,
     };
     use nonzero_ext::nonzero;
+    use std::borrow::Cow;
     // Build a minimal world with a single authority account.
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

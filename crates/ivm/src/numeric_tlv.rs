@@ -3,6 +3,11 @@
 //! Staged decoding charges bounded public work before each read, snapshots the
 //! complete envelope once, authenticates that snapshot, and then performs
 //! strict schema/canonical decoding. This ordering is consensus-visible.
+use crate::{
+    IVM, PointerType, VMError, numeric::PointerAbiFaultV1, numeric_gas,
+    syscall_metering::SyscallMeteringPhase,
+};
+pub use iroha_primitives::numeric_abi::MAX_QUANTITY_ENVELOPE_BYTES_V1;
 use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, NumericWorkStep, Quantity},
@@ -12,11 +17,6 @@ use iroha_primitives::{
         NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1, NumericAbiError, NumericAbiWorkStep,
         ObservedNumericAbiError, QuantityValueV1,
     },
-};
-pub use iroha_primitives::numeric_abi::MAX_QUANTITY_ENVELOPE_BYTES_V1;
-use crate::{
-    IVM, PointerType, VMError, numeric::PointerAbiFaultV1, numeric_gas,
-    syscall_metering::SyscallMeteringPhase,
 };
 const OUTER_HEADER_BYTES: usize = 7;
 const OUTER_HASH_BYTES: usize = iroha_crypto::Hash::LENGTH;

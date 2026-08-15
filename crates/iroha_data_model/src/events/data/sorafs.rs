@@ -1,12 +1,12 @@
 //! `SoraFS` gateway compliance events exposed via the data event stream.
-use iroha_data_model_derive::model;
-use iroha_primitives::numeric::Quantity;
 pub use self::model::*;
 use super::*;
+use iroha_data_model_derive::model;
+use iroha_primitives::numeric::Quantity;
 #[model]
 mod model {
-    use getset::Getters;
     use super::*;
+    use getset::Getters;
     /// Events emitted by the `SoraFS` gateway compliance surface.
     #[derive(
         Debug,
@@ -596,13 +596,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGatewayEvent {
 }
 #[cfg(feature = "json")]
 mod json_support {
-    use std::io::Cursor;
+    use super::{SorafsGarViolation, SorafsGatewayEvent};
     use base64::Engine as _;
     use norito::{
         codec::Decode,
         json::{Error, FastJsonWrite, JsonDeserialize, Parser},
     };
-    use super::{SorafsGarViolation, SorafsGatewayEvent};
+    use std::io::Cursor;
     fn decode_from_base64<T: Decode>(encoded: &str) -> Result<T, Error> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_bytes())
@@ -646,8 +646,8 @@ mod json_support {
     }
     #[cfg(test)]
     mod tests {
-        use base64::Engine as _;
         use super::*;
+        use base64::Engine as _;
         fn assert_bare_base64_json<T>(value: &T)
         where
             T: norito::codec::Encode + norito::core::NoritoSerialize + norito::json::JsonSerialize,

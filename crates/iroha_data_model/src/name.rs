@@ -1,13 +1,5 @@
 //! This module contains [`Name`](`crate::name::Name`) structure
 //! and related implementations and trait implementations.
-use std::{
-    borrow::{Borrow, Cow},
-    format,
-    str::FromStr,
-    string::String,
-    sync::OnceLock,
-    vec::Vec,
-};
 use icu_normalizer::{ComposingNormalizer, ComposingNormalizerBorrowed, provider::Baked};
 use idna::{
     AsciiDenyList,
@@ -17,6 +9,14 @@ use iroha_data_model_derive::model;
 use iroha_primitives::conststr::ConstString;
 use norito::core::{DecodeFromSlice, Error as NoritoError};
 use sha2::{Digest as _, Sha256};
+use std::{
+    borrow::{Borrow, Cow},
+    format,
+    str::FromStr,
+    string::String,
+    sync::OnceLock,
+    vec::Vec,
+};
 const ERR_DOMAIN_NORMALISATION: &str = "domain name failed UTS-46 STD3 normalization requirements";
 const ERR_NFC_PROFILE: &str =
     "compiled NFC normalization data does not match the consensus profile";
@@ -96,9 +96,9 @@ fn nfc_normalizer() -> Result<&'static ComposingNormalizerBorrowed<'static>, Par
 }
 #[model]
 mod model {
+    use super::*;
     use derive_more::{Debug, Display};
     use iroha_schema::IntoSchema;
-    use super::*;
     /// `Name` struct represents the type of Iroha Entities names, such as
     /// [`Domain`](`crate::domain::Domain`) name or
     /// [`Account`](`crate::account::Account`) name.
@@ -338,9 +338,9 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use std::borrow::ToOwned as _;
-    use norito::codec::{Decode, Encode};
     use super::*;
+    use norito::codec::{Decode, Encode};
+    use std::borrow::ToOwned as _;
     // Trait import not required; tests roundtrip via header-framed helpers.
     const INVALID_NAMES: [&str; 4] = ["", " ", "@", "#"];
     #[cfg(feature = "json")]

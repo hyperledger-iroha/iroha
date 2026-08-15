@@ -6,6 +6,8 @@
 //! ranges, labels, and fix recipes. Whole-program state invariants use their
 //! parser-owned state/lifecycle declaration nodes. This adapter deliberately
 //! does not scan diagnostic messages or source tokens to guess a spelling.
+#[cfg(test)]
+use crate::diagnostic::DiagnosticPhase;
 use crate::{
     diagnostic::{
         Diagnostic, DiagnosticBundle, DiagnosticFix, DiagnosticLabel, SourceSpan,
@@ -14,8 +16,6 @@ use crate::{
     resolved::ResolvedProgram,
     source::{SourceFile, SourceRange},
 };
-#[cfg(test)]
-use crate::diagnostic::DiagnosticPhase;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SemanticDiagnosticLabel {
     pub(crate) source: SourceRange,

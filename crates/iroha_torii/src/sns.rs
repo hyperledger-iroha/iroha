@@ -1,4 +1,5 @@
 //! Ledger-backed Sora Name Service (SNS) HTTP handlers.
+use crate::{JsonBody, SharedAppState};
 use axum::{
     extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode},
@@ -14,7 +15,6 @@ use iroha_core::{
 use iroha_data_model::sns::{NameRecordV1, NameSelectorV1, NameStatus, SuffixId};
 use parking_lot::Mutex;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
-use crate::{JsonBody, SharedAppState};
 const SNS_NAME_CACHE_MAX_ENTRIES: usize = 4096;
 /// HTTP-friendly error wrapper for SNS routes.
 #[derive(Debug)]

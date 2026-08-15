@@ -1,8 +1,5 @@
 //! Trace commitment regression tests built from Norito fixtures.
-use std::{
-    fmt::Write as _,
-    path::{Path, PathBuf},
-};
+use crate::common::{fixture_update_requested, fixture_update_requested_from};
 use fastpq_isi::CANONICAL_PARAMETER_SETS;
 use fastpq_prover::{
     OperationKind, PublicInputs, StateTransition, TransitionBatch,
@@ -17,7 +14,10 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{decode_from_bytes, json, to_bytes};
-use crate::common::{fixture_update_requested, fixture_update_requested_from};
+use std::{
+    fmt::Write as _,
+    path::{Path, PathBuf},
+};
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }

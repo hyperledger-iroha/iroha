@@ -3,7 +3,10 @@
 //! Points use the RFC 9380 `P256_XMD:SHA-256_SSWU_RO_` suite and are encoded as
 //! canonical compressed SEC1 values.  Scalars are canonical big-endian
 //! integers strictly below the P-256 group order.
+use super::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
 use core::fmt;
+/// P-256 ES256 signing key used by first-release wallet-side device proofs.
+pub use p256::ecdsa::SigningKey as DeviceSigningKeyV1;
 use p256::{
     AffinePoint, EncodedPoint, FieldBytes, NistP256, ProjectivePoint, Scalar,
     elliptic_curve::{
@@ -16,9 +19,6 @@ use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-use super::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
-/// P-256 ES256 signing key used by first-release wallet-side device proofs.
-pub use p256::ecdsa::SigningKey as DeviceSigningKeyV1;
 /// Maximum opaque proof bytes accepted before Norito decoding.
 pub const MAX_P256_ENGINE_PROOF_BYTES_V1: usize = 8 * 1024 * 1024;
 const TRANSCRIPT_VERSION_V1: u8 = 1;
@@ -534,8 +534,8 @@ pub(crate) fn validate_generator_independence(
 }
 #[cfg(test)]
 mod tests {
-    use p256::elliptic_curve::sec1::ToEncodedPoint as _;
     use super::*;
+    use p256::elliptic_curve::sec1::ToEncodedPoint as _;
     struct FailingRng;
     impl RngCore for FailingRng {
         fn next_u32(&mut self) -> u32 {

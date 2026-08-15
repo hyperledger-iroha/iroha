@@ -1,9 +1,10 @@
-use std::{
-    collections::BTreeSet,
-    fs,
-    io::{BufWriter, Read, Write},
-    path::{Path, PathBuf},
-    time::Duration,
+use crate::{
+    Outcome, RunArgs,
+    genesis::{
+        ConsensusPolicy, build_line_from_env, ensure_npos_parameters,
+        validate_consensus_mode_for_line,
+    },
+    tui,
 };
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, ensure, eyre};
@@ -35,13 +36,12 @@ use iroha_swarm::{
     PreparedSecretFile, PreparedValidator,
 };
 use iroha_version::BuildLine;
-use crate::{
-    Outcome, RunArgs,
-    genesis::{
-        ConsensusPolicy, build_line_from_env, ensure_npos_parameters,
-        validate_consensus_mode_for_line,
-    },
-    tui,
+use std::{
+    collections::BTreeSet,
+    fs,
+    io::{BufWriter, Read, Write},
+    path::{Path, PathBuf},
+    time::Duration,
 };
 /// Docker Compose configuration generator for Iroha.
 #[allow(clippy::struct_excessive_bools)]
@@ -3091,12 +3091,13 @@ fn parse_port(table: &toml::Table, field: &str) -> color_eyre::Result<u16> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        io::{BufWriter, Write},
-        num::{NonZeroU16, NonZeroUsize},
-        path::{Path, PathBuf},
+    use super::{
+        Args, load_peer_overrides, load_prepared_bundle, parse_peer_override_toml,
+        parse_prepared_peer_config, read_runtime_file_bounded, signed_genesis_consensus_metadata,
+        tx_history_mandatory_alias_source, validate_prepared_genesis,
+        validate_runtime_projection_policy,
     };
+    use crate::{RunArgs, localnet::LocalnetOptions};
     use iroha_crypto::{Algorithm, Hash, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId,
@@ -3109,13 +3110,12 @@ mod tests {
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_swarm::PreparedBuildLine;
     use iroha_version::BuildLine;
-    use super::{
-        Args, load_peer_overrides, load_prepared_bundle, parse_peer_override_toml,
-        parse_prepared_peer_config, read_runtime_file_bounded, signed_genesis_consensus_metadata,
-        tx_history_mandatory_alias_source, validate_prepared_genesis,
-        validate_runtime_projection_policy,
+    use std::{
+        fs,
+        io::{BufWriter, Write},
+        num::{NonZeroU16, NonZeroUsize},
+        path::{Path, PathBuf},
     };
-    use crate::{RunArgs, localnet::LocalnetOptions};
     #[test]
     fn prepared_tx_history_alias_source_uses_configured_limit() {
         let path = PathBuf::from("aliases.json");

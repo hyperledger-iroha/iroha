@@ -112,11 +112,13 @@ use super::{
         LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
         LocalValidateReplayEvidenceV1,
     },
-    v2_lifecycle_coordinator::RecoveredDecisionApplyDispatchKeyV1,
+    v2_lifecycle_coordinator::{
+        ProductionLifecycleLiveClockActivationPermitV1, RecoveredDecisionApplyDispatchKeyV1,
+    },
     v2_recovery::PendingKuraApply,
     v2_runtime::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
-        ExactServePredecessorCompletionEvidence, ExactServePredecessorEpisodeWitness,
+        ExactServePredecessorCompletionEvidence, ExactServePredecessorObservation,
         LeaderWireRuntimeTerminal, LocalProposalEffectOwnership, LocalProposalReadyCommandIdentity,
         NetworkIngressError, PendingRuntimeEffectBinding, RetiredBodyPipelineCompletions,
         RuntimeCandidateAdmissionDisposition, RuntimeClockError, RuntimeEffectOwnership,
@@ -297,6 +299,7 @@ pub(crate) struct VerifiedPendingGenesisNexusAmxContext {
 }
 impl VerifiedPendingGenesisNexusAmxContext {
     /// Return the exact projection bound into the replayed height-context id.
+    #[cfg(test)]
     pub(crate) const fn hash(self) -> Hash {
         self.hash
     }
@@ -1736,11 +1739,14 @@ pub(in crate::sumeragi) enum RecoveredDecisionFetchRequestRegistrationErrorV1 {
 /// the registry's claimed-carrier arming token and installs both dedicated
 /// indexes in one assertion-only tail.
 #[must_use = "dropping a recovered request reservation leaves executor indexes unchanged"]
-pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchRequestRegistrationV1<'executor> {
-    executor: &'executor mut V2EffectExecutor<SerializedV2Runtime>,
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchRequestRegistrationV1<
+    'executor,
+    R: EffectRuntime,
+> {
+    executor: &'executor mut V2EffectExecutor<R>,
     owner: Option<RecoveredDecisionFetchRequestOwnerV1>,
 }
-impl PreparedRecoveredDecisionFetchRequestRegistrationV1<'_> {
+impl<R: EffectRuntime> PreparedRecoveredDecisionFetchRequestRegistrationV1<'_, R> {
     /// Return the reserved exact lifecycle key.
     pub(in crate::sumeragi) fn dispatch_key(
         &self,
@@ -3772,7 +3778,63 @@ fn authenticate_recovered_lifecycle_next_vote_body_catalogs(
         )
     })
 }
-impl V2EffectExecutor<SerializedV2Runtime> {
+
+impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Preflight one dedicated recovered request without retaining an executor borrow.
+    ///
+    /// `Ok(false)` is reserved for the configured request-capacity bound. Every
+    /// identity, index, coordinate, or existing dedicated-owner conflict stays
+    /// a typed error so the scheduler cannot hide corruption as backpressure.
+    pub(in crate::sumeragi) fn recovered_decision_fetch_registration_available(
+        &self,
+        owner: &RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<bool, RecoveredDecisionFetchRequestRegistrationErrorV1> {
+        if self.output_guard.restart_required()
+            || self.fatal_reason.is_some()
+            || !owner.validates_exact_executor_context(&self.context, &self.requester)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ForeignExecutor);
+        }
+        if self.validated_certified_request_presence().is_err() {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::InvalidExistingCensus);
+        }
+        let key = owner.dispatch_key();
+        let request_hash = owner.request_hash();
+        if !self.recovered_decision_fetches.is_empty()
+            || self
+                .recovered_decision_fetch_by_request
+                .contains_key(&request_hash)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
+        }
+        if self.certified_work.contains_key(&request_hash)
+            || self.outstanding_requests.contains(request_hash)
+            || owner.conflicts_with_ordinary_tracker(&self.outstanding_requests)
+            || self.pending_fetches.values().any(|pending| {
+                owner.matches_body_coordinates(pending.task.round, pending.task.subject)
+            })
+            || self.recovered_decision_fetches.values().any(|existing| {
+                let projection = owner.candidate_projection();
+                existing.matches_body_coordinates(projection.round, projection.subject)
+            })
+            || self
+                .recovered_decision_fetch_by_request
+                .values()
+                .any(|existing| *existing == key)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ConflictingOwner);
+        }
+        if self
+            .outstanding_requests
+            .len()
+            .checked_add(self.recovered_decision_fetches.len())
+            .is_none_or(|owned| owned >= self.config.max_certified_requests)
+        {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     /// Reserve the sole dedicated recovered Decision Fetch owner position.
     ///
     /// Exact hash, logical request identity, body coordinates, and both ordinary
@@ -3783,7 +3845,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         &mut self,
         owner: RecoveredDecisionFetchRequestOwnerV1,
     ) -> Result<
-        PreparedRecoveredDecisionFetchRequestRegistrationV1<'_>,
+        PreparedRecoveredDecisionFetchRequestRegistrationV1<'_, R>,
         RecoveredDecisionFetchRequestRegistrationErrorV1,
     > {
         if !self.recovered_decision_fetch_registration_available(&owner)? {
@@ -3794,6 +3856,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             owner: Some(owner),
         })
     }
+}
+
+impl V2EffectExecutor<SerializedV2Runtime> {
     /// Take ownership of an exact-body store opened during sealed preflight.
     ///
     /// Production uses this entry point after independently inspecting the
@@ -3998,7 +4063,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .prepare_recovered_lifecycle_sign_completion(authority)
     }
     /// Publish executor-retained owners and compare the retained-response
-    /// target without resetting the selected-Serve predecessor witness.
+    /// target without resetting the selected-Serve predecessor retry latch.
     pub(crate) fn older_runtime_lifecycle_predates_retained_response(
         &mut self,
         now: Instant,
@@ -4010,26 +4075,30 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .older_lifecycle_predates_retained_response(now, target_lifecycle_ordinal)
             .map_err(EffectExecutorError::Runtime)
     }
-    /// Publish executor-retained owners and return the stable witness for the
-    /// current continuous predecessor episode of one exact Serve ticket.
-    pub(crate) fn exact_serve_predecessor_episode_witness(
+
+    /// Publish executor-retained owners and directly observe the runnable
+    /// predecessor prefix of one exact Serve ticket.
+    pub(crate) fn exact_serve_predecessor_observation(
         &mut self,
         now: Instant,
         serve_lifecycle_ordinal: u128,
         completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
-    ) -> Result<Option<ExactServePredecessorEpisodeWitness>, EffectExecutorError> {
+    ) -> Result<ExactServePredecessorObservation, EffectExecutorError> {
         self.ensure_open()?;
         self.publish_external_lifecycle_owners()?;
         self.runtime
-            .exact_serve_predecessor_episode_witness(
-                now,
-                serve_lifecycle_ordinal,
-                completion_evidence,
-            )
+            .exact_serve_predecessor_observation(now, serve_lifecycle_ordinal, completion_evidence)
             .map_err(EffectExecutorError::Runtime)
     }
     /// Arm the runtime pacemaker after all height startup work has completed.
-    pub(crate) fn arm_live_clocks(&mut self, now: Instant) -> Result<(), RuntimeClockError> {
+    pub(in crate::sumeragi) fn arm_live_clocks(
+        &mut self,
+        _permit: ProductionLifecycleLiveClockActivationPermitV1,
+        now: Instant,
+    ) -> Result<(), RuntimeClockError> {
+        if self.pending_tip_recovery.is_some() {
+            return Err(RuntimeClockError::PendingKuraRecovery);
+        }
         let tag = self.current_tag();
         let retain = self.local_validator == Some(self.context.leader(tag.view()));
         self.runtime
@@ -4126,6 +4195,22 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     ) -> Result<wire::SumeragiV2Status, AdapterError> {
         self.runtime.successor_activation_status_snapshot()
     }
+
+    /// Snapshot one completed interrupted tip while pacemaker clocks stay unarmed.
+    pub(in crate::sumeragi) fn pending_kura_activation_status_snapshot(
+        &mut self,
+    ) -> Result<wire::SumeragiV2Status, AdapterError> {
+        let pending_ready = self.ready_to_finish()
+            && self.lifecycle_live_clocks_are_unarmed()
+            && self.pending_tip_recovery.as_ref().is_some_and(|evidence| {
+                evidence.stage() == PendingKuraApplyRecoveryStage::Completed
+            });
+        if !pending_ready {
+            return Err(AdapterError::PendingKuraActivationNotReady);
+        }
+        self.runtime.pending_kura_activation_status_snapshot()
+    }
+
     /// Bind an interrupted Kura tip to the exact reducer Decision and durable
     /// validation marker reconstructed before network ingress opens.
     ///
@@ -4331,60 +4416,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Borrow the immutable context governing this executor height.
     pub(crate) const fn context(&self) -> &wire::HeightContext {
         &self.context
-    }
-    /// Preflight one dedicated recovered request without retaining an executor borrow.
-    ///
-    /// `Ok(false)` is reserved for the configured request-capacity bound. Every
-    /// identity, index, coordinate, or existing dedicated-owner conflict stays
-    /// a typed error so the scheduler cannot hide corruption as backpressure.
-    pub(in crate::sumeragi) fn recovered_decision_fetch_registration_available(
-        &self,
-        owner: &RecoveredDecisionFetchRequestOwnerV1,
-    ) -> Result<bool, RecoveredDecisionFetchRequestRegistrationErrorV1> {
-        if self.output_guard.restart_required()
-            || self.fatal_reason.is_some()
-            || !owner.validates_exact_executor_context(&self.context, &self.requester)
-        {
-            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ForeignExecutor);
-        }
-        if self.validated_certified_request_presence().is_err() {
-            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::InvalidExistingCensus);
-        }
-        let key = owner.dispatch_key();
-        let request_hash = owner.request_hash();
-        if !self.recovered_decision_fetches.is_empty()
-            || self
-                .recovered_decision_fetch_by_request
-                .contains_key(&request_hash)
-        {
-            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
-        }
-        if self.certified_work.contains_key(&request_hash)
-            || self.outstanding_requests.contains(request_hash)
-            || owner.conflicts_with_ordinary_tracker(&self.outstanding_requests)
-            || self.pending_fetches.values().any(|pending| {
-                owner.matches_body_coordinates(pending.task.round, pending.task.subject)
-            })
-            || self.recovered_decision_fetches.values().any(|existing| {
-                let projection = owner.candidate_projection();
-                existing.matches_body_coordinates(projection.round, projection.subject)
-            })
-            || self
-                .recovered_decision_fetch_by_request
-                .values()
-                .any(|existing| *existing == key)
-        {
-            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ConflictingOwner);
-        }
-        if self
-            .outstanding_requests
-            .len()
-            .checked_add(self.recovered_decision_fetches.len())
-            .is_none_or(|owned| owned >= self.config.max_certified_requests)
-        {
-            return Ok(false);
-        }
-        Ok(true)
     }
     /// Authenticate a certified-body request through the same production
     /// certificate verifier used for reducer ingress.
@@ -9442,6 +9473,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             && self.pending_applications.contains_key(&work_id)
     }
     /// Borrow the durable finality values returned by Kura after application.
+    #[cfg(test)]
     pub(crate) fn durable_finality(
         &self,
     ) -> Option<(&KuraV2CommitReceipt, &wire::finality::V2FinalityArtifact)> {
@@ -13616,5 +13648,6 @@ mod tests {
     include!("tests/v2_effects_main_03.rs");
     include!("tests/v2_effects_main_04.rs");
     include!("tests/v2_effects_main_05.rs");
+    include!("tests/v2_effects_lifecycle_predecessor.rs");
     include!("tests/v2_effects_03_locked_body_and_sidecar.rs");
 }

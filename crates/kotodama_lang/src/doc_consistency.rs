@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
     use crate::{
         builtins::{Builtin, BuiltinSurface},
         compiler::{Compiler, CompilerOptions},
@@ -11,6 +10,7 @@ mod tests {
         semantic::{V1_LIST_MEMBER_NAMES, V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_SUM_PATHS},
         session::{CompileRequest, CompilerSession},
     };
+    use std::{fs, path::PathBuf};
     fn docs_roots() -> [PathBuf; 2] {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         [

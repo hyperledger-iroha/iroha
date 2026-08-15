@@ -1,5 +1,6 @@
 //! Interop matrix covering SM2/SM3/SM4 against OpenSSL and Tongsuo CLIs.
 #![cfg(feature = "sm")]
+use iroha_crypto::{Sm2PrivateKey, Sm3Digest};
 use std::{
     env, fs,
     io::Write as _,
@@ -7,7 +8,6 @@ use std::{
     process::Command,
     sync::OnceLock,
 };
-use iroha_crypto::{Sm2PrivateKey, Sm3Digest};
 use tempfile::TempDir;
 const CLI_DEFAULTS: &[(&str, &str)] = &[("openssl", "OpenSSL"), ("tongsuo", "Tongsuo")];
 // Shared deterministic fixture so Rust/Python/JS stay aligned.

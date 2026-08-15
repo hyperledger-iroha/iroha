@@ -1,9 +1,9 @@
 //! Compliance tests for confidential key-derivation fixtures.
-use std::path::Path;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use hex::FromHex;
 use iroha_crypto::{ConfidentialKeyError, derive_keyset, derive_keyset_from_slice};
 use norito::json::{self, JsonDeserialize};
+use std::path::Path;
 #[derive(Debug, JsonDeserialize)]
 struct Fixture {
     format_version: u32,

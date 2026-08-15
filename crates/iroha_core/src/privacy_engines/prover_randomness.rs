@@ -424,8 +424,8 @@ fn derive_try_crypto_seed_from_block_v1(
 }
 #[cfg(test)]
 mod tests {
-    use rand_08::{SeedableRng as _, rngs::StdRng};
     use super::*;
+    use rand_08::{SeedableRng as _, rngs::StdRng};
     #[derive(Clone, Copy)]
     enum Mode {
         Constant,
@@ -756,9 +756,9 @@ mod tests {
         ));
     }
     mod try_crypto {
-        use rand::{RngCore as _, SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
         use super::super::*;
         use super::{RecordingStream, TryRecordingRng};
+        use rand::{RngCore as _, SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
         #[derive(Clone, Copy)]
         enum TryMode {
             Constant,

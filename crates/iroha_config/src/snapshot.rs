@@ -1,10 +1,10 @@
 //! Configuration related to Snapshot specifically
-use std::str::FromStr;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{self as ncore, Archived},
     json::{self, JsonDeserialize, JsonSerialize},
 };
+use std::str::FromStr;
 /// Functioning mode of the Snapshot Iroha module
 #[derive(Copy, Clone, Debug, Default, strum::Display, strum::EnumString)]
 #[strum(serialize_all = "snake_case")]

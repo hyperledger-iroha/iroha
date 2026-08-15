@@ -1,11 +1,4 @@
 //! Validate `SoraNet` handshake performance against reference tolerances.
-use std::{
-    collections::BTreeMap,
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-    time::Instant,
-};
 use iroha_crypto::{
     Algorithm, KeyPair,
     soranet::handshake::{
@@ -17,6 +10,13 @@ use iroha_crypto::{
 use norito::json::{self, Map, Value};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 const DEFAULT_BASELINE: &str = "crates/iroha_crypto/benches/soranet_handshake_baseline.json";
 const DEFAULT_TOLERANCE: f64 = 0.15;
 const MAX_P99_NS: u128 = 900_000_000; // 900ms

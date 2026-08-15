@@ -1,5 +1,4 @@
 //! Focused coverage for the stable map-helper surface.
-use std::{collections::HashMap, str::FromStr};
 use ivm::{
     IVM,
     kotodama::{
@@ -10,6 +9,7 @@ use ivm::{
     },
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
+use std::{collections::HashMap, str::FromStr};
 mod common;
 #[test]
 fn ephemeral_map_constructor_is_rejected() {

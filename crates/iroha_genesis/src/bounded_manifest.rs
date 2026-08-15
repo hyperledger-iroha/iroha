@@ -1,13 +1,13 @@
 //! Bounded local readers for genesis source artifacts.
+use eyre::{Result, WrapErr as _, eyre};
+use iroha_data_model::block::SignedBlock;
+use iroha_version::Version as _;
+use norito::DecodeLimits;
 use std::{
     fs,
     io::{self, Read as _},
     path::Path,
 };
-use eyre::{Result, WrapErr as _, eyre};
-use iroha_data_model::block::SignedBlock;
-use iroha_version::Version as _;
-use norito::DecodeLimits;
 /// First-release encoded byte limit for a JSON genesis manifest.
 pub const GENESIS_MANIFEST_JSON_MAX_BYTES_V1: usize = 16 * 1024 * 1024;
 /// First-release byte limit for one compiled IVM program referenced by genesis.

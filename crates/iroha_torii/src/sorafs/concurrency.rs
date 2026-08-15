@@ -1,9 +1,9 @@
 //! Concurrency tracking for SoraFS stream tokens.
+use dashmap::{DashMap, mapref::entry::Entry};
 use std::sync::{
     Arc,
     atomic::{AtomicU32, Ordering},
 };
-use dashmap::{DashMap, mapref::entry::Entry};
 const MAX_TOKEN_ID_BYTES: usize = 128;
 /// Tracks active stream requests per token to enforce concurrency budgets.
 #[derive(Clone, Default)]
@@ -114,6 +114,7 @@ impl Drop for StreamTokenConcurrencyPermit {
 pub struct ConcurrencyLimitExceeded;
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         sync::{
             Arc, Barrier,
@@ -121,7 +122,6 @@ mod tests {
         },
         thread,
     };
-    use super::*;
     #[test]
     fn zero_limit_and_noncanonical_ids_fail_closed_without_state() {
         let tracker = StreamTokenConcurrencyTracker::default();

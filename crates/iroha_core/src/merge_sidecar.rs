@@ -7,34 +7,6 @@
 //! crash-safe, while incomplete payload bytes remain in memory. Only a
 //! completely reassembled, canonical, reference-matching entry may be handed
 //! to Kura's atomic pending-sidecar store.
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    num::{NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{
-    block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2::MAX_VALIDATORS_PER_HEIGHT},
-    consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    merge::{MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
-    peer::PeerId,
-};
-#[cfg(test)]
-use iroha_p2p::network::{NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture};
-use iroha_p2p::{
-    Post, Priority,
-    network::{
-        NetworkReplyFlushIdentity, NetworkReplyRoute, NetworkReplyRouteSourceUpdate,
-        NetworkReplyRoutes, NetworkReplySourceKey,
-        message::{ClassifyTopic as _, Topic},
-    },
-};
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
 #[cfg(test)]
 use crate::sumeragi::v2_core::{
     production_reliable_flush_trace_refines_outbound_ownership_kernel,
@@ -61,6 +33,34 @@ use crate::{
         v2_lane_work::DurableMergeSidecarRolloverAuthority,
     },
 };
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{
+    block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2::MAX_VALIDATORS_PER_HEIGHT},
+    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    merge::{MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
+    peer::PeerId,
+};
+#[cfg(test)]
+use iroha_p2p::network::{NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture};
+use iroha_p2p::{
+    Post, Priority,
+    network::{
+        NetworkReplyFlushIdentity, NetworkReplyRoute, NetworkReplyRouteSourceUpdate,
+        NetworkReplyRoutes, NetworkReplySourceKey,
+        message::{ClassifyTopic as _, Topic},
+    },
+};
+use norito::codec::{Decode, Encode};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    num::{NonZeroU64, NonZeroUsize},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use thiserror::Error;
 /// Current certified merge-sidecar transfer protocol version.
 pub const CERTIFIED_MERGE_SIDECAR_VERSION_V1: u8 = 1;
 /// Maximum payload carried by one sidecar chunk.

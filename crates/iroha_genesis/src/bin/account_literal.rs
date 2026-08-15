@@ -1,8 +1,8 @@
 //! Render an account literal for a public key and chain discriminant.
-use std::{env, str::FromStr};
 use eyre::{Result, eyre};
 use iroha_crypto::PublicKey;
 use iroha_data_model::account::AccountId;
+use std::{env, str::FromStr};
 fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let public_key = args

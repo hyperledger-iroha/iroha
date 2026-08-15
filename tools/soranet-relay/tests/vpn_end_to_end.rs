@@ -1,10 +1,10 @@
-use std::sync::Arc;
 use iroha_data_model::soranet::vpn::{VPN_CELL_LEN, VpnCellClassV1, VpnFlowLabelV1};
 use soranet_relay::{
     config::{VpnConfig, VpnCoverTrafficConfig},
     metrics::{Metrics, VpnRuntimeState},
     vpn::VpnOverlay,
 };
+use std::sync::Arc;
 use tokio::io::duplex;
 #[tokio::test]
 async fn vpn_end_to_end_records_metrics_and_receipts() {

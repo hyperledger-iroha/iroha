@@ -1,7 +1,7 @@
 //! Profile presets for Iroha 3 genesis manifests.
-use core::num::NonZeroU64;
 use clap::ValueEnum;
 use color_eyre::eyre::{Result, eyre};
+use core::num::NonZeroU64;
 use iroha_crypto::Hash;
 use iroha_data_model::{asset::AssetDefinitionId, prelude::ChainId};
 /// Canonical I105 discriminant for the public Taira testnet.

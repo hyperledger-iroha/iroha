@@ -5,13 +5,6 @@
 //! rewrites final symbol identities in typed HIR, and then reruns whole-program
 //! recursion and effect analysis before handing the result to the canonical
 //! compiler session.
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
-    error::Error,
-    fmt,
-    sync::{Arc, Mutex},
-};
-use iroha_crypto::Hash;
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
     builtins::{Builtin, BuiltinSurface},
@@ -25,6 +18,13 @@ use crate::{
     },
     source::{FrontendBudget, SourceFile, SourceId},
     spanned_ast::SpannedProgram,
+};
+use iroha_crypto::Hash;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    error::Error,
+    fmt,
+    sync::{Arc, Mutex},
 };
 const LINKED_SYMBOL_PREFIX: &str = "__kotodama_link_";
 const MAX_PARSED_CACHE_ENTRIES: usize = 64;

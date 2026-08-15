@@ -4,11 +4,11 @@
 //! ensuring traffic leaves the relay at a deterministic rate regardless of application
 //! throughput. It enforces Weighted Fair Queuing (WFQ) across traffic classes and
 //! generates dummy cells when queues are empty.
+use crate::constant_rate::CONSTANT_RATE_CELL_BYTES;
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
 };
-use crate::constant_rate::CONSTANT_RATE_CELL_BYTES;
 /// Fixed cell size used for constant-rate transport.
 pub const CELL_SIZE_BYTES: usize = CONSTANT_RATE_CELL_BYTES as usize;
 const CELL_HEADER_BYTES: usize = 3; // [Type (1B) | Length (2B)]

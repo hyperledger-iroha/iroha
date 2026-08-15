@@ -1,10 +1,4 @@
 //! CLI for building deterministic SoraFS Taikai CAR bundles and envelopes.
-use std::{
-    fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-    str::FromStr,
-};
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
@@ -22,6 +16,12 @@ use sorafs_car::taikai::{
 };
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 #[derive(Parser, Debug)]
 #[command(
     name = "taikai_car",
@@ -1192,8 +1192,8 @@ fn render_indexes_map(indexes: &iroha_data_model::taikai::TaikaiEnvelopeIndexes)
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::{TempDir, tempdir};
     use super::*;
+    use tempfile::{TempDir, tempdir};
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");

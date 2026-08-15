@@ -1,5 +1,4 @@
 //! Peer-to-peer proxy envelopes for Torii ingress routing.
-use std::fmt;
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -8,6 +7,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use norito::codec::{Decode, Encode};
+use std::fmt;
 /// Schema version for deadline-bound Torii proxy requests.
 pub const TORII_PROXY_REQUEST_VERSION_V6: u16 = 6;
 /// Maximum inner body admitted by a first-release Torii proxy request.

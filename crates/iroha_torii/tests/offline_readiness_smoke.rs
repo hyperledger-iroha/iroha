@@ -1,13 +1,6 @@
 //! Router smoke tests for the first-release offline API.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
-use std::{
-    convert::Infallible,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
 use axum::body::{Body, Bytes};
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::{
@@ -15,6 +8,13 @@ use axum::http::{
     header::{ACCEPT, CONTENT_TYPE},
 };
 use iroha_core::prelude::World;
+use std::{
+    convert::Infallible,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 #[path = "fixtures.rs"]
 mod fixtures;
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {

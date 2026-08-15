@@ -1,15 +1,15 @@
 //! Shared `kagami` binary resolution helpers for integration tests.
+use crate::process::{build_timeout, output_with_timeout};
+use eyre::{Result, WrapErr, ensure, eyre};
+use iroha_test_network::{
+    ReleasePrebuiltBinary, resolve_release_prebuilt_binary, revalidate_release_prebuilt_binary,
+};
 use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
     sync::OnceLock,
 };
-use eyre::{Result, WrapErr, ensure, eyre};
-use iroha_test_network::{
-    ReleasePrebuiltBinary, resolve_release_prebuilt_binary, revalidate_release_prebuilt_binary,
-};
-use crate::process::{build_timeout, output_with_timeout};
 const KAGAMI_BIN_ENV: &str = "KAGAMI_BIN";
 const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";

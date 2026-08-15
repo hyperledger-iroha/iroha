@@ -1,12 +1,10 @@
 //! Runtime-only, role-separated signing boundary for production PoTR receipts.
 //!
-//! Torii constructs the canonical receipt, but it never owns or derives the
-//! provider key. Gateway Ed25519 and provider ML-DSA-65 operations are routed
-//! through distinct runtime services. Torii constructs an identity-pinned
-//! reader over its authoritative finalized state and rechecks the exact native
-//! provider-admission policy after both signatures. Private key material
-//! remains inside the injected signers.
-use std::{fmt, sync::Arc};
+//! Torii constructs the canonical receipt, but it never owns or derives the provider key. Gateway
+//! Ed25519 and provider ML-DSA-65 operations are routed through distinct runtime services. Torii
+//! constructs an identity-pinned reader over its authoritative finalized state and rechecks the
+//! exact native provider-admission policy after both signatures. Private key material remains
+//! inside the injected signers.
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_core::{
     smartcontracts::isi::sorafs_proof_outcome::read_sorafs_proof_outcome_signer_policy_in_finalized_view,
@@ -29,6 +27,7 @@ use sorafs_manifest::{
 use sorafs_node::{
     PotrAdmissionPolicyBindingError, PotrAdmissionPolicyBindingV1, PotrAdmissionPolicyProgressError,
 };
+use std::{fmt, sync::Arc};
 use thiserror::Error;
 /// Fixed, payload-free failure classes returned by a runtime signing service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -127,9 +126,8 @@ impl PotrRuntimeProviderBindingV1 {
 }
 /// Stable identities of the independently administered PoTR policy reader.
 ///
-/// These public, non-secret pins keep the immutable finalized-state source and
-/// admission-material resolver distinct from the reader facade and both
-/// runtime signer roles.
+/// These public, non-secret pins keep the immutable finalized-state source and admission-material
+/// resolver distinct from the reader facade and both runtime signer roles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PotrRuntimeReaderBindingsV1 {
     reader_id: [u8; 32],
@@ -224,11 +222,10 @@ impl fmt::Debug for PotrAdmissionSnapshotV1 {
 }
 /// Runtime-only exact-anchor reader for active provider admission policy.
 ///
-/// Implementations must query the authoritative finalized policy source and
-/// either return an active revision at or after `minimum` or fail closed. They
-/// must authenticate the policy series and validate its revision chain before
-/// returning a snapshot; a process-local registry or self-advertised provider
-/// key is not a production implementation.
+/// Implementations must query the authoritative finalized policy source and either return an active
+/// revision at or after `minimum` or fail closed. They must authenticate the policy series and
+/// validate its revision chain before returning a snapshot; a process-local registry or
+/// self-advertised provider key is not a production implementation.
 pub trait PotrAdmissionReaderV1: Send + Sync {
     /// Stable non-secret identity of this administered reader.
     fn reader_id(&self) -> [u8; 32];
@@ -253,14 +250,12 @@ pub struct PotrFinalizedPolicySnapshotV1 {
 }
 /// Exact-view source used by the production admission reader.
 ///
-/// A source identity names the administered chain-query connection, not a
-/// signer or key. Implementations must return a policy and block timestamp from
-/// one immutable finalized view.
+/// A source identity names the administered chain-query connection, not a signer or key.
+/// Implementations must return a policy and block timestamp from one immutable finalized view.
 pub trait PotrFinalizedPolicySourceV1: Send + Sync {
     /// Stable non-secret identity of the administered finalized-state source.
     fn source_id(&self) -> [u8; 32];
-    /// Read one provider's current native policy from an immutable finalized
-    /// view.
+    /// Read one provider's current native policy from an immutable finalized view.
     fn active_policy(
         &self,
         provider_id: [u8; 32],
@@ -572,9 +567,8 @@ pub enum PotrFinalizedAdmissionReaderConfigError {
 }
 /// Runtime-only Ed25519 signer for the gateway role of a PoTR receipt.
 ///
-/// Implementations may delegate to PKCS#11, an HSM, or a remote signing
-/// service. `signer_id` is a non-secret stable deployment identity for the
-/// signer instance, not a key handle or credential.
+/// Implementations may delegate to PKCS#11, an HSM, or a remote signing service. `signer_id` is a
+/// non-secret stable deployment identity for the signer instance, not a key handle or credential.
 pub trait PotrGatewaySignerV1: Send + Sync {
     /// Stable opaque production provider handle.
     fn handle(&self) -> &str;
@@ -589,10 +583,9 @@ pub trait PotrGatewaySignerV1: Send + Sync {
 }
 /// Runtime-only ML-DSA-65 signer for the provider role of a PoTR receipt.
 ///
-/// The declared provider identity and public key are checked against the
-/// current council-verified admission on every operation. This makes provider
-/// revocation and key rotation fail closed without trusting a self-advertised
-/// receipt key.
+/// The declared provider identity and public key are checked against the current council-verified
+/// admission on every operation. This makes provider revocation and key rotation fail closed
+/// without trusting a self-advertised receipt key.
 pub trait PotrProviderSignerV1: Send + Sync {
     /// Stable opaque production provider handle.
     fn handle(&self) -> &str;
@@ -733,9 +726,8 @@ impl PotrRuntimeSignerRolesV1 {
     ///
     /// # Errors
     ///
-    /// Fails for malformed keys or policy anchors, shared signer objects, zero
-    /// identities, or identity reuse across signing and policy-observation
-    /// roles.
+    /// Fails for malformed keys or policy anchors, shared signer objects, zero identities, or
+    /// identity reuse across signing and policy-observation roles.
     pub fn try_new(
         gateway: Arc<dyn PotrGatewaySignerV1>,
         provider: Arc<dyn PotrProviderSignerV1>,
@@ -915,9 +907,8 @@ impl PotrRuntimeSignersV1 {
     ///
     /// # Errors
     ///
-    /// Fails if either non-secret policy anchor is malformed, a stable runtime
-    /// identity is zero or collides, or a reader/signer role reuses the same
-    /// trait-object allocation.
+    /// Fails if either non-secret policy anchor is malformed, a stable runtime identity is zero or
+    /// collides, or a reader/signer role reuses the same trait-object allocation.
     pub fn try_new(
         gateway: Arc<dyn PotrGatewaySignerV1>,
         provider: Arc<dyn PotrProviderSignerV1>,
@@ -1457,11 +1448,7 @@ pub(crate) enum PotrReceiptRuntimeSigningError {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    };
+    use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::{KeyPair, Signature};
     use iroha_data_model::{account::AccountId, sorafs::proof_ledger::ProofOutcomeSignerPolicyV1};
@@ -1472,7 +1459,11 @@ mod tests {
         potr::{POTR_RECEIPT_VERSION_V1, PotrStatus},
         proof_stream::ProofStreamTier,
     };
-    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
     const GATEWAY_SIGNER_ID: [u8; 32] = [0xA1; 32];
     const PROVIDER_SIGNER_ID: [u8; 32] = [0xB2; 32];
     const GATEWAY_HANDLE: &str = "hsm:potr:gateway-primary";

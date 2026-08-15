@@ -3,11 +3,6 @@
 //! The verifier reconstructs every selector and constant column from the
 //! public statement. The prover only commits witness-bearing base columns and
 //! one carry bridge needed by the alternating VM previous/next row layout.
-use iroha_data_model::privacy::{
-    IrohaIvmPrivateNoteStarkStatementV1, PrivacyConsensusLimitsV1,
-    PrivacyNativeConsensusBindingDigestV1, PrivacyNativeConsensusBindingV1,
-};
-use rand::TryRngCore;
 use super::{
     air::{
         COPY_OFFSET, IvmPrivateNoteAirErrorV1, PRIVATE_NOTE_BASE_WIDTH_V1,
@@ -30,6 +25,8 @@ use super::{
     },
     relation::IvmPrivateNoteWitnessV1,
 };
+#[cfg(test)]
+use crate::privacy_engines::proof_managed_note_stark::proof_managed_note_stark_profile_digest_v1;
 use crate::privacy_engines::{
     aggregate_stark as aggregate,
     proof_managed_note_stark::{
@@ -43,8 +40,11 @@ use crate::privacy_engines::{
     },
     transparent_stark::{GoldilocksFieldV1 as F, TransparentTranscriptV1, sha256_frame_v1},
 };
-#[cfg(test)]
-use crate::privacy_engines::proof_managed_note_stark::proof_managed_note_stark_profile_digest_v1;
+use iroha_data_model::privacy::{
+    IrohaIvmPrivateNoteStarkStatementV1, PrivacyConsensusLimitsV1,
+    PrivacyNativeConsensusBindingDigestV1, PrivacyNativeConsensusBindingV1,
+};
+use rand::TryRngCore;
 const TYPE_SHA_ROUND: usize = 0;
 const TYPE_SHA_END: usize = 1;
 const TYPE_NODE_SELECT: usize = 2;
@@ -1568,6 +1568,8 @@ pub(crate) fn verify_private_note_stark_v1(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::privacy_engines::ivm_private_note::tests::fixture;
     use iroha_data_model::privacy::{
         PrivacyActionDigestV1, PrivacyEngineManifestDigestV1,
         PrivacyNativeConsensusBindingValidationErrorV1, PrivacyParameterDigestV1,
@@ -1576,8 +1578,6 @@ mod tests {
     };
     use rand::{SeedableRng as _, rngs::StdRng};
     use sha2::{Digest as _, Sha256};
-    use super::*;
-    use crate::privacy_engines::ivm_private_note::tests::fixture;
     fn consensus_material(
         statement: &IrohaIvmPrivateNoteStarkStatementV1,
     ) -> (PrivacyNativeConsensusBindingV1, PrivacyConsensusLimitsV1) {

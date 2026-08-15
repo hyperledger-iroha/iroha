@@ -509,8 +509,8 @@ fn decode_lower_hex(value: &str, label: &str) -> Result<Vec<u8>> {
 }
 #[cfg(test)]
 mod tests {
-    use norito::json::{self, Value};
     use super::*;
+    use norito::json::{self, Value};
     #[test]
     fn owner_is_deterministic_and_uses_the_real_receipt_type() {
         assert_eq!(account_onboarding_test_fixture::NETWORK_HASH_SEED_V1, 0xA1);

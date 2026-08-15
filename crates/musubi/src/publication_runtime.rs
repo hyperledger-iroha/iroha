@@ -8,12 +8,25 @@
 //! this service never registers an archive and never refreshes or replaces the receipt embedded
 //! in the exact registration transaction. An exact active location replay is accepted by Core
 //! before the location-set CAS check; any changed location request remains revision-gated.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    io::{self, Read},
-    path::{Path, PathBuf},
-    time::Duration,
+use crate::{
+    atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
+    local_file::read_bounded_single_link_regular_file_v1,
+    publish::{
+        MUSUBI_MAX_PROVIDER_REGISTRATION_ATTEMPTS_V1, PublicationArchiveLocationAdvanceV1,
+        PublicationArchiveLocationIntentV1, PublicationArchiveLocationTerminalReasonV1,
+        PublicationArchiveLocationTerminalV1, PublicationArchiveRegistrationV1,
+        PublicationBackendError, PublicationOperationIdV1,
+        PublicationProviderRegistrationCheckpointAdvanceV1,
+        PublicationProviderRegistrationCheckpointV1,
+        PublicationProviderRegistrationTransactionCheckpointV1, PublicationReadbackEvidenceV1,
+        PublicationRegisteredArchiveV1, PublicationRequestV1, PublicationValidationEvidenceV1,
+        validate_archive_location_page,
+    },
+    registry::{
+        PlatformConfigProvenanceV1, PublicationRuntimeServicesV1, RegistryFailureClassV1,
+        RegistryReadClientV1, RegistrySigningClientV1, RegistryTerminalTransactionStateV1,
+        RegistryTransactionStateV1,
+    },
 };
 use iroha::musubi_runtime::{
     AuthenticatedMusubiPublicationRuntimeClientV1, MUSUBI_MAX_PUBLICATION_LOCATION_ATTEMPTS_V1,
@@ -44,27 +57,14 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use norito::{Decode, DecodeLimits, Encode};
-use url::Url;
-use crate::{
-    atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
-    local_file::read_bounded_single_link_regular_file_v1,
-    publish::{
-        MUSUBI_MAX_PROVIDER_REGISTRATION_ATTEMPTS_V1, PublicationArchiveLocationAdvanceV1,
-        PublicationArchiveLocationIntentV1, PublicationArchiveLocationTerminalReasonV1,
-        PublicationArchiveLocationTerminalV1, PublicationArchiveRegistrationV1,
-        PublicationBackendError, PublicationOperationIdV1,
-        PublicationProviderRegistrationCheckpointAdvanceV1,
-        PublicationProviderRegistrationCheckpointV1,
-        PublicationProviderRegistrationTransactionCheckpointV1, PublicationReadbackEvidenceV1,
-        PublicationRegisteredArchiveV1, PublicationRequestV1, PublicationValidationEvidenceV1,
-        validate_archive_location_page,
-    },
-    registry::{
-        PlatformConfigProvenanceV1, PublicationRuntimeServicesV1, RegistryFailureClassV1,
-        RegistryReadClientV1, RegistrySigningClientV1, RegistryTerminalTransactionStateV1,
-        RegistryTransactionStateV1,
-    },
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    io::{self, Read},
+    path::{Path, PathBuf},
+    time::Duration,
 };
+use url::Url;
 const DEFAULT_CLIENT_CONFIG: &str = "client.toml";
 const MAX_CLIENT_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_DELEGATION_BYTES: u64 = 256 * 1024;
@@ -2068,13 +2068,11 @@ fn map_registry_error(error: crate::registry::RegistryErrorV1) -> PublicationBac
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        io::{self, Write as _},
-        net::TcpListener,
-        thread,
+    use super::*;
+    use crate::publish::PublicationBackendFailureClass;
+    use iroha::crypto::{
+        Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, Signature, SignatureOf,
     };
-    use iroha::crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, Signature, SignatureOf};
     #[cfg(unix)]
     use iroha_data_model::musubi::{
         MusubiNamespaceBindingDigestV1, MusubiNamespaceDelegationApprovalV1,
@@ -2105,9 +2103,13 @@ mod tests {
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
+    use std::{
+        fs,
+        io::{self, Write as _},
+        net::TcpListener,
+        thread,
+    };
     use tempfile::tempdir;
-    use super::*;
-    use crate::publish::PublicationBackendFailureClass;
     fn test_network_id(byte: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([byte; Hash::LENGTH]),

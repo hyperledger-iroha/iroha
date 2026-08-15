@@ -5,10 +5,9 @@
 //! provider authorities are derived from the finalized projection, signing is
 //! isolated from submission, and exact signed bytes are durable before they can
 //! be exposed to a submitter.
-use std::{
-    collections::BTreeSet,
-    path::Path,
-    sync::{Arc, Mutex},
+use crate::durable_transaction_forwarder::{
+    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
+    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
 use iroha_data_model::{
     ChainId, NetworkId,
@@ -34,11 +33,12 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
-use crate::durable_transaction_forwarder::{
-    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
-    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
+use std::{
+    collections::BTreeSet,
+    path::Path,
+    sync::{Arc, Mutex},
 };
+use thiserror::Error;
 /// Durable reserve-transaction checkpoint schema version.
 pub const RESERVE_TRANSACTION_FORWARDER_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Canonical reserve-transaction checkpoint file.
@@ -2452,7 +2452,7 @@ impl From<CheckpointStoreError> for ReserveTransactionForwarderError {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::Arc, thread, time::Duration};
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId, NetworkId,
@@ -2471,8 +2471,8 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use sorafs_manifest::deal::XorQuantity;
+    use std::{fs, sync::Arc, thread, time::Duration};
     use tempfile::TempDir;
-    use super::*;
     fn forwarder_policy() -> ReserveTransactionForwarderPolicyV1 {
         ReserveTransactionForwarderPolicyV1 {
             max_pending: 32,

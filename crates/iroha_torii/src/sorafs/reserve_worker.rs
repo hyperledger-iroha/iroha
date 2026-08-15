@@ -675,6 +675,7 @@ fn semantic_cursor(semantics: ReserveSemanticReconciliationV1) -> Option<Reserve
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ChainId,
@@ -705,7 +706,6 @@ mod tests {
         ReserveTransactionProjectionV1, ReserveTransactionReconciliationV1,
     };
     use tempfile::TempDir;
-    use super::*;
     const CHAIN: &str = "reserve-worker-test";
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test key")

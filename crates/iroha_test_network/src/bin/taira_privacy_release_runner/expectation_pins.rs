@@ -1,8 +1,8 @@
 //! Compiled expectation-pin enforcement for the native release runner.
+use super::*;
 use iroha_core::privacy_release_evidence::{
     privacy_release_expectation_capture_open_v1, privacy_release_expectation_fixture_matches_v1,
 };
-use super::*;
 /// Build the shape-only provisional evidence replaced by native capture.
 pub(super) fn empty_expected_evidence(
     protocol_id: PrivacyProtocolIdV1,

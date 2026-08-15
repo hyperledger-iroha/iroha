@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Trigger execution log coverage.
 #![cfg(feature = "fault_injection")]
-use std::num::NonZeroU64;
 use eyre::{Ok, Result};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -14,6 +13,7 @@ use iroha::{
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
+use std::num::NonZeroU64;
 use tokio::{task::spawn_blocking, time::timeout};
 /// # Scenario
 ///

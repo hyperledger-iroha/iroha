@@ -1,10 +1,10 @@
 //! End-to-end canonical domain registration from a Kotodama contract.
-use std::collections::HashMap;
 use iroha_crypto::PublicKey;
 use ivm::{
     IVM, KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
 };
+use std::collections::HashMap;
 mod common;
 fn account(domain: &str, public_key: &str) -> AccountId {
     let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();

@@ -6,7 +6,6 @@
 ))]
 #[path = "../../iroha_core/tests/zk_testkit.rs"]
 mod zk_testkit;
-use std::{env, num::NonZeroU64};
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_core::{
     kura::Kura,
@@ -30,6 +29,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
+use std::{env, num::NonZeroU64};
 const BALLOT_SCOPE_ANY: &str = "any";
 const DEFAULT_ABI_VERSION: &str = "1";
 fn canonical_abi_hex() -> String {

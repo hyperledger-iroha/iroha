@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Regression test ensuring `Torii::start` waits for shutdown.
-use std::{sync::Arc, time::Duration};
 use iroha_core::{
     kiso::KisoHandle,
     kura::Kura,
@@ -10,6 +9,7 @@ use iroha_core::{
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
+use std::{sync::Arc, time::Duration};
 #[tokio::test]
 async fn torii_start_blocks_until_shutdown_signal() {
     // Some sandboxed test environments forbid binding sockets (for example, when networking is

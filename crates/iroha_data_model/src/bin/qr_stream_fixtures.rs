@@ -2,10 +2,10 @@
 //!
 //! Run with `cargo run -p iroha_data_model --features dev-tools,test-fixtures --bin qr_stream_fixtures`
 //! to refresh `fixtures/qr_stream/*.json`. Use `--check` to verify fixtures are up to date.
-use std::{env, error::Error, fs, path::Path};
 use hex::encode;
 use iroha_data_model::qr_stream::{QrPayloadKind, QrStreamEncoder, QrStreamOptions};
 use norito::json::{self, Value};
+use std::{env, error::Error, fs, path::Path};
 const BASIC_FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/qr_stream/qr_stream_basic.json"

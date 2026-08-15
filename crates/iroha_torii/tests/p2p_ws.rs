@@ -4,13 +4,13 @@
 #[cfg(feature = "p2p_ws")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn p2p_ws_route_accepts_and_handshakes() {
-    use std::{net::SocketAddr, time::Duration};
     use axum::{
         Router,
         extract::{ConnectInfo, ws::WebSocketUpgrade},
         response::IntoResponse,
         routing::get,
     };
+    use std::{net::SocketAddr, time::Duration};
     use tokio::net::TcpListener;
     async fn route(
         ws: WebSocketUpgrade,

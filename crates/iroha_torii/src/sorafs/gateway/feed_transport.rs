@@ -6,6 +6,19 @@
 //! HTTPS, explicit content encodings, and bounded response buffering.
 //! Construction also seals the canonical trust inventory into the runtime
 //! identity that the controller verifies at startup and around feed use.
+use super::compliance::{
+    GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+    GatewayComplianceContentEncoding, GatewayComplianceError, GatewayComplianceFeedTransport,
+    GatewayComplianceFeedTransportIdentityV1, GatewayComplianceFeedTransportProbeError,
+    GatewayComplianceFetchRequest, GatewayComplianceFetchResponse,
+    MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1, gateway_compliance_feed_transport_policy_digest,
+};
+use http::{
+    HeaderMap, HeaderName,
+    header::{CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
+};
+use reqwest::{redirect::Policy, tls::TlsInfo};
+use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -18,21 +31,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use http::{
-    HeaderMap, HeaderName,
-    header::{CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
-};
-use reqwest::{redirect::Policy, tls::TlsInfo};
-use sha2::{Digest as _, Sha256};
 use url::Host;
 use x509_parser::parse_x509_certificate;
-use super::compliance::{
-    GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
-    GatewayComplianceContentEncoding, GatewayComplianceError, GatewayComplianceFeedTransport,
-    GatewayComplianceFeedTransportIdentityV1, GatewayComplianceFeedTransportProbeError,
-    GatewayComplianceFetchRequest, GatewayComplianceFetchResponse,
-    MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1, gateway_compliance_feed_transport_policy_digest,
-};
 const RESOLVER_WORKERS: usize = 4;
 const RESOLVER_QUEUE_CAPACITY: usize = 16;
 const MAX_RESOLVED_ADDRESSES: usize = 64;
@@ -749,6 +749,13 @@ fn spki_sha256(certificate_der: &[u8]) -> Result<[u8; 32], GatewayComplianceErro
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use http::{
+        HeaderMap, HeaderValue,
+        header::{CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
+    };
+    use rcgen::generate_simple_self_signed;
+    use sha2::{Digest as _, Sha256};
     use std::{
         collections::{BTreeMap, BTreeSet},
         io::Cursor,
@@ -761,14 +768,7 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
-    use http::{
-        HeaderMap, HeaderValue,
-        header::{CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
-    };
-    use rcgen::generate_simple_self_signed;
-    use sha2::{Digest as _, Sha256};
     use x509_parser::parse_x509_certificate;
-    use super::*;
     #[test]
     fn canonical_dns_hostname_validation_is_strict() {
         for valid in ["feed.example", "a-b.c0.example"] {

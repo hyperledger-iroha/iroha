@@ -84,6 +84,7 @@ REQUIRED_SOURCE_PATHS = (
     "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
     "crates/iroha_core/src/sumeragi/v2_recovery.rs",
     "crates/iroha_core/src/sumeragi/v2_runner.rs",
+    "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
     "crates/iroha_core/src/sumeragi/v2_runtime.rs",
     "crates/iroha_core/src/sumeragi/v2_transport.rs",
     "crates/iroha_core/src/sumeragi/v2_worker.rs",

@@ -6,7 +6,6 @@
 //! When the Rust data model changes, this binary produces different
 //! bytes, causing the Kotlin parity tests to fail until the
 //! corresponding encoder is updated.
-use std::env;
 use iroha_crypto::{Hash, PublicKey, default_bfv_programmed_hidden_program, sha256};
 use iroha_crypto::{RamLfeBackend, RamLfeVerificationMode};
 use iroha_data_model::account::{
@@ -34,6 +33,7 @@ use iroha_data_model::ram_lfe::{
     RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
     RamLfeProgramId, RamLfeReceiptAttestation,
 };
+use std::env;
 /// Well-known public key shared with the Kotlin parity tests.
 const PARITY_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";

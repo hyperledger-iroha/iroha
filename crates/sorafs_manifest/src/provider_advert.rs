@@ -4,8 +4,8 @@
 //! propagated through the discovery mesh. TTLs are capped at 24 hours with
 //! clients refreshing half-way through the validity window to avoid stale
 //! routes.
+use crate::{chunker_registry, deal::XorQuantity};
 use core::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroha_crypto::{Algorithm, PublicKey};
 use norito::{
@@ -14,8 +14,8 @@ use norito::{
     json::{FastJsonWrite, JsonSerialize as NoritoJsonSerialize},
 };
 use soranet_pq::MlDsaSuite;
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use crate::{chunker_registry, deal::XorQuantity};
 /// Advertisement schema version.
 pub const PROVIDER_ADVERT_VERSION_V1: u8 = 1;
 /// Domain separator prepended to canonical provider-advert signature payloads.
@@ -1644,10 +1644,10 @@ fn unix_time_now() -> Option<u64> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::{NoritoSerialize as _, decode_from_bytes, to_bytes};
-    use super::*;
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut bytes = Vec::new();

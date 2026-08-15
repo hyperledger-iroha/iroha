@@ -1,22 +1,22 @@
 //! DA ingest and persistence tests.
-use core::convert::TryInto;
-use std::{
-    cell::Cell,
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    io::{self, ErrorKind, Read, Write},
-    num::{NonZeroU32, NonZeroUsize},
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{
-        Arc, Barrier, LazyLock,
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
-    time::Duration,
+use super::*;
+use crate::da::taikai;
+use crate::da::taikai::taikai_ingest;
+use crate::da::taikai::taikai_ingest::{
+    AnchorSendError, AnchorSender, collect_pending_uploads, process_batch,
+};
+use crate::da::taikai::{
+    TAIKAI_ANCHOR_REQUEST_PREFIX, TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX,
+    TAIKAI_ANCHOR_SENTINEL_SUFFIX, TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX,
+    TAIKAI_TRM_LINEAGE_SUFFIX, TAIKAI_TRM_LOCK_PREFIX, TAIKAI_TRM_LOCK_STALE_SECS,
+    TAIKAI_TRM_LOCK_SUFFIX,
+};
+use crate::da::{
+    DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
 };
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use core::convert::TryInto;
 use flate2::{Compression as FlateCompression, write::GzEncoder};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::{
@@ -69,23 +69,23 @@ use sorafs_manifest::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
 };
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::{self, ErrorKind, Read, Write},
+    num::{NonZeroU32, NonZeroUsize},
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{
+        Arc, Barrier, LazyLock,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
+    time::Duration,
+};
 use tempfile::tempdir;
 use tokio::{fs as async_fs, sync::Mutex as AsyncMutex};
-use crate::da::taikai;
-use crate::da::taikai::taikai_ingest;
-use crate::da::taikai::taikai_ingest::{
-    AnchorSendError, AnchorSender, collect_pending_uploads, process_batch,
-};
-use crate::da::taikai::{
-    TAIKAI_ANCHOR_REQUEST_PREFIX, TAIKAI_ANCHOR_REQUEST_SUFFIX, TAIKAI_ANCHOR_SENTINEL_PREFIX,
-    TAIKAI_ANCHOR_SENTINEL_SUFFIX, TAIKAI_SPOOL_SUBDIR, TAIKAI_TRM_LINEAGE_PREFIX,
-    TAIKAI_TRM_LINEAGE_SUFFIX, TAIKAI_TRM_LOCK_PREFIX, TAIKAI_TRM_LOCK_STALE_SECS,
-    TAIKAI_TRM_LOCK_SUFFIX,
-};
-use crate::da::{
-    DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
-};
-use super::*;
 fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {
     Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
 }

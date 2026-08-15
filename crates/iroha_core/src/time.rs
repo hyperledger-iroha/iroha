@@ -8,16 +8,16 @@
 //!   high-RTT outliers.
 //! - Aggregates offsets via trimmed median; exposes `now()` for Torii and
 //!   timers.
+use crate::IrohaNetwork;
+use iroha_config::parameters::actual::NtsEnforcementMode;
+use iroha_data_model::peer::Peer;
+use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{OnceLock, RwLock},
     time::Instant,
 };
-use iroha_config::parameters::actual::NtsEnforcementMode;
-use iroha_data_model::peer::Peer;
-use norito::codec::{Decode, Encode};
 use tokio::sync::watch;
-use crate::IrohaNetwork;
 /// Outbound time probe message (peer → peer).
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 pub struct TimePing {
@@ -614,8 +614,8 @@ pub fn enforcement_mode() -> NtsEnforcementMode {
 }
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
     use super::*;
+    use std::{cell::Cell, rc::Rc};
     fn service_for_tests(params: Params) -> Service {
         Service::new(params)
     }

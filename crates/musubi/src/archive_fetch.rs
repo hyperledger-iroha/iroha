@@ -6,12 +6,9 @@
 //! Every successful stream still crosses [`MusubiCache::install`], so provider
 //! authentication cannot replace commitment, CAR, `PoR`, bundle, or source-tree
 //! verification.
-use std::{
-    collections::BTreeSet,
-    error::Error,
-    fmt,
-    io::{self, Read},
-    path::{Path, PathBuf},
+use crate::{
+    cache::{CacheError, InstallOutcome, MusubiCache},
+    registry::{RegistryFailureClassV1, RegistryReadClientV1},
 };
 use iroha_data_model::{
     NetworkId,
@@ -26,9 +23,12 @@ use iroha_data_model::{
 use sorafs_car::{
     CarBuildPlan, CarStreamingWriter, CarWriteError, ProfileId, compute_chunk_plan_digest_sha3,
 };
-use crate::{
-    cache::{CacheError, InstallOutcome, MusubiCache},
-    registry::{RegistryFailureClassV1, RegistryReadClientV1},
+use std::{
+    collections::BTreeSet,
+    error::Error,
+    fmt,
+    io::{self, Read},
+    path::{Path, PathBuf},
 };
 const RELEASE_PATH: &str = ".musubi/semantic-release.norito";
 const DESCRIPTOR_PATH: &str = ".musubi/artifact-descriptor.norito";
@@ -931,16 +931,16 @@ const fn stable_code(code: &str) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::atomic::{AtomicUsize, Ordering},
-        time::Duration,
-    };
+    use super::*;
     use iroha_data_model::{
         musubi::{MusubiContentDigestV1, MusubiProviderBundleAttestationSetDigestV1},
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid, ReplicationOrderId},
     };
     use sorafs_car::FileEntry;
-    use super::*;
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()

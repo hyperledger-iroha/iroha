@@ -6,8 +6,8 @@
 //! in masked committed segments and evaluates the same identities at
 //! transcript-derived points. The production aggregate binds the complete
 //! numeric trace material and is independently replayed by the verifier.
-use thiserror::Error;
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use thiserror::Error;
 /// Stable digest input for the implemented components.
 pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-x5r1-and-der-terminal-validator=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-terminal-binding=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=governance-gated";
 /// SHA-256 of the dedicated compact-CA prover/verifier descriptor.
@@ -226,7 +226,6 @@ fn validate_bits_v1(bits: &[F]) -> Result<(), ZkX509AirErrorV1> {
 }
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest as _, Sha256};
     use super::*;
     use crate::privacy_engines::zk_x509::{
         accumulator_air::{
@@ -254,6 +253,7 @@ mod tests {
         },
         sha_call_bus_stark::ZkX509ShaCallScheduleV1,
     };
+    use sha2::{Digest as _, Sha256};
     #[test]
     fn byte_and_word_range_rows_reject_every_local_malleation() {
         for value in 0..=u8::MAX {

@@ -1,5 +1,4 @@
 //! Capacity declaration tracking and replication order scheduling for the embedded SoraFS node.
-use std::collections::HashMap;
 use iroha_data_model::{
     metadata::Metadata,
     sorafs::{
@@ -16,6 +15,7 @@ use sorafs_manifest::capacity::{
     CapacityDeclarationV1, ChunkerCommitmentV1, LaneCommitmentV1, ReplicationAssignmentV1,
     ReplicationOrderSlaV1, ReplicationOrderV1,
 };
+use std::collections::HashMap;
 use thiserror::Error;
 const CAPACITY_DECLARATION_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
@@ -1474,6 +1474,7 @@ pub enum CapacityError {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{
         account::AccountId,
         sorafs::{
@@ -1490,7 +1491,6 @@ mod tests {
     use sorafs_manifest::capacity::{
         CAPACITY_DECLARATION_VERSION_V1, REPLICATION_ORDER_VERSION_V1, ReplicationOrderSlaV1,
     };
-    use super::*;
     fn make_record_and_manager() -> (CapacityManager, CapacityDeclarationRecord) {
         let declaration = CapacityDeclarationV1 {
             version: CAPACITY_DECLARATION_VERSION_V1,

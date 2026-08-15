@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensure Sumeragi commits blocks end-to-end using the Vote/QC pipeline.
-use std::time::{Duration, Instant};
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{
@@ -12,6 +11,7 @@ use iroha::data_model::{
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::gen_account_in;
 use reqwest::Client as HttpClient;
+use std::time::{Duration, Instant};
 #[test]
 fn commits_via_vote_qc_pipeline() -> Result<()> {
     init_instruction_registry();

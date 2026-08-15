@@ -1,4 +1,13 @@
 //! Crash-safe local Norito journal for pending queue routing plans.
+use super::{
+    LaneQueueReservationKeyV2, LaneQueueReservationOwnerPhaseV6,
+    LaneQueueReservationRecoveryPhaseV1, QueuePlanAdmissionContextV2,
+    QueuePlanGlobalAdmissionIdentityV2, QueuePlanReservationPhaseV1, RoutingPlan,
+};
+use crate::torii_proxy::QueuePlanAdmissionBindingV2;
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::transaction::{SignedTransaction, TransactionEntrypoint};
+use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use std::{
     collections::VecDeque,
@@ -14,15 +23,6 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-};
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::transaction::{SignedTransaction, TransactionEntrypoint};
-use norito::codec::{Decode, Encode};
-use crate::torii_proxy::QueuePlanAdmissionBindingV2;
-use super::{
-    LaneQueueReservationKeyV2, LaneQueueReservationOwnerPhaseV6,
-    LaneQueueReservationRecoveryPhaseV1, QueuePlanAdmissionContextV2,
-    QueuePlanGlobalAdmissionIdentityV2, QueuePlanReservationPhaseV1, RoutingPlan,
 };
 const QUEUE_PLAN_JOURNAL_FRAME_DOMAIN: &[u8] = b"iroha:queue-plan-journal-frame:v4";
 const QUEUE_PLAN_JOURNAL_RECORD_CLAIM_DOMAIN: &[u8] = b"iroha:queue-plan-journal-record-claim:v4";
@@ -3956,7 +3956,7 @@ fn verify_open_regular_path(path: &Path, file: &File) -> io::Result<JournalFileI
 include!("journal_direct_file_io.rs");
 #[cfg(test)]
 mod tests {
-    use std::fs::{self, OpenOptions};
+    use super::*;
     use iroha_data_model::{
         isi::{
             InstructionBox, Log,
@@ -3966,7 +3966,7 @@ mod tests {
     };
     use iroha_logger::Level;
     use iroha_test_samples::gen_account_in;
-    use super::*;
+    use std::fs::{self, OpenOptions};
     const TEST_MAX_BYTES: u64 = 4 * 1024 * 1024;
     fn limits(max_live_records: usize) -> QueuePlanJournalLimits {
         QueuePlanJournalLimits::new(

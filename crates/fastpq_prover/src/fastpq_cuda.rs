@@ -5,9 +5,6 @@
 //! The GPU backend is optional – enable the `fastpq-gpu` feature and provide a CUDA toolchain
 //! (SM80+) to compile the kernels. When unavailable, all entry points return
 //! [`CudaBackendError::Unavailable`] so the caller can fall back to the scalar implementation.
-use core::fmt;
-#[cfg(feature = "fastpq-gpu")]
-use core::{convert::TryFrom, ffi::c_void, ptr::NonNull};
 use crate::bn254::{self, BN254_LIMBS};
 #[cfg(feature = "fastpq-gpu")]
 use crate::trace::PoseidonColumnSlice;
@@ -16,6 +13,9 @@ use crate::{
     bn254_poseidon::Bn254PoseidonBatchSlice,
     bn254_poseidon_params::{bn254_limbs_to_bytes, bn254_poseidon_width3_params},
 };
+use core::fmt;
+#[cfg(feature = "fastpq-gpu")]
+use core::{convert::TryFrom, ffi::c_void, ptr::NonNull};
 /// Result alias for CUDA operations.
 pub type Result<T> = core::result::Result<T, CudaBackendError>;
 /// Errors surfaced by the CUDA backend wrappers.
@@ -958,7 +958,6 @@ pub(crate) fn fastpq_bn254_poseidon_hash_words(
 }
 #[cfg(test)]
 mod tests {
-    use iroha_zkp_halo2::Bn254Scalar;
     use super::{
         CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde, fastpq_fft, fastpq_lde, usize_to_u32,
         validate_bn254_dense, validate_dense,
@@ -972,6 +971,7 @@ mod tests {
         BN254_LIMBS, canonical_to_scalars, cpu_fft, cpu_lde, sample_columns, sample_coset,
         scalar_from_canonical_limbs, scalars_to_canonical, stage_twiddles_scalars,
     };
+    use iroha_zkp_halo2::Bn254Scalar;
     #[test]
     fn validate_bn254_dense_requires_full_limb_columns() {
         let err = validate_bn254_dense(3, 1, 0).expect_err("shape mismatch");

@@ -4,21 +4,23 @@
 #![allow(clippy::result_large_err)]
 #[cfg(test)]
 extern crate self as iroha_executor;
-use std::collections::{BTreeMap, BTreeSet};
 use data_model::{ValidationFail, executor::Result, parameter::CustomParameterId};
 #[cfg(not(test))]
 use data_model::{prelude::*, query::AnyQueryBox, smart_contract::payloads};
-use iroha_executor_data_model::{parameter::Parameter, permission::Permission as ExecutorPermission};
+use iroha_executor_data_model::{
+    parameter::Parameter, permission::Permission as ExecutorPermission,
+};
 pub use iroha_executor_derive::{entrypoint, migrate};
 use iroha_schema::{Ident, MetaMap};
 pub use iroha_smart_contract as smart_contract;
 pub use iroha_smart_contract_utils::{DebugExpectExt, DebugUnwrapExt, dbg, dbg_panic};
 pub use smart_contract::{Iroha, data_model};
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "bridge")]
+pub mod bridge;
 pub mod default;
 pub mod permission;
 pub mod runtime;
-#[cfg(feature = "bridge")]
-pub mod bridge;
 pub mod log {
     //! IVM runtime logging utilities
     pub use iroha_smart_contract_utils::{debug, error, event, info, trace, warn};
@@ -27,11 +29,11 @@ pub mod log {
 pub mod utils {
     //! Crate with utilities
     #[cfg(not(test))]
+    use super::*;
+    #[cfg(not(test))]
     use iroha_smart_contract_codec::decode_with_length_prefix_from_raw;
     pub use iroha_smart_contract_codec::encode_with_length_prefix;
     pub use iroha_smart_contract_utils::register_getrandom_err_callback;
-    #[cfg(not(test))]
-    use super::*;
     /// Get context for `validate_transaction()` entrypoint.
     ///
     /// # Safety
@@ -246,8 +248,6 @@ pub trait Execute {
 }
 pub mod prelude {
     //! Contains useful re-exports
-    pub use std::vec::Vec;
-    pub use iroha_executor_derive::{Entrypoints, Execute, Visit};
     pub use crate::{
         DataModelBuilder, DebugExpectExt, DebugUnwrapExt, Execute, Iroha,
         data_model::{
@@ -256,16 +256,15 @@ pub mod prelude {
         },
         dbg, dbg_panic, deny, execute, runtime,
     };
+    pub use iroha_executor_derive::{Entrypoints, Execute, Visit};
+    pub use std::vec::Vec;
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use core::{
         mem::ManuallyDrop,
         sync::atomic::{AtomicBool, Ordering},
-    };
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        slice,
     };
     use data_model::query::QueryItemKind;
     use data_model::{
@@ -276,7 +275,10 @@ mod tests {
             QueryResponse, SingularQueryOutputBox,
         },
     };
-    use super::*;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        slice,
+    };
     static CALLED: AtomicBool = AtomicBool::new(false);
     fn empty_iterable_batch(
         query: &data_model::query::QueryWithParams,

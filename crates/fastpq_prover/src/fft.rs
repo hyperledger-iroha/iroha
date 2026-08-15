@@ -5,17 +5,17 @@
 //! planner validates catalogue metadata, exposes parallel FFT/IFFT helpers,
 //! and evaluates coefficient columns onto the canonical low-degree extension
 //! coset.
-use core::convert::TryFrom;
-use std::{sync::MutexGuard, thread};
-use fastpq_isi::StarkParameterSet;
-use rayon::prelude::*;
-use tracing::{debug, info, warn};
 use crate::{
     backend,
     cyclotomic::{self, Domain},
     gpu,
     poseidon::FIELD_MODULUS,
 };
+use core::convert::TryFrom;
+use fastpq_isi::StarkParameterSet;
+use rayon::prelude::*;
+use std::{sync::MutexGuard, thread};
+use tracing::{debug, info, warn};
 /// Column-oriented FFT planner.
 #[derive(Clone)]
 pub struct Planner {
@@ -899,17 +899,17 @@ fn build_domain_cache(root: u64, max_log: u32) -> Vec<Domain> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::backend;
+    #[cfg(feature = "fastpq-gpu")]
+    use crate::gpu::{self, GpuError};
+    use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use std::panic::catch_unwind;
     #[cfg(feature = "fastpq-gpu")]
     use std::{
         sync::{Arc, Barrier},
         thread,
     };
-    use fastpq_isi::CANONICAL_PARAMETER_SETS;
-    use super::*;
-    use crate::backend;
-    #[cfg(feature = "fastpq-gpu")]
-    use crate::gpu::{self, GpuError};
     const MAX_TRACE_LOG: u32 = 4;
     fn deterministic_column_sets() -> Vec<(u32, Vec<Vec<u64>>)> {
         let mut cases = Vec::new();

@@ -246,6 +246,7 @@ pub(crate) fn process_consensus_output_guard() -> Arc<ConsensusOutputGuard> {
 }
 #[cfg(test)]
 mod tests {
+    use super::ConsensusOutputGuard;
     use std::{
         sync::{
             Arc,
@@ -255,7 +256,6 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
-    use super::ConsensusOutputGuard;
     #[test]
     fn activation_drains_existing_output_and_rejects_every_later_output() {
         let guard = ConsensusOutputGuard::isolated();

@@ -1,17 +1,10 @@
 //! SHAKE256 transcript and transparent matrix expansion for Bootle/Lantern.
 //!
-//! Every field is framed as an unsigned 32-bit big-endian byte length followed
-//! by the field itself. Matrix coefficients are independently derived from the
-//! complete tuple
-//! `(domain, parameter_digest, ppseed, role, rows, columns, row, column,
-//! coefficient, rejection_counter)`. This makes parallel expansion and random
-//! access byte-for-byte identical and prevents stream-position ambiguity.
-use p256::elliptic_curve::bigint::{U512, U1024};
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
-use thiserror::Error;
+//! Every field is framed as an unsigned 32-bit big-endian byte length followed by the field itself.
+//! Matrix coefficients are independently derived from the complete tuple `(domain,
+//! parameter_digest, ppseed, role, rows, columns, row, column, coefficient, rejection_counter)`.
+//! This makes parallel expansion and random access byte-for-byte identical and prevents
+//! stream-position ambiguity.
 use super::{
     params::{
         APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1, CHALLENGE_ETA_V1,
@@ -21,6 +14,12 @@ use super::{
     },
     ring::{ApplicationPolynomialV1, ProofPolynomialV1},
 };
+use p256::elliptic_curve::bigint::{U512, U1024};
+use sha3::{
+    Shake256,
+    digest::{ExtendableOutput, Update, XofReader},
+};
+use thiserror::Error;
 const MATRIX_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.matrix.v1";
 /// Nothing-up-my-sleeve domain for the fixed transparent public-parameter seed.
 pub const PUBLIC_PARAMETER_SEED_DOMAIN_V1: &[u8] =
@@ -68,8 +67,7 @@ const fn challenge_eta_power_bound_v1() -> U1024 {
     bound
 }
 const CHALLENGE_ETA_POWER_BOUND_V1: U1024 = challenge_eta_power_bound_v1();
-/// Derive the fixed transparent public-parameter seed from the pinned source
-/// profile.
+/// Derive the fixed transparent public-parameter seed from the pinned source profile.
 ///
 /// This seed is not secret setup material. It is independently recomputed by
 /// provers and verifiers and is included in the compiled engine manifest.
@@ -83,8 +81,7 @@ pub fn public_parameter_seed_v1() -> [u8; 32] {
     reader.read(&mut output);
     output
 }
-/// Construct the unique transparent matrix seed for one compiled parameter
-/// digest.
+/// Construct the unique transparent matrix seed for one compiled parameter digest.
 ///
 /// # Errors
 ///
@@ -466,13 +463,12 @@ impl PresentationChallengeBindingV1 {
 }
 /// Complete public prefix shared by every presentation transcript stage.
 ///
-/// The canonical statement digest binds the exact genesis-derived network ID,
-/// action index, transaction intent, compiled profile, verifier, schema,
-/// manifest, issuer identity, policy identity, policy epoch, issuer parameters,
-/// the committed policy digest, and disclosures. The separately supplied
-/// genesis hash must agree with that network ID. The extra relation digest
-/// commits the exact verifier-compiled matrix and public offset, while
-/// `matrix_seed` commits the transparent CRS seed used to expand all matrices.
+/// The canonical statement digest binds the exact genesis-derived network ID, action index,
+/// transaction intent, compiled profile, verifier, schema, manifest, issuer identity, policy
+/// identity, policy epoch, issuer parameters, the committed policy digest, and disclosures. The
+/// separately supplied genesis hash must agree with that network ID. The extra relation digest
+/// commits the exact verifier-compiled matrix and public offset, while `matrix_seed` commits the
+/// transparent CRS seed used to expand all matrices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PresentationTranscriptV1 {
     binding: PresentationChallengeBindingV1,
@@ -542,8 +538,7 @@ impl PresentationTranscriptV1 {
     ///
     /// # Errors
     ///
-    /// Rejects any zero digest or a matrix seed for another parameter
-    /// manifest.
+    /// Rejects any zero digest or a matrix seed for another parameter manifest.
     pub fn new(
         binding: PresentationChallengeBindingV1,
         matrix_seed: MatrixSeedV1,
@@ -663,8 +658,7 @@ impl ProofTranscriptCoreV1 {
     ///
     /// # Errors
     ///
-    /// Rejects an empty row, an oversized coordinate, or transcript framing
-    /// failure.
+    /// Rejects an empty row, an oversized coordinate, or transcript framing failure.
     pub(crate) fn derive_ternary_row(
         &self,
         stage: &[u8],
@@ -975,9 +969,8 @@ fn challenge_eta_norm_is_accepted_v1(norm: U1024) -> bool {
 }
 /// Check the exact LNP22 equation (19) challenge rejection condition.
 ///
-/// All arithmetic is over the integer negacyclic ring
-/// `Z[X]/(X^64 + 1)`, before reduction modulo the proof modulus.  The
-/// challenge is accepted exactly when
+/// All arithmetic is over the integer negacyclic ring `Z[X]/(X^64 + 1)`, before reduction modulo
+/// the proof modulus. The challenge is accepted exactly when
 /// `||sigma_-1(c^32) * c^32||_1 <= 140^64`.
 pub(crate) fn challenge_eta_is_valid_v1(challenge: ProofPolynomialV1) -> bool {
     challenge_eta_norm_v1(challenge).is_some_and(challenge_eta_norm_is_accepted_v1)
@@ -985,16 +978,14 @@ pub(crate) fn challenge_eta_is_valid_v1(challenge: ProofPolynomialV1) -> bool {
 /// Derive the unique auto-stable 64-coefficient challenge over the proof
 /// modulus from the exact public binding and pre-challenge commitment wire.
 ///
-/// The first 32 coefficients are uniform in `[-8, 8]`, coefficient 32 is
-/// zero, and the remaining 31 coefficients are the required antisymmetric
-/// image. The commitment wire is framed as one field, so component
-/// concatenation cannot collide.
+/// The first 32 coefficients are uniform in `[-8, 8]`, coefficient 32 is zero, and the remaining 31
+/// coefficients are the required antisymmetric image. The commitment wire is framed as one field,
+/// so component concatenation cannot collide.
 ///
 /// # Errors
 ///
-/// Rejects a zero binding digest, empty commitment wire, a commitment wire
-/// whose length cannot be represented in the canonical frame, or fixed-work
-/// candidate rejection exhaustion.
+/// Rejects a zero binding digest, empty commitment wire, a commitment wire whose length cannot be
+/// represented in the canonical frame, or fixed-work candidate rejection exhaustion.
 #[cfg(test)]
 pub(crate) fn derive_presentation_challenge_v1(
     binding: PresentationChallengeBindingV1,

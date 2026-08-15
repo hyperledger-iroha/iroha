@@ -1,11 +1,11 @@
 //! SM2 deterministic signing regression for the Rust SDK.
 #![cfg(feature = "sm")]
 use core::fmt::Write as _;
-use std::{fs, path::PathBuf};
 use hex::FromHex;
 use iroha::crypto::sm::{encode_sm2_private_key_payload, encode_sm2_public_key_payload};
 use iroha::crypto::{self, Algorithm, KeyPair, PrivateKey, PublicKey, Sm2PrivateKey, Sm2PublicKey};
 use norito::derive::JsonDeserialize;
+use std::{fs, path::PathBuf};
 struct DistIdGuard(String);
 impl Drop for DistIdGuard {
     fn drop(&mut self) {

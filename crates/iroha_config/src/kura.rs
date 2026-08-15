@@ -1,10 +1,10 @@
 //! Configuration tools related to Kura specifically.
-use std::str::FromStr;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{self as ncore, Archived},
     json::{self, JsonDeserialize, JsonSerialize},
 };
+use std::str::FromStr;
 /// Kura initialization mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
 #[strum(serialize_all = "snake_case")]

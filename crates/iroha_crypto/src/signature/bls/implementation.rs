@@ -1,4 +1,13 @@
+use super::{normal::NormalConfiguration, small::SmallConfiguration};
+use blake2::{Blake2b, digest::consts::U32};
 use core::marker::PhantomData;
+use hkdf::HkdfExtract;
+#[cfg(feature = "rand")]
+use rand::rngs::OsRng;
+#[cfg(feature = "rand")]
+use rand_core::TryCryptoRng;
+use sha2::Digest as _;
+use sha2::Sha256;
 use std::{
     borrow::ToOwned as _,
     cell::RefCell,
@@ -8,20 +17,11 @@ use std::{
     vec,
     vec::Vec,
 };
-use blake2::{Blake2b, digest::consts::U32};
-use hkdf::HkdfExtract;
-#[cfg(feature = "rand")]
-use rand::rngs::OsRng;
-#[cfg(feature = "rand")]
-use rand_core::TryCryptoRng;
-use sha2::Digest as _;
-use sha2::Sha256;
 use w3f_bls::{
     EngineBLS, PublicKey, SecretKey as W3fSecretKey, SecretKeyVT, SerializableToBytes as _,
     Signature as BlsSignature,
 };
 use zeroize::{Zeroize as _, Zeroizing};
-use super::{normal::NormalConfiguration, small::SmallConfiguration};
 pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
 const PREPARED_PK_CACHE_LIMIT: usize = 128;
 const VERIFY_OK_CACHE_LIMIT: usize = 4096;

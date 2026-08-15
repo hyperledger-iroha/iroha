@@ -4,7 +4,6 @@
 //! the V1 core-query host. Page and quantity invariants are enforced during both
 //! construction and Norito decoding so untrusted contract payloads cannot
 //! manufacture values that the host itself would never return.
-use std::fmt;
 use iroha_data_model::prelude::{
     AccountId, AssetDefinitionId, AssetId, DomainId, Json, NftId, Numeric, NumericOperationError,
     Quantity,
@@ -13,6 +12,7 @@ use norito::{
     Decode, Encode, NoritoDeserialize, NoritoSerialize,
     core::{self as ncore, DecodeFromSlice},
 };
+use std::fmt;
 /// Maximum number of entities in one V1 core-query page.
 pub const QUERY_PAGE_CAPACITY_V1: usize = 64;
 /// Stable entity discriminator used by the V1 core-query host protocol.
@@ -546,11 +546,11 @@ impl<T> QueryPageV1<T> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude::{
         AccountId, AssetDefinition, AssetDefinitionId, AssetId, DomainId, Name, Registrable,
     };
-    use super::*;
     fn bare<T: NoritoSerialize>(value: &T) -> Vec<u8> {
         let mut bytes = Vec::new();
         norito::core::serialize_to_buffer(value, &mut bytes).expect("encode bare payload");

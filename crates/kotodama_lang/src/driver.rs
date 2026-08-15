@@ -1,26 +1,11 @@
 //! Shared content-addressed Kotodama build driver.
 //!
-//! All developer entry points use this module for cache validation and output
-//! publication. A build record is a commit marker: it is written only after the
-//! artifact, manifest, interface, and hash-keyed sidecars have been durably
-//! published. Cache hits recompute every output digest and the canonical
-//! deployable code hash before skipping compilation. Cache reads are bounded so
-//! a corrupted or adversarial local target directory cannot force unbounded
-//! allocation before authentication.
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    error::Error,
-    fmt, fs,
-    io::{Read as _, Write as _},
-    path::{Component, Path, PathBuf},
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-use iroha_crypto::Hash;
-use iroha_data_model::smart_contract::manifest::ContractManifest;
-use norito::json;
+//! All developer entry points use this module for cache validation and output publication. A build
+//! record is a commit marker: it is written only after the artifact, manifest, interface, and
+//! hash-keyed sidecars have been durably published. Cache hits recompute every output digest and
+//! the canonical deployable code hash before skipping compilation. Cache reads are bounded so a
+//! corrupted or adversarial local target directory cannot force unbounded allocation before
+//! authentication.
 use crate::{
     ast::SourceUnitKind,
     diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourceSpan},
@@ -33,6 +18,20 @@ use crate::{
     session::{CompileOutput, CompileRequest, CompilerSession},
     source::SourceFile,
     spanned_ast::{AstNodeKind, SpannedProgram},
+};
+use iroha_crypto::Hash;
+use iroha_data_model::smart_contract::manifest::ContractManifest;
+use norito::json;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    error::Error,
+    fmt, fs,
+    io::{Read as _, Write as _},
+    path::{Component, Path, PathBuf},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 const BUILD_RECORD_SCHEMA: &str = "kotodama-build-v1";
 const DEFAULT_TARGET_ROOT: &str = "target/kotodama";
@@ -116,10 +115,9 @@ impl PublishLayout {
     }
     /// Keep the authenticated manifest as a content-addressed build sidecar.
     ///
-    /// This is used when a frontend returns the manifest through another
-    /// channel, such as `koto build --manifest-out -`. The manifest remains
-    /// available to authenticate no-op builds without publishing an
-    /// unexpected sibling file beside the requested artifact.
+    /// This is used when a frontend returns the manifest through another channel, such as `koto
+    /// build --manifest-out -`. The manifest remains available to authenticate no-op builds without
+    /// publishing an unexpected sibling file beside the requested artifact.
     #[must_use]
     pub fn with_sidecar_manifest(mut self) -> Self {
         self.manifest_storage = ManifestStorage::Sidecar;
@@ -437,10 +435,9 @@ impl BuildDriver {
     }
     /// Build one project through this driver's reusable typed-module graph.
     ///
-    /// Frontends should prefer this entry point over constructing a private
-    /// [`ModuleBuildGraph`]. Keeping graph parsing, typed linking, cache
-    /// authentication, and atomic publication in one driver makes repeated
-    /// project operations share the same content-addressed parser cache.
+    /// Frontends should prefer this entry point over constructing a private [`ModuleBuildGraph`].
+    /// Keeping graph parsing, typed linking, cache authentication, and atomic publication in one
+    /// driver makes repeated project operations share the same content-addressed parser cache.
     pub fn build_project(
         &self,
         request: LinkedSourceBuildRequest,
@@ -478,11 +475,10 @@ impl BuildDriver {
     }
     /// Type-check and lint one exact deployable source graph without publishing files.
     ///
-    /// Unlike loose/editor validation, this entry point links the supplied module
-    /// aliases or exports. The supplied root imports, package exports, and
-    /// transitive package imports are the complete V1 linking authority. Lints
-    /// are returned for the root and every explicitly locked module with their
-    /// original logical source names.
+    /// Unlike loose/editor validation, this entry point links the supplied module aliases or
+    /// exports. The supplied root imports, package exports, and transitive package imports are the
+    /// complete V1 linking authority. Lints are returned for the root and every explicitly locked
+    /// module with their original logical source names.
     pub fn check_project(
         &self,
         graph: SourceLinkRequest,
@@ -533,10 +529,9 @@ impl BuildDriver {
     }
     /// Check explicitly listed loose sources without inventing a module graph.
     ///
-    /// One deployable root is checked with an empty exact import graph. Module
-    /// files are checked independently. Mixing a root and modules requires an
-    /// explicit project manifest because positional order is never linking
-    /// authority in strict V1.
+    /// One deployable root is checked with an empty exact import graph. Module files are checked
+    /// independently. Mixing a root and modules requires an explicit project manifest because
+    /// positional order is never linking authority in strict V1.
     pub fn check_explicit_sources(
         &self,
         mut sources: Vec<SourceModuleUnit>,
@@ -633,10 +628,9 @@ impl BuildDriver {
     }
     /// Validate retained editor documents without inventing graph authority.
     ///
-    /// Until an editor supplies an explicit version-1 project manifest, open
-    /// sources have the same strict semantics as positional `koto check`:
-    /// modules are independent and a root mixed with modules reports
-    /// `E_PROJECT_MANIFEST_REQUIRED`. Completion remains syntax-derived.
+    /// Until an editor supplies an explicit version-1 project manifest, open sources have the same
+    /// strict semantics as positional `koto check`: modules are independent and a root mixed with
+    /// modules reports `E_PROJECT_MANIFEST_REQUIRED`. Completion remains syntax-derived.
     pub fn check_lsp_open_sources(
         &self,
         sources: Vec<SourceModuleUnit>,
@@ -970,10 +964,9 @@ pub fn logical_source_name(source_path: &Path, project_root: &Path) -> Result<St
 }
 /// Select the deterministic physical root for one explicitly selected source.
 ///
-/// Sources below `preferred_root` retain that common project. A source outside
-/// it becomes a one-file project rooted at its parent directory, allowing CLI
-/// tools to compile an absolute source without treating unrelated siblings as
-/// implicit modules.
+/// Sources below `preferred_root` retain that common project. A source outside it becomes a
+/// one-file project rooted at its parent directory, allowing CLI tools to compile an absolute
+/// source without treating unrelated siblings as implicit modules.
 pub fn project_root_for_source(
     source_path: &Path,
     preferred_root: &Path,
@@ -1042,10 +1035,9 @@ pub fn discover_source_modules(root: &Path) -> Result<Vec<SourceModuleUnit>, Bui
 }
 /// Read one deployable root and construct the canonical typed-module request.
 ///
-/// Package manifests and lockfiles remain responsible for supplying explicit
-/// aliases, exports, and authenticated package identities. When those are
-/// absent, callers pass empty collections: V1 never invents wildcard imports
-/// or implicit exports from nearby files.
+/// Package manifests and lockfiles remain responsible for supplying explicit aliases, exports, and
+/// authenticated package identities. When those are absent, callers pass empty collections: V1
+/// never invents wildcard imports or implicit exports from nearby files.
 pub fn discover_source_link_request(
     source_path: &Path,
     project_root: &Path,

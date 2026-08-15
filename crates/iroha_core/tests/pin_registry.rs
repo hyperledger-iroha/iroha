@@ -1,6 +1,5 @@
 //! Integration tests covering the `SoraFS` pin registry flows.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::{collections::BTreeSet, convert::TryInto, env, fs, num::NonZeroU64, path::PathBuf};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
     kura::Kura,
@@ -40,6 +39,7 @@ use sorafs_manifest::{
     ReplicationOrderV1, chunker_registry,
     pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
 };
+use std::{collections::BTreeSet, convert::TryInto, env, fs, num::NonZeroU64, path::PathBuf};
 const FIXTURE_PATH: &str = "tests/fixtures/sorafs_pin_registry/snapshot.json";
 #[test]
 fn pin_registry_snapshot_matches_fixture() {

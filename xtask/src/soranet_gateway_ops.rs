@@ -1,17 +1,17 @@
 //! SN15-M0 operations pack for the SoraGlobal Gateway CDN.
 //! Emits observability, compliance, and security scaffolding so M0 PoPs
 //! rehearse the full evidence bundle before production.
-use std::{
-    fs::{self, File},
-    path::{Path, PathBuf},
-};
+use crate::soranet_gateway_chaos::{self, ChaosScenario, ScenarioPack, ScheduleEntry};
 use eyre::{Result, WrapErr, eyre};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, Value},
 };
+use std::{
+    fs::{self, File},
+    path::{Path, PathBuf},
+};
 use time::OffsetDateTime;
-use crate::soranet_gateway_chaos::{self, ChaosScenario, ScenarioPack, ScheduleEntry};
 #[derive(Debug)]
 pub struct GatewayOpsOptions {
     pub output_dir: PathBuf,
@@ -951,9 +951,9 @@ fn summarize_path(path: &Path, root: &Path) -> String {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{collections::HashSet, fs};
     use tempfile::tempdir;
-    use super::*;
     #[test]
     fn writes_chaos_assets() {
         let dir = tempdir().expect("tempdir");

@@ -6,15 +6,15 @@
 //! pair and full-book matching, fee calculation, settlement-channel opening,
 //! receipt application, and payload signature verification. Authoritative
 //! sequencing, lifecycle state, and escrow mutation are committed ledger state.
-use std::collections::BTreeSet;
-use blake3::Hasher;
-use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
 use crate::{
     deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity},
     provider_advert::SignatureAlgorithm,
 };
+use blake3::Hasher;
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
+use std::collections::BTreeSet;
+use thiserror::Error;
 /// Schema version for [`OrderRequestV1`].
 pub const ORDERBOOK_ORDER_VERSION_V1: u8 = 1;
 /// Schema version for [`OrderCancelV1`].
@@ -1929,10 +1929,10 @@ pub enum OrderbookValidationError {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
     use super::*;
     use ed25519_dalek::SigningKey;
     use norito::core::NoritoSerialize as _;
+    use std::collections::{BTreeMap, BTreeSet};
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

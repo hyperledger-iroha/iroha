@@ -5,14 +5,14 @@
 //! the `SoraFS`-specific ballot context used by moderation panels. Validators use
 //! explicit helpers to enforce schema versioning, signature coverage, and
 //! commit/reveal binding before accepting moderation evidence.
-use std::collections::BTreeSet;
+#[cfg(feature = "json")]
+pub(crate) use crate::json_helpers::fixed_bytes::option as json_option_digest32;
 use blake2::digest::Digest;
 use iroha_crypto::{Algorithm, Blake2b256, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use std::collections::BTreeSet;
 use thiserror::Error;
-#[cfg(feature = "json")]
-pub(crate) use crate::json_helpers::fixed_bytes::option as json_option_digest32;
 /// Schema version for `ModerationReproManifestV1`.
 pub const MODERATION_REPRO_MANIFEST_VERSION_V1: u16 = 1;
 /// Maximum model weight and threshold value in basis points.
@@ -3191,8 +3191,8 @@ impl AdversarialCorpusManifestV1 {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;

@@ -1,13 +1,13 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    ops::{Deref, DerefMut},
-    sync::Arc,
-};
 use iroha_crypto::Hash;
 use ivm::ProgramMetadata;
 use ivm::analysis::{ProgramAnalysis, ProgramAnalysisError};
 use ivm::runtime::IvmConfig;
 use parking_lot::{Condvar, Mutex};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 /// Counters for the bounded prepared-contract artifact store.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PreparedContractCacheStats {
@@ -160,12 +160,11 @@ impl PreparedContractCache {
     }
     /// Check out a VM for a nested contract invocation.
     ///
-    /// The pool is shared by every host carrying this prepared-cache handle.
-    /// Cache hits reuse the loaded program and restore only memory chunks
-    /// dirtied by the previous invocation. Re-entrant calls allocate another
-    /// runtime when the matching pool is temporarily empty rather than
-    /// aliasing mutable VM state. `heap_limit` is part of the runtime identity,
-    /// so governance changes cannot reuse a VM carrying stale heap authority.
+    /// The pool is shared by every host carrying this prepared-cache handle. Cache hits reuse the
+    /// loaded program and restore only memory chunks dirtied by the previous invocation. Re-entrant
+    /// calls allocate another runtime when the matching pool is temporarily empty rather than
+    /// aliasing mutable VM state. `heap_limit` is part of the runtime identity, so governance
+    /// changes cannot reuse a VM carrying stale heap authority.
     pub fn checkout_runtime(
         &self,
         contract: &ivm::PreparedContract,
@@ -372,9 +371,8 @@ fn stack_limit_for_gas(gas_limit: u64) -> u64 {
 }
 /// Return whether a syscall is available to a contract-less IVM program.
 ///
-/// The canonical policy lives in `ivm_abi` and is hashed into ABI V1. Core
-/// delegates to it at both admission and host dispatch so the two enforcement
-/// points cannot drift.
+/// The canonical policy lives in `ivm_abi` and is hashed into ABI V1. Core delegates to it at both
+/// admission and host dispatch so the two enforcement points cannot drift.
 #[must_use]
 pub(crate) fn is_generic_syscall_allowed(number: u32) -> bool {
     ivm::syscalls::is_generic_program_syscall_allowed(ivm::SyscallPolicy::AbiV1, number)
@@ -431,8 +429,7 @@ impl GenericProgramSummary {
         Arc::clone(&self.program)
     }
 }
-/// Admission result for either a self-describing contract or a generic IVM
-/// program.
+/// Admission result for either a self-describing contract or a generic IVM program.
 #[derive(Clone, Debug)]
 pub enum ExecutableProgramSummary {
     /// A deployable, self-describing `CNTR` contract.
@@ -477,14 +474,12 @@ impl ExecutableProgramSummary {
 impl ProgramSummary {
     /// Prepare and summarize one complete deployable contract artifact.
     ///
-    /// This is the public construction boundary for callers that need a
-    /// self-contained summary without managing an [`IvmCache`]. It validates
-    /// and predecodes the artifact and initializes the private prepared-runtime
-    /// cache carried by the returned summary.
+    /// This is the public construction boundary for callers that need a self-contained summary
+    /// without managing an [`IvmCache`]. It validates and predecodes the artifact and initializes
+    /// the private prepared-runtime cache carried by the returned summary.
     ///
     /// # Errors
-    /// Returns [`ivm::VMError`] when the bytes are not a valid deployable IVM
-    /// contract artifact.
+    /// Returns [`ivm::VMError`] when the bytes are not a valid deployable IVM contract artifact.
     pub fn from_artifact(bytecode: &[u8]) -> Result<Self, ivm::VMError> {
         IvmCache::new().summarize_program(bytecode)
     }
@@ -500,9 +495,8 @@ impl ProgramSummary {
     }
     /// Check out a warmed runtime backed by the shared prepared-artifact pool.
     ///
-    /// The owned lease does not hold the cache mutex while guest code runs.
-    /// Dropping it on any success, error, or unwind path restores dirty memory
-    /// chunks and returns the VM to the pool.
+    /// The owned lease does not hold the cache mutex while guest code runs. Dropping it on any
+    /// success, error, or unwind path restores dirty memory chunks and returns the VM to the pool.
     ///
     /// # Errors
     /// Returns [`ivm::VMError`] if a cold runtime cannot load the validated
@@ -681,13 +675,11 @@ impl IvmCache {
         self.stats.artifact_hashes = self.stats.artifact_hashes.saturating_add(1);
         self.summarize_program_with_hash(code_hash, bytecode)
     }
-    /// Validate and summarize either a self-describing contract or a generic
-    /// ABI-bound IVM program.
+    /// Validate and summarize either a self-describing contract or a generic ABI-bound IVM program.
     ///
-    /// The presence of a canonical `CNTR` section is the only discriminator.
-    /// Contract artifacts retain the stronger full artifact verifier and
-    /// prepared-contract cache; generic programs are fully loaded once to
-    /// validate literals, instructions, control flow, and syscall policy.
+    /// The presence of a canonical `CNTR` section is the only discriminator. Contract artifacts
+    /// retain the stronger full artifact verifier and prepared-contract cache; generic programs are
+    /// fully loaded once to validate literals, instructions, control flow, and syscall policy.
     ///
     /// # Errors
     /// Returns [`ivm::VMError`] when the header, ABI binding, contract section,
@@ -816,8 +808,7 @@ impl IvmCache {
     /// complete artifact hash before publishing the entry.
     ///
     /// # Errors
-    /// Returns [`ivm::VMError`] if preparation fails or `bytecode` does not
-    /// match `code_hash`.
+    /// Returns [`ivm::VMError`] if preparation fails or `bytecode` does not match `code_hash`.
     pub fn summarize_program_with_hash(
         &mut self,
         code_hash: Hash,
@@ -857,9 +848,8 @@ impl IvmCache {
     }
     /// Resolve a locally cached summary by a trusted admitted content address.
     ///
-    /// This path takes no byte slice, so callers can check a world-state
-    /// binding before copying or borrowing the stored artifact. `Ok(None)`
-    /// means the exact bytes must be supplied to
+    /// This path takes no byte slice, so callers can check a world-state binding before copying or
+    /// borrowing the stored artifact. `Ok(None)` means the exact bytes must be supplied to
     /// [`Self::summarize_program_with_hash`].
     ///
     /// # Errors
@@ -1176,9 +1166,9 @@ impl IvmCache {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
     use ivm::runtime::IvmConfig;
-    use super::*;
     const HEAP_LIMIT: u64 = ivm::Memory::HEAP_MAX_SIZE;
     /// Assemble a minimal program containing only a HALT instruction.
     fn minimal_program() -> Vec<u8> {

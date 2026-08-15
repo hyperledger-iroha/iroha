@@ -1,10 +1,4 @@
 //! CLI coverage for the SoraFS reference validator.
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-#[cfg(unix)]
-use std::os::unix::fs::{PermissionsExt, symlink};
 use assert_cmd::cargo::cargo_bin_cmd;
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use iroha_crypto::{Algorithm, KeyPair, sha256};
@@ -17,6 +11,12 @@ use sorafs_manifest::{
     PotrStatus, ProofStreamTier, REPAIR_TASK_VERSION_V1, RepairTaskRecordV1, RepairTaskStateV1,
     RepairTicketId, SignatureAlgorithm, SignedReplicationOrderV1, governance_dag_block_cid_v1,
     sign_potr_receipt_v1, verify_order_request_signature_v1,
+};
+#[cfg(unix)]
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::{
+    fs,
+    path::{Path, PathBuf},
 };
 use tempfile::tempdir;
 fn workspace_fixture(path: &str) -> PathBuf {

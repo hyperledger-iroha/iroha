@@ -1,6 +1,6 @@
 //! Validated Torii query load-profile definitions used by benchmark binaries.
-use std::fmt;
 use iroha_data_model::query::parameters::MAX_FETCH_SIZE;
+use std::fmt;
 /// Upper bound for built-in benchmark concurrency.
 pub const MAX_BENCH_CONCURRENCY: usize = 256;
 /// Upper bound for measured operations in one sustained profile run.

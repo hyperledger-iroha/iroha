@@ -1,5 +1,4 @@
 //! Deterministic provider-admission fixture and lifecycle contract tests.
-use std::{fs, path::PathBuf};
 use ed25519_dalek::{Signer, SigningKey};
 use norito::json::Value;
 use sorafs_manifest::{
@@ -12,6 +11,7 @@ use sorafs_manifest::{
     validate_provider_admission_revocation_bytes, verify_advert_against_record,
     verify_revocation_signatures,
 };
+use std::{fs, path::PathBuf};
 const COUNCIL_KEY_BYTES: [u8; 32] = [0x45; 32];
 fn committed_fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -1,5 +1,9 @@
 //! Authoritative SoraFS proof-of-personhood issuer and registry handlers.
-use std::{collections::BTreeMap, str::FromStr, sync::OnceLock};
+use super::*;
+use crate::{
+    smartcontracts::ValidSingularQuery,
+    state::{StateTransaction, WorldReadOnly},
+};
 use iroha_data_model::{
     account::{AccountController, AccountId},
     isi::{
@@ -36,11 +40,7 @@ use sorafs_manifest::pop_credentials::{
     PopRevocationReasonV1, verify_pop_commitment_root_signature_v1,
     verify_pop_revocation_list_signature_v1,
 };
-use super::*;
-use crate::{
-    smartcontracts::ValidSingularQuery,
-    state::{StateTransaction, WorldReadOnly},
-};
+use std::{collections::BTreeMap, str::FromStr, sync::OnceLock};
 const POLICY_STATE_KEY: &str = "sorafs_pop_issuer_policy_v1";
 const STATUS_STATE_KEY: &str = "sorafs_pop_registry_status_v1";
 const CREDENTIAL_STATE_KEY_PREFIX: &str = "sorafs_pop_credential_commitment_v1_";
@@ -2346,6 +2346,12 @@ impl ValidSingularQuery for FindSorafsPopRegistryStatus {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
         IntoKeyValue, Registrable,
@@ -2366,12 +2372,6 @@ mod tests {
         PopSignatureV1, pop_commitment_root_signature_digest_v1,
         pop_revocation_list_signature_digest_v1, pop_revocation_root_v1,
         verify_pop_commitment_root_signature_v1, verify_pop_revocation_list_signature_v1,
-    };
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
     };
     const NOW: u64 = 10_000;
     fn keypair(seed: u8) -> KeyPair {

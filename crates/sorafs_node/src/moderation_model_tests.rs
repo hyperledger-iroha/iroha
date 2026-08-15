@@ -1,3 +1,4 @@
+use super::*;
 use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 use iroha_data_model::sorafs::moderation::{
     MODERATION_MODEL_WORKING_MEMORY_BYTES_V1, MODERATION_REPRO_MANIFEST_VERSION_V1,
@@ -8,7 +9,6 @@ use iroha_data_model::sorafs::moderation::{
     ModerationTrustPolicyBodyV1, ModerationTrustPolicySignatureV1, ModerationTrustedSignerV1,
     moderation_model_required_operations_v1,
 };
-use super::*;
 const SCREENING_AUTH_NOW: u64 = 1_800_000_000;
 const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
 const TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION: ModerationQuarantineKeyProviderQualificationV1 =

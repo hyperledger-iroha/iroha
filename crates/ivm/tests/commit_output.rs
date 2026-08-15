@@ -1,9 +1,9 @@
 //! OUTPUT region and COMMIT_OUTPUT syscall coverage.
+use ivm::{IVM, Memory, VMError, encoding, host::IVMHost, instruction, syscalls};
 use std::{
     any::Any,
     sync::{Arc, Mutex},
 };
-use ivm::{IVM, Memory, VMError, encoding, host::IVMHost, instruction, syscalls};
 mod common;
 use common::assemble;
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();

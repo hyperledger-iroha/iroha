@@ -1,11 +1,12 @@
 //! First-release privacy protocol governance and admission budgets.
 //!
-//! This module is deliberately independent of individual proof engines.  It
-//! owns the consensus-critical state-machine rules which every engine shares:
-//! one immutable activation record per protocol version, future-only
-//! activation, fail-closed lifecycle transitions, and transaction-atomic
-//! resource charging.
-use std::collections::{BTreeMap, btree_map::Entry};
+//! This module is deliberately independent of individual proof engines. It owns the
+//! consensus-critical state-machine rules which every engine shares: one immutable activation
+//! record per protocol version, future-only activation, fail-closed lifecycle transitions, and
+//! transaction-atomic resource charging.
+use crate::privacy_profiles::{
+    CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_activation_v1,
+};
 use iroha_data_model::{
     ValidationFail,
     isi::privacy::SubmitPrivacyProofV1,
@@ -17,23 +18,19 @@ use iroha_data_model::{
     },
     transaction::SignedTransaction,
 };
+use std::collections::{BTreeMap, btree_map::Entry};
 use thiserror::Error;
-use crate::privacy_profiles::{
-    CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_activation_v1,
-};
 /// Minimum governance lead time for a first-release privacy activation.
 ///
-/// The deployment workflow may impose a longer wall-clock or block delay.  The
-/// chain rule is the irreducible consensus guard and therefore cannot be
-/// bypassed by a deployment tool or SDK.
+/// The deployment workflow may impose a longer wall-clock or block delay. The chain rule is the
+/// irreducible consensus guard and therefore cannot be bypassed by a deployment tool or SDK.
 pub const PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1: u64 = 300;
 const PRIVACY_SIGNED_SUBMISSION_HASH_DOMAIN_V1: &[u8] = b"iroha.privacy.signed-submission-hash.v1";
 /// Hash the complete typed privacy submission authorized by the transaction signature.
 ///
-/// Unlike the transaction-intent digest, this internal one-shot fingerprint
-/// includes the final statement digests and proof bytes. It prevents a child
-/// contract, trigger, or VM overlay from substituting another submission after
-/// admission has validated the signed direct instruction.
+/// Unlike the transaction-intent digest, this internal one-shot fingerprint includes the final
+/// statement digests and proof bytes. It prevents a child contract, trigger, or VM overlay from
+/// substituting another submission after admission has validated the signed direct instruction.
 pub(crate) fn privacy_signed_submission_hash_v1(
     submission: &SubmitPrivacyProofV1,
 ) -> Result<iroha_crypto::Hash, norito::Error> {
@@ -52,10 +49,9 @@ pub(crate) fn privacy_signed_submission_hash_v1(
 }
 /// Recompute and validate the optional privacy intent in one signed payload.
 ///
-/// Ordinary transactions return `Ok(None)`. Any privacy-bearing payload must
-/// contain exactly one direct typed submission, have both derived digests
-/// correct, and avoid every dynamic/opaque V1 path before this function returns
-/// its one-shot state binding.
+/// Ordinary transactions return `Ok(None)`. Any privacy-bearing payload must contain exactly one
+/// direct typed submission, have both derived digests correct, and avoid every dynamic/opaque V1
+/// path before this function returns its one-shot state binding.
 pub(crate) fn signed_privacy_transaction_intent_binding_v1(
     transaction: &SignedTransaction,
 ) -> Result<Option<(PrivacyTransactionIntentDigestV1, iroha_crypto::Hash)>, ValidationFail> {
@@ -78,10 +74,9 @@ pub(crate) fn signed_privacy_transaction_intent_binding_v1(
 }
 /// Closed first-release registry of governed privacy protocol activations.
 ///
-/// A protocol identity can be registered exactly once.  Its artifact bindings
-/// are immutable; governance may only advance its lifecycle.  A parameter or
-/// verifier change therefore requires a new protocol identity in a new data
-/// model release instead of a compatibility alias.
+/// A protocol identity can be registered exactly once. Its artifact bindings are immutable;
+/// governance may only advance its lifecycle. A parameter or verifier change therefore requires a
+/// new protocol identity in a new data model release instead of a compatibility alias.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivacyProtocolRegistryV1 {
     limits: PrivacyConsensusLimitsV1,
@@ -92,8 +87,7 @@ impl PrivacyProtocolRegistryV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if any limit is zero, inconsistent, or above a
-    /// first-release hard ceiling.
+    /// Returns an error if any limit is zero, inconsistent, or above a first-release hard ceiling.
     pub fn new(limits: PrivacyConsensusLimitsV1) -> Result<Self, PrivacyRegistryError> {
         limits
             .validate()
@@ -118,9 +112,8 @@ impl PrivacyProtocolRegistryV1 {
     }
     /// Return an active record at `current_height`.
     ///
-    /// Call [`Self::advance_to_height`] at block start before admission.  This
-    /// accessor remains read-only so proof verification cannot mutate
-    /// governance state.
+    /// Call [`Self::advance_to_height`] at block start before admission. This accessor remains
+    /// read-only so proof verification cannot mutate governance state.
     #[must_use]
     pub fn active_record(
         &self,
@@ -135,9 +128,8 @@ impl PrivacyProtocolRegistryV1 {
     }
     /// Register one immutable future activation.
     ///
-    /// Registration is accepted only in the proposed state, at the exact
-    /// current height, with a delay of at least
-    /// [`PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1`].  All activations share the
+    /// Registration is accepted only in the proposed state, at the exact current height, with a
+    /// delay of at least [`PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1`]. All activations share the
     /// registry's limits so mixed-protocol blocks have one unambiguous budget.
     ///
     /// # Errors
@@ -178,16 +170,14 @@ impl PrivacyProtocolRegistryV1 {
     }
     /// Apply an explicit fail-closed lifecycle transition.
     ///
-    /// Validation evaluates a due proposal as active without mutating it first,
-    /// so an invalid governance instruction has no partial effect.  Successful
-    /// transitions replace only the lifecycle; artifact bindings cannot be
-    /// supplied here and therefore cannot be changed.
+    /// Validation evaluates a due proposal as active without mutating it first, so an invalid
+    /// governance instruction has no partial effect. Successful transitions replace only the
+    /// lifecycle; artifact bindings cannot be supplied here and therefore cannot be changed.
     ///
     /// # Errors
     ///
-    /// Returns an error when the protocol is unknown, transition history is
-    /// invalid, or the transition does not become effective at the current
-    /// height.
+    /// Returns an error when the protocol is unknown, transition history is invalid, or the
+    /// transition does not become effective at the current height.
     pub fn transition(
         &mut self,
         protocol_id: PrivacyProtocolIdV1,
@@ -210,17 +200,14 @@ impl PrivacyProtocolRegistryV1 {
         self.records.iter()
     }
 }
-/// Validate a persisted activation registration without constructing an
-/// in-memory registry.
+/// Validate a persisted activation registration without constructing an in-memory registry.
 ///
-/// World-state handlers use this function before inserting a record into typed
-/// storage.  Keeping the rule here prevents persistence adapters from
-/// reimplementing consensus logic.
+/// World-state handlers use this function before inserting a record into typed storage. Keeping the
+/// rule here prevents persistence adapters from reimplementing consensus logic.
 ///
 /// # Errors
 ///
-/// Returns the same deterministic error as
-/// [`PrivacyProtocolRegistryV1::register`].
+/// Returns the same deterministic error as [`PrivacyProtocolRegistryV1::register`].
 pub fn validate_privacy_registration_v1(
     chain_limits: &PrivacyConsensusLimitsV1,
     existing: Option<&PrivacyProtocolActivationRecordV1>,
@@ -287,14 +274,12 @@ pub const fn effective_privacy_lifecycle_v1(
 }
 /// Validate a lifecycle transition against a persisted activation record.
 ///
-/// A due proposal is promoted before evaluating the requested edge.  This
-/// makes governance ordering at the activation height identical in the
-/// in-memory registry and typed world storage.
+/// A due proposal is promoted before evaluating the requested edge. This makes governance ordering
+/// at the activation height identical in the in-memory registry and typed world storage.
 ///
 /// # Errors
 ///
-/// Returns an error for a spoofed transition height or an invalid lifecycle
-/// edge/history.
+/// Returns an error for a spoofed transition height or an invalid lifecycle edge/history.
 pub fn validate_privacy_lifecycle_transition_v1(
     current: &PrivacyProtocolActivationRecordV1,
     next: PrivacyProtocolLifecycleV1,
@@ -634,13 +619,13 @@ pub enum PrivacyBudgetError {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::privacy::{
-        PrivacyProofSystemIdV1, PrivacyProposedLifecycleV1, PrivacyRetiredLifecycleV1,
-        PrivacySuspendedLifecycleV1,
-    };
     use super::*;
     use crate::privacy_profiles::{
         compiled_privacy_profile_v1, zk_x509_release_candidate_profile_material_v1,
+    };
+    use iroha_data_model::privacy::{
+        PrivacyProofSystemIdV1, PrivacyProposedLifecycleV1, PrivacyRetiredLifecycleV1,
+        PrivacySuspendedLifecycleV1,
     };
     const PROPOSAL_HEIGHT: u64 = 1_000;
     const ACTIVATION_HEIGHT: u64 = PROPOSAL_HEIGHT + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1;

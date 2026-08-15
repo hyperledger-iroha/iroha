@@ -1,5 +1,4 @@
 //! Tests for Kagami codec error handling and Norito/JSON roundtrips.
-use std::{fmt::Debug, fs};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_data_model::{account::NewAccount, domain::Domain, trigger::Trigger};
 use norito::{
@@ -8,6 +7,7 @@ use norito::{
     json::{JsonDeserializeOwned, JsonSerialize},
     to_bytes,
 };
+use std::{fmt::Debug, fs};
 const SAMPLE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/samples/codec");
 fn roundtrip<T>(name: &str)
 where

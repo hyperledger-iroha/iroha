@@ -1,9 +1,5 @@
 //! Sample configuration builders
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-    sync::Arc,
-};
+use crate::init_instruction_registry;
 use color_eyre::{Report, eyre::eyre};
 use iroha_config::base::toml::WriteExt;
 use iroha_config::parameters::actual::{
@@ -66,9 +62,13 @@ use iroha_test_samples::{
 };
 #[cfg(test)]
 use norito::json::Value;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::Arc,
+};
 use toml::Table;
 use tracing::warn;
-use crate::init_instruction_registry;
 /// Exact policy commitments derived by isolated genesis pre-execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StagedGenesisPolicyHashes {
@@ -1196,9 +1196,11 @@ fn install_preexec_lane_manifests(
             &nexus.governance,
             &nexus.registry,
         );
-        registry.validate_active_coverage().map_err(|error| {
-            eyre!("validate lane manifest registry for genesis pre-execution: {error}")
-        })?;
+        registry
+            .validate_active_coverage_for_catalog(&nexus.lane_catalog)
+            .map_err(|error| {
+                eyre!("validate lane manifest registry for genesis pre-execution: {error}")
+            })?;
         registry
     } else {
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
@@ -1311,13 +1313,13 @@ fn rebuild_block_from_parts(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_core::state::StateReadOnly;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         asset::AssetDefinition, domain::Domain, parameter::system::SumeragiParameters,
     };
     use norito::codec::Decode;
-    use super::*;
     #[test]
     fn base_config_enables_confidential_verification() {
         let table = super::base_iroha_config();
@@ -1623,8 +1625,8 @@ mod tests {
     }
     #[test]
     fn populate_genesis_results_accepts_block_proof_policies() {
-        use std::num::NonZeroU32;
         use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
+        use std::num::NonZeroU32;
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
@@ -1685,7 +1687,6 @@ mod tests {
     }
     #[test]
     fn populate_genesis_results_uses_supplied_nexus_config_for_custom_staking_genesis() {
-        use std::num::NonZeroU32;
         use iroha_data_model::nexus::{
             DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
         };
@@ -1696,6 +1697,7 @@ mod tests {
             },
             prelude::Quantity,
         };
+        use std::num::NonZeroU32;
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
@@ -1880,11 +1882,11 @@ mod tests {
     }
     #[test]
     fn preexec_overrides_recompute_lane_config_from_policies() {
-        use std::num::NonZeroU32;
         use iroha_data_model::{
             da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme},
             nexus::{DataSpaceId, LaneId},
         };
+        use std::num::NonZeroU32;
         let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         let genesis_account_entry = Account {
             id: genesis_account,

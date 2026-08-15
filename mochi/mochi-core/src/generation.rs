@@ -1,17 +1,17 @@
 //! Crash-safe publication of immutable Mochi configuration generations.
+use crate::supervisor::{Result, SupervisorError};
+use iroha_crypto::{HashOf, PublicKey};
+use iroha_data_model::block::BlockHeader;
+use norito::json::{self, Map, Value};
+use rand::{TryRngCore as _, rngs::OsRng};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::{
     ffi::OsStr,
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-use iroha_crypto::{HashOf, PublicKey};
-use iroha_data_model::block::BlockHeader;
-use norito::json::{self, Map, Value};
-use rand::{TryRngCore as _, rngs::OsRng};
-use crate::supervisor::{Result, SupervisorError};
 pub(crate) const GENERATIONS_DIRECTORY: &str = "generations";
 pub(crate) const CURRENT_GENERATION_FILE: &str = "current-generation";
 const GENERATION_LOCK_FILE: &str = ".generation.lock";

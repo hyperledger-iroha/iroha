@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests covering Torii transaction history pagination and filters.
-use std::time::Duration;
 use eyre::{Result, WrapErr, bail, ensure, eyre};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use integration_tests::sandbox;
@@ -19,6 +18,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
+use std::time::Duration;
 use tokio::time::{Instant, sleep};
 #[test]
 fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()> {

@@ -128,6 +128,18 @@ fn verified_genesis(context: wire::HeightContext) -> VerifiedHeightContext {
 }
 include!("v2_adapter_activation_context.rs");
 #[cfg(feature = "bls")]
+fn run_marker_replay_test_on_stack() {
+    let handle = std::thread::Builder::new()
+        .name("production-lifecycle-marker-replay".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies)
+        .expect("spawn production lifecycle replay test");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
 fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) {
     let mut keys = (1_u8..=4)
         .map(|seed| {
@@ -175,6 +187,101 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
     };
     (context, keys, pops)
 }
+#[cfg(feature = "bls")]
+fn rebind_production_serve_execution_commitment(
+    context: &wire::HeightContext,
+    keys: &[KeyPair],
+    requester_key: &KeyPair,
+    authenticated: crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest,
+    execution_commitment: wire::ExecutionCommitment,
+) -> crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest {
+    let mut request = authenticated.request().clone();
+    request.certificate.execution_commitment = execution_commitment;
+    let vote_preimage = wire::Vote {
+        round: request.certificate.round,
+        proposal_round: request.certificate.proposal_round,
+        phase: request.certificate.phase,
+        subject: request.certificate.subject,
+        execution_commitment,
+        signer: *request
+            .certificate
+            .signers
+            .first()
+            .expect("production Serve fixture has a signer"),
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let signatures = request
+        .certificate
+        .signers
+        .iter()
+        .map(|index| {
+            let index = usize::try_from(*index).expect("fixture signer index fits usize");
+            Signature::new(keys[index].private_key(), &vote_preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    request.certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate rebound production Serve certificate");
+    request.signature = Signature::new(requester_key.private_key(), &request.signature_preimage())
+        .payload()
+        .to_vec();
+    let requester = request.requester.clone();
+    crate::sumeragi::v2_transport::authenticate_certified_body_request(
+        context,
+        request,
+        &requester,
+        |_, _| Ok::<(), &'static str>(()),
+    )
+    .expect("authenticate rebound production Serve request")
+}
+
+#[cfg(feature = "bls")]
+fn production_serve_requests_for_execution_commitment(
+    context: &wire::HeightContext,
+    keys: &[KeyPair],
+    local_validator: wire::ValidatorIndex,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    execution_commitment: wire::ExecutionCommitment,
+) -> (
+    crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest,
+    crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest,
+) {
+    let local = usize::try_from(local_validator).expect("fixture validator index fits usize");
+    let rejected_requester = (local + 1) % keys.len();
+    let admitted_requester = (local + 2) % keys.len();
+    let non_local = (0..keys.len())
+        .filter(|index| *index != local)
+        .collect::<Vec<_>>();
+    let all = (0..keys.len()).collect::<Vec<_>>();
+    let build = |requester: usize, signers: &[usize]| {
+        let (request, _) = super::super::v2_worker::tests::production_authenticated_serve_request(
+            context,
+            keys,
+            &keys[requester],
+            round,
+            subject,
+            wire::GlobalPhase::Commit,
+            signers,
+        );
+        rebind_production_serve_execution_commitment(
+            context,
+            keys,
+            &keys[requester],
+            request,
+            execution_commitment,
+        )
+    };
+    (
+        build(rejected_requester, &non_local),
+        build(admitted_requester, &all),
+    )
+}
+
 #[cfg(feature = "bls")]
 fn authenticate_qc(certificate: &mut wire::QuorumCertificate, keys: &[KeyPair]) {
     let signer = certificate
@@ -1112,6 +1219,7 @@ fn forged_conflict_cannot_mint_adapter_equivocation_evidence() {
             .equivocation_reported,
         "a forged conflicting signature cannot consume the one evidence report"
     );
+
     let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) = &mut conflicting.payload
     else {
         unreachable!("proposal helper returns a proposal")
@@ -1414,6 +1522,7 @@ fn assert_process_only_predecessor_absent_after_restart(directory: &TempDir) {
         "a process-only predecessor must not be synthesized during restart"
     );
 }
+
 fn open_test(directory: &TempDir) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), AdapterError> {
     SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),

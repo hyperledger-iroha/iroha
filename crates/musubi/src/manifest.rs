@@ -4,13 +4,6 @@
 //! `manifest-version = 1` is mandatory, and values are converted immediately
 //! into the structured Musubi data-model types used by resolution and
 //! publication.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fmt,
-    path::PathBuf,
-    str::FromStr,
-};
 use iroha_data_model::{
     musubi::{
         MUSUBI_IVM_ABI_VERSION_V1, MUSUBI_MAX_DEPENDENCIES_V1, MUSUBI_MAX_EXPORTS_V1,
@@ -18,6 +11,13 @@ use iroha_data_model::{
         MusubiPackageSelectorV1, MusubiVersionReqV1, MusubiVersionV1,
     },
     name::Name,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+    path::PathBuf,
+    str::FromStr,
 };
 /// Filename of a first-release Musubi manifest.
 pub const MANIFEST_FILE_NAME: &str = "Musubi.toml";

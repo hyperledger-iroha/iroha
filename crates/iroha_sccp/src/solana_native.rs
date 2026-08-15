@@ -16,11 +16,6 @@
 //! stake, vote-state, and replay-transcript commitments make the private
 //! finality witness independently identifiable without putting its unbounded
 //! contents in consensus state.
-use alloc::vec::Vec;
-use core::fmt;
-use iroha_data_model::bridge::{
-    SccpGroth16Bn254VerifyingKeyV1, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
-};
 use super::{
     H256, SCCP_CODEC_CANONICAL_TEXT, SCCP_CODEC_SOLANA_PUBKEY32, SCCP_DOMAIN_SOLANA,
     SCCP_DOMAIN_SORA, SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1, SCCP_TAIRA_XOR_ASSET_KEY_V1, SccpPayloadV1,
@@ -29,6 +24,11 @@ use super::{
     sccp_groth16_bn254_signal_word, sccp_groth16_bn254_verifying_key_hash_v1, sccp_lane_id_hash_v1,
     sccp_lane_source_event_digest_v1, sccp_message_id, sccp_source_identity_hash_v1,
     verify_sccp_groth16_bn254_pairing_equation_v1, verify_sccp_payload_structure,
+};
+use alloc::vec::Vec;
+use core::fmt;
+use iroha_data_model::bridge::{
+    SccpGroth16Bn254VerifyingKeyV1, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
 };
 /// Canonical raw 32-byte genesis hash of Solana testnet
 /// (`4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY`).
@@ -698,6 +698,10 @@ pub fn verify_sccp_solana_agave_source_v1(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        SccpEvmGroth16Bn254ProofV1, TransferPayloadV1, encode_sccp_evm_groth16_bn254_proof_bytes,
+    };
     use halo2curves::{
         Coordinates, CurveAffine,
         bn256::{Fq, Fr, G1Affine},
@@ -709,10 +713,6 @@ mod tests {
         SCCP_SOLANA_TESTNET_GENESIS_HASH_V1 as DATA_MODEL_SOLANA_TESTNET_GENESIS_HASH_V1,
         SccpBn254G1PointV1, SccpBn254G2PointV1, SccpGroth16Bn254IcV1, SccpLaneIdV1,
         SccpNativeTrustAnchorV1, SccpSolanaSourceEmitterV1,
-    };
-    use super::*;
-    use crate::{
-        SccpEvmGroth16Bn254ProofV1, TransferPayloadV1, encode_sccp_evm_groth16_bn254_proof_bytes,
     };
     #[derive(Clone)]
     struct Fixture {

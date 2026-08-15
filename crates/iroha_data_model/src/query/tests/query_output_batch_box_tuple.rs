@@ -1,6 +1,6 @@
+use super::*;
 use iroha_primitives::numeric::Numeric;
 use norito::codec::Encode;
-use super::*;
 fn numeric(values: &[u32]) -> QueryOutputBatchBox {
     QueryOutputBatchBox::Numeric(values.iter().copied().map(Numeric::from).collect())
 }

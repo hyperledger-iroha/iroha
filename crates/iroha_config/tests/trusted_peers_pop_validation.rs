@@ -1,9 +1,9 @@
 //! Validate `trusted_peers_pop` validator-subset and parsing rules.
-use std::{path::PathBuf, str::FromStr};
 use iroha_config::parameters::user::Root as UserConfig;
 use iroha_config_base::read::ConfigReader;
 use iroha_config_base::toml::TomlSource;
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, bls_normal_pop_prove};
+use std::{path::PathBuf, str::FromStr};
 const BASE_PUBLIC_KEY: &str = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2";
 const BASE_PRIVATE_KEY: &str =
     "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F";

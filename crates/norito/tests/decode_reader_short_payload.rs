@@ -1,7 +1,7 @@
 //! Decode-from-reader coverage for short payloads vs archived size.
-use std::io::Cursor;
 use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, NoritoSerialize};
+use std::io::Cursor;
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct LargePayload {
     bytes: [u8; 256],

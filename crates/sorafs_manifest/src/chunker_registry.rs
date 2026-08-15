@@ -1,7 +1,7 @@
 //! Chunker profile registry helpers used by SoraFS manifests.
 #![allow(unexpected_cfgs)]
-use std::{collections::HashSet, sync::OnceLock};
 use sorafs_chunker::ChunkProfile;
+use std::{collections::HashSet, sync::OnceLock};
 /// Multihash code used for CAR payload digests in the default profile.
 pub const DEFAULT_MULTIHASH_CODE: u64 = 0x1f;
 /// Canonical dag-cbor codec identifier for manifest roots.

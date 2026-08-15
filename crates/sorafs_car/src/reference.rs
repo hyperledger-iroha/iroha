@@ -4,12 +4,12 @@
 //! this crate owns CAR parsing and trustless replay. Keeping the adapter here
 //! avoids a dependency cycle and lets operators receive the same outcome shape
 //! as the rest of the SF-11 reference validators.
+use crate::{TrustlessVerificationError, TrustlessVerificationOutcome, TrustlessVerifierConfig};
 use sorafs_manifest::{
     ManifestV1, decode_manifest_v1_canonical,
     reference::{ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1},
     validation::{ManifestValidationError, PinPolicyConstraints, validate_manifest},
 };
-use crate::{TrustlessVerificationError, TrustlessVerificationOutcome, TrustlessVerifierConfig};
 const CATEGORY_INTERNAL: &str = "internal";
 const CATEGORY_NORITO: &str = "norito";
 const CATEGORY_POLICY: &str = "policy";
@@ -286,9 +286,9 @@ fn telemetry_tags(code: &str) -> Vec<String> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
-    use norito::decode_from_bytes;
     use super::*;
+    use norito::decode_from_bytes;
+    use std::{fs, path::PathBuf};
     fn workspace_path(relative: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../")

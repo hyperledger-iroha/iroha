@@ -5,19 +5,24 @@
     target_os = "horizon",
     target_os = "redox"
 ))]
-use std::path::Path;
+use color_eyre::eyre::{Result, eyre};
 #[cfg(any(
     not(unix),
     target_os = "espidf",
     target_os = "horizon",
     target_os = "redox"
 ))]
-use color_eyre::eyre::{Result, eyre};
+use std::path::Path;
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
 ))]
 mod unix {
+    use color_eyre::eyre::{Result, WrapErr as _, eyre};
+    use rand::{TryRngCore as _, rngs::OsRng};
+    use rustix::fs::{
+        AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, fchmod, open, openat, statat,
+    };
     use std::{
         collections::BTreeSet,
         ffi::{OsStr, OsString},
@@ -26,11 +31,6 @@ mod unix {
         os::unix::ffi::OsStrExt as _,
         os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _},
         path::{Component, Path, PathBuf},
-    };
-    use color_eyre::eyre::{Result, WrapErr as _, eyre};
-    use rand::{TryRngCore as _, rngs::OsRng};
-    use rustix::fs::{
-        AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, fchmod, open, openat, statat,
     };
     use zeroize::Zeroize as _;
     const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
@@ -784,11 +784,11 @@ mod unix {
     }
     #[cfg(test)]
     mod tests {
+        use super::*;
         use std::os::unix::{
             fs::{MetadataExt as _, PermissionsExt as _, symlink},
             net::UnixListener,
         };
-        use super::*;
         fn set_mode(path: &Path, mode: u32) {
             fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set mode");
         }

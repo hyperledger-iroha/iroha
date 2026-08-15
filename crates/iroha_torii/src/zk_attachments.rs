@@ -13,6 +13,20 @@
 //!   - DELETE `/v1/zk/attachments/{id}` – delete stored attachment and its metadata.
 //! - A background GC task periodically deletes entries older than a TTL;
 //!   TTL and size caps are provided via `iroha_config` (Torii).
+use crate::{
+    NoritoQuery,
+    routing::MaybeTelemetry,
+    utils::NORITO_MIME_TYPE,
+    zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
+};
+use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
+use flate2::read::GzDecoder;
+use iroha_config::parameters::actual::AttachmentSanitizerMode;
+use iroha_data_model::account::AccountId;
+use iroha_logger::prelude::*;
+use norito::json;
+use parking_lot::RwLock;
+use sha2::{Digest as _, Sha256};
 use std::{
     env,
     ffi::OsStr,
@@ -24,22 +38,8 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
-use flate2::read::GzDecoder;
-use iroha_config::parameters::actual::AttachmentSanitizerMode;
-use iroha_data_model::account::AccountId;
-use iroha_logger::prelude::*;
-use norito::json;
-use parking_lot::RwLock;
-use sha2::{Digest as _, Sha256};
 use tokio::{sync::Mutex, task};
 use zstd::stream::read::Decoder as ZstdDecoder;
-use crate::{
-    NoritoQuery,
-    routing::MaybeTelemetry,
-    utils::NORITO_MIME_TYPE,
-    zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
-};
 const MAX_ATTACHMENT_BYTES_FALLBACK: usize = 4 * 1024 * 1024; // fallback 4 MiB
 const ATTACHMENT_TTL_SECS_FALLBACK: u64 = 7 * 24 * 60 * 60; // fallback 7 days
 const GC_INTERVAL_SECS: u64 = 60; // run every minute
@@ -2152,25 +2152,25 @@ fn quota_lock() -> &'static Mutex<()> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, fs, path::PathBuf, process::Command};
+    use super::{
+        AttachmentHashes, AttachmentMeta, AttachmentProvenance, AttachmentSanitizerMode,
+        AttachmentSanitizerVerdict, SanitizeRejectReason, SanitizerConfig, ZK1_MAX_TLV_COUNT, json,
+        parse_zk1_tags, sanitize_attachment_id, sanitize_attachment_sync,
+    };
     use axum::http::HeaderMap;
+    use axum::{http::StatusCode, response::IntoResponse};
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use flate2::{Compression, write::GzEncoder};
     use http_body_util::BodyExt as _;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::account::AccountId;
     use sha2::{Digest as _, Sha256};
+    use std::{ffi::OsStr, fs, path::PathBuf, process::Command};
     use std::{
         io,
         io::Write as _,
         sync::Once,
         time::{Duration, Instant},
-    };
-    use axum::{http::StatusCode, response::IntoResponse};
-    use super::{
-        AttachmentHashes, AttachmentMeta, AttachmentProvenance, AttachmentSanitizerMode,
-        AttachmentSanitizerVerdict, SanitizeRejectReason, SanitizerConfig, ZK1_MAX_TLV_COUNT, json,
-        parse_zk1_tags, sanitize_attachment_id, sanitize_attachment_sync,
     };
     #[test]
     fn attachment_config_lock_remains_usable_after_writer_panic() {

@@ -908,16 +908,16 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeSet,
-        fs,
-        sync::atomic::{AtomicU64, Ordering},
-    };
     use super::support::GenerationMode as Mode;
     use super::{
         ABI_SYSCALL_GOLDEN_BEGIN, ABI_SYSCALL_GOLDEN_END, BEGIN, END, parse_generation_options,
         parse_syscall_spec, prepare_exact_outputs, render_abi_syscall_golden_section, render_docs,
         replace_generated_section, rewrite_gas_tokens, sync_generated_outputs, validate_gas_prose,
+    };
+    use std::{
+        collections::BTreeSet,
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
     };
     static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
     fn temp_file(name: &str) -> std::path::PathBuf {

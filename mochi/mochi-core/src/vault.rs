@@ -4,19 +4,19 @@
 //! can sign transactions with real account keys instead of the bundled
 //! development fixtures. First-release byte, signer, field, and JSON-graph
 //! ceilings are enforced before owned decoding or filesystem mutation.
+use crate::{
+    compose::{InstructionPermission, SigningAuthority, development_signing_authorities},
+    config::NetworkPaths,
+};
+use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
+use iroha_data_model::{account::AccountId, role::RoleId};
+use norito::json::{self, Map, Value};
 use std::{
     collections::BTreeSet,
     fs::{self, File},
     io::{self, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
-};
-use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
-use iroha_data_model::{account::AccountId, role::RoleId};
-use norito::json::{self, Map, Value};
-use crate::{
-    compose::{InstructionPermission, SigningAuthority, development_signing_authorities},
-    config::NetworkPaths,
 };
 /// Canonical filename storing signer metadata beneath a network root.
 pub const SIGNERS_FILE_NAME: &str = "signers.json";
@@ -467,10 +467,10 @@ fn extract_string(
 }
 #[cfg(test)]
 mod tests {
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-    use tempfile::tempdir;
     use super::*;
     use crate::config::{NetworkProfile, ProfilePreset};
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+    use tempfile::tempdir;
     fn dummy_paths(root: &Path) -> NetworkPaths {
         NetworkPaths::from_root(
             root,

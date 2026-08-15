@@ -5,6 +5,10 @@
 //! This lets future DA upload code publish cold query snapshots without
 //! inventing per-call conventions for compression, digests, or checkpoint
 //! references.
+use crate::query::{
+    index_status::QueryIndexStatus,
+    projection_checkpoint::{QueryProjectionCheckpointShard, QueryProjectionResourceKind},
+};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::BlockHeader,
@@ -14,10 +18,6 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-use crate::query::{
-    index_status::QueryIndexStatus,
-    projection_checkpoint::{QueryProjectionCheckpointShard, QueryProjectionResourceKind},
-};
 /// Version of the immutable query projection shard archive payload.
 pub const QUERY_PROJECTION_SHARD_ARCHIVE_VERSION: u16 = 1;
 /// Codec label describing the rowset bytes carried inside a shard archive.

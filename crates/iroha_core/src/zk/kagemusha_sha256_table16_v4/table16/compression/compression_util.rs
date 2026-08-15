@@ -10,12 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::convert::TryInto;
-use ff::PrimeField;
-use halo2_proofs::{
-    circuit::{Region, Value},
-    plonk::{Advice, Column, Error},
-};
 use super::{
     AbcdVar, CompressionConfig, EfghVar, RoundWord, RoundWordA, RoundWordDense, RoundWordE,
     RoundWordSpread, State, UpperSigmaVar,
@@ -25,6 +19,12 @@ use crate::zk::kagemusha_sha256_table16_v4::{
     table16::{SpreadVar, SpreadWord, StateWord, Table16Assignment},
     util::{even_bits, i2lebsp, lebs2ip, negate_spread, odd_bits, sum_with_carry},
 };
+use ff::PrimeField;
+use halo2_proofs::{
+    circuit::{Region, Value},
+    plonk::{Advice, Column, Error},
+};
+use std::convert::TryInto;
 // Rows needed for each gate
 pub const SIGMA_0_ROWS: usize = 4;
 pub const SIGMA_1_ROWS: usize = 4;

@@ -1,16 +1,16 @@
 //! Tests for SoraCloud signed-mutation request admission.
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use super::*;
 use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode, header},
     routing::post,
 };
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use tower::ServiceExt as _;
-use super::*;
 #[tokio::test]
 async fn soracloud_mutation_still_enforces_typed_accept() {
     let handler_calls = Arc::new(AtomicUsize::new(0));

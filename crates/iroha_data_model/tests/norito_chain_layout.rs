@@ -1,5 +1,4 @@
 //! Regression coverage for Norito chain wire layout candidates.
-use std::fmt::Debug;
 use iroha_crypto::{PrivateKey, PublicKey};
 use iroha_data_model::{
     Level,
@@ -10,6 +9,7 @@ use iroha_data_model::{
 };
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use norito::core::{DecodeFlagsGuard, Header, frame_bare_with_header_flags, header_flags};
+use std::fmt::Debug;
 #[derive(Clone, Copy)]
 struct LayoutCandidate {
     name: &'static str,

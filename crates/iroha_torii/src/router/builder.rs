@@ -3,11 +3,7 @@
 //! The builder records the exact descriptor for every cataloged mount. Its
 //! manifest is independent of Axum internals: validation never parses router
 //! debug output and never scans source text.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    convert::Infallible,
-    sync::Arc,
-};
+use crate::{SharedAppState, operator_signatures};
 use axum::{
     Router,
     body::Body,
@@ -21,8 +17,12 @@ use iroha_torii_shared::route_catalog::{
     EnabledFeatures, HttpMethod, ImplicitRouteDescriptor, Listener, RouteCatalog, RouteDescriptor,
     RouteEffect, RouteProjections,
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::Infallible,
+    sync::Arc,
+};
 use tower::{Layer, Service};
-use crate::{SharedAppState, operator_signatures};
 const COMPILED_ROUTE_FEATURES: &[&str] = &[
     #[cfg(feature = "app_api")]
     "app_api",
@@ -865,6 +865,7 @@ where
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use axum::{
         body::Body,
         http::{Method, Request, StatusCode},
@@ -873,7 +874,6 @@ mod tests {
         ApiSurface, FeatureGate, ImplicitRouteKind, Listener, RouteProjections,
     };
     use tower::ServiceExt as _;
-    use super::*;
     const READ: RouteDescriptor = RouteDescriptor::new(
         "test.read",
         HttpMethod::Get,

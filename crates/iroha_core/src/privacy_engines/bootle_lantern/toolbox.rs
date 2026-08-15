@@ -20,9 +20,6 @@
 //! garbage.  Unlike embedding evaluated scalars as constant polynomials,
 //! this compiler commutes with the auto-stable proof challenge and is a
 //! genuine input to the generic quadratic opening proof.
-use sha3::{Digest, Sha3_256};
-use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
 use super::{
     params::{
         APPLICATION_MODULUS_INVERSE_IN_PROOF_V1, APPLICATION_RING_DEGREE_V1, APPLICATION_ROWS_V1,
@@ -40,6 +37,9 @@ use super::{
         expand_proof_matrix_v1,
     },
 };
+use sha3::{Digest, Sha3_256};
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 /// Number of polynomials in the first, public part of `s2`.
 pub const S21_POLYNOMIALS_V1: usize = TBOX_M2_V1 - TBOX_KMSIS_V1;
 /// Number of projected field coordinates.

@@ -1,5 +1,4 @@
 //! Benchmarks for hash and Poseidon hot paths used by block admission.
-use std::hint::black_box;
 use criterion::Criterion;
 use iroha_core::fastpq;
 use iroha_crypto::Hash;
@@ -11,6 +10,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use iroha_zkp_halo2::poseidon::{self, PoseidonByteHasher};
+use std::hint::black_box;
 fn sample_transfer_delta() -> TransferDeltaTranscript {
     TransferDeltaTranscript {
         from_account: (*ALICE_ID).clone(),

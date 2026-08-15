@@ -325,8 +325,8 @@ pub enum StreamTokenQuotaError {
 }
 #[cfg(test)]
 mod tests {
-    use std::{sync::Barrier, thread};
     use super::*;
+    use std::{sync::Barrier, thread};
     const TOKEN_A: &str = "0000000000000000000000000000000a";
     const TOKEN_B: &str = "0000000000000000000000000000000b";
     const TOKEN_C: &str = "0000000000000000000000000000000c";

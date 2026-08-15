@@ -1,4 +1,8 @@
 //! Definition of Iroha default executor and accompanying execute functions.
+use crate::{
+    Execute, deny, execute,
+    permission::{AnyPermission, ExecutorPermission as _},
+};
 /// Re-export account visitor helpers used by the default executor.
 pub use account::{
     visit_approve_account_recovery, visit_cancel_account_recovery,
@@ -170,10 +174,6 @@ pub use trigger::{
     visit_register_trigger, visit_remove_trigger_key_value, visit_set_trigger_key_value,
     visit_unregister_trigger,
 };
-use crate::{
-    Execute, deny, execute,
-    permission::{AnyPermission, ExecutorPermission as _},
-};
 fn is_reserved_multisig_role_id(role_id: &RoleId) -> bool {
     const MULTISIG_SIGNATORY_NAMESPACE: &str = "MULTISIG_SIGNATORY";
     let name = role_id.name().as_ref();
@@ -307,7 +307,8 @@ fn account_exists_before_transaction<V: Execute + Visit + ?Sized>(
 }
 #[cfg(test)]
 mod contract_deployment_bootstrap_tests {
-    use std::num::NonZeroU64;
+    use super::*;
+    use crate::{Iroha, prelude};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::{AccountAlias, NewAccount, OpaqueAccountId},
@@ -320,8 +321,7 @@ mod contract_deployment_bootstrap_tests {
         prelude::Json,
         smart_contract::manifest::ContractManifest,
     };
-    use super::*;
-    use crate::{Iroha, prelude};
+    use std::num::NonZeroU64;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("non-zero deterministic key seed");
@@ -1404,10 +1404,10 @@ impl InstructionDispatch for InstructionBox {
 }
 /// Permission-checked visitors for native settlement instructions.
 pub mod settlement {
+    use super::*;
     use iroha_executor_data_model::permission::settlement::{
         CanManageFxCorridors, CanSetFxCorridorPolicy,
     };
-    use super::*;
     /// Dispatch a settlement instruction, gating policy updates and deferring settlement-source
     /// authorization to Core.
     pub fn visit_settlement_instruction<V: Execute + Visit + ?Sized>(
@@ -1446,6 +1446,8 @@ pub mod settlement {
 }
 #[cfg(test)]
 mod core_authorization_dispatch_tests {
+    use super::*;
+    use crate::{Iroha, prelude};
     use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
@@ -1469,8 +1471,6 @@ mod core_authorization_dispatch_tests {
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         prelude::{AccountId, AssetDefinitionId, DomainId, Quantity, ValidationFail},
     };
-    use super::*;
-    use crate::{Iroha, prelude};
     #[derive(Debug)]
     struct TestExecutor {
         host: Iroha,
@@ -1781,8 +1781,8 @@ pub mod governance {
 }
 /// Permission-checked visitors for peer management instructions.
 pub mod peer {
-    use iroha_executor_data_model::permission::peer::CanManagePeers;
     use super::*;
+    use iroha_executor_data_model::permission::peer::CanManagePeers;
     /// Registers a peer when genesis or a peer manager submits the instruction.
     pub fn visit_register_peer<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1812,8 +1812,8 @@ pub mod peer {
 }
 /// Permission-checked visitors for public-lane validator lifecycle instructions.
 pub mod staking {
-    use iroha_executor_data_model::permission::peer::CanManagePeers;
     use super::*;
+    use iroha_executor_data_model::permission::peer::CanManagePeers;
     /// Register a public-lane validator when the caller is authorised or during genesis.
     pub fn visit_register_public_lane_validator<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1856,8 +1856,8 @@ pub mod staking {
 }
 /// Permission-checked visitors for Nexus lane relay recovery instructions.
 pub mod nexus {
-    use iroha_executor_data_model::permission::peer::CanManageLaneRelayEmergency;
     use super::*;
+    use iroha_executor_data_model::permission::peer::CanManageLaneRelayEmergency;
     /// Set or clear emergency lane relay validators when the caller is authorised or during genesis.
     pub fn visit_set_lane_relay_emergency_validators<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1874,6 +1874,7 @@ pub mod nexus {
 }
 /// Permission-checked visitors for `SoraFS` registry and pricing instructions.
 pub mod sorafs {
+    use super::*;
     use iroha_executor_data_model::permission::sorafs::{
         CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanFileSorafsCapacityDispute,
         CanIssueSorafsReplicationOrder, CanManageSorafsModeration, CanManageSorafsPopRegistry,
@@ -1881,7 +1882,6 @@ pub mod sorafs {
         CanRecordSorafsReputationJournal, CanResolveSorafsCapacityDispute, CanSetSorafsPricing,
         CanSetSorafsReservePolicy, CanUpsertSorafsProviderCredit,
     };
-    use super::*;
     use iroha_smart_contract::data_model::query::sorafs::prelude::{
         FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
         FindSorafsModerationCommit, FindSorafsModerationEvents,
@@ -2891,10 +2891,14 @@ pub mod sorafs {
 }
 /// Permission-checked visitors for domain lifecycle instructions.
 pub mod domain {
-    use iroha_executor_data_model::permission::domain::{CanModifyDomainMetadata, CanUnregisterDomain};
-    use iroha_smart_contract::data_model::{asset::AssetDefinitionId, domain::DomainId};
     use super::*;
-    use crate::permission::{account::is_account_owner, domain::is_domain_owner, revoke_permissions};
+    use crate::permission::{
+        account::is_account_owner, domain::is_domain_owner, revoke_permissions,
+    };
+    use iroha_executor_data_model::permission::domain::{
+        CanModifyDomainMetadata, CanUnregisterDomain,
+    };
+    use iroha_smart_contract::data_model::{asset::AssetDefinitionId, domain::DomainId};
     /// Registers a domain only while applying genesis.
     ///
     /// Ordinary signed transactions must use the declarative `EnsureAlias`
@@ -3190,11 +3194,11 @@ pub mod domain {
 }
 /// Permission-checked visitors for account management instructions.
 pub mod account {
+    use super::*;
+    use crate::permission::{account::is_account_owner, revoke_permissions};
     use iroha_executor_data_model::permission::account::{
         CanModifyAccountMetadata, CanReplaceAccountController, CanUnregisterAccount,
     };
-    use super::*;
-    use crate::permission::{account::is_account_owner, revoke_permissions};
     /// Registers a canonical account.
     pub fn visit_register_account<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3482,15 +3486,15 @@ pub mod account {
 }
 /// Permission-checked visitors for asset definition instructions.
 pub mod asset_definition {
-    use iroha_executor_data_model::permission::asset_definition::{
-        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
-    };
-    use iroha_smart_contract::data_model::asset::AssetDefinitionId;
     use super::*;
     use crate::permission::{
         account::is_account_owner, asset_definition::is_asset_definition_owner,
         domain::is_domain_owner, revoke_permissions,
     };
+    use iroha_executor_data_model::permission::asset_definition::{
+        CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition,
+    };
+    use iroha_smart_contract::data_model::asset::AssetDefinitionId;
     /// Registers an asset definition.
     pub fn visit_register_asset_definition<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3784,6 +3788,8 @@ pub mod asset_definition {
 }
 /// Permission-checked visitors for asset operations.
 pub mod asset {
+    use super::*;
+    use crate::permission::{asset::is_asset_owner, asset_definition::is_asset_definition_owner};
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAssetToAccount,
         CanMintAssetWithDefinition, CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
@@ -3794,8 +3800,6 @@ pub mod asset {
         BuiltInInstruction, RemoveAssetKeyValue, SetAssetKeyValue,
     };
     use norito::NoritoSerialize;
-    use super::*;
-    use crate::permission::{asset::is_asset_owner, asset_definition::is_asset_definition_owner};
     fn target_account_scope(
         executor: &(impl Execute + Visit + ?Sized),
         account_id: &AccountId,
@@ -4127,8 +4131,6 @@ pub mod asset {
     }
     #[cfg(test)]
     mod tests {
-        use core::num::NonZeroU64;
-        use iroha_crypto::{Algorithm, KeyPair};
         use super::*;
         use crate::{
             Execute, Iroha,
@@ -4155,6 +4157,8 @@ pub mod asset {
             },
             prelude::{Context, Visit},
         };
+        use core::num::NonZeroU64;
+        use iroha_crypto::{Algorithm, KeyPair};
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("fixture seed must derive a valid keypair")
@@ -4443,10 +4447,6 @@ pub mod asset {
 }
 /// Permission-checked visitors for non-fungible asset instructions.
 pub mod nft {
-    use iroha_executor_data_model::permission::nft::{
-        CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
-    };
-    use norito::NoritoSerialize;
     use super::*;
     use crate::{
         data_model::isi::BuiltInInstruction,
@@ -4456,6 +4456,10 @@ pub mod nft {
             revoke_permissions,
         },
     };
+    use iroha_executor_data_model::permission::nft::{
+        CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
+    };
+    use norito::NoritoSerialize;
     /// Registers an NFT when the caller owns the domain or has the registration permission.
     pub fn visit_register_nft<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Register<Nft>) {
         let domain_id = isi.object().id().domain();
@@ -4595,8 +4599,8 @@ pub mod nft {
 }
 /// Permission-checked visitors for network parameter updates.
 pub mod parameter {
-    use iroha_executor_data_model::permission::parameter::CanSetParameters;
     use super::*;
+    use iroha_executor_data_model::permission::parameter::CanSetParameters;
     const SCCP_REGISTRY_PARAMETER_ID: &str = "sccp_registry_v1";
     fn updates_sccp_governance(isi: &SetParameter) -> bool {
         matches!(
@@ -4642,9 +4646,9 @@ pub mod parameter {
 }
 /// Permission-checked visitors for role registration and mutation.
 pub mod role {
+    use super::*;
     use iroha_executor_data_model::permission::role::CanManageRoles;
     use iroha_smart_contract::{Iroha, data_model::role::Role};
-    use super::*;
     #[derive(Clone, Copy)]
     pub(super) enum RoleDelegationOperation {
         Grant,
@@ -4859,13 +4863,13 @@ pub mod role {
 }
 /// Permission-checked visitors for trigger lifecycle and metadata instructions.
 pub mod trigger {
+    use super::*;
+    use crate::permission::{revoke_permissions, trigger::is_trigger_owner};
     use iroha_executor_data_model::permission::trigger::{
         CanExecuteTrigger, CanModifyTrigger, CanModifyTriggerMetadata, CanRegisterTrigger,
         CanUnregisterTrigger,
     };
     use iroha_smart_contract::data_model::trigger::Trigger;
-    use super::*;
-    use crate::permission::{revoke_permissions, trigger::is_trigger_owner};
     /// Registers a trigger when the caller is genesis, the trigger authority, or holds the grant token.
     pub fn visit_register_trigger<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -5138,6 +5142,13 @@ pub mod trigger {
     }
     #[cfg(test)]
     mod tests {
+        use super::*;
+        use crate::data_model::{
+            account::AccountId,
+            asset::{AssetDefinitionId, AssetId},
+            domain::DomainId,
+            nexus::FeeSponsorProgramId,
+        };
         use core::str::FromStr as _;
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_executor_data_model::permission::{
@@ -5168,13 +5179,6 @@ pub mod trigger {
             soranet::{
                 CanIngestSoranetPrivacy, CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers,
             },
-        };
-        use super::*;
-        use crate::data_model::{
-            account::AccountId,
-            asset::{AssetDefinitionId, AssetId},
-            domain::DomainId,
-            nexus::FeeSponsorProgramId,
         };
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -5505,9 +5509,9 @@ pub mod trigger {
 }
 #[cfg(test)]
 mod sorafs_permission_tests {
-    use core::num::NonZeroU64;
     use super::*;
     use crate::{Iroha, prelude, tests::with_mock_permissions};
+    use core::num::NonZeroU64;
     use iroha_crypto::PublicKey;
     use iroha_data_model::{
         account::AccountId,
@@ -6464,8 +6468,8 @@ pub mod permission {
 include!("governed_offline_permission_tests.rs");
 /// Permission-checked visitor for executor upgrade instructions.
 pub mod executor {
-    use iroha_executor_data_model::permission::executor::CanUpgradeExecutor;
     use super::*;
+    use iroha_executor_data_model::permission::executor::CanUpgradeExecutor;
     /// Upgrades the executor when invoked during genesis or by an authorised authority.
     pub fn visit_upgrade<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Upgrade) {
         if executor.context().curr_block.is_genesis() {

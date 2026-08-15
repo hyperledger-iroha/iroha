@@ -1,12 +1,7 @@
 //! This module contains [`LiveQueryStore`] actor.
-use std::{
-    fmt,
-    num::{NonZeroU64, NonZeroUsize},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
+use super::cursor::ErasedQueryIterator;
+use crate::smartcontracts::isi::query::{
+    OrdinaryQueryCursorBinding, OrdinaryQueryCursorMemory, OrdinaryQueryMemoryAdmission,
 };
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::actual::LiveQueryStore as Config;
@@ -20,11 +15,16 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::{trace, warn};
-use tokio::task::JoinHandle;
-use super::cursor::ErasedQueryIterator;
-use crate::smartcontracts::isi::query::{
-    OrdinaryQueryCursorBinding, OrdinaryQueryCursorMemory, OrdinaryQueryMemoryAdmission,
+use std::{
+    fmt,
+    num::{NonZeroU64, NonZeroUsize},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
 };
+use tokio::task::JoinHandle;
 type DeferredMaterializer = Box<dyn FnOnce() -> ErasedQueryIterator + Send + Sync>;
 const QUERY_ID_BYTES: usize = 32;
 const QUERY_ID_ALLOCATION_ATTEMPTS: usize = 16;
@@ -984,13 +984,10 @@ impl LiveQueryStoreHandle {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZeroU64,
-        sync::{
-            Arc, Barrier,
-            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        },
-        time::Duration,
+    use super::*;
+    use crate::smartcontracts::isi::query::{
+        ORDINARY_NAME_ID_SOURCE_BYTES, OrdinaryQueryExecutionLimits, OrdinaryQueryMemoryLease,
+        OrdinaryQueryMemoryReservation, QueryCountMode, QueryExecutionBudget, QueryLimits,
     };
     use iroha_data_model::{
         permission::Permission,
@@ -1003,10 +1000,13 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::smartcontracts::isi::query::{
-        ORDINARY_NAME_ID_SOURCE_BYTES, OrdinaryQueryExecutionLimits, OrdinaryQueryMemoryLease,
-        OrdinaryQueryMemoryReservation, QueryCountMode, QueryExecutionBudget, QueryLimits,
+    use std::{
+        num::NonZeroU64,
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
     #[derive(Debug)]
     struct TestMemoryReservation {

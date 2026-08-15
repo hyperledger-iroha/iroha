@@ -4,8 +4,8 @@
 //! `daf14859b5aa3f8d75c42966ba7de83e6eb59997` (Unlicense).  The unusual
 //! word-major eight-block output layout is intentional and matches the Falcon
 //! C implementation and its AVX2 path byte for byte.
-use zeroize::Zeroize;
 use super::PRNG;
+use zeroize::Zeroize;
 pub(in crate::privacy_engines::bootle_lantern::falcon512) struct ChaCha20Prng {
     buffer: [u8; 512],
     state: [u8; 56],
@@ -140,9 +140,9 @@ fn quarter_round(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) 
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use sha2::{Digest as _, Sha256};
     use zeroize::Zeroizing;
-    use super::*;
     #[test]
     fn pinned_falcon_chacha20_stream_kat() {
         let seed: [u8; 56] = hex::decode(

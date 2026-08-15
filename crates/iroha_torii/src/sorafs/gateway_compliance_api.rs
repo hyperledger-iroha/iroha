@@ -8,10 +8,13 @@
 //! controller before any durable transition commits.
 
 #![cfg(feature = "app_api")]
-use std::{
-    sync::{Arc, LazyLock},
-    time::{SystemTime, UNIX_EPOCH},
+use super::gateway::{
+    GatewayComplianceAcknowledgementV1, GatewayComplianceCatalogV1, GatewayComplianceCheckpointV1,
+    GatewayComplianceController, GatewayComplianceError, GatewayComplianceHistoryRecordV1,
+    GatewayComplianceMutationBindingV1, GatewayComplianceMutationResultV1,
+    GatewayComplianceRollbackV1, MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
 };
+use crate::{JsonBody, SharedAppState};
 use axum::{
     body::Bytes,
     extract::{Path, State},
@@ -23,13 +26,10 @@ use iroha_data_model::role::RoleId;
 use iroha_logger::warn;
 use norito::derive::JsonSerialize;
 use sha2::{Digest as _, Sha256};
-use super::gateway::{
-    GatewayComplianceAcknowledgementV1, GatewayComplianceCatalogV1, GatewayComplianceCheckpointV1,
-    GatewayComplianceController, GatewayComplianceError, GatewayComplianceHistoryRecordV1,
-    GatewayComplianceMutationBindingV1, GatewayComplianceMutationResultV1,
-    GatewayComplianceRollbackV1, MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+use std::{
+    sync::{Arc, LazyLock},
+    time::{SystemTime, UNIX_EPOCH},
 };
-use crate::{JsonBody, SharedAppState};
 const GATEWAY_COMPLIANCE_OPERATOR_ROLE: &str = "sorafs_gateway_compliance_operator";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 const IDEMPOTENCY_BINDING_DOMAIN_V1: &[u8] = b"iroha.sorafs.gateway.compliance.idempotency.v1";
@@ -1258,7 +1258,6 @@ fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response 
 }
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer as _, SigningKey};
     use super::*;
     use crate::sorafs::gateway::{
         GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1, GATEWAY_COMPLIANCE_CATALOG_VERSION_V1,
@@ -1266,6 +1265,7 @@ mod tests {
         GatewayComplianceCatalogPayloadV1, GatewayComplianceIdempotencyRecordV1,
         GatewayComplianceMutationKindV1,
     };
+    use ed25519_dalek::{Signer as _, SigningKey};
     #[test]
     fn gateway_compliance_auth_rejects_foreign_exact_network() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(

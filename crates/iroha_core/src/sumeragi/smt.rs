@@ -18,9 +18,9 @@
 //!
 //! This is a minimal, internal component. It does not attempt optimizations and
 //! runs in O((R+W) * 256). Avoid using in hot paths beyond prototyping.
-use std::collections::{BTreeMap, BTreeSet};
 use iroha_crypto::Hash;
 use iroha_data_model::block::consensus_v2 as wire;
+use std::collections::{BTreeMap, BTreeSet};
 /// A (key, value) pair for SMT inputs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KvPair {

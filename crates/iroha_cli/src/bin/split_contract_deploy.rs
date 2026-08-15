@@ -1,12 +1,9 @@
 //! Split contract deploy helper for oversized public deploy envelopes.
 #![allow(clippy::too_many_lines)]
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
 use clap::Parser;
 use eyre::{Result, WrapErr as _, eyre};
+#[cfg(test)]
+use iroha::data_model::transaction::Executable;
 use iroha::{
     account_address::parse_account_address,
     client::Client,
@@ -25,8 +22,11 @@ use iroha::{
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use iroha_torii_shared::FeeQuoteResponse;
 use iroha_version::codec::EncodeVersioned;
-#[cfg(test)]
-use iroha::data_model::transaction::Executable;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(long)]

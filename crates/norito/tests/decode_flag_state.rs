@@ -1,9 +1,9 @@
 //! Regression tests for decode flag state handling and panic safety.
-use std::io::{Cursor, Read};
 use norito::{
     NoritoSerialize,
     core::{self, Compression, Header, VERSION_MAJOR},
 };
+use std::io::{Cursor, Read};
 fn packed_seq_supported() -> bool {
     cfg!(feature = "packed-seq")
 }

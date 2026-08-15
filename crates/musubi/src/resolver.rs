@@ -5,11 +5,8 @@
 //! the first-release behavior: reuse a compatible selection already present in
 //! the graph, then a still-valid parent-local lock edge, then fresh releases in
 //! descending `SemVer` order.
-use std::{
-    collections::{BTreeMap, BTreeSet, btree_map::Entry},
-    error::Error,
-    fmt,
-    sync::Arc,
+use crate::lockfile::{
+    LockedRootV1, LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1,
 };
 use iroha_data_model::{
     NetworkId,
@@ -22,8 +19,11 @@ use iroha_data_model::{
     },
     name::Name,
 };
-use crate::lockfile::{
-    LockedRootV1, LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1,
+use std::{
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    error::Error,
+    fmt,
+    sync::Arc,
 };
 /// Maximum candidate rows retained across one bounded sparse-index collection.
 pub(crate) const MAX_COLLECTED_RESOLVER_ROWS_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
@@ -1594,6 +1594,7 @@ fn select_better_conflict(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{
         account::AccountId,
         musubi::{
@@ -1606,7 +1607,6 @@ mod tests {
         nexus::DataSpaceId,
         prelude::{Algorithm, KeyPair},
     };
-    use super::*;
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()

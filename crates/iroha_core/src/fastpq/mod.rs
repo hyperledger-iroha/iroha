@@ -1,10 +1,5 @@
 //! FASTPQ-specific transcript helpers shared across the host.
 pub mod lane;
-use std::{
-    collections::BTreeMap,
-    io::{self, Write},
-    sync::atomic::{AtomicBool, Ordering},
-};
 use fastpq_prover::{
     Bn254PoseidonBatchSlice, OperationKind, PendingBn254PoseidonWordBatch, PoseidonSponge,
     PublicInputs, StateTransition, TransitionBatch,
@@ -30,6 +25,11 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use iroha_zkp_halo2::poseidon as halo2_poseidon;
 use norito::{codec::Encode as NoritoEncode, to_bytes};
+use std::{
+    collections::BTreeMap,
+    io::{self, Write},
+    sync::atomic::{AtomicBool, Ordering},
+};
 use thiserror::Error;
 const AUTHORITY_DIGEST_DOMAIN: &[u8] = b"iroha:fastpq:v1:authority|";
 const TX_SET_HASH_DOMAIN: &[u8] = b"fastpq:v1:tx_set";
@@ -1071,7 +1071,7 @@ fn operation_from_dto(operation: &FastpqOperationKind) -> OperationKind {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU64};
+    use super::*;
     use iroha_data_model::{
         Registrable,
         block::{
@@ -1086,7 +1086,7 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::decode_from_bytes;
-    use super::*;
+    use std::{collections::BTreeMap, num::NonZeroU64};
     #[test]
     fn authority_digest_matches_known_vector() {
         let digest = authority_digest(&ALICE_ID);

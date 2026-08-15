@@ -1,9 +1,9 @@
 #![allow(single_use_lifetimes)] // NOTE: Triggered by &str implementation
-use std::{boxed::Box, mem::ManuallyDrop, ptr::NonNull, string::String, vec::Vec};
 use crate::{
     ReprC, WrapperTypeOf, ffi_type,
     slice::{RefMutSlice, RefSlice},
 };
+use std::{boxed::Box, mem::ManuallyDrop, ptr::NonNull, string::String, vec::Vec};
 // NOTE: This can be contested as it is nowhere documented that String is
 // actually transmutable into Vec<u8>, but implicitly it should be
 // SAFETY: String type should be transmutable into Vec<u8>

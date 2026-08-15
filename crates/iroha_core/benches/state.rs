@@ -3,8 +3,6 @@
 #[cfg(feature = "bench")]
 use core::num::NonZeroU64;
 #[cfg(feature = "bench")]
-use std::time::Duration;
-#[cfg(feature = "bench")]
 use criterion::{BatchSize, Criterion};
 #[cfg(feature = "bench")]
 use iroha_core::{
@@ -12,6 +10,8 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
+#[cfg(feature = "bench")]
+use std::time::Duration;
 #[cfg(feature = "bench")]
 fn bench_state_write_lock_heavy_world_commit(c: &mut Criterion) {
     let mut group = c.benchmark_group("state_write_lock_heavy_world_commit");

@@ -7,7 +7,6 @@
 //! family only after all six MAIN base roots and the compact-CA base root have
 //! been committed, then supplies an opaque phase token to MAIN and a binding
 //! that each local subproof absorbs before its auxiliary commitments.
-use thiserror::Error;
 use super::{
     der_stark::{ZkX509DerStarkChallengesV1, derive_zk_x509_der_stark_challenges_v1},
     io_air::{ZkX509IoChallengesV1, derive_zk_x509_io_challenges_v1},
@@ -39,6 +38,7 @@ use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1,
     sha256_frame_v1,
 };
+use thiserror::Error;
 const CREDENTIAL_PRE_AUX_MAGIC_V1: [u8; 4] = *b"X5B1";
 const CREDENTIAL_PRE_AUX_PROFILE_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:credential-pre-aux:profile:v1";

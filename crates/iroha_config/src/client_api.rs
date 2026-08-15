@@ -6,11 +6,14 @@
 #![allow(clippy::too_many_lines, clippy::or_fun_call)]
 //! - Deserialize [`ConfigUpdateDTO`] from the client and apply the changes
 // NonZero types are imported from core::num below
+use crate::{
+    logger::Directives,
+    parameters::{actual as base, defaults},
+};
 use core::{
     fmt::Write as _,
     num::{NonZero, NonZeroU32, NonZeroU64},
 };
-use std::{collections::BTreeMap, str::FromStr};
 use hex;
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
@@ -21,10 +24,7 @@ use norito::{
     Error as NoritoError,
     json::{self, Arena, FastFromJson, FastJsonWrite, JsonDeserialize, TapeWalker},
 };
-use crate::{
-    logger::Directives,
-    parameters::{actual as base, defaults},
-};
+use std::{collections::BTreeMap, str::FromStr};
 fn parse_exact_value_via_tape<'input, T>(
     parser: &mut json::Parser<'input>,
     parse: impl FnOnce(&mut TapeWalker<'input>, &mut Arena) -> Result<T, NoritoError>,
@@ -3313,6 +3313,7 @@ impl JsonDeserialize for SoranetHandshakeSummary {
 }
 #[cfg(test)]
 mod test {
+    use super::*;
     use iroha_crypto::{
         KeyPair,
         soranet::handshake::{
@@ -3321,7 +3322,6 @@ mod test {
     };
     use iroha_data_model::Level;
     use nonzero_ext::nonzero;
-    use super::*;
     std::thread_local! {
         static FAST_BRIDGE_TAPE_BYTES: std::cell::Cell<usize> = const {
             std::cell::Cell::new(0)

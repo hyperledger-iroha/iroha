@@ -5,16 +5,16 @@
 //! leader seed, DA layout, and proofs of possession that were frozen before it
 //! can authenticate that WAL. This store persists those canonical inputs before
 //! the corresponding WAL is opened and never overwrites a conflicting height.
+use super::v2::VerifiedHeightContext;
+use iroha_crypto::Hash;
+use iroha_data_model::block::consensus_v2 as wire;
+use norito::codec::{Decode, DecodeAll, Encode};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
-use iroha_crypto::Hash;
-use iroha_data_model::block::consensus_v2 as wire;
-use norito::codec::{Decode, DecodeAll, Encode};
 use thiserror::Error;
-use super::v2::VerifiedHeightContext;
 const FILE_MAGIC: &[u8; 8] = b"SUMV2CTX";
 const FRAME_VERSION: u16 = 1;
 const HASH_LEN: usize = 32;
@@ -1040,10 +1040,10 @@ pub(crate) enum V2ContextStoreError {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Barrier};
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
-    use super::*;
+    use std::sync::{Arc, Barrier};
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x93; Hash::LENGTH]),

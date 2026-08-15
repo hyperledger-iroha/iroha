@@ -1,17 +1,17 @@
 //! Permission Token and related impls
-use std::{collections::BTreeSet, format, string::String, vec::Vec};
+pub use self::model::*;
 use getset::Getters;
 use iroha_data_model_derive::model;
 use iroha_primitives::json::Json;
 use iroha_schema::{Ident, IntoSchema};
-pub use self::model::*;
+use std::{collections::BTreeSet, format, string::String, vec::Vec};
 /// Collection of [`Permission`]s
 pub type Permissions = BTreeSet<Permission>;
 #[model]
 mod model {
+    use super::*;
     use derive_more::Display;
     use norito::codec::{Decode, Encode};
-    use super::*;
     /// Stored proof of the account having a permission for a certain action.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Display, Getters,

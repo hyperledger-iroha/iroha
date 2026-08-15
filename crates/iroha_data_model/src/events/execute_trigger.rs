@@ -1,9 +1,9 @@
 //! Trigger execution event and filter
-use getset::Getters;
-use iroha_data_model_derive::model;
 pub use self::model::*;
 use super::*;
 use crate::prelude::*;
+use getset::Getters;
+use iroha_data_model_derive::model;
 #[model]
 mod model {
     use super::*;

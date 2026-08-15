@@ -1,4 +1,5 @@
 //! Contains trigger-related types that are specialized for core-specific needs.
+use crate::smartcontracts::triggers::set::ExecutableRef;
 use derive_more::Constructor;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -13,7 +14,6 @@ use iroha_logger::trace;
 use norito::json::native::Number as JsonNumber;
 #[cfg(feature = "json")]
 use norito::json::{self, JsonSerialize as JsonSerializeTrait, Value as JsonValue};
-use crate::smartcontracts::triggers::set::ExecutableRef;
 /// Same as [`iroha_data_model::trigger::action::Action`] but generic over the filter type
 ///
 /// This is used to split different action types to different collections
@@ -528,8 +528,7 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
 }
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "json")]
-    use std::num::{NonZeroU32, NonZeroU64};
+    use super::*;
     #[cfg(feature = "json")]
     use iroha_crypto::{Algorithm, KeyPair};
     #[cfg(feature = "json")]
@@ -538,7 +537,8 @@ mod tests {
     };
     #[cfg(feature = "json")]
     use iroha_primitives::const_vec::ConstVec;
-    use super::*;
+    #[cfg(feature = "json")]
+    use std::num::{NonZeroU32, NonZeroU64};
     #[cfg(feature = "json")]
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("specialized trigger fixture key generation should succeed")

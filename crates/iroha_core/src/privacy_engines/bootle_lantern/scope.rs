@@ -1,4 +1,5 @@
 //! Reusable credential-scope binding for the concrete Falcon-512 profile.
+use super::{params::APPLICATION_MODULUS_V1, ring::ApplicationPolynomialV1};
 use iroha_data_model::{
     NetworkId,
     privacy::{
@@ -14,7 +15,6 @@ use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
 };
 use thiserror::Error;
-use super::{params::APPLICATION_MODULUS_V1, ring::ApplicationPolynomialV1};
 /// Domain for the algebraic credential-scope term.
 pub const BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.lazer-falcon512-credential-scope.v1";
@@ -244,13 +244,13 @@ pub enum CredentialScopeErrorV1 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPublicMatrixV1,
         BootleLanternPolynomialV1, PrivacyTransactionIntentDigestV1,
     };
     use sha2::{Digest as _, Sha256};
-    use super::*;
     const fn raw(value: u8) -> [u8; 32] {
         [value; 32]
     }

@@ -694,7 +694,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
 }
 #[cfg(test)]
 mod tests {
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         bridge::{
@@ -704,6 +703,7 @@ mod tests {
         nexus::LaneId,
         proof::ProofBox,
     };
+    use norito::core::DecodeFromSlice;
     fn proof() -> BridgeProof {
         BridgeProof {
             range: BridgeProofRange {

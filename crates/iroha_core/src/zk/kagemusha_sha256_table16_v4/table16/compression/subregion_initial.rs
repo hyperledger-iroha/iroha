@@ -10,17 +10,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use ff::PrimeField;
-use halo2_proofs::{
-    circuit::{Region, Value},
-    plonk::Error,
-};
 use super::{
     super::{RoundWord, StateWord},
     CompressionConfig, RoundWordDense, State,
     compression_util::*,
 };
 use crate::zk::kagemusha_sha256_table16_v4::IV;
+use ff::PrimeField;
+use halo2_proofs::{
+    circuit::{Region, Value},
+    plonk::Error,
+};
 impl CompressionConfig {
     #[allow(clippy::many_single_char_names)]
     pub fn initialize_iv<F: PrimeField>(

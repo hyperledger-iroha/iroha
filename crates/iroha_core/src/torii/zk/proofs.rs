@@ -1,7 +1,7 @@
 //! Proof registry query helpers shared with Torii.
+use crate::state::{State, WorldReadOnly};
 use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus};
 use mv::storage::StorageReadOnly;
-use crate::state::{State, WorldReadOnly};
 /// Filters applied when querying proof records.
 #[derive(Debug, Clone)]
 pub struct ProofFilters<'a> {
@@ -158,6 +158,12 @@ fn proof_matches_filters(id: &ProofId, record: &ProofRecord, filters: &ProofFilt
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_data_model::{
         bridge::{
             BridgeProof, BridgeProofPayload, BridgeProofRange, BridgeProofRecord,
@@ -166,12 +172,6 @@ mod tests {
         proof::{ProofId, ProofRecord, ProofStatus},
     };
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
     fn blank_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();

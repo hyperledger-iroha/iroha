@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use super::*;
+use crate::tui;
 use clap::{ArgGroup, ValueEnum, builder::PossibleValue};
 use color_eyre::eyre::WrapErr as _;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
+use std::path::PathBuf;
 use zeroize::Zeroizing;
-use super::*;
-use crate::tui;
 /// Use `Kagami` to generate cryptographic key-pairs.
 #[derive(ClapArgs, Debug, Clone)]
 #[command(group = ArgGroup::new("generate_from").required(false))]
@@ -266,10 +266,10 @@ pub(crate) fn parse_keygen_seed_hex(seed: &str) -> color_eyre::Result<Vec<u8>> {
 mod tests {
     use std::{collections::BTreeSet, io::BufWriter};
     // Bring `ValueEnum` into scope so `AlgorithmArg::value_variants()` is callable in this module.
-    use clap::ValueEnum;
     use super::{
         Algorithm, AlgorithmArg, Args, ExposedPrivateKey, KeyPair, RunArgs, parse_keygen_seed_hex,
     };
+    use clap::ValueEnum;
     #[test]
     fn algorithm_arg_displays_as_algorithm() {
         assert_eq!(

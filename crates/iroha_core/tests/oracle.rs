@@ -1,11 +1,5 @@
 //! Oracle ISI integration tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroU64,
-    str::FromStr,
-    sync::Arc,
-};
 use iroha_config::parameters::{
     actual::{
         Oracle as OracleConfig, OracleChangeThresholds, OracleEconomics, OracleGovernance,
@@ -51,6 +45,12 @@ use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU64,
+    str::FromStr,
+    sync::Arc,
+};
 fn test_telemetry() -> StateTelemetry {
     StateTelemetry::new(Arc::new(Metrics::default()), false)
 }

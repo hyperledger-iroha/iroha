@@ -1,10 +1,10 @@
 //! Lossless, recovering Kotodama lexer.
+use super::{cst::GreenToken, kind::SyntaxKind};
 use crate::{
     diagnostic::{Diagnostic, DiagnosticFix, DiagnosticPhase, SourcePosition, SourceSpan},
     lexer::{TokenKind, V1_PUNCTUATION_KINDS, v1_keyword_kind},
     source::{FrontendBudget, SourceFile, TextRange},
 };
-use super::{cst::GreenToken, kind::SyntaxKind};
 /// Lossless lexer output.
 #[derive(Clone, Debug)]
 pub struct Lexed {

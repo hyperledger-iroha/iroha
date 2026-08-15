@@ -1,8 +1,8 @@
-use std::sync::OnceLock;
 use fastpq_isi::poseidon::{
     FIELD_MODULUS, MDS as CPU_MDS, RATE, ROUND_CONSTANTS as CPU_ROUND_CONSTANTS, STATE_WIDTH,
 };
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 const TOTAL_ROUNDS: usize = CPU_ROUND_CONSTANTS.len();
 const SNAPSHOT_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),

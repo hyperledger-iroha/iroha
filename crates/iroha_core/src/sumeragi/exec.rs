@@ -1,7 +1,13 @@
 //! Exec-vote helpers: compute `post_state_root` via SMT, build votes, and assemble QCs.
 //!
 //! This module is internal and side-effect free; consumed by the Sumeragi execution pipeline.
-use std::collections::{BTreeMap, BTreeSet};
+use super::{
+    consensus::ExecWitness,
+    smt::{
+        KvPair, build_kagemusha_topup_block_commitment, compute_consensus_post_state_root,
+        compute_post_state_root,
+    },
+};
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     block::{
@@ -13,13 +19,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneFinalityStatement, LaneId, compute_settlement_hash},
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
-use super::{
-    consensus::ExecWitness,
-    smt::{
-        KvPair, build_kagemusha_topup_block_commitment, compute_consensus_post_state_root,
-        compute_post_state_root,
-    },
-};
+use std::collections::{BTreeMap, BTreeSet};
 fn witness_pairs(witness: &ExecWitness) -> (Vec<KvPair>, Vec<KvPair>) {
     let reads = witness
         .reads
@@ -730,7 +730,9 @@ pub fn parent_state_from_witness(w: &ExecWitness) -> Hash {
 }
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, time::Duration};
+    use super::super::consensus::{ExecKv, ExecWitness};
+    use super::*;
+    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
     use iroha_crypto::{Algorithm, KeyPair, MerkleTreeCommitment, Signature, SignatureOf};
     use iroha_data_model::{
         account::AccountId,
@@ -753,9 +755,7 @@ mod tests {
         trigger::DataTriggerSequence,
     };
     use iroha_primitives::{numeric::Quantity, time::TimeSource};
-    use super::super::consensus::{ExecKv, ExecWitness};
-    use super::*;
-    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
+    use std::{num::NonZeroU64, time::Duration};
     const MANIFEST_APPLICATION_HEIGHT: u64 = 40;
     const MANIFEST_LANE_BLOCK_HEIGHT: u64 = 5;
     const MANIFEST_COORDINATOR_VIEW: u64 = 9;

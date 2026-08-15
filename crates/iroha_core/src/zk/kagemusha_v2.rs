@@ -1,23 +1,9 @@
 //! Selector-free ABI-21/V4 Kagemusha recursive-spend backend.
 //!
-//! V4 reuses the unchanged V2 amounts, note openings, authorization,
-//! membership, and finality relations. Its fixed Eq/Ep recursive circuits keep
-//! the recursive IPA verifier separate from the compact transition relation,
-//! so initialization, one-parent, and two-parent transitions use identical
-//! keys, layouts, and proof-size limits.
-use std::sync::Arc;
-use halo2_proofs::halo2curves::pasta::Fp as Scalar;
-use iroha_data_model::offline::{
-    KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4, KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2,
-    KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2,
-    KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2, KagemushaAuthenticatedReleaseV4,
-    KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleParityV1,
-    KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendBranchClaimV2,
-    KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendPublicStatementV4,
-    KagemushaRecursiveSpendStateBoundaryV5, KagemushaRecursiveSpendTransitionV4,
-};
-use norito::codec::Encode;
-use sha2::{Digest as _, Sha256};
+//! V4 reuses the unchanged V2 amounts, note openings, authorization, membership, and finality
+//! relations. Its fixed Eq/Ep recursive circuits keep the recursive IPA verifier separate from the
+//! compact transition relation, so initialization, one-parent, and two-parent transitions use
+//! identical keys, layouts, and proof-size limits.
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 pub use super::kagemusha_recursion_adapter::generate_candidate_recursive_step_two_receipt_v4;
 #[cfg(feature = "kagemusha-generation-memory-lab")]
@@ -37,6 +23,19 @@ pub use super::kagemusha_recursion_adapter::{
 pub use super::kagemusha_step_transition::{
     KagemushaStepOperationVectorV4, KagemushaStepTransferPublicV4,
 };
+use halo2_proofs::halo2curves::pasta::Fp as Scalar;
+use iroha_data_model::offline::{
+    KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4, KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2,
+    KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2,
+    KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2, KagemushaAuthenticatedReleaseV4,
+    KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleParityV1,
+    KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendBranchClaimV2,
+    KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendPublicStatementV4,
+    KagemushaRecursiveSpendStateBoundaryV5, KagemushaRecursiveSpendTransitionV4,
+};
+use norito::codec::Encode;
+use sha2::{Digest as _, Sha256};
+use std::sync::Arc;
 /// Version of the compact field-neutral state vector carried across the Pasta cycle.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5: u32 =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
@@ -119,12 +118,11 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V5: &[(&str, usize, usiz
 ];
 /// Audit map from every continuing statement field to its exact state-vector slot.
 ///
-/// Transition payloads are intentionally absent: they are consumed by the Eq
-/// application relation and summarized by a domain-separated rolling history
-/// accumulator that continues into the next state. Exact transition tags remain
-/// in the public branch claim for ledger conflict detection. Artifact generation
-/// is authenticated by the manifest hash, and verifier-key text is authenticated
-/// by its canonical identity.
+/// Transition payloads are intentionally absent: they are consumed by the Eq application relation
+/// and summarized by a domain-separated rolling history accumulator that continues into the next
+/// state. Exact transition tags remain in the public branch claim for ledger conflict detection.
+/// Artifact generation is authenticated by the manifest hash, and verifier-key text is
+/// authenticated by its canonical identity.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_COVERAGE_V5: &[(&str, &str)] = &[
     ("statement.network_id", "network_tag"),
     ("statement.asset", "asset_tag"),
@@ -258,11 +256,10 @@ pub(crate) const I_UNSHIELD_PUBLIC_INPUTS_DIGEST: usize = I_REDEMPTION_RECIPIENT
 pub(crate) const I_UNSHIELD_PUBLIC_AMOUNT: usize = I_UNSHIELD_PUBLIC_INPUTS_DIGEST + 4;
 /// Public-input contract for the secure Kagemusha output-membership relation.
 ///
-/// Paths remain witness values, but every path direction is constrained to the
-/// corresponding public leaf index and every recomputed path root is constrained
-/// to these public roots and commitments. The relation reuses the unchanged
-/// Axiom Poseidon specification and leaf/node domains of the confidential-note
-/// primitive.
+/// Paths remain witness values, but every path direction is constrained to the corresponding public
+/// leaf index and every recomputed path root is constrained to these public roots and commitments.
+/// The relation reuses the unchanged Axiom Poseidon specification and leaf/node domains of the
+/// confidential-note primitive.
 pub const KAGEMUSHA_OUTPUT_MEMBERSHIP_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_output_membership_v4","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["is_init","is_split","is_redemption_change","has_change","initial_root","final_root","recipient_commitment","recipient_leaf_index","change_commitment","change_leaf_index","dummy_leaf_index"]}"#;
 /// IPA domain exponent used by the fixed output-membership relation.
 pub const KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V4: u32 = 12;
@@ -310,11 +307,10 @@ pub struct KagemushaOutputMembershipWitnessV4 {
 }
 /// Eq/Fp secure Poseidon relation proving output insertion and final membership.
 ///
-/// This circuit is intentionally separate from the symmetric transition-only
-/// relation: confidential-tree roots are Pallas scalar-field elements and must
-/// not be re-hashed natively in the reciprocal Fq step.  A production StepEq
-/// composition consumes this relation together with the field-neutral state
-/// boundary. Production readiness remains false until the complete
+/// This circuit is intentionally separate from the symmetric transition-only relation:
+/// confidential-tree roots are Pallas scalar-field elements and must not be re-hashed natively in
+/// the reciprocal Fq step. A production StepEq composition consumes this relation together with the
+/// field-neutral state boundary. Production readiness remains false until the complete
 /// authenticated runtime, review, and device-evidence conjunction succeeds.
 #[derive(Clone, Debug, Default)]
 pub struct KagemushaOutputMembershipCircuitV4 {
@@ -338,6 +334,15 @@ impl KagemushaOutputMembershipCircuitV4 {
     }
 }
 pub(in crate::zk) mod output_membership_v4 {
+    use super::{
+        KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V4, KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V4,
+        KagemushaOutputMembershipCircuitV4, KagemushaOutputMembershipLeafV4,
+        KagemushaOutputMembershipOperationV4, KagemushaOutputMembershipWitnessV4, Scalar,
+    };
+    use crate::zk::confidential_v2::{
+        CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
+        confidential_relation_gadget::ConfidentialPoseidonChipV3, scalar_from_repr,
+    };
     use ff::Field as _;
     use halo2_base::{
         AssignedValue, Context,
@@ -349,15 +354,6 @@ pub(in crate::zk) mod output_membership_v4 {
     use halo2_proofs::{
         circuit::Layouter,
         plonk::{Circuit, ConstraintSystem, Error as PlonkError},
-    };
-    use super::{
-        KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V4, KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V4,
-        KagemushaOutputMembershipCircuitV4, KagemushaOutputMembershipLeafV4,
-        KagemushaOutputMembershipOperationV4, KagemushaOutputMembershipWitnessV4, Scalar,
-    };
-    use crate::zk::confidential_v2::{
-        CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
-        confidential_relation_gadget::ConfidentialPoseidonChipV3, scalar_from_repr,
     };
     const TREE_DEPTH: usize = iroha_data_model::offline::KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2;
     const MINIMUM_UNUSABLE_ROWS: usize = 9;
@@ -1219,10 +1215,9 @@ pub(super) fn kagemusha_public_inputs_for_statement_v4(
 }
 /// Derive the canonical ABI-21 child statement for one validated peer split.
 ///
-/// The caller supplies only the proof-derived final tree root and next-zero
-/// frontier. All lineage, transition, count, release, and verifier identities
-/// are derived from the split itself, so bridge and release-qualification
-/// paths cannot drift into distinct statement constructors.
+/// The caller supplies only the proof-derived final tree root and next-zero frontier. All lineage,
+/// transition, count, release, and verifier identities are derived from the split itself, so bridge
+/// and release-qualification paths cannot drift into distinct statement constructors.
 ///
 /// # Errors
 ///
@@ -1490,9 +1485,8 @@ impl KagemushaPastaCycleOpaqueProverV4 {
     /// Parse one authenticated production role at a time without retaining the
     /// complete eight-payload set in memory.
     ///
-    /// The loader must return the exact role requested. Each returned carrier
-    /// is rebound to `release`, parsed, and dropped before the next role is
-    /// requested.
+    /// The loader must return the exact role requested. Each returned carrier is rebound to
+    /// `release`, parsed, and dropped before the next role is requested.
     pub fn from_authenticated_artifact_loader<F>(
         _release: &KagemushaAuthenticatedReleaseV4,
         _load: F,
@@ -1897,10 +1891,9 @@ impl KagemushaPastaCycleOpaqueProverV4 {
         )
     }
 }
-/// Opaque ABI-21 terminal-verifier facade. Spend acceptance requires a
-/// complete V4 bundle; the separate unbound-pair method exists only for
-/// authenticated release qualification. Recursion-specific pair internals
-/// remain private.
+/// Opaque ABI-21 terminal-verifier facade. Spend acceptance requires a complete V4 bundle; the
+/// separate unbound-pair method exists only for authenticated release qualification.
+/// Recursion-specific pair internals remain private.
 enum KagemushaPastaCycleOpaqueVerifierInnerV4 {
     Eager(super::kagemusha_recursion_adapter::KagemushaPastaCycleTerminalVerifierV4),
     SourceBacked(super::kagemusha_recursion_adapter::KagemushaPastaCycleSourceBackedVerifierV4),
@@ -1992,9 +1985,8 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
     /// Parse one authenticated production verifier role at a time without
     /// retaining the complete six-payload set in memory.
     ///
-    /// The loader must return the exact role requested. Each returned carrier
-    /// is rebound to `release`, parsed, and dropped before the next role is
-    /// requested.
+    /// The loader must return the exact role requested. Each returned carrier is rebound to
+    /// `release`, parsed, and dropped before the next role is requested.
     pub fn from_authenticated_artifact_loader<F>(
         release: &KagemushaAuthenticatedReleaseV4,
         load: F,
@@ -2011,9 +2003,8 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
         let binding = KagemushaArtifactLoaderBindingV4::authenticated_release(release)?;
         Self::from_artifact_loader_binding(&binding, load)
     }
-    /// Parse one candidate-evidence-lab verifier role at a time without
-    /// relabelling the unsigned candidate as a production-authenticated
-    /// release.
+    /// Parse one candidate-evidence-lab verifier role at a time without relabelling the unsigned
+    /// candidate as a production-authenticated release.
     #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     pub fn from_candidate_artifact_loader<F>(
         candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
@@ -2090,8 +2081,7 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
         let operation = canonical_bundle_operation_v4(bundle)?;
         self.verify_bundle_binding_v4(bundle, &operation)
     }
-    /// Verify a complete V4 bundle and the exact lifecycle operation that
-    /// produced it.
+    /// Verify a complete V4 bundle and the exact lifecycle operation that produced it.
     pub fn verify_bundle_operation_v4(
         &self,
         bundle: &KagemushaRecursiveSpendBundleV4,
@@ -2102,14 +2092,12 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
     }
     /// Terminally verify the generator's opaque live-pair calibration vector.
     ///
-    /// This is a release-qualification boundary, not a spend-acceptance API:
-    /// the calibration pair has no lifecycle statement to authorize. It exists
-    /// so an installer or release gate can prove that the exact authenticated
-    /// Eq/Ep verifier artifacts execute both backend-native verification
-    /// branches before declaring the release usable. Normal offline-cash
-    /// verification must continue to call [`Self::verify_bundle_v4`] or
-    /// [`Self::verify_bundle_operation_v4`], which additionally bind the
-    /// canonical public statement and semantic operation.
+    /// This is a release-qualification boundary, not a spend-acceptance API: the calibration pair
+    /// has no lifecycle statement to authorize. It exists so an installer or release gate can prove
+    /// that the exact authenticated Eq/Ep verifier artifacts execute both backend-native
+    /// verification branches before declaring the release usable. Normal offline-cash verification
+    /// must continue to call [`Self::verify_bundle_v4`] or [`Self::verify_bundle_operation_v4`],
+    /// which additionally bind the canonical public statement and semantic operation.
     pub fn verify_release_qualification_pair_v4(&self, encoded_pair: &[u8]) -> Result<(), String> {
         self.inner.verify_encoded_pair_qualification(encoded_pair)
     }

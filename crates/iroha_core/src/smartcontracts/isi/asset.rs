@@ -1,5 +1,6 @@
 //! This module contains [`Asset`] structure, it's implementation and related traits and
 //! instructions implementations.
+use super::prelude::*;
 use iroha_data_model::{
     asset::definition::ConfidentialPolicyMode,
     fastpq::{TransferDeltaTranscript, TransferSmtWitness, normalized_numeric_to_u64},
@@ -10,15 +11,14 @@ use iroha_data_model::{
     query::error::FindError,
 };
 use iroha_telemetry::metrics;
-use super::prelude::*;
 /// ISI module contains all instructions related to assets:
 /// - minting/burning assets
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        sync::LazyLock,
+    use super::*;
+    use crate::{
+        smartcontracts::isi::account_admission::ensure_receiving_account, state::WorldTransaction,
     };
     use iroha_crypto::Hash;
     use iroha_data_model::{
@@ -47,11 +47,11 @@ pub mod isi {
         json::Json,
         numeric::{Numeric, Quantity},
     };
-    use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time as WallClockTime};
-    use super::*;
-    use crate::{
-        smartcontracts::isi::account_admission::ensure_receiving_account, state::WorldTransaction,
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::LazyLock,
     };
+    use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time as WallClockTime};
     // Use elided lifetimes to avoid single-use lifetime warnings in this inherent impl.
     impl WorldTransaction<'_, '_> {
         /// Decrease a numeric asset balance; removes the asset entry if it reaches zero.
@@ -6116,7 +6116,13 @@ pub mod isi {
 }
 /// Asset-related query implementations.
 pub mod query {
-    use std::{collections::BTreeSet, sync::Arc};
+    #[cfg(test)]
+    use super::isi::execute_user_numeric_asset_transfer;
+    use super::*;
+    use crate::{
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::StateReadOnly,
+    };
     use eyre::Result;
     use iroha_data_model::{
         asset::{Asset, AssetDefinition, AssetEntry},
@@ -6128,13 +6134,7 @@ pub mod query {
         },
     };
     use norito::json::Value;
-    #[cfg(test)]
-    use super::isi::execute_user_numeric_asset_transfer;
-    use super::*;
-    use crate::{
-        smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::StateReadOnly,
-    };
+    use std::{collections::BTreeSet, sync::Arc};
     #[derive(Debug, Default, Clone)]
     struct AssetPredicateView {
         ids: BTreeSet<AssetId>,
@@ -7092,7 +7092,13 @@ pub mod query {
     }
     #[cfg(test)]
     mod tests {
-        use std::collections::{BTreeMap, BTreeSet};
+        use super::*;
+        use crate::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            smartcontracts::ValidQuery,
+            state::{State, StateTransaction, World},
+        };
         use iroha_crypto::{Algorithm, Hash, KeyPair};
         use iroha_data_model::account::{
             NewAccount,
@@ -7117,13 +7123,7 @@ pub mod query {
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         use nonzero_ext::nonzero;
         use norito::json::Value;
-        use super::*;
-        use crate::{
-            kura::Kura,
-            query::store::LiveQueryStore,
-            smartcontracts::ValidQuery,
-            state::{State, StateTransaction, World},
-        };
+        use std::collections::{BTreeMap, BTreeSet};
         fn build_account_in_domain(account_id: &AccountId, _domain_id: &DomainId) -> Account {
             Account::new(account_id.clone()).build(account_id)
         }

@@ -1,9 +1,4 @@
 //! Generates deterministic SoraFS orderbook and settlement fixtures.
-use std::{
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-};
 use ed25519_dalek::SigningKey;
 use hex::encode;
 use norito::{
@@ -20,6 +15,11 @@ use sorafs_manifest::{
     sign_order_request_ed25519_v1, sign_settlement_receipt_ed25519_v1,
     validate_orderbook_payload_bytes, verify_order_cancel_signature_v1,
     verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
+};
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
 };
 const VALIDATION_GENERATED_AT: u64 = 123;
 fn main() -> Result<(), Box<dyn Error>> {

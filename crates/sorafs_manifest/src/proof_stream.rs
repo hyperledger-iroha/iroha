@@ -548,8 +548,8 @@ fn parse_canonical_base64_16(raw: &str) -> Result<[u8; 16], ProofStreamHttpReque
 }
 #[cfg(test)]
 mod tests {
-    use norito::json::{Value, from_slice, to_vec};
     use super::*;
+    use norito::json::{Value, from_slice, to_vec};
     fn base_request() -> ProofStreamRequestV1 {
         ProofStreamRequestV1 {
             manifest_digest: [0x11; 32],

@@ -7,11 +7,8 @@
 //! Encoding note: `Numeric` serializes as a helper carrying `(mantissa, scale)`.
 //! The mantissa is a raw [`crate::bigint::BigInt`] integer (no decimal scale
 //! is embedded in the integer), and the scale is stored separately as a `u32`.
+use crate::bigint::BigInt;
 use core::{cmp::Ordering, str::FromStr};
-use std::{
-    string::{String, ToString},
-    vec::Vec,
-};
 pub use iroha_primitives_derive::numeric;
 use norito::{
     Archived, Error, NoritoDeserialize, NoritoSerialize,
@@ -19,7 +16,10 @@ use norito::{
 };
 use num_bigint::BigInt as UnboundedBigInt;
 use num_traits::{One as _, Signed as _, Zero as _};
-use crate::bigint::BigInt;
+use std::{
+    string::{String, ToString},
+    vec::Vec,
+};
 /// Width of the signed two's-complement domain shared by Kotodama `int`,
 /// `decimal` mantissas, and `quantity` mantissas.
 pub const MAX_MANTISSA_BITS: usize = 512;
@@ -29,19 +29,17 @@ pub const MAX_MANTISSA_BYTES: usize = MAX_MANTISSA_BITS / 8;
 pub const MAX_DECIMAL_SCALE: u32 = 28;
 /// Maximum number of factors accepted by aggregate decimal-product helpers.
 ///
-/// Each factor is individually bounded to a 512-bit canonical mantissa, but
-/// the helpers deliberately retain an unbounded conceptual intermediate until
-/// their single final normalization or rounding step. Bounding the factor
-/// inventory prevents attacker-controlled iterators from growing that
-/// intermediate without limit.
+/// Each factor is individually bounded to a 512-bit canonical mantissa, but the helpers
+/// deliberately retain an unbounded conceptual intermediate until their single final normalization
+/// or rounding step. Bounding the factor inventory prevents attacker-controlled iterators from
+/// growing that intermediate without limit.
 pub const MAX_DECIMAL_PRODUCT_FACTORS: usize = 64;
 /// Canonical exact decimal with a bounded signed mantissa and scale.
 ///
-/// The finite set of values of type [`Numeric`] are of the form $m / 10^e$,
-/// where `m` is in `-2^511..=2^511-1` and `e` is in `[0, 28]`.
-/// The mantissa `m` is stored as a [`crate::bigint::BigInt`], while the scale
-/// `e` is carried separately. Public constructors strip fractional trailing
-/// zeroes, including reducing every zero to scale zero, so equality, ordering,
+/// The finite set of values of type [`Numeric`] are of the form $m / 10^e$, where `m` is in
+/// `-2^511..=2^511-1` and `e` is in `[0, 28]`. The mantissa `m` is stored as a
+/// [`crate::bigint::BigInt`], while the scale `e` is carried separately. Public constructors strip
+/// fractional trailing zeroes, including reducing every zero to scale zero, so equality, ordering,
 /// hashing, map keys, and serialization all observe one representation.
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -58,11 +56,10 @@ pub struct Numeric {
 }
 /// Canonical non-negative decimal for asset and resource quantities.
 ///
-/// `Quantity` is nominal: it cannot contain negative values or noncanonical
-/// decimal representations, so ledger-domain mistakes are rejected before a
-/// value reaches storage or hashing. The name deliberately does not imply
-/// currency: an Iroha asset may represent money, a commodity, a vote, or a
-/// right.
+/// `Quantity` is nominal: it cannot contain negative values or noncanonical decimal
+/// representations, so ledger-domain mistakes are rejected before a value reaches storage or
+/// hashing. The name deliberately does not imply currency: an Iroha asset may represent money, a
+/// commodity, a vote, or a right.
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -76,16 +73,14 @@ pub struct Numeric {
 pub struct Quantity(Numeric);
 /// Maximum number of fractional digits accepted for XOR-denominated values.
 ///
-/// XOR's ledger definition permits nanounit precision.  Keeping this limit in
-/// the nominal type prevents independent services from silently choosing
-/// incompatible fixed-unit conventions.
+/// XOR's ledger definition permits nanounit precision. Keeping this limit in the nominal type
+/// prevents independent services from silently choosing incompatible fixed-unit conventions.
 pub const XOR_QUANTITY_SCALE: u32 = 9;
 /// Canonical XOR-denominated quantity.
 ///
-/// This wrapper carries the same exact decimal value as [`Quantity`] while
-/// enforcing XOR's scale policy at every construction and wire-decoding
-/// boundary. It is intentionally unit-neutral: callers exchange decimal XOR
-/// values, never an implicit micro- or nano-unit integer.
+/// This wrapper carries the same exact decimal value as [`Quantity`] while enforcing XOR's scale
+/// policy at every construction and wire-decoding boundary. It is intentionally unit-neutral:
+/// callers exchange decimal XOR values, never an implicit micro- or nano-unit integer.
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -540,8 +535,7 @@ impl Numeric {
     }
     /// Return this value in its unique canonical decimal representation.
     ///
-    /// Canonicalization strips fractional trailing zeroes and represents every
-    /// zero as `(0, 0)`.
+    /// Canonicalization strips fractional trailing zeroes and represents every zero as `(0, 0)`.
     ///
     /// # Errors
     /// Returns [`NumericOperationError::MantissaOverflow`] if the normalized
@@ -719,9 +713,8 @@ impl Numeric {
     }
     /// Multiply two canonical decimals exactly.
     ///
-    /// The conceptual product may be wider than 512 bits and may initially
-    /// have scale 56. Trailing decimal zeroes are removed before the final
-    /// signed-width and scale bounds are checked.
+    /// The conceptual product may be wider than 512 bits and may initially have scale 56. Trailing
+    /// decimal zeroes are removed before the final signed-width and scale bounds are checked.
     ///
     /// # Errors
     /// Rejects noncanonical operands or an unrepresentable canonical result.
@@ -761,8 +754,7 @@ impl Numeric {
             observer,
         )
     }
-    /// Multiply by one decimal and divide exactly by another using one
-    /// conceptual intermediate.
+    /// Multiply by one decimal and divide exactly by another using one conceptual intermediate.
     ///
     /// The mathematical product remains unbounded until after the quotient is
     /// reduced and canonicalized. A wide temporary therefore cannot reject an
@@ -782,8 +774,7 @@ impl Numeric {
             &mut |_| Ok::<_, core::convert::Infallible>(()),
         ))
     }
-    /// Fused exact multiply/divide while reporting every logical work phase
-    /// before it begins.
+    /// Fused exact multiply/divide while reporting every logical work phase before it begins.
     ///
     /// # Errors
     /// Returns an arithmetic failure or propagates an observer rejection.
@@ -843,8 +834,7 @@ impl Numeric {
             )),
         }
     }
-    /// Multiply by one decimal and divide by another with a single rounded
-    /// conceptual intermediate.
+    /// Multiply by one decimal and divide by another with a single rounded conceptual intermediate.
     ///
     /// This operation is intentionally fused: the mathematical product is
     /// kept unbounded until after division, so a temporary wider than 512 bits
@@ -868,8 +858,7 @@ impl Numeric {
             &mut |_| Ok::<_, core::convert::Infallible>(()),
         ))
     }
-    /// Fused multiply/divide while reporting every logical work phase before
-    /// it begins.
+    /// Fused multiply/divide while reporting every logical work phase before it begins.
     ///
     /// # Errors
     /// Returns an arithmetic failure or propagates an observer rejection.
@@ -927,9 +916,8 @@ impl Numeric {
     }
     /// Attempt exact division at one explicit output scale.
     ///
-    /// `Ok(None)` means the quotient has a nonzero remainder at this scale.
-    /// This method is useful to runtimes that stage one metered attempt at a
-    /// time.
+    /// `Ok(None)` means the quotient has a nonzero remainder at this scale. This method is useful
+    /// to runtimes that stage one metered attempt at a time.
     ///
     /// # Errors
     /// Rejects invalid scale, noncanonical operands, division by zero, observer
@@ -974,8 +962,7 @@ impl Numeric {
     }
     /// Classify the mathematical quotient after reducing its denominator.
     ///
-    /// Every Euclidean and prime-factor division is reported to `observer`
-    /// before it begins.
+    /// Every Euclidean and prime-factor division is reported to `observer` before it begins.
     ///
     /// # Errors
     /// Rejects noncanonical operands, division by zero, or observer rejection.
@@ -1450,12 +1437,10 @@ impl Quantity {
     }
     /// Compute a weighted average with unbounded conceptual intermediates.
     ///
-    /// Each input contributes `value * weight` to the numerator. Products and
-    /// their sum are not narrowed to the public 512-bit mantissa domain before
-    /// division, so a representable average cannot fail merely because an
-    /// intermediate weighted sum is wider than the final result. Zero-weight
-    /// entries are accepted but do not make an otherwise empty denominator
-    /// valid.
+    /// Each input contributes `value * weight` to the numerator. Products and their sum are not
+    /// narrowed to the public 512-bit mantissa domain before division, so a representable average
+    /// cannot fail merely because an intermediate weighted sum is wider than the final result.
+    /// Zero-weight entries are accepted but do not make an otherwise empty denominator valid.
     ///
     /// This is a domain-aggregation primitive rather than a Kotodama numeric
     /// operator; VM opcodes continue to use the observed scalar operations.
@@ -1517,17 +1502,15 @@ impl Quantity {
     /// Multiply this quantity by a sequence of decimal factors using one
     /// unbounded conceptual product.
     ///
-    /// This helper is for domain formulas whose factors are defined as one
-    /// aggregate product. It deliberately differs from evaluating a source
-    /// expression as repeated `quantity * decimal` operators, where every
-    /// operator produces and checks its own public-domain result. Exact
-    /// trailing-zero normalization is allowed between factors because it does
-    /// not change the mathematical product.
+    /// This helper is for domain formulas whose factors are defined as one aggregate product. It
+    /// deliberately differs from evaluating a source expression as repeated `quantity * decimal`
+    /// operators, where every operator produces and checks its own public-domain result. Exact
+    /// trailing-zero normalization is allowed between factors because it does not change the
+    /// mathematical product.
     ///
     /// # Errors
-    /// Rejects more than 64 factors, a noncanonical factor, or a canonical
-    /// final result outside the decimal scale, signed-mantissa, or non-negative
-    /// quantity domain.
+    /// Rejects more than 64 factors, a noncanonical factor, or a canonical final result outside the
+    /// decimal scale, signed-mantissa, or non-negative quantity domain.
     pub fn try_product_decimals<'a, I>(&self, factors: I) -> Result<Self, DecimalProductError>
     where
         I: IntoIterator<Item = &'a Numeric>,
@@ -1571,10 +1554,9 @@ impl Quantity {
     /// Multiply this quantity by decimal factors as one unbounded conceptual
     /// product, then round the aggregate once at `output_scale`.
     ///
-    /// This is the rounded counterpart to [`Self::try_product_decimals`].
-    /// Intermediate products are never narrowed to the public mantissa or
-    /// scale domain, so deterministic final rounding is independent of factor
-    /// grouping.
+    /// This is the rounded counterpart to [`Self::try_product_decimals`]. Intermediate products are
+    /// never narrowed to the public mantissa or scale domain, so deterministic final rounding is
+    /// independent of factor grouping.
     ///
     /// # Errors
     /// Rejects more than 64 factors, a scale above 28, a noncanonical factor,
@@ -1636,10 +1618,9 @@ impl Quantity {
     }
     /// Compare `self * self_multiplier` with `other * other_multiplier`.
     ///
-    /// Products and decimal alignment are conceptual unbounded intermediates,
-    /// so comparisons at the public mantissa boundary remain exact instead of
-    /// failing merely because one side cannot be materialized as a standalone
-    /// [`Quantity`].
+    /// Products and decimal alignment are conceptual unbounded intermediates, so comparisons at the
+    /// public mantissa boundary remain exact instead of failing merely because one side cannot be
+    /// materialized as a standalone [`Quantity`].
     #[must_use]
     pub fn cmp_mul_u64(
         &self,
@@ -1813,8 +1794,7 @@ impl XorQuantity {
     /// Validate and wrap a canonical non-negative XOR quantity.
     ///
     /// # Errors
-    /// Rejects values carrying more than [`XOR_QUANTITY_SCALE`] fractional
-    /// digits.
+    /// Rejects values carrying more than [`XOR_QUANTITY_SCALE`] fractional digits.
     pub fn try_from_quantity(quantity: Quantity) -> Result<Self, XorQuantityError> {
         if quantity.scale() > XOR_QUANTITY_SCALE {
             return Err(XorQuantityError::ScaleOverflow {
@@ -1826,9 +1806,8 @@ impl XorQuantity {
     }
     /// Construct from an exact micro-XOR projection.
     ///
-    /// This is an explicit adapter for versioned external formats that define
-    /// their value in micro-XOR. New public APIs should accept decimal XOR
-    /// quantities directly.
+    /// This is an explicit adapter for versioned external formats that define their value in
+    /// micro-XOR. New public APIs should accept decimal XOR quantities directly.
     ///
     /// # Errors
     /// Returns an error if construction exceeds the bounded decimal domain.
@@ -1860,8 +1839,7 @@ impl XorQuantity {
     }
     /// Project to micro-XOR exactly.
     ///
-    /// This is an explicit adapter for versioned external formats. It never
-    /// rounds or saturates.
+    /// This is an explicit adapter for versioned external formats. It never rounds or saturates.
     ///
     /// # Errors
     /// Rejects sub-micro precision and values wider than `u128`.
@@ -1965,8 +1943,7 @@ impl XorQuantity {
             core::num::NonZeroU64::new(10_000).expect("basis-point denominator is non-zero"),
         )
     }
-    /// Multiply by an unsigned rational factor, rounding toward zero at XOR's
-    /// maximum scale.
+    /// Multiply by an unsigned rational factor, rounding toward zero at XOR's maximum scale.
     ///
     /// # Errors
     /// Returns a bounded-domain or XOR-scale failure.
@@ -1982,8 +1959,7 @@ impl XorQuantity {
             RoundingMode::TowardZero,
         )
     }
-    /// Multiply by an unsigned rational factor using an explicit rounding
-    /// policy and output scale.
+    /// Multiply by an unsigned rational factor using an explicit rounding policy and output scale.
     ///
     /// # Errors
     /// Returns a bounded-domain or XOR-scale failure.
@@ -2690,8 +2666,13 @@ impl core::str::FromStr for Numeric {
         if trimmed.is_empty() {
             return Err(NumericError::Malformed);
         }
-        let negative = trimmed.starts_with('-');
-        let digits = trimmed.trim_start_matches(['+', '-']);
+        let (negative, digits) = if let Some(digits) = trimmed.strip_prefix('-') {
+            (true, digits)
+        } else if let Some(digits) = trimmed.strip_prefix('+') {
+            (false, digits)
+        } else {
+            (false, trimmed)
+        };
         let mut scale = 0u32;
         let mut mantissa_str = String::new();
         let mut seen_dot = false;
@@ -2807,10 +2788,10 @@ mod scale_ {
     }
 }
 mod schema_ {
+    use super::*;
     use iroha_schema::{
         Compact, Declaration, Ident, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId,
     };
-    use super::*;
     impl TypeId for Numeric {
         fn id() -> Ident {
             "Numeric".to_string()
@@ -2884,10 +2865,9 @@ mod schema_ {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use core::cmp::Ordering;
     use num_bigint::BigInt as ReferenceInt;
-    use num_traits::{One as _, Signed as _, Zero as _};
-    use super::*;
     #[test]
     fn check_add() {
         let a = Numeric::new(10, 0);
@@ -3183,6 +3163,17 @@ mod tests {
             Err(NumericError::MantissaTooLarge)
         );
     }
+    #[test]
+    fn numeric_parser_rejects_multiple_leading_signs() {
+        for malformed in ["++1", "+-1", "-+1", "--1"] {
+            assert_eq!(
+                malformed.parse::<Numeric>(),
+                Err(NumericError::Malformed),
+                "multiple leading signs must be rejected: {malformed}"
+            );
+        }
+    }
+
     #[test]
     fn decimal_endpoints_and_negation_enforce_signed_domain_after_normalization() {
         let maximum = Numeric::new(signed_maximum(), 0);

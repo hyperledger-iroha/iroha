@@ -1,9 +1,9 @@
 //! Regression checks for the checked-in default Docker Compose identities.
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
 type ServiceEnvironments = BTreeMap<String, BTreeMap<String, String>>;
 const DEFAULT_STREAMING_PUBLIC_KEY: &str =
     "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";

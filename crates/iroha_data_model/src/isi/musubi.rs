@@ -776,8 +776,6 @@ impl_decode_musubi_instruction!(AssertMusubiReleaseDigestV1 {
 });
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         account::{MultisigMember, MultisigPolicy},
@@ -802,6 +800,8 @@ mod tests {
             },
         },
     };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
+    use norito::core::DecodeFromSlice;
     fn package() -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(7),

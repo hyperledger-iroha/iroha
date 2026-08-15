@@ -1,11 +1,11 @@
 //! Telemetry integrity helpers (hash chaining and optional keyed signatures).
+use iroha_config::parameters::actual::TelemetryIntegrity as TelemetryIntegrityConfig;
+use norito::json::{Map, Value};
 use std::{
     fs::File,
     io::Read,
     path::{Path, PathBuf},
 };
-use iroha_config::parameters::actual::TelemetryIntegrity as TelemetryIntegrityConfig;
-use norito::json::{Map, Value};
 use thiserror::Error;
 const STATE_VERSION: u64 = 1;
 const STATE_FILE_PREFIX: &str = "telemetry_integrity_";
@@ -228,8 +228,8 @@ fn persist_state_snapshot(path: &Path, seq: u64, prev_hash: [u8; 32]) -> Result<
 }
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
     #[test]
     fn chain_increments_with_prev_hash() {
         let config = TelemetryIntegrityConfig {

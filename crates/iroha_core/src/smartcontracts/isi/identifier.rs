@@ -1,4 +1,5 @@
 //! Hidden-function-backed identifier policy instruction handlers.
+use super::prelude::*;
 use iroha_crypto::{
     Hash, RamLfeBackend, RamLfeVerificationMode, decode_bfv_programmed_public_parameters,
     identifier_hashes_from_output_hash,
@@ -12,7 +13,6 @@ use iroha_data_model::{
     },
 };
 use iroha_telemetry::metrics;
-use super::prelude::*;
 /// Execution handlers for identifier-policy ISIs.
 pub mod isi {
     use super::*;
@@ -699,14 +699,14 @@ pub mod isi {
     }
     #[cfg(test)]
     mod proof_tests {
-        use std::str::FromStr as _;
+        use super::*;
         use iroha_crypto::RamLfeProofVerifierMetadata;
         use iroha_data_model::{
             proof::{ProofBox, VerifyingKeyBox},
             ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
             zk::{BackendTag, OpenVerifyEnvelope},
         };
-        use super::*;
+        use std::str::FromStr as _;
         fn sample_proof_payload() -> RamLfeExecutionReceiptPayload {
             RamLfeExecutionReceiptPayload {
                 program_id: RamLfeProgramId::from_str("identifier_proof_program")
@@ -881,6 +881,10 @@ pub mod isi {
 }
 #[cfg(test)]
 mod tests {
+    use crate::{
+        kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::Execute,
+        state::State,
+    };
     use iroha_crypto::{
         Algorithm, BfvEvaluationKeyBundle, Hash, KeyPair, PrivateKey, RamLfeBackend,
         RamLfeVerificationMode, Signature, SignatureOf,
@@ -912,10 +916,6 @@ mod tests {
     };
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
-    use crate::{
-        kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::Execute,
-        state::State,
-    };
     fn test_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();

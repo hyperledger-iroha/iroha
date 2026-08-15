@@ -29,17 +29,19 @@ pub mod zk_ams;
 // builds retain the verifier but cannot observe those crate-private roots.
 #[cfg_attr(not(any(test, feature = "privacy-release-evidence")), allow(dead_code))]
 pub(crate) mod zk_x509;
+use self::fcmp_plus_plus::{FcmpNativeErrorV1, FcmpOutputTupleV1};
+use self::proof_managed_accumulator::{
+    ProofManagedAccumulatorErrorV1, build_proof_managed_frontier_v1,
+};
+use self::zk_x509::credential_stark::{
+    ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
+    decode_zk_x509_credential_envelope_v1,
+};
 use iroha_data_model::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyProofManagedPoolBootstrapV1,
     PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementV1,
 };
 use thiserror::Error;
-use self::fcmp_plus_plus::{FcmpNativeErrorV1, FcmpOutputTupleV1};
-use self::proof_managed_accumulator::{ProofManagedAccumulatorErrorV1, build_proof_managed_frontier_v1};
-use self::zk_x509::credential_stark::{
-    ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
-    decode_zk_x509_credential_envelope_v1,
-};
 /// Exact maximum byte length of one canonical first-release `X5S1` proof.
 pub const ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1: usize =
     self::zk_x509::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize;

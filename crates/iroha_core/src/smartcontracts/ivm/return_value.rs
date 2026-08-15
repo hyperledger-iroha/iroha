@@ -1,5 +1,4 @@
 //! Exact, privacy-safe decoding of public Kotodama return registers.
-use std::str;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
@@ -29,6 +28,7 @@ use norito::{
     codec::{Decode, Encode},
     json::{self, Map, Value},
 };
+use std::str;
 use thiserror::Error;
 const FIRST_RETURN_REGISTER: usize = 10;
 /// Failure to decode the exact public return value declared by an entrypoint.
@@ -1769,12 +1769,12 @@ pub fn decode_entrypoint_return(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::Hash;
     use iroha_data_model::smart_contract::entrypoint::{
         EntrypointListTypeNodeV1, EntrypointStructTypeNodeV1, MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH,
     };
     use iroha_primitives::numeric::Quantity;
-    use super::*;
     fn leaf(kind: EntrypointValueKindV1) -> EntrypointValueTypeV1 {
         EntrypointValueTypeV1 {
             nodes: vec![EntrypointValueTypeNodeV1::Leaf(kind)],

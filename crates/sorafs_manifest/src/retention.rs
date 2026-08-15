@@ -1,9 +1,9 @@
 #![allow(unexpected_cfgs)]
 //! Retention precedence helpers for SoraFS manifests.
+use crate::{ManifestV1, MetadataEntry};
 use core::fmt;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-use crate::{ManifestV1, MetadataEntry};
 /// Schema version for [`RetentionSourceV1`].
 pub const RETENTION_SOURCE_VERSION_V1: u8 = 1;
 /// Manifest metadata key for a deal-driven retention cap.

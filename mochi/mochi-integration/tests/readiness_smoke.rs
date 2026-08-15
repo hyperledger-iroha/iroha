@@ -1,9 +1,4 @@
 //! Readiness smoke tests against the in-process mock Torii service.
-use std::{
-    net::{SocketAddr, TcpListener},
-    num::NonZeroU64,
-    time::Duration,
-};
 use color_eyre::Result;
 use iroha_data_model::{
     NetworkId,
@@ -19,6 +14,11 @@ use mochi_core::{
     development_signing_authorities,
 };
 use mochi_integration::{MockToriiBuilder, MockToriiFrame};
+use std::{
+    net::{SocketAddr, TcpListener},
+    num::NonZeroU64,
+    time::Duration,
+};
 use tokio::time::sleep;
 fn test_network_id() -> NetworkId {
     "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"

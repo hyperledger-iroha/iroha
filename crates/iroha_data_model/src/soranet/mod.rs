@@ -32,8 +32,8 @@ pub(crate) fn signature_for_public_key_algorithm(
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
     use super::*;
+    use iroha_crypto::KeyPair;
     #[test]
     fn signature_for_public_key_algorithm_rejects_malformed_mldsa_signature_lengths() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)

@@ -1,20 +1,20 @@
 //! Payload-free immutable audit journal and crash recovery.
-use std::{
-    collections::BTreeMap,
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    path::{Path, PathBuf},
-};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-use iroha_crypto::{KeyPair, Signature};
-use norito::codec::{Decode, Encode};
 use super::{
     envelope::SoftwareSignerKeyEnvelopeAadV1,
     protocol::{
         SIGNER_AUDIT_MAGIC_V1, SIGNER_MAX_SIGNATURE_BYTES_V1, SIGNER_PROTOCOL_VERSION_V1,
         digest_canonical,
     },
+};
+use iroha_crypto::{KeyPair, Signature};
+use norito::codec::{Decode, Encode};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    io::{Read as _, Write as _},
+    path::{Path, PathBuf},
 };
 const AUDIT_RECORD_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.audit-record.v1";
 const AUDIT_ATTESTATION_DOMAIN_V1: &[u8] = b"iroha.external-signer.audit-attestation.v1";
@@ -697,9 +697,9 @@ pub enum SoftwareSignerJournalErrorV1 {
 }
 #[cfg(test)]
 mod tests {
-    use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
-    use iroha_crypto::Algorithm;
     use super::*;
+    use iroha_crypto::Algorithm;
+    use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
     fn write_private_file(path: &Path, bytes: &[u8]) {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true).mode(0o600);

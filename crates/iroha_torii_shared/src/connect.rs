@@ -993,11 +993,11 @@ pub struct SignInProofV1 {
 pub type ConnectP2pMessage = ConnectP2pMessageV1;
 #[cfg(test)]
 mod tests {
-    use norito::core::{Error, header_flags};
-    use rand::{Rng, SeedableRng};
     use super::*;
     use iroha_crypto::{Hash, HashOf, PublicKey};
     use iroha_data_model::{account::AccountId, block::BlockHeader, domain::DomainId};
+    use norito::core::{Error, header_flags};
+    use rand::{Rng, SeedableRng};
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             label,

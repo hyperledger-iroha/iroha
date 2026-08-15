@@ -1,6 +1,5 @@
 //! Privacy-tag enforcement tests for ZK execution.
 mod common;
-use std::{any::Any, cell::Cell};
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use ivm::{
@@ -11,6 +10,7 @@ use ivm::{
     syscalls,
 };
 use ivm_abi::private_input::PrivateInputRecordV1;
+use std::{any::Any, cell::Cell};
 fn meta_with_mode(mode: u8) -> ProgramMetadata {
     ProgramMetadata {
         mode,

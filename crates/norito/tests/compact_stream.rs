@@ -1,8 +1,8 @@
-use std::io::Cursor;
 use norito::{
     core::{self, DecodeFlagsGuard, header_flags},
     stream_vec_collect_from_reader,
 };
+use std::io::Cursor;
 fn push_varint(out: &mut Vec<u8>, mut value: u64) {
     loop {
         let byte = (value & 0x7f) as u8;

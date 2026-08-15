@@ -2,12 +2,6 @@
 //! Integration test for the subprocess attachment sanitizer path.
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs)]
-use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
-#[cfg(unix)]
-use std::{fs, path::Path};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use axum::{
     body::Bytes,
     http::{HeaderMap, StatusCode},
@@ -18,6 +12,12 @@ use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::AttachmentSanitizerMode;
 use iroha_torii::MaybeTelemetry;
 use std::io::Write as _;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+use std::process::{Command, Output, Stdio};
+#[cfg(unix)]
+use std::{fs, path::Path};
 fn configure_subprocess_sanitizer_with_limits(
     sanitizer_path: PathBuf,
     sanitize_timeout_ms: u64,

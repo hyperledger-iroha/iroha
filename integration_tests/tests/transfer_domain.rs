@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for domain permissions and transfers.
-use std::time::{Duration, Instant};
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{client::Client, crypto::KeyPair, data_model::prelude::*};
@@ -15,6 +14,7 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
+use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 const DOMAIN_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(30);
 const DOMAIN_VISIBILITY_POLL: Duration = Duration::from_millis(100);

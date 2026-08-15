@@ -1,14 +1,14 @@
 //! Validation and execution logic of instructions for multisig accounts
-use std::collections::BTreeSet;
+use super::*;
+use crate::data_model::{
+    domain::DomainId, isi::error::InstructionExecutionError, metadata::Metadata, name::Name,
+};
 use iroha_smart_contract::data_model::{
     prelude::{FindAccounts, Grant, Register},
     query::prelude::{FindDomains, FindRoles, FindRolesByAccountId},
     role::{Role, RoleId},
 };
-use super::*;
-use crate::data_model::{
-    domain::DomainId, isi::error::InstructionExecutionError, metadata::Metadata, name::Name,
-};
+use std::collections::BTreeSet;
 impl VisitExecute for MultisigRegister {
     fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
         if let Err(err) = validate_registration(
@@ -334,11 +334,11 @@ where
 }
 #[cfg(test)]
 mod tests {
-    use core::num::{NonZeroU16, NonZeroU64};
-    use std::collections::BTreeMap;
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
     use crate::data_model::{domain::DomainId, prelude::AccountId};
+    use core::num::{NonZeroU16, NonZeroU64};
+    use iroha_crypto::{Algorithm, KeyPair};
+    use std::collections::BTreeMap;
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")

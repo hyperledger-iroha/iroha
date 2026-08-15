@@ -1,5 +1,12 @@
 //! User configuration view.
-use std::{fmt, fs::File, io::Read as _, path::PathBuf, time::Duration};
+use crate::{
+    config::BasicAuth,
+    crypto::{KeyPair, PrivateKey, PublicKey},
+    data_model::{
+        name,
+        prelude::{AccountId, ChainId, DomainId, NetworkId},
+    },
+};
 use error_stack::{Report, ResultExt};
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{
@@ -10,15 +17,8 @@ use iroha_config_base::{
 use iroha_torii_shared::{network_profile, network_profile_names};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
+use std::{fmt, fs::File, io::Read as _, path::PathBuf, time::Duration};
 use url::Url;
-use crate::{
-    config::BasicAuth,
-    crypto::{KeyPair, PrivateKey, PublicKey},
-    data_model::{
-        name,
-        prelude::{AccountId, ChainId, DomainId, NetworkId},
-    },
-};
 /// Minimal allowed transaction time-to-live.
 const MIN_TRANSACTION_TTL: Duration = Duration::from_secs(1);
 const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
@@ -851,9 +851,9 @@ impl AliasCache {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, str::FromStr, time::Duration};
-    use iroha_crypto::Algorithm;
     use super::*;
+    use iroha_crypto::Algorithm;
+    use std::{fs, path::PathBuf, str::FromStr, time::Duration};
     fn root_with_timeouts(ttl: Duration, timeout: Duration) -> Root {
         let key_pair =
             KeyPair::try_from_seed(b"iroha:config:user:tests".to_vec(), Algorithm::Ed25519)

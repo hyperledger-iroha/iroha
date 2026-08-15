@@ -1,5 +1,5 @@
-use std::time::Instant;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, ivm_mode, kotodama::wide as kwide};
+use std::time::Instant;
 fn assemble(code: &[u8]) -> Vec<u8> {
     let mut meta = ProgramMetadata::default();
     meta.mode |= ivm_mode::VECTOR;

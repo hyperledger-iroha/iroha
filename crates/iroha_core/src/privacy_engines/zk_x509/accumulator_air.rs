@@ -11,7 +11,6 @@
 //! adapter parses the complete signed CRL and proves the leaf serial differs
 //! from every canonical entry, while the shared SHA adapter binds the exact
 //! signed-DER and governance-record commitments.
-use thiserror::Error;
 use super::merkle::{
     ZK_X509_CA_COMPACT_TREE_CAPACITY_V1, ZK_X509_CA_COMPACT_TREE_DEPTH_V1,
     ZK_X509_CA_SPKI_DER_BYTES_V1,
@@ -26,6 +25,7 @@ use super::{
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use thiserror::Error;
 /// Thirteen hash rows plus 91 serialized SPKI bytes, padded to log seven.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1: usize = 128;
 /// One leaf call followed by twelve compact-tree node calls.

@@ -6,7 +6,6 @@
     clippy::field_reassign_with_default,
     clippy::items_after_statements
 )]
-use std::{num::NonZeroU64, sync::LazyLock};
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use iroha_core::{
     prelude::*,
@@ -39,6 +38,7 @@ use ivm::{
     core_query::{CoreQueryEntityTagV1, QUERY_PAGE_CAPACITY_V1},
     host::IVMHost,
 };
+use std::{num::NonZeroU64, sync::LazyLock};
 // Shared Tokio runtime for benches that need background tasks (e.g., LiveQueryStore)
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()

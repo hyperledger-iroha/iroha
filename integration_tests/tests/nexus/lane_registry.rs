@@ -1,11 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for the Nexus lane manifest registry.
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 use eyre::Result;
 use iroha_config::parameters::actual::{GovernanceCatalog, GovernanceModule, LaneRegistry};
 use iroha_core::governance::manifest::LaneManifestRegistry;
 use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId, LaneStorageProfile};
 use nonzero_ext::nonzero;
+use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 fn fixtures_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

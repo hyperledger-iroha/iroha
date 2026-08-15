@@ -1,4 +1,5 @@
 //! Static-site binding helpers backed by SoraFS storage.
+use http::uri::Authority;
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
@@ -6,7 +7,6 @@ use std::{
     net::IpAddr,
     path::{Component, Path, PathBuf},
 };
-use http::uri::Authority;
 /// Only supported static-site binding document schema.
 pub const SITE_BINDINGS_SCHEMA_VERSION_V1: u8 = 1;
 /// Maximum JSON container nesting accepted before parsing.

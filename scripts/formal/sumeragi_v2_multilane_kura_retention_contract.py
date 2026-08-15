@@ -525,7 +525,43 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
         (
             "let kura_replica_advert_refresh = Arc::new(",
             "KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())",
+            "lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+            "lifecycle_pending_kura::run_pending_kura_lifecycle_height(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn",
+        "run_non_pending_lifecycle_loop",
+        (
+            "ProductionLifecycleLaunchInputsV1::new(",
             "Arc::clone(&kura_replica_advert_refresh)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "fn",
+        "run_pending_kura_lifecycle_height",
+        (
+            "ProductionLifecycleLaunchInputsV1::new(",
+            "Arc::clone(&kura_replica_advert_refresh)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn",
+        "run_lifecycle_active_height",
+        (
+            "try_begin_certified_serve_producer_episode()",
+            ".service_kura_replica_advert_refresh_turn(Instant::now())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "fn",
+        "run_pending_active_height",
+        (
+            "try_begin_certified_serve_producer_episode()",
             ".service_kura_replica_advert_refresh_turn(Instant::now())",
         ),
     ),

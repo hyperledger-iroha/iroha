@@ -1,11 +1,11 @@
 //! Module with custom parameters
-use std::{format, string::String, vec::Vec};
 use iroha_executor_data_model::parameter::{CustomParameter, Parameter};
 use iroha_schema::IntoSchema;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
+use std::{format, string::String, vec::Vec};
 /// Parameter that controls domain limits
 #[derive(PartialEq, Eq, JsonDeserialize, JsonSerialize, IntoSchema)]
 pub struct DomainLimits {

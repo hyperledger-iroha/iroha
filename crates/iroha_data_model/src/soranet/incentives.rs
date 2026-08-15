@@ -6,12 +6,6 @@
 //! instructions targeting the XOR ledger (Sora Credits). Runtime components populate these
 //! payloads so the treasury can remunerate reliable relays deterministically while exposing the
 //! necessary observability hooks.
-use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
-use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 use super::{Digest32, RelayId};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -21,6 +15,12 @@ use crate::{
     isi::{InstructionBox, Transfer},
     metadata::Metadata,
 };
+use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 /// Identifier assigned to blinded measurement clients.
 pub type MeasurementId = Digest32;
 /// Canonical payload signed by a blinded measurement client for relay bandwidth proofs.
@@ -547,11 +547,11 @@ impl RelayRewardDisputeV1 {
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_primitives::{json::Json, numeric::Numeric};
     use super::*;
     use crate::{domain::DomainId, isi::TransferBox, name::Name};
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::{json::Json, numeric::Numeric};
+    use std::str::FromStr;
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

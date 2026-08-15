@@ -2,14 +2,14 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! scheduling outcomes or final state. This toggles the knob and compares events
 //! and balances for a mixed set of transactions.
-use std::{borrow::Cow, sync::Arc};
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
-use mv::storage::StorageReadOnly; // trait for .get()
+use mv::storage::StorageReadOnly;
+use std::{borrow::Cow, sync::Arc}; // trait for .get()
 mod snapshots;
 fn test_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(

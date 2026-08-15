@@ -1,4 +1,6 @@
 //! Various attachments for [`error_stack::Report::attach`] API.
+use derive_more::Display;
+use error_stack::{Report, fmt::ColorMode};
 use std::{
     any::TypeId,
     collections::HashSet,
@@ -7,8 +9,6 @@ use std::{
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
-use derive_more::Display;
-use error_stack::{Report, fmt::ColorMode};
 const ANSI_RESET: &str = "\u{1b}[0m";
 const ANSI_BOLD_CYAN: &str = "\u{1b}[1;36m";
 const ANSI_ITALIC: &str = "\u{1b}[3m";
@@ -319,15 +319,15 @@ where
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use error_stack::{Report, fmt::ColorMode};
     use std::{
         io::{Error, ErrorKind},
         sync::{Mutex, OnceLock},
     };
-    use error_stack::{Report, fmt::ColorMode};
-    use super::*;
     static COLOR_MODE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-    use toml::Value;
     use crate::ParameterId;
+    use toml::Value;
     fn reset_color_mode(mode: ColorMode) {
         Report::set_color_mode(mode);
     }

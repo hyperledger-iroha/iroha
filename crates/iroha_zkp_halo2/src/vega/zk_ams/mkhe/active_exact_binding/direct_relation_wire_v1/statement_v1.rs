@@ -27,10 +27,8 @@ mod rkg_one_h0_h1_replay_v1;
 pub(in super::super) use rkg_one_h0_h1_replay_v1::DirectRkgOneH0H1StatementReplayV1;
 #[path = "statement_v1/rkg_one_creator_core_v1.rs"]
 mod rkg_one_creator_core_v1;
+pub(in crate::vega::zk_ams::mkhe) use rkg_one_creator_core_v1::PreparedDirectRkgOneStatementCoreV1;
 use rkg_one_creator_core_v1::build_statement_core_v1;
-pub(in super::super) use rkg_one_creator_core_v1::{
-    FinalizedDirectRkgOneStatementV1, PreparedDirectRkgOneStatementCoreV1,
-};
 pub(in crate::vega::zk_ams::mkhe) mod object_role {
     use super::ZkAmsMkheDirectObjectKindV1;
     pub(in crate::vega::zk_ams::mkhe) trait Sealed {

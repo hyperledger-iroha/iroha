@@ -1,9 +1,9 @@
 //! Validate the public finalized-PoR replay-archive binding and worker bounds.
-use std::path::{Path, PathBuf};
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
+use std::path::{Path, PathBuf};
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()

@@ -1,8 +1,8 @@
 //! Allocation-conscious accessors for the committed block-hash journal.
-use std::num::NonZeroUsize;
+use super::State;
 use iroha_crypto::HashOf;
 use iroha_data_model::block::BlockHeader;
-use super::State;
+use std::num::NonZeroUsize;
 impl State {
     /// Snapshot committed block hashes from the block-hash journal.
     ///

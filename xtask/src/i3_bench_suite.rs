@@ -1,11 +1,3 @@
-use std::{
-    collections::{BTreeSet, HashMap, VecDeque},
-    error::Error,
-    fmt::Write as _,
-    fs,
-    path::{Path, PathBuf},
-    time::{Duration, Instant},
-};
 use axum::{
     Router,
     body::Body,
@@ -23,6 +15,14 @@ use norito::{
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeSet, HashMap, VecDeque},
+    error::Error,
+    fmt::Write as _,
+    fs,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 use time::OffsetDateTime;
 use tokio::runtime::Runtime;
 use tower::ServiceExt;
@@ -777,8 +777,8 @@ async fn proof_handler(
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::TempDir;
     use super::*;
+    use tempfile::TempDir;
     #[test]
     fn bench_suite_smoke() {
         let temp = TempDir::new().expect("temp dir");

@@ -1,9 +1,4 @@
 //! FIPS 204 key generation and signing over the crate's safe Rust primitives.
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
-use zeroize::Zeroizing;
 use super::{
     ML_DSA_CONTEXT_MAX_LEN, MlDsaError, MlDsaKeyPair, MlDsaSuite,
     mldsa_primitives::{
@@ -14,6 +9,11 @@ use super::{
     },
     validate_mldsa_secret_key_len,
 };
+use sha3::{
+    Shake256,
+    digest::{ExtendableOutput, Update, XofReader},
+};
+use zeroize::Zeroizing;
 const SEEDBYTES: usize = 32;
 const CRHBYTES: usize = 64;
 const TRBYTES: usize = 64;

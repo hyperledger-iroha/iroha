@@ -2214,6 +2214,7 @@ fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
         "self.adapter.record_reducer_outcome(",
         ".log_body_progress(&validation_event, reducer::StepDisposition::Applied, 1)",
         "self.armed = false",
+        "if self.adapter.status_publication_enabled",
         "super::status::set_v2_status(committed_status)",
     ] {
         assert!(
@@ -2239,6 +2240,9 @@ fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
     let disarm = post_fsync
         .find("self.armed = false")
         .expect("fail-stop Drop is disarmed before status publication");
+    let publication_guard = post_fsync
+        .find("if self.adapter.status_publication_enabled")
+        .expect("preactivation keeps direct Ready Validate publication closed");
     let status_publish = post_fsync
         .find("super::status::set_v2_status(committed_status)")
         .expect("precomputed committed status is published last");
@@ -2246,7 +2250,8 @@ fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
         registry_install < reducer_swap
             && reducer_swap < marker_clear
             && marker_clear < disarm
-            && disarm < status_publish
+            && disarm < publication_guard
+            && publication_guard < status_publish
     );
     for forbidden in ["?", "return Err", "publish_status(", ".wal.append("] {
         assert!(
@@ -2291,7 +2296,6 @@ fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
         "with_validated_preview",
         "with_rejected_preview",
         "FnOnce",
-        "-> R",
         ".commit(",
         "wal.append(",
         "drive_effects(",

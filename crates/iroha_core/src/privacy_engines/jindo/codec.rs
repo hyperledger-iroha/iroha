@@ -1,5 +1,4 @@
 //! Fixed-width canonical proof wire for revised Jindo Figs. 2--7.
-use thiserror::Error;
 use super::{
     JINDO_ENCODING_SLOTS_V1, JINDO_FIELD_ELEMENT_BYTES_V1, JINDO_MAX_BATCH_SIZE_V1,
     JINDO_RING_DEGREE_V1,
@@ -9,6 +8,7 @@ use super::{
         JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1,
     },
 };
+use thiserror::Error;
 pub const JINDO_PROOF_MAGIC_V1: [u8; 4] = *b"IJP2";
 pub const JINDO_PROOF_VERSION_V1: u8 = 2;
 pub const JINDO_PROOF_HEADER_BYTES_V1: usize = 8;

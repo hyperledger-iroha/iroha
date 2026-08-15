@@ -1,8 +1,23 @@
 #[test]
 fn startup_reconciles_lifecycle_before_lane_work_activation() {
-    let source = include_str!("../v2_runner.rs");
+    let parent = include_str!("../v2_runner.rs");
+    for anchor in [
+        "if pending_kura_apply.is_none()",
+        "lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+    ] {
+        assert!(
+            parent.contains(anchor),
+            "runner lost lifecycle handoff anchor: {anchor}"
+        );
+    }
+    let source = include_str!("../v2_runner/lifecycle_run_inner.rs");
     let anchors = [
-        "let _lifecycle_process_generation = claim_runner_lifecycle_process_generation(",
+        "V2BodyStore::open_with_policy(",
+        ".into_quarantined_recovered_startup()",
+        "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry(",
+        ".authenticate_final_wal_startup_authority()",
+        "open_production_lifecycle_owner_v1(",
+        "launch_non_pending_lifecycle_height(",
         "LaneApplicationEvidenceRepairQueueFence::capture(queue.as_ref())?",
         "evidence_repair_queue_fence.revalidate(queue.as_ref())?",
         "let deferred_terminal_recovery =",
@@ -10,12 +25,16 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
         "let planning = plan_lane_reservation_ownership(",
         "let lifecycle = reconcile_autonomous_lifecycle_startup(",
         "deferred_terminal_recovery,",
-        "let replanned = plan_lane_reservation_ownership(",
+        "plan_lane_reservation_ownership(",
         "let summary = apply_lane_reservation_reconciliation_plan(",
         "reservation_reconciliation_pending = false;",
-        "let mut lane_work = construct_after_pending_tip_application_recovery(",
+        "construct_after_pending_tip_application_recovery(",
         "lane_work.install_lane_drain_queue(Arc::clone(&queue))?;",
         "lane_work.activate_after_lane_drain_queue_install(&queue)?;",
+        "initialize_recovered_local_proposal(setup_runner)",
+        "let height_started_at = Instant::now();",
+        "preactivation.activate(height_started_at, local_proposal)",
+        "run_lifecycle_active_height(",
     ];
     let mut remainder = source;
     for anchor in anchors {

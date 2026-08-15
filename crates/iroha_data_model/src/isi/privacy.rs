@@ -876,9 +876,6 @@ impl_privacy_decode_from_slice!(SubmitPrivacyProofV1 {
 });
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         AssetDefinitionId, NetworkId,
@@ -913,6 +910,9 @@ mod tests {
             PrivacyZkX509RecordLifecycleV1,
         },
     };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use norito::core::DecodeFromSlice;
+    use std::str::FromStr as _;
     const PRIVACY_ISI_WIRE_IDS_V1: [&str; 28] = [
         RegisterPrivacyProtocolActivationV1::WIRE_ID,
         SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,

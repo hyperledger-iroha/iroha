@@ -6,6 +6,9 @@
 //! backend, verifying key, proof attachment, generic `OpenVerify` envelope, or
 //! alternate action wire.
 use core::{num::NonZeroU32, time::Duration};
+pub use iroha_core::privacy_engines::zk_ace::{
+    ZkAcePrivacyWitnessV1, ZkAcePrivacyWitnessValidationErrorV1,
+};
 use iroha_core::{
     privacy_engines::zk_ace::{
         ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1, ZkAceNativeErrorV1, ZkAceTryCryptoRngV1,
@@ -31,9 +34,6 @@ use iroha_data_model::{
         signed::TransactionSignatureError,
     },
     zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
-};
-pub use iroha_core::privacy_engines::zk_ace::{
-    ZkAcePrivacyWitnessV1, ZkAcePrivacyWitnessValidationErrorV1,
 };
 /// Exact public transfer authorized by one native ZK-ACE action.
 ///
@@ -794,7 +794,7 @@ pub fn build_signed_zk_ace_privacy_transfer_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
+    use super::*;
     use iroha_core::privacy_engines::zk_ace::{ZkAceTryRngCoreV1, verify_zk_ace_privacy_v1};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
@@ -806,7 +806,7 @@ mod tests {
         },
         transaction::Executable,
     };
-    use super::*;
+    use std::str::FromStr as _;
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive deterministic ZK-ACE test key")

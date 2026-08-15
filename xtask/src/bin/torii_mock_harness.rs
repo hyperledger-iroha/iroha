@@ -1,4 +1,8 @@
 #![allow(clippy::print_stdout)]
+use eyre::{Context, Result, bail, eyre};
+use hex::encode as hex_encode;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     env, fs,
@@ -6,10 +10,6 @@ use std::{
     process::Command,
     time::Instant,
 };
-use eyre::{Context, Result, bail, eyre};
-use hex::encode as hex_encode;
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
 const DEFAULT_SCENARIO: &str = "submit";
 const DEFAULT_TEST: &str = "org.hyperledger.iroha.android.client.HttpClientTransportHarnessTests";
 const DEFAULT_CONFIG_RELATIVE: &str = "tools/torii_mock_harness/config/default.toml";

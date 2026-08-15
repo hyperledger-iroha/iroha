@@ -16,10 +16,10 @@ pub mod nexus_app;
 pub mod privacy_issuance;
 pub mod query;
 pub mod secrecy;
-pub mod sns;
-pub mod subscriptions;
 #[cfg(feature = "sm")]
 pub mod sm;
+pub mod sns;
+pub mod subscriptions;
 pub use iroha_crypto as crypto;
 pub use iroha_data_model as data_model;
 pub use iroha_executor_data_model as executor_data_model;

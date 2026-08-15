@@ -2,7 +2,6 @@
 //! Integration tests for /v1/zk/proofs and /v1/zk/proofs/count.
 #![cfg(feature = "app_api")]
 #![allow(clippy::too_many_lines)]
-use std::{sync::Arc, time::Duration};
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::defaults;
@@ -12,6 +11,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::proof::{ProofId, ProofRecord, ProofStatus};
+use std::{sync::Arc, time::Duration};
 use tower::ServiceExt as _;
 #[tokio::test]
 async fn proofs_list_and_count_with_filters() {

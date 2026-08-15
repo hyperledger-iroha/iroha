@@ -4,8 +4,8 @@
 //! carries an explicit nominal numeric kind and that kind's complete canonical
 //! schema-bound numeric frame.  Runtime validation must compare the requested
 //! kind before publishing a private pointer into guest memory.
-use norito::{Decode, Encode};
 use crate::pointer_abi::PointerType;
+use norito::{Decode, Encode};
 /// ABI/domain version bound into private numeric projections and commitments.
 pub const PRIVATE_INPUT_ABI_VERSION_V1: u16 = 1;
 /// Nominal Norito schema name for one typed private-input record.

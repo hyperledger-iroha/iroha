@@ -5,11 +5,11 @@
 //! SoraDNS roadmap. These types are shared between governance tooling, Torii
 //! APIs, SDKs, and the resolver implementation so all components agree on the
 //! canonical Norito encoding.
+use crate::{account::AccountId, ipfs::IpfsPath};
 use iroha_crypto::{PublicKey, Signature};
 use iroha_primitives::soradns::GatewayHostBindings;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use crate::{account::AccountId, ipfs::IpfsPath};
 /// Current RAD schema version identifier.
 pub const RAD_VERSION_V1: u8 = 1;
 /// Current directory record schema version identifier.
@@ -465,8 +465,8 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::soradns::derive_gateway_hosts;
     use super::*;
+    use iroha_primitives::soradns::derive_gateway_hosts;
     #[test]
     fn gateway_host_set_matches_bindings() {
         let bindings = derive_gateway_hosts("docs.sora").expect("derive hosts");

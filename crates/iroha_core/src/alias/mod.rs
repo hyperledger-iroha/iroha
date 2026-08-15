@@ -4,11 +4,7 @@
 //! container. Iroha v1 deliberately does not expose an OPRF/VOPRF service; a
 //! future privacy-preserving lookup protocol must ship as a complete, keyed,
 //! verifiable construction rather than a hash-shaped placeholder.
-use std::{
-    collections::BTreeMap,
-    fmt,
-    sync::{Arc, RwLock},
-};
+use crate::state::WorldReadOnly;
 use iroha_crypto::{HashOf, KeyPair, Signature};
 use iroha_data_model::{
     account::{AccountId, rekey::AccountAlias},
@@ -30,9 +26,13 @@ use iroha_executor_data_model::permission::asset_definition::{
 };
 use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::{Arc, RwLock},
+};
 use thiserror::Error;
 use tracing::{Level, event, instrument};
-use crate::state::WorldReadOnly;
 const ALIAS_ATTESTATION_SIGNATURE_DOMAIN: &[u8] = b"iroha:alias:attestation:v1";
 fn alias_attestation_signature_preimage(record: &AliasRecord, attester: &AccountId) -> Vec<u8> {
     let attester_bytes = norito::to_bytes(attester).expect("AccountId must encode");
@@ -606,14 +606,14 @@ impl AliasService {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use iroha_crypto::Algorithm;
+    use iroha_data_model::{account::AccountId, alias::AliasIndex, name::Name};
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         str::FromStr,
         sync::Arc,
     };
-    use iroha_crypto::Algorithm;
-    use iroha_data_model::{account::AccountId, alias::AliasIndex, name::Name};
-    use super::*;
     fn owner() -> AccountId {
         const SIGNATORY: &str =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";

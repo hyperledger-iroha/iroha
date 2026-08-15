@@ -389,11 +389,11 @@ pub fn metal_available() -> bool {
     }
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]
-use std::cell::OnceCell;
-#[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2::rc::Retained;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 use objc2::runtime::ProtocolObject;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+use std::cell::OnceCell;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 fn discover_metal_device() -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLDevice>>> {
     // Debug knob: force enumeration even if system default device is available.
@@ -4581,8 +4581,8 @@ pub fn reset_metal_backend_for_tests() {
 pub fn reset_metal_backend_for_tests() {}
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
     use super::*;
+    use std::time::Instant;
     #[test]
     fn metal_acceleration_speed() {
         if !metal_available() {

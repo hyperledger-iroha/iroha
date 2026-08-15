@@ -1,4 +1,10 @@
 //! Deterministic V1 `CancelAssetLock` fixture generation and verification.
+use crate::{escrow::EscrowId, isi::escrow::CancelAssetLock};
+use iroha_crypto::Hash;
+use iroha_primitives::numeric::Quantity;
+use norito::{codec::encode_with_header_flags, json};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
@@ -7,12 +13,6 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
-use iroha_crypto::Hash;
-use iroha_primitives::numeric::Quantity;
-use norito::{codec::encode_with_header_flags, json};
-use crate::{escrow::EscrowId, isi::escrow::CancelAssetLock};
 const ESCROW_ID_PREIMAGE: &str = "sorafs-appeal-cancel-asset-lock-v1";
 const MAX_FIXTURE_COUNT: usize = 16;
 const MAX_FIXTURE_PATH_BYTES: usize = 240;

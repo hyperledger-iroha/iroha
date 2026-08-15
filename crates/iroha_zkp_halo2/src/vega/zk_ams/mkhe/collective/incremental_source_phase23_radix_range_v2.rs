@@ -715,7 +715,7 @@ fn pack_comparator_lanes_v2(
 
 /// Purpose-bound scratch authority. Production cannot construct it in this
 /// slice; tests may supply only an unlinked confidential-spool directory.
-pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) enum Phase23RadixWitnessScratchSinkV2
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) enum Phase23RadixWitnessScratchSinkV2
 {
     Production {
         confidential_spool_directory: Infallible,
@@ -770,11 +770,12 @@ struct RadixWitnessMaterializationRecordV2 {
 
 /// Non-authorizing public axes copied while Evidence is consumed into its
 /// strict cursor. They have no constructor or accessor outside that transition.
-pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) struct Phase23RadixSourceCursorAxesV2
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
+struct Phase23RadixSourceCursorAxesV2
 {
-    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) replay_record_digest:
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) replay_record_digest:
         [u8; 32],
-    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) source_receipt_digest:
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) source_receipt_digest:
         [u8; 32],
 }
 
@@ -864,7 +865,8 @@ fn validate_radix_witness_record_v2(
 }
 
 /// Unforgeable proof-order seal. Only successful materialization can mint it.
-pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) struct RadixWitnessMaterializationSealV2
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
+struct RadixWitnessMaterializationSealV2
 {
     replay_record_digest: [u8; 32],
     spool_context_digest: [u8; 32],
@@ -895,7 +897,7 @@ impl RadixWitnessMaterializationSealV2 {
         })
     }
 
-    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) fn validate_for_replay_v2(
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn validate_for_replay_v2(
         &self,
         replay_record_digest: [u8; 32],
     ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -951,10 +953,9 @@ fn radix_witness_seal_digest_v2(
 /// Move-only compact witness owner. It deliberately has no snapshot, Evidence,
 /// seal, commitment, proof, serialization, or tuple-splitting accessor.
 #[must_use = "dropping this owner closes replay evidence and the radix witness spool"]
-pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) struct Phase23RadixWitnessMaterializedV2<
-    K,
-    P,
-> {
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23)
+struct Phase23RadixWitnessMaterializedV2
+<K, P> {
     evidence: Option<Phase23GlobalLookupSourceReplayEvidenceV1<K, P>>,
     snapshot: ConfidentialSpoolSnapshotV1,
     record: RadixWitnessMaterializationRecordV2,
@@ -1071,7 +1072,7 @@ fn materialize_radix_group_v2<K, P>(
     Ok(())
 }
 
-pub(in crate::vega::zk_ams::mkhe::collective::incremental_source_phase23) fn materialize_phase23_radix_witness_v2<
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn materialize_phase23_radix_witness_v2<
     K,
     P,
 >(

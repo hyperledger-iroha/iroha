@@ -66,8 +66,8 @@ pub fn enable_tracing() -> Result<(), LoggerSetupError> {
 }
 #[cfg(test)]
 mod tests {
-    use log::Log;
     use super::enable_tracing;
+    use log::Log;
     #[test]
     fn logger_filters_by_module_prefix() {
         // Exercise the `enabled` predicate directly to avoid installing globals in tests

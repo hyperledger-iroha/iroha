@@ -1036,12 +1036,12 @@ async fn main() {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use axum::{
         body,
         http::{Request, StatusCode},
     };
     use iroha_data_model::compute::ComputeOutcomeKind;
-    use super::*;
     fn gateway_for_tests() -> Arc<ComputeGateway> {
         let manifest: ComputeManifest = json::from_str(include_str!(
             "../../../fixtures/compute/manifest_compute_payments.json"

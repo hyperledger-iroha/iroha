@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration smoke test: submit a proof attachment and query its record via Torii.
-use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
 use eyre::{Report, Result};
 use integration_tests::sandbox;
 use iroha_core::zk::test_utils::halo2_fixture_envelope;
@@ -15,6 +14,7 @@ use iroha_data_model::{
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use reqwest::Client as HttpClient;
+use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
 fn compute_proof_hash(backend: &str, bytes: &[u8]) -> [u8; 32] {
     iroha_core::zk::hash_proof(&ProofBox::new(backend.into(), bytes.to_vec()))
 }

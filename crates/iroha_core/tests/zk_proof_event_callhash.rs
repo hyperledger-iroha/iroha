@@ -1,7 +1,6 @@
 //! Verify that `ProofEvent::{Verified,Rejected}` carry the transaction `call_hash`.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
-use std::{borrow::Cow, sync::Arc};
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -13,6 +12,7 @@ use iroha_data_model::{
     },
     prelude::*,
 };
+use std::{borrow::Cow, sync::Arc};
 #[test]
 fn proof_event_includes_call_hash() {
     // Minimal world

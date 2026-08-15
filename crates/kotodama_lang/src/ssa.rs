@@ -18,11 +18,11 @@
 //! implementation choice, not a mixed representation: raw lowering operands
 //! are rewritten before branding, no parallel operation is retained, and the
 //! opaque SSA API exposes only verified construction and consuming de-SSA.
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::{
     ir::{self, Label, Temp},
     regalloc::{visit_instr_defs, visit_instr_uses, visit_terminator_uses},
 };
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 /// Maximum control-flow blocks accepted in one V1 function.
 ///
 /// The bound keeps dominance construction and verification deterministic and
@@ -3204,16 +3204,16 @@ impl Renamer {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use crate::{
-        ast::{BinaryOp, SourceLocation},
-        ir::{BasicBlock, Function, Instr, Label, Program as IrProgram, Temp, Terminator},
-    };
     use super::{
         BasicBlock as SsaBlock, Cfg, Function as SsaFunction, MAX_SSA_BLOCKS_PER_FUNCTION,
         MAX_SSA_INSTRUCTIONS_PER_FUNCTION, Phi, PhiInput, Program, Renamer, Value,
         ValueInstruction, ValueTerminator, validate_ssa_budget_counts,
     };
+    use crate::{
+        ast::{BinaryOp, SourceLocation},
+        ir::{BasicBlock, Function, Instr, Label, Program as IrProgram, Temp, Terminator},
+    };
+    use std::collections::BTreeSet;
     fn function(blocks: Vec<BasicBlock>) -> Function {
         Function {
             name: "test".to_owned(),

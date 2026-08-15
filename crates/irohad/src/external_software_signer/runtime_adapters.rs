@@ -1,7 +1,4 @@
 //! Purpose-separated adapters for detached SoraFS runtime signing roles.
-use std::{fmt, sync::Arc};
-use iroha_crypto::Algorithm;
-use sorafs_node::pop_credentials::PopIssuerSigner as _;
 use super::{
     adapter::ExternalSoftwareSignerAdapterErrorV1,
     protocol::{
@@ -11,6 +8,9 @@ use super::{
     typed_payload::{SoftwareSignerPurposeV1, encode_typed_signing_payload},
     unix::{ExternalSoftwareSignerClientErrorV1, SoftwareSignerClientV1},
 };
+use iroha_crypto::Algorithm;
+use sorafs_node::pop_credentials::PopIssuerSigner as _;
+use std::{fmt, sync::Arc};
 const DETACHED_OPERATION_ID_DOMAIN_V1: &[u8] = b"iroha.external-signer.detached-operation.v1";
 const DETACHED_MESSAGE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.detached-message.v1";
 const REDACTED_SIGNER_FAILURE_V1: &str = "external software signer unavailable";

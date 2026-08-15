@@ -1,7 +1,6 @@
 //! Ensure CoreHost enforces the same ABI gating as DefaultHost.
 #[path = "../../iroha_data_model/tests/fixtures/axt_golden.rs"]
 mod axt_golden;
-use std::{collections::HashMap, sync::Arc};
 use iroha_data_model::{
     nexus as model,
     nexus::{
@@ -18,6 +17,7 @@ use ivm::{
     },
     mock_wsv::{DataspaceAxtPolicy, MockWorldStateView, SpaceDirectoryAxtPolicy},
 };
+use std::{collections::HashMap, sync::Arc};
 mod common;
 const AXT_VERIFY_EMPTY_GAS: u64 = 64;
 const AXT_GAS_BASE: u64 = 16;
@@ -1125,8 +1125,8 @@ fn core_host_enforces_fixture_snapshot_fields() {
     );
     base_intent.op.from = base_handle.subject.account.clone();
     {
-        use std::num::NonZeroU64;
         use axt::AxtPolicy;
+        use std::num::NonZeroU64;
         let dsid = base_intent.asset_dsid;
         axt::validate_descriptor(&descriptor).expect("fixture descriptor must be canonical");
         let binding = axt::compute_binding(&descriptor).expect("binding");

@@ -5,16 +5,6 @@
 //! exact reporting-node identity, ordered validator keys, and count threshold,
 //! and delegates the complete header/context/PoP/BLS verification to
 //! `iroha_core::bridge`.
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
-use std::{
-    collections::BTreeSet,
-    env,
-    fs::{self, File},
-    io::{Read, Seek, SeekFrom},
-    path::{Path, PathBuf},
-    process,
-};
 use iroha_core::{
     bridge::{FinalityProofVerificationConfig, verify_finality_proof},
     validate_genesis_block,
@@ -35,6 +25,16 @@ use iroha_data_model::{
 };
 use norito::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+use std::{
+    collections::BTreeSet,
+    env,
+    fs::{self, File},
+    io::{Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+    process,
+};
 const LEGACY_EXPECTATIONS_SCHEMA_VERSION: u8 = 2;
 const LEGACY_RECEIPT_SCHEMA_VERSION: u8 = 3;
 const ATTESTED_EXPECTATIONS_SCHEMA_VERSION: u8 = 3;
@@ -1237,8 +1237,7 @@ fn compiled_build_fingerprint() -> Hash {
 }
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::{io::Write as _, os::fd::AsRawFd as _};
+    use super::*;
     use iroha_crypto::{Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         account::AccountId,
@@ -1258,7 +1257,8 @@ mod tests {
         },
         transaction::signed::TransactionBuilder,
     };
-    use super::*;
+    #[cfg(unix)]
+    use std::{io::Write as _, os::fd::AsRawFd as _};
     struct Fixture {
         status: SumeragiV2Status,
         proof: BridgeFinalityProof,

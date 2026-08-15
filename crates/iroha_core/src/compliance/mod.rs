@@ -1,11 +1,5 @@
 //! Lane compliance policy evaluation and loading.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    io::{self, Read as _},
-    path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
-};
+use crate::interlane::LanePrivacyRegistryHandle;
 use iroha_crypto::{Hash, privacy::LaneCommitmentId};
 use iroha_data_model::{
     account::AccountId,
@@ -18,7 +12,13 @@ use iroha_data_model::{
 use iroha_logger::warn;
 use norito::codec::{DecodeAll, Encode};
 use norito::{DecodeLimits, with_decode_limits};
-use crate::interlane::LanePrivacyRegistryHandle;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::{self, Read as _},
+    path::{Path, PathBuf},
+    sync::{Arc, LazyLock},
+};
 /// Static engine that evaluates lane compliance policies.
 #[derive(Debug)]
 pub struct LaneComplianceEngine {
@@ -806,7 +806,8 @@ impl LaneComplianceDecisionRecord {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, fs, path::PathBuf};
+    use super::*;
+    use crate::{governance::manifest::LaneManifestStatus, interlane::LanePrivacyRegistry};
     use iroha_crypto::{
         Algorithm, Hash, KeyPair,
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
@@ -816,8 +817,7 @@ mod tests {
         metadata::Metadata,
         nexus::{AuditControls, DataSpaceId, JurisdictionSet, LaneStorageProfile, LaneVisibility},
     };
-    use super::*;
-    use crate::{governance::manifest::LaneManifestStatus, interlane::LanePrivacyRegistry};
+    use std::{collections::BTreeSet, fs, path::PathBuf};
     fn account(name: &str, domain: &str) -> AccountId {
         let seed_literal = format!("{name}::{domain}");
         let mut seed = seed_literal.into_bytes();

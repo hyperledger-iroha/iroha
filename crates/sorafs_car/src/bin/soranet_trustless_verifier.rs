@@ -2,13 +2,6 @@
 //! Only the `dag-scope=full` path is supported today; chunk plans and PoR roots
 //! are reconstructed and checked against the manifest's mandatory commitments.
 #![allow(unexpected_cfgs)]
-use std::{
-    fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-    process,
-    time::{SystemTime, UNIX_EPOCH},
-};
 use clap::Parser;
 use eyre::{Context, Result};
 use norito::{
@@ -19,6 +12,13 @@ use sorafs_car::{TrustlessVerifier, TrustlessVerifierConfig, validate_manifest_c
 use sorafs_manifest::{ManifestV1, ValidationOutcomeV1};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process,
+    time::{SystemTime, UNIX_EPOCH},
+};
 #[derive(Debug, Parser)]
 #[command(
     author,

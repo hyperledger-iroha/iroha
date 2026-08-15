@@ -1,12 +1,12 @@
 //! M0 gateway baseline pack for the SoraGlobal Gateway CDN (SNNet-15M0).
 //! Generates H3 edge config, trustless verifier skeleton, and WAF/rate
 //! policies so early PoPs can run consistent drills.
+use eyre::{Result, WrapErr};
+use norito::{derive::JsonSerialize, json};
 use std::{
     fs::{self, File},
     path::PathBuf,
 };
-use eyre::{Result, WrapErr};
-use norito::{derive::JsonSerialize, json};
 #[derive(Debug)]
 pub struct GatewayM0Options {
     pub output_dir: PathBuf,

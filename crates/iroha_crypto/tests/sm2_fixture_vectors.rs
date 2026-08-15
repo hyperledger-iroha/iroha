@@ -1,6 +1,5 @@
 //! Cross-SDK SM2 fixture validation.
 #![cfg(feature = "sm")]
-use std::{fs, path::PathBuf};
 use hex::FromHex;
 use iroha_crypto::{
     Algorithm, PublicKey,
@@ -8,6 +7,7 @@ use iroha_crypto::{
 };
 use norito::json::{self, JsonDeserialize};
 use sm3::{Digest, Sm3};
+use std::{fs, path::PathBuf};
 const CURVE_SM2P256V1: &str = "sm2p256v1";
 const CURVE_GMT0003_ANNEX_D_FP256: &str = "gm-t-0003-annex-d-fp256";
 #[derive(Debug, JsonDeserialize)]

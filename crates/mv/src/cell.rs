@@ -48,9 +48,9 @@ impl<V: Value + Default> Default for Cell<V> {
 }
 /// Module for [`View`] and it's related impls
 mod view {
-    use std::ops::Deref;
-    use concread::ebrcell::EbrCellReadTxn;
     use super::*;
+    use concread::ebrcell::EbrCellReadTxn;
+    use std::ops::Deref;
     /// Consistent view of the storage at the certain version
     pub struct View<'storage, V: Value> {
         pub(crate) blocks: EbrCellReadTxn<V>,
@@ -73,9 +73,9 @@ use concread::EbrCell;
 pub use view::View;
 /// Module for [`Block`] and it's related impls
 mod block {
-    use std::ops::{Deref, DerefMut};
-    use concread::ebrcell::EbrCellWriteTxn;
     use super::*;
+    use concread::ebrcell::EbrCellWriteTxn;
+    use std::ops::{Deref, DerefMut};
     /// Batched update to the storage that can be reverted later
     pub struct Block<'storage, V: Value> {
         pub(crate) revert: EbrCellWriteTxn<'storage, Option<V>>,

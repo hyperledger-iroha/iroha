@@ -1,5 +1,9 @@
 //! Typed Torii surface for Parliament-governed validation-fee state.
-use std::ops::Bound::{Excluded, Unbounded};
+use crate::{
+    Error, JsonBody, NoritoBody, NoritoJson, NoritoQuery, SharedAppState, check_access,
+    gov::validation_fee_plain_electorate_rules, require_runtime_governance_account,
+    utils::extractors::NoritoOnly,
+};
 use axum::{
     extract::{ConnectInfo, Extension, Path, State},
     http::HeaderMap,
@@ -40,11 +44,7 @@ use iroha_torii_shared::validation_fee_api::{
     validation_fee_policy_proof_page_tip,
 };
 use mv::storage::StorageReadOnly as _;
-use crate::{
-    Error, JsonBody, NoritoBody, NoritoJson, NoritoQuery, SharedAppState, check_access,
-    gov::validation_fee_plain_electorate_rules, require_runtime_governance_account,
-    utils::extractors::NoritoOnly,
-};
+use std::ops::Bound::{Excluded, Unbounded};
 fn inconsistent(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
         code: "validation_fee_state_inconsistent",
@@ -1117,8 +1117,8 @@ pub(crate) async fn handler_plain_ballot_draft(
 }
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, collections::BTreeMap};
     use super::*;
+    use std::{cell::Cell, collections::BTreeMap};
     #[test]
     fn proposal_page_traversal_reads_only_limit_plus_one_index_rows() {
         let rows = (0_u64..10_000)

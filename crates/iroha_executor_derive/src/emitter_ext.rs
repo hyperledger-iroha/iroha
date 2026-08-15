@@ -53,9 +53,9 @@ impl EmitterExt for Emitter {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use quote::quote;
     use syn::Error;
-    use super::*;
     #[test]
     fn handle_ok() {
         let mut e = Emitter::new();

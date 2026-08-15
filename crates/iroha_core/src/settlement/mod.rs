@@ -6,7 +6,6 @@
 //! serialization details (Norito receipts, decimal arithmetic) from the rest of
 //! the code base.  Integration with Kura buffers and swap execution will be
 //! layered on top in follow-up patches.
-use std::collections::BTreeMap;
 use iroha_config::parameters::actual as config;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -27,6 +26,7 @@ use settlement_router::{
     policy::{BufferPolicy, BufferStatus},
     receipt::SettlementReceipt,
 };
+use std::collections::BTreeMap;
 use time::Duration as TimeDuration;
 #[cfg(any(feature = "telemetry", test))]
 const SETTLEMENT_MICRO_SCALE: u32 = 6;
@@ -319,9 +319,9 @@ impl SettlementAccumulator {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::Hash;
     use iroha_data_model::domain::DomainId;
-    use super::*;
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }

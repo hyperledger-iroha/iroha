@@ -6,19 +6,19 @@
 //! without scanning external DA manifests ad hoc. Recovery handles temp and
 //! main candidates sequentially and applies fixed byte/allocation/shard limits
 //! before retaining a decoded checkpoint.
-use std::{
-    fs,
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-};
-use iroha_logger::warn;
-use norito::{DecodeLimits, decode_from_bytes_with_limits, to_bytes};
-use thiserror::Error;
 use crate::query::projection_checkpoint::{
     QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES,
     QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS,
     QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES, QueryProjectionCheckpoint,
 };
+use iroha_logger::warn;
+use norito::{DecodeLimits, decode_from_bytes_with_limits, to_bytes};
+use std::{
+    fs,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+};
+use thiserror::Error;
 /// Maximum encoded bytes retained or decoded for one first-release checkpoint journal.
 const QUERY_PROJECTION_CHECKPOINT_JOURNAL_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum aggregate allocation permitted while decoding one checkpoint journal.
@@ -473,14 +473,14 @@ fn journal_file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) 
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::query::projection_checkpoint::{
+        QueryProjectionCheckpoint, QueryProjectionCheckpointShard, QueryProjectionResourceKind,
+    };
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         block::BlockHeader,
         da::types::{BlobDigest, StorageTicketId},
-    };
-    use super::*;
-    use crate::query::projection_checkpoint::{
-        QueryProjectionCheckpoint, QueryProjectionCheckpointShard, QueryProjectionResourceKind,
     };
     fn sample_hash(byte: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::new([byte; Hash::LENGTH]))

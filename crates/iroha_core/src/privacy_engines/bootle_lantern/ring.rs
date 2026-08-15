@@ -5,8 +5,6 @@
 //! externally supplied residues. Arithmetic methods always return canonical
 //! residues and use explicit modular operations, so debug and release builds
 //! have identical overflow behavior.
-use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
 use super::params::{
     APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1,
     INTERNAL_CRT_FIRST_TWO_PRODUCT_MOD_PROOF_MODULUS_V1, INTERNAL_CRT_GARNER_INVERSES_V1,
@@ -14,6 +12,8 @@ use super::params::{
     INTERNAL_CRT_PRIMES_V1, INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1,
     INTERNAL_CRT_RING_DEGREE_INVERSES_V1, PROOF_MODULUS_V1,
 };
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 #[derive(Clone, Copy)]
 struct FixedModulusV1 {
     modulus: u64,

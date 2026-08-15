@@ -3,10 +3,6 @@
 //!
 //! Some helpers are gated by telemetry and may be unused when those tests are
 //! disabled; allow the definitions to stay available across feature sets.
-use std::sync::{
-    Arc, LazyLock, Mutex,
-    atomic::{AtomicU64, Ordering},
-};
 use axum::{
     body::{Body, Bytes},
     http::Request,
@@ -24,6 +20,10 @@ use iroha_data_model::{ChainId, NetworkId, account::AccountId, peer::PeerId};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
 use iroha_torii::{OnlinePeersProvider, Torii};
+use std::sync::{
+    Arc, LazyLock, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use tower::ServiceExt as _;
 static SHARED_METRICS: LazyLock<Mutex<Arc<Metrics>>> =
     LazyLock::new(|| Mutex::new(Arc::new(Metrics::default())));

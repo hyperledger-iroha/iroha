@@ -10,25 +10,25 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::marker::PhantomData;
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::{Chip, Layouter, Region, Value},
     plonk::{Advice, Column, ConstraintSystem, Error, Expression, Fixed, Selector},
     poly::Rotation,
 };
+use std::marker::PhantomData;
 mod compression;
 mod gates;
 mod message_schedule;
 mod spread_table;
 pub(crate) mod util;
+use crate::zk::kagemusha_sha256_table16_v4::{
+    AssignedBits, AssignedBlockWord, BlockWord, PaddedByte, Sha256Instructions,
+};
 use compression::*;
 use gates::*;
 use message_schedule::*;
 use spread_table::*;
-use crate::zk::kagemusha_sha256_table16_v4::{
-    AssignedBits, AssignedBlockWord, BlockWord, PaddedByte, Sha256Instructions,
-};
 #[derive(Clone, Debug)]
 struct PackConfig {
     bytes: [Column<Advice>; 4],
@@ -418,8 +418,8 @@ trait Table16Assignment<F: PrimeField> {
 }
 #[cfg(test)]
 mod constraint_inventory_tests {
-    use halo2_proofs::{halo2curves::pasta::Fp, plonk::ConstraintSystem};
     use super::Table16Chip;
+    use halo2_proofs::{halo2curves::pasta::Fp, plonk::ConstraintSystem};
     #[test]
     fn five_lane_tail_relation_adds_no_fixed_selector_or_permutation_columns() {
         let mut meta = ConstraintSystem::<Fp>::default();

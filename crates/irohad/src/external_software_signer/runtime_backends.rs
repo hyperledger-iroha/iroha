@@ -1,11 +1,4 @@
 //! Exact catalog-to-backend assembly for isolated software signer services.
-use std::sync::Arc;
-use iroha_torii::sorafs::{
-    PotrGatewaySignerV1 as _, PotrProviderSignerV1 as _, StreamTokenRuntimeSigner as _,
-};
-use sorafs_node::{
-    GovernanceDagRuntimeSigner as _, evidence_viewer::EvidenceViewerReceiptSignerV1 as _,
-};
 use super::{
     adapter::{ExternalSoftwareSignerAdapterErrorV1, ExternalSoftwareSignerNativeAdapterV1},
     runtime_adapters::{
@@ -15,6 +8,13 @@ use super::{
         ExternalSoftwareSignerPotrProviderAdapterV1, ExternalSoftwareSignerStreamTokenAdapterV1,
     },
 };
+use iroha_torii::sorafs::{
+    PotrGatewaySignerV1 as _, PotrProviderSignerV1 as _, StreamTokenRuntimeSigner as _,
+};
+use sorafs_node::{
+    GovernanceDagRuntimeSigner as _, evidence_viewer::EvidenceViewerReceiptSignerV1 as _,
+};
+use std::sync::Arc;
 /// Deployment-owned set of every phase-one software-signing backend.
 #[derive(Clone, Default)]
 pub struct ExternalSoftwareSignerBackendsV1 {

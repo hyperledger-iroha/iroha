@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke tests for Torii domains endpoints.
 #![cfg(feature = "app_api")]
-use std::sync::Arc;
 use axum::http::Request;
 use http::StatusCode;
 use iroha_core::{
@@ -11,6 +10,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_torii::Torii;
+use std::sync::Arc;
 use tower::ServiceExt as _;
 #[tokio::test]
 async fn domains_endpoints_exist() {

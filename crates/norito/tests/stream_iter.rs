@@ -1,13 +1,13 @@
 //! Streaming iterator regression coverage.
-use std::{
-    collections::{BTreeMap, HashMap},
-    io::Cursor,
-};
 use norito::core as norito_core;
 use norito::core::{DecodeFlagsGuard, header_flags};
 use norito::{
     Compression, Error, NoritoSerialize, StreamMapIter, serialize_into,
     stream_btreemap_collect_from_reader, stream_hashmap_collect_from_reader, stream_seq_iter,
+};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::Cursor,
 };
 #[cfg(feature = "packed-struct")]
 #[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]

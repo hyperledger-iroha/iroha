@@ -3,14 +3,14 @@
 //! Signed order, cancellation, and settlement payload schemas remain in
 //! `sorafs_manifest::orderbook`. These records bind those canonical payloads to
 //! a governance-controlled policy and to deterministic ledger admission state.
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
-use sorafs_manifest::deal::XorQuantity;
 use crate::{
     account::AccountId, asset::AssetDefinitionId, escrow::EscrowId,
     events::data::sorafs::SorafsOrderbookLedgerEvent, sorafs::capacity::ProviderId,
 };
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use sorafs_manifest::deal::XorQuantity;
+use thiserror::Error;
 /// First-release schema version for [`OrderbookAdmissionPolicyV1`].
 pub const ORDERBOOK_ADMISSION_POLICY_VERSION_V1: u16 = 1;
 /// Maximum order lifetime governance may configure for the first release.
@@ -809,9 +809,9 @@ pub struct OrderbookFinalizedEventPageV1 {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
     use crate::events::data::sorafs::SorafsOrderbookLedgerEventKind;
+    use iroha_crypto::{Algorithm, KeyPair};
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;

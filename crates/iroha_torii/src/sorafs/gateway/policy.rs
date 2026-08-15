@@ -1,9 +1,8 @@
 //! Gateway policy orchestration for GAR enforcement and rate limiting.
-use std::{
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+use super::rate_limit::{
+    ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter, RateLimitError,
 };
+use crate::sorafs::AdmissionRegistry;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use hex::ToHex;
 use iroha_data_model::{
@@ -11,8 +10,11 @@ use iroha_data_model::{
     sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
 use iroha_logger::debug;
-use super::rate_limit::{ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter, RateLimitError};
-use crate::sorafs::AdmissionRegistry;
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 /// Canonical, bounded HTTP authority host admitted to GAR event metadata.
 ///
 /// The inner string is private so [`RequestContext`] cannot retain raw request
@@ -391,8 +393,8 @@ pub fn build_gar_violation_event(
 }
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
     use super::*;
+    use std::time::{Duration, SystemTime};
     fn sample_provider_id() -> [u8; 32] {
         [0x42; 32]
     }

@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
+use super::super::table_assets::read_u64_le;
 use core::cmp::Ordering;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use zeroize::DefaultIsZeroes;
-use super::super::table_assets::read_u64_le;
 // ========================================================================
 // Fixed-point operations
 // ========================================================================

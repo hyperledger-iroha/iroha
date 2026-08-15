@@ -1,5 +1,5 @@
-use std::net::{Ipv4Addr, SocketAddr};
 use super::bind_reusable_tcp_listener;
+use std::net::{Ipv4Addr, SocketAddr};
 #[tokio::test(flavor = "current_thread")]
 async fn reusable_tcp_listener_binds_loopback() {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));

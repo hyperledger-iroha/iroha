@@ -1,5 +1,5 @@
 //! Golden V1 proof fixture parity; regeneration gated by `FASTPQ_UPDATE_FIXTURES`.
-use std::{fs, path::PathBuf};
+use crate::common::fixture_update_requested;
 use fastpq_prover::{
     ExecutionMode, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
     gadgets::transfer::attach_transfer_smt_witnesses,
@@ -14,7 +14,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
-use crate::common::fixture_update_requested;
+use std::{fs, path::PathBuf};
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")

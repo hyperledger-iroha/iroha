@@ -1,6 +1,6 @@
-use std::num::NonZeroU64;
 use iroha_crypto::{HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use ivm::{IVM, syscalls};
+use std::num::NonZeroU64;
 mod common;
 use common::assemble_syscalls;
 #[test]

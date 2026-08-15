@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke test that ZK endpoints (verify, attachments) are exposed via the merged sub-router.
 #![cfg(feature = "app_api")]
-use std::sync::{Mutex, MutexGuard, OnceLock};
 use axum::http::Request;
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -12,6 +11,7 @@ use iroha_data_model::{
     domain::{Domain, DomainId},
 };
 use iroha_torii_shared::ErrorEnvelope;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;

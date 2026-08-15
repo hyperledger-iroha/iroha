@@ -10,8 +10,7 @@ use syn::{FnArg, LitStr, Path, Type, parse::Parse, punctuated::Punctuated, token
 // `metric_*_label!` helpers below provide a public surface for downstream crates.
 /// Emit the canonical "total" metric label as a string literal.
 ///
-/// Usage: `metric_total_label!()` expands to `"total"`.
-/// The macro accepts no input tokens.
+/// Usage: `metric_total_label!()` expands to `"total"`. The macro accepts no input tokens.
 #[cfg(feature = "metric-instrumentation")]
 #[proc_macro]
 pub fn metric_total_label(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -24,8 +23,7 @@ pub fn metric_total_label(input: proc_macro::TokenStream) -> proc_macro::TokenSt
 }
 /// Emit the canonical "success" metric label as a string literal.
 ///
-/// Usage: `metric_success_label!()` expands to `"success"`.
-/// The macro accepts no input tokens.
+/// Usage: `metric_success_label!()` expands to `"success"`. The macro accepts no input tokens.
 #[cfg(feature = "metric-instrumentation")]
 #[proc_macro]
 pub fn metric_success_label(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -65,8 +63,7 @@ fn type_has_metrics_field(ty: &Type) -> bool {
         _ => false,
     }
 }
-/// The identifier of the first argument that has a type which has
-/// metrics.
+/// The identifier of the first argument that has a type which has metrics.
 ///
 /// # Errors
 /// If no argument is of type `StateTransaction` of `StateSnapshot`.
@@ -136,26 +133,20 @@ impl ToTokens for MetricSpec {
         self.metric_name.to_tokens(tokens);
     }
 }
-/// Macro for instrumenting an `isi`'s `impl execute` to track a given
-/// metric.  To specify a metric, put it as an attribute parameter
-/// inside quotes.
+/// Macro for instrumenting an `isi`'s `impl execute` to track a given metric. To specify a metric,
+/// put it as an attribute parameter inside quotes.
 ///
-/// This will increment the `prometheus::IntVec` metric
-/// corresponding to the literal provided in quotes, with the second
-/// argument being `METRIC_TOTAL_LABEL == "total"`. If the execution of the
-/// `Fn`'s body doesn't result in an [`Err`] variant, another metric
-/// with the same first argument and `METRIC_SUCCESS_LABEL = "success"` is also
-/// incremented. Thus one can infer the number of rejected
-/// transactions based on this parameter. If necessary, this macro
-/// should be edited to record different [`Err`] variants as different
-/// rejections, so we could (in theory), record the number of
-/// transactions that got rejected because of
-/// e.g. `SignatureCondition` failure.
+/// This will increment the `prometheus::IntVec` metric corresponding to the literal provided in
+/// quotes, with the second argument being `METRIC_TOTAL_LABEL == "total"`. If the execution of the
+/// `Fn`'s body doesn't result in an [`Err`] variant, another metric with the same first argument
+/// and `METRIC_SUCCESS_LABEL = "success"` is also incremented. Thus one can infer the number of
+/// rejected transactions based on this parameter. If necessary, this macro should be edited to
+/// record different [`Err`] variants as different rejections, so we could (in theory), record the
+/// number of transactions that got rejected because of e.g. `SignatureCondition` failure.
 ///
-/// If you also want to track the execution time of the `isi`, you
-/// should prefix the quoted metric with the `+` symbol. Timing metrics
-/// are emitted only when the `metric-instrumentation` feature is enabled;
-/// without it the `+` prefix is accepted but timings are a no-op.
+/// If you also want to track the execution time of the `isi`, you should prefix the quoted metric
+/// with the `+` symbol. Timing metrics are emitted only when the `metric-instrumentation` feature
+/// is enabled; without it the `+` prefix is accepted but timings are a no-op.
 ///
 /// # Examples
 ///

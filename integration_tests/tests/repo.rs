@@ -1,10 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for repo and reverse-repo instructions.
-use std::{
-    convert::TryFrom,
-    sync::{Mutex, OnceLock},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -21,6 +16,11 @@ use iroha_data_model::isi::RepoMarginCallIsi;
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
+use std::{
+    convert::TryFrom,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static START_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 fn install_quiet_tracing() {

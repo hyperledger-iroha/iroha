@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_lines)]
-use iroha_primitives::const_vec::ConstVec;
 use super::*;
 use crate::prelude::*;
+use iroha_primitives::const_vec::ConstVec;
 macro_rules! check_enum {
         ($name:ident { $($variant:ident),+ $(,)? }) => {
             $(assert_eq!($name::try_from($name::$variant as u8).unwrap(), $name::$variant);)+

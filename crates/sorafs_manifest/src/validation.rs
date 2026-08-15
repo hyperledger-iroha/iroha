@@ -1,11 +1,11 @@
 //! Validation helpers for manifests destined for the Pin Registry.
 #![allow(unexpected_cfgs)]
-use std::collections::BTreeSet;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crate::{
     ChunkingProfileV1, EMPTY_POR_ROOT_V1, GovernanceProofs, MANIFEST_VERSION_V1, ManifestV1,
     PinPolicy, ProfileId, StorageClass, chunker_registry,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use std::collections::BTreeSet;
 /// Maximum canonical Norito manifest size admitted by first-release nodes.
 pub const MAX_MANIFEST_ENCODED_BYTES: usize = 512 * 1024;
 /// Exact binary length of the canonical first-release manifest root CID.
@@ -761,10 +761,10 @@ fn validate_governance(
 }
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
-    use ed25519_dalek::{Signer as _, SigningKey};
     use super::*;
     use crate::{AliasClaim, CouncilSignature, GovernanceProofs, ManifestBuilder, MetadataEntry};
+    use base64::Engine as _;
+    use ed25519_dalek::{Signer as _, SigningKey};
     use sorafs_chunker::ChunkProfile;
     fn manifest_with_defaults() -> ManifestV1 {
         let mut manifest = ManifestBuilder::new()

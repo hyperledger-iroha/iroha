@@ -1,12 +1,12 @@
 //! Test helpers for fixture-backed event snapshots.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(dead_code)]
+use iroha_data_model::events::prelude::EventBox;
 use std::{
     env, fs,
     io::Write,
     path::{Path, PathBuf},
 };
-use iroha_data_model::events::prelude::EventBox;
 /// Serialize events to canonical JSON, filtering out non-deterministic kinds.
 pub fn events_json_filtered(events: &[EventBox]) -> String {
     let mut filtered: Vec<_> = events

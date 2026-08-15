@@ -8,17 +8,19 @@
 //! carry signed provenance only; single-signature account headers use canonical
 //! lowercase hex while signed bodies and paths retain I105. Protected GETs
 //! require the exact NetworkId and local key.
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    io::{self, Read as _, Seek as _, SeekFrom, Write as _},
-    num::{NonZeroU16, NonZeroU32, NonZeroU64},
-    path::{Path, PathBuf},
-    process::Command as ProcessCommand,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
+use crate::{Run, RunContext};
 use eyre::{Report, Result, WrapErr, eyre};
+#[cfg(test)]
+use iroha::data_model::{
+    nexus::{DataSpaceId, FeeDebitSource},
+    soracloud::{
+        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+        SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelEncryptionRecipientV1,
+        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+        SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
+    },
+    transaction::SignedTransaction,
+};
 use iroha::{
     client::{
         CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1, Client, canonical_network_request_hash,
@@ -91,6 +93,10 @@ use iroha_core::soracloud_runtime::{
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
 use iroha_primitives::{json::Json, numeric::Quantity};
+#[cfg(test)]
+use iroha_torii_shared::{
+    FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse,
+};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore as _},
@@ -111,21 +117,17 @@ use sorafs_manifest::{
     ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
     MetadataEntry, PinPolicy, StorageClass as ManifestStorageClass, chunker_registry,
 };
-use tiny_keccak::{Hasher as _, Sha3};
-#[cfg(test)]
-use iroha::data_model::{
-    nexus::{DataSpaceId, FeeDebitSource},
-    soracloud::{
-        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-        SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelEncryptionRecipientV1,
-        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
-        SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
-    },
-    transaction::SignedTransaction,
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::{self, Read as _, Seek as _, SeekFrom, Write as _},
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
+    path::{Path, PathBuf},
+    process::Command as ProcessCommand,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-#[cfg(test)]
-use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse};
-use crate::{Run, RunContext};
+use tiny_keccak::{Hasher as _, Sha3};
 const DEFAULT_CONTAINER_MANIFEST: &str = "fixtures/soracloud/sora_container_manifest_v1.json";
 const DEFAULT_SERVICE_MANIFEST: &str = "fixtures/soracloud/sora_service_manifest_v1.json";
 const DEFAULT_AGENT_APARTMENT_MANIFEST: &str =
@@ -15423,122 +15425,73 @@ fn normalized_contract_identifier(name: &str) -> String {
         out
     }
 }
+
+const TEMPLATE_PACKAGE_NAME: &str = "__SORACLOUD_PACKAGE_NAME__";
+const TEMPLATE_SERVICE_NAME: &str = "__SORACLOUD_SERVICE_NAME__";
+const TEMPLATE_SERVICE_NAME_DEBUG: &str = "__SORACLOUD_SERVICE_NAME_DEBUG__";
+const TEMPLATE_APP_NAME: &str = "__SORACLOUD_APP_NAME__";
+const TEMPLATE_APP_NAME_DEBUG: &str = "__SORACLOUD_APP_NAME_DEBUG__";
+const TEMPLATE_BUNDLE_NAME: &str = "__SORACLOUD_BUNDLE_NAME__";
+const TEMPLATE_SHELL_PRELUDE: &str = "__SORACLOUD_SHELL_PRELUDE__";
+const TEMPLATE_SEIYAKU_NAME: &str = "__SORACLOUD_SEIYAKU_NAME__";
+const TEMPLATE_DNS_HOST: &str = "__SORACLOUD_DNS_HOST__";
+
+fn render_template(template: &str, substitutions: &[(&str, &str)]) -> String {
+    let mut rendered = String::with_capacity(template.len());
+    let mut remaining = template;
+    loop {
+        let mut next_substitution = None;
+        for &(placeholder, replacement) in substitutions {
+            if let Some(offset) = remaining.find(placeholder)
+                && next_substitution.is_none_or(|(best_offset, _, _)| offset < best_offset)
+            {
+                next_substitution = Some((offset, placeholder, replacement));
+            }
+        }
+        let Some((offset, placeholder, replacement)) = next_substitution else {
+            rendered.push_str(remaining);
+            return rendered;
+        };
+        rendered.push_str(&remaining[..offset]);
+        rendered.push_str(replacement);
+        remaining = &remaining[offset + placeholder.len()..];
+    }
+}
+
 fn site_package_json(package_name: &str) -> String {
-    format!(
-        r#"{{
-  "name": "{package_name}-site",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {{
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  }},
-  "dependencies": {{
-    "vue": "^3.5.0"
-  }},
-  "devDependencies": {{
-    "@vitejs/plugin-vue": "^5.2.0",
-    "typescript": "^5.6.0",
-    "vite": "^5.4.0"
-  }}
-}}
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/site_package_json.tmpl"),
+        &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
 fn webapp_root_package_json(package_name: &str) -> String {
-    format!(
-        r#"{{
-  "name": "{package_name}-webapp",
-  "private": true,
-  "version": "0.1.0",
-  "scripts": {{
-    "dev:frontend": "npm --prefix frontend run dev",
-    "dev:api": "node api/server.mjs",
-    "build": "npm --prefix frontend run build",
-    "start": "node api/server.mjs"
-  }}
-}}
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/webapp_root_package_json.tmpl"),
+        &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
 fn webapp_frontend_package_json(package_name: &str) -> String {
-    format!(
-        r#"{{
-  "name": "{package_name}-frontend",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {{
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  }},
-  "dependencies": {{
-    "vue": "^3.5.0"
-  }},
-  "devDependencies": {{
-    "@vitejs/plugin-vue": "^5.2.0",
-    "typescript": "^5.6.0",
-    "vite": "^5.4.0"
-  }}
-}}
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/webapp_frontend_package_json.tmpl"),
+        &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
 fn pii_app_root_package_json(package_name: &str) -> String {
-    format!(
-        r#"{{
-  "name": "{package_name}-pii-app",
-  "private": true,
-  "version": "0.1.0",
-  "scripts": {{
-    "dev:frontend": "npm --prefix frontend run dev",
-    "dev:api": "node api/server.mjs",
-    "build": "npm --prefix frontend run build",
-    "start": "node api/server.mjs"
-  }}
-}}
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/pii_app_root_package_json.tmpl"),
+        &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
 fn pii_app_frontend_package_json(package_name: &str) -> String {
-    format!(
-        r#"{{
-  "name": "{package_name}-pii-frontend",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {{
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  }},
-  "dependencies": {{
-    "vue": "^3.5.0"
-  }},
-  "devDependencies": {{
-    "@vitejs/plugin-vue": "^5.2.0",
-    "typescript": "^5.6.0",
-    "vite": "^5.4.0"
-  }}
-}}
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/pii_app_frontend_package_json.tmpl"),
+        &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
 fn hayahi_app_root_package_json(package_name: &str) -> String {
-    format!(
-        r#"{{
-  "name": "{package_name}-hayahi-app",
-  "private": true,
-  "version": "0.1.0",
-  "scripts": {{
-    "build": "./build.sh",
-    "build:api": "./build.sh"
-  }}
-}}
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/hayahi_app_root_package_json.tmpl"),
+        &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
 fn site_tsconfig_json() -> &'static str {
@@ -15563,29 +15516,9 @@ fn site_main_ts() -> &'static str {
     include_str!("soracloud/templates/v1/site_main.ts")
 }
 fn site_app_vue(service_name: &str) -> String {
-    format!(
-        r#"<template>
-  <main class="shell">
-    <h1>{service_name}</h1>
-    <p>This Vue3 static site is ready for SoraFS packaging and SoraDNS binding.</p>
-  </main>
-</template>
-
-<style scoped>
-.shell {{
-  font-family: "Avenir Next", "Segoe UI", sans-serif;
-  max-width: 720px;
-  margin: 4rem auto;
-  padding: 0 1.25rem;
-  color: #16324f;
-}}
-
-h1 {{
-  font-size: 2.25rem;
-  margin: 0 0 1rem;
-}}
-</style>
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/site_app_vue.tmpl"),
+        &[(TEMPLATE_SERVICE_NAME, service_name)],
     )
 }
 fn single_api_frontend_app_vue(app_name: &str) -> String {
@@ -15633,41 +15566,10 @@ fn single_api_api_dev_sh() -> &'static str {
     include_str!("soracloud/templates/v1/single_api_api_dev.sh")
 }
 fn single_api_api_dev_server_mjs(app_name: &str) -> String {
-    format!(
-        r#"#!/usr/bin/env node
-import http from "node:http";
-
-const APP_NAME = {app_name:?};
-const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT ?? "8787", 10);
-
-function sendJson(res, status, payload) {{
-  const body = JSON.stringify(payload, null, 2);
-  res.writeHead(status, {{
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body)
-  }});
-  res.end(body);
-}}
-
-const server = http.createServer((req, res) => {{
-  const url = new URL(req.url ?? "/", `http://${{req.headers.host ?? "127.0.0.1"}}`);
-  if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/api/healthz") {{
-    sendJson(res, 200, {{
-      app: APP_NAME,
-      route: "/api/healthz",
-      status: "ready",
-      runtime: "local_dev_shim"
-    }});
-    return;
-  }}
-
-  sendJson(res, 404, {{ error: "not found", path: url.pathname }});
-}});
-
-server.listen(PORT, "0.0.0.0", () => {{
-  console.log(`${{APP_NAME}} api dev shim listening on ${{PORT}}`);
-}});
-"#
+    let app_name_debug = format!("{app_name:?}");
+    render_template(
+        include_str!("soracloud/assets/v1/single_api_api_dev_server_mjs.tmpl"),
+        &[(TEMPLATE_APP_NAME_DEBUG, &app_name_debug)],
     )
 }
 fn single_api_api_verify_build_sh() -> String {
@@ -15678,25 +15580,12 @@ fn hayahi_app_build_sh() -> String {
 }
 fn http_service_build_sh(bundle_name: &str) -> String {
     let prelude = iroha_shell_command_prelude();
-    format!(
-        r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-BUILD_DIR="$SCRIPT_DIR/build"
-BUNDLE_PATH="$BUILD_DIR/{bundle_name}"
-{prelude}
-
-mkdir -p "$BUILD_DIR"
-"${{IROHA_CMD[@]}}" soracloud service bundle-pack \
-  --source "$SCRIPT_DIR/app/server.mjs" \
-  --archive-path "app/server.mjs" \
-  --output "$BUNDLE_PATH" \
-  --executable
-
-echo "built $BUNDLE_PATH"
-"#,
-        prelude = prelude,
+    render_template(
+        include_str!("soracloud/assets/v1/http_service_build_sh.tmpl"),
+        &[
+            (TEMPLATE_BUNDLE_NAME, bundle_name),
+            (TEMPLATE_SHELL_PRELUDE, prelude),
+        ],
     )
 }
 fn http_service_dev_sh() -> &'static str {
@@ -15710,24 +15599,12 @@ fn iroha_shell_command_prelude() -> &'static str {
 }
 fn http_service_build_and_sync_sh(bundle_name: &str) -> String {
     let prelude = iroha_shell_command_prelude();
-    format!(
-        r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-(
-  cd "$SCRIPT_DIR/http-service"
-  ./build.sh
-)
-
-"${{IROHA_CMD[@]}}" soracloud service sync-manifests \
-  --container "$SCRIPT_DIR/container_manifest.json" \
-  --service "$SCRIPT_DIR/service_manifest.json" \
-  --bundle-file "$SCRIPT_DIR/http-service/build/{bundle_name}"
-"#,
-        prelude = prelude,
+    render_template(
+        include_str!("soracloud/assets/v1/http_service_build_and_sync_sh.tmpl"),
+        &[
+            (TEMPLATE_BUNDLE_NAME, bundle_name),
+            (TEMPLATE_SHELL_PRELUDE, prelude),
+        ],
     )
 }
 fn http_service_doctor_sh() -> String {
@@ -15751,579 +15628,35 @@ fn http_service_upgrade_sh() -> String {
         .replace("{prelude}", prelude)
 }
 fn http_service_server_mjs(service_name: &str) -> String {
-    format!(
-        r#"#!/usr/bin/env node
-import http from "node:http";
-import fs from "node:fs";
-import path from "node:path";
-
-const SERVICE_NAME = {service_name:?};
-const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT ?? "8787", 10);
-const APP_DATA_DIR = process.env.SORACLOUD_LEASE_VOLUME_APP_DATA_DIR ?? path.join(process.cwd(), "tmp", "app-data");
-
-fs.mkdirSync(APP_DATA_DIR, {{ recursive: true }});
-
-function sendJson(res, status, payload) {{
-  const body = JSON.stringify(payload, null, 2);
-  res.writeHead(status, {{
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body)
-  }});
-  res.end(body);
-}}
-
-function readJsonBody(req) {{
-  return new Promise((resolve, reject) => {{
-    let raw = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {{
-      raw += chunk;
-      if (raw.length > 1024 * 1024) {{
-        reject(new Error("request body exceeds 1 MiB"));
-      }}
-    }});
-    req.on("end", () => {{
-      if (raw.trim().length === 0) {{
-        resolve({{}});
-        return;
-      }}
-      try {{
-        resolve(JSON.parse(raw));
-      }} catch (error) {{
-        reject(error);
-      }}
-    }});
-    req.on("error", reject);
-  }});
-}}
-
-function writeJsonFile(file, payload) {{
-  fs.writeFileSync(file, JSON.stringify(payload, null, 2));
-}}
-
-function readJsonFile(file) {{
-  if (!fs.existsSync(file)) {{
-    return null;
-  }}
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}}
-
-function writeLastEcho(payload) {{
-  writeJsonFile(path.join(APP_DATA_DIR, "last-echo.json"), payload);
-}}
-
-const server = http.createServer(async (req, res) => {{
-  const url = new URL(req.url ?? "/", `http://${{req.headers.host ?? "127.0.0.1"}}`);
-  const pathname = url.pathname;
-
-  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/health") {{
-    sendJson(res, 200, {{
-      service: SERVICE_NAME,
-      runtime: "Inrou",
-      routes: ["/health", "/echo"],
-      lease_volumes: {{
-        app_data: APP_DATA_DIR
-      }}
-    }});
-    return;
-  }}
-
-  if (req.method === "POST" && pathname === "/echo") {{
-    try {{
-      const body = await readJsonBody(req);
-      const payload = {{
-        service: SERVICE_NAME,
-        received_at: new Date().toISOString(),
-        body
-      }};
-      writeLastEcho(payload);
-      sendJson(res, 200, payload);
-    }} catch (error) {{
-      sendJson(res, 400, {{ error: error?.message ?? String(error) }});
-    }}
-    return;
-  }}
-
-  sendJson(res, 404, {{ error: "not found", path: pathname }});
-}});
-
-server.listen(PORT, "0.0.0.0", () => {{
-  console.log(`${{SERVICE_NAME}} listening on ${{PORT}}`);
-}});
-"#
+    let service_name_debug = format!("{service_name:?}");
+    render_template(
+        include_str!("soracloud/assets/v1/http_service_server_mjs.tmpl"),
+        &[(TEMPLATE_SERVICE_NAME_DEBUG, &service_name_debug)],
     )
 }
 fn split_app_live_server_mjs(service_name: &str) -> String {
-    format!(
-        r#"#!/usr/bin/env node
-import http from "node:http";
-import fs from "node:fs";
-import path from "node:path";
-import {{ randomUUID }} from "node:crypto";
-
-const SERVICE_NAME = {service_name:?};
-const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT ?? "8787", 10);
-const SHARED_CACHE_DIR = process.env.SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR ?? path.join(process.cwd(), "tmp", "shared-cache");
-const SEARCH_SESSIONS_DIR = process.env.SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_DIR ?? path.join(process.cwd(), "tmp", "search-sessions");
-const COLLECTOR_STATE_DIR = process.env.SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR ?? path.join(process.cwd(), "tmp", "collector-state");
-const RUNTIME_CACHE_DIR = process.env.SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_DIR ?? path.join(process.cwd(), "tmp", "runtime-cache");
-
-for (const dir of [SHARED_CACHE_DIR, SEARCH_SESSIONS_DIR, COLLECTOR_STATE_DIR, RUNTIME_CACHE_DIR]) {{
-  fs.mkdirSync(dir, {{ recursive: true }});
-}}
-
-function sendJson(res, status, payload) {{
-  const body = JSON.stringify(payload, null, 2);
-  res.writeHead(status, {{
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body)
-  }});
-  res.end(body);
-}}
-
-function readJsonBody(req) {{
-  return new Promise((resolve, reject) => {{
-    let raw = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {{
-      raw += chunk;
-      if (raw.length > 1024 * 1024) {{
-        reject(new Error("request body exceeds 1 MiB"));
-      }}
-    }});
-    req.on("end", () => {{
-      if (raw.trim().length === 0) {{
-        resolve({{}});
-        return;
-      }}
-      try {{
-        resolve(JSON.parse(raw));
-      }} catch (error) {{
-        reject(error);
-      }}
-    }});
-    req.on("error", reject);
-  }});
-}}
-
-function writeJsonFile(file, payload) {{
-  fs.writeFileSync(file, JSON.stringify(payload, null, 2));
-}}
-
-function readJsonFile(file) {{
-  if (!fs.existsSync(file)) {{
-    return null;
-  }}
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}}
-
-function writeSession(sessionId, payload) {{
-  writeJsonFile(path.join(SEARCH_SESSIONS_DIR, `${{sessionId}}.json`), payload);
-}}
-
-function readSession(sessionId) {{
-  return readJsonFile(path.join(SEARCH_SESSIONS_DIR, `${{sessionId}}.json`));
-}}
-
-function cacheSearch(sessionId, payload) {{
-  writeJsonFile(path.join(SHARED_CACHE_DIR, `${{sessionId}}.json`), payload);
-}}
-
-function appendCollectorCheckpoint(sessionId, payload) {{
-  const file = path.join(COLLECTOR_STATE_DIR, `${{sessionId}}.log`);
-  fs.appendFileSync(file, `${{new Date().toISOString()}} ${{JSON.stringify(payload)}}\n`);
-}}
-
-function writeRuntimeSnapshot(sessionId, payload) {{
-  writeJsonFile(path.join(RUNTIME_CACHE_DIR, `${{sessionId}}.json`), payload);
-}}
-
-function trustedStringField(field, value) {{
-  if (typeof value === "string" && value.trim().length > 0) {{
-    return {{
-      value: value.trim(),
-      status: "trusted_request",
-      provenance: [{{ source: "request", field }}]
-    }};
-  }}
-  return {{ value: null, status: "unknown", provenance: [] }};
-}}
-
-function trustedNumberField(field, value) {{
-  if (typeof value === "number" && Number.isFinite(value)) {{
-    return {{
-      value,
-      status: "trusted_request",
-      provenance: [{{ source: "request", field }}]
-    }};
-  }}
-  return {{ value: null, status: "unknown", provenance: [] }};
-}}
-
-function buildSearchRecord(sessionId, request) {{
-  const now = new Date().toISOString();
-  return {{
-    id: sessionId,
-    service: SERVICE_NAME,
-    status: "complete",
-    mode: "starter_scaffold",
-    generated_at: now,
-    source: "hosted_http",
-    query: {{
-      origin: trustedStringField("origin", request.origin),
-      destination: trustedStringField("destination", request.destination),
-      departure_date: trustedStringField("departure_date", request.departure_date),
-      return_date: trustedStringField("return_date", request.return_date),
-      cabin: trustedStringField("cabin", request.cabin),
-      passengers: trustedNumberField("passengers", request.passengers)
-    }},
-    itineraries: [],
-    unresolved_fields: ["aircraft", "luxury_labels", "collector_results"],
-    collector_status: {{
-      status: "not_configured",
-      detail: "starter scaffold does not ship production collectors"
-    }},
-    provenance: [
-      {{ source: "request", detail: "caller supplied query fields" }},
-      {{ source: "starter_scaffold", detail: "no trusted upstream search sources configured" }}
-    ]
-  }};
-}}
-
-function buildSearchEvents(sessionId, record) {{
-  return [
-    {{
-      event: "queued",
-      data: {{
-        search_id: sessionId,
-        status: "accepted",
-        source: "starter_scaffold"
-      }}
-    }},
-    {{
-      event: "snapshot",
-      data: record
-    }},
-    {{
-      event: "done",
-      data: {{
-        search_id: sessionId,
-        status: record.status
-      }}
-    }}
-  ];
-}}
-
-const server = http.createServer(async (req, res) => {{
-  const url = new URL(req.url ?? "/", `http://${{req.headers.host ?? "127.0.0.1"}}`);
-  const pathname = url.pathname;
-
-  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/health") {{
-    sendJson(res, 200, {{
-      service: SERVICE_NAME,
-      runtime: "Inrou",
-      lease_volumes: {{
-        shared_cache: SHARED_CACHE_DIR,
-        search_sessions: SEARCH_SESSIONS_DIR,
-        collector_state: COLLECTOR_STATE_DIR,
-        runtime_cache: RUNTIME_CACHE_DIR
-      }}
-    }});
-    return;
-  }}
-
-  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/airports/search") {{
-    sendJson(res, 200, {{
-      query: url.searchParams.get("q") ?? "",
-      airports: [],
-      status: "not_configured",
-      provenance: []
-    }});
-    return;
-  }}
-
-  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/filters/metadata") {{
-    sendJson(res, 200, {{
-      filters: {{}},
-      status: "not_configured",
-      provenance: []
-    }});
-    return;
-  }}
-
-  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/luxury/catalog") {{
-    sendJson(res, 200, {{
-      items: [],
-      status: "not_configured",
-      provenance: []
-    }});
-    return;
-  }}
-
-  if (req.method === "POST" && pathname === "/links/resolve") {{
-    try {{
-      const body = await readJsonBody(req);
-      sendJson(res, 200, {{
-        links: [],
-        input: body,
-        status: "not_configured",
-        provenance: []
-      }});
-    }} catch (error) {{
-      sendJson(res, 400, {{ error: error?.message ?? String(error) }});
-    }}
-    return;
-  }}
-
-  if (req.method === "POST" && pathname === "/search") {{
-    try {{
-      const body = await readJsonBody(req);
-      const sessionId = randomUUID();
-      const result = buildSearchRecord(sessionId, body);
-      const events = buildSearchEvents(sessionId, result);
-      const session = {{ request: body, result, events }};
-      writeSession(sessionId, session);
-      cacheSearch(sessionId, result);
-      writeRuntimeSnapshot(sessionId, {{
-        search_id: sessionId,
-        status: result.status,
-        updated_at: result.generated_at
-      }});
-      appendCollectorCheckpoint(sessionId, {{ stage: "queued", request: body }});
-      appendCollectorCheckpoint(sessionId, {{ stage: "complete", result }});
-      sendJson(res, 202, {{
-        search_id: sessionId,
-        status: "accepted",
-        result
-      }});
-    }} catch (error) {{
-      sendJson(res, 400, {{ error: error?.message ?? String(error) }});
-    }}
-    return;
-  }}
-
-  const eventMatch = pathname.match(/^\/search\/([^/]+)\/events$/);
-  if ((req.method === "GET" || req.method === "HEAD") && eventMatch) {{
-    const session = readSession(eventMatch[1]);
-    if (!session) {{
-      sendJson(res, 404, {{ error: "search session not found" }});
-      return;
-    }}
-    res.writeHead(200, {{
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive"
-    }});
-    for (const event of session.events ?? []) {{
-      res.write(`event: ${{event.event}}\n`);
-      res.write(`data: ${{JSON.stringify(event.data)}}\n\n`);
-    }}
-    res.end();
-    return;
-  }}
-
-  sendJson(res, 404, {{ error: "not found", path: pathname }});
-}});
-
-server.listen(PORT, "0.0.0.0", () => {{
-  const address = server.address();
-  const boundPort = typeof address === "object" && address ? address.port : PORT;
-  console.log(`${{SERVICE_NAME}} listening on ${{boundPort}}`);
-}});
-"#
+    let service_name_debug = format!("{service_name:?}");
+    render_template(
+        include_str!("soracloud/assets/v1/split_app_live_server_mjs.tmpl"),
+        &[(TEMPLATE_SERVICE_NAME_DEBUG, &service_name_debug)],
     )
 }
 fn http_service_readme(service_name: &str, package_name: &str) -> String {
-    format!(
-        r#"# {service_name} HTTP Service Template
-
-This template is generated by:
-
-```bash
-iroha soracloud service init --template http-service --service-name {service_name}
-```
-
-It targets the Soracloud hosted HTTP plane directly:
-
-- `execution_plane = HttpService`
-- `runtime = Inrou`
-- public route prefix `/api/v1`
-- starter routes `/health` and `/echo`
-- lease-backed storage exposed via `SORACLOUD_LEASE_VOLUME_*_DIR` and
-  `SORACLOUD_LEASE_VOLUME_*_MOUNT_PATH`
-- root scripts:
-  - `./dev.sh`
-  - `./build-and-sync.sh`
-  - `./doctor.sh`
-  - `./release.sh`
-  - `./deploy.sh`
-  - `./upgrade.sh`
-
-## Local dev
-
-```bash
-iroha soracloud service plan --container ./container_manifest.json --service ./service_manifest.json
-./dev.sh
-iroha soracloud service dev --container ./container_manifest.json --service ./service_manifest.json --dry-run
-iroha soracloud service dev --container ./container_manifest.json --service ./service_manifest.json
-```
-
-The starter server falls back to local `tmp/` lease directories when
-`SORACLOUD_LEASE_VOLUME_*` env vars are not set, so it can be run directly
-without a live control plane.
-
-The `iroha soracloud service dev`, `build`, `deploy`, and `upgrade` wrappers return the same route, handler-count, replica, and
-workspace-script projection that `iroha soracloud service plan` prints.
-
-## Local build
-
-```bash
-cd http-service
-./build.sh
-```
-
-The build emits `build/http-service.tgz`, a deterministic canonical gzip/USTAR
-bundle containing only `app/server.mjs` with mode 0755. Guest images under
-`http-service/inrou/` are not copied into this bundle; `app release` publishes
-them as immutable SoraFS artifacts and records the artifact refs in the Inrou
-manifest submitted to the control plane.
-
-Before deploy, replace the placeholder `ssh_authorized_keys` entry in
-`container_manifest.json` and stage dual-ISA guest assets at:
-
-- `http-service/inrou/x86_64/vmlinux`
-- `http-service/inrou/x86_64/rootfs.ext4`
-- `http-service/inrou/aarch64/vmlinux`
-- `http-service/inrou/aarch64/rootfs.ext4`
-
-Optional initrd images live at:
-
-- `http-service/inrou/x86_64/initrd.img`
-- `http-service/inrou/aarch64/initrd.img`
-
-## Build + sync manifests
-
-```bash
-iroha soracloud service plan --container ./container_manifest.json --service ./service_manifest.json
-./build-and-sync.sh
-iroha soracloud service build --container ./container_manifest.json --service ./service_manifest.json --dry-run
-iroha soracloud service build --container ./container_manifest.json --service ./service_manifest.json
-```
-
-The root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`, then explicit source checkout settings (`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`), so hosted-service
-workspaces can target a local `iroha_cli` checkout without requiring a
-globally installed source wrapper. If you are driving the fallback through
-`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`, set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to
-keep Cargo package and artifact state isolated from other local builds.
-
-## Doctor the service workspace
-
-```bash
-./doctor.sh
-```
-
-`doctor.sh` rebuilds the hosted service bundle, refreshes the manifest hashes,
-and then runs `iroha soracloud service plan` against the adjacent
-`container_manifest.json` and `service_manifest.json`.
-
-## Lease volume contract
-
-The generated service expects these runtime environment variables:
-
-- `SORACLOUD_LEASE_VOLUME_APP_DATA_DIR`
-- `SORACLOUD_LEASE_VOLUME_APP_DATA_MOUNT_PATH`
-
-The generic runtime contract is `SORACLOUD_LEASE_VOLUME_<NAME>_DIR` and
-`SORACLOUD_LEASE_VOLUME_<NAME>_MOUNT_PATH`, where `<NAME>` is the uppercased
-volume name with punctuation normalized to underscores.
-
-The manifest also declares a `PersistentRootLeaseVolume` mounted at `/` so the
-Inrou guest keeps its mutable root disk on lease-backed storage.
-
-## Deploy
-
-```bash
-TORII_URL=http://127.0.0.1:8080 ./release.sh
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-`release.sh` runs `doctor.sh` first and then submits the deploy mutation using
-the same manifest pair.
-
-The direct `iroha soracloud service deploy` and `upgrade` commands also keep the
-same local route and workspace-script projection in their output while
-returning the live mutation response.
-
-## Upgrade
-
-```bash
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-## Status
-
-```bash
-iroha soracloud service status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-When `status` is driven from `--container` plus `--service`, the output also
-keeps the same local route and workspace-script projection that `plan`
-prints alongside the live Torii payload.
-
-## Service control-plane commands
-
-```bash
-iroha soracloud service config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud service secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud service rollout --container ./container_manifest.json --service ./service_manifest.json --rollout-handle <handle> --governance-tx-hash <hash> --torii-url http://127.0.0.1:8080
-```
-
-Other service-bound Soracloud commands, including `hf deploy`,
-`hf status`, `hf lease-renew`, `hf lease-leave`, `training-job-*`,
-`model artifact-*`, `model weight-*`,
-`model upload-encryption-recipient`, `model upload-register`, and
-`model upload-status`, also accept the same `--container` plus
-`--service` manifest pair instead of a manual `--service-name` where a
-service name applies. The manifest-pair forms of those commands, plus
-`config-*`, `secret-*`, `rollback`, and `rollout`, also attach the same
-`service_plan` projection that `plan` reports.
-
-The generated service name will resolve under `https://{package_name}.sora/api/v1`.
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/http_service_readme.tmpl"),
+        &[
+            (TEMPLATE_SERVICE_NAME, service_name),
+            (TEMPLATE_PACKAGE_NAME, package_name),
+        ],
     )
 }
 fn http_service_inrou_assets_readme() -> String {
     include_str!("soracloud/templates/v1/http_service_inrou_assets_readme.md").to_owned()
 }
 fn split_app_frontend_package_json(package_name: &str) -> String {
-    format!(
-        r#"{{
-  "name": "{package_name}-frontend",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {{
-    "dev": "vite",
-    "build": "node ./scripts/validate-production-env.mjs && vite build",
-    "preview": "vite preview"
-  }},
-  "dependencies": {{
-    "vue": "^3.5.13"
-  }},
-  "devDependencies": {{
-    "@vitejs/plugin-vue": "^5.2.1",
-    "typescript": "^5.8.2",
-    "vite": "^6.2.0"
-  }}
-}}
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/split_app_frontend_package_json.tmpl"),
+        &[(TEMPLATE_PACKAGE_NAME, package_name)],
     )
 }
 fn split_app_frontend_validate_production_env_mjs() -> &'static str {
@@ -16333,244 +15666,9 @@ fn split_app_frontend_vite_config() -> &'static str {
     include_str!("soracloud/templates/v1/split_app_frontend_vite.config.ts")
 }
 fn split_app_frontend_app_vue(app_name: &str) -> String {
-    format!(
-        r#"<script setup lang="ts">
-import {{ onMounted, ref }} from "vue";
-
-const apiBase = import.meta.env.VITE_PUBLIC_API_BASE ?? "/api";
-const dataMode = import.meta.env.VITE_DATA_MODE ?? "local";
-const me = ref("loading");
-const searchStatus = ref("idle");
-const lastSearch = ref<any>(null);
-const preferences = ref({{ home_airport: "", cabin_preference: "" }});
-const searchForm = ref({{ origin: "", destination: "", cabin: "" }});
-
-function withApiBase(path: string) {{
-  return `${{apiBase}}${{path}}`;
-}}
-
-function compactRecord(input: Record<string, unknown>) {{
-  return Object.fromEntries(
-    Object.entries(input).filter(([, value]) => {{
-      if (typeof value === "string") {{
-        return value.trim().length > 0;
-      }}
-      return value !== null && value !== undefined;
-    }})
-  );
-}}
-
-async function requestJson(path: string, init?: RequestInit) {{
-  const response = await fetch(withApiBase(path), {{
-    ...init,
-    headers: {{
-      "content-type": "application/json",
-      ...(init?.headers ?? {{}})
-    }}
-  }});
-  if (!response.ok) {{
-    throw new Error(`${{path}} returned ${{response.status}}`);
-  }}
-  return response.json();
-}}
-
-async function refreshMe() {{
-  try {{
-    const payload = await requestJson("/auth/me");
-    me.value = JSON.stringify(payload, null, 2);
-  }} catch (error: any) {{
-    me.value = error?.message ?? String(error);
-  }}
-}}
-
-async function runSearch() {{
-  searchStatus.value = "requesting";
-  lastSearch.value = null;
-  try {{
-    const payload = await requestJson("/v1/search", {{
-      method: "POST",
-      body: JSON.stringify(compactRecord(searchForm.value))
-    }});
-    searchStatus.value = payload.status ?? "accepted";
-    lastSearch.value = payload;
-  }} catch (error: any) {{
-    searchStatus.value = error?.message ?? String(error);
-  }}
-}}
-
-async function savePreferences() {{
-  await requestJson("/v1/user/preferences", {{
-    method: "PUT",
-    body: JSON.stringify({{ preferences: compactRecord(preferences.value) }})
-  }});
-  await refreshMe();
-}}
-
-onMounted(async () => {{
-  await refreshMe();
-}});
-</script>
-
-<template>
-  <main class="app-shell">
-    <section class="hero">
-      <p class="eyebrow">Soracloud Split App</p>
-      <h1>{app_name}</h1>
-      <p class="lede">
-        Static frontend on SoraFS, a hosted live API on Inrou, and a deterministic
-        wallet vault on IVM, all sharing the same `/api` surface.
-      </p>
-      <p class="eyebrow">Build mode: {{{{ dataMode }}}} | API base: {{{{ apiBase }}}}</p>
-      <div class="actions">
-        <button @click="runSearch">Run Live Search</button>
-        <button class="secondary" @click="savePreferences">Save Preferences</button>
-      </div>
-    </section>
-
-    <section class="panel-grid">
-      <article class="panel">
-        <h2>Vault</h2>
-        <label>
-          Home airport
-          <input v-model="preferences.home_airport" placeholder="e.g. BNE" />
-        </label>
-        <label>
-          Cabin
-          <select v-model="preferences.cabin_preference">
-            <option value="">Unknown</option>
-            <option value="business">Business</option>
-            <option value="first">First</option>
-            <option value="premium-economy">Premium Economy</option>
-          </select>
-        </label>
-      </article>
-
-      <article class="panel">
-        <h2>Live Search</h2>
-        <label>
-          Origin
-          <input v-model="searchForm.origin" placeholder="e.g. BNE" />
-        </label>
-        <label>
-          Destination
-          <input v-model="searchForm.destination" placeholder="e.g. HND" />
-        </label>
-        <label>
-          Requested cabin
-          <select v-model="searchForm.cabin">
-            <option value="">Unknown</option>
-            <option value="business">Business</option>
-            <option value="first">First</option>
-            <option value="premium-economy">Premium Economy</option>
-          </select>
-        </label>
-        <p>Status: <strong>{{ searchStatus }}</strong></p>
-        <pre>{{ lastSearch ? JSON.stringify(lastSearch, null, 2) : "No search submitted yet." }}</pre>
-      </article>
-    </section>
-
-    <section class="panel">
-      <h2>Auth / Me</h2>
-      <pre>{{ me }}</pre>
-    </section>
-  </main>
-</template>
-
-<style scoped>
-:global(body) {{
-  margin: 0;
-  background: radial-gradient(circle at top, #1f3d52 0%, #0b1720 55%, #05080a 100%);
-  color: #f5f3ec;
-  font-family: "Iowan Old Style", "Palatino Linotype", serif;
-}}
-
-.app-shell {{
-  min-height: 100vh;
-  padding: 3rem 1.5rem 4rem;
-  max-width: 1100px;
-  margin: 0 auto;
-}}
-
-.hero {{
-  padding: 2rem 0 3rem;
-}}
-
-.eyebrow {{
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: #b7d7e8;
-  font-size: 0.8rem;
-}}
-
-h1 {{
-  margin: 0.25rem 0 1rem;
-  font-size: clamp(2.5rem, 8vw, 5rem);
-}}
-
-.lede {{
-  max-width: 48rem;
-  color: #d7e6ef;
-  line-height: 1.6;
-}}
-
-.actions {{
-  display: flex;
-  gap: 1rem;
-  margin-top: 1.5rem;
-  flex-wrap: wrap;
-}}
-
-button {{
-  border: 0;
-  background: #e6b05c;
-  color: #091018;
-  padding: 0.85rem 1.25rem;
-  font: inherit;
-  cursor: pointer;
-}}
-
-button.secondary {{
-  background: rgba(255, 255, 255, 0.12);
-  color: #f5f3ec;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}}
-
-.panel-grid {{
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-}}
-
-.panel {{
-  background: rgba(5, 12, 18, 0.74);
-  border: 1px solid rgba(183, 215, 232, 0.18);
-  padding: 1.25rem;
-  backdrop-filter: blur(20px);
-}}
-
-label {{
-  display: grid;
-  gap: 0.4rem;
-  margin-bottom: 1rem;
-}}
-
-input,
-select {{
-  padding: 0.7rem 0.85rem;
-  font: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.08);
-  color: inherit;
-}}
-
-pre {{
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #b7d7e8;
-}}
-</style>
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/split_app_frontend_app_vue.tmpl"),
+        &[(TEMPLATE_APP_NAME, app_name)],
     )
 }
 fn split_app_vault_build_sh() -> String {
@@ -16583,385 +15681,29 @@ fn split_app_vault_verify_build_sh() -> String {
     include_str!("soracloud/templates/v1/split_app_vault_verify_build.sh").to_owned()
 }
 fn split_app_vault_dev_server_mjs(app_name: &str) -> String {
-    format!(
-        r#"#!/usr/bin/env node
-import http from "node:http";
-import fs from "node:fs";
-import path from "node:path";
-import {{ randomUUID }} from "node:crypto";
-
-const SERVICE_NAME = {app_name:?} + " vault dev";
-const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT ?? "8788", 10);
-const STATE_FILE = process.env.SORACLOUD_VAULT_DEV_STATE_FILE
-  ?? path.join(process.cwd(), "tmp", "vault-dev-state.json");
-const DEV_WALLET = process.env.SORACLOUD_VAULT_DEV_WALLET ?? "dev-wallet";
-
-fs.mkdirSync(path.dirname(STATE_FILE), {{ recursive: true }});
-
-function loadState() {{
-  if (!fs.existsSync(STATE_FILE)) {{
-    return {{
-      authenticated: true,
-      wallet: DEV_WALLET,
-      preferences: {{}},
-      saved_searches: [],
-      challenges: {{}}
-    }};
-  }}
-  const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-  return {{
-    authenticated: parsed.authenticated ?? true,
-    wallet: parsed.wallet ?? DEV_WALLET,
-    preferences: typeof parsed.preferences === "object" && parsed.preferences ? parsed.preferences : {{}},
-    saved_searches: Array.isArray(parsed.saved_searches) ? parsed.saved_searches : [],
-    challenges: typeof parsed.challenges === "object" && parsed.challenges ? parsed.challenges : {{}}
-  }};
-}}
-
-function saveState(state) {{
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-}}
-
-function sendJson(res, status, payload) {{
-  const body = JSON.stringify(payload, null, 2);
-  res.writeHead(status, {{
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body)
-  }});
-  res.end(body);
-}}
-
-function readJsonBody(req) {{
-  return new Promise((resolve, reject) => {{
-    let raw = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {{
-      raw += chunk;
-      if (raw.length > 1024 * 1024) {{
-        reject(new Error("request body exceeds 1 MiB"));
-      }}
-    }});
-    req.on("end", () => {{
-      if (raw.trim().length === 0) {{
-        resolve({{}});
-        return;
-      }}
-      try {{
-        resolve(JSON.parse(raw));
-      }} catch (error) {{
-        reject(error);
-      }}
-    }});
-    req.on("error", reject);
-  }});
-}}
-
-function authEnvelope(state) {{
-  return {{
-    authenticated: state.authenticated,
-    wallet: state.wallet,
-    preferences: state.preferences,
-    saved_search_count: state.saved_searches.length,
-    mode: "local_dev_shim"
-  }};
-}}
-
-const server = http.createServer(async (req, res) => {{
-  const url = new URL(req.url ?? "/", `http://${{req.headers.host ?? "127.0.0.1"}}`);
-  const pathname = url.pathname;
-  const state = loadState();
-
-  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/health") {{
-    sendJson(res, 200, {{
-      service: SERVICE_NAME,
-      runtime: "local_dev_shim",
-      state_file: STATE_FILE,
-      wallet: state.wallet
-    }});
-    return;
-  }}
-
-  if (req.method === "POST" && pathname === "/auth/challenge") {{
-    const challengeId = randomUUID();
-    const challenge = {{
-      challenge_id: challengeId,
-      wallet: state.wallet,
-      issued_at: new Date().toISOString(),
-      mode: "local_dev_shim"
-    }};
-    state.challenges[challengeId] = challenge;
-    saveState(state);
-    sendJson(res, 200, challenge);
-    return;
-  }}
-
-  if (req.method === "POST" && pathname === "/auth/login") {{
-    state.authenticated = true;
-    saveState(state);
-    sendJson(res, 200, authEnvelope(state));
-    return;
-  }}
-
-  if (req.method === "POST" && pathname === "/auth/logout") {{
-    state.authenticated = false;
-    saveState(state);
-    sendJson(res, 200, authEnvelope(state));
-    return;
-  }}
-
-  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/auth/me") {{
-    sendJson(res, 200, authEnvelope(state));
-    return;
-  }}
-
-  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/v1/user/preferences") {{
-    sendJson(res, 200, {{
-      wallet: state.wallet,
-      preferences: state.preferences
-    }});
-    return;
-  }}
-
-  if (req.method === "PUT" && pathname === "/v1/user/preferences") {{
-    try {{
-      const body = await readJsonBody(req);
-      state.preferences = typeof body.preferences === "object" && body.preferences
-        ? body.preferences
-        : {{}};
-      state.authenticated = true;
-      saveState(state);
-      sendJson(res, 200, {{
-        accepted: true,
-        wallet: state.wallet,
-        preferences: state.preferences
-      }});
-    }} catch (error) {{
-      sendJson(res, 400, {{ error: error?.message ?? String(error) }});
-    }}
-    return;
-  }}
-
-  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/v1/user/saved-searches") {{
-    sendJson(res, 200, {{
-      wallet: state.wallet,
-      saved_searches: state.saved_searches
-    }});
-    return;
-  }}
-
-  if (req.method === "POST" && pathname === "/v1/user/saved-searches") {{
-    try {{
-      const body = await readJsonBody(req);
-      const entry = {{
-        id: randomUUID(),
-        created_at: new Date().toISOString(),
-        query: body.query ?? body
-      }};
-      state.saved_searches = [...state.saved_searches, entry];
-      state.authenticated = true;
-      saveState(state);
-      sendJson(res, 200, {{
-        accepted: true,
-        saved_search: entry,
-        saved_searches: state.saved_searches
-      }});
-    }} catch (error) {{
-      sendJson(res, 400, {{ error: error?.message ?? String(error) }});
-    }}
-    return;
-  }}
-
-  sendJson(res, 404, {{ error: "not found", path: pathname }});
-}});
-
-server.listen(PORT, "0.0.0.0", () => {{
-  console.log(`${{SERVICE_NAME}} listening on ${{PORT}}`);
-}});
-"#
+    let app_name_debug = format!("{app_name:?}");
+    render_template(
+        include_str!("soracloud/assets/v1/split_app_vault_dev_server_mjs.tmpl"),
+        &[(TEMPLATE_APP_NAME_DEBUG, &app_name_debug)],
     )
 }
 fn split_app_vault_contract_ko(app_name: &str) -> String {
     let seiyaku_name = format!("{}_vault_api", normalized_contract_identifier(app_name));
-    format!(
-        r#"seiyaku {seiyaku_name} {{
-  view fn serve_auth_me(bytes _request_body, Json _request_meta, int observed_height) -> Json {{
-    return json {{
-      authenticated: false,
-      observed_height: observed_height,
-      wallet: Json::parse("null")
-    }};
-  }}
-
-  view fn serve_user_preferences(bytes _request_body, Json _request_meta, int observed_height) -> Json {{
-    return json {{
-      observed_height: observed_height,
-      preferences: json {{}}
-    }};
-  }}
-
-  view fn serve_saved_searches(bytes _request_body, Json _request_meta, int observed_height) -> Json {{
-    return json {{
-      observed_height: observed_height,
-      saved_searches: json []
-    }};
-  }}
-
-  view fn issue_auth_challenge(bytes _request_body, int execution_sequence, int observed_height) -> Json {{
-    return json {{
-      accepted: true,
-      challenge_id: execution_sequence,
-      observed_height: observed_height
-    }};
-  }}
-
-  view fn complete_auth_login(bytes _request_body, int execution_sequence, int observed_height) -> Json {{
-    return json {{
-      accepted: true,
-      action: "login",
-      observed_height: observed_height,
-      sequence: execution_sequence
-    }};
-  }}
-
-  view fn close_auth_session(bytes _request_body, int execution_sequence, int observed_height) -> Json {{
-    return json {{
-      accepted: true,
-      action: "logout",
-      observed_height: observed_height,
-      sequence: execution_sequence
-    }};
-  }}
-
-  view fn store_user_preferences(bytes _request_body, int execution_sequence, int observed_height) -> Json {{
-    return json {{
-      accepted: true,
-      action: "store_preferences",
-      observed_height: observed_height,
-      sequence: execution_sequence
-    }};
-  }}
-
-  view fn store_saved_search(bytes _request_body, int execution_sequence, int observed_height) -> Json {{
-    return json {{
-      accepted: true,
-      action: "store_saved_search",
-      observed_height: observed_height,
-      sequence: execution_sequence
-    }};
-  }}
-}}
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/split_app_vault_contract_ko.tmpl"),
+        &[(TEMPLATE_SEIYAKU_NAME, &seiyaku_name)],
     )
 }
 fn split_app_live_readme(app_name: &str) -> String {
-    format!(
-        r#"# {app_name} Live API
-
-This service is the hosted HTTP plane for the split app.
-
-The starter server owns:
-
-- `GET /api/v1/health`
-- `POST /api/v1/search`
-- `GET /api/v1/search/:id/events`
-- `GET /api/v1/airports/search`
-- `GET /api/v1/filters/metadata`
-- `GET /api/v1/luxury/catalog`
-- `POST /api/v1/links/resolve`
-
-Mutable live-search state is written to lease-backed directories exposed through
-`SORACLOUD_LEASE_VOLUME_*`.
-
-## Local dev
-
-```bash
-./dev.sh
-```
-
-The starter server falls back to local `tmp/` lease directories, so you can run
-the hosted live plane directly without Soracloud while wiring the frontend to
-`http://127.0.0.1:8787/api`.
-
-Build:
-
-```bash
-./build.sh
-```
-
-The build emits `build/live-api.tgz` as a deterministic canonical gzip/USTAR
-bundle containing only `app/server.mjs` with mode 0755.
-
-Stage these guest assets under `services/live/inrou/` before deploy:
-
-- `x86_64/vmlinux`
-- `x86_64/rootfs.ext4`
-- `aarch64/vmlinux`
-- `aarch64/rootfs.ext4`
-
-Optional initrd images live at `x86_64/initrd.img` and `aarch64/initrd.img`.
-
-The live container manifest references these runtime member paths:
-
-- `/inrou/x86_64/vmlinux`
-- `/inrou/x86_64/rootfs.ext4`
-- `/inrou/aarch64/vmlinux`
-- `/inrou/aarch64/rootfs.ext4`
-
-`app release` publishes the staged guest-image directory into SoraFS, records
-immutable artifact refs in the submitted Inrou manifest, and hydrates hosts
-according to the guest-image distribution policy: global by default, or
-explicit geography tags with latency fallback when geography is unknown.
-
-Replace the placeholder SSH key in `services/live/container_manifest.json`.
-
-The generated app manifest references that tarball through `bundle_file`, so:
-
-```bash
-iroha soracloud service sync-manifests --app-manifest ../../app_manifest.json
-```
-
-will refresh the live service `bundle_hash` automatically.
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/split_app_live_readme.tmpl"),
+        &[(TEMPLATE_APP_NAME, app_name)],
     )
 }
 fn split_app_vault_readme(app_name: &str) -> String {
-    format!(
-        r#"# {app_name} Vault API
-
-This service is the deterministic IVM plane for wallet auth and private user
-state.
-
-## Local dev shim
-
-```bash
-./dev.sh
-```
-
-`dev.sh` starts a local HTTP shim for `/api/auth*` and `/api/v1/user*` routes so
-the split app can be exercised without a live deterministic runtime. Build and
-deploy still use the IVM bytecode emitted by `./build.sh`.
-
-## Local verification
-
-```bash
-./build.sh
-./verify-build.sh
-```
-
-`verify-build.sh` recompiles `contract/vault_api.ko` with `koto build` and
-checks that both the bytecode and emitted contract manifest match the committed
-build outputs.
-
-Build:
-
-```bash
-./build.sh
-```
-
-The build emits `build/vault-api.to`, and the generated app manifest references
-that bytecode through `bundle_file` so the app-wide `sync-manifests` command can
-refresh the admitted manifest hashes in one pass.
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/split_app_vault_readme.tmpl"),
+        &[(TEMPLATE_APP_NAME, app_name)],
     )
 }
 fn split_app_local_dev_sh() -> &'static str {
@@ -16993,209 +15735,18 @@ fn split_app_upgrade_sh() -> String {
     include_str!("soracloud/templates/v1/static/split_app_upgrade.sh").replace("{prelude}", prelude)
 }
 fn split_app_readme(app_name: &str, package_name: &str) -> String {
-    format!(
-        r#"# {app_name} Split App Template
-
-This template provides:
-
-- `frontend/` static SPA intended for SoraFS publication
-- `services/live/` hosted HTTP live API targeting `Inrou`
-- `services/vault/` deterministic IVM vault API plus a local dev shim
-- `app_manifest.json` wiring the frontend plus both services together
-- `dev.sh` to boot the frontend plus both local API processes
-- `build-and-sync.sh` to rebuild every artifact and refresh manifest hashes
-- `doctor.sh` to rebuild every artifact and fail-close on the split-app release contract
-- `release.sh` to rebuild, validate, and then deploy-or-upgrade the full app
-- `deploy.sh` as a compatibility wrapper around `release.sh`
-- `upgrade.sh` to rebuild, resync, and submit the app-wide upgrade flow
-
-## Local dev
-
-```bash
-./dev.sh
-```
-
-This starts the frontend dev server on `http://127.0.0.1:5173`, the live API on
-`http://127.0.0.1:8787`, and the vault dev shim on `http://127.0.0.1:8788`.
-
-The generated Vite config keeps `VITE_PUBLIC_API_BASE=/api` and proxies:
-
-- `/api/v1/search*`, `/api/v1/health`, `/api/v1/airports*`,
-  `/api/v1/filters*`, `/api/v1/luxury*`, and `/api/v1/links*` to the live API
-- `/api/auth*` and `/api/v1/user*` to the vault dev shim
-
-Those local proxies strip the shared `/api` prefix before forwarding, matching
-the same hosted longest-prefix route behavior Torii applies in production.
-
-The CLI can resolve and run the same manifest-adjacent entrypoint:
-
-```bash
-iroha soracloud app dev --manifest ./app_manifest.json --dry-run
-iroha soracloud app dev --manifest ./app_manifest.json
-```
-
-Then inspect the mixed route split from the app manifest:
-
-```bash
-iroha soracloud app plan --manifest ./app_manifest.json
-```
-
-`app plan` prints the root `manifest_path`, root `hostname`, then each
-service's resolved `container_manifest_path`, `service_manifest_path`, child
-`workspace_dir`, and child service scripts, which you can feed directly into
-service-scoped Soracloud commands.
-
-## Build everything
-
-```bash
-./build-and-sync.sh
-iroha soracloud app build --manifest ./app_manifest.json --dry-run
-iroha soracloud app build --manifest ./app_manifest.json
-```
-
-The root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`, then explicit source checkout settings (`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`), so split-app workspaces can
-target a local `iroha_cli` checkout without requiring a globally installed
-wrapper. If you are driving the fallback through `IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`, set
-`IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to keep Cargo package and
-artifact state isolated from other local builds.
-
-## Doctor the release contract
-
-```bash
-./doctor.sh
-iroha soracloud app doctor --manifest ./app_manifest.json
-iroha soracloud app doctor --manifest ./app_manifest.json --dry-run
-iroha soracloud app doctor --manifest ./app_manifest.json
-```
-
-`app doctor` fail-closes on the split-plane production contract before you ship:
-CID-only frontend publication, same-origin `/api`, a hosted `Inrou` live plane,
-a deterministic `Ivm` vault plane, lease-backed live storage, vault-only
-auth/user bindings, and no cross-service route collisions.
-
-## Inspect the local split-plane plan
-
-```bash
-iroha soracloud app plan --manifest ./app_manifest.json
-```
-
-This validates every referenced service pair locally and prints the mixed-app
-route ownership, including the hosted `/api/v1/*` live plane, the
-deterministic `/api/auth*` and `/api/v1/user*` vault plane, and the expected
-CID gateway URL template for the frontend.
-
-## Publish + deploy the mixed app
-
-```bash
-TORII_URL=http://127.0.0.1:8080 ./release.sh
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-`doctor.sh` rebuilds the frontend and both services, verifies the vault
-bytecode, refreshes every manifest hash with `sync-manifests --app-manifest`,
-and then runs `iroha soracloud app doctor`.
-
-`release.sh` runs `doctor.sh` first and then executes
-`iroha soracloud app release` with deploy-or-upgrade semantics so one
-documented command handles the full mixed-app upsert path without manual pin
-registration or SSH-only steps. `deploy.sh` is kept as the compatibility
-wrapper for operators that already call `./deploy.sh`. The manifest-driven
-Each service entry in the app manifest carries a `bundle_file`, so the sync
-step refreshes both `container.bundle_hash` and the referenced service
-container hash before deploy.
-
-Direct `iroha soracloud app release` responses keep the root
-`manifest_path`, root `hostname`, root `workspace_dir`, root
-`workspace_scripts`, the frontend publish projection, one manifest-derived
-child service entry per app service, and the top-level mixed `routes` split
-that `app plan` reports.
-
-## Upgrade the mixed app
-
-```bash
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-`upgrade.sh` runs `doctor.sh` first so the same rebuild and validation path
-applies before `iroha soracloud app upgrade`.
-
-Direct `iroha soracloud app upgrade` responses keep the same root
-manifest/hostname/workspace metadata, frontend, service, and top-level
-`routes` projection as app deploy.
-
-## Inspect deployed status
-
-```bash
-iroha soracloud app status --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-`app status` keeps one entry per child service manifest and reports the child
-manifest paths, the root `manifest_path`, root `hostname`, root
-`workspace_dir`, root `workspace_scripts`, plane/runtime, route prefix, the
-top-level `routes` split, the frontend publish projection, and the matched
-Torii control-plane status when present.
-
-Service-scoped Soracloud commands still operate on the child service manifests:
-
-- use `services/live/container_manifest.json` plus
-  `services/live/service_manifest.json` for live-plane commands
-- use `services/vault/container_manifest.json` plus
-  `services/vault/service_manifest.json` for vault-plane commands
-
-When those commands are driven by `--container` plus `--service`, their
-responses also attach the same local `service_plan` projection that
-`iroha soracloud service plan` reports.
-
-The generated API origin is `https://{package_name}.sora`, and the frontend is
-served from the published `cid_gateway_url` under
-`https://{package_name}.sora/sorafs/cid/...` while both services continue to
-share `/api` on the host origin.
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/split_app_readme.tmpl"),
+        &[
+            (TEMPLATE_APP_NAME, app_name),
+            (TEMPLATE_PACKAGE_NAME, package_name),
+        ],
     )
 }
 fn split_app_existing_repo_readme(app_name: &str) -> String {
-    format!(
-        r#"# {app_name} Split App Existing-Repo Template
-
-This template is for app repos that already own their frontend and service
-source trees.
-
-It provides:
-
-- `app_manifest.json` wiring the static site, live service, and vault service
-- `services/live/*.json` and `services/vault/*.json` control-plane manifests
-- `build-and-sync.sh`, `doctor.sh`, `release.sh`, `deploy.sh`, and `upgrade.sh`
-- `.gitignore` entries for the expected service build outputs
-
-It intentionally does not generate starter source under `frontend/`,
-`services/live/app/`, or `services/vault/contract/`.
-
-## What you need to replace
-
-- point `app_manifest.json` at your real static-site dist directory if it is not
-  already correct
-- replace `build-and-sync.sh` with the commands that build your frontend, live
-  bundle, and vault bytecode before calling `iroha soracloud service sync-manifests`
-- add your own dev scripts if you want a one-command development entrypoint
-
-## Release flow
-
-```bash
-./doctor.sh
-TORII_URL=http://127.0.0.1:8080 ./release.sh
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-```
-
-The root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`, then explicit source checkout settings (`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`), so the workspace can target
-a local `iroha_cli` checkout without requiring a globally installed source wrapper.
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/split_app_existing_repo_readme.tmpl"),
+        &[(TEMPLATE_APP_NAME, app_name)],
     )
 }
 fn pii_app_consent_policy_template() -> String {
@@ -17208,98 +15759,18 @@ fn pii_app_deletion_workflow_template() -> String {
     include_str!("soracloud/templates/v1/pii_app_deletion_workflow.json").to_owned()
 }
 fn site_readme(service_name: &str, dns_host: &str) -> String {
-    format!(
-        r#"# {service_name} Static Site Template
-
-This template is generated by:
-
-```bash
-iroha soracloud service init --template site --service-name {service_name}
-```
-
-## Local dev
-
-```bash
-npm install
-npm run dev
-```
-
-## Build and package for SoraFS
-
-```bash
-npm run build
-iroha app sorafs toolkit pack ./dist \
-  --car-out ../sorafs/site_payload.car \
-  --manifest-out ../sorafs/site_manifest.to \
-  --json-out ../sorafs/site_pack_report.json
-```
-
-## Register and bind on SoraDNS
-
-Use the pack report to recover the chunk digest and then register the pin
-alongside the public alias binding.
-
-```bash
-export CHUNK_DIGEST=$(jq -r '.chunk_digest_sha3_256' ../sorafs/site_pack_report.json)
-iroha app sorafs pin register \
-  --manifest ../sorafs/site_manifest.to \
-  --chunk-digest "$CHUNK_DIGEST" \
-  --alias-namespace soradns \
-  --alias-name {dns_host} \
-  --alias-proof ../sorafs/{service_name}_alias_proof.bin
-```
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/site_readme.tmpl"),
+        &[
+            (TEMPLATE_SERVICE_NAME, service_name),
+            (TEMPLATE_DNS_HOST, dns_host),
+        ],
     )
 }
 fn single_api_api_readme(app_name: &str) -> String {
-    format!(
-        r#"# {app_name} API Service
-
-This deterministic IVM service owns the root-bound app API.
-
-The starter contract exposes:
-
-- `GET /api/healthz`
-
-## Local dev shim
-
-```bash
-./dev.sh
-```
-
-`dev.sh` starts a local HTTP shim for `/api/healthz` so the root-bound frontend
-can be exercised without a live deterministic runtime. Build and deploy still
-use the IVM bytecode emitted by `./build.sh`.
-
-## Build
-
-```bash
-./build.sh
-```
-
-The build emits `build/api-service.to` plus
-`build/api-service.contract_manifest.json`.
-
-## Offline verification
-
-```bash
-./verify-build.sh
-```
-
-`verify-build.sh` recompiles `contract/api_service.ko` with `koto build` and
-checks that both the bytecode and emitted contract manifest still match the
-committed build outputs.
-
-The generated app manifest already
-points at that bytecode through `bundle_file`, so:
-
-```bash
-iroha soracloud service sync-manifests --app-manifest ../../app_manifest.json
-```
-
-refreshes the container bundle hash and the service container manifest hash in
-one pass before deploy.
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/single_api_api_readme.tmpl"),
+        &[(TEMPLATE_APP_NAME, app_name)],
     )
 }
 fn single_api_local_dev_sh() -> &'static str {
@@ -17329,321 +15800,30 @@ fn single_api_upgrade_sh() -> String {
         .replace("{prelude}", prelude)
 }
 fn single_api_app_readme(app_name: &str, package_name: &str) -> String {
-    format!(
-        r#"# {app_name} Single-API App Template
-
-This template provides:
-
-- `web/` root-bound Vue frontend intended for publication on the app hostname
-- `services/api/` deterministic IVM API bundle plus a local dev shim
-- `app_manifest.json` wiring both surfaces together
-- `dev.sh` to boot the frontend plus the local API shim
-- `build-and-sync.sh` to rebuild every artifact and refresh manifest hashes
-- `deploy.sh` to run the full publish + deploy flow from one command
-- `upgrade.sh` to rebuild, resync, and submit the app-wide upgrade flow
-
-## Local dev
-
-```bash
-./dev.sh
-```
-
-This starts the frontend dev server on `http://127.0.0.1:5173` and the API dev
-shim on `http://127.0.0.1:8787`. The generated Vite config keeps `/api`
-same-host and proxies it to the local API shim.
-
-The CLI can resolve and run the same manifest-adjacent entrypoint:
-
-```bash
-iroha soracloud app dev --manifest ./app_manifest.json --dry-run
-iroha soracloud app dev --manifest ./app_manifest.json
-```
-
-`iroha soracloud app plan --manifest ./app_manifest.json` also prints
-the root `manifest_path`, root `hostname`, the resolved child manifest paths,
-child `workspace_dir`, and child service scripts for service-scoped Soracloud
-commands.
-
-## Build everything
-
-```bash
-./build-and-sync.sh
-iroha soracloud app build --manifest ./app_manifest.json --dry-run
-iroha soracloud app build --manifest ./app_manifest.json
-```
-
-`build-and-sync.sh` runs the frontend build, `services/api/./build.sh`, and
-`services/api/./verify-build.sh` before refreshing manifest hashes.
-
-The root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`, then explicit source checkout settings (`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`), so single-API app
-workspaces can target a local `iroha_cli` checkout without requiring a
-globally installed source wrapper. If you are driving the fallback through
-`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`, set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to
-keep Cargo package and artifact state isolated from other local builds.
-
-The app manifest references `services/api/build/api-service.to`, so the app-wide
-sync path updates the bundle hash automatically.
-
-## Publish + deploy
-
-```bash
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha soracloud app doctor --manifest ./app_manifest.json --dry-run
-iroha soracloud app doctor --manifest ./app_manifest.json
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud app deploy --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app deploy --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-Direct `iroha soracloud app deploy` responses keep the root
-`manifest_path`, root `hostname`, root `workspace_dir`, root
-`workspace_scripts`, the frontend publish projection, one manifest-derived
-child service entry per app service, and the top-level `routes` split that
-`app plan` reports.
-
-## Upgrade
-
-```bash
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-Direct `iroha soracloud app upgrade` responses keep the same root
-manifest/hostname/workspace metadata, frontend, service, and top-level
-`routes` projection as app deploy.
-
-## Inspect deployed status
-
-```bash
-iroha soracloud app status --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-`app status` keeps one entry per child service manifest and reports the child
-manifest paths, the root `manifest_path`, root `hostname`, root
-`workspace_dir`, root `workspace_scripts`, plane/runtime, route prefix, the
-top-level mixed `routes` split, the frontend publish projection, and the
-matched Torii control-plane status when present.
-
-Service-scoped Soracloud commands still operate on the child API manifests at
-`services/api/container_manifest.json` plus `services/api/service_manifest.json`.
-
-When those commands are driven by `--container` plus `--service`, their
-responses also attach the same local `service_plan` projection that
-`iroha soracloud service plan` reports.
-
-The frontend stays bound at `https://{package_name}.sora/`, and the API stays on
-the same host under `https://{package_name}.sora/api/healthz`.
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/single_api_app_readme.tmpl"),
+        &[
+            (TEMPLATE_APP_NAME, app_name),
+            (TEMPLATE_PACKAGE_NAME, package_name),
+        ],
     )
 }
 fn webapp_readme(service_name: &str) -> String {
-    format!(
-        r#"# {service_name} Webapp Template
-
-This template provides:
-
-- `frontend/` Vue3 SPA (Vite).
-- `api/server.mjs` deterministic challenge-signature auth (`/api/auth/challenge|login|logout|me`).
-- Replay protection with single-use challenges persisted under `/state/auth/challenges`.
-- Shared session handles persisted under `/state/auth/sessions` with signed `session` cookies.
-- Soracloud manifests at the parent init directory (`container_manifest.json`, `service_manifest.json`).
-
-## Local dev
-
-```bash
-npm install
-npm --prefix frontend install
-export AUTH_MODE=dev
-export SESSION_HMAC_KEY='replace-with-at-least-32-random-characters'
-export AUTH_SESSION_TTL_SECS=900
-export AUTH_CHALLENGE_TTL_SECS=120
-export AUTH_CAPABILITY_MAP_JSON='{{}}'
-export AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0
-export PUBLIC_BASE_URL='http://127.0.0.1:8787'
-npm run dev:api
-npm run dev:frontend
-```
-
-## Production required config
-
-- `SESSION_HMAC_KEY` must be set with at least 32 characters (`AUTH_MODE=strict` is default).
-- `AUTH_CAPABILITY_MAP_JSON` maps `public_key_hex -> capability[]` and is used at login.
-- `PUBLIC_BASE_URL` controls cookie `Secure` and origin binding.
-- `AUTH_REQUIRE_EXTERNAL_SHARED_STATE` defaults to enabled in strict/production
-  mode and fails closed unless `globalThis.__soracloudSharedStateAdapter` is
-  provided by the host runtime. Set `AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0` only
-  for local single-replica development.
-
-## Deploy API service on Soracloud
-
-```bash
-iroha soracloud service deploy \
-  --container ../container_manifest.json \
-  --service ../service_manifest.json \
-  --torii-url http://127.0.0.1:8080
-```
-
-## Publish frontend to SoraFS
-
-```bash
-npm run build
-iroha app sorafs toolkit pack ./frontend/dist \
-  --manifest-out ../sorafs/frontend_manifest.to \
-  --car-out ../sorafs/frontend_payload.car \
-  --json-out ../sorafs/frontend_pack_report.json
-```
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/webapp_readme.tmpl"),
+        &[(TEMPLATE_SERVICE_NAME, service_name)],
     )
 }
 fn pii_app_readme(service_name: &str) -> String {
-    format!(
-        r#"# {service_name} PII-App Template
-
-This template provides a private workload starter for regulated PII data:
-
-- `frontend/` Vue3 control panel for challenge-signature auth + policy actions.
-- `api/server.mjs` PII API starter under `/pii/api/*` with strict authn/authz.
-- `policy/*.json` governance templates for consent, retention, and deletion workflows.
-- Soracloud manifests in the parent init directory (`container_manifest.json`, `service_manifest.json`).
-
-## Local dev
-
-```bash
-npm install
-npm --prefix frontend install
-export AUTH_MODE=dev
-export SESSION_HMAC_KEY='replace-with-at-least-32-random-characters'
-export AUTH_SESSION_TTL_SECS=900
-export AUTH_CHALLENGE_TTL_SECS=120
-export AUTH_CAPABILITY_MAP_JSON='{{"replace-with-ed25519-public-key-hex":["pii.records.read","pii.consent.grant","pii.consent.revoke","pii.records.retention.sweep","pii.records.delete"]}}'
-export AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0
-export PUBLIC_BASE_URL='http://127.0.0.1:8788'
-npm run dev:api
-npm run dev:frontend
-```
-
-## Production required config
-
-- `SESSION_HMAC_KEY` (>= 32 characters) is mandatory in strict/production mode.
-- `AUTH_CAPABILITY_MAP_JSON` is mandatory and must map principals to capabilities.
-- Private routes fail closed with deterministic `401`/`403` JSON responses.
-- `AUTH_REQUIRE_EXTERNAL_SHARED_STATE` defaults to enabled in strict/production
-  mode and requires host-provided shared state adapter
-  (`globalThis.__soracloudSharedStateAdapter`). Set
-  `AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0` only for local single-replica
-  development.
-
-## Policy templates
-
-- `policy/consent_policy_template.json`
-- `policy/retention_policy_template.json`
-- `policy/deletion_workflow_template.json`
-
-Populate these templates with jurisdiction-specific values and submit through
-your governance flow before production rollout.
-
-## Deploy API service on Soracloud
-
-```bash
-iroha soracloud service deploy \
-  --container ../container_manifest.json \
-  --service ../service_manifest.json \
-  --torii-url http://127.0.0.1:8080
-```
-
-## Publish frontend bundle
-
-```bash
-npm run build
-iroha app sorafs toolkit pack ./frontend/dist \
-  --manifest-out ../sorafs/pii_frontend_manifest.to \
-  --car-out ../sorafs/pii_frontend_payload.car \
-  --json-out ../sorafs/pii_frontend_pack_report.json
-```
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/pii_app_readme.tmpl"),
+        &[(TEMPLATE_SERVICE_NAME, service_name)],
     )
 }
 fn hayahi_app_readme(service_name: &str) -> String {
-    format!(
-        r#"# {service_name} Hayahi-App Template
-
-This template provides a real Soracloud/IVM Hayahi API scaffold:
-
-- `contract/hayahi_api.ko` with concrete Soracloud query/update/private-update entrypoints.
-- `build.sh` that compiles the contract into `build/hayahi-app-api.to`.
-- Shared Soracloud state bindings for search sessions, shared cache, and collector job/result ledgers.
-- Confidential Soracloud state bindings for wallet-bound preferences and saved searches.
-- Soracloud manifests in the parent init directory (`container_manifest.json`, `service_manifest.json`).
-
-## Build the IVM bundle
-
-```bash
-./build.sh
-```
-
-`build.sh` will use a local `koto` binary when available and otherwise
-falls back to:
-
-```bash
-cargo run --manifest-path ../../../Cargo.toml -p ivm --bin koto -- build \
-  ./contract/hayahi_api.ko \
-  --out ./build/hayahi-app-api.to \
-  --manifest-out ./build/hayahi-app-api.contract_manifest.json \
-  --max-cycles 1000000
-```
-
-## Exposed routes
-
-- `GET /api/v1/health`
-- `GET /api/v1/state/overview`
-- `GET /api/v1/collector/status`
-- `GET /api/auth/me`
-- `GET /api/v1/user/preferences`
-- `GET /api/v1/user/saved-searches`
-- `POST /api/auth/challenge`
-- `POST /api/v1/search`
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `PUT /api/v1/user/preferences`
-- `POST /api/v1/user/saved-searches`
-
-Method-aware public route matching in Torii is required for the shared REST
-paths such as `GET|PUT /api/v1/user/preferences` and
-`GET|POST /api/v1/user/saved-searches`.
-
-## Keep manifest hashes aligned
-
-After local edits or a fresh bytecode build, refresh the Soracloud manifest
-hashes before deploy:
-
-```bash
-iroha soracloud service sync-manifests \
-  --container ../container_manifest.json \
-  --service ../service_manifest.json \
-  --bundle-file ./build/hayahi-app-api.to
-```
-
-## Deploy API service on Soracloud
-
-```bash
-iroha soracloud service deploy \
-  --container ../container_manifest.json \
-  --service ../service_manifest.json \
-  --torii-url http://127.0.0.1:8080
-```
-
-## Publish frontend bundle
-
-```bash
-npm run build
-iroha app sorafs toolkit pack ./frontend/dist \
-  --manifest-out ../sorafs/hayahi_frontend_manifest.to \
-  --car-out ../sorafs/hayahi_frontend_payload.car \
-  --json-out ../sorafs/hayahi_frontend_pack_report.json
-```
-"#
+    render_template(
+        include_str!("soracloud/assets/v1/hayahi_app_readme.tmpl"),
+        &[(TEMPLATE_SERVICE_NAME, service_name)],
     )
 }
 #[cfg(test)]
@@ -17771,6 +15951,109 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn template_renderer_is_single_pass_for_adversarial_substitutions() {
+        let first = "__SORACLOUD_SECOND__\n\"quoted\" {braced}";
+        assert_eq!(
+            render_template(
+                "before __SORACLOUD_FIRST__ | __SORACLOUD_SECOND__ | __SORACLOUD_FIRST__ after",
+                &[
+                    ("__SORACLOUD_FIRST__", first),
+                    ("__SORACLOUD_SECOND__", "second"),
+                ],
+            ),
+            format!("before {first} | second | {first} after")
+        );
+        assert_eq!(render_template("already complete", &[]), "already complete");
+    }
+
+    #[test]
+    fn canonical_template_outputs_match_pre_extraction_manifest() {
+        let outputs = [
+            site_package_json("travel-ops"),
+            webapp_root_package_json("travel-ops"),
+            webapp_frontend_package_json("travel-ops"),
+            pii_app_root_package_json("travel-ops"),
+            pii_app_frontend_package_json("travel-ops"),
+            hayahi_app_root_package_json("travel-ops"),
+            site_app_vue("travel_ops"),
+            single_api_api_dev_server_mjs("travel_ops"),
+            http_service_build_sh("http-service.tgz"),
+            http_service_build_and_sync_sh("http-service.tgz"),
+            http_service_server_mjs("travel_ops"),
+            split_app_live_server_mjs("travel_ops"),
+            http_service_readme("travel_ops", "travel-ops"),
+            split_app_frontend_package_json("travel-ops"),
+            split_app_frontend_app_vue("travel_ops"),
+            split_app_vault_dev_server_mjs("travel_ops"),
+            split_app_vault_contract_ko("travel_ops"),
+            split_app_live_readme("travel_ops"),
+            split_app_vault_readme("travel_ops"),
+            split_app_readme("travel_ops", "travel-ops"),
+            split_app_existing_repo_readme("travel_ops"),
+            site_readme("travel_ops", "travel-ops.sora"),
+            single_api_api_readme("travel_ops"),
+            single_api_app_readme("travel_ops", "travel-ops"),
+            webapp_readme("travel_ops"),
+            pii_app_readme("travel_ops"),
+            hayahi_app_readme("travel_ops"),
+        ];
+        const OUTPUT_NAMES: &str = "site_package_json webapp_root_package_json webapp_frontend_package_json pii_app_root_package_json pii_app_frontend_package_json hayahi_app_root_package_json site_app_vue single_api_api_dev_server_mjs http_service_build_sh http_service_build_and_sync_sh http_service_server_mjs split_app_live_server_mjs http_service_readme split_app_frontend_package_json split_app_frontend_app_vue split_app_vault_dev_server_mjs split_app_vault_contract_ko split_app_live_readme split_app_vault_readme split_app_readme split_app_existing_repo_readme site_readme single_api_api_readme single_api_app_readme webapp_readme pii_app_readme hayahi_app_readme";
+        const EXPECTED: &str = r#"
+site_package_json 347 c46f64656bfdf12515337349ccacd586e8767193d552ca42310c26c9b246d1ed
+webapp_root_package_json 269 a8b3b7e882c3319559256b3e96cf48c5395639d82eaed28b860966c19ffb15ce
+webapp_frontend_package_json 351 72de68ed13eaa4819ab8d762fdb9528aa636ca58856029071c21bb30c94cd608
+pii_app_root_package_json 270 bc1976cd61a41cdcf4115b9e69c222020a8f2876a16d8e623eba34393f3ebbc3
+pii_app_frontend_package_json 355 7e8f88aa184ca0e1a31f29e102bc24e1c5cec19a8db37fba105b7e685e25922f
+hayahi_app_root_package_json 156 dfd557709bb1c7d444978b1d64fb3bc49ec3a325715982c803704403d33d759f
+site_app_vue 385 4c14de601de70079a6578e4d8b1b1139acfc25917ef452492890f18a7c8f5249
+single_api_api_dev_server_mjs 982 43e0c43a5b8f0d07c3da290e550f5e24ede338755d104571174c4ab071606605
+http_service_build_sh 1681 c64b42511d790a6ff665b7764bdd0b1441a6b871f76fc162b209679f46c78d91
+http_service_build_and_sync_sh 1662 a6d7f11aa57165049284567e5fee03261e26ef718a7f87564153ee88cb38a6ac
+http_service_server_mjs 2569 7665ddc2702a94e2b4d28b886b8514cb483b7b8f70c1bb30623283871bcd99a6
+split_app_live_server_mjs 8278 fdfc00db55f79f6770aa5c36be14c06b0072babe2a3afd633ac1d736229c8127
+http_service_readme 6759 9ed4b8e60a24595ff286d502ca3b0206ab0b0e277bff74d88fa3e9818afb9702
+split_app_frontend_package_json 398 9a530d4f077383675477ff9a00bbc2c9a0ae904dab69e92df89cc149145f4259
+split_app_frontend_app_vue 5716 b58585b2c5943e4ff5a2c4a550584cd206cca69e50566a33bbad8ddcf5e5526f
+split_app_vault_dev_server_mjs 5465 c75d651df13ded58a7797581620fa3f0b3cd7db6bac2b3495e07e9c73d6d08d0
+split_app_vault_contract_ko 1954 4659628ad41641fff5f994e398317b609a218363b10873b6a382db438dd68d01
+split_app_live_readme 1840 2b23bdc35c8df6ad63c9cfc7658d26d8be99c2f7f2831f4829a290112beeb8a5
+split_app_vault_readme 849 6fe7462b8041da7d25d39075b8bc340981913631cc4abdebf7df7ef765382538
+split_app_readme 6841 2944d7104ebfdfb277b668df64cae1048317b0c9bcc48edceeb8ae5e2c5dd620
+split_app_existing_repo_readme 1379 3862080d77bf4612d86d4a8dfc7546c7b35421a3d35558a60806440642ebc7b3
+site_readme 900 444f057eedd22cd002eb6d1ff01699a9b49fb2eec74655604929ecdef595f46b
+single_api_api_readme 1025 27df8e2b157c73d02cb9388820b1cb5ec14c56ec119e662d6113ed8bda0265f5
+single_api_app_readme 4428 916245d9adfa1e4906aeeabea3001c67cd14faf2382b914e91f00dd0f11c50ee
+webapp_readme 1873 f297bcb316ac4a5163a273a8984758b85b98f228762362805b04937a94cbc8ab
+pii_app_readme 2276 179b73cd33fa35ef0534d4db04c0bda0b4d226ad3381055402da604929c60800
+hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f45323ab823e
+"#;
+        let expected: Vec<_> = EXPECTED.lines().filter(|line| !line.is_empty()).collect();
+        let names: Vec<_> = OUTPUT_NAMES.split_ascii_whitespace().collect();
+        assert_eq!([outputs.len(), expected.len(), names.len()], [27; 3]);
+        for ((output, expected), output_name) in outputs.into_iter().zip(expected).zip(names) {
+            let mut fields = expected.split_ascii_whitespace();
+            let name = fields.next().expect("manifest function name");
+            let expected_len: usize = fields
+                .next()
+                .expect("manifest byte length")
+                .parse()
+                .expect("numeric byte length");
+            let expected_digest = fields.next().expect("manifest digest");
+            assert_eq!(fields.next(), None, "manifest field count");
+            assert_eq!(output_name, name, "manifest function order");
+            assert_eq!(output.len(), expected_len, "{name} byte length");
+            assert_eq!(
+                hex::encode(Sha256::digest(output.as_bytes())),
+                expected_digest,
+                "{name} digest"
+            );
+            assert!(output.ends_with('\n'), "{name} final LF");
+        }
+    }
+
+    include!("soracloud/template_extraction_tests.rs");
+
     #[test]
     fn bundle_pack_writes_deterministic_canonical_archive_and_reports_exact_bytes() {
         let dir = temp_dir("bundle_pack_canonical");

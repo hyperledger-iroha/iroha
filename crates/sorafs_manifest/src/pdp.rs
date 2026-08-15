@@ -5,12 +5,12 @@
 //! commitment contains its own hot-leaf Merkle root. A valid proof therefore
 //! demonstrates possession of the challenged bytes against both advertised
 //! roots rather than merely replaying precomputed leaf hashes.
-use std::collections::BTreeSet;
-use ed25519_dalek::{Signer as _, SigningKey};
-use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
 use super::{BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, ProfileId};
 use crate::AdmissionRecord;
+use ed25519_dalek::{Signer as _, SigningKey};
+use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::collections::BTreeSet;
+use thiserror::Error;
 mod merkle;
 pub use merkle::{
     PdpMerklePathError, PdpMerkleReadError, PdpMerkleTreeBuilderV1, PdpMerkleTreeError,

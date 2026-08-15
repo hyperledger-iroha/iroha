@@ -1,7 +1,7 @@
 //! Helpers for serialising and parsing chunk fetch specifications and expected
 //! payload metadata from JSON reports emitted by SoraFS tooling.
-use norito::json::{Map, Value, to_string_pretty};
 use crate::{CarBuildPlan, CarPlanError, ChunkFetchSpec, TaikaiSegmentHint};
+use norito::json::{Map, Value, to_string_pretty};
 /// Canonical schema identifier for standalone SoraFS chunk fetch plans.
 pub const CHUNK_FETCH_PLAN_SCHEMA_V1: &str = "sorafs.chunk_fetch_plan.v1";
 /// Schema identifier for manifest-builder reports that embed chunk specs.

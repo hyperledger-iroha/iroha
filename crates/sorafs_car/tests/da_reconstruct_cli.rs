@@ -1,7 +1,7 @@
 //! CLI regressions for the SoraFS DA reconstruction harness.
 #![cfg(feature = "da_harness")]
-use std::{env, fs, path::PathBuf};
 use assert_cmd::cargo::cargo_bin_cmd;
+use std::{env, fs, path::PathBuf};
 use tempfile::{Builder, TempDir};
 fn workspace_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

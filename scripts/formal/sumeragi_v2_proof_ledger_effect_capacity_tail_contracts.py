@@ -684,11 +684,26 @@ let timeout_vote_recovery_episode = !retained_dispatch_allows
             "public ownership-aware retained-debt capacity preflight",
         ),
     ):
-        item = _require_rust_item(effects_path, source, item_name, errors)
+        executor_context = (
+            production_executor_context
+            if item_name == "enqueue_network_with_ingress_ownership"
+            else generic_executor_context
+        )
+        matches = tuple(
+            candidate
+            for candidate in rust_items(source, item_name)
+            if candidate.brace_context == executor_context
+        )
+        item = matches[0] if len(matches) == 1 else None
+        if len(matches) != 1:
+            errors.append(
+                f"{effects_path}: require exactly one production executor item "
+                f"{item_name}; found {len(matches)}"
+            )
         _require_rust_item_context(
             effects_path,
             item,
-            production_executor_context,
+            executor_context,
             description,
             errors,
         )

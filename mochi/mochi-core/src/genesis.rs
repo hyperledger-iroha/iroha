@@ -1,5 +1,4 @@
 //! Helpers for generating default genesis manifests aligned with Kagami defaults.
-use std::{collections::BTreeSet, path::PathBuf, sync::LazyLock};
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     account::Account,
@@ -24,6 +23,7 @@ use iroha_executor_data_model::permission::{
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
+use std::{collections::BTreeSet, path::PathBuf, sync::LazyLock};
 static SAMPLE_ROSE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
     let wonderland_id =
         DomainId::try_new("wonderland", "universal").expect("sample wonderland domain is valid");
@@ -253,6 +253,7 @@ pub fn with_topology(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         isi::{GrantBox, MintBox, RegisterBox, SetParameter},
@@ -268,7 +269,6 @@ mod tests {
         transaction::Executable,
     };
     use iroha_primitives::json::Json;
-    use super::*;
     #[test]
     fn local_onboarding_bootstrap_is_exact_funded_and_idempotent() {
         const EXPECTED_CANONICAL_XOR_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";

@@ -7,11 +7,6 @@
 //! documented in the roadmap: monthly rent is computed per storage class and
 //! duration, underwriting ratios determine collateral requirements, and credit
 //! line caps / APR values track the assigned provider tier.
-use core::num::NonZeroU64;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use sorafs_manifest::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity};
-use thiserror::Error;
 use crate::{
     DeriveJsonDeserialize, DeriveJsonSerialize,
     account::AccountId,
@@ -19,6 +14,11 @@ use crate::{
     events::data::sorafs::SorafsReserveLedgerEvent,
     sorafs::{capacity::ProviderId, pin_registry::StorageClass},
 };
+use core::num::NonZeroU64;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use sorafs_manifest::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity};
+use thiserror::Error;
 /// Schema version for [`ReservePolicyV1`].
 pub const RESERVE_POLICY_VERSION_V1: u8 = 1;
 /// First-release chain authority-policy version.

@@ -1,6 +1,8 @@
 //! Integration tests covering SM2 key pair behavior.
 #![cfg(feature = "sm")]
-use iroha_crypto::{Algorithm, Error, KeyPair, Signature, Sm2PrivateKey, Sm2PublicKey, Sm2Signature};
+use iroha_crypto::{
+    Algorithm, Error, KeyPair, Signature, Sm2PrivateKey, Sm2PublicKey, Sm2Signature,
+};
 use rand::{RngCore, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
 fn checked_sm2_keypair() -> KeyPair {

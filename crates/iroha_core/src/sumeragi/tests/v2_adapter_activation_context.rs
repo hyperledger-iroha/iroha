@@ -23,6 +23,22 @@ fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
         crate::sumeragi::status::v2_status().is_none(),
         "successor replay must remain invisible while its remaining constructors are fallible"
     );
+    let stale_tag = reducer::EventTag::new(
+        context.height,
+        0,
+        reducer::Generation::new(context.height.saturating_sub(1)),
+    );
+    let ignored = adapter
+        .retransmit_elapsed(stale_tag)
+        .expect("validate an ignored preactivation retransmission");
+    assert_eq!(
+        ignored.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::StaleGeneration)
+    );
+    assert!(
+        crate::sumeragi::status::v2_status().is_none(),
+        "recovery reducer turns must remain unpublished before activation"
+    );
     let prepared = adapter
         .successor_activation_status()
         .expect("prepare reducer-owned activation snapshot");
@@ -39,11 +55,6 @@ fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
         "preparing a snapshot is not publication"
     );
     crate::sumeragi::status::set_v2_status(prepared);
-    let stale_tag = reducer::EventTag::new(
-        context.height,
-        0,
-        reducer::Generation::new(context.height.saturating_sub(1)),
-    );
     let ignored = adapter
         .retransmit_elapsed(stale_tag)
         .expect("publish an ignored post-activation retransmission");

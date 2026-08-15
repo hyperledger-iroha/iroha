@@ -8,7 +8,12 @@
 //! resulting signed transaction.
 
 #![cfg(feature = "app_api")]
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use super::orderbook_worker::{
+    OrderbookEnvelopeReconciliationV1, OrderbookFinalizedSnapshotV1, OrderbookGenerationSnapshotV1,
+    OrderbookMaintenanceDueV1, OrderbookWorkerActionV1, plan_orderbook_generation,
+    plan_orderbook_worker_action, reconcile_orderbook_semantics,
+};
+use crate::{SharedAppState, SoraFsOrderbookTransactionSigner};
 use axum::http::StatusCode;
 use blake3::hash as blake3_hash;
 use iroha_core::{
@@ -58,12 +63,7 @@ use sorafs_node::{
         validate_orderbook_pending_delivery_v1, validate_orderbook_reconciliation_material_v1,
     },
 };
-use super::orderbook_worker::{
-    OrderbookEnvelopeReconciliationV1, OrderbookFinalizedSnapshotV1, OrderbookGenerationSnapshotV1,
-    OrderbookMaintenanceDueV1, OrderbookWorkerActionV1, plan_orderbook_generation,
-    plan_orderbook_worker_action, reconcile_orderbook_semantics,
-};
-use crate::{SharedAppState, SoraFsOrderbookTransactionSigner};
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 const ORDERBOOK_TELEMETRY_MAX_EVENTS_PER_SCAN_V1: usize = 1_024;
 const ORDERBOOK_TELEMETRY_MAX_ORDERS_V1: usize = ORDERBOOK_MAX_OPEN_ORDERS_V1 as usize;
 const ORDERBOOK_TELEMETRY_MAX_CHANNELS_V1: usize =
@@ -1856,12 +1856,12 @@ async fn submit_sorafs_orderbook_transaction(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId, events::data::sorafs::SorafsOrderbookLedgerEvent,
         sorafs::orderbook::OrderbookFinalizedEventV1,
     };
-    use super::*;
     fn cursor(height: u64, seed: u8) -> OrderbookFinalizedCursorV1 {
         OrderbookFinalizedCursorV1 {
             height,

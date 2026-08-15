@@ -1,11 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for fraud monitoring admission policy using mocked assessments.
-use std::str::FromStr;
 use eyre::{Report, Result};
 use integration_tests::sandbox;
 use iroha::data_model::{Level, metadata::Metadata, name::Name, prelude::*};
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
+use std::str::FromStr;
 use toml::Value as TomlValue;
 fn error_chain(err: &Report) -> Vec<String> {
     err.chain().map(ToString::to_string).collect()

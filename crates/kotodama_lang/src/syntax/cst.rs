@@ -1,6 +1,6 @@
 //! Immutable lossless concrete syntax tree nodes.
-use crate::source::{SourceFile, SourceId, TextRange};
 use super::kind::SyntaxKind;
+use crate::source::{SourceFile, SourceId, TextRange};
 /// One lossless token in a concrete syntax tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GreenToken {

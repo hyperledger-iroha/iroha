@@ -1,13 +1,13 @@
 //! Compact length coverage for core collection serializers.
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    core::{self, DecodeFlagsGuard, header_flags},
+};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque},
     rc::Rc,
     sync::Arc,
-};
-use norito::{
-    NoritoDeserialize, NoritoSerialize,
-    core::{self, DecodeFlagsGuard, header_flags},
 };
 fn serialize_payload<T: NoritoSerialize>(value: &T) -> Vec<u8> {
     let mut out = Vec::new();

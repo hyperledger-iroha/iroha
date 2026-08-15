@@ -5,11 +5,9 @@
 //! runtime signer sees it, persists the exact verified signed transaction before
 //! submission, and retains bounded completed/dead-letter state for replay-safe
 //! reconciliation. It never owns private keys or an authoritative finance model.
-use std::{
-    collections::BTreeSet,
-    fmt,
-    path::Path,
-    sync::{Arc, Mutex},
+use crate::durable_transaction_forwarder::{
+    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
+    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
@@ -25,11 +23,13 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
-use crate::durable_transaction_forwarder::{
-    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
-    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
+use std::{
+    collections::BTreeSet,
+    fmt,
+    path::Path,
+    sync::{Arc, Mutex},
 };
+use thiserror::Error;
 /// Durable checkpoint schema version.
 pub const APPEAL_FINANCE_FORWARDER_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Canonical checkpoint file name.
@@ -2690,7 +2690,7 @@ impl From<AppealFinanceCheckpointExternalError> for AppealFinanceTransactionForw
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::numeric::Quantity;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -2701,8 +2701,8 @@ mod tests {
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
-    use super::*;
     #[derive(Debug)]
     struct TestCheckpointRuntime {
         provider_handle: String,

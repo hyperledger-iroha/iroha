@@ -1,11 +1,11 @@
 //! Iroha is a quite dynamic system so many events can happen.
 //! This module contains descriptions of such an events and
 //! utility Iroha Special Instructions to work with them.
-use iroha_data_model::events::prelude::*;
 use crate::{
     proof_filters,
     stream::{self, WebSocketNorito},
 };
+use iroha_data_model::events::prelude::*;
 /// Type of error for `Consumer`
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

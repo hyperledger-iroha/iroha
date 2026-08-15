@@ -72,8 +72,8 @@ mod scalar {
 }
 #[cfg(feature = "simd")]
 mod simd {
-    use core::simd::{LaneCount, Simd, SimdOrd, SimdPartialEq, SupportedLaneCount};
     use super::{Ordering, scalar};
+    use core::simd::{LaneCount, Simd, SimdOrd, SimdPartialEq, SupportedLaneCount};
     const LANES: usize = 8;
     #[inline]
     pub(super) fn sort_dedup_u32(slice: &mut [u32]) -> Option<usize>

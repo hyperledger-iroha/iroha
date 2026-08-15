@@ -5,11 +5,6 @@
 //! prover-selected channel metadata, or trace-derived length can change it.
 //! The MAIN assembler compares its witness-bearing declarations byte-for-byte
 //! with this plan before committing either I/O base table.
-use iroha_data_model::privacy::{
-    IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyStatementV1,
-    ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
-};
-use thiserror::Error;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::io_air::ZkX509IoChannelWitnessV1;
 use super::{
@@ -26,6 +21,11 @@ use super::{
         ZK_X509_PROJECTION_HASH_BUFFER_BYTES_V1, ZK_X509_PROJECTION_SPKI_DER_BYTES_V1,
     },
 };
+use iroha_data_model::privacy::{
+    IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyStatementV1,
+    ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
+};
+use thiserror::Error;
 /// Stable identity of the verifier-owned MAIN I/O declaration compiler.
 pub(crate) const ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1: &[u8] = b"zk-x509-main-io-declarations-v1-incompatible:statement-only:three-spki-prefix:serial-length+padded:per-disclosure-attribute-length+padded:three-certificate-tbs-pairs:optional-certificate-selector:three-certificate-signature-triples:crl-tbs+complete-crl+signature:issuer+leaf-keys:issuer+root-spki:active-projection-sha-triples:public-digests-verifier-fixed:declarations=40+5d:logical-rows=55922+4736d:max74866:fixed-capacity262144:first-release";
 /// Fixed declaration count with no selective disclosures.
@@ -371,12 +371,12 @@ pub(crate) fn compile_zk_x509_main_io_declarations_v1(
 }
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::*;
+    use crate::privacy_engines::zk_x509::projection_air::tests::fixture;
     use iroha_data_model::privacy::{
         PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1, PrivacyNullifierV1,
         PrivacyZkX509DisclosedAttributeV1,
     };
-    use super::*;
-    use crate::privacy_engines::zk_x509::projection_air::tests::fixture;
     pub(crate) fn statement_with_disclosures_v1(
         disclosures: usize,
     ) -> IrohaZkX509StarkP256StatementV1 {

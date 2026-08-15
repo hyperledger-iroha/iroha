@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level regressions for the read-only Nexus lifecycle status surface.
 #![cfg(feature = "app_api")]
-use std::sync::Arc;
 use axum::{
     Router,
     body::Body,
@@ -19,6 +18,7 @@ use iroha_core::{
 };
 use iroha_data_model::nexus::{LaneId, LaneLifecycleStatusV1};
 use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
+use std::sync::Arc;
 #[path = "fixtures.rs"]
 mod fixtures;
 struct NexusHarness {

@@ -3,8 +3,8 @@
 //! Verifies that `MerkleTree<[u8;32]>` serializes only canonical leaves plus
 //! its hash scheme, rebuilds cached nodes on decode, and that proofs remain
 //! lossless via the Norito codec.
-use std::num::NonZeroU64;
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
+use std::num::NonZeroU64;
 fn leaf_hash(payload: &[u8]) -> HashOf<[u8; 32]> {
     // Domain-tag example for TX entry leaves (not strictly required for roundtrip,
     // but keeps consistency with other Merkle tests and docs):

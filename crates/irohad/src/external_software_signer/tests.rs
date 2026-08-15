@@ -1,4 +1,13 @@
-use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
+use super::{
+    SoftwareSignerKeyAlgorithmV1, SoftwareSignerProvisioningV1, SoftwareSignerPurposeBindingV1,
+    SoftwareSignerRoleV1, SoftwareSignerServiceV1, SoftwareSignerSignatureReceiptV1,
+    SoftwareSignerWrappingKeyV1,
+    protocol::{
+        AdminCommandV1, AdminRequestV1, AdminStatusV1, SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1,
+        SignRequestV1, SignStatusV1, admin_request_digest, payload_digest, sign_request_digest,
+    },
+    typed_payload::{SoftwareSignerPurposeV1, encode_typed_signing_payload},
+};
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -14,16 +23,7 @@ use sorafs_manifest::{
     POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus, StreamTokenBodyV1,
     proof_stream::ProofStreamTier,
 };
-use super::{
-    SoftwareSignerKeyAlgorithmV1, SoftwareSignerProvisioningV1, SoftwareSignerPurposeBindingV1,
-    SoftwareSignerRoleV1, SoftwareSignerServiceV1, SoftwareSignerSignatureReceiptV1,
-    SoftwareSignerWrappingKeyV1,
-    protocol::{
-        AdminCommandV1, AdminRequestV1, AdminStatusV1, SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1,
-        SignRequestV1, SignStatusV1, admin_request_digest, payload_digest, sign_request_digest,
-    },
-    typed_payload::{SoftwareSignerPurposeV1, encode_typed_signing_payload},
-};
+use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 const WRAPPING_KEY: [u8; 32] = [0xA5; 32];
 fn test_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(

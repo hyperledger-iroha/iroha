@@ -1,11 +1,11 @@
 //! Integration test for `kagami genesis embed-pop` populating `pop_hex` inside topology entries.
 mod common;
-use std::process::Command;
 use color_eyre::{
     Result,
     eyre::{WrapErr, ensure},
 };
 use common::{PopFixture, generate_pop, minimal_manifest_with_topology, write_raw_genesis_to};
+use std::process::Command;
 #[test]
 fn pop_and_embed_populates_pop_hex_entries() -> Result<()> {
     let pop1 = generate_pop(&"51".repeat(32))?;

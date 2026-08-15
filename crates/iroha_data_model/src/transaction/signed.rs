@@ -1,28 +1,4 @@
 //! Transaction structures and related implementations.
-use std::{
-    collections::BTreeMap,
-    convert::TryFrom,
-    iter::IntoIterator,
-    num::{NonZeroU32, NonZeroU64},
-    str::FromStr,
-    string::String,
-    sync::LazyLock,
-    time::Duration,
-    vec::Vec,
-};
-#[cfg(feature = "fault_injection")]
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use derive_more::{Deref, Display, From, TryInto};
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
-use iroha_data_model_derive::model;
-use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
-use iroha_schema::IntoSchema;
-use iroha_version::Version;
-use norito::{
-    codec::{Decode, Encode},
-    core::DecodeFromSlice,
-};
-use thiserror::Error;
 pub use self::model::*;
 use super::{
     error,
@@ -46,7 +22,31 @@ use crate::{
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
+#[cfg(feature = "fault_injection")]
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use derive_more::{Deref, Display, From, TryInto};
+use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
+use iroha_data_model_derive::model;
 use iroha_primitives::numeric::Quantity;
+use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
+use iroha_schema::IntoSchema;
+use iroha_version::Version;
+use norito::{
+    codec::{Decode, Encode},
+    core::DecodeFromSlice,
+};
+use std::{
+    collections::BTreeMap,
+    convert::TryFrom,
+    iter::IntoIterator,
+    num::{NonZeroU32, NonZeroU64},
+    str::FromStr,
+    string::String,
+    sync::LazyLock,
+    time::Duration,
+    vec::Vec,
+};
+use thiserror::Error;
 /// Default signature-bound lifetime assigned by [`TransactionBuilder`].
 ///
 /// Networks govern the admission ceiling through
@@ -71,9 +71,9 @@ fn verify_typed_signature_for_signer<T: Encode>(
 }
 #[model]
 mod model {
-    use iroha_primitives::const_vec::ConstVec;
     use super::*;
     use crate::account::AccountId;
+    use iroha_primitives::const_vec::ConstVec;
     /// Fee system whose charge is bounded by a signed transaction limit.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -327,10 +327,9 @@ mod model {
     }
     /// Transaction containing a signed intent and its authorization proof.
     ///
-    /// `Iroha` and its clients use [`Self`] to send transactions over the network.
-    /// After a transaction is signed and before it can be processed any further,
-    /// the transaction must be accepted by an `Iroha` peer.
-    /// The peer verifies the signature and checks the limits.
+    /// `Iroha` and its clients use [`Self`] to send transactions over the network. After a
+    /// transaction is signed and before it can be processed any further, the transaction must be
+    /// accepted by an `Iroha` peer. The peer verifies the signature and checks the limits.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Display, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1106,8 +1105,7 @@ impl TransactionPayload {
     ///
     /// # Errors
     ///
-    /// Returns an error when the typed intent is non-canonical or legacy fee
-    /// metadata is present.
+    /// Returns an error when the typed intent is non-canonical or legacy fee metadata is present.
     pub fn validate_fee_payment_intent(&self) -> Result<(), FeePaymentIntentError> {
         self.fee_payment
             .validate()
@@ -1144,13 +1142,12 @@ impl TransactionPayload {
     /// - `statement.context.transaction_intent_digest` becomes 32 zero bytes;
     /// - `envelope.statement_digest` becomes 32 zero bytes.
     ///
-    /// For ZK-ACE, the replay nullifier also becomes 32 zero bytes because it
-    /// is derived from the resulting intent-bound authorization projection.
-    /// For Vega, the device-authentication digest also becomes 32 zero bytes
-    /// because `H_dev` binds the resulting transaction-intent digest. For the
-    /// native IVM private-note protocol, the self-authenticating action digest
-    /// likewise becomes 32 zero bytes because its canonical preimage includes
-    /// the resulting transaction-intent digest.
+    /// For ZK-ACE, the replay nullifier also becomes 32 zero bytes because it is derived from the
+    /// resulting intent-bound authorization projection. For Vega, the device-authentication digest
+    /// also becomes 32 zero bytes because `H_dev` binds the resulting transaction-intent digest.
+    /// For the native IVM private-note protocol, the self-authenticating action digest likewise
+    /// becomes 32 zero bytes because its canonical preimage includes the resulting
+    /// transaction-intent digest.
     ///
     /// Zeroing these derived fields removes their otherwise unavoidable
     /// self-reference. Every independent payload field, statement field,
@@ -1176,9 +1173,8 @@ impl TransactionPayload {
     }
     /// Validate the final stored intent and statement digests.
     ///
-    /// This is the admission-side companion to
-    /// [`Self::privacy_transaction_intent_digest_v1`]. It recomputes both
-    /// derived values from the exact signed payload and rejects zero, stale, or
+    /// This is the admission-side companion to [`Self::privacy_transaction_intent_digest_v1`]. It
+    /// recomputes both derived values from the exact signed payload and rejects zero, stale, or
     /// foreign values before any executor effect.
     ///
     /// # Errors
@@ -1223,10 +1219,9 @@ impl TransactionPayload {
     }
     /// Validate and borrow an optional direct privacy submission for runtime admission.
     ///
-    /// Ordinary non-privacy transactions return `Ok(None)`. A typed submission
-    /// hidden in a proved overlay or an opaque instruction bearing the privacy
-    /// wire id fails closed. When one direct submission exists, every V1
-    /// projection and derived-field rule is enforced.
+    /// Ordinary non-privacy transactions return `Ok(None)`. A typed submission hidden in a proved
+    /// overlay or an opaque instruction bearing the privacy wire id fails closed. When one direct
+    /// submission exists, every V1 projection and derived-field rule is enforced.
     ///
     /// # Errors
     ///
@@ -1308,9 +1303,8 @@ impl SignedTransaction {
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyTransactionIntentErrorV1`] if the transaction contains
-    /// an invalid privacy-instruction combination or its canonical intent
-    /// cannot be derived.
+    /// Returns [`PrivacyTransactionIntentErrorV1`] if the transaction contains an invalid
+    /// privacy-instruction combination or its canonical intent cannot be derived.
     pub fn privacy_transaction_intent_binding_if_present_v1(
         &self,
     ) -> Result<
@@ -1404,10 +1398,9 @@ impl SignedTransaction {
     }
     /// Number of signatures bundled with this transaction.
     ///
-    /// Current transactions carry exactly one signature for single-key
-    /// authorities. Multisig authorities count the raw signature entries in the
-    /// multisig bundle (including duplicates) so admission can enforce bundle
-    /// size limits.
+    /// Current transactions carry exactly one signature for single-key authorities. Multisig
+    /// authorities count the raw signature entries in the multisig bundle (including duplicates) so
+    /// admission can enforce bundle size limits.
     #[inline]
     pub fn signature_count(&self) -> usize {
         match self.payload.authority.controller() {
@@ -1806,8 +1799,7 @@ impl TransactionEntrypoint {
     ///
     /// # Errors
     ///
-    /// Returns an error if the entrypoint cannot be serialized with the canonical V1 Norito
-    /// layout.
+    /// Returns an error if the entrypoint cannot be serialized with the canonical V1 Norito layout.
     pub fn encode_wire_v1(&self) -> Result<Vec<u8>, norito::core::Error> {
         encode_default_layout_versioned(self.version(), self)
     }
@@ -2263,9 +2255,8 @@ impl TransactionBuilder {
     }
     /// Set time-to-live for this transaction
     ///
-    /// A zero duration leaves the builder with an invalid missing lifetime;
-    /// fallible payload/signing workflows then return
-    /// [`TransactionSignatureError::MissingTimeToLive`].
+    /// A zero duration leaves the builder with an invalid missing lifetime; fallible
+    /// payload/signing workflows then return [`TransactionSignatureError::MissingTimeToLive`].
     pub fn set_ttl(&mut self, time_to_live: Duration) -> &mut Self {
         let ttl: u64 = time_to_live
             .as_millis()
@@ -2408,15 +2399,15 @@ fn test_network_id(seed: u8) -> NetworkId {
         Hash::prehashed([seed; Hash::LENGTH]),
     ))
 }
+#[cfg(all(test, feature = "fault_injection"))]
+#[path = "signed/fault_injection_tests.rs"]
+mod fault_injection_tests;
 #[cfg(test)]
 #[path = "signed_model_tests.rs"]
 mod tests;
 #[cfg(test)]
 #[path = "signed/ttl_tests.rs"]
 mod ttl_tests;
-#[cfg(all(test, feature = "fault_injection"))]
-#[path = "signed/fault_injection_tests.rs"]
-mod fault_injection_tests;
 include!("signed/attachments_tests.rs");
 impl TransactionEntrypoint {
     /// Account authorized to initiate this transaction when one exists.

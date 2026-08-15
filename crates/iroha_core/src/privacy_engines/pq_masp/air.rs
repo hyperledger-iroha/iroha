@@ -4,9 +4,6 @@
 //! byte-copy permutation connects note fields, hash inputs and outputs,
 //! accumulator children, and value arithmetic. Public statement bytes are
 //! verifier-derived fixed constraints at their final endpoints.
-use std::collections::BTreeMap;
-use iroha_data_model::privacy::PqMaspStarkStatementV1;
-use thiserror::Error;
 use super::relation::{
     ACCUMULATOR_LEAF_DOMAIN_V1, ACCUMULATOR_NODE_DOMAIN_V1, HASH_FRAME_DOMAIN_V1,
     NOTE_COMMITMENT_DOMAIN_V1, NOTE_ENCRYPTION_KEYS_DOMAIN_V1, NOTE_NULLIFIER_DOMAIN_V1,
@@ -20,6 +17,9 @@ use crate::privacy_engines::{
     },
     transparent_stark::GoldilocksFieldV1 as F,
 };
+use iroha_data_model::privacy::PqMaspStarkStatementV1;
+use std::collections::BTreeMap;
+use thiserror::Error;
 pub(super) const PQ_MASP_TRACE_LOG2_V1: u8 = 14;
 pub(super) const PQ_MASP_TRACE_SIZE_V1: usize = 1 << PQ_MASP_TRACE_LOG2_V1;
 pub(super) const PQ_MASP_COPY_WIDTH_V1: usize = 8;

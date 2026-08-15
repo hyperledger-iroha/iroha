@@ -5,7 +5,7 @@
 //! second content-ownership database: approved manifests and completed
 //! replication orders remain the sole authority, while adverts only supply
 //! current peer connectivity metadata.
-use std::collections::{BTreeMap, BTreeSet};
+use crate::{SharedAppState, sorafs::ProviderAdvertCache};
 use axum::{
     body::Body,
     extract::{Path, RawQuery, State},
@@ -24,14 +24,14 @@ use iroha_logger::{debug, warn};
 use mv::storage::StorageReadOnly;
 use norito::json::{self, Map, Value};
 use sorafs_manifest::{AdvertEndpoint, EndpointKind, ProviderAdvertV1, TransportProtocol};
+pub(crate) use sorafs_orchestrator::routing_authority::RoutingAuthorityCache;
 use sorafs_orchestrator::routing_authority::{
     FinalizedStateIdentityV1, RoutingAuthorityError, RoutingAuthoritySource,
     build_routing_authority_projection,
 };
+use std::collections::{BTreeMap, BTreeSet};
 use time::{Month, OffsetDateTime, Weekday};
 use url::{Host as UrlHost, Url};
-use crate::{SharedAppState, sorafs::ProviderAdvertCache};
-pub(crate) use sorafs_orchestrator::routing_authority::RoutingAuthorityCache;
 const JSON_RESULT_LIMIT: usize = 100;
 const NDJSON_RESULT_LIMIT: usize = 1_024;
 const MAX_PATH_IDENTIFIER_BYTES: usize = 256;
@@ -1260,7 +1260,7 @@ fn unix_now_secs() -> u64 {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
     use axum::http::header;
     use http_body_util::BodyExt as _;
     use sorafs_manifest::{
@@ -1268,7 +1268,7 @@ mod tests {
         ProviderAdvertBodyV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic,
         SignatureAlgorithm, StreamBudgetV1, TransportHintV1,
     };
-    use super::*;
+    use std::sync::Arc;
     const NOW: u64 = 1_700_000_100;
     fn sample_cid(seed: u8) -> ManifestRootCid {
         ManifestRootCid::from_blake3_digest([seed.max(1); 32]).expect("canonical root CID")

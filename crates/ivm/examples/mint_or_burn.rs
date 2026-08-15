@@ -1,15 +1,15 @@
 //! Demonstrates mint and burn operations using canonical pointer-ABI account,
 //! asset-definition, and `QuantityValueV1` TLVs.
-use std::{
-    any::Any,
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
 use iroha_data_model::{account::AccountId, asset::AssetDefinitionId, domain::DomainId};
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     IVM, PointerType, VMError, encoding, host::IVMHost, instruction, kotodama::wide as kwide,
     syscalls,
+};
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{Arc, Mutex},
 };
 #[derive(Clone)]
 struct AssetHost {

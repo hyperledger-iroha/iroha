@@ -1,7 +1,7 @@
 //! Governance lifecycle events for the data event stream.
-use iroha_data_model_derive::model;
 pub use self::model::*;
 use super::*;
+use iroha_data_model_derive::model;
 #[model]
 mod model {
     use super::*;

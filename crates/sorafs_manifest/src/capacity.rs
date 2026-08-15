@@ -4,18 +4,18 @@
 //! The Norito payloads defined here allow governance, Torii, and storage
 //! operators to exchange deterministic capacity declarations, replication
 //! orders, and telemetry snapshots.
-use std::collections::BTreeSet;
+use crate::{
+    chunker_registry,
+    provider_advert::{CapabilityType, SignatureAlgorithm, StakePointer},
+};
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroha_schema::IntoSchema;
 use norito::{
     core::{DecodeFromSlice, decode_field_canonical},
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
 };
+use std::collections::BTreeSet;
 use thiserror::Error;
-use crate::{
-    chunker_registry,
-    provider_advert::{CapabilityType, SignatureAlgorithm, StakePointer},
-};
 /// Schema version for [`CapacityDeclarationV1`].
 pub const CAPACITY_DECLARATION_VERSION_V1: u8 = 1;
 /// Schema version for [`ReplicationOrderV1`].

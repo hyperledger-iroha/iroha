@@ -1,9 +1,3 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-};
 use blake3::Hasher as Blake3Hasher;
 use hex::FromHex;
 use iroha_data_model::ministry::{AgendaProposalAction, AgendaProposalV1};
@@ -16,6 +10,12 @@ use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Value as JsonValue};
 use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use walkdir::WalkDir;
 pub enum Command {
@@ -804,14 +804,14 @@ struct PolicyConflictRef {
 }
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use super::*;
     use hex::FromHex;
     use iroha_data_model::ministry::{
         AGENDA_PROPOSAL_VERSION_V1, AgendaEvidenceAttachment, AgendaEvidenceKind,
         AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget,
     };
+    use std::io::Write;
     use tempfile::NamedTempFile;
-    use super::*;
     const TEST_ROSTER: &str = r#"{
         "format_version": 1,
         "members": [

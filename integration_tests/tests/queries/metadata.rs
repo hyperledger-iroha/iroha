@@ -1,12 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests querying metadata via `FindAccounts`.
-use std::{collections::BTreeMap, str::FromStr};
 use integration_tests::sandbox;
 use iroha::{client::QueryError, data_model::prelude::*};
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::account::CanRegisterAccount;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
+use std::{collections::BTreeMap, str::FromStr};
 #[test]
 #[allow(clippy::too_many_lines)]
 fn find_accounts_with_asset() {

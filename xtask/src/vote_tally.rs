@@ -1,9 +1,9 @@
-use std::{convert::TryInto, error::Error, fs, path::Path};
 use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
 use norito::json::{self, Value};
+use std::{convert::TryInto, error::Error, fs, path::Path};
 /// Canonical file names within the vote tally bundle directory.
 pub fn bundle_file_names() -> &'static [&'static str] {
     &[
@@ -125,6 +125,7 @@ fn deterministic_timestamp(summary: &BundleSummary) -> u64 {
 }
 #[cfg(feature = "vote-tally")]
 mod vote_tally_backend {
+    use super::*;
     use halo2_proofs as halo2_axiom;
     use halo2_proofs::{
         SerdeFormat,
@@ -149,7 +150,6 @@ mod vote_tally_backend {
     };
     use rand_core_06::{CryptoRng as CryptoRngOld, RngCore as RngCoreOld};
     use sha2::{Digest as ShaDigest, Sha256};
-    use super::*;
     struct Halo2ProofRng(ChaCha20Rng);
     impl Halo2ProofRng {
         fn from_seed(seed: [u8; 32]) -> Self {

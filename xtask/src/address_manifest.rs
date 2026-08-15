@@ -1,3 +1,7 @@
+use blake3::Hash;
+use hex::encode as hex_encode;
+use norito::json::{self, JsonDeserialize, Map, Value};
+use sha2::{Digest, Sha256};
 #[allow(unused_imports)]
 use std::fmt::Write as _;
 use std::{
@@ -6,10 +10,6 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-use blake3::Hash;
-use hex::encode as hex_encode;
-use norito::json::{self, JsonDeserialize, Map, Value};
-use sha2::{Digest, Sha256};
 const RUNBOOK_PATH: &str = "specs/runbooks/address_manifest_ops.md";
 #[derive(Clone)]
 pub struct VerifyOptions {
@@ -331,8 +331,8 @@ fn ensure_hex_string(
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
     use super::*;
+    use tempfile::tempdir;
     #[test]
     fn detects_sequence_gap() {
         let previous = tempdir().unwrap();

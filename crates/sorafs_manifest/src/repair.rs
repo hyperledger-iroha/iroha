@@ -5,12 +5,12 @@
 //! payloads are Norito-encoded so governance, Torii, and tooling can exchange
 //! deterministic artefacts without bespoke serializers.
 #![allow(clippy::size_of_ref)]
-use std::fmt;
-use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
 use crate::deal::{BASIS_POINTS_PER_UNIT, XorQuantity};
 #[cfg(test)]
 use iroha_crypto::numeric::Quantity;
+use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::fmt;
+use thiserror::Error;
 /// Schema version for [`RepairEvidenceV1`].
 pub const REPAIR_EVIDENCE_VERSION_V1: u8 = 1;
 /// Schema version for [`RepairReportV1`].

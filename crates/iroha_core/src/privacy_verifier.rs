@@ -6,31 +6,6 @@
 //! this module can construct [`VerifiedPrivacyEffectsV1`], so state handlers
 //! cannot derive ledger effects from unverified caller-controlled bytes.
 #[cfg(feature = "zk-stark")]
-use iroha_data_model::zk::ZkAcePrivacyPublicInputsV1;
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    asset::{AssetBalanceScope, AssetDefinitionId},
-    privacy::{
-        AnonymousPgcKOutOfNStatementV1, BootleLanternIssuerPolicyLifecycleV1,
-        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
-        IrohaIvmPrivateNoteStarkStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
-        IrohaZkAmsStatementV1, MoneroFcmpPlusPlusStatementV1, OrchardHalo2ActionsStatementV1,
-        PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
-        PrivacyFcmpKeyImageV1, PrivacyFcmpOutputTupleV1, PrivacyNamespaceV1,
-        PrivacyNativeConsensusBindingV1, PrivacyNativeConsensusBindingValidationErrorV1,
-        PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofEnvelopeValidationError, PrivacyProtocolActivationRecordV1,
-        PrivacyProtocolIdV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
-        PrivacyStatementV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
-        PrivacyVeRangeBitLengthV1, PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
-        PrivacyZkAmsActionV1, VegaExistingCredentialStatementV1,
-    },
-};
-use thiserror::Error;
-#[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{ZkAceNativeErrorV1, verify_zk_ace_privacy_v1};
 #[cfg(feature = "privacy-release-evidence")]
 use crate::privacy_profiles::{
@@ -94,6 +69,31 @@ use crate::{
         validate_privacy_zk_x509_statement_state_v1,
     },
 };
+#[cfg(feature = "zk-stark")]
+use iroha_data_model::zk::ZkAcePrivacyPublicInputsV1;
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    asset::{AssetBalanceScope, AssetDefinitionId},
+    privacy::{
+        AnonymousPgcKOutOfNStatementV1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
+        IrohaIvmPrivateNoteStarkStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
+        IrohaZkAmsStatementV1, MoneroFcmpPlusPlusStatementV1, OrchardHalo2ActionsStatementV1,
+        PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
+        PrivacyFcmpKeyImageV1, PrivacyFcmpOutputTupleV1, PrivacyNamespaceV1,
+        PrivacyNativeConsensusBindingV1, PrivacyNativeConsensusBindingValidationErrorV1,
+        PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
+        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+        PrivacyProofEnvelopeValidationError, PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolIdV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
+        PrivacyStatementV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
+        PrivacyVeRangeBitLengthV1, PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
+        PrivacyZkAmsActionV1, VegaExistingCredentialStatementV1,
+    },
+};
+use thiserror::Error;
 /// Complete trusted PGC pool state selected before native verification.
 ///
 /// The submit handler constructs this only after its bounded state loader has
@@ -120,9 +120,8 @@ pub(crate) struct PrivacyPgcVerificationStateV1<'a> {
 }
 /// Trusted X.509 governance/root snapshot and replay status selected by core.
 ///
-/// The replay bit is derived from the role-separated nullifier map before
-/// native proof verification, so an already consumed certificate cannot force
-/// another H20 proof verification.
+/// The replay bit is derived from the role-separated nullifier map before native proof
+/// verification, so an already consumed certificate cannot force another H20 proof verification.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PrivacyZkX509VerificationStateV1<'a> {
     /// Fully joined active trust-anchor, policy, CRL, and root-head state.
@@ -322,10 +321,9 @@ impl VerifiedOrchardLedgerEffectV1 {
 }
 /// Complete proof-managed pool mutation authorized by a native verifier.
 ///
-/// The closed transition enum carries exactly one protocol-native successor,
-/// so an FCMP++ curve frontier cannot be confused with an IVM/PQ note
-/// frontier and the handler never reconstructs effects from caller-controlled
-/// roots.
+/// The closed transition enum carries exactly one protocol-native successor, so an FCMP++ curve
+/// frontier cannot be confused with an IVM/PQ note frontier and the handler never reconstructs
+/// effects from caller-controlled roots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum VerifiedProofManagedPoolTransitionV1 {
     /// FCMP++ key images, complete output tuples, and curve-tree successor.
@@ -515,10 +513,9 @@ impl VerifiedPrivacyEffectsV1 {
 /// activation, envelope inconsistency, wrong execution context, unsupported
 /// engine, non-canonical native wire value, or failed proof equation.
 ///
-/// Failure precedence is consensus-critical: compiled activation is checked
-/// first, governed and intrinsic envelope validity second, trusted execution
-/// context third, canonical byte charging fourth, and the selected native
-/// verifier last.
+/// Failure precedence is consensus-critical: compiled activation is checked first, governed and
+/// intrinsic envelope validity second, trusted execution context third, canonical byte charging
+/// fourth, and the selected native verifier last.
 pub(crate) fn verify_privacy_envelope_v1(
     envelope: &PrivacyProofEnvelopeV1,
     context: PrivacyVerificationContextV1<'_>,
@@ -533,10 +530,9 @@ pub(crate) fn verify_privacy_envelope_v1(
 /// Verify an X.509 release candidate through the production envelope path
 /// before governance availability is enabled.
 ///
-/// This entry point exists only in release-evidence builds. It derives the
-/// pinned candidate profile internally, applies the same exact activation
-/// binding comparison as consensus admission, and then joins the common
-/// verifier below. It cannot expose a compiled profile to governance.
+/// This entry point exists only in release-evidence builds. It derives the pinned candidate profile
+/// internally, applies the same exact activation binding comparison as consensus admission, and
+/// then joins the common verifier below. It cannot expose a compiled profile to governance.
 #[cfg(feature = "privacy-release-evidence")]
 pub(crate) fn verify_zk_x509_release_candidate_envelope_v1(
     envelope: &PrivacyProofEnvelopeV1,
@@ -1516,10 +1512,9 @@ fn verify_vega_existing_credential_v1(
 }
 /// Validate the exact current Vega issuer revision selected by a statement.
 ///
-/// This is the production trusted-state boundary shared by ledger admission
-/// and the non-shipping release-evidence harness. It deliberately performs no
-/// proof work: malformed, revoked, stale, or policy-substituted authoritative
-/// state must fail before the native verifier is invoked.
+/// This is the production trusted-state boundary shared by ledger admission and the non-shipping
+/// release-evidence harness. It deliberately performs no proof work: malformed, revoked, stale, or
+/// policy-substituted authoritative state must fail before the native verifier is invoked.
 pub(crate) fn validate_vega_authoritative_issuer_binding_v1(
     statement: &VegaExistingCredentialStatementV1,
     record: &PrivacyVegaIssuerRecordV1,
@@ -2047,8 +2042,7 @@ pub(crate) struct PrivacyFcmpStateFailureV1 {
 pub(crate) struct PrivacyFcmpVerificationFailureV1 {
     source: FcmpNativeErrorV1,
 }
-/// Stable trusted-state failure detected before private-IVM proof
-/// verification.
+/// Stable trusted-state failure detected before private-IVM proof verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PrivacyIvmPrivateNoteStateFailureCodeV1 {
     /// The submit path did not supply a trusted pool snapshot.
@@ -2098,8 +2092,7 @@ pub(crate) enum PrivacyIvmPrivateNoteNativeFailureSourceV1 {
 pub(crate) struct PrivacyIvmPrivateNoteVerificationFailureV1 {
     source: PrivacyIvmPrivateNoteNativeFailureSourceV1,
 }
-/// Stable trusted-state failure detected before PQ-MASP authorization and
-/// proof verification.
+/// Stable trusted-state failure detected before PQ-MASP authorization and proof verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PrivacyPqMaspStateFailureCodeV1 {
     /// The submit path did not supply a trusted pool snapshot.
@@ -2151,8 +2144,7 @@ pub(crate) enum PrivacyPqMaspNativeFailureSourceV1 {
 pub(crate) struct PrivacyPqMaspVerificationFailureV1 {
     source: PrivacyPqMaspNativeFailureSourceV1,
 }
-/// Stable trusted-state failure detected before or after native PGC proof
-/// verification.
+/// Stable trusted-state failure detected before or after native PGC proof verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PrivacyAnonymousPgcStateFailureCodeV1 {
     /// The submit path did not supply a trusted pool snapshot.
@@ -2243,54 +2235,6 @@ pub(crate) use tests::{
 pub(crate) use tests::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_test};
 #[cfg(test)]
 mod tests {
-    use std::{str::FromStr as _, sync::OnceLock};
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{
-        asset::AssetDefinitionId,
-        block::BlockHeader,
-        domain::DomainId,
-        name::Name,
-        privacy::{
-            BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
-            BootleLanternDisclosedAttributeV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
-            IrohaZkAmsProofV1, PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-            PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEncryptionKeyV1,
-            PrivacyEngineIdV1, PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1,
-            PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
-            PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyJindoFieldElementV1,
-            PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1,
-            PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-            PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcBootstrapProofDigestV1,
-            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-            PrivacyPqMaspPoolBootstrapV1, PrivacyProofManagedPoolBootstrapV1,
-            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
-            PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootPublicationV1,
-            PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
-            PrivacyStatementValidationError, PrivacyTransactionIntentDigestV1,
-            PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
-            PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaMdlDateV1,
-            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyX509CrlDerDigestV1,
-            PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1,
-            PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
-            PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
-            PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryIdV1, PrivacyZkAmsSeedPublicKeyV1,
-            PrivacyZkAmsSubjectCommitmentV1, PrivacyZkX509CrlRecordV1,
-            VeRangeTransparentRangeStatementV1, ZK_AMS_PHC_VERSION_V1,
-            ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZkAcePqAuthorizationStatementV1,
-            zk_ams_registry_record_digest_v1,
-        },
-        zk::derive_zk_ace_privacy_authorization_digest,
-    };
-    use iroha_zkp_halo2::vega::MAX_VEGA_PROOF_BYTES_V1;
-    use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
-    use mv::storage::Storage;
-    use p256::ecdsa::{
-        Signature as P256Signature, SigningKey as P256SigningKey,
-        signature::hazmat::PrehashSigner as _,
-    };
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-    use sha2::{Digest, Sha256};
     use super::*;
     use crate::{
         privacy_engines::{
@@ -2360,7 +2304,55 @@ mod tests {
             load_privacy_zk_x509_authoritative_state_v1, privacy_zk_x509_ca_namespace_v1,
         },
     };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        asset::AssetDefinitionId,
+        block::BlockHeader,
+        domain::DomainId,
+        name::Name,
+        privacy::{
+            BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
+            BootleLanternDisclosedAttributeV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
+            IrohaZkAmsProofV1, PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+            PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEncryptionKeyV1,
+            PrivacyEngineIdV1, PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1,
+            PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
+            PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyJindoFieldElementV1,
+            PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1,
+            PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+            PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcBootstrapProofDigestV1,
+            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+            PrivacyPqMaspPoolBootstrapV1, PrivacyProofManagedPoolBootstrapV1,
+            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
+            PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootPublicationV1,
+            PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
+            PrivacyStatementValidationError, PrivacyTransactionIntentDigestV1,
+            PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
+            PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaMdlDateV1,
+            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyX509CrlDerDigestV1,
+            PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1,
+            PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
+            PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+            PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryIdV1, PrivacyZkAmsSeedPublicKeyV1,
+            PrivacyZkAmsSubjectCommitmentV1, PrivacyZkX509CrlRecordV1,
+            VeRangeTransparentRangeStatementV1, ZK_AMS_PHC_VERSION_V1,
+            ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZkAcePqAuthorizationStatementV1,
+            zk_ams_registry_record_digest_v1,
+        },
+        zk::derive_zk_ace_privacy_authorization_digest,
+    };
+    use iroha_zkp_halo2::vega::MAX_VEGA_PROOF_BYTES_V1;
+    use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
+    use mv::storage::Storage;
+    use p256::ecdsa::{
+        Signature as P256Signature, SigningKey as P256SigningKey,
+        signature::hazmat::PrehashSigner as _,
+    };
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use sha2::{Digest, Sha256};
     use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
+    use std::{str::FromStr as _, sync::OnceLock};
     const TEST_CONSENSUS_LIMITS: PrivacyConsensusLimitsV1 =
         PrivacyConsensusLimitsV1::taira_default();
     fn network_id(seed: u8) -> NetworkId {

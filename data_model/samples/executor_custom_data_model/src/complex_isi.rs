@@ -6,7 +6,7 @@ pub use evaluate::*;
 pub use expression::*;
 pub use isi::*;
 mod isi {
-    use std::{borrow::ToOwned, boxed::Box, format, string::String, vec::Vec};
+    use crate::complex_isi::expression::EvaluatesTo;
     use iroha_data_model::{
         isi::{CustomInstruction, InstructionBox},
         prelude::Json,
@@ -16,7 +16,7 @@ mod isi {
         derive::{JsonDeserialize, JsonSerialize},
         json,
     };
-    use crate::complex_isi::expression::EvaluatesTo;
+    use std::{borrow::ToOwned, boxed::Box, format, string::String, vec::Vec};
     #[derive(Debug, IntoSchema)]
     pub enum CustomInstructionExpr {
         Core(CoreExpr),
@@ -149,14 +149,6 @@ mod isi {
 }
 mod expression {
     use core::marker::PhantomData;
-    use std::{
-        borrow::ToOwned,
-        boxed::Box,
-        format,
-        string::{String, ToString},
-        vec,
-        vec::Vec,
-    };
     use iroha_data_model::{
         asset::{AssetDefinitionId, AssetId},
         isi::InstructionBox,
@@ -166,6 +158,14 @@ mod expression {
     use norito::{
         derive::{JsonDeserialize, JsonSerialize},
         json,
+    };
+    use std::{
+        borrow::ToOwned,
+        boxed::Box,
+        format,
+        string::{String, ToString},
+        vec,
+        vec::Vec,
     };
     /// Struct for type checking and converting expression results.
     #[derive(Debug, TypeId)]
@@ -488,12 +488,12 @@ mod expression {
     }
 }
 mod evaluate {
-    use std::string::ToString;
-    use iroha_data_model::{ValidationFail, isi::error::InstructionExecutionError};
     use crate::complex_isi::{
         QuantityQuery,
         expression::{EvaluatesTo, Expression, Greater, Value},
     };
+    use iroha_data_model::{ValidationFail, isi::error::InstructionExecutionError};
+    use std::string::ToString;
     #[allow(clippy::result_large_err)]
     pub trait Evaluate {
         /// The resulting type of the expression.

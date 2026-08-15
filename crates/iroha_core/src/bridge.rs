@@ -1,5 +1,8 @@
 //! Helpers for bridge finality proofs built from commit certificates.
-use std::{collections::BTreeSet, fmt};
+use crate::{
+    state::{State as CoreState, StateReadOnly},
+    tx::AcceptedTransaction,
+};
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     NetworkId,
@@ -24,11 +27,8 @@ use iroha_sccp::{
     TairaSccpMessageProofV1,
 };
 use mv::storage::StorageReadOnly;
+use std::{collections::BTreeSet, fmt};
 use thiserror::Error;
-use crate::{
-    state::{State as CoreState, StateReadOnly},
-    tx::AcceptedTransaction,
-};
 /// A Sumeragi-v2 finality artifact whose structure, roster PoPs, and CommitQC
 /// cryptography have already been verified.
 ///
@@ -1785,7 +1785,8 @@ fn verify_structural_sccp_finality_proof_against_local_state(
 }
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, num::NonZeroU64};
+    use super::*;
+    use crate::tx::AcceptedTransaction;
     use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
         account::AccountId,
@@ -1801,8 +1802,7 @@ mod tests {
         },
         trigger::{TimeTriggerEntrypoint, TriggerId},
     };
-    use super::*;
-    use crate::tx::AcceptedTransaction;
+    use std::{borrow::Cow, num::NonZeroU64};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("bridge fixture key generation should succeed")
     }

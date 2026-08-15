@@ -33,9 +33,9 @@ impl<'a> SealedDirectRkgOneCandidateV1<'a> {
     pub(in crate::vega::zk_ams::mkhe) fn proof_bytes(&self) -> &[u8] {
         self.proof_owner.proof_bytes()
     }
-    /// The byte figures are logical payload lower bounds, not heap, RSS,
-    /// headroom, or certification: saves 42_074_112; candidate 26_308_918;
-    /// prospective retained-wrapper peak 128_093_990.
+    /// Named logical payload lower bounds only: not heap, RSS, or headroom
+    /// upper bounds and not certification; saves 42_074_112; compact candidate
+    /// 26_308_918; post-borrow retained-wrapper lower bound 128_022_422.
     #[expect(dead_code, reason = "private unconnected compaction precursor")]
     fn into_compacted_sealed_candidate_v1(self) -> impl Sized + 'a {
         CompactedSealedDirectRkgOneCandidateV1 {
@@ -45,6 +45,7 @@ impl<'a> SealedDirectRkgOneCandidateV1<'a> {
     }
 }
 /// Private construction corridor; deliberately unexported and uncalled.
+// TODO: Wire verifier/admission consumption and durable state reinsertion before any release gate.
 #[expect(
     dead_code,
     reason = "current precursor has no production caller or gate"

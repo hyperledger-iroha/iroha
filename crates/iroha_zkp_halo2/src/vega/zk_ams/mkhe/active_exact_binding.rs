@@ -99,10 +99,9 @@ pub(in crate::vega::zk_ams::mkhe) use direct_relation_wire_v1::{
     seal_direct_rkg_one_proof_owner_v1,
 };
 pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_creator_adapter_v1::{
-    CompletedDirectRkgOneCreatorV1, DirectRkgOneCreatorH0ReadyV1, DirectRkgOneCreatorH0ReplayV1,
-    DirectRkgOneCreatorH1ReadyV1, DirectRkgOneCreatorH1ReplayV1, FinalizedDirectRkgOneCapabilityV1,
-    PreparedDirectRkgOneCreatorPermitV1, prepare_direct_rkg_one_creator_h0_v1,
-    prepare_direct_rkg_one_statement_permit_v1,
+    CompletedDirectRkgOneCreatorV1, DirectRkgOneCreatorH0ReadyV1, DirectRkgOneCreatorH1ReadyV1,
+    FinalizedDirectRkgOneCapabilityV1, PreparedDirectRkgOneCreatorPermitV1,
+    prepare_direct_rkg_one_creator_h0_v1, prepare_direct_rkg_one_statement_permit_v1,
 };
 const RELEASE_RING_DEGREE_V1: usize = 131_072;
 const MAX_RELATION_WITNESSES_V1: usize = 6;

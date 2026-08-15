@@ -1,11 +1,11 @@
+use super::*;
+use crate::asset::id::AssetId;
 use core::num::NonZeroU16;
-use std::fmt::Display;
 use iroha_crypto::PublicKey;
 use iroha_primitives::json::Json;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
-use super::*;
-use crate::asset::id::AssetId;
+use std::fmt::Display;
 iroha_data_model_derive::model_single! {
     /// Generic instruction for setting a chain-wide config parameter.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Constructor)]
@@ -1524,9 +1524,9 @@ impl SetParameter {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::{codec::Encode as _, core::DecodeFromSlice};
-    use super::*;
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked transparent ISI fixture keypair");

@@ -1,8 +1,3 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::Duration,
-};
 use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr, bail};
 use hex::{decode as hex_decode, encode as hex_encode};
@@ -18,6 +13,11 @@ use soradns_resolver::{
         read_http_body_bounded,
     },
     rad::{compute_rad_digest, decode_rad_entries, validate_rad},
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
 };
 use tracing_subscriber::EnvFilter;
 #[derive(Debug, Parser)]

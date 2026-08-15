@@ -3,7 +3,8 @@
 //! These endpoints operate on the in-memory pin intent index populated during
 //! block application. Durable WSV plumbing can replace the backing store once
 //! available without changing the handler surface.
-use std::num::{NonZeroU64, NonZeroUsize};
+use super::commitments::{DaListSnapshot, list_snapshot_for_state};
+use crate::{Error, JsonBody, NoritoJson, SharedAppState};
 use axum::extract::State;
 use iroha_config::parameters::actual::Nexus;
 use iroha_core::{
@@ -20,8 +21,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::ManifestDigest,
 };
-use super::commitments::{DaListSnapshot, list_snapshot_for_state};
-use crate::{Error, JsonBody, NoritoJson, SharedAppState};
+use std::num::{NonZeroU64, NonZeroUsize};
 const ENDPOINT_DA_PIN_INTENTS: &str = "/v1/da/pin-intents";
 const ENDPOINT_DA_PIN_INTENTS_PROVE: &str = "/v1/da/pin-intents/prove";
 const ENDPOINT_DA_PIN_INTENTS_VERIFY: &str = "/v1/da/pin-intents/verify";
@@ -417,10 +417,7 @@ fn verify_against_kura_block(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
-    use std::{
-        num::{NonZeroU32, NonZeroU64},
-        sync::Arc,
-    };
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         NetworkId,
@@ -437,7 +434,10 @@ mod tests {
             LaneConfig as ModelLaneConfig, LaneId,
         },
     };
-    use super::*;
+    use std::{
+        num::{NonZeroU32, NonZeroU64},
+        sync::Arc,
+    };
     fn sample_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
         let key_pair = KeyPair::try_from_seed(vec![0xD5; 32], Algorithm::Ed25519)
             .expect("valid deterministic DA query key");

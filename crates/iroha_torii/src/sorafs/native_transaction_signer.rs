@@ -6,13 +6,13 @@
 //! revalidates it immediately before and after every signing operation. The
 //! facade also rejects an input owned by another authority and verifies that
 //! the provider returned the exact payload, authority, and a valid signature.
-use std::sync::Arc;
 use iroha_config::parameters::validate_production_runtime_handle;
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
     account::AccountId,
     transaction::{SignedTransaction, TransactionPayload},
 };
+use std::sync::Arc;
 /// One isolated native SoraFS transaction-signing role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
@@ -607,16 +607,16 @@ define_qualified_signer!(
 );
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use super::*;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
-    use super::*;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
     const EXPECTED_QUALIFICATION: SorafsNativeTransactionSignerQualificationV1 =
         SorafsNativeTransactionSignerQualificationV1::new(7, [0xA7; 32]);
     enum TestSignOutput {

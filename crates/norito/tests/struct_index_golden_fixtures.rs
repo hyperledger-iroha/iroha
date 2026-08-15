@@ -1,7 +1,7 @@
 //! Validate struct index against on-disk golden fixtures (.json + .tape).
 #![cfg(feature = "json")]
-use std::{fs, path::Path};
 use norito::json::build_struct_index;
+use std::{fs, path::Path};
 fn load_tape(path: &Path) -> Vec<u32> {
     let s = fs::read_to_string(path).expect("read tape");
     s.lines()

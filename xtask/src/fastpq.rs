@@ -1,10 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use crate::workspace_root;
 use blake3::hash as blake3_hash;
 use eyre::{Context, Result, bail, ensure, eyre};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
@@ -15,8 +9,14 @@ use norito::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339, macros::format_description};
-use crate::workspace_root;
 #[derive(Debug, Clone)]
 pub struct BenchInput {
     pub label: String,
@@ -1313,9 +1313,9 @@ fn default_wrapper_path() -> PathBuf {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::path::Path;
     use tempfile::TempDir;
-    use super::*;
     fn sample_bundle(rows: u64) -> Value {
         norito::json!({
             "metadata": {

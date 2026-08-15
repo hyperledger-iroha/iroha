@@ -2,20 +2,10 @@
 #![allow(clippy::doc_markdown)]
 /// Low-cardinality metrics for the Musubi V1 package ecosystem.
 pub mod musubi;
+use crate::privacy::PrivacyDrainSnapshot;
 use core::{
     convert::{TryFrom, TryInto},
     ops::Deref,
-};
-#[cfg(feature = "otel-exporter")]
-use std::collections::HashMap;
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    sync::{
-        Arc, Mutex, OnceLock, RwLock,
-        atomic::{AtomicBool, AtomicU64 as StdAtomicU64, Ordering},
-    },
-    time::{Duration, SystemTime, UNIX_EPOCH},
-    vec::Vec,
 };
 use iroha_config::{
     kura::FsyncMode,
@@ -50,7 +40,17 @@ use prometheus::{
     core::{AtomicU64, GenericGauge, GenericGaugeVec},
 };
 pub use prometheus::{GaugeVec, core::Collector};
-use crate::privacy::PrivacyDrainSnapshot;
+#[cfg(feature = "otel-exporter")]
+use std::collections::HashMap;
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    sync::{
+        Arc, Mutex, OnceLock, RwLock,
+        atomic::{AtomicBool, AtomicU64 as StdAtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+    vec::Vec,
+};
 /// Type for reporting amount of dropped messages for sumeragi
 pub type DroppedMessagesCounter = IntCounter;
 /// Type for reporting view change index of current round
@@ -2283,8 +2283,8 @@ pub fn global_sorafs_node_otel() -> Arc<SorafsNodeOtel> {
 }
 #[cfg(test)]
 mod tests {
-    use norito::{NoritoDeserialize, from_bytes, to_bytes};
     use super::*;
+    use norito::{NoritoDeserialize, from_bytes, to_bytes};
     fn find_metric_line<'a>(dump: &'a str, prefix: &str) -> &'a str {
         dump.lines()
             .find(|line| line.starts_with(prefix))
@@ -8082,8 +8082,8 @@ impl MetricSpecCursor {
 }
 #[cfg(test)]
 mod metric_catalog_tests {
-    use std::collections::BTreeSet;
     use super::{METRIC_CATALOG_V1, METRIC_CATALOG_V1_HEADER, METRIC_CATALOG_V1_ROWS, Metrics};
+    use std::collections::BTreeSet;
     #[test]
     fn v1_catalog_is_complete_and_unique() {
         let mut lines = METRIC_CATALOG_V1.lines();

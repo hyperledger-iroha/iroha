@@ -336,6 +336,8 @@ impl std::error::Error for RuntimeConfigError {}
 pub(crate) enum RuntimeClockError {
     /// The one-shot post-startup activation already occurred.
     AlreadyArmed,
+    /// An interrupted canonical Kura tip must remain permanently unarmed.
+    PendingKuraRecovery,
     /// The initial self-leader proposal lifecycle could not be reserved before
     /// the live timeout clock was armed.
     ProducerReservation,
@@ -346,6 +348,8 @@ impl fmt::Display for RuntimeClockError {
             Self::AlreadyArmed => formatter.write_str(
                 "Sumeragi v2 live pacemaker clocks may be armed only once after startup",
             ),
+            Self::PendingKuraRecovery => formatter
+                .write_str("interrupted Kura-tip recovery cannot arm live pacemaker clocks"),
             Self::ProducerReservation => formatter.write_str(
                 "Sumeragi v2 could not reserve the initial view producer before arming clocks",
             ),
@@ -1482,59 +1486,35 @@ impl ExactServePredecessorCompletionEvidence {
         self.lifecycle_ordinal > 0 && self.lifecycle_ordinal_complement == !self.lifecycle_ordinal
     }
 }
-/// Process-local evidence that an exact Serve target acquired a newly
-/// runnable, strictly older runtime prefix after previously observing none.
+
+/// Direct observation of the runnable prefix before one selected Serve target.
 ///
-/// The witness is neither serialized nor exposed outside the consensus
-/// implementation. One continuous older prefix retains one witness even when
-/// its minimum owner changes; only an observed `no older -> older` transition
-/// for the same target increments `episode`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ExactServePredecessorEpisodeWitness {
-    serve_lifecycle_ordinal: u128,
-    predecessor_lifecycle_ordinal: u128,
-    episode: u128,
+/// The first observation authorizes the worker's one initial checked ingress
+/// pass even when runtime has no predecessor yet. Later observations reopen
+/// that bounded admission only while an exact older owner is runnable. No
+/// episode counter or cross-component witness is retained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExactServePredecessorObservation {
+    first_target_observation: bool,
+    runnable_predecessor: bool,
 }
-impl ExactServePredecessorEpisodeWitness {
-    fn try_new(
-        serve_lifecycle_ordinal: u128,
-        predecessor_lifecycle_ordinal: u128,
-        episode: u128,
-    ) -> Option<Self> {
-        let witness = Self {
-            serve_lifecycle_ordinal,
-            predecessor_lifecycle_ordinal,
-            episode,
-        };
-        witness.validate_exact().then_some(witness)
+
+impl ExactServePredecessorObservation {
+    const fn new(first_target_observation: bool, runnable_predecessor: bool) -> Self {
+        Self {
+            first_target_observation,
+            runnable_predecessor,
+        }
     }
-    #[cfg(test)]
-    pub(crate) fn for_test(
-        serve_lifecycle_ordinal: u128,
-        predecessor_lifecycle_ordinal: u128,
-        episode: u128,
-    ) -> Self {
-        Self::try_new(
-            serve_lifecycle_ordinal,
-            predecessor_lifecycle_ordinal,
-            episode,
-        )
-        .expect("exact Serve predecessor episode test witness must be valid")
+
+    /// Return whether the exact worker ticket should open one bounded older-I/O admission.
+    pub(crate) const fn should_open_predecessor_admission(self) -> bool {
+        self.first_target_observation || self.runnable_predecessor
     }
-    pub(crate) const fn serve_lifecycle_ordinal(self) -> u128 {
-        self.serve_lifecycle_ordinal
-    }
-    pub(crate) const fn predecessor_lifecycle_ordinal(self) -> u128 {
-        self.predecessor_lifecycle_ordinal
-    }
-    pub(crate) const fn episode(self) -> u128 {
-        self.episode
-    }
-    pub(crate) const fn validate_exact(self) -> bool {
-        self.serve_lifecycle_ordinal > 0
-            && self.predecessor_lifecycle_ordinal > 0
-            && self.predecessor_lifecycle_ordinal < self.serve_lifecycle_ordinal
-            && self.episode > 0
+
+    /// Return whether runtime currently retains a runnable strictly older owner.
+    pub(crate) const fn has_runnable_predecessor(self) -> bool {
+        self.runnable_predecessor
     }
 }
 impl RuntimeLifecycleOwner {
@@ -12193,26 +12173,17 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     schedule: ScheduleState,
     last_scheduler_ownership: Option<RuntimeSchedulerOwnershipEvidence>,
     /// Exact external Serve/response target whose older runnable prefix is
-    /// receiving one bounded opportunity in the current runner episode.
+    /// receiving one bounded opportunity in the current runner turn.
     exact_serve_target_ordinal: Option<u128>,
-    /// An older FIFO owner hit retryable adapter pressure during that episode.
+    /// An older FIFO owner hit retryable adapter pressure during that turn.
     /// The target must then proceed; retry cannot become an unbounded barrier.
     exact_serve_predecessor_retry_attempted: bool,
     /// Retained certified-response target used only by the legacy boolean
-    /// predecessor probe. It must never reset the selected-Serve witness state.
+    /// predecessor probe. It must never reset selected-Serve observation state.
     retained_response_predecessor_target_ordinal: Option<u128>,
     /// Whether one older FIFO owner already received its bounded attempt for
     /// the retained-response target.
     retained_response_predecessor_retry_attempted: bool,
-    /// Whether the last exact-target observation found a physically retained
-    /// strictly older runtime prefix. Retry-unadmitted suppression deliberately
-    /// leaves this set while the restored owner remains present, so repeated
-    /// polls cannot mint another producer episode.
-    exact_serve_predecessor_physically_present: bool,
-    /// Monotone process-local predecessor episode for the current exact target.
-    exact_serve_predecessor_episode: u128,
-    /// Stable witness for the current continuous older prefix.
-    exact_serve_predecessor_witness: Option<ExactServePredecessorEpisodeWitness>,
     fail_closed: bool,
     fail_closed_reason: Option<String>,
 }
@@ -12307,9 +12278,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             exact_serve_predecessor_retry_attempted: false,
             retained_response_predecessor_target_ordinal: None,
             retained_response_predecessor_retry_attempted: false,
-            exact_serve_predecessor_physically_present: false,
-            exact_serve_predecessor_episode: 0,
-            exact_serve_predecessor_witness: None,
             fail_closed: false,
             fail_closed_reason: None,
         };
@@ -14304,21 +14272,21 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(false)
     }
-    /// Freeze every due clock and return the current predecessor episode for
+
+    /// Freeze every due clock and directly observe the runnable prefix before
     /// one exact Serve ingress ticket from the shared ordinal source.
     ///
     /// The caller publishes executor-retained owners immediately before this
-    /// query. A witness authorizes one bounded producer episode; it does not
-    /// authorize a loop. The witness changes only after this actor observes no
-    /// strictly older owner and subsequently observes one for the same target.
-    /// A runtime owner equal to the external ticket is a source-uniqueness
-    /// violation and latches fail-closed.
-    pub(crate) fn exact_serve_predecessor_episode_witness(
+    /// query. The result authorizes at most one worker admission in the current
+    /// outer turn; it is not a persistent episode owner. A runtime owner equal
+    /// to the external ticket is a source-uniqueness violation and latches
+    /// fail-closed.
+    pub(crate) fn exact_serve_predecessor_observation(
         &mut self,
         now: Instant,
         serve_lifecycle_ordinal: u128,
         completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
-    ) -> Result<Option<ExactServePredecessorEpisodeWitness>, String> {
+    ) -> Result<ExactServePredecessorObservation, String> {
         if self.fail_closed {
             return Err("Sumeragi v2 runtime is fail-closed".to_owned());
         }
@@ -14360,12 +14328,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             );
             return Err("Sumeragi v2 exact Serve completion evidence was invalid".to_owned());
         }
-        if self.exact_serve_target_ordinal != Some(serve_lifecycle_ordinal) {
+        let first_target_observation =
+            self.exact_serve_target_ordinal != Some(serve_lifecycle_ordinal);
+        if first_target_observation {
             self.exact_serve_target_ordinal = Some(serve_lifecycle_ordinal);
             self.exact_serve_predecessor_retry_attempted = false;
-            self.exact_serve_predecessor_physically_present = false;
-            self.exact_serve_predecessor_episode = 0;
-            self.exact_serve_predecessor_witness = None;
         }
         let minimum = match self.minimum_runnable_lifecycle_ordinal(now, completion_evidence) {
             Ok(minimum) => minimum,
@@ -14378,55 +14345,20 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.exact_serve_predecessor_retry_attempted {
             // The exact older owner received its bounded attempt and proved
             // that adapter capacity, not logical order, prevents admission.
-            // Its restored FIFO occurrence remains physically present. Keep
-            // that fact latched while it remains runnable: clearing it here
-            // would turn every poll into a fresh predecessor episode and put
-            // the exact target behind an unbounded retry loop.
-            if predecessor.is_some() {
-                self.exact_serve_predecessor_physically_present = true;
-            } else {
+            // Its restored FIFO occurrence remains runnable. Suppress it while
+            // present so every poll cannot become another predecessor turn.
+            if predecessor.is_none() {
                 self.exact_serve_predecessor_retry_attempted = false;
-                self.exact_serve_predecessor_physically_present = false;
-                self.exact_serve_predecessor_witness = None;
             }
-            return Ok(None);
+            return Ok(ExactServePredecessorObservation::new(
+                first_target_observation,
+                false,
+            ));
         }
-        let Some(predecessor_lifecycle_ordinal) = predecessor else {
-            self.exact_serve_predecessor_physically_present = false;
-            self.exact_serve_predecessor_witness = None;
-            return Ok(None);
-        };
-        if !self.exact_serve_predecessor_physically_present {
-            let Some(episode) = self.exact_serve_predecessor_episode.checked_add(1) else {
-                self.latch_fail_closed("exact Serve predecessor episode ordinal overflowed");
-                return Err("Sumeragi v2 exact Serve predecessor episode overflowed".to_owned());
-            };
-            let Some(witness) = ExactServePredecessorEpisodeWitness::try_new(
-                serve_lifecycle_ordinal,
-                predecessor_lifecycle_ordinal,
-                episode,
-            ) else {
-                self.latch_fail_closed("exact Serve predecessor episode witness was invalid");
-                return Err(
-                    "Sumeragi v2 exact Serve predecessor episode witness was invalid".to_owned(),
-                );
-            };
-            self.exact_serve_predecessor_episode = episode;
-            self.exact_serve_predecessor_witness = Some(witness);
-            self.exact_serve_predecessor_physically_present = true;
-        }
-        let Some(witness) = self.exact_serve_predecessor_witness else {
-            self.latch_fail_closed("exact Serve predecessor episode lost its witness");
-            return Err("Sumeragi v2 exact Serve predecessor episode lost its witness".to_owned());
-        };
-        if !witness.validate_exact() || witness.serve_lifecycle_ordinal() != serve_lifecycle_ordinal
-        {
-            self.latch_fail_closed("exact Serve predecessor episode changed target identity");
-            return Err(
-                "Sumeragi v2 exact Serve predecessor episode changed target identity".to_owned(),
-            );
-        }
-        Ok(Some(witness))
+        Ok(ExactServePredecessorObservation::new(
+            first_target_observation,
+            predecessor.is_some(),
+        ))
     }
     /// Return whether one runnable owner belongs to the currently witnessed
     /// strictly older prefix of an exact Serve ticket.
@@ -14436,11 +14368,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         now: Instant,
         serve_lifecycle_ordinal: u128,
     ) -> Result<bool, String> {
-        self.exact_serve_predecessor_episode_witness(now, serve_lifecycle_ordinal, None)
-            .map(|witness| witness.is_some())
+        self.exact_serve_predecessor_observation(now, serve_lifecycle_ordinal, None)
+            .map(ExactServePredecessorObservation::has_runnable_predecessor)
     }
     /// Return whether one runnable owner strictly predates a retained
-    /// certified-response target without mutating selected-Serve witness state.
+    /// certified-response target without mutating selected-Serve observation state.
     pub(crate) fn older_lifecycle_predates_retained_response(
         &mut self,
         now: Instant,
@@ -16851,6 +16783,17 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         self.driver.successor_activation_status()
     }
+
+    /// Snapshot an already-decided interrupted tip without arming successor clocks.
+    pub(crate) fn pending_kura_activation_status_snapshot(
+        &mut self,
+    ) -> Result<wire::SumeragiV2Status, AdapterError> {
+        if self.clocks_armed {
+            return Err(AdapterError::PendingKuraActivationNotReady);
+        }
+        self.driver.pending_kura_activation_status()
+    }
+
     fn body_pipeline_completion_is_owned(
         &mut self,
         tag: EventTag,

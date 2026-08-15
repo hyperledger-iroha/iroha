@@ -1,12 +1,4 @@
 //! Crash-safe time-floor persistence for the private Musubi publication service.
-use std::{
-    fmt,
-    fs::{self, File, OpenOptions},
-    io::{self, Read as _, Write as _},
-    path::{Path, PathBuf},
-};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 #[cfg(unix)]
 use super::publication_filesystem_owner_probe;
 use super::{
@@ -14,7 +6,17 @@ use super::{
     MusubiPublicationSystemClockV1,
 };
 #[cfg(unix)]
-use crate::musubi_archive_fetch::{secure_directory_open_flags, secure_no_follow_nonblocking_flags};
+use crate::musubi_archive_fetch::{
+    secure_directory_open_flags, secure_no_follow_nonblocking_flags,
+};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::{
+    fmt,
+    fs::{self, File, OpenOptions},
+    io::{self, Read as _, Write as _},
+    path::{Path, PathBuf},
+};
 const CLOCK_STATE_FILE: &str = "clock-floor-v1.norito";
 const CLOCK_LOCK_FILE: &str = "clock-floor-v1.lock";
 const CLOCK_NEXT_FILE: &str = "clock-floor-v1.next";
@@ -1003,6 +1005,7 @@ fn metadata_owner(_metadata: &fs::Metadata) -> u32 {
 }
 #[cfg(all(test, unix))]
 mod tests {
+    use super::*;
     use std::{
         os::unix::fs::{PermissionsExt as _, symlink},
         sync::{
@@ -1010,7 +1013,6 @@ mod tests {
             atomic::{AtomicU64, Ordering},
         },
     };
-    use super::*;
     #[derive(Clone)]
     struct TestClock {
         current: Arc<AtomicU64>,

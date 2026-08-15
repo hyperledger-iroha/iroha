@@ -5,12 +5,12 @@
 //! authenticates the canonical proof digest.  PoTR keeps the exact canonical
 //! dual-signed receipt because that receipt is the exactly-once identity used by
 //! latency repair and downstream audit consumers.
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     account::AccountId,
     sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// First-release proof-outcome projection version.
 pub const PROOF_OUTCOME_RECORD_VERSION_V1: u16 = 1;
 /// Hard item ceiling for one committed proof-outcome event query.

@@ -739,27 +739,86 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 ),
             },
             {
-                "role": "runner lifecycle process-generation claim handoff",
+                "role": "runner lifecycle process-generation branch handoff",
                 "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
                 "impl": None,
                 "symbol": "run_inner",
                 "required_tokens": (
                     "claim_runner_lifecycle_process_generation",
-                    "reconcile_autonomous_lifecycle_startup",
-                    "_lifecycle_process_generation.as_ref",
-                    "V2LaneWorkAdapter::new_with_output_guard_and_transport",
-                    "_lifecycle_process_generation.clone",
-                    "let context = verified_context.context().clone",
+                    "let reservation_reconciliation_pending = true",
+                    "match pending_kura_apply",
+                    "lifecycle_run_inner::run_non_pending_lifecycle_loop",
+                    "lifecycle_pending_kura::run_pending_kura_lifecycle_height",
+                    "_lifecycle_process_generation",
+                    "reservation_reconciliation_pending",
                 ),
                 "ordered_tokens": (
                     "let _initial_local_validator = local_validator_index(verified_context.context(), &local_peer, config.role)?",
                     "let _lifecycle_process_generation = claim_runner_lifecycle_process_generation(",
                     "config.role, kura.as_ref(), verified_context.context(), &local_peer,",
+                    "let reservation_reconciliation_pending = true",
+                    "match pending_kura_apply",
+                    "None => lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+                    "Some(pending) => lifecycle_pending_kura::run_pending_kura_lifecycle_height(",
+                ),
+            },
+            {
+                "role": "ordinary lifecycle process-generation startup propagation",
+                "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+                "impl": None,
+                "symbol": "run_non_pending_lifecycle_loop",
+                "required_tokens": (
+                    "let context = verified_context.context().clone",
+                    "reconcile_autonomous_lifecycle_startup",
+                    "lifecycle_process_generation.as_ref",
+                    "V2LaneWorkAdapter::new_with_output_guard_and_transport",
+                    "lifecycle_process_generation.clone",
+                ),
+                "ordered_tokens": (
                     "let context = verified_context.context().clone()",
                     "reconcile_autonomous_lifecycle_startup(",
-                    "_lifecycle_process_generation.as_ref(),",
+                    "lifecycle_process_generation.as_ref(),",
                     "V2LaneWorkAdapter::new_with_output_guard_and_transport(",
-                    "_lifecycle_process_generation.clone(),",
+                    "lifecycle_process_generation.clone(),",
+                ),
+            },
+            {
+                "role": "pending Kura lifecycle reconciliation propagation",
+                "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+                "impl": None,
+                "symbol": "reconcile_pending_lane_startup",
+                "required_tokens": (
+                    "reconcile_autonomous_lifecycle_startup",
+                    "lifecycle_process_generation",
+                    "plan_lane_reservation_ownership",
+                    "Some(lifecycle)",
+                ),
+                "ordered_tokens": (
+                    "let deferred_terminal_recovery = reconcile_lifecycle_terminal_outcomes_before_queue_planning(",
+                    "let planning = plan_lane_reservation_ownership(",
+                    "let lifecycle = reconcile_autonomous_lifecycle_startup(",
+                    "lifecycle_process_generation,",
+                    "Some(lifecycle),",
+                ),
+            },
+            {
+                "role": "pending Kura lifecycle process-generation lane handoff",
+                "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+                "impl": None,
+                "symbol": "run_pending_kura_lifecycle_height",
+                "required_tokens": (
+                    "reconcile_pending_lane_startup",
+                    "lifecycle_process_generation.as_ref",
+                    "pending.prepare_lane_recovery",
+                    "V2LaneWorkAdapter::new_with_output_guard_and_transport",
+                    "lifecycle_process_generation.clone",
+                ),
+                "ordered_tokens": (
+                    "let (pending, control) = reconcile_pending_lane_startup(",
+                    "lifecycle_process_generation.as_ref(),",
+                    "let mut prepared = pending.prepare_lane_recovery(",
+                    "V2LaneWorkAdapter::new_with_output_guard_and_transport(",
+                    "lifecycle_process_generation.clone(),",
                 ),
             },
             {
@@ -2843,9 +2902,9 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         ),
     },
     {
-        "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
         "impl": None,
-        "symbol": "run_inner",
+        "symbol": "run_non_pending_lifecycle_loop",
         "required_tokens": (
             "reservation_reconciliation_pending",
             "reconcile_lifecycle_terminal_outcomes_before_queue_planning",
@@ -2869,11 +2928,67 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "let planner_evidence = pre_lifecycle_plan.startup_snapshot_recovery_evidence()?",
             "let lifecycle = reconcile_autonomous_lifecycle_startup(",
             "planner_evidence, deferred_terminal_recovery,",
-            "let replanned = plan_lane_reservation_ownership(state.as_ref(), queue.as_ref(), kura.as_ref(), &verified_context, Some(lifecycle),)?",
+            "plan_lane_reservation_ownership(state.as_ref(), queue.as_ref(), kura.as_ref(), &verified_context, Some(lifecycle),)?",
             "apply_lane_reservation_reconciliation_plan(",
             "let mut lane_work = construct_after_pending_tip_application_recovery(",
             "lane_work.install_lane_drain_queue(Arc::clone(&queue))",
             "lane_work.activate_after_lane_drain_queue_install(&queue)",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "impl": None,
+        "symbol": "reconcile_pending_lane_startup",
+        "required_tokens": (
+            "reconcile_lifecycle_terminal_outcomes_before_queue_planning",
+            "plan_lane_reservation_ownership",
+            "LaneReservationReconciliationPlanning::Ready(pre_lifecycle_plan)",
+            "pre_lifecycle_plan.startup_snapshot_recovery_evidence",
+            "reconcile_autonomous_lifecycle_startup",
+            "deferred_terminal_recovery",
+            "Some(lifecycle)",
+            "apply_lane_reservation_reconciliation_plan",
+        ),
+        "ordered_tokens": (
+            "let deferred_terminal_recovery = reconcile_lifecycle_terminal_outcomes_before_queue_planning(",
+            "let planning = plan_lane_reservation_ownership(",
+            "LaneReservationReconciliationPlanning::Ready(pre_lifecycle_plan) =>",
+            "let planner_evidence = pre_lifecycle_plan.startup_snapshot_recovery_evidence()?",
+            "let lifecycle = reconcile_autonomous_lifecycle_startup(",
+            "deferred_terminal_recovery,",
+            "plan_lane_reservation_ownership(state.as_ref(), queue.as_ref(), kura.as_ref(), verified_context, Some(lifecycle),)?",
+            "apply_lane_reservation_reconciliation_plan(",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "impl": None,
+        "symbol": "run_pending_kura_lifecycle_height",
+        "required_tokens": (
+            "reconcile_pending_lane_startup",
+            "pending.prepare_lane_recovery",
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport",
+        ),
+        "ordered_tokens": (
+            "let (pending, control) = reconcile_pending_lane_startup(",
+            "let mut prepared = pending.prepare_lane_recovery(",
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport(",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+        "impl": "PendingKuraProductionLifecycleV1",
+        "symbol": "prepare_lane_recovery",
+        "required_tokens": (
+            "lane_work.install_lane_drain_queue",
+            "lane_work.activate_after_lane_drain_queue_install",
+            "matches_lifecycle_lane_work",
+        ),
+        "ordered_tokens": (
+            "if !services.matches_lifecycle_lane_work(&lane_work)",
+            "lane_work.install_lane_drain_queue(Arc::clone(&queue))?",
+            "lane_work.activate_after_lane_drain_queue_install(&queue)?",
+            "Ok(lane_work)",
         ),
     },
     {
@@ -3568,14 +3683,17 @@ def _production_trace_extraction_source_snapshot(
                     path=core_relative, kind="fn", symbol=symbol, item=item
                 )
             )
-    try:
-        core_source = _bounded_regular_file_bytes(
-            root_dir / core_relative,
-            label="production first-release refinement kernel",
-            maximum_bytes=PRODUCTION_TRACE_EXTRACTION_COMPONENT_MAX_BYTES,
-        ).decode("utf-8")
-    except (UnicodeDecodeError, ValueError) as error:
-        errors.append(str(error))
+    _core_path, core_source = _read_reviewed_rust_source(
+        root_dir,
+        core_relative,
+        errors,
+        "production first-release refinement kernel",
+    )
+    if len(core_source.encode("utf-8")) > PRODUCTION_TRACE_EXTRACTION_COMPONENT_MAX_BYTES:
+        errors.append(
+            "production first-release refinement kernel exceeds the bounded "
+            "trace-extraction component limit"
+        )
         core_source = ""
     transition_macros = rust_macro_items(
         core_source, "production_in_flight_first_release_transition_body"
@@ -3896,7 +4014,7 @@ def _production_trace_extraction_source_snapshot(
             "action: projection.action",
             "actor: projection.actor",
             "target: projection.target",
-            "before_state_digest: production_in_flight_first_release_state_digest_v1(projection.before,)",
+            "before_state_digest: production_in_flight_first_release_state_digest_v1(projection.before)",
             "after_state_digest: production_in_flight_first_release_state_digest_v1(projection.after)",
             "source_identity: PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256",
         ),
@@ -4829,6 +4947,9 @@ def build_production_trace_extraction_evidence(
     workspace_manifest = verus_evidence.get("source_manifest_sha256")
     if not _nonempty_string(workspace_manifest):
         raise ValueError("Verus evidence lacks its workspace source manifest")
+    tlaps_ledger_sha256 = tlaps_evidence.get("ledger_sha256")
+    if not _nonempty_string(tlaps_ledger_sha256):
+        raise ValueError("TLAPS evidence lacks its exact proof-ledger digest")
     component_evidence = {
         "tlaps_sha256": _canonical_json_sha256(tlaps_evidence),
         "verus_sha256": _canonical_json_sha256(verus_evidence),
@@ -4845,9 +4966,7 @@ def build_production_trace_extraction_evidence(
                 "cross-tool evidence does not link the exact formal and workspace "
                 "manifests"
             )
-        if cross_tool_evidence.get("ledger_sha256") != _canonical_json_sha256(
-            ledger
-        ):
+        if cross_tool_evidence.get("ledger_sha256") != tlaps_ledger_sha256:
             raise ValueError(
                 "cross-tool evidence does not link the exact proof ledger"
             )
@@ -4855,7 +4974,6 @@ def build_production_trace_extraction_evidence(
             raise ValueError(
                 "cross-tool evidence does not link the exact backend evidence"
             )
-
     source_snapshot = _production_trace_extraction_source_snapshot(
         root_dir=root_dir, formal_dir=formal_dir
     )

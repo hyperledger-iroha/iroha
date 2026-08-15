@@ -3,12 +3,12 @@
 //! For each event in [`super::events`], there's a corresponding filter type in this module. It can filter the events by origin id and event type.
 //!
 //! Event types are filtered with an `EventSet` type, allowing to filter for multiple event types at once.
-use std::fmt::Debug;
+pub use self::model::*;
+use super::*;
 pub use bridge_filters_model::BridgeEventFilter;
 use getset::Getters;
 use iroha_data_model_derive::model;
-pub use self::model::*;
-use super::*;
+use std::fmt::Debug;
 #[model]
 mod model {
     use super::*;
@@ -1593,10 +1593,10 @@ pub mod prelude {
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod tests {
-    use iroha_crypto::{Hash, KeyPair};
-    use iroha_primitives::numeric::Quantity;
     use super::*;
     use crate::nexus::UniversalAccountId;
+    use iroha_crypto::{Hash, KeyPair};
+    use iroha_primitives::numeric::Quantity;
     fn checked_random_account_id() -> AccountId {
         AccountId::new(
             KeyPair::try_random()
@@ -2130,10 +2130,10 @@ mod tests {
 }
 #[allow(dead_code)]
 mod bridge_filters_model {
+    use crate::events::data::events::HasOrigin;
     use iroha_data_model_derive::model;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-    use crate::events::data::events::HasOrigin;
     #[model]
     mod model {
         use super::*;

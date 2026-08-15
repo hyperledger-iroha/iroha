@@ -1,18 +1,29 @@
 //! Miscellaneous config-reading tests for `iroha_config_base`.
 #![allow(clippy::needless_raw_string_hashes)]
-use std::{backtrace::Backtrace, panic::Location, path::PathBuf};
+use std::{
+    backtrace::Backtrace,
+    fs,
+    panic::Location,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
 use error_stack::{Report, fmt::ColorMode};
 use expect_test::expect;
-use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
+use iroha_config_base::{
+    env::MockEnv,
+    read::{ConfigReader, MAX_TOML_EXTENDS_DEPTH, MAX_TOML_EXTENDS_SOURCES},
+    toml::TomlSource,
+};
 use toml::toml;
 /// Sample configuration types used by tests to validate the reader.
 pub mod sample_config {
-    use std::{net::SocketAddr, path::PathBuf};
     use iroha_config_base::{
         WithOrigin,
         read::{ConfigReader, FinalWrap, ReadConfig},
     };
     use norito::json::{self, JsonDeserialize, JsonSerialize};
+    use std::{net::SocketAddr, path::PathBuf};
     /// Root configuration container aggregating all subsections.
     #[derive(Debug)]
     pub struct Root {
@@ -209,6 +220,37 @@ impl ExpectExt for expect_test::Expect {
         self.assert_eq(&format_report(report));
     }
 }
+struct TestDirectory {
+    path: PathBuf,
+}
+
+impl TestDirectory {
+    fn new(label: &str) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "iroha_config_base_{label}_{}_{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).expect("create temporary configuration directory");
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn write(&self, name: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
+        fs::write(self.path.join(name), contents).expect("write temporary configuration file");
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
 #[test]
 fn error_when_no_file() {
     let report = ConfigReader::new()
@@ -281,6 +323,138 @@ fn extends_chain_applies_in_order() {
     assert_eq!(chain.unwrap(), "middle");
     fs::remove_dir_all(&dir).unwrap();
 }
+#[test]
+fn extends_self_cycle_is_rejected() {
+    let directory = TestDirectory::new("self_cycle");
+    fs::create_dir(directory.path().join("nested"))
+        .expect("create alternate spelling for cycle target");
+    directory.write("self.toml", "extends = \"nested/../self.toml\"\n");
+
+    let report = ConfigReader::new()
+        .read_toml_with_extends(directory.path().join("self.toml"))
+        .expect_err("a self-referential extends chain must fail");
+    let rendered = format_report(&report);
+
+    assert!(rendered.contains("Failed to extend configurations"));
+    assert!(rendered.contains("configuration `extends` cycle detected"));
+    assert!(rendered.contains("self.toml"));
+}
+
+#[test]
+fn extends_indirect_cycle_is_rejected() {
+    let directory = TestDirectory::new("indirect_cycle");
+    directory.write("first.toml", "extends = \"second.toml\"\n");
+    directory.write("second.toml", "extends = \"first.toml\"\n");
+
+    let report = ConfigReader::new()
+        .read_toml_with_extends(directory.path().join("first.toml"))
+        .expect_err("an indirect extends cycle must fail");
+    let rendered = format_report(&report);
+
+    assert!(rendered.contains("Failed to extend configurations"));
+    assert!(rendered.contains("configuration `extends` cycle detected"));
+    assert!(rendered.contains("first.toml"));
+}
+
+#[test]
+fn extends_depth_limit_is_enforced() {
+    let maximum_depth = usize::from(MAX_TOML_EXTENDS_DEPTH);
+    let over_limit_depth = maximum_depth + 1;
+
+    let directory = TestDirectory::new("depth_limit");
+    for depth in 0..=over_limit_depth {
+        let contents = if depth == over_limit_depth {
+            String::new()
+        } else {
+            format!("extends = \"{}.toml\"\n", depth + 1)
+        };
+        directory.write(format!("{depth}.toml"), contents);
+    }
+
+    let report = ConfigReader::new()
+        .read_toml_with_extends(directory.path().join("0.toml"))
+        .expect_err("an excessively deep extends chain must fail");
+    let rendered = format_report(&report);
+
+    assert!(rendered.contains("Failed to extend configurations"));
+    assert!(rendered.contains(&format!(
+        "depth {over_limit_depth} exceeds the maximum {maximum_depth}"
+    )));
+}
+
+#[test]
+fn extends_chain_at_depth_limit_is_allowed() {
+    let maximum_depth = usize::from(MAX_TOML_EXTENDS_DEPTH);
+
+    let directory = TestDirectory::new("depth_boundary");
+    for depth in 0..=maximum_depth {
+        let contents = if depth == maximum_depth {
+            "chain = \"boundary\"\n".to_owned()
+        } else {
+            format!("extends = \"{}.toml\"\n", depth + 1)
+        };
+        directory.write(format!("{depth}.toml"), contents);
+    }
+
+    let mut reader = ConfigReader::new()
+        .read_toml_with_extends(directory.path().join("0.toml"))
+        .expect("a chain at the supported depth boundary is valid");
+    let chain = reader
+        .read_parameter::<String>(["chain"])
+        .value_required()
+        .finish();
+    reader
+        .into_result()
+        .expect("boundary-depth config is valid");
+
+    assert_eq!(chain.unwrap(), "boundary");
+}
+
+#[test]
+fn extends_shared_base_across_siblings_is_allowed() {
+    let directory = TestDirectory::new("shared_base");
+    directory.write("common.toml", "chain = \"common\"\n");
+    directory.write("left.toml", "extends = \"common.toml\"\nchain = \"left\"\n");
+    directory.write(
+        "right.toml",
+        "extends = \"common.toml\"\nchain = \"right\"\n",
+    );
+    directory.write("top.toml", "extends = [\"left.toml\", \"right.toml\"]\n");
+
+    let mut reader = ConfigReader::new()
+        .read_toml_with_extends(directory.path().join("top.toml"))
+        .expect("a shared base outside the active ancestry is valid");
+    let chain = reader
+        .read_parameter::<String>(["chain"])
+        .value_required()
+        .finish();
+    reader.into_result().expect("shared-base config is valid");
+
+    assert_eq!(chain.unwrap(), "right");
+}
+
+#[test]
+fn extends_source_reference_limit_is_enforced() {
+    let directory = TestDirectory::new("source_limit");
+    let references = (0..MAX_TOML_EXTENDS_SOURCES)
+        .map(|index| format!("\"{index}.toml\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    directory.write("root.toml", format!("extends = [{references}]\n"));
+
+    let report = ConfigReader::new()
+        .read_toml_with_extends(directory.path().join("root.toml"))
+        .expect_err("an excessive extends fanout must fail");
+    let rendered = format_report(&report);
+
+    assert!(rendered.contains("Failed to extend configurations"));
+    assert!(rendered.contains(&format!(
+        "source references {} exceed the maximum {}",
+        MAX_TOML_EXTENDS_SOURCES + 1,
+        MAX_TOML_EXTENDS_SOURCES
+    )));
+}
+
 #[test]
 fn error_reading_empty_config() {
     let report = ConfigReader::new()

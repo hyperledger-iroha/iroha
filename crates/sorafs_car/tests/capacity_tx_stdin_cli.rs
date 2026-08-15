@@ -1,6 +1,5 @@
 //! Integration coverage for SoraFS capacity transaction stdin construction.
 #![cfg(feature = "cli")]
-use std::fs;
 use assert_cmd::cargo::cargo_bin_cmd;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_data_model::{
@@ -21,6 +20,7 @@ use sorafs_manifest::{
     },
     provider_advert::{CapabilityType, StakePointer},
 };
+use std::fs;
 use tempfile::tempdir;
 #[test]
 fn tx_stdin_builder_wraps_capacity_declaration_summaries() {

@@ -1,7 +1,6 @@
 //! Router-level coverage for the authoritative Sumeragi v2 QC endpoint.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "telemetry")]
-use std::sync::{Mutex, MutexGuard};
 use axum::{Router, body::Body, http::Request, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::sumeragi::status;
@@ -16,6 +15,7 @@ use iroha_data_model::block::{
     },
 };
 use iroha_torii::SumeragiV2QcResponse;
+use std::sync::{Mutex, MutexGuard};
 use tower::ServiceExt as _;
 static QC_ENDPOINT_TEST_LOCK: Mutex<()> = Mutex::new(());
 struct PublishedStatus {

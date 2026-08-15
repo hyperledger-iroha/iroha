@@ -1,9 +1,4 @@
 //! Utilities for Norito encoding and Axum integration.
-use std::{
-    any::{Any, TypeId},
-    future::Future,
-    sync::Arc,
-};
 use axum::{
     http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
@@ -17,6 +12,11 @@ use iroha_version::Version;
 use norito::{
     json::{self, JsonDeserializeOwned, JsonSerialize, Value},
     prelude::*,
+};
+use std::{
+    any::{Any, TypeId},
+    future::Future,
+    sync::Arc,
 };
 /// MIME used in Torii for Norito encoding
 // note: no elegant way to associate it with generic `NoritoBody<T>`
@@ -1359,6 +1359,7 @@ impl<T: JsonSerialize + Send + 'static> IntoResponse for JsonBody<T> {
     }
 }
 pub mod extractors {
+    use super::*;
     use axum::{
         body::Bytes,
         extract::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request},
@@ -1369,7 +1370,6 @@ pub mod extractors {
         json::{self, JsonDeserializeOwned, Number, Value},
     };
     use urlencoding::decode;
-    use super::*;
     fn typed_request_rejection(
         status: StatusCode,
         code: &'static str,
@@ -2409,6 +2409,7 @@ pub mod extractors {
     }
     #[cfg(test)]
     mod tests {
+        use super::*;
         use axum::{
             body::Body,
             extract::{DefaultBodyLimit, FromRequestParts},
@@ -2417,7 +2418,6 @@ pub mod extractors {
         use http_body_util::BodyExt as _;
         use iroha_version::{RawVersioned, UnsupportedVersion, Version};
         use norito::core::{NoritoDeserialize, NoritoSerialize};
-        use super::*;
         #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
         struct Dummy(u32);
         #[test]

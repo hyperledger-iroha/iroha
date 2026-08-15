@@ -1,12 +1,12 @@
 //! Events for streaming API.
-use std::{format, ops::Deref, string::String, sync::Arc, vec::Vec};
+pub use crate::{Decode, Encode};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use pipeline::{BlockEvent, TransactionEvent};
-pub use crate::{Decode, Encode};
+use std::{format, ops::Deref, string::String, sync::Arc, vec::Vec};
 macro_rules! impl_json_via_norito_bytes {
     ($($ty:path),+ $(,)?) => {
         $(
@@ -89,9 +89,6 @@ pub mod time;
 pub mod trigger_completed;
 #[cfg(test)]
 mod tests {
-    use std::{str::FromStr, sync::Arc};
-    use iroha_crypto::Hash;
-    use iroha_primitives::json::Json;
     use super::*;
     use crate::{
         domain::DomainId,
@@ -99,6 +96,9 @@ mod tests {
         events::execute_trigger::ExecuteTriggerEventFilter,
         name::Name,
     };
+    use iroha_crypto::Hash;
+    use iroha_primitives::json::Json;
+    use std::{str::FromStr, sync::Arc};
     #[cfg(feature = "json")]
     #[test]
     fn event_filter_json_is_canonical_and_ambient_independent() {
@@ -498,11 +498,11 @@ impl IntoSchema for SharedDataEvent {
 #[cfg(feature = "http")]
 pub mod stream {
     //! Structures related to event streaming over HTTP
+    pub use self::model::*;
+    use super::*;
     use derive_more::Constructor;
     use iroha_data_model_derive::model;
     use iroha_version::prelude::*;
-    pub use self::model::*;
-    use super::*;
     #[model]
     mod model {
         use super::*;

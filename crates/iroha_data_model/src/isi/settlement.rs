@@ -1,13 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
-use derive_more::{Constructor, Display, FromStr};
-use getset::{CopyGetters, Getters};
-use iroha_crypto::{Hash, HashOf, derive_non_signing_ed25519_public_key};
-use iroha_data_model_derive::model;
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
-use norito::derive::{JsonDeserialize, JsonSerialize};
 pub use self::model::SettlementId;
 use super::*;
 use crate::{
@@ -18,6 +8,16 @@ use crate::{
     oracle::{FeedConfigVersion, FeedEvent, FeedId, FeedSlot, ObservationValue},
     prelude::{AccountId, AssetDefinitionId},
 };
+use derive_more::{Constructor, Display, FromStr};
+use getset::{CopyGetters, Getters};
+use iroha_crypto::{Hash, HashOf, derive_non_signing_ed25519_public_key};
+use iroha_data_model_derive::model;
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::derive::{JsonDeserialize, JsonSerialize};
+use std::collections::{BTreeMap, BTreeSet};
 const FX_CORRIDOR_ESCROW_ACCOUNT_DOMAIN_V1: &[u8] = b"iroha:fx-corridor:escrow-account:v1";
 #[model]
 mod model {

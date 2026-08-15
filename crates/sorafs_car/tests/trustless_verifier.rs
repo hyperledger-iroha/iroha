@@ -1,10 +1,10 @@
 //! CLI regressions for the SoraNet trustless verifier.
-use std::{env, fs, path::PathBuf};
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::decode_from_bytes;
 use norito::json::Value;
 use sorafs_car::{TrustlessVerificationError, TrustlessVerifier, TrustlessVerifierConfig};
 use sorafs_manifest::{ManifestV1, SORAFS_GATEWAY_MANIFEST_DIGEST_HEX};
+use std::{env, fs, path::PathBuf};
 use tempfile::{Builder, TempDir};
 fn workspace_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

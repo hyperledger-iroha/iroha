@@ -388,6 +388,22 @@
           ]
         },
         {
+          "path": "crates/iroha/src/client.rs",
+          "required_tokens": [
+            "pub fn get_sumeragi_status(&self) -> Result<SumeragiV2Status>",
+            "pub fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus>"
+          ]
+        },
+        {
+          "path": "crates/iroha/src/client/sumeragi_api_separation_tests.rs",
+          "required_tokens": [
+            "get_sumeragi_status_rejects_unknown_json_fields",
+            "status endpoint must reject a diagnostics-shaped payload",
+            "get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields",
+            "diagnostics endpoint must reject a status-shaped payload"
+          ]
+        },
+        {
           "path": "python/iroha_torii_client/tests/test_client.py",
           "required_tokens": [
             "test_sumeragi_endpoint_methods_reject_swapped_payload_contracts"
@@ -400,9 +416,33 @@
           ]
         },
         {
+          "path": "javascript/iroha_js/test/toriiClient.test.js",
+          "required_tokens": [
+            "typed Sumeragi endpoints reject swapped status and diagnostics payloads",
+            "sumeragi status payload contains unknown field pipeline_execution",
+            "sumeragi diagnostics contains unknown field protocol_version"
+          ]
+        },
+        {
           "path": "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift",
           "required_tokens": [
             "func testRustOwnedGroupedNativeAmxV2EndpointSeparation()",
+            "status endpoint must reject a diagnostics-shaped payload",
+            "diagnostics endpoint must reject a status-shaped payload"
+          ]
+        },
+        {
+          "path": "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/SumeragiHttpTransportContractTest.kt",
+          "required_tokens": [
+            "fun `status and diagnostics reject missing parameterized or ambiguous JSON content types`()",
+            "status endpoint must reject a diagnostics-shaped payload",
+            "diagnostics endpoint must reject a status-shaped payload"
+          ]
+        },
+        {
+          "path": "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SumeragiHttpTransportTests.java",
+          "required_tokens": [
+            "public void responsesRequireExactContentTypeCanonicalLengthAndBoundedBody()",
             "status endpoint must reject a diagnostics-shaped payload",
             "diagnostics endpoint must reject a status-shaped payload"
           ]
@@ -468,10 +508,80 @@
           ]
         },
         {
+          "path": "ci/run_native_amx_v2_grouped_sdk_parity.sh",
+          "required_tokens": [
+            "openapi_require_signed=0",
+            "if [[ \"${IROHA_RELEASE_SEALED_WORKTREE:-0}\" == 1 ]]; then",
+            "openapi_require_signed=1",
+            "expected_marker=\"openapi-two-mirror-replay status=success candidate_oid=${candidate_oid} candidate_tree=${candidate_tree} mirrors=2 artifacts=5 require_signed=${require_signed}\"",
+            "grouped Native AMX V2 OpenAPI parity lacks one exact path-free two-mirror replay marker",
+            "observed_test_count=7",
+            "OPENAPI_NODE_BIN=\"$sdk_openapi_node_bin\"",
+            "OPENAPI_NODE_MODULES_ROOT=\"$sdk_openapi_node_modules_root\"",
+            "OPENAPI_REQUIRE_SIGNED=\"$openapi_require_signed\"",
+            "bash \"${repo_root}/ci/check_openapi_spec.sh\"",
+            "assert_openapi_replay_marker"
+          ]
+        },
+        {
+          "path": "ci/sumeragi_v2_sdk_source_closure.json",
+          "required_tokens": [
+            "\"native-amx-v2-grouped-suite\": [",
+            "\"artifacts/openapi/allowed_signers.json\",",
+            "\"ci/check_openapi_spec.sh\","
+          ]
+        },
+        {
+          "path": "scripts/run_sumeragi_v2_release_gates.sh",
+          "required_tokens": [
+            "readonly native_amx_grouped_parity_harness=\"ci/run_native_amx_v2_grouped_sdk_parity.sh\"",
+            "bash \"$native_amx_grouped_parity_harness\" --suite-source-manifest-sha256",
+            "grouped Native AMX V2 parity harness returned an invalid source digest",
+            "\"native-amx-grouped-${native_amx_grouped_parity_surface}\"",
+            "native_amx_grouped_suite_source_manifest_sha256 \\"
+          ]
+        },
+        {
+          "path": "scripts/write_sumeragi_v2_release_receipt.py",
+          "required_tokens": [
+            "\"write_sumeragi_v2_release_receipt_gate_evidence.py\": (",
+            "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae",
+            "_SDK_SOURCE_CLOSURE_RESOLVER = \"ci/resolve_sumeragi_v2_sdk_source_closure.py\"",
+            "_SDK_SOURCE_CLOSURE_MANIFEST = \"ci/sumeragi_v2_sdk_source_closure.json\"",
+            "_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE = \"native-amx-v2-grouped\"",
+            "hashlib.sha256(payload).hexdigest()",
+            "!= _RELEASE_RECEIPT_COMPONENT_SHA256[filename]",
+            "\"_sdk_suite_source_manifest\","
+          ]
+        },
+        {
+          "path": "scripts/write_sumeragi_v2_release_receipt_gate_evidence.py",
+          "required_tokens": [
+            "expected_suite_manifest = _sdk_suite_source_manifest(",
+            "repo_root, _NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE",
+            "fields[\"native_amx_grouped_suite_source_manifest_sha256\"]",
+            "replay_marker_prefix = \"openapi-two-mirror-replay \"",
+            "f\"candidate_oid={sealed['head_commit']} \"",
+            "f\"candidate_tree={sealed['head_tree']} \"",
+            "\"mirrors=2 artifacts=5 require_signed=1\"",
+            "replay_markers != [expected_replay_marker]",
+            "or lines.index(expected_replay_marker)",
+            ">= lines.index(expected_marker)",
+            "exact path-free two-mirror replay binding"
+          ]
+        },
+        {
           "path": "ci/check_sumeragi_v2_multilane_release_inventory.sh",
           "required_tokens": [
             "native-amx-rust-fixture-check command 0",
-            "sumeragi_v2_wire_fixtures -- --check"
+            "regenerate Native AMX Rust fixture authority twice into disjoint private roots and byte-authenticate both outputs",
+            "readonly grouped_parity_harness=\"ci/run_native_amx_v2_grouped_sdk_parity.sh\"",
+            "bash \"$grouped_parity_harness\" --suite-source-manifest-sha256",
+            "symbols[\"_sdk_suite_source_manifest\"](",
+            "symbols[\"_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE\"]",
+            "!= \"$grouped_suite_source_manifest_sha256\"",
+            "grouped Native AMX V2 fixture/suite source binding is invalid",
+            "grouped Native AMX V2 suite-source manifest SHA-256"
           ]
         }
       ]
@@ -522,11 +632,77 @@
           ]
         },
         {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "required_tokens": [
+            "fn merge_share_transport_rejects_omission_nonleader_body_and_legacy_version()",
+            "legacy.version = MERGE_COMMITTEE_SIGNATURE_VERSION_V2.saturating_sub(1);",
+            "expect(\"reject legacy merge-share version\")",
+            "expect(\"read untouched signing guard\")"
+          ]
+        },
+        {
+          "path": "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift",
+          "required_tokens": [
+            "final class SumeragiV2WireFixtureTests: XCTestCase",
+            "private let fixtureRelativePath = \"fixtures/sumeragi_v2/wire_v2.tsv\"",
+            "func testRustCanonicalMessageFixturesRoundtrip() throws",
+            "func testMalformedAndSemanticallyNoncanonicalFixturesFailClosed() throws"
+          ]
+        },
+        {
+          "path": "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt",
+          "required_tokens": [
+            "class SumeragiV2WireFixtureTest",
+            "private const val FIXTURE_RELATIVE_PATH = \"fixtures/sumeragi_v2/wire_v2.tsv\"",
+            "fun `rust canonical message fixtures roundtrip`()",
+            "fun `malformed and semantically noncanonical fixtures fail closed`()"
+          ]
+        },
+        {
+          "path": "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java",
+          "required_tokens": [
+            "public final class SumeragiV2WireFixtureTests",
+            "private static final String FIXTURE_RELATIVE_PATH = \"fixtures/sumeragi_v2/wire_v2.tsv\";",
+            "public void rustCanonicalMessageFixturesRoundtrip() throws Exception",
+            "public void malformedAndSemanticallyNoncanonicalFixturesFailClosed() throws Exception"
+          ]
+        },
+        {
+          "path": "ci/run_sumeragi_v2_sdk_diagnostics.sh",
+          "required_tokens": [
+            "observed_test_count=33",
+            "SumeragiV2WireFixtureTests'",
+            "observed_test_count=42",
+            "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest",
+            "observed_test_count=41",
+            "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests"
+          ]
+        },
+        {
+          "path": "ci/sumeragi_v2_sdk_source_closure.json",
+          "required_tokens": [
+            "\"IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift\"",
+            "\"kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt\"",
+            "\"java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java\""
+          ]
+        },
+        {
           "path": "scripts/run_sumeragi_v2_release_gates.sh",
           "required_tokens": [
+            "sumeragi::v2_lane_work::tests::merge_share_transport_rejects_omission_nonleader_body_and_legacy_version",
             "sumeragi_v2_cross_sdk_fixtures::shared_sdk_accept_fixtures_are_exact_current_rust_encodings",
             "sumeragi_v2_cross_sdk_fixtures::shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation",
-            "cross-sdk-rust cargo-exact 2"
+            "cross-sdk-rust cargo-exact 2",
+            "sumeragi_v2_sdk_diagnostics_test_counts=(",
+            "\"sumeragi-diagnostics-${sumeragi_v2_sdk_diagnostics_surface}\""
+          ]
+        },
+        {
+          "path": "scripts/write_sumeragi_v2_release_receipt.py",
+          "required_tokens": [
+            "(\"swift\", 33)",
+            "(\"kotlin\", 42)",
+            "(\"java\", 41)"
           ]
         },
         {
@@ -535,7 +711,9 @@
             "source-sealed-legacy-codec-guard command 0",
             "bash scripts/check_no_legacy_codec.sh",
             "native-amx-rust-fixture-check command 0",
-            "sumeragi_v2_wire_fixtures -- --check"
+            "regenerate Native AMX Rust fixture authority twice into disjoint private roots and byte-authenticate both outputs",
+            "for sdk_diagnostics_test_count in 121 88 33 42 41; do",
+            "SumeragiV2WireFixtureTest"
           ]
         }
       ]
@@ -5209,7 +5387,43 @@
         "required_tokens": [
           "let kura_replica_advert_refresh = Arc::new(",
           "KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())",
-          "Arc::clone(&kura_replica_advert_refresh)",
+          "lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+          "lifecycle_pending_kura::run_pending_kura_lifecycle_height("
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "kind": "fn",
+        "symbol": "run_non_pending_lifecycle_loop",
+        "required_tokens": [
+          "ProductionLifecycleLaunchInputsV1::new(",
+          "Arc::clone(&kura_replica_advert_refresh)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "kind": "fn",
+        "symbol": "run_pending_kura_lifecycle_height",
+        "required_tokens": [
+          "ProductionLifecycleLaunchInputsV1::new(",
+          "Arc::clone(&kura_replica_advert_refresh)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "kind": "fn",
+        "symbol": "run_lifecycle_active_height",
+        "required_tokens": [
+          "try_begin_certified_serve_producer_episode()",
+          ".service_kura_replica_advert_refresh_turn(Instant::now())"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "kind": "fn",
+        "symbol": "run_pending_active_height",
+        "required_tokens": [
+          "try_begin_certified_serve_producer_episode()",
           ".service_kura_replica_advert_refresh_turn(Instant::now())"
         ]
       },
@@ -6913,24 +7127,87 @@
           "kind": "fn",
           "symbol": "run_inner",
           "required_tokens": [
-            "pending_tip_recovery_attempts",
-            "lane_reservation_startup_reconciliation_pending",
+            "let reservation_reconciliation_pending = true",
+            "match pending_kura_apply",
+            "lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+            "lifecycle_pending_kura::run_pending_kura_lifecycle_height("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+          "kind": "method",
+          "symbol": "PendingKuraProductionLifecycleV1::drive_apply_recovery_turn",
+          "required_tokens": [
+            "executor.pending_tip_recovery_attempts()",
+            "services.drain_completions(executor)?",
+            "executor.step_pending_tip_recovery(Instant::now(), services)?",
+            "PendingKuraApplyRecoveryStage::Completed",
+            "executor.ready_to_finish()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+          "kind": "fn",
+          "symbol": "run_non_pending_lifecycle_loop",
+          "required_tokens": [
+            "close_ingress_for_rollover",
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
+            "retransmit_interval",
+            "round_timeout",
             "plan_lane_application_evidence_repair",
             "LaneApplicationEvidenceRepairPlanning::Ready(plan) if plan.is_empty()",
             "plan.item_count()",
             "begin_fail_stop_operation",
             "apply_lane_application_evidence_repair",
             "summary.publication_count()",
-            "summary.ordinary_pairs",
             "made no bounded progress",
             "LaneApplicationEvidenceRepairPlanning::RecoverCanonicalBodies",
+            "recover_canonical_bodies_before_activation",
+            "plan_lane_reservation_ownership",
+            "lane_reservation_startup_reconciliation_pending()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "reconcile_pending_lane_startup",
+          "required_tokens": [
+            "plan_lane_application_evidence_repair",
+            "LaneApplicationEvidenceRepairPlanning::Ready(plan) if plan.is_empty()",
+            "plan.item_count()",
+            "begin_fail_stop_operation",
+            "apply_lane_application_evidence_repair",
+            "summary.publication_count()",
+            "made no bounded progress",
+            "LaneApplicationEvidenceRepairPlanning::RecoverCanonicalBodies",
+            "recover_pending_canonical_bodies",
+            "plan_lane_reservation_ownership",
+            "lane_reservation_startup_reconciliation_pending()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+          "kind": "fn",
+          "symbol": "recover_canonical_bodies_before_activation",
+          "required_tokens": [
             "canonical_executed_block_recovery_batches",
             "CanonicalExecutedBlockRecovery::new",
             "body_recovery.service_next()",
             "drain_canonical_executed_block_recovery_ingress",
-            "dispatch_canonical_executed_block_recovery_effects",
-            "close_ingress_for_rollover",
-            "plan_lane_reservation_ownership"
+            "dispatch_canonical_executed_block_recovery_effects"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "recover_pending_canonical_bodies",
+          "required_tokens": [
+            "canonical_executed_block_recovery_batches",
+            "CanonicalExecutedBlockRecovery::new",
+            "body_recovery.service_next()",
+            "drain_canonical_executed_block_recovery_ingress",
+            "dispatch_canonical_executed_block_recovery_effects"
           ]
         },
         {
@@ -7145,19 +7422,49 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
           "kind": "fn",
-          "symbol": "run_inner",
+          "symbol": "run_pending_kura_lifecycle_height",
           "required_tokens": [
-            "service_next_native_participant_recovery_request",
-            "next_lane_retransmit",
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
             "retransmit_interval",
+            "round_timeout"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+          "kind": "fn",
+          "symbol": "run_lifecycle_active_height",
+          "required_tokens": [
+            "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
+            "service_historical_recovery_tick(&mut lane_work)?",
             "schedule_autonomous_new_view_timeouts",
             "schedule_retransmission",
             "deadline_after(now, retransmit_interval)",
-            "block_sync_frame_byte_capacity",
-            "service_historical_recovery_tick",
-            "dispatch_lane_work_effects"
+            "dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "run_pending_active_height",
+          "required_tokens": [
+            "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval)",
+            "service_historical_recovery_tick(lane_work)?",
+            "schedule_autonomous_new_view_timeouts",
+            "schedule_retransmission",
+            "deadline_after(now, retransmit_interval)",
+            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/canonical_recovery_ingress.rs",
+          "kind": "fn",
+          "symbol": "service_historical_recovery_tick",
+          "required_tokens": [
+            "service_next_historical_recovery()",
+            "map_err(V2RunnerError::from)"
           ]
         },
         {
@@ -8927,6 +9234,18 @@
           "kind": "fn",
           "symbol": "run_inner",
           "required_tokens": [
+            "public_key: genesis_public_key",
+            "block_cadence",
+            "sumeragi_v2_timing_ms(block_cadence_ms)",
+            "let round_timeout = Duration::from_millis(round_timeout_ms)",
+            "let retransmit_interval = Duration::from_millis(retransmit_interval_ms)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+          "kind": "fn",
+          "symbol": "run_non_pending_lifecycle_loop",
+          "required_tokens": [
             "if reservation_reconciliation_pending",
             "reconcile_lifecycle_terminal_outcomes_before_queue_planning(",
             "let planning = plan_lane_reservation_ownership(",
@@ -8934,16 +9253,67 @@
             "apply_lane_reservation_reconciliation_plan(",
             "reservation_reconciliation_pending = false;",
             "construct_after_pending_tip_application_recovery(",
-            "public_key: genesis_public_key",
-            "block_cadence",
-            "sumeragi_v2_timing_ms(block_cadence_ms)",
-            "let round_timeout = Duration::from_millis(round_timeout_ms)",
-            "let retransmit_interval = Duration::from_millis(retransmit_interval_ms)",
-            "lane_work_limits(",
-            "block_sync_frame_byte_capacity,\n            retransmit_interval,\n            round_timeout,\n        )?;",
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
             "retransmit_interval",
-            "round_timeout",
-            "service_historical_recovery_tick"
+            "round_timeout"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "reconcile_pending_lane_startup",
+          "required_tokens": [
+            "reconcile_lifecycle_terminal_outcomes_before_queue_planning(",
+            "let planning = plan_lane_reservation_ownership(",
+            "reconcile_autonomous_lifecycle_startup(",
+            "apply_lane_reservation_reconciliation_plan("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+          "kind": "method",
+          "symbol": "PendingKuraProductionLifecycleV1::prepare_lane_recovery",
+          "required_tokens": [
+            "lane_work.install_lane_drain_queue(Arc::clone(&queue))?;",
+            "lane_work.activate_after_lane_drain_queue_install(&queue)?;"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "run_pending_kura_lifecycle_height",
+          "required_tokens": [
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
+            "retransmit_interval",
+            "round_timeout"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+          "kind": "fn",
+          "symbol": "run_lifecycle_active_height",
+          "required_tokens": [
+            "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
+            "service_historical_recovery_tick(&mut lane_work)?",
+            "lane_work.schedule_autonomous_new_view_timeouts(",
+            "lane_work.schedule_retransmission()?",
+            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
+            "dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "run_pending_active_height",
+          "required_tokens": [
+            "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval)",
+            "service_historical_recovery_tick(lane_work)?",
+            "lane_work.schedule_autonomous_new_view_timeouts(",
+            "lane_work.schedule_retransmission()?",
+            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
+            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?"
           ]
         },
         {
@@ -10261,7 +10631,7 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/canonical_recovery_ingress.rs",
           "kind": "fn",
           "symbol": "service_historical_recovery_tick",
           "required_tokens": [

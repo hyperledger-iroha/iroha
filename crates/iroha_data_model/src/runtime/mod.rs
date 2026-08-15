@@ -3,12 +3,12 @@
 //!
 //! Types here are used by instructions (ISIs) and events to coordinate
 //! deterministic activation of the fixed ABI v1 runtime without downtime.
-use std::{string::String, vec::Vec};
+use crate::smart_contract::manifest::ManifestProvenance;
 use iroha_crypto::{Error as CryptoError, Hash, KeyPair, Signature};
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use crate::smart_contract::manifest::ManifestProvenance;
+use std::{string::String, vec::Vec};
 /// Runtime upgrade manifest hashing helper.
 fn manifest_hash(bytes: &[u8]) -> RuntimeUpgradeId {
     let hash = Hash::new(bytes);

@@ -3,13 +3,6 @@
 //! This preserves the established `query::dsl` public surface. Predicate payloads are captured
 //! and evaluated via JSON when enabled; selector projections remain minimal.
 #[cfg(feature = "ids_projection")]
-use std::any::TypeId as StdTypeId;
-use std::{any::Any, marker::PhantomData, sync::Arc};
-use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId};
-use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
-use norito::json::{self, JsonSerialize, Value};
-#[cfg(feature = "ids_projection")]
 use crate::Identifiable;
 #[cfg(feature = "json")]
 use crate::query::json::{EqualsCondition, InCondition, PredicateJson};
@@ -22,6 +15,13 @@ use crate::query::tx_predicate::{
     committed_tx_predicate_from_canonical_json, committed_tx_predicate_from_predicate_json,
     committed_tx_predicate_from_value,
 };
+use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId};
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json::{self, JsonSerialize, Value};
+#[cfg(feature = "ids_projection")]
+use std::any::TypeId as StdTypeId;
+use std::{any::Any, marker::PhantomData, sync::Arc};
 /// Marker for predicate projections.
 #[derive(Debug, Clone, Copy)]
 pub struct PredicateMarker;
@@ -1033,10 +1033,6 @@ mod tests {
 }
 #[cfg(all(test, feature = "json"))]
 mod codec_tests {
-    use std::time::Duration;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleProof};
-    use iroha_primitives::json::Json;
-    use norito::NoritoSerialize;
     use super::*;
     use crate::{
         account, block,
@@ -1048,6 +1044,10 @@ mod codec_tests {
         transaction::signed,
         trigger,
     };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleProof};
+    use iroha_primitives::json::Json;
+    use norito::NoritoSerialize;
+    use std::time::Duration;
     fn bare_bytes(value: &dyn NoritoSerialize) -> Vec<u8> {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let mut bytes = Vec::new();
@@ -1731,9 +1731,6 @@ mod codec_tests {
 }
 #[cfg(all(test, feature = "json"))]
 mod predicate_tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_primitives::json::Json;
-    use norito::json;
     use super::*;
     use crate::{
         Registrable,
@@ -1741,6 +1738,9 @@ mod predicate_tests {
         domain::{Domain, DomainId},
         query::json::PredicateJson,
     };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::json::Json;
+    use norito::json;
     fn test_authority() -> AccountId {
         let (public_key, _private_key) = KeyPair::try_from_seed(vec![0x24; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair")

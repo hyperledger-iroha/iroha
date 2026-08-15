@@ -1,10 +1,10 @@
 use super::*;
-use iroha_crypto::Hash;
-use norito::codec::Encode;
 use crate::{
     isi::SettlementId,
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
 };
+use iroha_crypto::Hash;
+use norito::codec::Encode;
 isi! {
     /// Initiate or roll a repo agreement between two counterparties.
     pub struct RepoIsi {
@@ -386,11 +386,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RepoInstructionBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo::RepoGovernance;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::Encode;
     use norito::core::DecodeFromSlice;
-    use crate::repo::RepoGovernance;
     #[derive(Encode)]
     struct ForgedRepoCashLeg {
         asset_definition_id: AssetDefinitionId,

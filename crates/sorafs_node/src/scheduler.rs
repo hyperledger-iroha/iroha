@@ -3,13 +3,13 @@
 //! This module implements the pin/fetch/PoR queue coordination layer used by
 //! the Torii gateway and storage backend. It applies operator supplied limits
 //! and emits lightweight telemetry snapshots for the metrics pipeline.
+use crate::config::StorageConfig;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use crate::config::StorageConfig;
 const LOCAL_PROVIDER_LABEL: &str = "local";
 const FETCH_RATE_SMOOTHING_WEIGHT: u64 = 4;
 const MAX_PROVIDER_KEY_BYTES: usize = 128;

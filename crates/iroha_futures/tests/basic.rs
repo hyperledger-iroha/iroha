@@ -2,9 +2,9 @@
 //!
 //! Verifies that `#[telemetry_future]` records per-poll durations and that
 //! collected `FuturePollTelemetry` entries match the expected sleep timings.
-use std::{thread, time::Duration};
 use iroha_futures::FuturePollTelemetry;
 use iroha_logger::telemetry::Channel;
+use std::{thread, time::Duration};
 use tokio::task;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 #[iroha_futures::telemetry_future]

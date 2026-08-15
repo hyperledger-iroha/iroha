@@ -1,10 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests ensuring executor-enforced permission policies.
-use std::{
-    io::ErrorKind,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
 use eyre::Result;
 use integration_tests::{metrics::MetricsReader, sandbox, sync::sync_after_submission};
 use iroha::{
@@ -22,6 +17,11 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, gen_account_in};
+use std::{
+    io::ErrorKind,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tokio::{
     runtime::Runtime,
     time::{sleep, timeout},

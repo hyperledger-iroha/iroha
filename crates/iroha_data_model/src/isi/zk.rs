@@ -374,9 +374,9 @@ impl_zk_decode_from_slice!(FinalizeElection {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::too_many_lines)]
-    use std::str::FromStr as _;
-    use norito::core::DecodeFromSlice;
     use super::*;
+    use norito::core::DecodeFromSlice;
+    use std::str::FromStr as _;
     #[test]
     fn election_shape_v1_enforces_option_and_tally_boundaries() {
         assert_eq!(

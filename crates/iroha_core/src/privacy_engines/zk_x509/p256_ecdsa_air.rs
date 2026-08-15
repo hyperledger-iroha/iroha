@@ -231,12 +231,6 @@ pub(crate) fn constrain_p256_ecdsa_v1<C: P256EcdsaCircuitV1>(
 }
 #[cfg(test)]
 mod tests {
-    use p256::{
-        EncodedPoint, FieldBytes, FieldElement, ProjectivePoint, Scalar,
-        ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _},
-        elliptic_curve::{PrimeField as _, group::Group as _, sec1::ToEncodedPoint as _},
-    };
-    use thiserror::Error;
     use super::*;
     use crate::privacy_engines::zk_x509::{
         p256_air::{
@@ -250,6 +244,12 @@ mod tests {
             build_p256_reduction_trace_v1,
         },
     };
+    use p256::{
+        EncodedPoint, FieldBytes, FieldElement, ProjectivePoint, Scalar,
+        ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _},
+        elliptic_curve::{PrimeField as _, group::Group as _, sec1::ToEncodedPoint as _},
+    };
+    use thiserror::Error;
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct BaseValue(usize);
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,10 +1,10 @@
 //! Canonical logical paths used by durable smart-contract and native ledger state.
-use std::{borrow::Borrow, str::FromStr, string::String};
+pub use self::model::*;
+use crate::{error::ParseError, name::Name};
 use iroha_data_model_derive::model;
 use iroha_primitives::conststr::ConstString;
 use norito::core::{DecodeFromSlice, Error as NoritoError};
-pub use self::model::*;
-use crate::{error::ParseError, name::Name};
+use std::{borrow::Borrow, str::FromStr, string::String};
 /// Maximum UTF-8 byte length of a canonical [`StatePath`].
 ///
 /// The limit covers a canonical `StateMap` base (`Name`, at most 255 UTF-8
@@ -13,9 +13,9 @@ use crate::{error::ParseError, name::Name};
 pub const MAX_STATE_PATH_BYTES: usize = 16 * 1024;
 #[model]
 mod model {
+    use super::*;
     use derive_more::{Debug, Display};
     use iroha_schema::IntoSchema;
-    use super::*;
     /// Canonical logical path for durable smart-contract and native ledger state.
     ///
     /// Unlike [`Name`], this nominal type is sized for composite state paths and
@@ -177,9 +177,9 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use std::vec::Vec;
-    use norito::codec::{Decode, Encode};
     use super::*;
+    use norito::codec::{Decode, Encode};
+    use std::vec::Vec;
     #[test]
     fn accepts_long_paths_and_enforces_utf8_byte_limit() {
         let long = format!("balances/{}", "a".repeat(4 * 1024));

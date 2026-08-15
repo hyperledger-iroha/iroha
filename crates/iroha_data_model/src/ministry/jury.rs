@@ -5,12 +5,12 @@
 //! sortition manifests plus sealed commit / reveal ballots so governance
 //! clients can prove juror selection and ballot integrity before admitting
 //! policy votes to the ledger.
-use std::collections::BTreeSet;
+use crate::{Decode, Encode};
 use blake2::digest::Digest;
 use iroha_crypto::Blake2b256;
 use iroha_schema::IntoSchema;
+use std::collections::BTreeSet;
 use thiserror::Error;
-use crate::{Decode, Encode};
 /// Schema version tag for [`PolicyJuryBallotCommitV1`].
 pub const POLICY_JURY_BALLOT_COMMIT_VERSION_V1: u16 = 1;
 /// Schema version tag for [`PolicyJuryBallotRevealV1`].

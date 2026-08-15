@@ -1,10 +1,4 @@
 //! Unified Kotodama V1 developer command.
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    env,
-    io::{BufRead, Write},
-    path::{Path, PathBuf},
-};
 use ivm::kotodama::{
     builtins::{Builtin, BuiltinSurface},
     compiler::CompilerOptions,
@@ -29,6 +23,12 @@ use ivm::kotodama::{
     diagnostic::{DiagnosticFix, DiagnosticLabel},
     session::{CompileOutput, CompileRequest},
     source::TextRange,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    env,
+    io::{BufRead, Write},
+    path::{Path, PathBuf},
 };
 const USAGE: &str = "\
 Kotodama V1 toolchain

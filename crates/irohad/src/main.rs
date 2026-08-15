@@ -6674,7 +6674,7 @@ fn freeze_lane_manifests_for_startup_replay(
     } else {
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
     };
-    registry.validate_active_coverage()?;
+    registry.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
     Ok(Arc::new(registry))
 }
 /// Rebind the frozen startup sources to the effective catalog produced by replay.
@@ -6683,7 +6683,7 @@ fn rebind_frozen_lane_manifests_after_startup_replay(
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Result<LaneManifestRegistryHandle, GovernanceGuardError> {
     let rebound = frozen.rebind(&nexus.lane_catalog, &nexus.governance);
-    rebound.validate_active_coverage()?;
+    rebound.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
     Ok(Arc::new(rebound))
 }
 #[cfg(test)]

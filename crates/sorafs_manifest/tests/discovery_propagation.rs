@@ -1,5 +1,4 @@
 //! Discovery propagation integration tests covering gossip, signature checks, and capability GREASE.
-use std::collections::{HashMap, HashSet, VecDeque};
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signer, SigningKey};
 use sorafs_manifest::{
@@ -8,6 +7,7 @@ use sorafs_manifest::{
     PathDiversityPolicy, ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
     QosHints, RendezvousTopic, SignatureAlgorithm, StakePointer,
 };
+use std::collections::{HashMap, HashSet, VecDeque};
 const ISSUED_AT: u64 = 1_700_000_000;
 const TTL_SECS: u64 = 3_600;
 #[test]

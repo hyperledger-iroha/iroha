@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry-enabled tests for the sumeragi evidence list endpoint.
 #![cfg(feature = "telemetry")]
-use std::sync::Arc;
 use axum::extract::State;
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -20,6 +19,7 @@ use iroha_data_model::{
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
 };
 use iroha_torii::{Error, EvidenceListQuery, NoritoQuery, handle_v1_sumeragi_evidence_list};
+use std::sync::Arc;
 fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
     let certificate = Qc {

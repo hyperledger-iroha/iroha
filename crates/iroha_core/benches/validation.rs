@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::all)]
 #![allow(clippy::disallowed_types)] // benches use HashSet internally for metrics
-use std::sync::{Arc, LazyLock};
 use criterion::{BatchSize, Criterion};
 use iroha_core::{
     block::*,
@@ -19,6 +18,7 @@ use iroha_data_model::{
     transaction::{IvmBytecode, TransactionBuilder},
 };
 use iroha_test_samples::gen_account_in;
+use std::sync::{Arc, LazyLock};
 static STARTER_DOMAIN: LazyLock<DomainId> =
     LazyLock::new(|| DomainId::try_new("start", "universal").unwrap());
 static STARTER_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(KeyPair::random);

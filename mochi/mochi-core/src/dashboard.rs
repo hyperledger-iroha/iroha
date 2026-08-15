@@ -1,5 +1,4 @@
 //! Dashboard data aggregation for the Mochi desktop shell.
-use std::collections::{BTreeMap, BTreeSet};
 use crate::{
     SigningAuthority,
     torii::{
@@ -7,6 +6,7 @@ use crate::{
         ExplorerBlockRecord, ExplorerBlocksQuery, ToriiClient, ToriiError, ToriiErrorInfo,
     },
 };
+use std::collections::{BTreeMap, BTreeSet};
 const DASHBOARD_BLOCK_LIMIT: u32 = 6;
 const DASHBOARD_EXPLORER_PAGE_SIZE: u32 = 100;
 /// An individual balance displayed under a dev account card.
@@ -192,11 +192,11 @@ fn map_recent_block(block: ExplorerBlockRecord) -> DashboardRecentBlock {
 }
 #[cfg(test)]
 mod tests {
+    use super::fetch_dashboard_snapshot;
+    use crate::{SigningAuthority, torii::ToriiClient};
     use httpmock::prelude::*;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use norito::json;
-    use super::fetch_dashboard_snapshot;
-    use crate::{SigningAuthority, torii::ToriiClient};
     fn signer() -> SigningAuthority {
         SigningAuthority::new("Alice", ALICE_ID.clone(), ALICE_KEYPAIR.clone())
     }

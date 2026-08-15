@@ -1678,6 +1678,21 @@ impl LifecycleLedgerV1 {
         }
         Ok((self.clone(), apply_ordinal, false))
     }
+
+    /// Rejoin an installed recovered Apply carrier to its unchanged four-row ledger lineage.
+    pub(in crate::sumeragi) fn exactly_matches_recovered_decision_apply_carrier(
+        &self,
+        fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        lineage: &RecoveredDecisionApplyCandidateLineageV1,
+        installed_apply_ordinal: u128,
+    ) -> bool {
+        let projection = RecoveredDecisionApplyCarrierLedgerProjectionV1 { fetch, lineage };
+        self.stage_recovered_decision_apply_projection(&projection)
+            .is_ok_and(|(staged, apply_ordinal, changed)| {
+                !changed && staged == *self && apply_ordinal == installed_apply_ordinal
+            })
+    }
+
     /// Authenticate an already terminal recovered Decision body chain.
     ///
     /// This oracle never feeds storage-only recovery: a terminal Apply must

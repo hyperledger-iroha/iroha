@@ -1,11 +1,4 @@
 //! Argon2 puzzle issuance microservice backing the SoraNet relay handshake.
-use std::{
-    collections::HashSet,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -40,6 +33,13 @@ use soranet_relay::config::{
     read_bounded_direct_regular_file,
 };
 use soranet_relay::token_tool::REVOCATION_LIST_MAX_ENTRIES_V1;
+use std::{
+    collections::HashSet,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 use tokio::{net::TcpListener, signal};
 use tracing::{info, warn};
@@ -1379,10 +1379,10 @@ fn parse_revocation_contents(contents: &str) -> Result<HashSet<[u8; 32]>, String
 }
 #[cfg(test)]
 mod tests {
-    use std::{fmt::Write as _, fs, num::NonZeroU32};
+    use super::*;
     use iroha_crypto::soranet::{pow::ChallengeBinding, token::AdmissionTokenVerifier};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
-    use super::*;
+    use std::{fmt::Write as _, fs, num::NonZeroU32};
     fn temporary_file_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "soranet_puzzle_{label}_{}_{}",
@@ -2001,8 +2001,8 @@ mod tests {
     }
     #[tokio::test]
     async fn http_token_endpoints_issue_tokens() {
-        use std::time::SystemTime;
         use axum::{body::Bytes, extract::State};
+        use std::time::SystemTime;
         let (service, verifier) = token_service();
         let state = Arc::new(service);
         let config_bytes = get_token_config(State(state.clone()))

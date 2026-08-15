@@ -1,8 +1,8 @@
 //! Strict schema-golden assertions shared by integration tests.
 #![allow(dead_code)]
-use std::any::TypeId;
 use iroha_schema::{IntoSchema, MetaMap, MetaMapEntry};
 use norito::json::Value;
+use std::any::TypeId;
 pub struct ExpectedEntry(TypeId, &'static str, &'static str);
 pub fn entry<T: 'static>(id: &'static str) -> ExpectedEntry {
     named_entry::<T>(id, id)

@@ -1,9 +1,9 @@
 //! Telemetry helpers for the SoraFS gateway TLS automation surface.
-use std::time::{Duration, SystemTime};
+use super::acme::CertificateBundle;
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::Telemetry;
+use std::time::{Duration, SystemTime};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use super::acme::CertificateBundle;
 /// Canonical header emitted by the gateway.
 pub const SORA_TLS_STATE_HEADER: &str = "x-sora-tls-state";
 /// Result classification for TLS renewal attempts.
@@ -127,8 +127,8 @@ fn sanitize(value: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
     use super::*;
+    use std::time::{Duration, SystemTime};
     #[test]
     fn header_serialisation() {
         let now = SystemTime::now();

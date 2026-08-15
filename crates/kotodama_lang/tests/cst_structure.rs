@@ -1,9 +1,9 @@
 //! Structural CST coverage for declarations, statements, and hostile recovery.
-use std::collections::HashMap;
 use kotodama_lang::{
     source::{FrontendBudget, SourceFile, SourceId},
     syntax::{GreenElement, GreenNode, SyntaxKind, lex, parse},
 };
+use std::collections::HashMap;
 fn collect_kinds(node: &GreenNode, counts: &mut HashMap<SyntaxKind, usize>) {
     *counts.entry(node.kind).or_default() += 1;
     for child in &node.children {

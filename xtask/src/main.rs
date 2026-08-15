@@ -1,23 +1,4 @@
 //! Developer automation entrypoint for repository maintenance tasks.
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
-    env,
-    error::Error,
-    ffi::OsStr,
-    fmt::Write as FmtWrite,
-    fs,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    process,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-#[cfg(unix)]
-use std::{
-    ffi::OsString,
-    os::unix::ffi::{OsStrExt, OsStringExt},
-};
 use axum::{
     Router,
     body::{self, Body},
@@ -65,6 +46,25 @@ use norito::{
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    env,
+    error::Error,
+    ffi::OsStr,
+    fmt::Write as FmtWrite,
+    fs,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    process,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+#[cfg(unix)]
+use std::{
+    ffi::OsString,
+    os::unix::ffi::{OsStrExt, OsStringExt},
+};
 use tempfile::TempDir;
 use time::{
     Date, OffsetDateTime,
@@ -11501,8 +11501,8 @@ fn update_sha256_os_str_component(hasher: &mut Sha256, label: &[u8], value: &OsS
 }
 #[cfg(test)]
 mod acceleration_state_tests {
-    use serde_json::Value;
     use super::*;
+    use serde_json::Value;
     #[test]
     fn parse_supports_acceleration_state_command() {
         let args = ["xtask", "acceleration-state", "--format", "json"];
@@ -11670,8 +11670,8 @@ mod acceleration_state_tests {
 }
 #[cfg(test)]
 mod openapi_tests {
-    use tempfile::tempdir;
     use super::*;
+    use tempfile::tempdir;
     const RELEASE_OPENAPI_FIXTURE: &[u8] = br#"{
   "openapi": "3.1.0",
   "info": {"title": "Torii fixture", "version": "1.0.0"},
@@ -13659,8 +13659,8 @@ mod openapi_tests {
 }
 #[cfg(test)]
 mod space_directory_tests {
-    use tempfile::tempdir;
     use super::*;
+    use tempfile::tempdir;
     const SAMPLE_MANIFEST: &str = r#"{
   "version": 1,
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",

@@ -4,10 +4,10 @@
 //! workspace commit `daf14859b5aa3f8d75c42966ba7de83e6eb59997`
 //! (`src/lib.rs::KAT_512`, Unlicense). They are compiled only for tests.
 #![allow(non_upper_case_globals)]
-use sha2::{Digest as _, Sha256};
-use zeroize::Zeroizing;
 use super::table_assets::read_u16_le;
 use super::*;
+use sha2::{Digest as _, Sha256};
+use zeroize::Zeroizing;
 const KAT_512_BYTES: &[u8; 3_168] = include_bytes!("assets/kat512_v1.bin");
 struct Kat512 {
     f: [i8; 512],

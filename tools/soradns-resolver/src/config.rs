@@ -1,18 +1,3 @@
-use std::{
-    convert::TryFrom,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
-use eyre::{Context, Result, bail};
-use hickory_proto::rr::{
-    Name, RData, Record,
-    rdata::{A, AAAA, CNAME, TXT},
-};
-use norito::{decode_from_bytes_with_limits, json};
-use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use reqwest::header::HeaderName;
 use crate::{
     bundle::ProofBundleV1,
     limits::{
@@ -24,6 +9,21 @@ use crate::{
         read_http_body_bounded,
     },
     rad::{ResolverAttestation, decode_rad_entries},
+};
+use eyre::{Context, Result, bail};
+use hickory_proto::rr::{
+    Name, RData, Record,
+    rdata::{A, AAAA, CNAME, TXT},
+};
+use norito::{decode_from_bytes_with_limits, json};
+use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use reqwest::header::HeaderName;
+use std::{
+    convert::TryFrom,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
 };
 /// Resolver configuration with normalised runtime values.
 #[derive(Debug, Clone)]
@@ -1062,10 +1062,10 @@ impl StaticRecordConfig {
 }
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-    use expect_test::expect;
-    use tempfile::NamedTempFile;
     use super::*;
+    use expect_test::expect;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
     fn write_config(contents: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");
         file.write_all(contents.as_bytes()).expect("write config");

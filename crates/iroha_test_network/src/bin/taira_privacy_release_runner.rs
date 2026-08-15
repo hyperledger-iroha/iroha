@@ -5,37 +5,6 @@
 //! parent-enforced wall-clock, resident-memory, and virtual-address-space
 //! ceilings. Norito is authoritative; JSON is only a typed projection.
 #![cfg(unix)]
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    env,
-    error::Error,
-    ffi::OsString,
-    fs::{self, File, Metadata, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    mem::MaybeUninit,
-    os::fd::{AsRawFd, FromRawFd, RawFd},
-    os::unix::{
-        fs::{MetadataExt, OpenOptionsExt},
-        process::{CommandExt, ExitStatusExt},
-    },
-    path::{Component, Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
-#[cfg(target_os = "linux")]
-use std::{
-    ffi::CString,
-    os::{
-        fd::IntoRawFd,
-        unix::{ffi::OsStrExt, fs::FileExt},
-    },
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-};
 use iroha_core::privacy_release_evidence::{
     PRIVACY_RELEASE_CASE_COUNT_V1, PRIVACY_RELEASE_EVIDENCE_SCHEMA_VERSION_V1,
     PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1, PRIVACY_RELEASE_MAX_PROOF_ARTIFACTS_V1,
@@ -68,6 +37,37 @@ use nix::{
 use norito::{
     DecodeLimits,
     derive::{JsonDeserialize, JsonSerialize},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env,
+    error::Error,
+    ffi::OsString,
+    fs::{self, File, Metadata, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    mem::MaybeUninit,
+    os::fd::{AsRawFd, FromRawFd, RawFd},
+    os::unix::{
+        fs::{MetadataExt, OpenOptionsExt},
+        process::{CommandExt, ExitStatusExt},
+    },
+    path::{Component, Path, PathBuf},
+    process::{Command, ExitStatus, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+#[cfg(target_os = "linux")]
+use std::{
+    ffi::CString,
+    os::{
+        fd::IntoRawFd,
+        unix::{ffi::OsStrExt, fs::FileExt},
+    },
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
 };
 #[path = "taira_privacy_release_runner/expectation_pins.rs"]
 mod expectation_pins;
@@ -4956,8 +4956,8 @@ fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
 }
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::symlink;
     use super::*;
+    use std::os::unix::fs::symlink;
     #[cfg(all(
         target_os = "linux",
         target_endian = "little",

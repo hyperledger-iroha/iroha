@@ -301,16 +301,16 @@ pub(crate) fn normalize_p256_nonidentity_v1<C: P256BaseFieldCircuitV1>(
 }
 #[cfg(test)]
 mod tests {
-    use p256::{
-        EncodedPoint, FieldBytes, FieldElement, ProjectivePoint, Scalar,
-        elliptic_curve::{group::Group as _, sec1::ToEncodedPoint as _},
-    };
-    use thiserror::Error;
     use super::*;
     use crate::privacy_engines::zk_x509::p256_air::{
         P256_BASE_MODULUS_BE_V1, ZkX509P256ArithmeticKindV1, ZkX509P256ArithmeticOperationV1,
         ZkX509P256ModulusV1, build_zk_x509_p256_arithmetic_trace_v1,
     };
+    use p256::{
+        EncodedPoint, FieldBytes, FieldElement, ProjectivePoint, Scalar,
+        elliptic_curve::{group::Group as _, sec1::ToEncodedPoint as _},
+    };
+    use thiserror::Error;
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct TestValue(usize);
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]

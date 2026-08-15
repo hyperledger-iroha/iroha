@@ -1,10 +1,6 @@
 #![cfg(feature = "app_api")]
 //! Capacity registry helpers exposed via Torii.
-use std::{
-    collections::{HashMap, HashSet},
-    str::FromStr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use crate::sorafs::capability_name;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use hex::ToHex;
 use iroha_core::state::{WorldReadOnly, WorldView};
@@ -40,9 +36,13 @@ use sorafs_manifest::{
     },
     provider_advert::{CapabilityType, StakePointer},
 };
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use crate::sorafs::capability_name;
 const METADATA_STATUS_TIMESTAMP_KEY: &str = "sorafs_status_timestamp_unix";
 const METADATA_GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
@@ -2280,7 +2280,7 @@ fn storage_class_label(class: StorageClass) -> &'static str {
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use super::*;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
     use iroha_crypto::PublicKey;
     use iroha_data_model::{
@@ -2307,7 +2307,7 @@ mod tests {
         },
         provider_advert::StakePointer,
     };
-    use super::*;
+    use std::str::FromStr;
     fn fixture_manifest_root_cid() -> ManifestRootCid {
         let manifest: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(include_bytes!(
             "../../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to"

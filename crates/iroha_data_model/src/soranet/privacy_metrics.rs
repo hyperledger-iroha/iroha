@@ -9,12 +9,12 @@
 //! dashboards. This mirrors the behaviour implemented by the reference relay
 //! privacy aggregator while providing schema-stable Norito payloads for
 //! long-term storage and operator dashboards.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json;
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 /// Aggregated GAR abuse report counts keyed by the truncated category hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]

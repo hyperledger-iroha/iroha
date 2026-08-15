@@ -2,6 +2,7 @@
 //! file or standard input. By default it uses the canonical SoraFS profile, but
 //! callers can override the chunking parameters via CLI flags to experiment
 //! with alternate layouts.
+use sorafs_chunker::{ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile};
 use std::{
     env,
     fmt::Write as _,
@@ -10,7 +11,6 @@ use std::{
     path::Path,
     process,
 };
-use sorafs_chunker::{ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile};
 #[derive(Debug, Clone)]
 struct CliConfig {
     profile: ChunkProfile,

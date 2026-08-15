@@ -8,10 +8,10 @@
 //! separate durable body-store boundary before validation or voting. The
 //! reducer sees only the resulting body-availability token; READY/DELIVER
 //! state and collector selection do not exist here.
-use std::path::Path;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::consensus_v2 as wire;
 use iroha_primitives::erasure::rs16;
+use std::path::Path;
 use thiserror::Error;
 /// Canonical encoded payload and the manifest committing to every chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -246,9 +246,9 @@ pub(crate) enum V2ChunkError {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
-    use super::*;
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x92; Hash::LENGTH]),

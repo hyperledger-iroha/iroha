@@ -1,9 +1,10 @@
 //! This module contains RWA instructions and queries implementations.
-use iroha_telemetry::metrics;
 use super::prelude::*;
+use iroha_telemetry::metrics;
 /// ISI module contains all instructions related to RWA lots.
 pub mod isi {
-    use std::collections::BTreeSet;
+    use super::*;
+    use crate::smartcontracts::isi::account_admission::ensure_receiving_account;
     use iroha_data_model::{
         IntoKeyValue,
         isi::{
@@ -19,8 +20,7 @@ pub mod isi {
     };
     use iroha_primitives::numeric::Quantity;
     use iroha_telemetry::metrics;
-    use super::*;
-    use crate::smartcontracts::isi::account_admission::ensure_receiving_account;
+    use std::collections::BTreeSet;
     fn ensure_positive_quantity(quantity: &Quantity, context: &str) -> Result<(), Error> {
         if quantity.is_zero() {
             return Err(Error::InvariantViolation(
@@ -899,10 +899,6 @@ pub mod isi {
     }
     #[cfg(test)]
     mod tests {
-        use core::num::NonZeroU64;
-        use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_primitives::json::Json;
-        use iroha_test_samples::ALICE_ID;
         use super::*;
         use crate::{
             block::ValidBlock,
@@ -910,6 +906,10 @@ pub mod isi {
             query::store::LiveQueryStore,
             state::{State, World},
         };
+        use core::num::NonZeroU64;
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::ALICE_ID;
         fn checked_keypair() -> KeyPair {
             KeyPair::try_random().expect("RWA ISI fixture key generation should succeed")
         }
@@ -1400,7 +1400,11 @@ pub mod isi {
 }
 /// RWA-related query implementations.
 pub mod query {
-    use std::collections::BTreeSet;
+    use super::*;
+    use crate::{
+        smartcontracts::ValidQuery,
+        state::{StateReadOnly, WorldReadOnly},
+    };
     use eyre::Result;
     use iroha_data_model::query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
@@ -1409,11 +1413,7 @@ pub mod query {
     };
     use iroha_data_model::rwa::RwaEntry;
     use norito::json::Value;
-    use super::*;
-    use crate::{
-        smartcontracts::ValidQuery,
-        state::{StateReadOnly, WorldReadOnly},
-    };
+    use std::collections::BTreeSet;
     #[derive(Debug, Default, Clone)]
     struct RwaPredicateView {
         ids: BTreeSet<RwaId>,
@@ -1768,10 +1768,6 @@ pub mod query {
     }
     #[cfg(test)]
     mod tests {
-        use core::num::NonZeroU64;
-        use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_primitives::json::Json;
-        use iroha_test_samples::ALICE_ID;
         use super::*;
         use crate::{
             block::ValidBlock,
@@ -1779,6 +1775,10 @@ pub mod query {
             query::store::LiveQueryStore,
             state::{State, World},
         };
+        use core::num::NonZeroU64;
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::ALICE_ID;
         fn checked_keypair() -> KeyPair {
             KeyPair::try_random().expect("RWA query fixture key generation should succeed")
         }

@@ -1,8 +1,8 @@
-use std::{cmp::Ordering, collections::HashMap};
-use norito::json::{self, Value};
-use thiserror::Error;
 use crate::events::{ResolverEvent, ResolverEventLog};
 pub use crate::state::BundleSnapshot;
+use norito::json::{self, Value};
+use std::{cmp::Ordering, collections::HashMap};
+use thiserror::Error;
 /// Structured records generated from resolver transparency logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransparencyRecord {

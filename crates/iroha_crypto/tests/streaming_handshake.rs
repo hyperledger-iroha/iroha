@@ -1,5 +1,4 @@
 //! Integration tests validating the streaming handshake and encrypted chunk pipeline.
-use std::convert::{TryFrom, TryInto};
 use chacha20poly1305::{
     ChaCha20Poly1305, XChaCha20Poly1305,
     aead::{Aead, KeyInit, Payload},
@@ -27,6 +26,7 @@ use norito::streaming::{
 };
 use sha3::{Digest, Sha3_256};
 use soranet_pq::{MlKemKeyPair, MlKemSuite, generate_mlkem_keypair_from_os};
+use std::convert::{TryFrom, TryInto};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 const TEST_KEM_SUITE: MlKemSuite = MlKemSuite::MlKem768;
 fn mlkem_keypair() -> MlKemKeyPair {

@@ -35,6 +35,30 @@
     clippy::useless_conversion
 )]
 //! Metal GPU bindings for FASTPQ.
+use crate::{
+    backend::GpuBackend,
+    bn254_poseidon::Bn254PoseidonBatchSlice,
+    bn254_poseidon_params::{
+        BN254_LIMBS, BN254_POSEIDON_WIDTH, Bn254PoseidonWidth3Params, bn254_limbs_to_bytes,
+        bn254_poseidon_width3_params,
+    },
+    gpu::GpuError,
+    metal_config::{self, DeviceHints},
+    overrides,
+    poseidon::FIELD_MODULUS,
+    poseidon_manifest::poseidon_manifest,
+    trace::{PoseidonColumnBatch, PoseidonColumnSlice},
+};
+use block::ConcreteBlock;
+use fastpq_isi::poseidon::STATE_WIDTH;
+use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
+use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
+use metal::{
+    Buffer, CommandBuffer, CommandQueue, ComputeCommandEncoderRef, ComputePipelineState, Device,
+    Library, MTLCommandBufferStatus, MTLDeviceLocation, MTLResourceOptions, MTLSize, NSRange,
+};
+use norito::json::{self, Value};
+use smallvec::SmallVec;
 #[cfg(test)]
 use std::sync::Once;
 use std::{
@@ -55,31 +79,7 @@ use std::{
     time::{Duration, Instant},
     vec::Vec,
 };
-use block::ConcreteBlock;
-use fastpq_isi::poseidon::STATE_WIDTH;
-use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
-use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
-use metal::{
-    Buffer, CommandBuffer, CommandQueue, ComputeCommandEncoderRef, ComputePipelineState, Device,
-    Library, MTLCommandBufferStatus, MTLDeviceLocation, MTLResourceOptions, MTLSize, NSRange,
-};
-use norito::json::{self, Value};
-use smallvec::SmallVec;
 use tracing::{debug, warn};
-use crate::{
-    backend::GpuBackend,
-    bn254_poseidon::Bn254PoseidonBatchSlice,
-    bn254_poseidon_params::{
-        BN254_LIMBS, BN254_POSEIDON_WIDTH, Bn254PoseidonWidth3Params, bn254_limbs_to_bytes,
-        bn254_poseidon_width3_params,
-    },
-    gpu::GpuError,
-    metal_config::{self, DeviceHints},
-    overrides,
-    poseidon::FIELD_MODULUS,
-    poseidon_manifest::poseidon_manifest,
-    trace::{PoseidonColumnBatch, PoseidonColumnSlice},
-};
 type MetalResult<T> = Result<T, GpuError>;
 const POSEIDON_PERMUTE_KERNEL: &str = "poseidon_permute";
 const POSEIDON_HASH_KERNEL: &str = "poseidon_hash_columns";
@@ -5132,8 +5132,8 @@ mod helper_tests {
 }
 #[cfg(test)]
 mod bn254_helper_tests {
-    use metal::Device;
     use super::*;
+    use metal::Device;
     #[test]
     fn upload_bn254_twiddles_rejects_non_limb_multiple() {
         if Device::system_default().is_none() {
@@ -5209,11 +5209,11 @@ mod bn254_helper_tests {
 }
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod tests {
-    use std::{thread, time::Duration};
-    use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
-    use iroha_crypto::Hash;
     use super::{ensure_multi_queue_env, unwrap_or_skip, *};
     use crate::fft::Planner;
+    use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
+    use iroha_crypto::Hash;
+    use std::{thread, time::Duration};
     const TRACE_NODE_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:v1:trace:node";
     fn sample_fft_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
         let len = 1usize << log_size;

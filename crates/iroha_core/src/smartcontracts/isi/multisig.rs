@@ -1,8 +1,11 @@
 //! Built-in handling for multisig instructions without requiring an executor upgrade.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-    sync::LazyLock,
+use crate::{
+    smartcontracts::Execute,
+    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
+    state::{
+        StateTransaction, WorldReadOnly, public_lane_reward_record_matches_key,
+        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
+    },
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -27,13 +30,10 @@ use iroha_executor_data_model::isi::multisig::{
     MultisigPropose, MultisigRegister, MultisigSpec,
 };
 use mv::storage::StorageReadOnly;
-use crate::{
-    smartcontracts::Execute,
-    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
-    state::{
-        StateTransaction, WorldReadOnly, public_lane_reward_record_matches_key,
-        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
-    },
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+    sync::LazyLock,
 };
 const DELIMITER: char = '/';
 const MULTISIG: &str = "multisig";

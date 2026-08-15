@@ -165,9 +165,6 @@ impl_decode_one_field!(FinalizeAccountRecovery {
 });
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-    use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         account::{
@@ -176,6 +173,9 @@ mod tests {
         },
         nexus::DataSpaceId,
     };
+    use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+    use norito::core::DecodeFromSlice;
+    use std::num::NonZeroU64;
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked account-recovery ISI fixture keypair");

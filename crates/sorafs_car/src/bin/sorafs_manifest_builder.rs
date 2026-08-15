@@ -1,11 +1,4 @@
 //! Generates chunk metadata and a canonical Norito manifest for a given payload.
-use std::{
-    env,
-    fs::{self, File, read},
-    io::{self, BufReader, BufWriter, Cursor, Read, Write},
-    path::{Path, PathBuf},
-    process,
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::Hash;
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -32,6 +25,13 @@ use sorafs_manifest::{
 };
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::{
+    env,
+    fs::{self, File, read},
+    io::{self, BufReader, BufWriter, Cursor, Read, Write},
+    path::{Path, PathBuf},
+    process,
+};
 const COUNCIL_SIGNING_KEY_SEED_BYTES: usize = 32;
 struct CouncilSigningSeed([u8; COUNCIL_SIGNING_KEY_SEED_BYTES]);
 impl CouncilSigningSeed {
@@ -1987,9 +1987,9 @@ fn platform_no_follow_flag() -> i32 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     use tempfile::{NamedTempFile, TempDir, tempdir};
-    use super::*;
     const SMALL_ORDER_ED25519: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

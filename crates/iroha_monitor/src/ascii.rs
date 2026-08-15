@@ -7,9 +7,9 @@
 //! so it works on any terminal, including the `TERM=dumb` that our tests use.
 //! The header also sketches the current hyōshi breath contour from the Etenraku
 //! transcription so the animation mirrors the music’s phrasing.
+use crate::etenraku::{self, hyoshi_breath_scalar};
 use std::convert::TryFrom;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-use crate::etenraku::{self, hyoshi_breath_scalar};
 const SKY_FRAMES_NIGHT: [&[&str]; 4] = [
     &[
         "             ☆         ✦              ✧        ☆         ",

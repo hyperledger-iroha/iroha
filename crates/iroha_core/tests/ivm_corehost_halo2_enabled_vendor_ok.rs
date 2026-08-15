@@ -3,7 +3,6 @@
 #![cfg(feature = "zk-tests")]
 #![cfg(feature = "zk-ipa-native")]
 #![allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
@@ -27,6 +26,7 @@ use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
 use sha2::{Digest, Sha256};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&type_id.to_be_bytes());

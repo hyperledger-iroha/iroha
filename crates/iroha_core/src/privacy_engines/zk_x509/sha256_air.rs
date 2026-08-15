@@ -10,9 +10,9 @@
 //! The global wire-copy argument binds execution-order gate accesses to the
 //! address-sorted SHA word-memory table, and the SHA call-bus STARK binds those
 //! words across aggregate segments.
-use thiserror::Error;
 use super::air::{BooleanGateAirRowV1, ZkX509AirErrorV1};
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use thiserror::Error;
 const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -583,7 +583,6 @@ fn digest_from_words_v1(
 }
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest as _, Sha256};
     use super::*;
     use crate::privacy_engines::zk_x509::{
         profile::ZK_X509_MAX_CRL_BYTES_V1,
@@ -591,6 +590,7 @@ mod tests {
             SHA256_WORD_FIXED_BATCH_SEGMENT_COUNT_V1, SHA256_WORD_FIXED_BATCH_SEGMENT_ROWS_V1,
         },
     };
+    use sha2::{Digest as _, Sha256};
     #[test]
     fn complete_sha256_gate_schedule_matches_independent_implementation() {
         for message in [

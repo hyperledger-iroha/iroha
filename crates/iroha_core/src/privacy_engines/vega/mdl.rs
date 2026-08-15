@@ -1,4 +1,9 @@
 //! Figure 9 mDL witness parsing and native preflight validation.
+use super::{
+    VEGA_MDL_DOCUMENT_TYPE_V1, VEGA_MDL_NAMESPACE_V1, VegaMdlConsensusBindingV1, VegaMdlError,
+    VegaMdlPublicInputsV1, VegaSignatureRoleV1, cbor::CborNode,
+    derive_device_authentication_digest_v1, validate_date, validate_trusted_presentation_date_v1,
+};
 use core::fmt;
 use iroha_data_model::privacy::{
     PrivacyP256PointV1, PrivacyVegaMdlDateV1, VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
@@ -13,11 +18,6 @@ use p256::{
 };
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
-use super::{
-    VEGA_MDL_DOCUMENT_TYPE_V1, VEGA_MDL_NAMESPACE_V1, VegaMdlConsensusBindingV1, VegaMdlError,
-    VegaMdlPublicInputsV1, VegaSignatureRoleV1, cbor::CborNode,
-    derive_device_authentication_digest_v1, validate_date, validate_trusted_presentation_date_v1,
-};
 const COSE_ES256_PROTECTED_HEADER_V1: &[u8] = &[0xa1, 0x01, 0x26];
 const DEVICE_KEY_PREFIX_V1: &[u8] = b"\x69deviceKey";
 const VALID_UNTIL_PREFIX_V1: &[u8] = b"\x6avalidUntil";
@@ -846,6 +846,11 @@ fn validate_exact_input_length(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::privacy_engines::vega::{
+        VEGA_MDL_PUBLIC_INPUT_COUNT_V1, VEGA_PRIVACY_ACTION_INDEX_V1, VegaBindingFieldV1,
+        verify_mdl_figure9_v1,
+    };
     use iroha_data_model::privacy::{
         PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineManifestDigestV1,
         PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
@@ -857,11 +862,6 @@ mod tests {
     };
     use iroha_zkp_halo2::vega::VegaT256ScalarV1;
     use p256::ecdsa::{SigningKey, signature::hazmat::PrehashSigner};
-    use super::*;
-    use crate::privacy_engines::vega::{
-        VEGA_MDL_PUBLIC_INPUT_COUNT_V1, VEGA_PRIVACY_ACTION_INDEX_V1, VegaBindingFieldV1,
-        verify_mdl_figure9_v1,
-    };
     const TRUSTED_TIMESTAMP_MS: u64 = 1_785_024_000_000;
     struct Fixture {
         statement: VegaExistingCredentialStatementV1,

@@ -1,6 +1,6 @@
 #![allow(unexpected_cfgs)]
-use std::fs;
 use sorafs_manifest::{REPLICATION_ORDER_VERSION_V1, ReplicationOrderV1};
+use std::fs;
 const FIXTURES_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/sorafs_manifest"

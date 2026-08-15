@@ -1,5 +1,4 @@
 //! Benchmarks for phase-separated Kotodama compilation and execution in IVM.
-use std::{collections::BTreeMap, sync::Arc};
 use criterion::{BatchSize, Criterion};
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
@@ -15,6 +14,7 @@ use ivm::{
     kotodama::{parser, semantic::SemanticContext},
     pointer_abi::PointerType,
 };
+use std::{collections::BTreeMap, sync::Arc};
 const LITERAL_BENCH_SIZE: usize = 512;
 fn kotodama_program() -> Vec<u8> {
     let src = "seiyaku Add { view fn add(int a, int b) -> int { return a + b; } }";

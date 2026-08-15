@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii handler tests for governance read endpoints: proposal/referendum/locks/tally.
 #![allow(unexpected_cfgs, clippy::similar_names, clippy::too_many_lines)]
-use std::sync::Arc;
 use axum::{extract::Path as AxPath, response::IntoResponse};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -14,6 +13,7 @@ use iroha_data_model::governance::types::{
     AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
 };
 use mv::storage::StorageReadOnly;
+use std::sync::Arc;
 fn checked_governance_read_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked governance read endpoint Ed25519 fixture keypair")

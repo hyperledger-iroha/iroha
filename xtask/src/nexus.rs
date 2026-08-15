@@ -1,14 +1,3 @@
-use std::{
-    collections::{BTreeSet, HashMap},
-    error::Error,
-    fmt::Write,
-    fs,
-    io::{self, Write as _},
-    num::NonZeroU32,
-    path::{Component, Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
 use arrow_array::{
     ArrayRef, BooleanArray, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array,
 };
@@ -41,6 +30,17 @@ use norito::{
     json::{self as serde_json, Map as JsonMap, Value as JsonValue},
 };
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
+use std::{
+    collections::{BTreeSet, HashMap},
+    error::Error,
+    fmt::Write,
+    fs,
+    io::{self, Write as _},
+    num::NonZeroU32,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const NEXUS_CONNECT_FIXTURE_OUTPUT: &str = "fixtures/sdk/nexus_connect_transfer_v1.json";
 const NEXUS_CONNECT_FIXTURE_NETWORK_ID: &str =
@@ -1109,15 +1109,15 @@ fn hex32(input: &str) -> [u8; 32] {
 }
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use super::*;
     use arrow_array::{Array, BooleanArray, Float64Array, StringArray, UInt32Array, UInt64Array};
     use iroha_data_model::{
         metadata::Metadata,
         nexus::{AuditControls, JurisdictionSet, LaneCompliancePolicyId},
     };
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use std::fs;
     use tempfile::{NamedTempFile, tempdir};
-    use super::*;
     #[test]
     fn teu_utilization_helper_handles_zero_capacity() {
         assert_eq!(compute_teu_utilization_pct(0, 10), 0.0);

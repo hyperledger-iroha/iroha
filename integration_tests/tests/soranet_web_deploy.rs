@@ -3,13 +3,13 @@
 //! delegation placeholders) for a regular internet zone pointing at the
 //! `SoraDNS` gateway. Provider storage ingest is exercised by the internal
 //! finalized-ledger outbox suites, not by a public upload route.
-use std::collections::HashMap;
 use eyre::{Result, eyre};
 use iroha_primitives::soradns::{GatewayHostBindings, derive_gateway_hosts};
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::{
     DagCodecId, ManifestBuilder, ManifestV1, PinPolicy, StorageClass, chunker_registry,
 };
+use std::collections::HashMap;
 const WELCOME_TEXT: &str = "welcome to SORA Nexus / Hyperledger Iroha 3";
 const DNS_TTL_SECS: u32 = 600;
 const PLACEHOLDER_NS_HOSTS: [&str; 2] = ["ns1.soranet.example.", "ns2.soranet.example."];

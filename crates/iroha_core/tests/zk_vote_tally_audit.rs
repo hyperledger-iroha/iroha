@@ -12,6 +12,7 @@ mod zk_testkit;
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 mod tests {
+    use super::zk_testkit;
     use iroha_core::{
         executor::Executor,
         kura::Kura,
@@ -34,7 +35,6 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-    use super::zk_testkit;
     #[test]
     fn vote_tally_proof_verifies_with_vk_bytes() {
         let bundle = zk_testkit::vote_merkle8_bundle();

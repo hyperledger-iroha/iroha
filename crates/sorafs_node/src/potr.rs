@@ -7,22 +7,7 @@
 //! exactly-once source identity and must return the canonical proof-outcome
 //! operation or repair-task identity. A substituted acknowledgement is never
 //! checkpointed, so a crash or rejected acknowledgement remains safe to replay.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{Read, Write as _},
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-#[cfg(unix)]
-use std::os::unix::fs::{
-    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
-};
-#[cfg(windows)]
-use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+use crate::proof_outcome_forwarder::{ProofOutcomeOutboxError, potr_proof_outcome_operation_id_v1};
 use iroha_data_model::sorafs::moderation_ledger::sorafs_repair_task_id_v1;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
@@ -34,8 +19,23 @@ use sorafs_manifest::{
         RepairLatencySlaCauseV1, RepairReportV1, RepairTicketId,
     },
 };
+#[cfg(unix)]
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+};
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::{Read, Write as _},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use thiserror::Error;
-use crate::proof_outcome_forwarder::{ProofOutcomeOutboxError, potr_proof_outcome_operation_id_v1};
 /// Durable PoTR checkpoint schema version.
 pub const POTR_TRACKER_CHECKPOINT_VERSION_V1: u8 = 1;
 /// File containing the canonical PoTR tracker checkpoint.
@@ -1797,17 +1797,8 @@ pub enum PotrTrackerError {
 }
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-    use std::{
-        collections::BTreeMap,
-        path::Path,
-        sync::{
-            Arc, Barrier,
-            atomic::{AtomicU64, Ordering},
-        },
-        thread,
-    };
+    use super::*;
+    use crate::{NodeHandle, config::StorageConfig};
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
     use sorafs_manifest::{
@@ -1819,9 +1810,18 @@ mod tests {
         compute_proposal_digest,
         potr::{POTR_RECEIPT_VERSION_V1, PotrStatus, sign_potr_receipt_v1},
     };
+    #[cfg(unix)]
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    use std::{
+        collections::BTreeMap,
+        path::Path,
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicU64, Ordering},
+        },
+        thread,
+    };
     use tempfile::TempDir;
-    use crate::{NodeHandle, config::StorageConfig};
-    use super::*;
     const PROVIDER_ID: [u8; 32] = [0x22; 32];
     const MANIFEST_DIGEST: [u8; 32] = [0x11; 32];
     type ProofOutcome = (PotrReceiptV1, [u8; 32], [u8; 32]);

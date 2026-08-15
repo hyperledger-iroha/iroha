@@ -1,9 +1,4 @@
 //! Fail-closed declaration, type, and call resolution for spanned Kotodama AST.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
-use iroha_primitives::bigint::BigInt;
 use crate::{
     ast::{
         Block, Expr, FunctionKind, HirId, Item, Pattern, PatternBinding, Program, Statement,
@@ -16,6 +11,11 @@ use crate::{
         AstFacts, AstNodeKind, AstSourceMap, BindingFact, BindingFactKind, DeclarationFact,
         DeclarationKind, NodeId, SpannedProgram, TypeUseFact,
     },
+};
+use iroha_primitives::bigint::BigInt;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
 };
 /// Stable identity of one resolved source declaration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

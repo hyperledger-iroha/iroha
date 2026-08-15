@@ -1,6 +1,6 @@
 //! Shared helpers for serialising and parsing PoR proofs and trees.
-use norito::json::{Map, Value};
 use crate::{PorChunkTree, PorLeaf, PorMerkleTree, PorProof, PorSegment};
+use norito::json::{Map, Value};
 const POR_PROOF_MAX_SEGMENT_LEAVES: usize = crate::POR_SEGMENT_SIZE / crate::POR_LEAF_SIZE;
 const POR_PROOF_MAX_CHUNK_SEGMENTS: usize =
     (crate::CHUNK_STORE_MAX_CHUNK_BYTES as usize).div_ceil(crate::POR_SEGMENT_SIZE);

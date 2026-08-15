@@ -1,7 +1,7 @@
-use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
-use iroha_smart_contract::data_model::{isi::CustomInstruction, prelude::InstructionBox};
 use super::*;
 use crate::prelude::{Execute, Visit};
+use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
+use iroha_smart_contract::data_model::{isi::CustomInstruction, prelude::InstructionBox};
 /// Dispatches a custom instruction through the default executor pipeline.
 pub fn visit_custom_instruction<V: Execute + Visit + ?Sized>(
     executor: &mut V,
@@ -83,11 +83,13 @@ pub(super) fn is_reserved_multisig_metadata_key(
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{account::AccountId, block::BlockHeader, executor, prelude::ValidationFail};
     use super::*;
     use crate::prelude::Context;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::AccountId, block::BlockHeader, executor, prelude::ValidationFail,
+    };
+    use std::num::NonZeroU64;
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")

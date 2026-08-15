@@ -1,11 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Native AMX multidataspace routing integration coverage.
-use std::{
-    collections::BTreeSet,
-    fs,
-    num::{NonZeroU32, NonZeroUsize},
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -117,6 +111,12 @@ use sorafs_manifest::{
     REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
     ReplicationOrderV1, StorageClass as ManifestStorageClass,
     chunker_registry::{MANIFEST_DAG_CODEC, default_descriptor},
+};
+use std::{
+    collections::BTreeSet,
+    fs,
+    num::{NonZeroU32, NonZeroUsize},
+    time::{Duration, Instant},
 };
 use tokio::{
     task::spawn_blocking,

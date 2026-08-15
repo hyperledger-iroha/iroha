@@ -15,7 +15,7 @@ pub(crate) mod quota;
 pub mod receipts;
 pub mod replay_cache;
 pub mod shard_cursor;
-use std::collections::BTreeSet;
+use crate::da::pin_intents::{PinIntentDropReason, canonicalize_bundle};
 pub use confidential::{ConfidentialComputeError, validate_confidential_compute_record};
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry, Nexus};
 use iroha_crypto::{Hash, HashOf};
@@ -46,8 +46,8 @@ pub use shard_cursor::{
     DaShardCursor, DaShardCursorError, DaShardCursorIndex, DaShardCursorJournal, LaneShardCursor,
     ShardCursorJournalError,
 };
+use std::collections::BTreeSet;
 use thiserror::Error;
-use crate::da::pin_intents::{PinIntentDropReason, canonicalize_bundle};
 /// Maximum UTF-8 byte length admitted for a DA pin-intent alias.
 pub const MAX_DA_PIN_INTENT_ALIAS_BYTES: usize = 256;
 /// Errors returned when a DA commitment violates the configured lane proof policy.
@@ -1386,6 +1386,7 @@ fn validate_pin_intent_bundle_len(len: usize) -> Result<(), DaPinIntentValidatio
 }
 #[cfg(test)]
 mod proof_policy_tests {
+    use super::*;
     use iroha_data_model::{
         account::{AccountController, AccountId, MultisigMember, MultisigPolicy},
         da::{
@@ -1396,7 +1397,6 @@ mod proof_policy_tests {
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
-    use super::*;
     fn intent(
         lane: LaneId,
         epoch: u64,
@@ -1860,7 +1860,7 @@ pub fn active_proof_policy_bundle_hash_at_height(
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU32};
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         da::{
@@ -1875,7 +1875,7 @@ mod tests {
         peer::PeerId,
     };
     use norito::to_bytes;
-    use super::*;
+    use std::{collections::BTreeMap, num::NonZeroU32};
     fn test_pin_authorization(
         lane: LaneId,
         epoch: u64,

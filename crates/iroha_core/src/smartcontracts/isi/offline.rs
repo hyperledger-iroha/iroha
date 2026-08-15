@@ -1,15 +1,7 @@
 //! Kagemusha offline-cash instruction execution.
 mod kagemusha_terminal_registry_v4;
-pub use kagemusha_terminal_registry_v4::{
-    KagemushaCatalogQualificationSealV1, KagemushaReleaseCatalogV4,
-};
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
-use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
-    io::Cursor,
-    sync::LazyLock,
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -47,8 +39,16 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_primitives::numeric::Quantity;
+pub use kagemusha_terminal_registry_v4::{
+    KagemushaCatalogQualificationSealV1, KagemushaReleaseCatalogV4,
+};
 use p256::PublicKey as P256PublicKey;
 use sha2::{Digest as _, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    io::Cursor,
+    sync::LazyLock,
+};
 use x509_parser::{
     extensions::ParsedExtension,
     prelude::{FromDer as _, X509Certificate},
@@ -290,11 +290,10 @@ fn indexed_kagemusha_v4_verifier_v4(
 }
 /// Visit every release whose terminal Eq/Ep verifier records have Active status.
 ///
-/// Terminal records deliberately outlive their issuance windows so historic
-/// offline notes can still be redeemed. A command that explicitly uses the
-/// release cache therefore authenticates every Active version, including
-/// future-activation records, not merely the newest registry entry. This is
-/// command-scoped validation, never node startup or capability admission.
+/// Terminal records deliberately outlive their issuance windows so historic offline notes can still
+/// be redeemed. A command that explicitly uses the release cache therefore authenticates every
+/// Active version, including future-activation records, not merely the newest registry entry. This
+/// is command-scoped validation, never node startup or capability admission.
 fn visit_active_kagemusha_v4_release_pairs(
     world: &impl WorldReadOnly,
     _block_height: u64,
@@ -699,13 +698,11 @@ pub fn resolve_kagemusha_recursive_transaction_release_v4(
         artifact_set,
     })
 }
-/// Validate an explicitly requested V4 proof release against exact material in
-/// the local cache.
+/// Validate an explicitly requested V4 proof release against exact material in the local cache.
 ///
-/// This helper is for application-managed issuance/redemption proof workflows.
-/// It is not node startup, health, readiness, dataspace, or asset admission:
-/// wallet-facing cash handoff support is universal whether or not a release
-/// cache is configured.
+/// This helper is for application-managed issuance/redemption proof workflows. It is not node
+/// startup, health, readiness, dataspace, or asset admission: wallet-facing cash handoff support is
+/// universal whether or not a release cache is configured.
 pub fn ensure_kagemusha_active_release_material_v4(
     world: &impl WorldReadOnly,
     catalog: &KagemushaReleaseCatalogV4,
@@ -1291,10 +1288,9 @@ pub mod isi {
     /// Build the canonical fail-closed production device policy used by a
     /// Kagemusha release activation.
     ///
-    /// The platform roots are the built-in Apple App Attest and Android
-    /// KeyMint roots used by the native verifier. App identities and signing
-    /// digests remain explicit operator input; this helper never invents or
-    /// relaxes them.
+    /// The platform roots are the built-in Apple App Attest and Android KeyMint roots used by the
+    /// native verifier. App identities and signing digests remain explicit operator input; this
+    /// helper never invents or relaxes them.
     ///
     /// # Errors
     ///
@@ -2817,11 +2813,10 @@ pub mod isi {
     }
     /// Derive the canonical end-of-block active-receiver snapshot.
     ///
-    /// Only records in the post-upgrade native-protected `v2` namespace are
-    /// eligible. Legacy records require one fresh native registration. A
-    /// corrupt protected record or policy produces a deterministic unavailable
-    /// snapshot; multiple current registrations for the same account/device/
-    /// asset tuple produce an explicit ambiguous leaf which cannot be routed.
+    /// Only records in the post-upgrade native-protected `v2` namespace are eligible. Legacy
+    /// records require one fresh native registration. A corrupt protected record or policy produces
+    /// a deterministic unavailable snapshot; multiple current registrations for the same
+    /// account/device/ asset tuple produce an explicit ambiguous leaf which cannot be routed.
     pub fn derive_kagemusha_active_receiver_snapshot_v1(
         world: &impl WorldReadOnly,
         evaluated_height: u64,
@@ -3087,10 +3082,9 @@ pub mod isi {
     }
     /// Resolve the unique active on-chain registration for one signed receiver request.
     ///
-    /// The lookup scans only canonical Kagemusha registration records and fails
-    /// closed on corrupt state, policy rotation, expiry, provenance gaps, or an
-    /// ambiguous exact tuple. The caller supplies the committed evaluation
-    /// height/time from one immutable state snapshot.
+    /// The lookup scans only canonical Kagemusha registration records and fails closed on corrupt
+    /// state, policy rotation, expiry, provenance gaps, or an ambiguous exact tuple. The caller
+    /// supplies the committed evaluation height/time from one immutable state snapshot.
     pub fn resolve_kagemusha_recipient_registration_v1(
         world: &impl WorldReadOnly,
         request: &KagemushaRecipientPaymentRequestV2,
@@ -3743,10 +3737,9 @@ pub mod isi {
     }
     /// Validate and stage every marker needed to consume a set of V2 branches.
     ///
-    /// Partial redemption may additionally authorize the deterministic change
-    /// child of a consumed parent. This function is deliberately read-only:
-    /// every path, ledger conflict, and transition choice is checked before a
-    /// caller can commit even the first marker.
+    /// Partial redemption may additionally authorize the deterministic change child of a consumed
+    /// parent. This function is deliberately read-only: every path, ledger conflict, and transition
+    /// choice is checked before a caller can commit even the first marker.
     fn plan_kagemusha_v2_consumed_branch_set(
         consumed_claims: &[KagemushaRecursiveSpendBranchClaimV2],
         redemption_binding_digest: Option<[u8; 32]>,

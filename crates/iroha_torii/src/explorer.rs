@@ -4,10 +4,9 @@
 //! returns at most 100 matches and inspects at most 512 candidate keys, so sparse secondary
 //! filters cannot turn one read-admission token into a ledger-scale scan. Block, transaction, and
 //! instruction history retain their separate page-number contract.
-use std::{
-    fmt,
-    ops::Bound::{Excluded, Unbounded},
-    time::Duration,
+use crate::{
+    account_literal,
+    json_macros::{JsonDeserialize, JsonSerialize},
 };
 use base64::{
     Engine as _,
@@ -49,11 +48,12 @@ use norito::{
     json::{self, Map, Value},
 };
 use sha2::{Digest as _, Sha256};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use crate::{
-    account_literal,
-    json_macros::{JsonDeserialize, JsonSerialize},
+use std::{
+    fmt,
+    ops::Bound::{Excluded, Unbounded},
+    time::Duration,
 };
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const ACCOUNT_QR_DIMENSION_PX: u32 = 192;
 const ACCOUNT_QR_ERROR_CORRECTION: EcLevel = EcLevel::M;
 const ACCOUNT_QR_ERROR_CORRECTION_LABEL: &str = "M";
@@ -2187,7 +2187,6 @@ fn saturating_usize_to_u32(value: usize) -> u32 {
 }
 #[cfg(test)]
 mod tests {
-    use std::{iter, num::NonZeroU32, str::FromStr, time::Duration as StdDuration};
     use iroha_core::state::World;
     use iroha_data_model::{
         NetworkId, Registrable, ValidationFail,
@@ -2210,6 +2209,7 @@ mod tests {
     };
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
+    use std::{iter, num::NonZeroU32, str::FromStr, time::Duration as StdDuration};
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0xA1; iroha_crypto::Hash::LENGTH]),
@@ -2287,8 +2287,8 @@ mod tests {
         assert_eq!(domain_and_owner_page.items.len(), 1);
         assert_eq!(domain_and_owner_page.items[0].id, definition_id.to_string());
     }
-    use nonzero_ext::nonzero;
     use super::*;
+    use nonzero_ext::nonzero;
     #[test]
     fn instruction_kind_filter_accepts_kagemusha_camelcase_and_snake_case() {
         assert_eq!(

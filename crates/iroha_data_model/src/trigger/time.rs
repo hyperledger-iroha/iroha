@@ -1,13 +1,13 @@
 //! Time trigger entrypoint definitions.
-use derive_more::Display;
-use iroha_crypto::HashOf;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     account::AccountId,
     transaction::{ExecutionStep, TransactionEntrypoint},
     trigger::TriggerId,
 };
+use derive_more::Display;
+use iroha_crypto::HashOf;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// A time-triggered entrypoint, forming the second half of the transaction entrypoints.
 #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(

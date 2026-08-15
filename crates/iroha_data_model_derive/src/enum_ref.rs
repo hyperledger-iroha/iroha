@@ -1,7 +1,7 @@
+use crate::utils::darling_error;
 use darling::{FromAttributes, FromDeriveInput, FromMeta, FromVariant};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use crate::utils::darling_error;
 pub fn impl_enum_ref(input: &syn::DeriveInput) -> manyhow::Result<TokenStream> {
     let input = EnumRef::from_derive_input(input).map_err(darling_error)?;
     Ok(quote! { #input })

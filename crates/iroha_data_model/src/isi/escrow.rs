@@ -542,13 +542,13 @@ impl_escrow_decode_from_slice!(ExpireAssetLock {
 });
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{domain::DomainId, name::Name};
     use core::num::{NonZeroU32, NonZeroU64};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::codec::Encode;
     use norito::core::DecodeFromSlice;
-    use super::*;
-    use crate::{domain::DomainId, name::Name};
     #[derive(Encode)]
     struct ForgedOpenAssetEscrow {
         escrow_id: crate::escrow::EscrowId,

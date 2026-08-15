@@ -1,15 +1,15 @@
 //! Shared helpers for committed transaction predicates.
 #![allow(clippy::missing_errors_doc)]
+use crate::{
+    name::Name,
+    query::{CommittedTransaction, CommittedTxFilters},
+};
 use iroha_crypto::HashOf;
 use iroha_primitives::json::Json;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use thiserror::Error;
-use crate::{
-    name::Name,
-    query::{CommittedTransaction, CommittedTxFilters},
-};
 /// Predicate tree over committed transactions.
 ///
 /// With the `json` feature, the canonical representation is an app expression
@@ -1702,17 +1702,17 @@ impl CommittedTxPredicate {
     }
 }
 mod wire {
-    use std::cell::Cell;
-    use iroha_crypto::HashOf;
-    use iroha_primitives::json::Json;
-    use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
-    use norito::{NoritoDeserialize, NoritoSerialize, core::Error};
     use super::{
         CommittedTxPredicate, MAX_COMMITTED_TX_MEMBERSHIP_VALUES, MAX_COMMITTED_TX_PREDICATE_DEPTH,
         MAX_COMMITTED_TX_PREDICATE_NODES, MAX_COMMITTED_TX_TOTAL_MEMBERSHIP_VALUES,
         validate_committed_tx_predicate,
     };
     use crate::name::Name;
+    use iroha_crypto::HashOf;
+    use iroha_primitives::json::Json;
+    use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
+    use norito::{NoritoDeserialize, NoritoSerialize, core::Error};
+    use std::cell::Cell;
     thread_local! {
         /// Remaining aggregate membership literals while decoding one predicate.
         ///
@@ -2248,9 +2248,6 @@ impl IntoSchema for CommittedTxPredicate {
 }
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use std::str::FromStr;
-    use hex;
-    use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof};
     use super::*;
     use crate::{
         domain::DomainId,
@@ -2260,6 +2257,9 @@ mod tests {
             FeePaymentIntent, TransactionBuilder, TransactionEntrypoint, TransactionResult,
         },
     };
+    use hex;
+    use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof};
+    use std::str::FromStr;
     fn bare_bytes(value: &dyn norito::core::NoritoSerialize) -> Vec<u8> {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let mut bytes = Vec::new();

@@ -6,11 +6,11 @@
 #[cfg(test)]
 use core::ops::ShrAssign;
 use core::{cmp::Ordering, fmt};
-use std::sync::LazyLock;
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, Zero};
 use rand::{RngCore, rngs::OsRng};
 use rand_core::TryRngCore;
+use std::sync::LazyLock;
 use streebog::{Digest, Streebog256, Streebog512};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 #[cfg(feature = "gost")]
@@ -21,17 +21,17 @@ mod constant_time {
     //! This module provides field operations backed by `crypto-bigint`’s constant-time
     //! Montgomery arithmetic and Jacobian point helpers that will replace the compat
     //! `num-bigint` implementation during Task G2.
-    use std::{ptr, sync::LazyLock};
+    use super::{AffinePoint as OuterAffinePoint, CurveParams as OuterCurveParams};
+    #[cfg(test)]
+    use crate::Algorithm;
     use crypto_bigint::{
         Odd, U256, U512, Uint,
         modular::{MontyForm, MontyParams},
     };
     use num_bigint::BigUint;
     use num_traits::Zero;
+    use std::{ptr, sync::LazyLock};
     use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
-    use super::{AffinePoint as OuterAffinePoint, CurveParams as OuterCurveParams};
-    #[cfg(test)]
-    use crate::Algorithm;
     /// Field element represented in Montgomery form with constant-time operations.
     #[derive(Clone, Copy)]
     struct FieldElement<const LIMBS: usize> {
@@ -589,14 +589,14 @@ mod constant_time {
     }
     #[cfg(test)]
     mod tests {
-        use num_bigint::BigUint;
-        use num_traits::{One, Zero};
-        use rand_core::RngCore;
         use super::*;
         use crate::{
             rng::rng_from_seed,
             signature::gost::{Params, compat_point_add, compat_scalar_mul, params_for_algorithm},
         };
+        use num_bigint::BigUint;
+        use num_traits::{One, Zero};
+        use rand_core::RngCore;
         #[test]
         fn generator_is_on_curve_all_params() {
             for algo in [
@@ -1666,10 +1666,10 @@ pub fn verify(
 }
 #[cfg(test)]
 mod tests {
-    use std::{hint::black_box, time::Instant};
+    use super::*;
     use num_traits::{One, ToPrimitive, Zero as _};
     use rand::{RngCore, SeedableRng, rngs::StdRng};
-    use super::*;
+    use std::{hint::black_box, time::Instant};
     const LEGACY_HMAC_BLOCK_LEN: usize = 64;
     fn seed_pair() -> (PublicKey, PrivateKey) {
         let seed = b"iroha-gost-test-seed";

@@ -732,6 +732,7 @@ pub(crate) fn plan_orderbook_generation(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -754,7 +755,6 @@ mod tests {
         OrderbookTransactionForwarderPolicyV1,
     };
     use tempfile::TempDir;
-    use super::*;
     fn foreign_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0xF1; 32]),

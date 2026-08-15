@@ -2,43 +2,6 @@
 //!
 //! The supervisor prepares filesystem layouts, generates a Kagami-aligned
 //! default genesis manifest, and can launch or stop child `iroha3d` processes.
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    env,
-    ffi::{OsStr, OsString},
-    fs::{self, OpenOptions},
-    io::{self, BufRead, BufReader, Read, Write},
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    str::FromStr,
-    sync::{Arc, Mutex},
-    thread::{self, JoinHandle},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove,
-};
-use iroha_data_model::{
-    block::BlockHeader,
-    parameter::system::SumeragiConsensusMode,
-    peer::PeerId,
-    prelude::{AccountId, ChainId, NetworkId},
-};
-use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
-use iroha_version::build_line::BuildLine;
-#[cfg(any(test, feature = "test"))]
-use izanami::genesis_support::sign_prepared_genesis_from_config;
-use izanami::genesis_support::{
-    ManagedNodeConfig, UNRESOLVED_GENESIS_EXPECTED_HASH, validate_prepared_genesis_for_startup,
-};
-use norito::json::{self, Map, Value};
-use once_cell::sync::OnceCell;
-use rand::{TryRngCore as _, rngs::OsRng};
-use tokio::runtime::Handle;
-use zeroize::{Zeroize as _, Zeroizing};
 use crate::{
     compose::{SigningAuthority, development_signing_authorities},
     config::{
@@ -58,6 +21,43 @@ use crate::{
     },
     vault::{SignerVault, SignerVaultError},
 };
+use iroha_crypto::{
+    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove,
+};
+use iroha_data_model::{
+    block::BlockHeader,
+    parameter::system::SumeragiConsensusMode,
+    peer::PeerId,
+    prelude::{AccountId, ChainId, NetworkId},
+};
+use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+use iroha_version::build_line::BuildLine;
+#[cfg(any(test, feature = "test"))]
+use izanami::genesis_support::sign_prepared_genesis_from_config;
+use izanami::genesis_support::{
+    ManagedNodeConfig, UNRESOLVED_GENESIS_EXPECTED_HASH, validate_prepared_genesis_for_startup,
+};
+use norito::json::{self, Map, Value};
+use once_cell::sync::OnceCell;
+use rand::{TryRngCore as _, rngs::OsRng};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    env,
+    ffi::{OsStr, OsString},
+    fs::{self, OpenOptions},
+    io::{self, BufRead, BufReader, Read, Write},
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    str::FromStr,
+    sync::{Arc, Mutex},
+    thread::{self, JoinHandle},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use tokio::runtime::Handle;
+use zeroize::{Zeroize as _, Zeroizing};
 mod generation_lifecycle;
 mod ownership;
 mod selected_storage;

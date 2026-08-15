@@ -589,7 +589,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "54fdb6bca310890d4d5c195925ddafafb74c89ec7b33ce4cd339846177b5bdb4"
+        "3e87cffe611d61fb2e9a7a6d921cc263794238c57c3d22121025b74423b6468d"
     )
     python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
     python_launcher = (
@@ -1843,15 +1843,7 @@ def make_g12_evidence(
     }
 
 
-def _sdk_dependency_material() -> tuple[
-    bytes,
-    bytes,
-    bytes,
-    bytes,
-    dict[str, bytes],
-    list[dict[str, object]],
-    list[dict[str, object]],
-]:
+def _sdk_dependency_material() -> tuple[bytes, bytes, bytes, bytes, dict[str, bytes], list[dict[str, object]], list[dict[str, object]]]:
     package_lock = canonical_json(
         {
             "name": "sdk-fixture",
@@ -1907,6 +1899,9 @@ def _sdk_dependency_material() -> tuple[
         "node/node_modules/.package-lock.json": installed_lock,
         "node/node_modules/fixture/index.js": b"export const fixture = true;\n",
         "node/package-lock.json": package_lock,
+        "openapi/node_modules/.package-lock.json": installed_lock,
+        "openapi/node_modules/fixture/index.js": b"export const openapiFixture = true;\n",
+        "openapi/package-lock.json": package_lock,
         "swiftpm/cache/checkouts/fixture/.git/HEAD": (
             resolved_revision + "\n"
         ).encode("ascii"),
@@ -1939,6 +1934,9 @@ def _sdk_dependency_material() -> tuple[
         "node",
         "node/node_modules",
         "node/node_modules/fixture",
+        "openapi",
+        "openapi/node_modules",
+        "openapi/node_modules/fixture",
         "swiftpm",
         "swiftpm/cache",
         "swiftpm/cache/checkouts",
@@ -2023,15 +2021,7 @@ def _sdk_dependency_material() -> tuple[
 
 
 def _sdk_source_manifest_fixture(git_path: Path, git_sha256: str) -> bytes:
-    (
-        package_lock,
-        _,
-        package_resolved,
-        wrapper,
-        files,
-        records,
-        _,
-    ) = _sdk_dependency_material()
+    package_lock, _, package_resolved, wrapper, files, records, _ = _sdk_dependency_material()
 
     def source_inventory(prefix: str) -> dict[str, object]:
         projected: list[dict[str, object]] = []
@@ -2098,7 +2088,12 @@ def _sdk_source_manifest_fixture(git_path: Path, git_sha256: str) -> bytes:
                 "node_modules_root": "/operator/node_modules",
                 "package_lock_sha256": hashlib.sha256(package_lock).hexdigest(),
             },
-            "schema_version": 2,
+            "openapi_node": {
+                "node_modules_inventory": source_inventory("openapi/node_modules"),
+                "node_modules_root": "/operator/tools/openapi/node_modules",
+                "package_lock_sha256": hashlib.sha256(package_lock).hexdigest(),
+            },
+            "schema_version": 3,
             "swiftpm": {
                 "cache_inventory": source_inventory("swiftpm/cache"),
                 "cache_root": "/operator/swiftpm-cache",
@@ -2121,15 +2116,7 @@ def _sdk_source_manifest_fixture(git_path: Path, git_sha256: str) -> bytes:
 def make_sdk_dependency_evidence(
     invocation_root: Path, *, source_manifest_sha256: str
 ) -> dict[str, Path]:
-    (
-        package_lock,
-        installed_lock,
-        package_resolved,
-        wrapper,
-        files,
-        records,
-        work_records,
-    ) = _sdk_dependency_material()
+    package_lock, installed_lock, package_resolved, wrapper, files, records, work_records = _sdk_dependency_material()
     resolved_revision = "a" * 40
     resolved_tree = "b" * 40
     archive_path = invocation_root / "sdk-dependency-bundle.tar"
@@ -2169,6 +2156,12 @@ def make_sdk_dependency_evidence(
             "node": {
                 "node_modules_archive_name": "node/node_modules",
                 "package_lock_archive_name": "node/package-lock.json",
+                "package_lock_sha256": hashlib.sha256(package_lock).hexdigest(),
+                "installed_lock_sha256": hashlib.sha256(installed_lock).hexdigest(),
+            },
+            "openapi_node": {
+                "node_modules_archive_name": "openapi/node_modules",
+                "package_lock_archive_name": "openapi/package-lock.json",
                 "package_lock_sha256": hashlib.sha256(package_lock).hexdigest(),
                 "installed_lock_sha256": hashlib.sha256(installed_lock).hexdigest(),
             },
@@ -2746,13 +2739,20 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             log_lines = [f"{leg_id} completed successfully"]
         elif kind == "native-amx-sdk":
             surface = leg_id.removeprefix("native-amx-grouped-")
-            log_lines = [
+            log_lines = []
+            if surface == "openapi":
+                log_lines.append(
+                    "openapi-two-mirror-replay status=success "
+                    f"candidate_oid={head} candidate_tree={tree} "
+                    "mirrors=2 artifacts=5 require_signed=1"
+                )
+            log_lines.append(
                 "native-amx-v2-grouped-parity "
                 f"surface={surface} tests={required_count} "
                 f"fixture_sha256={native_amx_grouped_fixture_sha256} "
                 "suite_source_manifest_sha256="
                 f"{native_amx_grouped_suite_source_manifest}"
-            ]
+            )
         elif kind == "sdk-diagnostics":
             surface = leg_id.removeprefix("sumeragi-diagnostics-")
             log_lines = [

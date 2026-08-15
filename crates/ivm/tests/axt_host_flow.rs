@@ -1,5 +1,4 @@
 //! AXT host flow coverage for DefaultHost and WsvHost.
-use std::{collections::HashMap, sync::Arc};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     nexus::{
@@ -17,6 +16,7 @@ use ivm::{
     mock_wsv::{AccountId, DataspaceAxtPolicy, MockWorldStateView, WsvHost},
     syscalls,
 };
+use std::{collections::HashMap, sync::Arc};
 const AXT_VERIFY_EMPTY_GAS: u64 = 64;
 const AXT_GAS_BASE: u64 = 16;
 fn axt_gas(payload_len: usize) -> u64 {

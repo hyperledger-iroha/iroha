@@ -1,7 +1,7 @@
 //! Lifecycle aggregation tests for the desktop supervisor shell.
-use std::collections::HashSet;
-use mochi_core::SupervisorError;
 use super::MochiApp;
+use mochi_core::SupervisorError;
+use std::collections::HashSet;
 #[test]
 fn alias_operation_aggregation_attempts_every_requested_peer() {
     let aliases = vec!["peer0".to_owned(), "peer1".to_owned(), "peer2".to_owned()];

@@ -1,5 +1,4 @@
 //! Cross-language acceptance for Swift-built confidential-unshield redeem attachments.
-use std::{env, fs};
 use iroha_core::zk::{
     ZK_BACKEND_HALO2_IPA,
     confidential_v2::{
@@ -13,6 +12,7 @@ use iroha_data_model::{
     proof::{ProofAttachment, VerifyingKeyId},
     zk::{BackendTag, OpenVerifyEnvelope},
 };
+use std::{env, fs};
 #[test]
 fn swift_confidential_unshield_redeem_attachment_is_canonical_and_verifies() {
     let Ok(path) = env::var("IROHA_SWIFT_UNSHIELD_ATTACHMENT_PATH") else {

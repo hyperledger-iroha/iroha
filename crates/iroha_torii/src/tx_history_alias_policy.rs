@@ -1,4 +1,11 @@
 //! Bounded startup loader for transaction-history mandatory-alias policy files.
+use iroha_data_model::{
+    alias_setup::AccountAliasName, name::MAX_NAME_BYTES, nexus::DataSpaceCatalog,
+};
+use norito::{
+    DecodeLimits,
+    json::{JsonPreflightLimits, JsonPreflightProfile, Parser, preflight_slice},
+};
 use std::{
     alloc::{Layout, alloc},
     fmt,
@@ -10,11 +17,6 @@ use std::{
 };
 #[cfg(test)]
 use std::{path::PathBuf, sync::Mutex};
-use iroha_data_model::{alias_setup::AccountAliasName, name::MAX_NAME_BYTES, nexus::DataSpaceCatalog};
-use norito::{
-    DecodeLimits,
-    json::{JsonPreflightLimits, JsonPreflightProfile, Parser, preflight_slice},
-};
 const MAX_ACCOUNT_ALIAS_LITERAL_BYTES: usize = 3 * MAX_NAME_BYTES + 2;
 const JSON_VALUE_DEPTH: usize = 3;
 /// Canonical mandatory aliases retained in one exact, sorted allocation.
@@ -656,8 +658,8 @@ fn replace_policy_file_for_test(path: &Path) -> io::Result<()> {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::nexus::{DataSpaceId, DataSpaceMetadata};
     use super::*;
+    use iroha_data_model::nexus::{DataSpaceId, DataSpaceMetadata};
     fn catalog() -> DataSpaceCatalog {
         DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),

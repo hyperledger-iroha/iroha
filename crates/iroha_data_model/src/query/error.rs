@@ -1,15 +1,15 @@
 //! Error types produced by query execution.
 //!
 //! Module containing errors that can occur during query execution.
+pub use self::model::*;
+use super::*;
+use crate::prelude::*;
 #[cfg(feature = "json")]
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-pub use self::model::*;
-use super::*;
-use crate::prelude::*;
 #[model]
 mod model {
     use super::*;

@@ -1,9 +1,9 @@
 //! Stable source identities for the CST-lowered Kotodama AST.
+pub(crate) use crate::ast::NodeId;
 use crate::{
     ast::Program,
     source::{SourceFile, SourceId, TextRange},
 };
-pub(crate) use crate::ast::NodeId;
 /// Coarse source node category retained independently of AST enum layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AstNodeKind {

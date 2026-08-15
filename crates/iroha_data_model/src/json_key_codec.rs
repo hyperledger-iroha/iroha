@@ -616,9 +616,6 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpInboundAnchorHighWaterKeyV1 {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
-    use mv::json::JsonKeyCodec;
-    use norito::json::Parser;
     use crate::account::AccountId;
     use crate::bridge::sccp::{
         SccpInboundAnchorHighWaterKeyV1, SccpInboundMessageKeyV1, SccpLaneIdV1, SccpNetworkV1,
@@ -632,6 +629,9 @@ mod tests {
         nexus::DataSpaceId,
         sorafs::{capacity::ProviderId, pin_registry::ReplicationOrderId},
     };
+    use iroha_crypto::KeyPair;
+    use mv::json::JsonKeyCodec;
+    use norito::json::Parser;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
     }

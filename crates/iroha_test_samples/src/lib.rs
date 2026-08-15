@@ -1,4 +1,8 @@
 //! Utility crate for standardized and random signatories.
+use iroha_crypto::KeyPair;
+#[cfg(feature = "rand")]
+use iroha_crypto::{Algorithm, Error as CryptoError, Hash};
+use iroha_data_model::prelude::{AccountId, DomainId, IvmBytecode};
 #[cfg(all(test, feature = "rand"))]
 use std::sync::Mutex;
 #[cfg(feature = "rand")]
@@ -12,10 +16,6 @@ use std::{
     str::FromStr,
     sync::LazyLock,
 };
-use iroha_crypto::KeyPair;
-#[cfg(feature = "rand")]
-use iroha_crypto::{Algorithm, Error as CryptoError, Hash};
-use iroha_data_model::prelude::{AccountId, DomainId, IvmBytecode};
 /// Generate a domainless [`AccountId`] using the given `domain` label as seed scope.
 ///
 /// # Panics
@@ -98,9 +98,9 @@ fn set_calibration_seed_override(seed: Option<&str>) {
 }
 #[cfg(all(test, feature = "rand"))]
 mod calibration_tests {
-    use std::sync::atomic::Ordering;
-    use iroha_data_model::prelude::AccountId;
     use super::*;
+    use iroha_data_model::prelude::AccountId;
+    use std::sync::atomic::Ordering;
     #[test]
     fn gen_account_in_uses_seed_when_present() {
         let seed_value = "test-seed";

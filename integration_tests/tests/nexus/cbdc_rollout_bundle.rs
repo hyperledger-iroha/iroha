@@ -1,9 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Nexus CBDC rollout bundle tooling smoke tests.
 #![cfg(target_family = "unix")]
-use std::{path::PathBuf, process::Command};
 use eyre::{Result, WrapErr, ensure};
 use integration_tests::process::{process_timeout, status_with_timeout};
+use std::{path::PathBuf, process::Command};
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

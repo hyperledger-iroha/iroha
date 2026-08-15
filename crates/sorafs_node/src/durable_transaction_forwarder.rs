@@ -4,6 +4,13 @@
 //! instruction and its finalized-chain reconciliation result. This module owns
 //! only the reusable crash states and the hardened single-writer persistence
 //! protocol.
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
+#[cfg(unix)]
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+};
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
@@ -14,13 +21,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-#[cfg(unix)]
-use std::os::unix::fs::{
-    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
-};
-#[cfg(windows)]
-use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static CHECKPOINT_PROCESS_LOCKS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());

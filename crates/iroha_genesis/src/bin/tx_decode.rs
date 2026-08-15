@@ -1,8 +1,8 @@
 //! Decode transaction payloads from stdin for diagnostics.
-use std::io::{self, Read};
 use iroha_data_model::transaction::{SignedTransaction, TransactionEntrypoint};
 use iroha_version::codec::DecodeVersioned as _;
 use norito::core::DecodeFromSlice as _;
+use std::io::{self, Read};
 fn try_decode_signed(bytes: &[u8]) -> String {
     if SignedTransaction::decode_all_versioned(bytes).is_ok() {
         return "signed:versioned".to_string();

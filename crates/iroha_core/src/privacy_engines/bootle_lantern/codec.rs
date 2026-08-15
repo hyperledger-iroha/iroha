@@ -1,10 +1,10 @@
 //! Strict fixed-width Bootle/Lantern presentation and blind-issuance wires.
-use thiserror::Error;
 use super::params::{
     APPLICATION_RING_DEGREE_V1, CHALLENGE_OMEGA_V1, PROOF_MODULUS_V1, PROOF_RESIDUE_BYTES_V1,
 };
 use super::ring::ProofPolynomialV1;
 use super::transcript::challenge_eta_is_valid_v1;
+use thiserror::Error;
 /// Proof wire magic.
 pub const PROOF_MAGIC_V1: [u8; 4] = *b"ILN1";
 /// Blind-issuance-request proof wire magic.

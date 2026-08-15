@@ -15,7 +15,7 @@ use crate::{
             ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
             ZkAmsT256MembershipBoundV1, ZkAmsT256MembershipErrorV1, ZkAmsT256MembershipProofV1,
             preflight_zk_ams_t256_membership_chunk_wire_v1, prove_zk_ams_t256_membership_chunk_v1,
-            verify_zk_ams_t256_membership_chunk_v1,
+            verify_zk_ams_t256_membership_chunk_v1, verify_zk_ams_t256_membership_chunk_wire_v1,
             zk_ams_t256_bulletproof_generator_basis_digest_v1,
         },
         sponge::Keccak256,
@@ -399,10 +399,76 @@ impl<'a, R: ExactEightChunkMembershipRoleV1> PreflightedExactEightChunkMembershi
             verifier_transcript_digest,
         })
     }
+    #[cfg(test)]
     pub(super) fn materialize(
         self,
     ) -> Result<ExactEightChunkMembershipEvidenceV1<R>, ExactEightChunkMembershipErrorV1> {
         ExactEightChunkMembershipEvidenceV1::from_wire_bytes_exact(self.bytes)
+    }
+    /// Replay all eight borrowed chunk wires without constructing owned proofs.
+    ///
+    /// The preflighted frame remains reusable. This returns no capability or
+    /// receipt and retains only the eight transcript digests needed to recheck
+    /// the exact ordered transcript-set root.
+    pub(super) fn verify_replayable(&self) -> Result<(), ExactEightChunkMembershipErrorV1> {
+        ensure_canonical_generator_basis()?;
+        self.verify_replayable_with(|context_digest, ordinal, wire| {
+            verify_zk_ams_t256_membership_chunk_wire_v1(context_digest, ordinal, R::BOUND, wire)
+                .map_err(Into::into)
+        })
+    }
+    fn verify_replayable_with<F>(
+        &self,
+        mut verify_chunk: F,
+    ) -> Result<(), ExactEightChunkMembershipErrorV1>
+    where
+        F: FnMut([u8; 32], u16, &[u8]) -> Result<[u8; 32], ExactEightChunkMembershipErrorV1>,
+    {
+        let context_digest = self.context.context_digest();
+        let mut transcript_digests = [[0_u8; 32]; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1];
+        for (index, transcript_digest) in transcript_digests.iter_mut().enumerate() {
+            let start = EXACT_MEMBERSHIP_HEADER_BYTES_V1
+                .checked_add(
+                    index
+                        .checked_mul(R::CHUNK_WIRE_BYTES)
+                        .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?,
+                )
+                .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?;
+            let end = start
+                .checked_add(R::CHUNK_WIRE_BYTES)
+                .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?;
+            *transcript_digest = verify_chunk(
+                context_digest,
+                u16::try_from(index).map_err(|_| ExactEightChunkMembershipErrorV1::Shape)?,
+                self.bytes
+                    .get(start..end)
+                    .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?,
+            )?;
+            if *transcript_digest == [0; 32] {
+                return Err(ExactEightChunkMembershipErrorV1::DigestMismatch);
+            }
+        }
+        let recomputed = verifier_transcript_set_digest::<R>(
+            context_digest,
+            ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+            &transcript_digests,
+        );
+        if self.verifier_transcript_digest == [0; 32]
+            || recomputed != self.verifier_transcript_digest
+        {
+            return Err(ExactEightChunkMembershipErrorV1::DigestMismatch);
+        }
+        Ok(())
+    }
+    #[cfg(test)]
+    pub(super) fn verify_replayable_with_for_test<F>(
+        &self,
+        verify_chunk: F,
+    ) -> Result<(), ExactEightChunkMembershipErrorV1>
+    where
+        F: FnMut([u8; 32], u16, &[u8]) -> Result<[u8; 32], ExactEightChunkMembershipErrorV1>,
+    {
+        self.verify_replayable_with(verify_chunk)
     }
     pub(super) const fn context(&self) -> ExactEightChunkMembershipContextV1<R> {
         self.context
@@ -1241,6 +1307,18 @@ mod tests {
         hash.update(&chunk.to_wire_bytes());
         Ok(hash.finalize())
     }
+    fn syntax_fixture_transcript_digest(
+        context_digest: [u8; 32],
+        ordinal: u16,
+        wire: &[u8],
+    ) -> [u8; 32] {
+        let mut hash = Keccak256::new();
+        hash.update(b"iroha.zk-ams.v1.mkhe.direct-membership.syntax-fixture-transcript");
+        hash.update(&context_digest);
+        hash.update(&ordinal.to_be_bytes());
+        hash.update(wire);
+        hash.finalize()
+    }
     fn fake_evidence<R: ExactEightChunkMembershipRoleV1>(
         seed: &[u8],
         point_offset: usize,
@@ -1288,6 +1366,122 @@ mod tests {
             verified.verifier_transcript_digest(),
             evidence.verifier_transcript_digest()
         );
+    }
+
+    #[test]
+    fn borrowed_replay_visits_zero_through_seven_and_stops_on_the_first_failure() {
+        let wire = canonical_membership_syntax_wire_fixture_for_test::<
+            DirectRelationBoundOneMembershipRoleV1,
+        >(b"borrowed-replay-order", 0);
+        let view = PreflightedExactEightChunkMembershipWireV1::<
+            DirectRelationBoundOneMembershipRoleV1,
+        >::preflight(&wire)
+        .expect("preflighted fixture");
+        let mut visited = Vec::new();
+        view.verify_replayable_with_for_test(|context_digest, ordinal, chunk_wire| {
+            visited.push(ordinal);
+            Ok(syntax_fixture_transcript_digest(
+                context_digest,
+                ordinal,
+                chunk_wire,
+            ))
+        })
+        .expect("borrowed replay");
+        assert_eq!(visited, (0_u16..8).collect::<Vec<_>>());
+
+        visited.clear();
+        let error = view
+            .verify_replayable_with_for_test(|context_digest, ordinal, chunk_wire| {
+                visited.push(ordinal);
+                if ordinal == 3 {
+                    return Err(ExactEightChunkMembershipErrorV1::Membership(
+                        ZkAmsT256MembershipErrorV1::StatementMismatch,
+                    ));
+                }
+                Ok(syntax_fixture_transcript_digest(
+                    context_digest,
+                    ordinal,
+                    chunk_wire,
+                ))
+            })
+            .unwrap_err();
+        assert_eq!(
+            error,
+            ExactEightChunkMembershipErrorV1::Membership(
+                ZkAmsT256MembershipErrorV1::StatementMismatch
+            )
+        );
+        assert_eq!(visited, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn borrowed_replay_rejects_zero_and_mismatched_transcript_roots() {
+        let wire = canonical_membership_syntax_wire_fixture_for_test::<
+            DirectRelationBoundTwoMembershipRoleV1,
+        >(b"borrowed-replay-root", 0);
+        let view = PreflightedExactEightChunkMembershipWireV1::<
+            DirectRelationBoundTwoMembershipRoleV1,
+        >::preflight(&wire)
+        .expect("preflighted fixture");
+        let mut calls = 0;
+        let zero = view.verify_replayable_with_for_test(|context, ordinal, chunk_wire| {
+            calls += 1;
+            if ordinal == 2 {
+                Ok([0; 32])
+            } else {
+                Ok(syntax_fixture_transcript_digest(
+                    context, ordinal, chunk_wire,
+                ))
+            }
+        });
+        assert_eq!(zero, Err(ExactEightChunkMembershipErrorV1::DigestMismatch));
+        assert_eq!(calls, 3);
+
+        calls = 0;
+        let mismatch = view.verify_replayable_with_for_test(|context, ordinal, chunk_wire| {
+            calls += 1;
+            let mut digest = syntax_fixture_transcript_digest(context, ordinal, chunk_wire);
+            if ordinal == 7 {
+                digest[0] ^= 1;
+            }
+            Ok(digest)
+        });
+        assert_eq!(
+            mismatch,
+            Err(ExactEightChunkMembershipErrorV1::DigestMismatch)
+        );
+        assert_eq!(calls, 8);
+    }
+
+    #[test]
+    fn borrowed_replay_surface_is_conversion_and_authority_free() {
+        let source = include_str!("exact_eight_chunk_membership.rs");
+        let replay = source
+            .split_once("    pub(super) fn verify_replayable(&self)")
+            .and_then(|(_, tail)| tail.split_once("    pub(super) const fn context("))
+            .map(|(body, _)| body)
+            .expect("bounded borrowed replay surface");
+        assert_eq!(
+            replay
+                .matches("verify_zk_ams_t256_membership_chunk_wire_v1(")
+                .count(),
+            1
+        );
+        assert!(replay.contains("let mut transcript_digests = [[0_u8; 32];"));
+        assert!(replay.contains("verifier_transcript_set_digest::<R>("));
+        for forbidden in [
+            "materialize",
+            "from_wire_bytes_exact",
+            "to_vec",
+            "Vec<",
+            "ZkAmsT256MembershipProofV1",
+            "VerifiedExactEightChunkMembershipV1",
+            "capability",
+            "receipt",
+            "into_verified",
+        ] {
+            assert!(!replay.contains(forbidden));
+        }
     }
     #[test]
     fn all_roles_have_exact_release_sizes_and_move_only_verified_outputs() {

@@ -101,9 +101,9 @@ pub fn derive_labeled_hkdf(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::LazyLock;
-    use hex::ToHex;
     use super::*;
+    use hex::ToHex;
+    use std::sync::LazyLock;
     static IKM: LazyLock<Vec<u8>> = LazyLock::new(|| (0_u8..16).collect());
     static SALT: LazyLock<Vec<u8>> = LazyLock::new(|| (32_u8..48).collect());
     #[test]

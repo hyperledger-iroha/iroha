@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end check that privacy proofs attached to transactions can satisfy
 //! lane compliance policies requiring advertised commitments.
-use std::{collections::BTreeSet, sync::Arc};
 use eyre::Result;
 use iroha_core::{
     compliance::{LaneComplianceContext, LaneComplianceEngine, LaneComplianceEvaluation},
@@ -21,6 +20,7 @@ use iroha_data_model::{
     },
 };
 use iroha_test_samples::ALICE_ID;
+use std::{collections::BTreeSet, sync::Arc};
 #[test]
 fn lane_privacy_proof_allows_compliance() -> Result<()> {
     let lane_id = LaneId::new(5);

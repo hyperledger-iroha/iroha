@@ -1,26 +1,9 @@
 //! Canonical native Falcon-512 blind issuance for Bootle/Lantern credentials.
 //!
-//! The first-release lifecycle is deliberately closed: generate a concrete
-//! Falcon/NTRU issuer key, derive its governed policy, prove a blinded holder
-//! request, verify and sign that request, then let the holder independently
-//! finalize and validate the credential before any presentation proof is
-//! produced. There is no direct or trusted-issuance shortcut.
-use iroha_data_model::{
-    NetworkId,
-    privacy::{
-        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
-        BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
-        BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
-        BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
-        IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-        PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
-        PrivacyStatementContextV1,
-    },
-};
-use rand_core_06::{CryptoRng, OsRng, RngCore};
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
+//! The first-release lifecycle is deliberately closed: generate a concrete Falcon/NTRU issuer key,
+//! derive its governed policy, prove a blinded holder request, verify and sign that request, then
+//! let the holder independently finalize and validate the credential before any presentation proof
+//! is produced. There is no direct or trusted-issuance shortcut.
 pub use super::issuance_store::{
     BootleLanternFileIssuanceStoreV1, BootleLanternInMemoryIssuanceStoreV1,
     BootleLanternIssuanceClaimV1, BootleLanternIssuancePreflightV1,
@@ -57,7 +40,25 @@ use super::{
         TranscriptErrorV1, expand_application_matrix_v1, matrix_seed_v1,
     },
 };
-use crate::privacy_engines::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
+use crate::privacy_engines::prover_randomness::{
+    HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
+};
+use iroha_data_model::{
+    NetworkId,
+    privacy::{
+        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
+        BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
+        BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
+        BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
+        IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+        PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+        PrivacyStatementContextV1,
+    },
+};
+use rand_core_06::{CryptoRng, OsRng, RngCore};
+use sha2::{Digest as _, Sha256};
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 /// Exact concrete issuer profile committed by compiled privacy metadata.
 pub const BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1: &[u8] = b"falcon512-ntru-r512-as-r64-rank8-interleaved|source:rust-fn-dsa-workspace-0.3-daf14859b5aa3f8d75c42966ba7de83e6eb59997-Unlicense|specialization:BLNS-specialization-no-main-construction-reduction|public-key:H_i[j]=h[8*j+i]|equation:s1+h*s2=t+A_tau*tau+credential-scope|keygen-seed:exact-nonzero-32-byte-secret-or-health-checked-CSPRNG|keygen-candidates:4096|authorization-id-draws:4|authorization-lifetime-blocks<=4096|authorization-state:Fresh-Processing-Completed-or-Failed|issuance-store:bounded-strict-ILS1-file-store+canonical-process-lease+held-unix-exclusive-flock+atomic-sync-rename+explicit-height-pruning|preimage-attempts:64|tau:one-purpose-derived-64-byte-stream-eight-R64-MSB-first|preimage-rng:purpose-derived-56-byte-Falcon-ChaCha20-word-major|issuance-rng:one-health-checked-master64-per-holder-or-issuer-operation+closed-context-bound-SHAKE256-substreams|canonical-flow:keygen-provider-prepare-ILA1+torii-only-register-request-ILQ1-with-ILB1-torii-preflight-public-P1+provider-key-validation-atomic-height-claim-provider-independent-revalidation-before-RNG-issue-local-ILR1-revalidation-durable-complete-or-fail-finalize-ILN1|broker-binding:exact-handle+revision+policy-digest+issuer-id+policy-id+lifetime+same-service-uid|completed-retry-before-provider-call-after-process-reopen-and-independent-of-expiry|no-direct-issuance";
 /// Exact peer-1 Taira broker contract committed by provider qualification.
@@ -68,11 +69,10 @@ pub const BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1: &[u8] = b"falcon512-ntru-
 pub const TAIRA_BOOTLE_LANTERN_BROKER_CONTRACT_V1: &[u8] = b"binary:taira_bootle_lantern_broker|slot:54|operations:authenticate=108,prepare-authorization=109,validate-request=110,issue-validated=111|transport:stock-runtime-provider-broker-v1-same-service-uid|credentials:three-explicit-systemd-encrypted-or-container-read-only-bind-files+nofollow+effective-service-owner-or-exact-unit-systemd-root-owner+mode0400+single-link+bounded-read+immutable-opened-snapshot|authentication:opaque-bearer-domain-hash+constant-time-fixed-digest-compare+stable-principal-seed+bounded-nonzero-request-context+exact-height-lifetime|issuer:native-falcon512-key-from-exact-seed|rng:core-owned-rand_core_06-OsRng-per-prepare-or-issue|policy:epoch1-active+no-required-disclosures+eight-empty-allowlists|public-export:canonical-InstructionBox-registration-bytes+sha256+complete-public-policy-json|state:torii-only-preflight-claim-complete-fail|lifecycle:joined-SIGINT+SIGTERM-orderly-cleanup|first-release:no-legacy-or-direct-issuance";
 /// Exact authorization/request/response wire contract owned by this implementation.
 ///
-/// Header validation establishes the structural message purpose. Complete
-/// cryptographic purpose separation additionally comes from the self-digest,
-/// request transcript, scope, policy, and request-digest checks; a
-/// structurally valid same-shape splice is rejected by those bindings rather
-/// than by a claim that structural decoding alone rejects every splice.
+/// Header validation establishes the structural message purpose. Complete cryptographic purpose
+/// separation additionally comes from the self-digest, request transcript, scope, policy, and
+/// request-digest checks; a structurally valid same-shape splice is rejected by those bindings
+/// rather than by a claim that structural decoding alone rejects every splice.
 pub(crate) const BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1: &[u8] = b"ILA1:fixed320|header:magic=ILA1,version-u8=1,flags-u8=0,reserved-u16be=0|fields:authorization-id[32],issuer-profile-digest[32],canonical-genesis-hash[32],credential-scope-digest[32],policy-record-digest[32],issuer-parameter-id[32],issuer-parameter-digest[32],policy-epoch-u64be,requester-authorization-digest[32],issued-at-height-u64be,expires-at-height-u64be,authorization-digest[32]|canonical:exact-length,nonzero-bindings,active-profile,lifetime=1..4096,self-digest=SHA256(domain+u64be-length-framed-fields);ILQ1:fixed71576|header:magic=ILQ1,version-u8=1,purpose-u8=1,reserved-u16be=0,target-count-u16be=8,ring-degree-u16be=64,proof-length-u32be=70344|fields:target[8][64]-u16be,target-digest[32],issuance-authorization-digest[32],scope-digest[32],issuer-profile-digest[32],policy-record-digest[32],proof[70344]=strict-ILB1,request-digest[32]|canonical:caller-cap-before-exact-length-before-allocation,exact-counts,target-residues<12289,nonzero-bindings,self-digests,no-trailing-bytes;ILR1:fixed3176|header:magic=ILR1,version-u8=1,flags-u8=0,reserved-u16be=0|fields:tag[8][64]-u16be,signature-one[8][64]-u16be,signature-two[8][64]-u16be,request-digest[32],scope-digest[32],policy-record-digest[32]|canonical:exact-length,tag-in-{0,1},signature-residues<12289,nonzero-bindings|purpose-separation:header-structural-plus-cryptographic-bound-digests-and-transcript";
 /// Maximum complete Falcon/NTRU key candidates derived from one seed.
 pub const MAX_BOOTLE_LANTERN_ISSUER_KEYGEN_CANDIDATES_V1: u32 =
@@ -155,10 +155,9 @@ pub enum TairaBootleLanternBrokerQualificationErrorV1 {
 }
 /// Issuer-generated bearer authorization for exactly one blind issuance.
 ///
-/// The authorization is integrity-bound to the issuer implementation, chain
-/// genesis, reusable credential scope, active policy/key epoch, external
-/// requester authorization, and a bounded block-height lifetime.  Its fields
-/// are private so callers cannot fabricate or rewrite it.
+/// The authorization is integrity-bound to the issuer implementation, chain genesis, reusable
+/// credential scope, active policy/key epoch, external requester authorization, and a bounded
+/// block-height lifetime. Its fields are private so callers cannot fabricate or rewrite it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BootleLanternIssuanceAuthorizationV1 {
     authorization_id: [u8; 32],
@@ -250,9 +249,8 @@ impl BootleLanternIssuanceAuthorizationV1 {
     ///
     /// # Errors
     ///
-    /// Rejects every wrong length, magic, version, flag/reserved byte, zero
-    /// field, invalid lifetime, altered digest, trailing byte, or alternate
-    /// representation.
+    /// Rejects every wrong length, magic, version, flag/reserved byte, zero field, invalid
+    /// lifetime, altered digest, trailing byte, or alternate representation.
     pub fn decode_exact(bytes: &[u8]) -> Result<Self, BootleLanternIssuanceErrorV1> {
         if bytes.len() != BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1
             || bytes[..4] != AUTHORIZATION_MAGIC_V1
@@ -312,10 +310,9 @@ impl core::fmt::Debug for BootleLanternIssuerKeyPairV1 {
 impl BootleLanternIssuerKeyPairV1 {
     /// Reconstruct one genuine bounded issuer key from exact secret seed material.
     ///
-    /// This is the stable HSM/sealed-credential provisioning boundary. The
-    /// seed must be 32 uniformly random secret bytes, never a password, label,
-    /// public identifier, or test default. The caller retains ownership and
-    /// must zeroize it immediately after this call.
+    /// This is the stable HSM/sealed-credential provisioning boundary. The seed must be 32
+    /// uniformly random secret bytes, never a password, label, public identifier, or test default.
+    /// The caller retains ownership and must zeroize it immediately after this call.
     ///
     /// # Errors
     ///
@@ -350,9 +347,8 @@ impl BootleLanternIssuerKeyPairV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a zero parameter identity, unavailable or unhealthy
-    /// cryptographic randomness, key-generation exhaustion, or a public-key
-    /// structural invariant failure.
+    /// Rejects a zero parameter identity, unavailable or unhealthy cryptographic randomness,
+    /// key-generation exhaustion, or a public-key structural invariant failure.
     pub fn generate_with_rng_v1<R: CryptoRng + RngCore>(
         issuer_parameter_id: PrivacyParameterIdV1,
         rng: &mut R,
@@ -420,16 +416,14 @@ impl BootleLanternIssuerKeyPairV1 {
 }
 /// Generate and atomically register one bounded blind-issuance authorization.
 ///
-/// `requester_authorization_digest` is the issuer deployment's non-zero
-/// authorization decision (for example, an authenticated account/session or
-/// approved enrollment record).  The privacy engine treats it as an opaque
-/// public commitment and never substitutes a holder-generated nonce for it.
+/// `requester_authorization_digest` is the issuer deployment's non-zero authorization decision (for
+/// example, an authenticated account/session or approved enrollment record). The privacy engine
+/// treats it as an opaque public commitment and never substitutes a holder-generated nonce for it.
 ///
 /// # Errors
 ///
-/// Rejects an invalid key/policy/scope, zero requester authorization, an
-/// invalid or overlong lifetime, unhealthy randomness, identifier collision
-/// exhaustion, or any persistence failure.
+/// Rejects an invalid key/policy/scope, zero requester authorization, an invalid or overlong
+/// lifetime, unhealthy randomness, identifier collision exhaustion, or any persistence failure.
 pub fn issuer_authorize_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
     issuer: &BootleLanternIssuerKeyPairV1,
     context: &PrivacyStatementContextV1,
@@ -483,18 +477,16 @@ pub fn issuer_authorize_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
 }
 /// Prepare one native authorization candidate without mutating replay state.
 ///
-/// This is the cryptographic-provider half of the issuance boundary. The
-/// caller is responsible for atomically registering the returned identifier
-/// in the sole authoritative [`BootleLanternIssuanceStoreV1`]. A collision
-/// must never be treated as success: callers may request at most
-/// [`MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1`] independent candidates
+/// This is the cryptographic-provider half of the issuance boundary. The caller is responsible for
+/// atomically registering the returned identifier in the sole authoritative
+/// [`BootleLanternIssuanceStoreV1`]. A collision must never be treated as success: callers may
+/// request at most [`MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1`] independent candidates
 /// before failing closed.
 ///
 /// # Errors
 ///
-/// Rejects an invalid key, policy, context, principal binding, lifetime,
-/// unhealthy randomness, a zero identifier draw, or an inconsistent
-/// canonical authorization.
+/// Rejects an invalid key, policy, context, principal binding, lifetime, unhealthy randomness, a
+/// zero identifier draw, or an inconsistent canonical authorization.
 pub fn issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1<R: CryptoRng + RngCore>(
     issuer: &BootleLanternIssuerKeyPairV1,
     context: &PrivacyStatementContextV1,
@@ -534,10 +526,9 @@ pub fn issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1<R: Cryp
 }
 /// Prepare one native authorization candidate with fresh operating-system randomness.
 ///
-/// This is the production provider entrypoint. Deterministic and fault-
-/// injected tests retain the explicit-RNG variant, while deployment adapters
-/// cannot accidentally substitute the incompatible `rand` 0.9 RNG traits or
-/// reuse one mutable RNG across independent provider operations.
+/// This is the production provider entrypoint. Deterministic and fault- injected tests retain the
+/// explicit-RNG variant, while deployment adapters cannot accidentally substitute the incompatible
+/// `rand` 0.9 RNG traits or reuse one mutable RNG across independent provider operations.
 ///
 /// # Errors
 ///
@@ -567,9 +558,8 @@ pub fn issuer_prepare_blind_issuance_authorization_candidate_v1(
 }
 /// Validate a provider-prepared authorization against exact public chain state.
 ///
-/// This consumes no randomness and performs no store mutation. Callers must
-/// run it before registering a remote or HSM-produced candidate in the sole
-/// authoritative issuance store.
+/// This consumes no randomness and performs no store mutation. Callers must run it before
+/// registering a remote or HSM-produced candidate in the sole authoritative issuance store.
 ///
 /// # Errors
 ///
@@ -674,8 +664,7 @@ impl BootleLanternBlindIssuanceRequestV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a non-canonical target or any inconsistent, zero, or
-    /// substituted request binding.
+    /// Rejects a non-canonical target or any inconsistent, zero, or substituted request binding.
     pub fn encode(&self) -> Result<Vec<u8>, BootleLanternIssuanceErrorV1> {
         let proof_wire = self.proof.encode();
         self.validate_self_v1(&proof_wire)?;
@@ -717,10 +706,9 @@ impl BootleLanternBlindIssuanceRequestV1 {
     }
     /// Decode exactly one allocation-bounded canonical `ILQ1` request.
     ///
-    /// The caller ceiling and exact outer length are checked before the sole
-    /// variable-sized inner-proof allocation. The header fixes the target
-    /// count, ring degree, and exact `ILB1` proof length, so no attacker-supplied
-    /// count controls allocation or iteration.
+    /// The caller ceiling and exact outer length are checked before the sole variable-sized
+    /// inner-proof allocation. The header fixes the target count, ring degree, and exact `ILB1`
+    /// proof length, so no attacker-supplied count controls allocation or iteration.
     ///
     /// # Errors
     ///
@@ -1108,9 +1096,8 @@ impl Drop for BootleLanternCredentialV1 {
 impl BootleLanternCredentialV1 {
     /// Build and independently validate the witness for one later statement.
     ///
-    /// Action index and transaction intent may change between presentations;
-    /// every reusable scope field and the exact active policy must remain the
-    /// same.
+    /// Action index and transaction intent may change between presentations; every reusable scope
+    /// field and the exact active policy must remain the same.
     ///
     /// # Errors
     ///
@@ -1249,9 +1236,8 @@ pub fn holder_prepare_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
 ///
 /// # Errors
 ///
-/// Returns the same closed failure set as
-/// [`holder_prepare_blind_issuance_with_rng_v1`], including unavailable or
-/// unhealthy operating-system randomness.
+/// Returns the same closed failure set as [`holder_prepare_blind_issuance_with_rng_v1`], including
+/// unavailable or unhealthy operating-system randomness.
 pub fn holder_prepare_blind_issuance_v1(
     context: &PrivacyStatementContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -1301,10 +1287,9 @@ pub fn issuer_validate_blind_issuance_request_encoded_v1(
 }
 /// Verify one canonical holder request against the exact issuer trapdoor.
 ///
-/// This is the cryptographic provider's non-random validation phase. It
-/// repeats all public P1 and binding checks and additionally proves that the
-/// provider's private key corresponds to the governed public issuer policy.
-/// It performs no replay-state mutation and consumes no randomness.
+/// This is the cryptographic provider's non-random validation phase. It repeats all public P1 and
+/// binding checks and additionally proves that the provider's private key corresponds to the
+/// governed public issuer policy. It performs no replay-state mutation and consumes no randomness.
 ///
 /// # Errors
 ///
@@ -1333,17 +1318,15 @@ pub fn issuer_validate_blind_issuance_request_for_issuer_encoded_v1(
 /// Validate and cryptographically issue one request without touching replay state.
 ///
 /// The caller must first run the non-mutating replay preflight, invoke
-/// [`issuer_validate_blind_issuance_request_encoded_v1`], and atomically claim
-/// the exact request in the authoritative issuance store. This function then
-/// independently repeats every canonical binding and P1 verification before
-/// obtaining issuer randomness. The caller must durably complete or
-/// irreversibly fail the claim on every return path.
+/// [`issuer_validate_blind_issuance_request_encoded_v1`], and atomically claim the exact request in
+/// the authoritative issuance store. This function then independently repeats every canonical
+/// binding and P1 verification before obtaining issuer randomness. The caller must durably complete
+/// or irreversibly fail the claim on every return path.
 ///
 /// # Errors
 ///
-/// Rejects any non-canonical wire, key/policy/context/authorization/request
-/// substitution, invalid P1 proof, unhealthy randomness, sampling failure, or
-/// response invariant failure.
+/// Rejects any non-canonical wire, key/policy/context/authorization/request substitution, invalid
+/// P1 proof, unhealthy randomness, sampling failure, or response invariant failure.
 pub fn issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1<R: CryptoRng + RngCore>(
     issuer: &BootleLanternIssuerKeyPairV1,
     context: &PrivacyStatementContextV1,
@@ -1412,14 +1395,12 @@ pub fn issuer_issue_validated_blind_issuance_request_encoded_v1(
 }
 /// Decode and bind a cached response to the exact completed request.
 ///
-/// This performs no issuer operation and consumes no randomness. It is the
-/// only accepted path for returning a durable completed retry after the
-/// authorization lifetime has elapsed.
+/// This performs no issuer operation and consumes no randomness. It is the only accepted path for
+/// returning a durable completed retry after the authorization lifetime has elapsed.
 ///
 /// # Errors
 ///
-/// Rejects malformed or substituted authorization, request, scope, policy, or
-/// response bytes.
+/// Rejects malformed or substituted authorization, request, scope, policy, or response bytes.
 pub fn issuer_validate_cached_blind_issuance_response_encoded_v1(
     context: &PrivacyStatementContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -1508,18 +1489,16 @@ fn validate_encoded_request_v1(
 }
 /// Decode one canonical `ILQ1` request, atomically claim it, and issue at most once.
 ///
-/// This explicit-RNG entrypoint retains the authoritative store-backed
-/// lifecycle for deterministic tests and deployment-owned fault injection.
-/// Production providers should prefer
-/// [`issuer_issue_validated_blind_issuance_request_encoded_v1`] after Torii has
-/// performed the sole durable preflight and claim transition.
+/// This explicit-RNG entrypoint retains the authoritative store-backed lifecycle for deterministic
+/// tests and deployment-owned fault injection. Production providers should prefer
+/// [`issuer_issue_validated_blind_issuance_request_encoded_v1`] after Torii has performed the sole
+/// durable preflight and claim transition.
 ///
 /// # Errors
 ///
-/// Rejects a malformed, truncated, trailing, or oversized request wire; every
-/// key, policy, context, genesis, authorization, request, height, or proof
-/// substitution; replay-store failures; unhealthy randomness; sampling
-/// exhaustion; and response-invariant failures. A completed retry returns its
+/// Rejects a malformed, truncated, trailing, or oversized request wire; every key, policy, context,
+/// genesis, authorization, request, height, or proof substitution; replay-store failures; unhealthy
+/// randomness; sampling exhaustion; and response-invariant failures. A completed retry returns its
 /// exact cached response without consuming the supplied RNG.
 pub fn issuer_blind_issue_once_encoded_with_rng_v1<R: CryptoRng + RngCore>(
     issuer: &BootleLanternIssuerKeyPairV1,
@@ -1552,10 +1531,9 @@ pub fn issuer_blind_issue_once_encoded_with_rng_v1<R: CryptoRng + RngCore>(
 ///
 /// # Errors
 ///
-/// Rejects key/policy/context/authorization/request substitution and expiry
-/// before randomness.  A completed retry of the same request returns the
-/// exact cached `ILR1` response without touching either RNG.  Once a fresh
-/// claim succeeds, every later failure is terminal and can never reset the
+/// Rejects key/policy/context/authorization/request substitution and expiry before randomness. A
+/// completed retry of the same request returns the exact cached `ILR1` response without touching
+/// either RNG. Once a fresh claim succeeds, every later failure is terminal and can never reset the
 /// authorization to fresh.
 pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: CryptoRng + RngCore>(
     issuer: &BootleLanternIssuerKeyPairV1,
@@ -1881,10 +1859,9 @@ pub fn taira_bootle_lantern_broker_contract_digest_v1() -> [u8; 32] {
 ///
 /// # Errors
 ///
-/// Rejects empty or zero public bindings, an out-of-range lifetime, a policy
-/// whose identities do not match the advertised binding, a policy other than
-/// the valid active epoch-one record, canonical encoding failure, or a weak
-/// derived digest.
+/// Rejects empty or zero public bindings, an out-of-range lifetime, a policy whose identities do
+/// not match the advertised binding, a policy other than the valid active epoch-one record,
+/// canonical encoding failure, or a weak derived digest.
 pub fn derive_taira_bootle_lantern_broker_qualification_digest_v1(
     inputs: &TairaBootleLanternBrokerQualificationInputsV1<'_>,
 ) -> Result<[u8; 32], TairaBootleLanternBrokerQualificationErrorV1> {
@@ -2471,10 +2448,7 @@ const _: () = {
 };
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        OnceLock,
-        atomic::{AtomicU32, Ordering},
-    };
+    use super::*;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         block::BlockHeader,
@@ -2484,7 +2458,10 @@ mod tests {
         },
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-    use super::*;
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicU32, Ordering},
+    };
     #[test]
     fn issuer_profile_digest_binds_every_exact_native_subprofile_in_order() {
         let canonical_fields = [

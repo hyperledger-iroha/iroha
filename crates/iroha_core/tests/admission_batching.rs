@@ -4,7 +4,6 @@
 //! These exercise grouping + bisection in `ValidBlock::validate_static` using
 //! one intentionally bad signature per batch.
 use core::time::Duration;
-use std::{sync::Arc, time::SystemTime};
 use iroha_core::{
     block::ValidBlock,
     governance::manifest::LaneManifestRegistry,
@@ -17,6 +16,7 @@ use iroha_crypto::Signature;
 use iroha_crypto::{Algorithm, HashOf, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::prelude::*;
 use nonzero_ext::nonzero;
+use std::{sync::Arc, time::SystemTime};
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     let kura = Kura::blank_kura_for_testing();

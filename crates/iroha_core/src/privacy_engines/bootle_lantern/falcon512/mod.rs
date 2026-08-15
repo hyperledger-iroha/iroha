@@ -84,9 +84,9 @@ pub(super) fn sample_preimage_from_seed(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use sha2::{Digest as _, Sha256};
     use zeroize::Zeroizing;
-    use super::*;
     #[test]
     fn pinned_upstream_keygen_test0_raw_trapdoor_kat() {
         let trapdoor = generate_from_seed_slice_for_test(

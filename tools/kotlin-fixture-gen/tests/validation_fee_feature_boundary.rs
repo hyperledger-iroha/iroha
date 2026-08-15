@@ -1,5 +1,4 @@
 //! No-governance validation-fee registry feature-boundary regression.
-use std::str::FromStr as _;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
     NetworkId,
@@ -18,6 +17,7 @@ use iroha_data_model::{
         ValidationFeePolicyRegistryV1, ValidationFeePolicyV1, initial_validation_fee_amount,
     },
 };
+use std::str::FromStr as _;
 const PARITY_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const REFERENDUM_START_HEIGHT: u64 = 1;

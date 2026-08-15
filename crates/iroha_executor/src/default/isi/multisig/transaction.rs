@@ -1,11 +1,11 @@
 //! Validation and execution logic of instructions for multisig transactions
-use std::collections::BTreeSet;
-use iroha_smart_contract::data_model::{isi::CustomInstruction, query::error::QueryExecutionFail};
 use super::*;
 use crate::{
     data_model::{Level, query::error::FindError},
     smart_contract::DebugExpectExt as _,
 };
+use iroha_smart_contract::data_model::{isi::CustomInstruction, query::error::QueryExecutionFail};
+use std::collections::BTreeSet;
 fn proposer_is_authorized(
     multisig_account: &AccountId,
     proposer: &AccountId,
@@ -386,12 +386,12 @@ fn prune_down<V: Execute + Visit + ?Sized>(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use core::num::{NonZeroU16, NonZeroU64};
-    use std::collections::BTreeMap;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::account::{MultisigMember, MultisigPolicy};
     use iroha_smart_contract::data_model::{account::AccountId, domain::DomainId};
-    use super::*;
+    use std::collections::BTreeMap;
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")

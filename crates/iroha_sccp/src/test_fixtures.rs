@@ -1,6 +1,6 @@
 //! Deterministic exact SCCP fixtures for crate and downstream integration tests.
+use crate::*;
 use core::{num::NonZeroU64, time::Duration};
-use std::collections::BTreeSet;
 use halo2curves::{
     Coordinates, CurveAffine,
     bn256::{Fq, Fr, G1Affine},
@@ -37,7 +37,7 @@ use iroha_data_model::{
     },
 };
 use norito::to_bytes;
-use crate::*;
+use std::collections::BTreeSet;
 /// Complete exact EVM outbound fixture for downstream SCCP integration tests.
 ///
 /// Every field is reconstructed from the governed route and the returned proof

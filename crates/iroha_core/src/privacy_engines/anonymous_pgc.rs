@@ -1,26 +1,24 @@
 //! Source-justified Anonymous-PGC cryptographic engine.
 //!
-//! This module implements the Twisted-ElGamal construction in Definition 6.1
-//! of ePrint 2025/884, complete Schnorr representation proofs for public-key
-//! possession and ciphertext opening, and the first-release bootstrap and
-//! payment relations.  The [`bootstrap`] protocol establishes a bounded,
-//! nonnegative encrypted account table with an exact public total supply.
-//! The [`payment`] protocol proves the four §6 legality sub-languages without
-//! disclosing the sender or recipient indices and carries that bootstrap
-//! invariant forward.
+//! This module implements the Twisted-ElGamal construction in Definition 6.1 of ePrint 2025/884,
+//! complete Schnorr representation proofs for public-key possession and ciphertext opening, and the
+//! first-release bootstrap and payment relations. The [`bootstrap`] protocol establishes a bounded,
+//! nonnegative encrypted account table with an exact public total supply. The [`payment`] protocol
+//! proves the four §6 legality sub-languages without disclosing the sender or recipient indices and
+//! carries that bootstrap invariant forward.
 pub mod bootstrap;
 pub mod payment;
-use std::collections::BTreeMap;
-use once_cell::sync::Lazy;
-use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
-use rand_core_06::{CryptoRng, RngCore};
-use sha2::{Digest, Sha256};
-use thiserror::Error;
 use super::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
     TranscriptV1, generator_digest, hash_to_curve_rfc9380, health_checked_p256_rng_v1,
     random_nonzero_scalar, validate_generator_independence,
 };
+use once_cell::sync::Lazy;
+use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
+use rand_core_06::{CryptoRng, RngCore};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use thiserror::Error;
 /// Closed identifier for Twisted-ElGamal public-key possession transcripts.
 pub const PGC_KEY_POSSESSION_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.key-possession.p256.sha256.v1";
 /// Closed identifier for Twisted-ElGamal opening transcripts.
@@ -70,8 +68,7 @@ impl AnonymousPgcParametersV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error only if RFC 9380 generator derivation fails or the
-    /// derived roles collide.
+    /// Returns an error only if RFC 9380 generator derivation fails or the derived roles collide.
     pub fn get() -> Result<&'static Self, AnonymousPgcError> {
         PGC_PARAMETERS.as_ref().map_err(Clone::clone)
     }
@@ -323,8 +320,7 @@ impl TwistedElGamalCiphertextV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if either component is malformed, noncanonical, or
-    /// the identity.
+    /// Returns an error if either component is malformed, noncanonical, or the identity.
     pub fn from_sec1_bytes(left: &[u8], right: &[u8]) -> Result<Self, AnonymousPgcError> {
         let ciphertext = Self {
             left: CompressedPointV1::from_slice(left)?,
@@ -418,10 +414,9 @@ impl TwistedElGamalKeyPairV1 {
 }
 /// Immutable supply provenance carried by every payment in one PGC pool.
 ///
-/// Core creates this value only after a complete bootstrap proof verifies and
-/// persists the corresponding canonical bootstrap digest.  Binding both
-/// fields into every payment prevents a proof from being replayed across pools
-/// with different initial supply histories.
+/// Core creates this value only after a complete bootstrap proof verifies and persists the
+/// corresponding canonical bootstrap digest. Binding both fields into every payment prevents a
+/// proof from being replayed across pools with different initial supply histories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnonymousPgcPoolInvariantV1 {
     total_supply: u32,
@@ -654,13 +649,11 @@ pub enum AnonymousPgcError {
 }
 /// Encrypt a 32-bit message with caller-provided independent non-zero randomness.
 ///
-/// This is Definition 6.1's `Enc(pk,m;r)`:
-/// `C_L = pk·r`, `C_R = g·r + h·m`.
+/// This is Definition 6.1's `Enc(pk,m;r)`: `C_L = pk·r`, `C_R = g·r + h·m`.
 ///
 /// # Errors
 ///
-/// Returns an error for an invalid key or a negligibly probable identity
-/// component.
+/// Returns an error for an invalid key or a negligibly probable identity component.
 pub fn encrypt_with_randomness(
     public_key: TwistedElGamalPublicKeyV1,
     message: u32,
@@ -680,8 +673,7 @@ pub fn encrypt_with_randomness(
 ///
 /// # Errors
 ///
-/// Returns an error if entropy sampling, parameter derivation, or point
-/// canonicalization fails.
+/// Returns an error if entropy sampling, parameter derivation, or point canonicalization fails.
 pub fn encrypt<R>(
     public_key: TwistedElGamalPublicKeyV1,
     message: u32,
@@ -702,18 +694,16 @@ where
 }
 /// Decrypt a nonnegative 32-bit balance using fixed-profile baby-step giant-step.
 ///
-/// The paper's Anonymous-PGC profile admits the inclusive message interval
-/// `[0, 2^32 - 1]`; this method therefore returns every `u32` value, including
-/// [`u32::MAX`].  It computes `h·m = C_R - C_L·sk^-1` and recovers `m` with at
-/// most `2^16` baby steps and `2^16` giant steps.  The baby-step table is
-/// initialized once and is bounded to 65,535 encoded non-identity points.
+/// The paper's Anonymous-PGC profile admits the inclusive message interval `[0, 2^32 - 1]`; this
+/// method therefore returns every `u32` value, including [`u32::MAX`]. It computes `h·m = C_R -
+/// C_L·sk^-1` and recovers `m` with at most `2^16` baby steps and `2^16` giant steps. The baby-step
+/// table is initialized once and is bounded to 65,535 encoded non-identity points.
 ///
-/// This is a wallet-side operation, not a consensus verifier operation.  Its
-/// lookup and early-success behavior are not constant-time with respect to the
-/// plaintext, but both work and memory have fixed first-release hard caps.
-/// Callers must authenticate the account/ciphertext association separately;
-/// like the paper's unauthenticated `Dec`, a wrong key is rejected exactly when
-/// the resulting group element has no representative in the admitted interval.
+/// This is a wallet-side operation, not a consensus verifier operation. Its lookup and
+/// early-success behavior are not constant-time with respect to the plaintext, but both work and
+/// memory have fixed first-release hard caps. Callers must authenticate the account/ciphertext
+/// association separately; like the paper's unauthenticated `Dec`, a wrong key is rejected exactly
+/// when the resulting group element has no representative in the admitted interval.
 ///
 /// # Errors
 ///
@@ -763,9 +753,8 @@ pub fn decrypt_u32(
 }
 /// Add two Twisted-ElGamal ciphertexts component-wise.
 ///
-/// The result encrypts the sum of messages with the sum of randomizers.  The
-/// strict wire profile rejects the negligible/cancellation case where either
-/// component is the identity.
+/// The result encrypts the sum of messages with the sum of randomizers. The strict wire profile
+/// rejects the negligible/cancellation case where either component is the identity.
 ///
 /// # Errors
 ///
@@ -913,8 +902,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error for malformed material, binding mismatch, or a failed
-/// Schnorr equation.
+/// Returns an error for malformed material, binding mismatch, or a failed Schnorr equation.
 pub fn verify_key_possession(
     statement: &PgcKeyPossessionStatementV1<'_>,
     proof: &PgcKeyPossessionProofV1,
@@ -1030,8 +1018,7 @@ impl PgcCiphertextOpeningProofV1 {
         Ok(())
     }
 }
-/// Prove knowledge of `(message, randomness)` opening a Twisted-ElGamal
-/// ciphertext.
+/// Prove knowledge of `(message, randomness)` opening a Twisted-ElGamal ciphertext.
 ///
 /// # Errors
 ///
@@ -1176,8 +1163,8 @@ fn ciphertext_opening_transcript(
 }
 #[cfg(test)]
 mod tests {
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use super::*;
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     struct KatRng {
         seed: [u8; 32],
         counter: u64,

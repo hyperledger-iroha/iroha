@@ -4,8 +4,7 @@
 //! checked `#[cfg_attr(feature = "json", norito(json = "..."))]` attribute.
 //! For base64 encoding, select `crate::json_helpers::base64_vec` on `Vec<u8>` fields.
 #[cfg(feature = "json")]
-use std::collections::BTreeMap;
-use std::{format, string::String, vec::Vec};
+use crate::soranet::privacy_metrics::SoranetPrivacyModeV1;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 #[cfg(feature = "json")]
 use norito::json::{
@@ -13,7 +12,8 @@ use norito::json::{
     write_base64_json_to,
 };
 #[cfg(feature = "json")]
-use crate::soranet::privacy_metrics::SoranetPrivacyModeV1;
+use std::collections::BTreeMap;
+use std::{format, string::String, vec::Vec};
 #[cfg(feature = "json")]
 fn write_u128_decimal_string(
     mut value: u128,
@@ -781,11 +781,11 @@ pub mod sora_inrou_guest_images_map {
 }
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use norito::json;
     use super::*;
     use crate::soracloud::{
         SoraArtifactDistributionPolicyV1, SoraInrouGuestImageV1, SoraInrouGuestIsaV1,
     };
+    use norito::json;
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct Base64Wrapper {
         #[cfg_attr(

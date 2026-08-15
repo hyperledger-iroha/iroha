@@ -1,9 +1,7 @@
 //! Authoritative SoraFS orderbook policy and signed-payload ledger handlers.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-    sync::OnceLock,
-};
+use super::*;
+use crate::smartcontracts::ValidSingularQuery;
+use crate::state::{StateTransaction, WorldReadOnly};
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::AccountId,
@@ -68,9 +66,11 @@ use sorafs_manifest::{
     },
     provider_advert::SignatureAlgorithm,
 };
-use super::*;
-use crate::smartcontracts::ValidSingularQuery;
-use crate::state::{StateTransaction, WorldReadOnly};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+    sync::OnceLock,
+};
 mod orderbook_current_memory;
 const POLICY_STATE_KEY: &str = "sorafs_orderbook_policy_v1";
 const STATUS_STATE_KEY: &str = "sorafs_orderbook_status_v1";
@@ -4036,6 +4036,12 @@ impl ValidSingularQuery for FindSorafsOrderbookEvents {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Hash, KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
         IntoKeyValue, Registrable,
@@ -4076,12 +4082,6 @@ mod tests {
             order_request_signature_digest_v1, settlement_receipt_signature_digest_v1,
         },
         provider_advert::SignatureAlgorithm,
-    };
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
     };
     pub(super) const NOW: u64 = 10_000;
     pub(super) fn keypair(seed: u8) -> KeyPair {

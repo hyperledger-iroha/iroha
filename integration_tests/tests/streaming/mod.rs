@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Norito Streaming integration test helpers and vectors.
 use core::convert::TryFrom;
-use std::path::PathBuf;
 use hex::encode as hex_encode;
 use iroha_config::parameters::actual;
 use iroha_core::streaming::{StreamingHandle, StreamingProcessError};
@@ -22,6 +21,7 @@ use norito::{
     },
     to_bytes,
 };
+use std::path::PathBuf;
 /// Default capability mask used by streaming integration tests.
 pub const BASE_CAPABILITIES: CapabilityFlags = CapabilityFlags::from_bits(
     CapabilityFlags::FEATURE_FEEDBACK_HINTS
@@ -501,6 +501,7 @@ pub fn seed_viewer_negotiation(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use norito::{
         json::Value,
         streaming::{
@@ -508,7 +509,6 @@ mod tests {
             TransportCapabilityResolution,
         },
     };
-    use super::*;
     fn expect_u64_field(map: &norito::json::Map, key: &str) -> u64 {
         match map.get(key) {
             Some(Value::Number(value)) => value

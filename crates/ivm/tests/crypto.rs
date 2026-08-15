@@ -5,8 +5,8 @@ use ivm::{
     encoding, field, instruction, pairing_check_truncated, poseidon2, poseidon6, vector_supported,
 };
 mod common;
-use std::sync::{Mutex, MutexGuard, OnceLock};
 use common::assemble;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 fn words(words: &[u32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(words.len() * 4);

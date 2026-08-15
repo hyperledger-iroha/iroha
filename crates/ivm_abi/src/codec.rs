@@ -1,10 +1,10 @@
 //! Canonical Norito helpers shared by ABI producers and consumers.
+use crate::VMError;
 use norito::{
     NoritoSerialize,
     codec::{Decode, Encode},
     core::DecodeLimits,
 };
-use crate::VMError;
 /// Encode a Norito value using the V1 canonical layout.
 ///
 /// The result is independent of any ambient decode/encode flag guard.

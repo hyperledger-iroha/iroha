@@ -10,8 +10,8 @@
 //! - Includes extended vector/parallel and cryptographic instructions.
 //! - Vector length scaling and HTM retry penalties are supported; vector costs
 //!   scale from the two-lane baseline by the active logical vector length.
-use iroha_crypto::Hash;
 use crate::instruction::wide;
+use iroha_crypto::Hash;
 /// Gas accounting treats two lanes as the baseline for vector operations.
 pub const VECTOR_BASE_LANES: usize = 2;
 /// Default byte multiplier for syscall host-work gas families.

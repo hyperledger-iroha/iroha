@@ -1,12 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests that a restarted peer restores its state.
-use std::{
-    borrow::Cow,
-    collections::BTreeMap,
-    num::{NonZeroU16, NonZeroU32, NonZeroU64},
-    path::Path,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::crypto::{Hash, Signature};
@@ -56,6 +49,13 @@ use iroha_torii::{
 };
 use norito::json::{self, Value};
 use sorafs_manifest::{DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder};
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
+    path::Path,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},

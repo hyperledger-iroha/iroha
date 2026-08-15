@@ -1,5 +1,5 @@
-use std::io::Cursor;
 use norito::{core::Error, deserialize_from, to_bytes};
+use std::io::Cursor;
 #[test]
 fn truncated_payload_is_rejected() {
     let bytes = to_bytes(&"safe".to_string()).expect("serialize");

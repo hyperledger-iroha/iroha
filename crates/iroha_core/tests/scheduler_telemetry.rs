@@ -2,14 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures layer metrics and utilization are populated after block application.
 #![allow(unused_imports)]
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroU32,
-    path::PathBuf,
-    str::FromStr,
-    sync::Arc,
-};
 use iroha_config::parameters::actual::{
     LaneCompliance, LaneConfig as RuntimeLaneConfig, LaneRelayEmergency, NexusAxt,
     NexusEndorsement, NexusFees, NexusRelayWorker, NexusStaking, NexusStorage,
@@ -29,6 +21,14 @@ use iroha_data_model::{
         LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile, LaneVisibility,
     },
     prelude::*,
+};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU32,
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
 };
 #[test]
 #[cfg(feature = "telemetry")]

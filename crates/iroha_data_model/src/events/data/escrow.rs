@@ -1,9 +1,9 @@
 //! Events emitted by native asset escrow flows.
+use crate::{account::AccountId, escrow::AssetEscrowRecord, name::Name};
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use crate::{account::AccountId, escrow::AssetEscrowRecord, name::Name};
 /// Native escrow lifecycle events.
 #[derive(
     Debug,

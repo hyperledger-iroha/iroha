@@ -3,7 +3,15 @@
 //! The reducer never reads mutable world state. Genesis inputs and finalized
 //! epoch snapshots enter here once, and every non-boundary successor carries
 //! the previous frozen election inputs unchanged.
-use std::collections::BTreeMap;
+use super::{
+    stake_snapshot::{StrictV2StakeSnapshotError, strict_v2_voting_roster},
+    v2::VerifiedHeightContext,
+};
+use crate::state::{
+    StateBlock, StateReadOnly, WorldReadOnly, epoch_validator_peer_ids_from_world,
+    live_consensus_key_pop_for_peer, nexus_active_lane_ids,
+    public_lane_validator_record_matches_key,
+};
 use iroha_crypto::{Algorithm, Hash};
 use iroha_data_model::{
     NetworkId,
@@ -16,16 +24,8 @@ use iroha_data_model::{
 use iroha_genesis::GenesisBlock;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
+use std::collections::BTreeMap;
 use thiserror::Error;
-use super::{
-    stake_snapshot::{StrictV2StakeSnapshotError, strict_v2_voting_roster},
-    v2::VerifiedHeightContext,
-};
-use crate::state::{
-    StateBlock, StateReadOnly, WorldReadOnly, epoch_validator_peer_ids_from_world,
-    live_consensus_key_pop_for_peer, nexus_active_lane_ids,
-    public_lane_validator_record_matches_key,
-};
 /// Verified height-one inputs retained until the production reducer opens its
 /// safety WAL.
 pub struct GenesisV2Bootstrap {
@@ -800,7 +800,12 @@ pub(crate) enum V2ContextBuildError {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId, NetworkId,
@@ -819,12 +824,7 @@ mod tests {
     };
     use iroha_genesis::GenesisBlock;
     use iroha_primitives::numeric::Quantity;
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
+    use std::num::NonZeroU64;
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),

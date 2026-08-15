@@ -1,17 +1,17 @@
 //! Custom parameter definitions.
-use std::collections::BTreeMap;
+use crate::name::Name;
 use getset::Getters;
 use iroha_primitives::json::Json;
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use crate::name::Name;
+use std::collections::BTreeMap;
 #[cfg(feature = "json")]
 pub mod json_helpers {
     //! JSON helper utilities for serializing and deserializing custom parameters.
+    use super::*;
     use norito::json::{
         self, BoundedJsonError, JsonDeserialize, JsonSerialize, JsonWriteSink, Parser, Value,
     };
-    use super::*;
     /// Serialize a `CustomParameters` map into a JSON object written to `out`.
     pub fn serialize(parameters: &CustomParameters, out: &mut String) {
         out.push('{');
@@ -108,10 +108,10 @@ pub(crate) type CustomParameters = BTreeMap<CustomParameterId, CustomParameter>;
 pub use self::model::*;
 #[iroha_data_model_derive::model]
 mod model {
+    use super::*;
     use derive_more::{Constructor, Display, FromStr};
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-    use super::*;
     /// Id of a custom parameter
     #[derive(
         Debug,
@@ -250,9 +250,9 @@ impl JsonDeserialize for CustomParameter {
 }
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr as _;
     use super::*;
     use crate::name::Name;
+    use core::str::FromStr as _;
     #[test]
     fn id_name_returns_inner() {
         let id = CustomParameterId::new(Name::from_str("param").expect("Valid"));

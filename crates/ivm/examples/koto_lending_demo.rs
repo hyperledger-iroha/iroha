@@ -1,5 +1,4 @@
 //! Kotodama lending demo: a minimal borrow/mint flow on IVM.
-use std::collections::BTreeMap;
 use iroha_crypto::Hash;
 use iroha_data_model::{DomainId, prelude::Name};
 use iroha_primitives::{json::Json, numeric::Quantity};
@@ -8,6 +7,7 @@ use ivm::{
     ProgramMetadata, encode_argument_record_from_json,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
+use std::collections::BTreeMap;
 fn fixture_account(_domain: &str, hex_public_key: &str) -> AccountId {
     AccountId::new(hex_public_key.parse().expect("public key"))
 }

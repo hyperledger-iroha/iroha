@@ -1,10 +1,4 @@
 //! Asset definition alias literals and catalog-pinned permission targets.
-use core::fmt;
-use std::{format, str::FromStr, string::String};
-use iroha_data_model_derive::model;
-use iroha_primitives::conststr::ConstString;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 pub use self::model::*;
 use crate::{
     asset::id::AssetDefinitionId,
@@ -13,11 +7,17 @@ use crate::{
     name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
+use core::fmt;
+use iroha_data_model_derive::model;
+use iroha_primitives::conststr::ConstString;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{format, str::FromStr, string::String};
 #[model]
 mod model {
+    use super::*;
     use derive_more::Display;
     use iroha_schema::IntoSchema;
-    use super::*;
     /// Asset alias in either `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` format.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]

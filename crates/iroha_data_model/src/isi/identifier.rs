@@ -107,11 +107,6 @@ impl_decode_two_fields!(RevokeIdentifier {
 });
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{
-        Algorithm, Hash, KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
-        SignatureOf,
-    };
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         nexus::UniversalAccountId,
@@ -120,6 +115,11 @@ mod tests {
             RamLfeProgramId, RamLfeReceiptAttestation,
         },
     };
+    use iroha_crypto::{
+        Algorithm, Hash, KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
+        SignatureOf,
+    };
+    use norito::core::DecodeFromSlice;
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked identifier instruction fixture keypair")

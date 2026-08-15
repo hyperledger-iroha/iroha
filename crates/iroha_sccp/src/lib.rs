@@ -1,11 +1,9 @@
 //! SCCP payload, proof, and counterparty submission helpers for Iroha bridge flows.
 //!
-//! SCCP V1 supports Ethereum, BSC, Solana testnet, and TRON as complete
-//! bidirectional route families. Solana uses one exact testnet identity and a
-//! governed recursive Agave proof; no domain-wide or mainnet alias is
-//! decodable. SCCP will
-//! not support Sub&#115;trate/Pol&#107;adot networks for now; treat that as launch
-//! scope, not pending compatibility work.
+//! SCCP V1 supports Ethereum, BSC, Solana testnet, and TRON as complete bidirectional route
+//! families. Solana uses one exact testnet identity and a governed recursive Agave proof; no
+//! domain-wide or mainnet alias is decodable. SCCP will not support Sub&#115;trate/Pol&#107;adot
+//! networks for now; treat that as launch scope, not pending compatibility work.
 //!
 //! The crate targets the Rust standard library unconditionally.
 //! BLS verification for Taira and BSC finality is also unconditional so Cargo
@@ -27,13 +25,6 @@ mod native_admission;
 pub use native_admission::*;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod test_fixtures;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use test_fixtures::{
-    SccpExactOutboundTestFixtureV1, SccpFinalizedBlockTestFixtureV1,
-    sccp_exact_evm_governed_route_test_fixture_v1, sccp_exact_outbound_test_fixture_for_nonce_v1,
-    sccp_exact_outbound_test_fixture_v1, sccp_finalize_taira_block_test_fixture_v1,
-    sccp_sora_outbound_execution_policy_test_fixture_v1,
-};
 use alloc::{borrow::ToOwned, format, string::String, vec::Vec};
 use blake2::{
     Blake2bVar,
@@ -72,14 +63,20 @@ use iroha_data_model::{
 };
 use norito::to_bytes;
 use sha2::{Digest as _, Sha256};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use test_fixtures::{
+    SccpExactOutboundTestFixtureV1, SccpFinalizedBlockTestFixtureV1,
+    sccp_exact_evm_governed_route_test_fixture_v1, sccp_exact_outbound_test_fixture_for_nonce_v1,
+    sccp_exact_outbound_test_fixture_v1, sccp_finalize_taira_block_test_fixture_v1,
+    sccp_sora_outbound_execution_policy_test_fixture_v1,
+};
 use tiny_keccak::Hasher;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 /// Per-thread work counters for the closed SCCP destination-proof path.
 ///
-/// This instrumentation is compiled only for crate tests or with the existing
-/// `test-fixtures` feature, so production verification does not pay for atomic
-/// or thread-local accounting.
+/// This instrumentation is compiled only for crate tests or with the existing `test-fixtures`
+/// feature, so production verification does not pay for atomic or thread-local accounting.
 pub struct SccpDestinationProofWorkCountersV1 {
     /// Canonical outer destination artifacts decoded on this thread.
     pub artifact_framing_decodes: usize,
@@ -245,13 +242,12 @@ pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 4] = [
 /// Return whether every key in an account controller is executable by the V1
 /// EVM/TVM destination contracts.
 ///
-/// Rust supports additional account-key algorithms, but accepting one as a
-/// Taira-origin SCCP sender would create an outbound lock that the immutable
-/// first-release destination routes cannot parse exactly. V1 therefore admits
-/// single-key and canonical multisig controllers composed only from Ed25519 and
-/// compressed secp256k1 public keys. This check is an economic admission rule,
-/// not a signature-policy shortcut: normal transaction authorization still
-/// verifies the complete controller before this predicate is reached.
+/// Rust supports additional account-key algorithms, but accepting one as a Taira-origin SCCP sender
+/// would create an outbound lock that the immutable first-release destination routes cannot parse
+/// exactly. V1 therefore admits single-key and canonical multisig controllers composed only from
+/// Ed25519 and compressed secp256k1 public keys. This check is an economic admission rule, not a
+/// signature-policy shortcut: normal transaction authorization still verifies the complete
+/// controller before this predicate is reached.
 #[must_use]
 pub fn sccp_destination_contract_supports_account_v1(account: &AccountId) -> bool {
     fn supports_key(key: &iroha_crypto::PublicKey) -> bool {
@@ -544,7 +540,9 @@ mod json_utils {
         }
     }
     pub mod vec_bytes_hex {
-        use super::{Error, JsonDeserialize, Parser, String, Vec, decode_hex_vec, encode_hex, json};
+        use super::{
+            Error, JsonDeserialize, Parser, String, Vec, decode_hex_vec, encode_hex, json,
+        };
         pub fn serialize(value: &[Vec<u8>], out: &mut String) {
             out.push('[');
             for (index, item) in value.iter().enumerate() {
@@ -776,9 +774,8 @@ pub struct SccpMerkleProofV1 {
 }
 /// Exact typed Sumeragi-v2 finality proof carried by an SCCP message bundle.
 ///
-/// SCCP intentionally reuses the generic bridge proof type so consensus,
-/// bridge, Torii, and destination admission cannot drift into different vote
-/// transcripts or quorum rules.
+/// SCCP intentionally reuses the generic bridge proof type so consensus, bridge, Torii, and
+/// destination admission cannot drift into different vote transcripts or quorum rules.
 pub type TairaBridgeFinalityProofV1 = iroha_data_model::bridge::BridgeFinalityProof;
 #[derive(
     Clone,
@@ -1613,10 +1610,9 @@ pub fn sccp_verified_solana_destination_call_is_self_canonical_v1(
 /// One canonically framed destination artifact with its embedded bundle and
 /// finality proof decoded exactly once but not yet trusted against governance.
 ///
-/// Fields are intentionally private. Callers may inspect them to resolve the
-/// authoritative historical route, but only
-/// [`verify_parsed_sccp_destination_proof_v1`] can create the opaque verified
-/// context used to bypass repeated cryptographic verification.
+/// Fields are intentionally private. Callers may inspect them to resolve the authoritative
+/// historical route, but only [`verify_parsed_sccp_destination_proof_v1`] can create the opaque
+/// verified context used to bypass repeated cryptographic verification.
 pub struct SccpParsedDestinationProofV1 {
     artifact: SccpGroth16Bn254ProofArtifactV1,
     bundle: TairaSccpMessageProofV1,
@@ -1645,10 +1641,9 @@ impl SccpParsedDestinationProofV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Opaque route-bound destination verification result.
 ///
-/// Construction proves that the embedded finality proof has passed its one
-/// Groth16 pairing and that the finality projection is structurally canonical.
-/// Core must bind that projection to its trusted local block and QC, then
-/// perform the single authoritative BLS aggregate verification there.
+/// Construction proves that the embedded finality proof has passed its one Groth16 pairing and that
+/// the finality projection is structurally canonical. Core must bind that projection to its trusted
+/// local block and QC, then perform the single authoritative BLS aggregate verification there.
 pub struct SccpVerifiedDestinationContextV1 {
     call: SccpVerifiedDestinationCallV1,
     finality: TairaBridgeFinalityProofV1,
@@ -2278,9 +2273,8 @@ pub fn sccp_counterparty_domain(primary: u32, secondary: u32) -> Option<u32> {
 }
 /// Return the external destination for one SORA-origin outbound message.
 ///
-/// External-origin messages deliberately return `None`; inbound admission uses
-/// the closed protocol-native proof API and never constructs an outbound
-/// counterparty artifact.
+/// External-origin messages deliberately return `None`; inbound admission uses the closed
+/// protocol-native proof API and never constructs an outbound counterparty artifact.
 pub fn sccp_counterparty_domain_for_message_payload(payload: &SccpPayloadV1) -> Option<u32> {
     let source_domain = sccp_message_source_domain(payload);
     let target_domain = sccp_message_target_domain(payload);
@@ -2416,13 +2410,11 @@ fn sccp_groth16_bn254_signal_word(label: &[u8], value: H256) -> H256 {
 }
 /// Derive the eleven BN254 field public signals consumed by SCCP Groth16 verifiers.
 ///
-/// The output order matches `SccpGroth16Bn254MessageVerifier`: message id,
-/// payload hash, target-domain word, commitment root, finality-height word,
-/// finality block hash, source-domain word, statement hash, and destination
-/// binding hash, immutable route-configuration hash, and governed SORA
-/// finality-anchor hash. Each word is
-/// `keccak256(abi.encode(keccak256(label), value)) mod Fr` encoded as a
-/// big-endian 32-byte BN254 scalar.
+/// The output order matches `SccpGroth16Bn254MessageVerifier`: message id, payload hash,
+/// target-domain word, commitment root, finality-height word, finality block hash, source-domain
+/// word, statement hash, and destination binding hash, immutable route-configuration hash, and
+/// governed SORA finality-anchor hash. Each word is `keccak256(abi.encode(keccak256(label), value))
+/// mod Fr` encoded as a big-endian 32-byte BN254 scalar.
 pub fn sccp_groth16_bn254_public_signal_words(
     public_inputs: &SccpMessagePublicInputsV1,
     source_domain: u32,
@@ -2810,12 +2802,10 @@ fn verify_sccp_groth16_bn254_proof_against_validated_request_v1(
 /// Verify an SCCP Groth16 proof against an exact governed BN254 prover request.
 ///
 /// This performs the same eleven signal hashes and four-term pairing equation as
-/// `SccpGroth16Bn254MessageVerifier.sol`. The expected key hash must come from
-/// the request derived from typed governed deployment state, never from
-/// proof-controlled metadata. The semantic-profile hash is not a twelfth
-/// signal; it is nevertheless required here so all six governed hash roles
-/// receive the same nonzero, pairwise-distinct admission check as the
-/// destination verifier.
+/// `SccpGroth16Bn254MessageVerifier.sol`. The expected key hash must come from the request derived
+/// from typed governed deployment state, never from proof-controlled metadata. The semantic-profile
+/// hash is not a twelfth signal; it is nevertheless required here so all six governed hash roles
+/// receive the same nonzero, pairwise-distinct admission check as the destination verifier.
 pub fn verify_sccp_groth16_bn254_proof_v1(
     request: &SccpGroth16Bn254ProofRequestV1,
     proof_bytes: &[u8],
@@ -2952,13 +2942,11 @@ fn decode_canonical_taira_sccp_message_bundle_with_payload_v1(
         canonical_payload_bytes: payload_bytes,
     })
 }
-/// Decode the compact canonical message-bundle byte layout embedded in one
-/// Groth16 prover request.
+/// Decode the compact canonical message-bundle byte layout embedded in one Groth16 prover request.
 ///
-/// This is distinct from [`decode_taira_sccp_message_proof`], which decodes a
-/// top-level Norito-framed Torii artifact. The embedded request layout is
-/// length-delimited by the SCCP protocol itself and must never be guessed as a
-/// Norito frame.
+/// This is distinct from [`decode_taira_sccp_message_proof`], which decodes a top-level
+/// Norito-framed Torii artifact. The embedded request layout is length-delimited by the SCCP
+/// protocol itself and must never be guessed as a Norito frame.
 pub fn decode_canonical_taira_sccp_message_bundle_v1(
     bundle_bytes: &[u8],
 ) -> Option<TairaSccpMessageProofV1> {
@@ -4034,10 +4022,9 @@ fn build_sccp_verified_solana_destination_call_v1(
 }
 /// Return whether a compact Solana call still matches exact governed history.
 ///
-/// This is the verification boundary for a call deserialized independently of
-/// the opaque parsed-proof context. It rechecks route material, canonical
-/// bytes, Taira finality, and the BN254 pairing; callers must not trust a
-/// mutable DTO merely because it once came from the builder.
+/// This is the verification boundary for a call deserialized independently of the opaque
+/// parsed-proof context. It rechecks route material, canonical bytes, Taira finality, and the BN254
+/// pairing; callers must not trust a mutable DTO merely because it once came from the builder.
 #[must_use]
 pub fn sccp_verified_solana_destination_call_matches_governed_route_v1(
     call: &SccpVerifiedSolanaDestinationCallV1,
@@ -4089,13 +4076,11 @@ pub fn sccp_verified_solana_destination_call_matches_governed_route_v1(
         &deployment.verifying_key,
     )
 }
-/// Decode one destination artifact, its canonical embedded SCCP bundle, and
-/// its Taira finality proof exactly once without evaluating a pairing or BLS
-/// aggregate.
+/// Decode one destination artifact, its canonical embedded SCCP bundle, and its Taira finality
+/// proof exactly once without evaluating a pairing or BLS aggregate.
 ///
-/// The result is structurally and hash bound, but remains untrusted until it is
-/// resolved against historical governed route state by
-/// [`verify_parsed_sccp_destination_proof_v1`].
+/// The result is structurally and hash bound, but remains untrusted until it is resolved against
+/// historical governed route state by [`verify_parsed_sccp_destination_proof_v1`].
 pub fn parse_sccp_destination_proof_v1(
     proof: &BridgeSccpDestinationProofV1,
 ) -> Option<SccpParsedDestinationProofV1> {
@@ -4228,10 +4213,9 @@ pub fn verify_parsed_sccp_destination_proof_v1(
 /// Bind one parsed artifact to exact Solana route history and derive a compact
 /// proof-account settlement call.
 ///
-/// Payer, destination SPL token account, proof account, and route PDAs are
-/// explicit inputs because they are transaction-specific. The resulting
-/// sealed value hashes them together with the governed program, state, mint,
-/// verifier material, message, payload, public inputs, and proof.
+/// Payer, destination SPL token account, proof account, and route PDAs are explicit inputs because
+/// they are transaction-specific. The resulting sealed value hashes them together with the governed
+/// program, state, mint, verifier material, message, payload, public inputs, and proof.
 pub fn verify_parsed_sccp_solana_destination_proof_v1(
     parsed: SccpParsedDestinationProofV1,
     governed_route: &SccpGovernedRouteV1,
@@ -4283,13 +4267,11 @@ pub fn verify_sccp_destination_proof_v1(
     }
     Some(verified.into_call())
 }
-/// Verify one Solana destination proof and derive its compact proof-account
-/// transaction material.
+/// Verify one Solana destination proof and derive its compact proof-account transaction material.
 ///
-/// This is the complete query-free entrypoint for callers that do not already
-/// hold an opaque parsed context. It performs canonical framing, exact
-/// governed-route reconstruction, one BN254 pairing, and Taira BLS finality
-/// verification before returning a call.
+/// This is the complete query-free entrypoint for callers that do not already hold an opaque parsed
+/// context. It performs canonical framing, exact governed-route reconstruction, one BN254 pairing,
+/// and Taira BLS finality verification before returning a call.
 pub fn verify_sccp_solana_destination_proof_v1(
     proof: &BridgeSccpDestinationProofV1,
     bundle: &TairaSccpMessageProofV1,
@@ -4752,11 +4734,10 @@ pub fn verify_sccp_payload_structure(payload: &SccpPayloadV1) -> bool {
 }
 /// Build the exact outbound hub commitment for a governed destination context.
 ///
-/// The constructor is intentionally fallible. Besides validating the exact
-/// SORA-to-external lane against the payload domains, it rejects zero values
-/// and collisions among the lane, destination binding, route configuration,
-/// message, and payload hash roles. This keeps malformed records out of both
-/// Merkle trees and the durable replay index.
+/// The constructor is intentionally fallible. Besides validating the exact SORA-to-external lane
+/// against the payload domains, it rejects zero values and collisions among the lane, destination
+/// binding, route configuration, message, and payload hash roles. This keeps malformed records out
+/// of both Merkle trees and the durable replay index.
 pub fn hub_commitment_from_sccp_payload(
     context: SccpOutboundMessageContextV1,
     payload: &SccpPayloadV1,
@@ -5104,13 +5085,11 @@ pub fn verified_sccp_message_taira_finality_proof(
 }
 /// Decode and cryptographically verify a proof-controlled Taira v2 artifact.
 ///
-/// This establishes internal cryptographic consistency for the complete frozen
-/// v2 context, exact equal-vote quorum, `PoPs`, and exact commit-vote
-/// transcript. The context and roster are still carried by the proof, so
-/// callers MUST NOT treat this function as a trust anchor. Production
-/// destination proofs additionally bind an audited semantic circuit to a
-/// governed [`SccpSoraFinalityAnchorV1`]. BLS verification is mandatory in
-/// every build of this crate.
+/// This establishes internal cryptographic consistency for the complete frozen v2 context, exact
+/// equal-vote quorum, `PoPs`, and exact commit-vote transcript. The context and roster are still
+/// carried by the proof, so callers MUST NOT treat this function as a trust anchor. Production
+/// destination proofs additionally bind an audited semantic circuit to a governed
+/// [`SccpSoraFinalityAnchorV1`]. BLS verification is mandatory in every build of this crate.
 pub fn verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(
     bundle: &TairaSccpMessageProofV1,
 ) -> Option<TairaBridgeFinalityProofV1> {
@@ -5225,7 +5204,7 @@ fn hash_merkle_node(left: &H256, right: &H256) -> H256 {
 }
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, sync::OnceLock};
+    use super::*;
     use halo2curves::{
         Coordinates, CurveAffine,
         bn256::{Fq, Fq2, Fr, G1Affine, G2Affine},
@@ -5247,7 +5226,7 @@ mod tests {
         },
         proof::ProofBox,
     };
-    use super::*;
+    use std::{cell::Cell, sync::OnceLock};
     struct OutboundFixture {
         route: SccpGovernedRouteV1,
         bundle: TairaSccpMessageProofV1,

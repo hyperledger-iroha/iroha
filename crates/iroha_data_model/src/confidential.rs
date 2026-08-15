@@ -5,6 +5,8 @@
 //! parameter sets. These structures model the governance state transitions
 //! (publish → activate → deprecate → withdraw) and advertise the hashes that
 //! wallets and validators must verify before accepting an upgrade.
+#[cfg(feature = "json")]
+use crate::json_helpers::fixed_bytes;
 use core::fmt::{self, Display, Formatter};
 use iroha_crypto::kex::{KeyExchangeScheme as _, X25519Sha256};
 use iroha_schema::IntoSchema;
@@ -12,8 +14,6 @@ use norito::{
     codec::{Decode, Encode},
     core::{self as norito_core, DecodeFromSlice, Error as NoritoError},
 };
-#[cfg(feature = "json")]
-use crate::json_helpers::fixed_bytes;
 /// Version discriminator for confidential encrypted payloads (v1 layout).
 pub const CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1: u8 = 1;
 /// Maximum encrypted note payload bytes accepted by confidential instructions.
@@ -561,8 +561,8 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use norito::codec::{decode_adaptive, encode_adaptive};
     use super::*;
+    use norito::codec::{decode_adaptive, encode_adaptive};
     #[test]
     fn pedersen_roundtrip() {
         let params = PedersenParams {

@@ -1,5 +1,13 @@
 //! Deterministic complete fixtures for non-shipping tests and release evidence.
-use std::str::FromStr as _;
+use super::{
+    IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteWitnessV1,
+    PRIVATE_NOTE_TREE_DEPTH_V1, PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PrivateInstructionV1,
+    PrivateNotePlaintextV1, PrivateOpcodeV1, PrivateProgramV1, derive_note_authority_v1,
+    derive_note_commitment_v1, derive_note_nullifier_v1, derive_private_program_id_v1,
+    encrypt_ivm_private_wallet_note_v1, ivm_private_recipient_public_key_v1,
+    relation::{accumulator_leaf_invocation_v1, accumulator_node_invocation_v1},
+};
+use crate::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
@@ -11,15 +19,7 @@ use iroha_data_model::{
     },
 };
 use rand_core_06::{CryptoRng, RngCore};
-use crate::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
-use super::{
-    IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteWitnessV1,
-    PRIVATE_NOTE_TREE_DEPTH_V1, PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PrivateInstructionV1,
-    PrivateNotePlaintextV1, PrivateOpcodeV1, PrivateProgramV1, derive_note_authority_v1,
-    derive_note_commitment_v1, derive_note_nullifier_v1, derive_private_program_id_v1,
-    encrypt_ivm_private_wallet_note_v1, ivm_private_recipient_public_key_v1,
-    relation::{accumulator_leaf_invocation_v1, accumulator_node_invocation_v1},
-};
+use std::str::FromStr as _;
 /// Complete fixture material kept behind `test` or release-evidence cfg.
 pub(crate) struct IvmPrivateNoteReleaseFixtureV1 {
     pub(crate) statement: IrohaIvmPrivateNoteStarkStatementV1,
@@ -318,9 +318,9 @@ pub(crate) fn ivm_private_note_network_fixture_v1<R: RngCore + CryptoRng>(
 }
 #[cfg(test)]
 mod tests {
-    use rand_08::{SeedableRng as _, rngs::StdRng};
     use super::*;
     use crate::privacy_engines::ivm_private_note::relation::validate_private_note_relation_v1;
+    use rand_08::{SeedableRng as _, rngs::StdRng};
     #[test]
     fn release_context_binds_every_compiled_profile_digest() {
         let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)

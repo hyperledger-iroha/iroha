@@ -1159,6 +1159,16 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
 /// decoding, nor serialization, and carries no evidence or authority.
 #[cfg(test)]
 pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());
+// TODO: Reconnect the private external-source prototype after its confidential
+// spool dependency can enter the authorized workspace lock graph.
+#[cfg(any())]
+#[path = "phase23_rns_link_external_source.rs"]
+mod external_source;
+#[cfg(any())]
+pub(in crate::vega::zk_ams::mkhe) use external_source::{
+    ZkAmsPhase23RnsLinkExternalSourceAssemblyV1, ZkAmsPhase23RnsLinkExternalSourcePublicationV1,
+    ZkAmsPhase23RnsLinkSecretChunkV1,
+};
 #[allow(
     dead_code,
     reason = "cross-field prerequisite remains production-uninhabited until source/range/mask/qPCS seals and the global ZK lookup theorem are wired"

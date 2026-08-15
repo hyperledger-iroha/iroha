@@ -1,9 +1,9 @@
 #![cfg(feature = "json")]
 //! Randomized `norito::json::Value` parity coverage against `serde_json`.
-use std::collections::BTreeMap;
 use norito::json::{self, Number, Value};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde_json::{Map as SerdeMap, Number as SerdeNumber, Value as SerdeValue};
+use std::collections::BTreeMap;
 const RNG_SEED: u64 = 0x5EED_C0DE_D15E_A5E5;
 const RANDOM_CASES: usize = 256;
 const MAX_DEPTH: usize = 4;

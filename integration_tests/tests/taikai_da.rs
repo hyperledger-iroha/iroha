@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Roadmap SN13-D coverage for Taikai DA ingest validation.
-use std::path::Path;
 use blake3::hash as blake3_hash;
 use eyre::Result;
 use integration_tests::sandbox::start_network_async_or_skip;
@@ -22,6 +21,7 @@ use iroha_test_network::{Network, NetworkBuilder};
 use iroha_test_samples::ALICE_KEYPAIR;
 use norito::json::{self, Value};
 use reqwest::{Client, Response, StatusCode};
+use std::path::Path;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 const META_EVENT_ID: &str = "taikai.event_id";

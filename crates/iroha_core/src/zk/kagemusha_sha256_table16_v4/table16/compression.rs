@@ -10,26 +10,26 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::{convert::TryInto, ops::Range};
+use super::{super::DIGEST_SIZE, SpreadInputs, SpreadVar, SpreadWord, Table16Assignment};
+use crate::zk::kagemusha_sha256_table16_v4::AssignedWord;
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::{Layouter, Value},
     plonk::{Advice, Column, ConstraintSystem, Error, Selector},
     poly::Rotation,
 };
-use super::{super::DIGEST_SIZE, SpreadInputs, SpreadVar, SpreadWord, Table16Assignment};
-use crate::zk::kagemusha_sha256_table16_v4::AssignedWord;
+use std::{convert::TryInto, ops::Range};
 mod compression_gates;
 mod compression_util;
 mod subregion_digest;
 mod subregion_initial;
 mod subregion_main;
-use compression_gates::CompressionGate;
-use compression_util::match_state;
 use crate::zk::kagemusha_sha256_table16_v4::{
     AssignedBits, ROUNDS,
     util::{i2lebsp, lebs2ip},
 };
+use compression_gates::CompressionGate;
+use compression_util::match_state;
 pub trait UpperSigmaVar<
     const A_LEN: usize,
     const B_LEN: usize,
@@ -936,13 +936,13 @@ impl CompressionConfig {
 }
 #[cfg(test)]
 mod isolated_tests {
+    use super::super::{Table16Chip, Table16Config};
     use halo2_proofs::{
         circuit::{Layouter, V1},
         dev::MockProver,
         halo2curves::pasta::Fp,
         plonk::{Circuit, ConstraintSystem, Error},
     };
-    use super::super::{Table16Chip, Table16Config};
     #[derive(Clone, Debug, Default)]
     struct DecomposeAbcdCircuit;
     impl Circuit<Fp> for DecomposeAbcdCircuit {
@@ -979,6 +979,8 @@ mod isolated_tests {
 }
 #[cfg(test)]
 mod tests {
+    use super::super::{super::BLOCK_SIZE, Table16Chip, Table16Config, msg_schedule_test_input};
+    use crate::zk::kagemusha_sha256_table16_v4::{BlockWord, IV, ROUND_CONSTANTS};
     use ff::PrimeField;
     use halo2_proofs::halo2curves::pasta::pallas;
     use halo2_proofs::{
@@ -987,8 +989,6 @@ mod tests {
         plonk::{Circuit, ConstraintSystem, Error},
     };
     use sha2::Digest;
-    use super::super::{super::BLOCK_SIZE, Table16Chip, Table16Config, msg_schedule_test_input};
-    use crate::zk::kagemusha_sha256_table16_v4::{BlockWord, IV, ROUND_CONSTANTS};
     fn host_compress(initial: [u32; 8], round_constants: [u32; 64]) -> ([u32; 8], [u32; 8]) {
         let mut schedule = [0_u32; 64];
         schedule[0] = 0x6162_6380;

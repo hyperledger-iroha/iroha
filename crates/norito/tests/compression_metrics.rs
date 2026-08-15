@@ -1,5 +1,4 @@
 //! Compression telemetry metrics cover incremental usage and JSON helpers.
-use std::sync::{Mutex, OnceLock};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{
@@ -8,6 +7,7 @@ use norito::{
         to_bytes, to_compressed_bytes,
     },
 };
+use std::sync::{Mutex, OnceLock};
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, iroha_schema::IntoSchema,
 )]

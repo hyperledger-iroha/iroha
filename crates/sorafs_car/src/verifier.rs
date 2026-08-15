@@ -4,19 +4,19 @@
 //! the Proof-of-Retrievability (PoR) tree so clients can validate responses
 //! from untrusted gateways. It supports both `dag-scope=full` downloads and
 //! `dag-scope=block` ranged responses.
-use std::{
-    borrow::Cow,
-    io::{self, Read, Write},
-    ops::{Range, RangeInclusive},
-};
-use blake3::Hash;
-use sorafs_manifest::ManifestV1;
-use thiserror::Error;
 use crate::{
     BLAKE3_256_MULTIHASH_CODE, CarBuildPlan, CarChunk, CarPlanError, CarStreamingWriter,
     CarWriteError, CarWriteStats, ChunkProfile, ChunkStore, ChunkStoreError, DAG_CBOR_CODEC,
     FilePlan, HEADER_LEN, PRAGMA, RAW_CODEC, chunker_registry,
 };
+use blake3::Hash;
+use sorafs_manifest::ManifestV1;
+use std::{
+    borrow::Cow,
+    io::{self, Read, Write},
+    ops::{Range, RangeInclusive},
+};
+use thiserror::Error;
 pub(crate) const MAX_CARV1_HEADER_SIZE: usize = 64 * 1024;
 /// Result returned after verifying a `dag-scope=full` CAR stream.
 #[derive(Debug)]
@@ -1292,10 +1292,10 @@ fn hash_to_array(hash: Hash) -> [u8; 32] {
 }
 #[cfg(test)]
 mod tests {
-    use blake3::hash as blake3_hash;
-    use sorafs_manifest::{DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy, StorageClass};
     use super::*;
     use crate::{CarChunk, CarWriter, ChunkProfile, FileEntry, FilePlan, encode_cid};
+    use blake3::hash as blake3_hash;
+    use sorafs_manifest::{DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy, StorageClass};
     fn sample_payload() -> Vec<u8> {
         let total_bytes = 512 * 1024; // ensure multiple chunks under the default profile
         let mut payload = Vec::with_capacity(total_bytes);

@@ -114,8 +114,8 @@ pub enum StreamTokenError {
 }
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{PUBLIC_KEY_LENGTH, SigningKey};
     use super::*;
+    use ed25519_dalek::{PUBLIC_KEY_LENGTH, SigningKey};
     const SMALL_ORDER_R: [u8; PUBLIC_KEY_LENGTH] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

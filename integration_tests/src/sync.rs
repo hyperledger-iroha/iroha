@@ -1,12 +1,12 @@
 //! Synchronization helpers for integration tests.
+use eyre::{Result, WrapErr};
+use iroha::client::{Client, Status};
+use iroha_test_network::{BlockHeight, Network};
 use std::{
     env,
     thread::sleep,
     time::{Duration, Instant},
 };
-use eyre::{Result, WrapErr};
-use iroha::client::{Client, Status};
-use iroha_test_network::{BlockHeight, Network};
 use tokio::runtime::Runtime;
 use tokio::task::spawn_blocking;
 // Integration submissions occasionally need more time to commit under DA-enabled consensus;
@@ -176,19 +176,19 @@ fn read_env_duration(var: &str, default: Duration) -> Duration {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        sync::{Mutex, MutexGuard, OnceLock},
-    };
     use super::*;
+    use iroha::config::{AnonymityPolicy, Config, default_connect_queue_root};
+    use iroha::data_model::{ChainId, NetworkId};
     use iroha::{
         client::Client,
         crypto::{Hash, HashOf},
     };
-    use iroha::config::{AnonymityPolicy, Config, default_connect_queue_root};
-    use iroha::data_model::{ChainId, NetworkId};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
+    use std::{
+        collections::HashMap,
+        sync::{Mutex, MutexGuard, OnceLock},
+    };
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     #[allow(unsafe_code)]
     fn remove_env_var(key: &str) {

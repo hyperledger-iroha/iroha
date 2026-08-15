@@ -571,9 +571,9 @@ pub fn izanami_profile_for(attack: CommunicationAttack) -> Option<&'static Izana
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use iroha_data_model::block::consensus_v2::is_valid_committee_size;
     use super::*;
+    use iroha_data_model::block::consensus_v2::is_valid_committee_size;
+    use std::collections::BTreeSet;
     fn numeric_arg(args: &[&str], name: &str) -> usize {
         args.windows(2)
             .find_map(|pair| (pair[0] == name).then(|| pair[1].parse().expect("numeric CLI arg")))

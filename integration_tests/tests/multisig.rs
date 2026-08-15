@@ -1,11 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests validating multi-signature transaction flows.
-use std::{
-    collections::BTreeMap,
-    num::{NonZeroU16, NonZeroU64},
-    path::Path,
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::{
     binary_resolver::{iroha_program, prepare_iroha_cli_test_environment},
@@ -34,6 +28,12 @@ use iroha_torii::{
 };
 use norito::json::Value as JsonValue;
 use reqwest::header::CONTENT_TYPE;
+use std::{
+    collections::BTreeMap,
+    num::{NonZeroU16, NonZeroU64},
+    path::Path,
+    time::{Duration, Instant},
+};
 use tokio::runtime::Runtime;
 const DOMAIN_REGISTRATION_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60);
 const DOMAIN_REGISTRATION_RECOVERY_POLL: Duration = Duration::from_millis(250);

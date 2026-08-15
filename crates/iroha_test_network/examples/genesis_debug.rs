@@ -1,4 +1,3 @@
-use std::process::{Command, Stdio};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use iroha_data_model::{
     block::SignedBlock,
@@ -11,6 +10,7 @@ use norito::{
     codec::{decode_adaptive, encode_with_header_flags},
     json::{self, Value as JsonValue},
 };
+use std::process::{Command, Stdio};
 fn main() {
     init_instruction_registry();
     if let Ok(mode) = std::env::var("GENESIS_DEBUG_MODE") {

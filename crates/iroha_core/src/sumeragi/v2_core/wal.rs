@@ -1,10 +1,10 @@
-use std::{collections::BTreeMap, error::Error, fmt};
 use super::{
     CertificateRef, ContextId, HeightContext, Phase, Proposal, ProposalJustification,
     QuorumCertificate, Round, Subject, TimeoutCertificate, TimeoutVote, ValidatorId, Vote,
     reducer::FinalizedHeight,
     refinement::{self, StrictSameRoundTimeoutUpgradeProjection},
 };
+use std::{collections::BTreeMap, error::Error, fmt};
 /// Canonical Sumeragi-v2 safety-WAL file magic.
 pub const SAFETY_WAL_FILE_MAGIC: [u8; 8] = *b"SUMV2WAL";
 /// Canonical Sumeragi-v2 safety-WAL frame magic.

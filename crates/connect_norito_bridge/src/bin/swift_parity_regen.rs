@@ -4,15 +4,6 @@
 //! `cargo run --locked --offline -p connect_norito_bridge --features dev-tools --bin swift_parity_regen -- --check`
 //! `cargo run --locked --offline -p connect_norito_bridge --features dev-tools --bin swift_parity_regen -- --write`
 //! `cargo run --locked --offline -p connect_norito_bridge --features dev-tools --bin swift_parity_regen -- --write --output-root /tmp/swift-parity-stage`
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    env, fs,
-    io::{Read as _, Write as _},
-    num::NonZeroU32,
-    path::{Component, Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
@@ -28,6 +19,15 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
     codec::Encode,
     json::{self, Map, Value},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env, fs,
+    io::{Read as _, Write as _},
+    num::NonZeroU32,
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+    time::Duration,
 };
 const DEFAULT_FIXTURES_PATH: &str = "IrohaSwift/Fixtures/swift_parity_payloads.json";
 const DEFAULT_OUT_DIR: &str = "IrohaSwift/Fixtures";
@@ -1271,8 +1271,8 @@ fn run_with_options(fixtures_path: &Path, options: &Options) -> Result<(), Strin
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::Hash;
     use super::*;
+    use iroha_crypto::Hash;
     use iroha_data_model::{DomainId, transaction::Executable};
     use norito::json::Number;
     fn canonical_temp_root(directory: &tempfile::TempDir) -> PathBuf {

@@ -1,9 +1,9 @@
 //! Bounded acquisition and decode boundary for remote Hugging Face model metadata.
-use std::{collections::BTreeSet, fmt};
+use super::SoracloudError;
 use futures_util::{Stream, StreamExt as _};
 use iroha_config::parameters::{actual::SoracloudRuntimeHuggingFace, defaults};
 use iroha_data_model::soracloud::{SoraHfBackendFamilyV1, SoraHfModelFormatV1};
-use super::SoracloudError;
+use std::{collections::BTreeSet, fmt};
 const INITIAL_ALLOCATION_BYTES: usize = 16 * 1024;
 type WeightFileSelection = (SoraHfBackendFamilyV1, SoraHfModelFormatV1, Vec<String>);
 /// Read provider-controlled model metadata under its source configuration cap.
@@ -264,10 +264,10 @@ fn reserve_to(
 }
 #[cfg(test)]
 mod tests {
-    use std::{io, task::Poll};
+    use super::*;
     use futures_util::stream;
     use http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
-    use super::*;
+    use std::{io, task::Poll};
     const REPO_ID: &str = "org/model";
     const REVISION: &str = "revision";
     fn config_with_limit(maximum_bytes: u64) -> SoracloudRuntimeHuggingFace {

@@ -1,13 +1,13 @@
 //! Helpers for loading and compiling sample smart-contract programs used by Izanami.
+use color_eyre::{Result, eyre::eyre};
+use iroha_data_model::transaction::IvmBytecode;
+use iroha_test_network::repo_root;
+use ivm::KotodamaCompiler;
 use std::{
     collections::HashMap,
     path::{Component, Path},
     sync::{Mutex, OnceLock},
 };
-use color_eyre::{Result, eyre::eyre};
-use iroha_data_model::transaction::IvmBytecode;
-use iroha_test_network::repo_root;
-use ivm::KotodamaCompiler;
 const IVM_TRIGGER_ARTIFACT: &str = "artifact_v1_1_mode03_vlen8_cycles1000_abi1";
 /// Compile a Kotodama sample from `crates/kotodama_lang/src/samples` into bytecode.
 ///

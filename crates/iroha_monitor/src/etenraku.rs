@@ -8,11 +8,11 @@
 //! The score focuses on hichiriki melodic primacy, slower shō breathing, lighter heterophonic
 //! ryūteki support, and sparse string/percussion punctuation. It provides timed events, MIDI export
 //! helpers, and small helpers that keep the ASCII prologue in sync with the audio rendition.
+use eyre::Result;
 use std::{
     cmp::Ordering,
     f32::consts::{LN_2, PI},
 };
-use eyre::Result;
 pub const HYOSHI_BEATS: f32 = 16.0;
 pub const OBACHI_OFFSET_BEATS: f32 = HYOSHI_BEATS * 0.5;
 #[allow(dead_code)]

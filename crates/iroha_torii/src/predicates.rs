@@ -43,6 +43,7 @@
 //!   embeds it into the `CompoundPredicate`. The executor evaluates it server-side
 //!   via `EvaluatePredicate`; endpoint-only fields such as `asset_id` remain
 //!   under the authoritative local transaction filter.
+use crate::filter::{FilterExpr, validate_filter};
 use iroha_data_model::{
     name::Name,
     query::{
@@ -52,7 +53,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use norito::json::Value;
-use crate::filter::{FilterExpr, validate_filter};
 /// Build a server-side predicate for `CommittedTransaction` from the JSON DSL.
 pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
     if validate_filter(expr).is_err() {
@@ -79,8 +79,8 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
         (hash.to_string() == s).then_some(hash)
     }
     fn map(expr: &FilterExpr) -> TP {
-        use FilterExpr as F;
         use crate::filter::FieldPath;
+        use FilterExpr as F;
         fn metadata_key(field: &str) -> Option<Name> {
             field.strip_prefix("metadata.").and_then(|rest| {
                 rest.parse::<Name>()

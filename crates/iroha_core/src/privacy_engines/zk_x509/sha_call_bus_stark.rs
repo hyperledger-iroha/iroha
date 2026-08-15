@@ -10,18 +10,13 @@
 //! - all three authoritative governance-record self-digests;
 //! - one compact trust-anchor leaf and twelve compact-tree nodes.
 //!
-//! Exact message lengths remain private.  Each call owns a maximum block
-//! range, constrains the one legal SHA padding for its private length, and
-//! makes every unused capacity row canonical.  Four independently
-//! domain-separated Goldilocks products bind `(call, role, slot, word kind,
-//! word offset, value)` between source and SHA adapters.  Products accumulate
-//! continuously inside each whole-call-packed physical segment.  Separate
-//! per-call products can still be replayed for cross-adapter equality, while
-//! the SHA AIR itself exposes only registration-owned segment terminals and
-//! never selects a claim from an opened call identity.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use sha2::{Digest, Sha256};
-use thiserror::Error;
+//! Exact message lengths remain private. Each call owns a maximum block range, constrains the one
+//! legal SHA padding for its private length, and makes every unused capacity row canonical. Four
+//! independently domain-separated Goldilocks products bind `(call, role, slot, word kind, word
+//! offset, value)` between source and SHA adapters. Products accumulate continuously inside each
+//! whole-call-packed physical segment. Separate per-call products can still be replayed for
+//! cross-adapter equality, while the SHA AIR itself exposes only registration-owned segment
+//! terminals and never selects a claim from an opened call identity.
 #[cfg(test)]
 use super::sha256_word_air::{ZkX509WordMemoryChallengesV1, ZkX509WordMemoryLaneChallengesV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -73,6 +68,9 @@ use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use sha2::{Digest, Sha256};
+use thiserror::Error;
 /// Per-type closed-relation DER admission limit.
 pub(crate) const ZK_X509_SHA_CALL_MAX_DER_BYTES_V1: usize = 4_096;
 /// Exact number of canonical SHA calls at maximum shape.
@@ -105,10 +103,9 @@ pub(crate) const ZK_X509_SHA_SEGMENT_ROWS_V1: usize = 1 << 19;
 pub(crate) const ZK_X509_SHA_SEGMENT_COUNT_V1: usize = 4;
 /// Maximum active rows in each replay segment.
 ///
-/// Calls are packed whole into these four bins.  No call transition crosses a
-/// physical commitment boundary, so every segment suffix is canonical
-/// padding and the opened-row verifier never needs a witness-fed cross-segment
-/// continuation value.
+/// Calls are packed whole into these four bins. No call transition crosses a physical commitment
+/// boundary, so every segment suffix is canonical padding and the opened-row verifier never needs a
+/// witness-fed cross-segment continuation value.
 pub(crate) const ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1: [usize; ZK_X509_SHA_SEGMENT_COUNT_V1] =
     [480_288, 521_952, 521_696, 448_192];
 /// Sole physical packing order for the 29 whole SHA calls.
@@ -129,10 +126,9 @@ const ZK_X509_SHA_RFC_LENGTH_BITS_V1: usize = 13;
 /// proof-bound binary decomposition of the running raw-message length.
 pub(crate) const ZK_X509_SHA_BATCH_BASE_WIDTH_V1: usize =
     SHA_WORD_CAPACITY_BASE_WIDTH_V1 + ZK_X509_SHA_RFC_LENGTH_BITS_V1;
-/// Word-memory/control columns, separate SHA call buses, and four RFC consumer
-/// product streams per lane. One stream owns each byte of an input word, so a
-/// selected raw byte remains degree two and its product recurrence degree
-/// three.
+/// Word-memory/control columns, separate SHA call buses, and four RFC consumer product streams per
+/// lane. One stream owns each byte of an input word, so a selected raw byte remains degree two and
+/// its product recurrence degree three.
 pub(crate) const ZK_X509_SHA_BATCH_AUX_WIDTH_V1: usize =
     SHA_WORD_CAPACITY_AUX_WIDTH_V1 + 6 * ZK_X509_SHA_BUS_LANES_V1;
 /// Verifier-preprocessed word, call identity, segment boundary, raw-length
@@ -264,10 +260,9 @@ pub(crate) const ZK_X509_SHA_FIXED_PHYSICAL_PADDING_V1: usize =
     ZK_X509_SHA_FIXED_SEGMENT_LAST_V1 + 1;
 /// One verifier-preprocessed selector for each compact-CA SHA call.
 ///
-/// These selectors are committed by the fixed oracle. They cannot be
-/// reconstructed by branching on the opened call column because that column
-/// is a polynomial evaluation, rather than a discrete call number, away from
-/// the native trace domain.
+/// These selectors are committed by the fixed oracle. They cannot be reconstructed by branching on
+/// the opened call column because that column is a polynomial evaluation, rather than a discrete
+/// call number, away from the native trace domain.
 pub(crate) const ZK_X509_SHA_FIXED_CA_CALL_SELECTORS_V1: usize =
     ZK_X509_SHA_FIXED_PHYSICAL_PADDING_V1 + 1;
 pub(crate) const ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1: usize =
@@ -296,8 +291,7 @@ const CRL_RECORD_CALL_V1: usize = 15;
 pub(crate) const ZK_X509_SHA_CA_LEAF_CALL_V1: usize = 16;
 /// Canonical global call index of compact CA node level zero.
 pub(crate) const ZK_X509_SHA_CA_NODE_CALL_START_V1: usize = 17;
-/// Number of compact-CA calls whose individual products are consumed by the
-/// credential composition.
+/// Number of compact-CA calls whose individual products are consumed by the credential composition.
 pub(crate) const ZK_X509_SHA_CA_CALL_COUNT_V1: usize =
     ZK_X509_SHA_CALL_COUNT_V1 - ZK_X509_SHA_CA_LEAF_CALL_V1;
 const _: () = {
@@ -535,9 +529,8 @@ pub(crate) struct ZkX509ShaCallEventV1 {
 }
 /// Per-call composite-proof terminals.
 ///
-/// Raw lengths, active block counts, and digest words are deliberately absent:
-/// exposing any of them in proof metadata would defeat the fixed-capacity
-/// privacy contract.
+/// Raw lengths, active block counts, and digest words are deliberately absent: exposing any of them
+/// in proof metadata would defeat the fixed-capacity privacy contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ShaCallTerminalV1 {
     /// Canonical call identity.
@@ -549,13 +542,11 @@ pub(crate) struct ZkX509ShaCallTerminalV1 {
     /// Digest-consumer product terminal per call-bus lane.
     pub(crate) digest_products: [F; ZK_X509_SHA_BUS_LANES_V1],
 }
-/// Proof-carried cumulative start and call-local terminal products for one
-/// compact-CA SHA call.
+/// Proof-carried cumulative start and call-local terminal products for one compact-CA SHA call.
 ///
-/// The MAIN AIR binds `start` on the call's verifier-fixed first row and
-/// binds `start * terminal` to the cumulative product on its fixed last row.
-/// The multiplication-only relation remains total when a compressed factor
-/// is zero and never asks the prover or verifier to divide a bus product.
+/// The MAIN AIR binds `start` on the call's verifier-fixed first row and binds `start * terminal`
+/// to the cumulative product on its fixed last row. The multiplication-only relation remains total
+/// when a compressed factor is zero and never asks the prover or verifier to divide a bus product.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ShaCallBoundaryTerminalV1 {
     /// Canonical call identity in `16..=28`.
@@ -605,9 +596,8 @@ impl ZkX509ShaCallBoundaryTerminalV1 {
 }
 /// Per-call RFC-output consumer products derived from committed SHA rows.
 ///
-/// The four streams keep one potentially masked message byte per stream. The
-/// verifier multiplies the streams only after verifying their individual
-/// terminal constraints.
+/// The four streams keep one potentially masked message byte per stream. The verifier multiplies
+/// the streams only after verifying their individual terminal constraints.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ShaRfcConsumerTerminalV1 {
@@ -620,8 +610,7 @@ pub(crate) struct ZkX509ShaRfcConsumerTerminalV1 {
 }
 #[cfg(test)]
 impl ZkX509ShaRfcConsumerTerminalV1 {
-    /// Combine the independently constrained streams after proof
-    /// verification.
+    /// Combine the independently constrained streams after proof verification.
     pub(crate) fn combined_products(self) -> [F; ZK_X509_SHA_BUS_LANES_V1] {
         core::array::from_fn(|lane| {
             self.stream_products
@@ -704,9 +693,8 @@ struct ZkX509ShaRfcConsumerChannelsV1 {
 }
 /// One challenge-independent fixed-capacity SHA call.
 ///
-/// Base and fixed rows may be streamed before X5B1 exists. The word-memory,
-/// call-bus, RFC products, and terminal claims are absent until this source
-/// is consumed by the segment binder.
+/// Base and fixed rows may be streamed before X5B1 exists. The word-memory, call-bus, RFC products,
+/// and terminal claims are absent until this source is consumed by the segment binder.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509ShaBatchCallBaseSourceV1 {
     pub(crate) manifest: ZkX509ShaCallManifestV1,
@@ -1464,9 +1452,8 @@ impl ZkX509ShaCallScheduleV1 {
 }
 /// Independent-verifier provider for all four physical SHA fixed segments.
 ///
-/// Every retained value is compiled from [`ZkX509ShaCallPublicShapeV1`].
-/// Exact messages, private lengths, selected digest states, and transcript
-/// challenges are deliberately absent.
+/// Every retained value is compiled from [`ZkX509ShaCallPublicShapeV1`]. Exact messages, private
+/// lengths, selected digest states, and transcript challenges are deliberately absent.
 #[derive(Clone, Debug)]
 pub(crate) struct ZkX509ShaBatchFixedProviderV1 {
     schedule: ZkX509ShaCallScheduleV1,
@@ -1604,9 +1591,8 @@ fn validate_witness_v1(
 /// Validate the complete fixed 29-call witness array without replaying the
 /// multi-million-row SHA batch.
 ///
-/// This is the production assembly boundary: it rejects omission, role
-/// reorder, inactive-call substitution, overlength input, and digest mismatch
-/// before any segment provider is registered.
+/// This is the production assembly boundary: it rejects omission, role reorder, inactive-call
+/// substitution, overlength input, and digest mismatch before any segment provider is registered.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn validate_zk_x509_sha_call_witnesses_v1(
     schedule: &ZkX509ShaCallScheduleV1,
@@ -1788,8 +1774,7 @@ impl ZkX509ShaCallBusChallengesV1 {
 }
 /// Derive the call-bus family after all source and SHA base commitments.
 ///
-/// Word-memory uses a different label family and must never reuse these
-/// challenges.
+/// Word-memory uses a different label family and must never reuse these challenges.
 pub(crate) fn derive_zk_x509_sha_call_bus_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
 ) -> Result<ZkX509ShaCallBusChallengesV1, TransparentStarkErrorV1> {
@@ -1918,13 +1903,11 @@ impl Drop for ZkX509ShaColumnFillGuardV1<'_> {
         }
     }
 }
-/// Challenge-independent source for one of the four canonical log-19 SHA
-/// registrations.
+/// Challenge-independent source for one of the four canonical log-19 SHA registrations.
 ///
-/// The source can stream every base and verifier-fixed row without receiving
-/// any post-base challenge. Binding is a one-shot runtime capability: a
-/// failed challenge validation leaves the source retryable, while a
-/// successful bind permanently disables a second transition.
+/// The source can stream every base and verifier-fixed row without receiving any post-base
+/// challenge. Binding is a one-shot runtime capability: a failed challenge validation leaves the
+/// source retryable, while a successful bind permanently disables a second transition.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509ShaBatchSegmentBaseSourceV1<'a> {
     schedule: &'a ZkX509ShaCallScheduleV1,
@@ -1978,8 +1961,7 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
         }
         validate_sha_segment_replay_plan_v1(self.schedule, self.replay)
     }
-    /// Replay one challenge-independent base column into an exact native
-    /// segment-sized target.
+    /// Replay one challenge-independent base column into an exact native segment-sized target.
     ///
     /// The caller owns the sole output allocation. Internally this method
     /// retains at most one fixed-capacity call, checks canonical fields and
@@ -2002,8 +1984,7 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
         })?;
         fill.finish_v1()
     }
-    /// Replay one verifier-fixed column before X5B1 into an exact native
-    /// segment-sized target.
+    /// Replay one verifier-fixed column before X5B1 into an exact native segment-sized target.
     #[cfg(test)]
     pub(crate) fn fill_fixed_column_v1(
         &self,
@@ -2023,8 +2004,7 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
         })?;
         fill.finish_v1()
     }
-    /// Reconstruct one base/fixed row for bounded opening tests and sampled
-    /// commitment checks.
+    /// Reconstruct one base/fixed row for bounded opening tests and sampled commitment checks.
     #[cfg(test)]
     pub(crate) fn base_fixed_row_v1(
         &self,
@@ -2176,9 +2156,8 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
 }
 /// Challenge-bound auxiliary and terminal source for one SHA registration.
 ///
-/// Construction is possible only through
-/// [`ZkX509ShaBatchSegmentBaseSourceV1::bind_v1`]. The complete auxiliary
-/// stream is one-shot and never exposes a raw challenge constructor.
+/// Construction is possible only through [`ZkX509ShaBatchSegmentBaseSourceV1::bind_v1`]. The
+/// complete auxiliary stream is one-shot and never exposes a raw challenge constructor.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509ShaBatchSegmentAuxSourceV1<'a> {
     schedule: &'a ZkX509ShaCallScheduleV1,
@@ -2295,10 +2274,9 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
     }
     /// Deterministically replay one challenge-bound auxiliary column.
     ///
-    /// The opaque X5B1 binding remains internal. Replaying a column does not
-    /// consume the separate one-shot row stream, so MAIN may request all
-    /// registered columns in any deterministic order without retaining an
-    /// eager segment matrix.
+    /// The opaque X5B1 binding remains internal. Replaying a column does not consume the separate
+    /// one-shot row stream, so MAIN may request all registered columns in any deterministic order
+    /// without retaining an eager segment matrix.
     pub(crate) fn fill_aux_column_with_air_terminals_v1(
         &self,
         segment: usize,
@@ -2313,8 +2291,7 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
         fill.finish_v1()?;
         Ok(terminals)
     }
-    /// Replay one auxiliary column when only the registration terminal is
-    /// needed.
+    /// Replay one auxiliary column when only the registration terminal is needed.
     pub(crate) fn fill_aux_column_v1(
         &self,
         segment: usize,
@@ -2350,8 +2327,7 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
             .for_each_aux_row_with_air_terminals_v1(visitor)?
             .segment)
     }
-    /// Clear the retained opaque binding and permanently close every bound
-    /// replay API.
+    /// Clear the retained opaque binding and permanently close every bound replay API.
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.binding = None;
         self.row_stream_emitted = true;
@@ -3199,14 +3175,12 @@ pub(crate) const ZK_X509_SHA_COLLISION_LANES_V1: u8 = 4;
 pub(crate) const ZK_X509_SHA_BASE_FOLD_COLLISION_LANES_V1: u8 = 3;
 /// Return the exact release union bound in floating-point diagnostic form.
 ///
-/// There are two distinct word-memory multiset equalities (local/execution
-/// and execution/sorted), each with numerator `1_316_240`, plus one SHA-call
-/// equality with numerator `10_088`. Four independent compression lanes make
-/// each collision term `(n/(p-1))^4`; the union is therefore
-/// `2*(n_memory/(p-1))^4 + (n_call/(p-1))^4`. Splitting the proof-derived RFC
-/// consumer product into four row streams adds no collision event: their
-/// individually constrained terminals are multiplied exactly before the
-/// already-accounted RFC output equality.
+/// There are two distinct word-memory multiset equalities (local/execution and execution/sorted),
+/// each with numerator `1_316_240`, plus one SHA-call equality with numerator `10_088`. Four
+/// independent compression lanes make each collision term `(n/(p-1))^4`; the union is therefore
+/// `2*(n_memory/(p-1))^4 + (n_call/(p-1))^4`. Splitting the proof-derived RFC consumer product into
+/// four row streams adds no collision event: their individually constrained terminals are
+/// multiplied exactly before the already-accounted RFC output equality.
 #[cfg(test)]
 fn algebraic_security_bits_v1() -> (f64, f64, f64) {
     let denominator = (GOLDILOCKS_MODULUS_V1 - 1) as f64;

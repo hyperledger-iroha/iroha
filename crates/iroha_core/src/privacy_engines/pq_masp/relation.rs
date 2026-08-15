@@ -5,7 +5,6 @@
 //! commitments, and checked value conservation. ML-DSA verification and the
 //! ML-KEM/XChaCha output codec are separate native proof-wire checks; neither
 //! is represented by a caller-selectable backend tag.
-use std::{collections::BTreeSet, fmt};
 use iroha_data_model::privacy::{
     PQ_MASP_MAX_INPUTS_V1, PQ_MASP_MAX_OUTPUTS_V1, PqMaspStarkStatementV1,
     PrivacyAuthorizationKeyDigestV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
@@ -13,6 +12,7 @@ use iroha_data_model::privacy::{
     PrivacyPoolNamespaceV1, PrivacyProtocolIdV1, PrivacyRecipientIdV1, PrivacyRootV1,
 };
 use sha2::{Digest as _, Sha256};
+use std::{collections::BTreeSet, fmt};
 use thiserror::Error;
 use zeroize::Zeroize;
 /// Exact depth of the validator-owned PQ note tree.
@@ -808,7 +808,7 @@ pub(crate) fn validate_pq_masp_relation_v1(
 #[cfg(test)]
 /// Canonical fixtures shared by the relation and extension-AIR suites.
 pub(crate) mod tests {
-    use std::str::FromStr as _;
+    use super::*;
     use iroha_data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,
@@ -823,7 +823,7 @@ pub(crate) mod tests {
             PrivacyVerifierDigestV1,
         },
     };
-    use super::*;
+    use std::str::FromStr as _;
     fn raw(byte: u8) -> [u8; 32] {
         [byte; 32]
     }

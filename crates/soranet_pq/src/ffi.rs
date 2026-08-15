@@ -1,13 +1,13 @@
 //! C-friendly bindings for the `soranet_pq` primitives.
-use core::{
-    convert::TryFrom,
-    ffi::{c_int, c_uchar, c_uint, c_ulong},
-    slice,
-};
 use crate::{
     MlDsaSuite, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem_from_os,
     generate_mldsa_keypair_from_os, generate_mlkem_keypair_from_os, mldsa::MlDsaError,
     mlkem::MlKemError, sign_mldsa_from_os, verify_mldsa,
+};
+use core::{
+    convert::TryFrom,
+    ffi::{c_int, c_uchar, c_uint, c_ulong},
+    slice,
 };
 const ERR_INVALID_SUITE: c_int = -1;
 const ERR_NULL_POINTER: c_int = -2;
@@ -387,11 +387,11 @@ pub unsafe extern "C" fn soranet_mldsa_verify(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{HedgedRngSeed, deterministic_chacha20_rng, sign_mldsa};
     use core::ptr;
     use pqcrypto_traits::sign::VerificationError;
     use sha3::{Digest, Sha3_256};
-    use crate::{HedgedRngSeed, deterministic_chacha20_rng, sign_mldsa};
-    use super::*;
     fn len_as_c_uint(len: usize) -> c_uint {
         c_uint::try_from(len).expect("test vector length fits in c_uint")
     }

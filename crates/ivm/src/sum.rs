@@ -1,7 +1,7 @@
 //! Runtime support for active-only compiler-owned Kotodama sums.
+use crate::{IVM, VMError};
 use ivm_abi::sum::SUM_WORD_BYTES_V1;
 pub use ivm_abi::sum::SumLayoutV1;
-use crate::{IVM, VMError};
 fn layout_error() -> VMError {
     VMError::DecodeError
 }

@@ -7,7 +7,9 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World},
 };
-use iroha_data_model::{events::data::governance::GovernanceEvent, isi::governance::CastPlainBallot};
+use iroha_data_model::{
+    events::data::governance::GovernanceEvent, isi::governance::CastPlainBallot,
+};
 use iroha_test_samples::ALICE_ID;
 #[test]
 fn plain_ballot_rejected_when_disabled() {

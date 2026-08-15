@@ -1,9 +1,9 @@
 //! Normalize a genesis manifest JSON and print its expanded instruction batches.
-use std::{env, path::PathBuf};
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::KeyPair;
 use iroha_data_model::{isi::SetParameter, transaction::Executable};
 use iroha_genesis::RawGenesisTransaction;
+use std::{env, path::PathBuf};
 fn main() -> Result<()> {
     iroha_genesis::init_instruction_registry();
     let mut args = env::args().skip(1);
@@ -56,8 +56,8 @@ fn print_batch(stage: &str, batch_idx: usize, batch: &[iroha_data_model::isi::In
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::Algorithm;
     use super::*;
+    use iroha_crypto::Algorithm;
     #[test]
     fn normalization_signer_uses_checked_default_key_generation() {
         let keypair = normalization_signer().expect("checked default signer generation");

@@ -1,6 +1,4 @@
 //! Logic related to the conversion of [`Option<T>`] to and from FFI-compatible representation
-use core::mem::MaybeUninit;
-use std::boxed::Box;
 use crate::{
     FfiConvert, FfiOutPtr, FfiOutPtrRead, FfiOutPtrWrite, FfiReturn, FfiType, FfiWrapperType,
     ReprC, Result,
@@ -9,6 +7,8 @@ use crate::{
         COutPtr, COutPtrRead, COutPtrWrite, CType, CTypeConvert, CWrapperType, Cloned, NonLocal,
     },
 };
+use core::mem::MaybeUninit;
+use std::boxed::Box;
 /// Marker for [`Option<T>`] that doesn't have niche representation
 #[derive(Debug, Clone, Copy)]
 pub enum WithoutNiche {}
@@ -216,9 +216,9 @@ unsafe impl<'dummy, R: Niche<'dummy> + Ir + NonLocal<R::Type>> NonLocal<Self> fo
 unsafe impl<R: Ir + NonLocal<R::Type>> NonLocal<Option<WithoutNiche>> for Option<R> {}
 #[cfg(test)]
 mod tests {
-    use core::sync::atomic::{AtomicUsize, Ordering};
     use super::*;
     use crate::repr_c::CTypeConvert;
+    use core::sync::atomic::{AtomicUsize, Ordering};
     static CLONE_COUNTER: AtomicUsize = AtomicUsize::new(0);
     #[repr(transparent)]
     #[derive(Debug, PartialEq, Eq)]

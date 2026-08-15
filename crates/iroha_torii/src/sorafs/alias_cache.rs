@@ -1,13 +1,13 @@
 //! Alias proof caching policy and evaluation helpers for SoraFS gateways.
-use std::time::Duration;
+#[cfg(feature = "app_api")]
+use crate::sorafs::registry::{GovernanceSummary, ManifestLineageSummary};
 use http::header::HeaderValue;
 pub use sorafs_manifest::alias_cache::{
     AliasCachePolicy, AliasProofError, AliasProofEvaluation, AliasProofState, decode_alias_proof,
     decode_alias_proof_untrusted_signers, unix_now_secs,
 };
 use sorafs_manifest::pin_registry::AliasProofBundleV1;
-#[cfg(feature = "app_api")]
-use crate::sorafs::registry::{GovernanceSummary, ManifestLineageSummary};
+use std::time::Duration;
 /// Grace window overrides layered atop the base alias cache policy.
 #[derive(Debug, Clone, Copy)]
 pub struct AliasCacheEnforcement {
@@ -571,6 +571,11 @@ impl AliasProofEvaluationExt for AliasProofEvaluation {
 }
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
+    use super::*;
+    use crate::sorafs::registry::{
+        GovernanceRefKind, GovernanceReference, GovernanceSummary, ManifestLineageSummary,
+        approved_successor_for_tests,
+    };
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_config::parameters::actual::SorafsAliasCachePolicy as ConfigPolicy;
     use sorafs_manifest::{
@@ -578,11 +583,6 @@ mod tests {
         pin_registry::{
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
-    };
-    use super::*;
-    use crate::sorafs::registry::{
-        GovernanceRefKind, GovernanceReference, GovernanceSummary, ManifestLineageSummary,
-        approved_successor_for_tests,
     };
     fn sample_bundle(generated: u64, expires: u64) -> AliasProofBundleV1 {
         let binding = AliasBindingV1 {

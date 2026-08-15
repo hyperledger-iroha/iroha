@@ -1,9 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end coverage for the canonical threshold escrow Kotodama sample.
-use std::{
-    num::NonZeroU64,
-    time::{Duration, Instant},
-};
 use base64::Engine as _;
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
@@ -22,7 +18,13 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, load_sample_ivm};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, load_sample_ivm,
+};
+use std::{
+    num::NonZeroU64,
+    time::{Duration, Instant},
+};
 const TX_TIMEOUT: Duration = Duration::from_secs(60);
 const CONTRACT_CALL_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 const CONTRACT_CALL_ADMISSION_POLL: Duration = Duration::from_millis(250);

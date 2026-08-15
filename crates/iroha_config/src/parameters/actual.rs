@@ -14,15 +14,6 @@
     clippy::assertions_on_constants,
     clippy::too_many_arguments
 )]
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
 use error_stack::{Report, ResultExt};
 use iroha_config_base::{WithOrigin, read::ConfigReader, toml::TomlSource, util::Bytes};
 use iroha_crypto::{
@@ -79,8 +70,21 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity, XorQuantity},
     unique_vec::UniqueVec,
 };
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
+};
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
+use crate::{
+    kura::{FsyncMode, InitMode},
+    parameters::{defaults, user, user::ParseError},
+};
 use norito::{codec::Encode, streaming::EntropyMode};
 pub use sorafs_reputation::{
     SorafsReputationFinalizedArchiveRetentionAuthority, SorafsReputationRuntime,
@@ -89,10 +93,6 @@ pub use sorafs_reputation::{
 use thiserror::Error;
 use url::Url;
 pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
-use crate::{
-    kura::{FsyncMode, InitMode},
-    parameters::{defaults, user, user::ParseError},
-};
 type Result<T, E> = core::result::Result<T, Report<E>>;
 /// Parsed configuration root used internally by Iroha services.
 #[derive(Debug, Clone)]
@@ -1003,11 +1003,11 @@ pub(crate) fn sora_routing_policy() -> LaneRoutingPolicy {
 }
 #[cfg(test)]
 mod sora_profile_tests {
-    use std::num::NonZeroU32;
+    use super::*;
     use iroha_config_base::toml::TomlSource;
     use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneConfigMetadata};
+    use std::num::NonZeroU32;
     use toml::Table;
-    use super::*;
     const MINIMAL_CONFIG: &str = r#"
 chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"

@@ -604,12 +604,12 @@ pub fn verify_and_decide_ep_accumulation_v4(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ff::Field as _;
     use halo2_proofs::{
         halo2curves::group::{Curve as _, Group as _},
         poly::{commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
     };
-    use super::*;
     fn ipa_h_coefficients<F: ff::Field>(challenges: &[F], scalar: F) -> Vec<F> {
         let mut coefficients = vec![F::ZERO; 1 << challenges.len()];
         coefficients[0] = scalar;

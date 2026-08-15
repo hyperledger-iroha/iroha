@@ -7,19 +7,13 @@
 //! only: its bootstrap digest binds the exact no-prune operation schema, and earlier or unknown
 //! frame envelopes are retained and rejected without legacy decoding.
 #[cfg(test)]
-use std::sync::Barrier;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-    sync::Arc,
+use super::LaneQueueReservationRecoveryPhaseV1;
+use super::{
+    LaneQueueFifoOrderV5, LaneQueueReservationKeyV2, LaneQueueReservationOwnerPhaseV6,
+    LaneQueueReservationReconciliationSnapshotV1, LaneQueueReservationRecordV5,
+    LaneQueueReservationReleaseBarrierV3, LaneQueueReservationReleaseCompletionV5,
+    QueuePlanReservationPhaseV1,
 };
-use iroha_crypto::{Hash, HashOf, sha256_reader_bounded};
-use iroha_data_model::{
-    merge::MAX_MERGE_EXECUTION_ENTRYPOINTS, nexus::LaneId, transaction::SignedTransaction,
-};
-use norito::codec::{Decode, Encode};
 use crate::sumeragi::v2_core::{
     CanonicalIdentityProjection, CheckedProductionTransition, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
     IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER, IDENTITY_KIND_LANE_QUEUE_RESERVATION,
@@ -33,13 +27,19 @@ use crate::sumeragi::v2_core::{
     ProductionInFlightReservationTransitionProjection,
     check_production_in_flight_reservation_transition,
 };
+use iroha_crypto::{Hash, HashOf, sha256_reader_bounded};
+use iroha_data_model::{
+    merge::MAX_MERGE_EXECUTION_ENTRYPOINTS, nexus::LaneId, transaction::SignedTransaction,
+};
+use norito::codec::{Decode, Encode};
 #[cfg(test)]
-use super::LaneQueueReservationRecoveryPhaseV1;
-use super::{
-    LaneQueueFifoOrderV5, LaneQueueReservationKeyV2, LaneQueueReservationOwnerPhaseV6,
-    LaneQueueReservationReconciliationSnapshotV1, LaneQueueReservationRecordV5,
-    LaneQueueReservationReleaseBarrierV3, LaneQueueReservationReleaseCompletionV5,
-    QueuePlanReservationPhaseV1,
+use std::sync::Barrier;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::{self, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 const RESERVATION_JOURNAL_FRAME_DOMAIN: &[u8] = b"iroha:queue-lane-reservation-frame:v6";
 const RESERVATION_JOURNAL_BOOTSTRAP_DOMAIN: &[u8] = b"iroha:queue-lane-reservation-bootstrap:v6";
@@ -4837,14 +4837,14 @@ fn invalid_data(error: impl ToString) -> io::Error {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs::OpenOptions, io::Write};
+    use super::*;
+    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision};
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         nexus::{DataSpaceId, LaneId},
         transaction::{SignedTransaction, TransactionEntrypoint},
     };
-    use super::*;
-    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision};
+    use std::{fs::OpenOptions, io::Write};
     const V3_RESERVATION_JOURNAL_FRAME_DOMAIN: &[u8] = b"iroha:queue-lane-reservation-frame:v3";
     const V3_RESERVATION_JOURNAL_FRAME_MAGIC: [u8; 8] = *b"IRQRJNL3";
     const V4_RESERVATION_JOURNAL_FRAME_DOMAIN: &[u8] = b"iroha:queue-lane-reservation-frame:v4";

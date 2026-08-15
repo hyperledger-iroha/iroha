@@ -1,11 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for non-fungible token lifecycle operations.
-use std::time::{Duration, Instant};
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
+use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(

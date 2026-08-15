@@ -5,11 +5,8 @@
 //! enums, and proof envelopes must bind all three together with governed
 //! parameter, verifier, statement-schema, and engine-manifest digests. There
 //! are no free-form identifiers, aliases, or fallback proof variants.
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
 use crate::{AssetDefinitionId, NetworkId, account::AccountId, asset::AssetBalanceScope};
+use iroha_schema::IntoSchema;
 pub use iroha_zkp_halo2::vega::{
     VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,
     VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
@@ -17,6 +14,9 @@ pub use iroha_zkp_halo2::vega::{
     VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
     VEGA_MDL_MSO_PAYLOAD_BYTES_V1, VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1,
 };
+use norito::codec::{Decode, Encode};
+use sha2::{Digest as _, Sha256};
+use thiserror::Error;
 /// Domain separator used to hash canonical [`PrivacyStatementV1`] values.
 pub const PRIVACY_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:statement:v1";
 /// Domain separator used to hash canonical [`PrivacyNativeConsensusBindingV1`] values.

@@ -1,12 +1,12 @@
 //! CLI regression tests for the production SoraFS provider-advert builder.
 #![cfg(feature = "cli")]
+use assert_cmd::cargo::cargo_bin_cmd;
+use ed25519_dalek::{Signer, SigningKey};
+use iroha_crypto::sha256;
 use std::{
     env, fs,
     path::{Path, PathBuf},
 };
-use assert_cmd::cargo::cargo_bin_cmd;
-use ed25519_dalek::{Signer, SigningKey};
-use iroha_crypto::sha256;
 use tempfile::{Builder, TempDir};
 fn canonical_temp_base() -> PathBuf {
     env::temp_dir()

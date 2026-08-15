@@ -1,9 +1,9 @@
 //! End-to-end canonical entity registration calls through the pointer ABI.
-use std::collections::HashMap;
 use ivm::{
     IVM, MockWorldStateView, PermissionToken, kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::WsvHost,
 };
+use std::collections::HashMap;
 mod common;
 #[test]
 fn kotodama_register_account_and_unregister_asset() {

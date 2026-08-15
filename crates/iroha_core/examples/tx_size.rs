@@ -1,5 +1,4 @@
 //! Compute the encoded size of a single Log instruction transaction with a custom payload.
-use std::error::Error;
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     Level,
@@ -7,6 +6,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, signed::TransactionSignatureError},
 };
 use iroha_version::codec::EncodeVersioned;
+use std::error::Error;
 fn main() -> Result<(), Box<dyn Error>> {
     let bytes: usize = std::env::args()
         .nth(1)
@@ -42,8 +42,8 @@ fn tx_size_key_pair() -> Result<KeyPair, iroha_crypto::Error> {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::Algorithm;
     use super::*;
+    use iroha_crypto::Algorithm;
     #[test]
     fn tx_size_key_pair_uses_checked_default_generation() {
         let key_pair = tx_size_key_pair().expect("tx-size example key pair");

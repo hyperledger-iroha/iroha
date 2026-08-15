@@ -1,9 +1,5 @@
 #![allow(clippy::disallowed_types, clippy::items_after_test_module)]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::{
-    num::{NonZeroU16, NonZeroU64},
-    sync::Arc,
-};
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
     governance::manifest::LaneManifestRegistry,
@@ -26,6 +22,10 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::{
     account::CanUnregisterAccount, asset_definition::CanUnregisterAssetDefinition,
+};
+use std::{
+    num::{NonZeroU16, NonZeroU64},
+    sync::Arc,
 };
 /// Create block
 pub fn create_block<'a>(
@@ -386,11 +386,11 @@ fn generate_account_id(seed: u128) -> AccountId {
 #[cfg(test)]
 mod tests {
     #[allow(unused_imports)]
+    use super::*;
+    #[allow(unused_imports)]
     use iroha_data_model::peer::PeerId;
     #[allow(unused_imports)]
     use tokio::runtime::Runtime;
-    #[allow(unused_imports)]
-    use super::*;
     #[test]
     fn build_state_succeeds_without_executor_bytecode() {
         let rt = Runtime::new().unwrap();

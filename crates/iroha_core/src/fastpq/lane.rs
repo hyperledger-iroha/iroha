@@ -1,11 +1,11 @@
 //! FASTPQ prover lane: converts execution witnesses into transition batches and
 //! drives the Stage 6 prover in the background.
-use std::{
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, Ordering},
+use crate::{
+    fastpq::{
+        ENTRY_HASH_METADATA_KEY, FASTPQ_CANONICAL_PARAMETER_SET, FastpqWitnessContext,
+        TranscriptBatchError, batches_from_bundles, batches_from_exec_witness,
     },
-    time::Instant,
+    kura::{FastpqProofEnqueueResult, FastpqProofSnapshot, Kura},
 };
 use fastpq_prover::{
     ExecutionMode as ProverExecutionMode, MetalOverrides,
@@ -16,14 +16,14 @@ use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseid
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{BlockHeader, consensus::ExecWitness};
 use iroha_logger::{debug, info, warn};
-use tokio::sync::mpsc;
-use crate::{
-    fastpq::{
-        ENTRY_HASH_METADATA_KEY, FASTPQ_CANONICAL_PARAMETER_SET, FastpqWitnessContext,
-        TranscriptBatchError, batches_from_bundles, batches_from_exec_witness,
+use std::{
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
     },
-    kura::{FastpqProofEnqueueResult, FastpqProofSnapshot, Kura},
+    time::Instant,
 };
+use tokio::sync::mpsc;
 /// Handle used to submit FASTPQ prover jobs.
 #[derive(Clone)]
 pub struct FastpqLaneHandle {
@@ -431,7 +431,7 @@ pub fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};
+    use super::*;
     use crate::fastpq::{
         FastpqPublicInputsTemplate, authority_digest, batches_from_bundles, transition_batch_to_dto,
     };
@@ -441,7 +441,7 @@ mod tests {
     };
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use super::*;
+    use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};
     #[tokio::test]
     async fn lane_processes_transcripts_with_mock_engine() {
         use tokio::time::{Instant, sleep};

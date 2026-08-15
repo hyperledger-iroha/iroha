@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Connected peers count and reconfiguration under register/unregister.
-use std::{fmt::Write as _, time::Duration};
 use assert_matches::assert_matches;
 use eyre::{Result, WrapErr, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
@@ -15,6 +14,7 @@ use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::*;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
+use std::{fmt::Write as _, time::Duration};
 use tokio::{
     task::spawn_blocking,
     time::{Instant, sleep, timeout},

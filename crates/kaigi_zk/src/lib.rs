@@ -8,7 +8,6 @@
 //! claim about the pre-join tree. Private leave remains disabled until a
 //! dedicated Merkle-membership circuit is available.
 use core::array;
-use std::sync::OnceLock;
 use halo2_proofs::{
     circuit::{Cell, Layouter, Region, SimpleFloorPlanner, Value},
     halo2curves::{
@@ -20,6 +19,7 @@ use halo2_proofs::{
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use poseidon_primitives::poseidon::primitives::Spec;
+use std::sync::OnceLock;
 /// Scalar field used by the Kaigi Halo2 circuits (Pasta Fp).
 pub type Scalar = Fp;
 /// Backend identifier used by the roster join circuit verifier metadata.
@@ -587,13 +587,13 @@ impl Circuit<Scalar> for KaigiUsageCommitmentCircuit {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use halo2_proofs::{
         dev::MockProver,
         halo2curves::pasta::{EqAffine as Curve, Fp as FieldScalar},
         plonk::{keygen_pk, keygen_vk},
         poly::{commitment::ParamsProver, ipa::commitment::ParamsIPA},
     };
-    use super::*;
     #[test]
     fn compressors_return_distinct_outputs() {
         let commitment = compute_commitment_bytes(11, 31);

@@ -1,7 +1,7 @@
-use std::net;
 use manyhow::Result;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::quote;
+use std::net;
 use syn::{Token, bracketed, parse::ParseStream};
 /// Stringify [`TokenStream`], without inserting any spaces in between
 fn stringify_tokens(tokens: TokenStream) -> String {
@@ -148,8 +148,8 @@ pub fn socket_addr_impl(input: TokenStream) -> Result<TokenStream> {
 }
 #[cfg(test)]
 mod tests {
-    use manyhow::ToTokensError;
     use super::*;
+    use manyhow::ToTokensError;
     #[test]
     fn parse_ipv4() {
         assert_eq!(

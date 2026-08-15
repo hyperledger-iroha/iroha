@@ -1,7 +1,7 @@
 //! Ensure signatory/quorum instructions are in the default registry.
-use std::any::type_name;
 use iroha_data_model::isi::registry;
 use iroha_data_model::isi::{AddSignatory, RemoveSignatory, SetAccountQuorum};
+use std::any::type_name;
 #[test]
 fn default_registry_includes_signatory_quorum_instructions() {
     let registry = registry::default();

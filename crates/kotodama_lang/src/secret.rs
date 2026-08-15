@@ -5,7 +5,6 @@
 //! cryptographic declassifiers below.  This module also performs a final walk
 //! over typed programs so future type-checker changes cannot accidentally turn
 //! a rejected secret flow into an accepted one.
-use std::collections::HashSet;
 use crate::{
     ast::FunctionKind,
     builtins::{Builtin, BuiltinAccess},
@@ -14,6 +13,7 @@ use crate::{
         TypedProgram, TypedStatement,
     },
 };
+use std::collections::HashSet;
 fn error(code: &'static str, message: impl Into<String>) -> SemanticError {
     SemanticError {
         code,

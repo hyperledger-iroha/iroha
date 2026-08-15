@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Multi-lane routing and storage provisioning integration.
-use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};
 use eyre::Result;
 use iroha_config::{
     kura::{FsyncMode, InitMode},
@@ -34,6 +33,7 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
+use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};
 use tempfile::tempdir;
 const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 fn test_chain_id() -> ChainId {

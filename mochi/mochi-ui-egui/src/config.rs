@@ -5,16 +5,16 @@
 //! recompiling the application. This module discovers that file (or an explicit
 //! `MOCHI_CONFIG` override), parses the TOML document, and yields a strongly
 //! typed configuration for the UI to apply while constructing the supervisor.
+use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use mochi_core::{
+    GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder,
+    config::sandbox_root_for_workspace, supervisor::RestartPolicy,
+};
 use std::{
     convert::TryFrom,
     env, fmt, fs, io,
     path::{Path, PathBuf},
     time::Duration,
-};
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
-use mochi_core::{
-    GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder,
-    config::sandbox_root_for_workspace, supervisor::RestartPolicy,
 };
 const DEFAULT_RESTART_MAX_RESTARTS: usize = 3;
 const DEFAULT_RESTART_BACKOFF_MS: u64 = 1_000;

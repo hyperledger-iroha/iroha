@@ -3,11 +3,7 @@
 //! E.g. peer A changes address, connects to peer B,
 //! and then peer B will broadcast address of peer A to other peers.
 #![allow(clippy::disallowed_types)]
-#[allow(clippy::disallowed_types)]
-use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
-    time::Duration,
-};
+use crate::{IrohaNetwork, NetworkMessage};
 use iroha_config::parameters::actual::TrustedPeers;
 use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{
@@ -21,8 +17,12 @@ use iroha_p2p::{
 };
 use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
 use norito::{NoritoDeserialize, NoritoSerialize, codec::Encode, core as ncore};
+#[allow(clippy::disallowed_types)]
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    time::Duration,
+};
 use tokio::sync::mpsc;
-use crate::{IrohaNetwork, NetworkMessage};
 /// Trust tracking entry with decay metadata.
 #[derive(Debug, Clone)]
 struct TrustEntry {
@@ -1111,10 +1111,7 @@ impl<'a> ncore::DecodeFromSlice<'a> for PeerTrustGossip {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, BTreeSet, HashSet},
-        time::Instant,
-    };
+    use super::*;
     use iroha_config::{
         base::WithOrigin,
         parameters::actual::{
@@ -1124,7 +1121,10 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::block::{BlockHeader, consensus_v2::ConsensusMode};
-    use super::*;
+    use std::{
+        collections::{BTreeMap, BTreeSet, HashSet},
+        time::Instant,
+    };
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),

@@ -5,14 +5,6 @@
 //! durable boundaries, while finalized projections are read from one immutable
 //! [`State::query_view`] and cross-checked through the native committed-event
 //! query.
-use std::{
-    cmp,
-    sync::{
-        Arc, Mutex, RwLock,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
-};
 use iroha_core::{
     queue::Queue,
     smartcontracts::ValidSingularQuery,
@@ -52,6 +44,14 @@ use sorafs_node::moderation_orchestrator::{
     ModerationTerminalHandoffSinkV1, ModerationTerminalHandoffV1, ModerationTransactionReceiptV1,
     ModerationTransactionRequestV1, ModerationTransactionSubmitterV1,
     qualify_moderation_runtime_provider_v1, revalidate_moderation_runtime_provider_v1,
+};
+use std::{
+    cmp,
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 const MODERATION_HANDOFF_MAX_BYTES_V1: usize = 64 * 1024;
 const MODERATION_PANEL_NOTIFICATION_MAX_BYTES_V1: usize = 64 * 1024;
@@ -1662,14 +1662,7 @@ impl ModerationPanelNotificationSinkV1 for ModerationPanelNotificationSinkAdapte
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, VecDeque},
-        sync::{
-            Barrier, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
-        thread,
-    };
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         events::data::sorafs::{SorafsModerationLedgerEvent, SorafsModerationLedgerEventKind},
@@ -1678,7 +1671,14 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use sorafs_node::moderation_orchestrator::ModerationNativeActionV1;
-    use super::*;
+    use std::{
+        collections::{BTreeMap, VecDeque},
+        sync::{
+            Barrier, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+    };
     const TEST_SIGNER_HANDLE: &str = "moderation-hsm-primary";
     const TEST_INGRESS_HANDLE: &str = "moderation-ingress-primary";
     const TEST_HANDOFF_HANDLE: &str = "moderation-handoff-primary";

@@ -1,9 +1,9 @@
 //! Validate the V1 public configuration boundary for native `SoraFS` transaction signers.
-use std::{fmt::Write as _, path::PathBuf};
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::account::AccountId;
+use std::{fmt::Write as _, path::PathBuf};
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()

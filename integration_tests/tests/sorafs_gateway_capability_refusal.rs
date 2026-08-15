@@ -1,8 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests covering the `SoraFS` gateway capability refusal fixture bundle.
-use std::collections::{HashMap, HashSet};
 use integration_tests::sorafs_gateway_capability_refusal::{load_responses, load_scenarios};
 use norito::json::Value;
+use std::collections::{HashMap, HashSet};
 #[test]
 fn capability_refusal_scenarios_match_expected_ids() {
     let scenarios = load_scenarios().expect("load capability refusal scenarios");

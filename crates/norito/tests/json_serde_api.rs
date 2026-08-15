@@ -1,8 +1,8 @@
 #![cfg(feature = "json")]
 //! Representative smoke/regression parity tests for the serde-style JSON API.
-use std::collections::BTreeMap;
 use norito::json;
 use serde::Serialize;
+use std::collections::BTreeMap;
 #[derive(Debug, norito::JsonSerialize, Serialize)]
 struct TypedChild {
     ok: bool,

@@ -1,11 +1,5 @@
 //! Interactive setup wizard for quickly preparing Iroha/Sora configs.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt, fs,
-    io::{BufWriter, Write},
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Context as _, Result, eyre};
 use inquire::{Select, Text};
@@ -15,8 +9,14 @@ use iroha_crypto::{
 use iroha_data_model::peer::PeerId;
 use iroha_genesis::{read_genesis_manifest_bytes, validate_genesis_manifest_json};
 use norito::json::{self, Value as JsonValue};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt, fs,
+    io::{BufWriter, Write},
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 use toml::{Value as TomlValue, value::Table as TomlTable};
-use crate::{Outcome, RunArgs, tui};
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 /// Supported network profiles for the wizard.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

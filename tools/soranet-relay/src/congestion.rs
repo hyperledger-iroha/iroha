@@ -4,6 +4,7 @@
 //! peer and limits the number of simultaneous circuits each remote may
 //! establish. It is intentionally conservative; production operators should
 //! tune the limits via configuration once traffic characteristics are known.
+use crate::config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, CongestionConfig};
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -11,7 +12,6 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use crate::config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, CongestionConfig};
 #[derive(Debug)]
 /// Per-remote circuit accounting state.
 struct ClientState {
@@ -227,8 +227,8 @@ pub enum CongestionError {
 }
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
     fn controller(max_active_circuits: usize) -> CongestionController {
         CongestionController::new(CongestionConfig {
             max_circuits_per_client: 2,

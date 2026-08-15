@@ -1,4 +1,6 @@
 //! Telemetry sent to a server
+use crate::integrity::ChainState;
+use crate::retry_period::RetryPeriod;
 use chrono::Utc;
 use eyre::{Result, eyre};
 use futures::{Sink, SinkExt, StreamExt, stream::SplitSink};
@@ -16,8 +18,6 @@ use tokio_tungstenite::{
     tungstenite::{Error, Message},
 };
 use url::Url;
-use crate::integrity::ChainState;
-use crate::retry_period::RetryPeriod;
 type WebSocketSplitSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 const INTERNAL_CHANNEL_CAPACITY: usize = 10;
 /// Starts telemetry sending data to a server
@@ -296,6 +296,15 @@ impl SinkFactory for WebsocketSinkFactory {
 }
 #[cfg(test)]
 mod tests {
+    use crate::{
+        integrity::ChainState,
+        ws::{Client, RetryPeriod, SinkFactory},
+    };
+    use eyre::{Result, eyre};
+    use futures::{Sink, StreamExt};
+    use iroha_config::parameters::actual::TelemetryIntegrity;
+    use iroha_logger::telemetry::{Event, Fields};
+    use norito::json::{Map, Value};
     use std::{
         pin::Pin,
         sync::{
@@ -305,17 +314,8 @@ mod tests {
         task::{Context, Poll},
         time::Duration,
     };
-    use eyre::{Result, eyre};
-    use futures::{Sink, StreamExt};
-    use iroha_config::parameters::actual::TelemetryIntegrity;
-    use iroha_logger::telemetry::{Event, Fields};
-    use norito::json::{Map, Value};
     use tokio::task::JoinHandle;
     use tokio_tungstenite::tungstenite::{Error, Message};
-    use crate::{
-        integrity::ChainState,
-        ws::{Client, RetryPeriod, SinkFactory},
-    };
     #[test]
     fn prepare_message_fails_on_invalid_hash_fields() {
         for field in ["genesis_hash", "best", "finalized_hash"] {

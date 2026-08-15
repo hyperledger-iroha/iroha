@@ -13,14 +13,7 @@
 //! This module defines the complete projection contract; ledger mutation,
 //! storage, and native query/Torii wiring remain outside this service layer.
 pub mod runtime;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-    sync::{
-        Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-};
+use crate::durable_transaction_forwarder::{AtomicCheckpointStore, CheckpointStoreError};
 use iroha_data_model::{
     NetworkId,
     events::data::sorafs::SorafsRepairLedgerEventKind,
@@ -62,8 +55,15 @@ use sorafs_manifest::reputation::{
         ReputationSnapshotTrustPolicyV1, SignedReputationSnapshotV1, snapshot_signing_digest,
     },
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
 use thiserror::Error;
-use crate::durable_transaction_forwarder::{AtomicCheckpointStore, CheckpointStoreError};
 /// Durable reputation-ingest policy schema version.
 pub const REPUTATION_INGEST_POLICY_VERSION_V1: u8 = 1;
 /// Durable reputation checkpoint schema version.
@@ -3788,7 +3788,7 @@ fn checked_unix_millis_to_seconds(unix_ms: u64) -> Option<u64> {
 }
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -3825,8 +3825,8 @@ mod tests {
         ReputationSnapshotSignatureV1, ReputationTrustedSignerV1,
         SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
     };
+    use std::fs;
     use tempfile::TempDir;
-    use super::*;
     const TARGET_HEIGHT: u64 = 10;
     const TARGET_HASH: [u8; 32] = [0xA1; 32];
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;

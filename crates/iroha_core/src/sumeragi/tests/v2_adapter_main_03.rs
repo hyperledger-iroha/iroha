@@ -1234,7 +1234,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     else {
         unreachable!("cold fixture Broadcast is a signed Proposal")
     };
-    substituted_proposal.signature.push(0xD7);
+    substituted_proposal.subject.payload_hash = Hash::new(b"substituted cold Proposal payload");
     assert!(
         RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1::from_recovered_wal(
             super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
@@ -1365,6 +1365,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
             &mut services,
             context.clone(),
             local,
+            tag,
             Arc::clone(&output_guard),
             body_store,
             body_store_identity.clone(),
@@ -1388,6 +1389,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
             &mut foreign_services,
             context,
             local,
+            tag,
             Arc::clone(&output_guard),
             foreign_store,
             foreign_store_identity,

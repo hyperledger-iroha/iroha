@@ -4,6 +4,17 @@
 //! signer seed is never materialized as a JSON string.  Protocol-specific
 //! witness bytes are decoded only after an authenticated execute request has
 //! passed every public binding and transaction-plan check.
+use crate::privacy_native_actions::{
+    AnonymousPgcPaymentActionRequestV1, BootleLanternPresentationActionRequestV1,
+    FcmpMembershipPaymentActionRequestV1, FcmpWalletOutputRequestV1, IvmPrivateNoteActionRequestV1,
+    IvmPrivateNoteOutputRequestV1, JindoPolynomialEvaluationActionRequestV1,
+    OrchardNoteActionRequestV1, PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1,
+    PqMaspNoteActionRequestV1, PqMaspOutputRequestV1, PrivacyNativeActionRequestV1,
+    VeRangeActionRequestV1, VegaCredentialPresentationActionRequestV1,
+    ZkAceAuthorizationActionRequestV1, ZkAmsActionRequestV1, ZkAmsAdmissionCredentialRequestV1,
+    ZkAmsBatchAdmissionActionRequestV1, ZkAmsProvisionAccountActionRequestV1,
+    parse_canonical_public_balance_scope_v1, privacy_native_action_capability_for_protocol_v1,
+};
 use core::fmt;
 use iroha_core::privacy_engines::{
     bootle_lantern::{relation::BootleLanternPresentationWitnessV1, ring::ApplicationPolynomialV1},
@@ -41,17 +52,6 @@ use iroha_data_model::{
 };
 use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize, Zeroizing};
-use crate::privacy_native_actions::{
-    AnonymousPgcPaymentActionRequestV1, BootleLanternPresentationActionRequestV1,
-    FcmpMembershipPaymentActionRequestV1, FcmpWalletOutputRequestV1, IvmPrivateNoteActionRequestV1,
-    IvmPrivateNoteOutputRequestV1, JindoPolynomialEvaluationActionRequestV1,
-    OrchardNoteActionRequestV1, PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1,
-    PqMaspNoteActionRequestV1, PqMaspOutputRequestV1, PrivacyNativeActionRequestV1,
-    VeRangeActionRequestV1, VegaCredentialPresentationActionRequestV1,
-    ZkAceAuthorizationActionRequestV1, ZkAmsActionRequestV1, ZkAmsAdmissionCredentialRequestV1,
-    ZkAmsBatchAdmissionActionRequestV1, ZkAmsProvisionAccountActionRequestV1,
-    parse_canonical_public_balance_scope_v1, privacy_native_action_capability_for_protocol_v1,
-};
 use zk_ace_prover::ZkAcePrivacyTransferV1;
 const MAGIC: &[u8; 4] = b"IPWB";
 const SCHEMA_VERSION: u8 = 1;

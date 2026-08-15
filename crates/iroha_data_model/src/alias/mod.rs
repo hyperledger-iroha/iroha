@@ -3,12 +3,12 @@
 //! This module currently provides data model primitives for alias records,
 //! attestation tracking, and Merkle snapshot bookkeeping. Iroha v1 does not
 //! define or expose an OPRF/VOPRF protocol for alias lookup.
-use std::vec::Vec;
+pub use self::model::*;
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::{Decode, codec::Encode};
-pub use self::model::*;
+use std::vec::Vec;
 #[model]
 mod model {
     use super::*;
@@ -171,10 +171,10 @@ pub fn alias_frontier_digest(
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-    use iroha_crypto::KeyPair;
     use super::*;
     use crate::{account::AccountId, domain::DomainId, name::Name};
+    use iroha_crypto::KeyPair;
+    use std::str::FromStr;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked alias fixture keypair")
     }

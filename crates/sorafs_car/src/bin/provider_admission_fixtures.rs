@@ -1,9 +1,4 @@
 //! Generates deterministic provider admission fixtures for SoraFS tests.
-use std::{
-    env, fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
 use ed25519_dalek::{Signer, SigningKey};
 use hex::FromHex;
 use iroha_crypto::{BlsNormal, KeyGenOption, KeyPair};
@@ -26,6 +21,11 @@ use sorafs_manifest::{
 };
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 const DEFAULT_OUTPUT_DIR: &str = "fixtures/sorafs_manifest/provider_admission";
 const PROVIDER_ID_HEX: &str = "0a0b0c0d0e0f0011223344556677889900aa0bb0ccddeeff1122334455667788";
 const STAKE_POOL_ID_HEX: &str = "99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa";
@@ -938,9 +938,9 @@ fn transport_protocol_label(protocol: TransportProtocol) -> &'static str {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::collections::BTreeSet;
     use tempfile::{TempDir, tempdir};
-    use super::*;
     const EXPECTED_FIXTURE_NAMES: &[&str] = &[
         "README.md",
         "advert_renewed_v1.json",

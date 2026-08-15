@@ -6,6 +6,9 @@
 - VRF seed (hex): 9DA3880072B44387B94BC02414E4E84AAE99F70966F8C247C092647109AFCBF3
 - deterministic genesis creation-time base (ms): 1700000000000
 - genesis public key: ed012077D8B70FE83D6E0A0FF1C100FDCD01C6A937DA0B7B1004E7C9545BB64D6639A8
+- topology: 7 logical lanes over 5 physical dataspaces (`universal`, `dpn`, `is`, `is2`, `cbsi`); governance and zk are lanes in `universal`, not dataspaces
+- physical-deployment limit: this deterministic sample uses one 7-peer harness to validate config/genesis binding; it does not provision five disjoint server cohorts or per-dataspace manifests and is not evidence of a deployable physical topology
+
 - peers:
 - peer 1: public_key=ea0130A281E64EED12B1A0CD3114DB7F3F33F4C923532CB0550ABB6A64911CA72EEAA1866CF77C84AD3B2C6406B0595E21FE3D address=172.28.0.10:1337 pop_hex=aad83622df5db2568f7a01eed56592d97d9fb8077c4e31def87d6654b4906a815324493cfea2af389b5ea4c62335c7f8009e3a38f3dd6f6a08fa6492d4e77433913722f67f6210a667eb6e1ffce83522bc308e8a9ade1ee0ddad94a4d2672bd4
 - peer 2: public_key=ea013080D71C0DD03907BC174C7F4D90C23993A5BA9108A7F109A1D7966117997D4B1F3C51008F538BABB2A01D3CB5A7C15778 address=172.28.0.11:1338 pop_hex=b01b6f05f1274ef632f0a4f46bcbfdd09b69fb37dc27aa58ec4e147ba1b7cc8816c56bb098623053d0a12b3db444cea0118795f31f27d434af4200168a362da8e9d2dc508ab99e6fa0d0003d469b1bfc4fad0c0b5373b34a6f3e76267cc35399
@@ -24,10 +27,11 @@ Files:
 - config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 - sorafs_sites.json — empty version-1 named-host binding document loaded, validated, and cached at Torii startup
-- docker-compose.yml — full validator committee mounting the shared genesis, per-peer configs, and the host `/run/secrets/iroha` directory read-only
+- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
 
 Runtime keys:
-- Validator, SoraNet transport, and streaming signing keys are not embedded. Provision every per-peer file named by the configs under `/run/secrets/iroha` before starting the committee. Startup fails closed when a required file is absent.
+- Validator, SoraNet transport, and streaming signing keys are not embedded. Provision the per-peer files named by each config under `/run/secrets/iroha` before starting a validator. The compose file mounts that host directory read-only and startup fails closed when a required file is absent.
+
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-taira

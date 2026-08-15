@@ -25,6 +25,7 @@ extern crate self as iroha_data_model;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary
 // rather than silencing the lint at the crate root.
+use crate::name::Name;
 pub use iroha_crypto::PublicKey;
 pub use iroha_data_model_derive::model;
 pub use norito::codec::{Decode, Encode};
@@ -35,7 +36,6 @@ pub use norito_derive::{
     FastJson as DeriveFastJson, FastJsonWrite as DeriveFastJsonWrite,
     JsonDeserialize as DeriveJsonDeserialize, JsonSerialize as DeriveJsonSerialize,
 };
-use crate::name::Name;
 /// Data model compatibility version for SDK and node handshakes.
 ///
 /// Version 2 makes the signature-bound fee payment intent mandatory and
@@ -65,6 +65,8 @@ pub mod asset;
 pub use asset::{AssetDefinitionId, AssetId};
 /// Block-level data structures and helpers.
 pub mod block;
+/// Bridge-related data types.
+pub mod bridge;
 /// Shared primitives reused across data model modules.
 pub mod common;
 /// Compute lane requests, manifests, and receipts.
@@ -93,6 +95,9 @@ pub mod executor;
 pub mod fastpq;
 /// Fraud detection and risk scoring data types.
 pub mod fraud;
+/// Governance-related data types (feature-gated)
+#[cfg(feature = "governance")]
+pub mod governance;
 mod governance_fingerprint;
 /// Hijiri reputation system data types.
 pub mod hijiri;
@@ -105,6 +110,8 @@ pub mod ipfs;
 /// Instruction-set interface (ISI) data types.
 pub mod isi;
 mod json_helpers;
+#[cfg(feature = "json")]
+mod json_key_codec;
 /// Jurisdiction Data Guardian attestations and committee types.
 pub mod jurisdiction;
 /// Kaigi session descriptors and billing profile definitions.
@@ -163,6 +170,8 @@ pub mod sns;
 pub mod social;
 /// Soracloud manifests for deterministic service hosting.
 pub mod soracloud;
+/// SoraDNS attestation and directory data structures.
+pub mod soradns;
 /// SoraFS data structures (pin registry, manifests).
 pub mod sorafs;
 /// Strict `sorafs://...` URI literals.
@@ -177,6 +186,9 @@ pub mod state_path;
 pub mod subscription;
 /// Taikai broadcast metadata and segment envelope types.
 pub mod taikai;
+/// Test fixtures exposed for SDK/guardrail consumers.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod testing;
 /// Transaction structures, payloads, and signatures.
 pub mod transaction;
 /// Extended transaction responses for Torii/SDK integrations.
@@ -191,20 +203,8 @@ pub mod validator;
 pub mod verification;
 /// Visitor traits for traversing data-model structures.
 pub mod visit;
-/// SoraDNS attestation and directory data structures.
-pub mod soradns;
 /// Zero-knowledge proof payload types.
 pub mod zk;
-#[cfg(feature = "json")]
-mod json_key_codec;
-/// Bridge-related data types.
-pub mod bridge;
-/// Governance-related data types (feature-gated)
-#[cfg(feature = "governance")]
-pub mod governance;
-/// Test fixtures exposed for SDK/guardrail consumers.
-#[cfg(any(test, feature = "test-fixtures"))]
-pub mod testing;
 /// Helpers for constructing and accessing instruction registries used by the IVM.
 pub mod instruction_registry {
     pub use crate::isi::{InstructionRegistry, registry::default};
@@ -315,22 +315,6 @@ mod ffi {
 #[allow(ambiguous_glob_reexports)]
 pub mod prelude {
     //! Prelude: re-export of most commonly used traits, structs and macros in this crate.
-    pub use iroha_crypto::{
-        Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, MerkleTree, PrivateKey, PublicKey,
-        Signature, SignatureOf,
-    };
-    pub use iroha_primitives::{
-        json::Json,
-        numeric::{Numeric, NumericOperationError, NumericSpec, Quantity, numeric},
-        numeric_abi::{
-            DECIMAL_SCHEMA_HASH_V1, DECIMAL_SCHEMA_NAME_V1, DecimalValueV1, INT_SCHEMA_HASH_V1,
-            INT_SCHEMA_NAME_V1, IntValueV1, MAX_DECIMAL_ENVELOPE_BYTES_V1,
-            MAX_DECIMAL_FRAME_BYTES_V1, MAX_INT_ENVELOPE_BYTES_V1, MAX_INT_FRAME_BYTES_V1,
-            MAX_QUANTITY_ENVELOPE_BYTES_V1, MAX_QUANTITY_FRAME_BYTES_V1,
-            NUMERIC_FRAME_HEADER_BYTES_V1, NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1, NumericAbiError,
-            QUANTITY_SCHEMA_HASH_V1, QUANTITY_SCHEMA_NAME_V1, QuantityValueV1,
-        },
-    };
     pub use super::{
         ChainId, Decode, Encode, HasMetadata, IdBox, Identifiable, Level, NetworkId, Registrable,
         ValidationFail,
@@ -385,5 +369,21 @@ pub mod prelude {
         subscription::prelude::*,
         transaction::prelude::*,
         trigger::prelude::*,
+    };
+    pub use iroha_crypto::{
+        Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, MerkleTree, PrivateKey, PublicKey,
+        Signature, SignatureOf,
+    };
+    pub use iroha_primitives::{
+        json::Json,
+        numeric::{Numeric, NumericOperationError, NumericSpec, Quantity, numeric},
+        numeric_abi::{
+            DECIMAL_SCHEMA_HASH_V1, DECIMAL_SCHEMA_NAME_V1, DecimalValueV1, INT_SCHEMA_HASH_V1,
+            INT_SCHEMA_NAME_V1, IntValueV1, MAX_DECIMAL_ENVELOPE_BYTES_V1,
+            MAX_DECIMAL_FRAME_BYTES_V1, MAX_INT_ENVELOPE_BYTES_V1, MAX_INT_FRAME_BYTES_V1,
+            MAX_QUANTITY_ENVELOPE_BYTES_V1, MAX_QUANTITY_FRAME_BYTES_V1,
+            NUMERIC_FRAME_HEADER_BYTES_V1, NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1, NumericAbiError,
+            QUANTITY_SCHEMA_HASH_V1, QUANTITY_SCHEMA_NAME_V1, QuantityValueV1,
+        },
     };
 }

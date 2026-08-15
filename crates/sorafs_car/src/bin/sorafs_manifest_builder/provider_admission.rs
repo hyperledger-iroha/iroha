@@ -1,9 +1,6 @@
-use std::{
-    fs,
-    io::Read as _,
-    iter::Iterator,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+use super::{
+    chunker_registry, parse_hex_array, parse_hex_vec, parse_profile_handle, parse_u16, parse_u32,
+    parse_u64, read_file_bytes, write_binary, write_json,
 };
 use ed25519_dalek::{Signer, SigningKey};
 use norito::{
@@ -26,9 +23,12 @@ use sorafs_manifest::{
     provider_advert::{PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1, ProviderCapabilitySoranetPqV1},
     verify_advert_against_record, verify_revocation_signatures_untrusted_signers,
 };
-use super::{
-    chunker_registry, parse_hex_array, parse_hex_vec, parse_profile_handle, parse_u16, parse_u32,
-    parse_u64, read_file_bytes, write_binary, write_json,
+use std::{
+    fs,
+    io::Read as _,
+    iter::Iterator,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 const PROPOSAL_VERSION: u8 = PROVIDER_ADMISSION_PROPOSAL_VERSION_V1;
 const ENVELOPE_VERSION: u8 = PROVIDER_ADMISSION_ENVELOPE_VERSION_V1;

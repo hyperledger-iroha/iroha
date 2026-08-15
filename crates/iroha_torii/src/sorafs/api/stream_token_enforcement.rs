@@ -1,5 +1,12 @@
 //! Production stream-token admission for SoraFS serving routes.
 use super::*;
+use crate::sorafs::{
+    StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionErrorV1,
+    StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionRequestV1,
+    StreamTokenGatewayQuotaRequestV1,
+};
+#[cfg(test)]
+use crate::sorafs::{StreamTokenConcurrencyPermit, StreamTokenQuotaError};
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
     reputation::{
@@ -9,13 +16,6 @@ use iroha_data_model::sorafs::{
     },
 };
 use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
-use crate::sorafs::{
-    StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionErrorV1,
-    StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionRequestV1,
-    StreamTokenGatewayQuotaRequestV1,
-};
-#[cfg(test)]
-use crate::sorafs::{StreamTokenConcurrencyPermit, StreamTokenQuotaError};
 #[derive(Debug)]
 struct ExternalStreamTokenLease {
     capture: Arc<StreamTokenAdmissionCaptureV1>,

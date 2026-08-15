@@ -1,7 +1,5 @@
 //! V1 transcript regression fixtures.
 #[cfg(feature = "fastpq-gpu")]
-use std::{fs, path::Path};
-#[cfg(feature = "fastpq-gpu")]
 use fastpq_prover::{
     OperationKind, Proof, Prover, PublicInputs, StateTransition, TransitionBatch,
     gadgets::transfer::attach_transfer_smt_witnesses, verify,
@@ -21,6 +19,8 @@ use iroha_primitives::numeric::Quantity;
 use norito::core::to_bytes;
 #[cfg(feature = "fastpq-gpu")]
 use norito::to_bytes as norito_bytes;
+#[cfg(feature = "fastpq-gpu")]
+use std::{fs, path::Path};
 #[cfg(feature = "fastpq-gpu")]
 const FIXTURE_NAME: &str = "stage4_balanced_preview.bin";
 #[cfg(feature = "fastpq-gpu")]

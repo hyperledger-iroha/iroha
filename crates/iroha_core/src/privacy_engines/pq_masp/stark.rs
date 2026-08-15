@@ -4,10 +4,6 @@
 //! public statement. The prover commits only witness-bearing base columns;
 //! the sole profile auxiliary column is reserved as a zero bridge so the
 //! shared first-release note proof driver has one exact topology.
-use iroha_data_model::privacy::{
-    PqMaspStarkStatementV1, PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1,
-};
-use rand::TryRngCore;
 use super::{
     air::{
         COPY_OFFSET, PQ_MASP_BASE_WIDTH_V1, PQ_MASP_COPY_WIDTH_V1, PQ_MASP_SHA_BIT_COLUMNS_V1,
@@ -28,6 +24,8 @@ use super::{
     },
     relation::PqMaspWitnessV1,
 };
+#[cfg(test)]
+use crate::privacy_engines::proof_managed_note_stark::proof_managed_note_stark_profile_digest_v1;
 use crate::privacy_engines::{
     aggregate_stark as aggregate,
     proof_managed_note_stark::{
@@ -41,8 +39,10 @@ use crate::privacy_engines::{
     },
     transparent_stark::{GoldilocksFieldV1 as F, TransparentTranscriptV1, sha256_frame_v1},
 };
-#[cfg(test)]
-use crate::privacy_engines::proof_managed_note_stark::proof_managed_note_stark_profile_digest_v1;
+use iroha_data_model::privacy::{
+    PqMaspStarkStatementV1, PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1,
+};
+use rand::TryRngCore;
 const TYPE_SHA_ROUND: usize = 0;
 const TYPE_SHA_END: usize = 1;
 const TYPE_NODE_SELECT: usize = 2;
@@ -1555,9 +1555,6 @@ pub(crate) fn verify_pq_masp_stark_v1(
 }
 #[cfg(test)]
 mod tests {
-    use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
-    use sha2::{Digest as _, Sha256};
-    use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
     use super::*;
     use crate::privacy_engines::{
         pq_masp::{
@@ -1576,6 +1573,9 @@ mod tests {
             note_copy_constraint_residues_v1,
         },
     };
+    use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
+    use sha2::{Digest as _, Sha256};
+    use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
     fn row(columns: &[Vec<F>], index: usize) -> Vec<F> {
         columns.iter().map(|column| column[index]).collect()
     }

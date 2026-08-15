@@ -1,6 +1,4 @@
 //! Zero-knowledge envelope types (Norito TLV payloads).
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     AssetDefinitionId, NetworkId,
     account::AccountId,
@@ -8,6 +6,8 @@ use crate::{
         PrivacyNullifierV1, ZkAcePqAuthorizationStatementV1, privacy_protocol_label_is_reserved_v1,
     },
 };
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Canonical ZK-ACE circuit identifier for post-quantum authorization v0.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID: &str = "zk_ace_pq_authorization_v0";
 /// Canonical verifier-registry label used by ZK-ACE authorization v0.
@@ -696,16 +696,16 @@ pub enum ZkAceTransferDigestErrorV1 {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::type_complexity)]
+    use super::*;
+    use crate::{
+        account::address::ChainDiscriminantGuard, block::BlockHeader, domain::DomainId, name::Name,
+    };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use std::{
         collections::BTreeSet,
         str::FromStr as _,
         sync::{Arc, Barrier},
         thread,
-    };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use super::*;
-    use crate::{
-        account::address::ChainDiscriminantGuard, block::BlockHeader, domain::DomainId, name::Name,
     };
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(

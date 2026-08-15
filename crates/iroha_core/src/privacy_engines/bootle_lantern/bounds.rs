@@ -1,10 +1,10 @@
 //! Public response-bound checks for decoded Lantern presentations.
-use thiserror::Error;
 use super::{
     codec::BootleLanternPresentationProofV1,
     compression::{center_proof_residue_v1, use_gamma_hint_v1},
     params::{Z1_NORM_SQUARED_BOUND_V1, Z3_NORM_SQUARED_BOUND_V1, Z4_INFINITY_NORM_BOUND_V1},
 };
+use thiserror::Error;
 /// Validate all proof components whose bounds are independently public.
 ///
 /// This does not replace the ABDLOP commitment equation or the linear/norm

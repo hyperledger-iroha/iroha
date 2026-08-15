@@ -1,16 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Taira-profile localnet soak with fixed load, packet impairment, and validator churn.
-use std::{
-    any::Any,
-    cmp::Reverse,
-    collections::BTreeSet,
-    fs,
-    net::SocketAddr as StdSocketAddr,
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{kagami::resolve_kagami_bin, process as test_process, sandbox};
 use iroha::{
@@ -32,6 +21,17 @@ use iroha::{
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use iroha_test_network::{
     Program, fslock_ports::AllocatedPortBlock, init_instruction_registry, repo_root,
+};
+use std::{
+    any::Any,
+    cmp::Reverse,
+    collections::BTreeSet,
+    fs,
+    net::SocketAddr as StdSocketAddr,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 use tempfile::TempDir;
 use tokio::time::sleep;

@@ -1,10 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical I105 account IDs.
-use std::{
-    env,
-    sync::OnceLock,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox::{
     self, start_network_async_or_skip as sandbox_start_network_async_or_skip,
@@ -25,6 +20,11 @@ use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use reqwest::Client;
+use std::{
+    env,
+    sync::OnceLock,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 type SurfaceSpec<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
 const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64;
 fn env_flag_enabled(raw: &str) -> bool {

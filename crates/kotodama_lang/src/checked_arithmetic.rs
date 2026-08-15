@@ -4,13 +4,13 @@
 //! syscall implementation. It contains no scalar-register arithmetic and no
 //! host-width fallback, so folding cannot disagree with runtime execution at a
 //! width, sign, scale, normalization, or exact-division boundary.
-use iroha_primitives::{
-    bigint::{BigInt, BigIntError},
-    numeric::{MAX_MANTISSA_BYTES, Numeric, NumericOperationError, Quantity},
-};
 use crate::{
     ast::{BinaryOp, UnaryOp},
     semantic::{ExprKind, Type, TypedExpr},
+};
+use iroha_primitives::{
+    bigint::{BigInt, BigIntError},
+    numeric::{MAX_MANTISSA_BYTES, Numeric, NumericOperationError, Quantity},
 };
 /// One fully evaluated source numeric value.
 #[derive(Clone, Debug, PartialEq, Eq)]

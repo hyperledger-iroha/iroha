@@ -1,10 +1,4 @@
 //! Regenerate grouped Nexus and streaming golden fixtures from canonical Rust encoders.
-use std::{
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
 use hex::encode as hex_encode;
 use iroha_data_model::DomainId;
 use iroha_data_model::prelude::{
@@ -21,6 +15,12 @@ use norito::{
         },
     },
     to_bytes,
+};
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 const FIXTURE_PUBLIC_KEY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";

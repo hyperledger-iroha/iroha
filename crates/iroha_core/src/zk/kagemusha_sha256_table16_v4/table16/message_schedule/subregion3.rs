@@ -10,12 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::convert::TryInto;
-use ff::PrimeField;
-use halo2_proofs::{
-    circuit::{Region, Value},
-    plonk::Error,
-};
 use super::{
     super::{SpreadVar, SpreadWord, Table16Assignment},
     MessageScheduleConfig, MessageWord,
@@ -25,6 +19,12 @@ use crate::zk::kagemusha_sha256_table16_v4::{
     AssignedBits, Bits,
     util::{even_bits, i2lebsp, lebs2ip, odd_bits, spread_bits, sum_with_carry},
 };
+use ff::PrimeField;
+use halo2_proofs::{
+    circuit::{Region, Value},
+    plonk::Error,
+};
+use std::convert::TryInto;
 // A word in subregion 3
 // (10, 7, 2, 13)-bit chunks
 pub struct Subregion3Word<F: PrimeField> {

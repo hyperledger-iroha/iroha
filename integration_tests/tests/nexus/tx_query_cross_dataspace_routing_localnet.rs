@@ -1,12 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Focused wrong-dataspace Torii ingress regression for transaction and query routing.
 use super::localnet_npos::npos_override_transactions;
-use std::{
-    collections::BTreeSet,
-    num::NonZeroU32,
-    thread,
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -48,6 +42,12 @@ use iroha_torii::{
 };
 use norito::{decode_from_bytes, json::Value as JsonValue};
 use reqwest::StatusCode as HttpStatusCode;
+use std::{
+    collections::BTreeSet,
+    num::NonZeroU32,
+    thread,
+    time::{Duration, Instant},
+};
 use tokio::time::sleep;
 use toml::{Table, Value as TomlValue};
 const NEXUS_ALIAS: &str = "universal";

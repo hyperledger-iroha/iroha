@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use soranet_handshake_harness::verify_fixtures;
+use std::path::PathBuf;
 fn workspace_root() -> PathBuf {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir

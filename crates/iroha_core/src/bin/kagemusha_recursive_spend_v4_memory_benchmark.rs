@@ -5,13 +5,6 @@
 //! Proving keys are streamed into anonymous files, and the process emits only
 //! validated byte counts and shape summaries; it cannot frame or publish
 //! candidate or release artifacts.
-use std::{
-    env,
-    error::Error,
-    ffi::OsStr,
-    fs::File,
-    io::{self, Write as _},
-};
 use iroha_core::zk::kagemusha_v2::{
     KagemushaGeneratedParityArtifactsV4, generate_kagemusha_pasta_cycle_artifacts_v4,
     run_kagemusha_k17_shape_probe_v5, start_kagemusha_generation_memory_guard_v4,
@@ -23,6 +16,13 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
     KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4, KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
     KagemushaPastaCycleParityV1, KagemushaStepCircuitParamsV4,
+};
+use std::{
+    env,
+    error::Error,
+    ffi::OsStr,
+    fs::File,
+    io::{self, Write as _},
 };
 const SUBCOMMAND: &str = "measure-compact-k17";
 const K17_SHAPE_PROBE_SUBCOMMAND: &str = "probe-compact-k17-shape";

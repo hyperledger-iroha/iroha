@@ -1,8 +1,7 @@
 //! Runtime upgrade app API handlers.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+use crate::{
+    NoritoJson,
+    json_macros::{JsonDeserialize, JsonSerialize},
 };
 use axum::{extract::Path, response::IntoResponse};
 use iroha_core::{
@@ -43,9 +42,10 @@ use iroha_data_model::{
 use iroha_logger::warn;
 use mv::storage::StorageReadOnly;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use crate::{
-    NoritoJson,
-    json_macros::{JsonDeserialize, JsonSerialize},
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 const CURVE_REGISTRY_VERSION: u32 = 1;
 const QUERY_PROJECTION_SHARD_CATALOG_VERSION: u16 = 1;
@@ -1884,9 +1884,9 @@ pub async fn handle_runtime_cancel_upgrade(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use http_body_util::BodyExt as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
-    use super::*;
     #[cfg(feature = "app_api")]
     fn checked_projection_ed25519_keypair(seed: u8) -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

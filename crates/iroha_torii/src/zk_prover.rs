@@ -21,22 +21,16 @@
 //!
 //! The worker verifies `ProofAttachment` payloads (single or list, Norito or JSON)
 //! using core backend verifiers and records per-proof metadata. It never mutates WSV.
-#[cfg(test)]
-use std::collections::BTreeMap;
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::{
-    collections::{BinaryHeap, HashSet},
-    fs,
-    io::Read as _,
-    io::{Error as IoError, ErrorKind as IoErrorKind},
-    path::{Path, PathBuf},
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicU64, Ordering},
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
+use crate::NoritoQuery;
+use crate::{
+    routing::MaybeTelemetry,
+    zk_attachments::{
+        ATTACHMENT_META_FILE_MAX_BYTES, open_attachment_regular_file,
+        read_bounded_attachment_regular_file, validate_attachment_body_contract,
+        validate_attachment_metadata_contract,
     },
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
 };
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
@@ -59,21 +53,27 @@ use norito::json;
 use parking_lot::{Mutex, RwLock};
 #[cfg(test)]
 use sha2::{Digest as _, Sha256};
+#[cfg(test)]
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::{
+    collections::{BinaryHeap, HashSet},
+    fs,
+    io::Read as _,
+    io::{Error as IoError, ErrorKind as IoErrorKind},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::{
     runtime::{Handle, RuntimeFlavor},
     sync::Semaphore,
     task::{self, JoinSet},
-};
-#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
-use crate::NoritoQuery;
-use crate::{
-    routing::MaybeTelemetry,
-    zk_attachments::{
-        ATTACHMENT_META_FILE_MAX_BYTES, open_attachment_regular_file,
-        read_bounded_attachment_regular_file, validate_attachment_body_contract,
-        validate_attachment_metadata_contract,
-    },
-    zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
 };
 #[derive(
     Debug,
@@ -2006,11 +2006,11 @@ pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoRe
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::test_utils::TestDataDirGuard;
     use http_body_util::BodyExt as _;
     use iroha_core::zk::test_utils::{FixtureEnvelope, halo2_ivm_execution_envelope};
     use iroha_data_model::proof::{ProofAttachment, ProofBox};
-    use super::*;
-    use crate::test_utils::TestDataDirGuard;
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
     #[cfg(any(unix, windows))]
     #[test]

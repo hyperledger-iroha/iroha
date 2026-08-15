@@ -5,10 +5,11 @@
 //! finalized.  This module retains only bounded delivery metadata and the exact
 //! signed transaction selected by the runtime signer.  It never projects an
 //! outcome independently of finalized ledger state.
-use std::{
-    collections::BTreeSet,
-    path::Path,
-    sync::{Arc, Mutex},
+#[cfg(test)]
+use crate::durable_transaction_forwarder::CheckpointWriterGuard;
+use crate::durable_transaction_forwarder::{
+    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
+    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
 use iroha_data_model::{
     isi::sorafs::{
@@ -29,13 +30,12 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
     PDP_GOVERNANCE_ARCHIVE_MAX_CANONICAL_BYTES_V1, PdpGovernanceArchiveV1, PotrReceiptV1,
 };
-use thiserror::Error;
-#[cfg(test)]
-use crate::durable_transaction_forwarder::CheckpointWriterGuard;
-use crate::durable_transaction_forwarder::{
-    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
-    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
+use std::{
+    collections::BTreeSet,
+    path::Path,
+    sync::{Arc, Mutex},
 };
+use thiserror::Error;
 /// Durable outbox checkpoint schema version.
 pub const PROOF_OUTCOME_OUTBOX_CHECKPOINT_VERSION_V1: u8 = 1;
 /// File containing the canonical proof-outcome delivery checkpoint.
@@ -1364,9 +1364,7 @@ impl From<CheckpointStoreError> for ProofOutcomeOutboxError {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::Write as _, time::Duration};
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt as _;
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -1390,8 +1388,10 @@ mod tests {
             sign_potr_receipt_v1,
         },
     };
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt as _;
+    use std::{fs, io::Write as _, time::Duration};
     use tempfile::TempDir;
-    use super::*;
     fn test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,

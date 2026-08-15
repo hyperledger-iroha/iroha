@@ -2,12 +2,6 @@
 //!
 //! These instructions move Soracloud service deployment state into the
 //! authoritative on-chain world model instead of Torii-local file persistence.
-use core::cmp::Ordering;
-use std::collections::BTreeMap;
-use iroha_crypto::Hash;
-use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
@@ -27,6 +21,12 @@ use crate::{
     },
     sorafs::pin_registry::StorageClass,
 };
+use core::cmp::Ordering;
+use iroha_crypto::Hash;
+use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeMap;
 fn encoded_order<T: Encode>(left: &T, right: &T) -> Ordering {
     left.encode().cmp(&right.encode())
 }
@@ -1766,9 +1766,9 @@ impl_soracloud_decode_from_slice!(RecordSoracloudPrivateUploadedModelExecutionRe
 });
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use norito::core::DecodeFromSlice;
-    use super::*;
     fn name(raw: &str) -> Name {
         raw.parse().expect("valid name")
     }

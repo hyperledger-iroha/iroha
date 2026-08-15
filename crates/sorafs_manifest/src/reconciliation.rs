@@ -1,7 +1,7 @@
 //! Reconciliation reports published by SoraFS nodes.
+use crate::deal::XorQuantity;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-use crate::deal::XorQuantity;
 /// Schema version for [`SorafsReconciliationReportV1`].
 pub const SORAFS_RECONCILIATION_REPORT_VERSION_V1: u8 = 1;
 /// Deterministic reconciliation summary published by a SoraFS node.

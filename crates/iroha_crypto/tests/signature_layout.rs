@@ -36,8 +36,8 @@ fn read_varint(bytes: &[u8]) -> (usize, usize) {
     (usize::try_from(val).unwrap_or(usize::MAX), i)
 }
 fn dump_header(label: &str, bytes: &[u8]) {
-    use std::fmt::Write as _;
     use norito::core::{Header, header_flags};
+    use std::fmt::Write as _;
     if bytes.len() < Header::SIZE {
         eprintln!("{label}: buffer shorter than header (len={})", bytes.len());
         return;

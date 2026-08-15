@@ -1,25 +1,25 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Subscription trigger integration tests.
-use std::{
-    collections::BTreeMap,
-    time::{Duration, SystemTime},
-};
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
+use iroha::data_model::subscription::{
+    SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY, SUBSCRIPTION_PLAN_METADATA_KEY,
+    SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
+};
 use iroha::{
     client::Client,
     data_model::{Level, asset::AssetId, prelude::*},
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
+use ivm::{ProgramMetadata, encoding, instruction, syscalls};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, SystemTime},
+};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
-};
-use ivm::{ProgramMetadata, encoding, instruction, syscalls};
-use iroha::data_model::subscription::{
-    SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY, SUBSCRIPTION_PLAN_METADATA_KEY,
-    SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
 };
 async fn run_or_skip<F, Fut>(context: &'static str, test: F) -> Result<()>
 where

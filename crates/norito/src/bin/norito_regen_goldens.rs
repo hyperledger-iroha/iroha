@@ -1,10 +1,10 @@
+use norito::json;
 use std::{
     env,
     error::Error,
     fs,
     path::{Path, PathBuf},
 };
-use norito::json;
 fn default_golden_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")

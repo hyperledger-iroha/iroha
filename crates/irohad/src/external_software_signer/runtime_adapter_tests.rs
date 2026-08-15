@@ -1,7 +1,11 @@
-use std::{
-    fmt,
-    os::unix::fs::PermissionsExt as _,
-    sync::{Arc, Mutex},
+use super::{
+    ExternalSoftwareSignerAdapterErrorV1, ExternalSoftwareSignerBackendsV1,
+    ExternalSoftwareSignerBillingStatementAdapterV1, ExternalSoftwareSignerEvidenceViewerAdapterV1,
+    ExternalSoftwareSignerGovernanceDagAdapterV1, ExternalSoftwareSignerPopIssuerAdapterV1,
+    ExternalSoftwareSignerPotrProviderAdapterV1, ExternalSoftwareSignerStreamTokenAdapterV1,
+    SoftwareSignerClientV1, SoftwareSignerKeyAlgorithmV1, SoftwareSignerProvisioningV1,
+    SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1, SoftwareSignerServiceV1,
+    SoftwareSignerWrappingKeyV1,
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_torii::sorafs::{PotrProviderSignerV1 as _, StreamTokenRuntimeSigner as _};
@@ -11,14 +15,10 @@ use sorafs_node::{
     hedging_billing_service::BillingStatementRuntimeSigner as _,
     pop_credentials::PopIssuerSigner as _,
 };
-use super::{
-    ExternalSoftwareSignerAdapterErrorV1, ExternalSoftwareSignerBackendsV1,
-    ExternalSoftwareSignerBillingStatementAdapterV1, ExternalSoftwareSignerEvidenceViewerAdapterV1,
-    ExternalSoftwareSignerGovernanceDagAdapterV1, ExternalSoftwareSignerPopIssuerAdapterV1,
-    ExternalSoftwareSignerPotrProviderAdapterV1, ExternalSoftwareSignerStreamTokenAdapterV1,
-    SoftwareSignerClientV1, SoftwareSignerKeyAlgorithmV1, SoftwareSignerProvisioningV1,
-    SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1, SoftwareSignerServiceV1,
-    SoftwareSignerWrappingKeyV1,
+use std::{
+    fmt,
+    os::unix::fs::PermissionsExt as _,
+    sync::{Arc, Mutex},
 };
 const TEST_WRAP_KEY: [u8; 32] = [0xD1; 32];
 fn direct_signer(

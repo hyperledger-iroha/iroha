@@ -1,10 +1,10 @@
 //! Internationalization helpers shared across Iroha components.
+use norito::json::{self, Value};
 use std::{
     borrow::Cow,
     collections::HashMap,
     sync::{Arc, OnceLock},
 };
-use norito::json::{self, Value};
 macro_rules! language_catalog {
     ($(
         $variant:ident => {
@@ -445,8 +445,8 @@ impl Localizer {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, fs, path::Path};
     use super::*;
+    use std::{collections::BTreeSet, fs, path::Path};
     fn expected_file_stems() -> BTreeSet<String> {
         Language::ALL
             .iter()

@@ -3,6 +3,26 @@
 //! The fixture lives beside the reference relation so its DER construction
 //! uses the exact closed grammar rather than a platform certificate builder.
 //! It is compiled only for tests and the isolated privacy-release runner.
+use super::*;
+use crate::{
+    privacy_engines::zk_x509::{
+        codec::ZkX509AttributeOpeningV1,
+        merkle::{
+            ZK_X509_CA_COMPACT_TREE_CAPACITY_V1, ZkX509CaMembershipPathV1,
+            ca_membership_path_from_complete_spkis_v1, ca_root_from_complete_spkis_v1,
+        },
+        profile::{
+            ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1, ZK_X509_MAX_CHAIN_DEPTH_V1,
+            ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_MAX_SERIAL_BYTES_V1,
+            ZK_X509_MIN_CHAIN_DEPTH_V1,
+        },
+    },
+    privacy_state::{
+        PrivacyCommitmentKeyV1, PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1, PrivacyRootKeyV1,
+        PrivacyRootProvenanceV1, PrivacyStateItemRecordV1, PrivacyZkX509AuthoritativeStateV1,
+        load_privacy_zk_x509_authoritative_state_v1, privacy_zk_x509_ca_namespace_v1,
+    },
+};
 use iroha_crypto::{Algorithm, KeyPair};
 #[cfg(test)]
 use iroha_crypto::{Hash, HashOf};
@@ -30,26 +50,6 @@ use p256::ecdsa::{
     signature::{Signer as _, hazmat::PrehashSigner as _},
 };
 use time::OffsetDateTime;
-use super::*;
-use crate::{
-    privacy_engines::zk_x509::{
-        codec::ZkX509AttributeOpeningV1,
-        merkle::{
-            ZK_X509_CA_COMPACT_TREE_CAPACITY_V1, ZkX509CaMembershipPathV1,
-            ca_membership_path_from_complete_spkis_v1, ca_root_from_complete_spkis_v1,
-        },
-        profile::{
-            ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1, ZK_X509_MAX_CHAIN_DEPTH_V1,
-            ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_MAX_SERIAL_BYTES_V1,
-            ZK_X509_MIN_CHAIN_DEPTH_V1,
-        },
-    },
-    privacy_state::{
-        PrivacyCommitmentKeyV1, PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1, PrivacyRootKeyV1,
-        PrivacyRootProvenanceV1, PrivacyStateItemRecordV1, PrivacyZkX509AuthoritativeStateV1,
-        load_privacy_zk_x509_authoritative_state_v1, privacy_zk_x509_ca_namespace_v1,
-    },
-};
 const CRL_THIS_UPDATE: u64 = 1_672_531_200; // 2023-01-01T00:00:00Z
 const CRL_NEXT_UPDATE: u64 = CRL_THIS_UPDATE + 300;
 const VALIDATION_TIME: u64 = CRL_THIS_UPDATE + 60;

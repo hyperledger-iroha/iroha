@@ -2,29 +2,8 @@
 //!
 //! Queries implement the [`crate::query::Query`] trait and can be stored as trait objects for
 //! dynamic dispatch. The [`crate::query::QueryBox`] alias wraps a `Box<dyn ErasedQuery + Send + Sync>` and is used
-//! throughout the data model whenever heterogeneous queries need to be passed
-//! around.
+//! throughout the data model whenever heterogeneous queries need to be passed around.
 #![allow(clippy::missing_inline_in_public_items)]
-use std::{
-    any::Any,
-    boxed::Box,
-    format,
-    num::NonZeroU64,
-    string::String,
-    sync::OnceLock,
-    vec::{self, Vec},
-};
-use derive_more::Constructor;
-use iroha_crypto::{
-    Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment, PublicKey, SignatureOf,
-};
-use iroha_data_model_derive::model;
-use iroha_macro::FromVariant;
-use iroha_primitives::{json::Json, numeric::Numeric};
-use iroha_schema::IntoSchema;
-use iroha_version::Version;
-use norito::codec::{Decode, Encode};
-use parameters::{ForwardCursor, QueryParams};
 pub use self::model::*;
 use self::{
     account::*, asset::*, block::*, domain::*, dsl::*, executor::*, nft::*, peer::*, permission::*,
@@ -54,6 +33,26 @@ use crate::{
     rwa::{Rwa, RwaId},
     seal,
     trigger::{Trigger, TriggerId},
+};
+use derive_more::Constructor;
+use iroha_crypto::{
+    Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment, PublicKey, SignatureOf,
+};
+use iroha_data_model_derive::model;
+use iroha_macro::FromVariant;
+use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_schema::IntoSchema;
+use iroha_version::Version;
+use norito::codec::{Decode, Encode};
+use parameters::{ForwardCursor, QueryParams};
+use std::{
+    any::Any,
+    boxed::Box,
+    format,
+    num::NonZeroU64,
+    string::String,
+    sync::OnceLock,
+    vec::{self, Vec},
 };
 /// Structural error in a column-oriented iterable-query batch.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
@@ -590,9 +589,8 @@ pub trait Query: seal::Query + Send + Sync + 'static {
     fn execute(&self) {}
     /// Return the wire discriminator for this concrete iterable query.
     ///
-    /// Most queries use the discriminator of their output item. Queries whose
-    /// payloads would otherwise be ambiguous can override this method with a
-    /// query-specific discriminator.
+    /// Most queries use the discriminator of their output item. Queries whose payloads would
+    /// otherwise be ambiguous can override this method with a query-specific discriminator.
     fn query_item_kind(&self) -> QueryItemKind
     where
         Self::Item: ItemKindTag,
@@ -670,9 +668,8 @@ impl QueryRegistry {
     }
     /// Register a query type with an explicit, path-independent wire identifier.
     ///
-    /// The concrete Rust [`std::any::type_name`] remains a valid lookup key for
-    /// in-process cloning, while `wire_id` is the canonical identifier emitted
-    /// by query serializers.
+    /// The concrete Rust [`std::any::type_name`] remains a valid lookup key for in-process cloning,
+    /// while `wire_id` is the canonical identifier emitted by query serializers.
     #[must_use]
     pub fn register_with_id<T>(mut self, wire_id: &'static str) -> Self
     where
@@ -805,8 +802,7 @@ define_builtin_query_registry! {
 }
 /// Set the global query registry used to decode queries by type name or stable wire identifier.
 ///
-/// This should be called exactly once during application start-up. Subsequent
-/// calls are ignored.
+/// This should be called exactly once during application start-up. Subsequent calls are ignored.
 ///
 /// If this function is never invoked, the data model falls back to a built-in
 /// registry covering the standard iterable query set, allowing JSON and Norito
@@ -862,13 +858,13 @@ fn builtin_query_registry() -> &'static QueryRegistry {
 mod wire_id_tests;
 #[model]
 mod model {
-    use getset::Getters;
-    use iroha_crypto::HashOf;
     use super::*;
     use crate::{
         prelude::{TransactionEntrypoint, TransactionResult},
         trigger::action,
     };
+    use getset::Getters;
+    use iroha_crypto::HashOf;
     /// An iterable query bundled with a filter.
     ///
     /// The concrete query payload is carried by [`QueryWithParams`]; this
@@ -940,10 +936,9 @@ mod model {
         ) -> Result<usize, norito::core::Error>;
         /// Return the concrete Rust type key used for in-process registry lookup.
         ///
-        /// The registry maps this key to the stable identifier emitted on the
-        /// wire. Using a dedicated method avoids relying on `type_name_of_val`
-        /// for trait objects, which returns the trait object type rather than
-        /// the concrete type.
+        /// The registry maps this key to the stable identifier emitted on the wire. Using a
+        /// dedicated method avoids relying on `type_name_of_val` for trait objects, which returns
+        /// the trait object type rather than the concrete type.
         fn type_name_key(&self) -> &'static str;
     }
     impl<T, Q> ErasedQuery<T> for Q
@@ -1671,11 +1666,10 @@ mod model {
     impl QueryWithParams {
         /// Construct the canonical query envelope from an erased query and parameters.
         ///
-        /// An erased carrier retains only the output item type, so it cannot
-        /// distinguish query types whose payload shapes are identical. Build
-        /// seller-, buyer-, and status-filtered escrow queries through
-        /// [`crate::query::builder::QueryBuilder`] (or construct this envelope
-        /// with the corresponding query-specific [`QueryItemKind`]) instead.
+        /// An erased carrier retains only the output item type, so it cannot distinguish query
+        /// types whose payload shapes are identical. Build seller-, buyer-, and status-filtered
+        /// escrow queries through [`crate::query::builder::QueryBuilder`] (or construct this
+        /// envelope with the corresponding query-specific [`QueryItemKind`]) instead.
         pub fn new(query: &QueryBox<QueryOutputBatchBox>, params: QueryParams) -> Self {
             macro_rules! try_build {
                 ($item:ty, $kind:ident) => {
@@ -1814,10 +1808,9 @@ mod model {
         FeeSponsorProgramId,
         /// Native asset escrows filtered by seller (wire tag 28).
         ///
-        /// This query-specific tag is appended because seller and buyer query
-        /// payloads both encode as a single [`AccountId`]. The tag is therefore
-        /// the consensus-visible discriminator; existing variants above must
-        /// never be reordered.
+        /// This query-specific tag is appended because seller and buyer query payloads both encode
+        /// as a single [`AccountId`]. The tag is therefore the consensus-visible discriminator;
+        /// existing variants above must never be reordered.
         AssetEscrowsBySeller,
         /// Native asset escrows filtered by buyer (wire tag 29).
         AssetEscrowsByBuyer,
@@ -3191,16 +3184,14 @@ impl SignedQuery {
     }
     /// Verify that the single-key authority signed the complete query payload.
     ///
-    /// Decoding a [`SignedQuery`] is intentionally structural only. Network
-    /// ingress must validate inexpensive network and freshness bounds before
-    /// calling this method, then consume the request nonce before performing
-    /// authorization or query work.
+    /// Decoding a [`SignedQuery`] is intentionally structural only. Network ingress must validate
+    /// inexpensive network and freshness bounds before calling this method, then consume the
+    /// request nonce before performing authorization or query work.
     ///
     /// # Errors
     ///
-    /// Returns an error when the authority is not single-key, the signature
-    /// material is malformed, or the signature does not authenticate the
-    /// complete payload.
+    /// Returns an error when the authority is not single-key, the signature material is malformed,
+    /// or the signature does not authenticate the complete payload.
     pub fn verify_signature(&self) -> Result<(), SignedQueryValidationError> {
         let QuerySignature(signature) = &self.signature;
         let signatory = self
@@ -3257,10 +3248,6 @@ mod candidate {
     // JSON deserialization for SignedQuery is disabled in non-json builds.
     #[cfg(test)]
     mod tests {
-        use std::sync::LazyLock;
-        use iroha_crypto::KeyPair;
-        #[cfg(feature = "json")]
-        use norito::json;
         use crate::{
             account::{AccountId, MultisigMember, MultisigPolicy},
             query::{
@@ -3268,6 +3255,10 @@ mod candidate {
                 candidate::SignedQueryCandidate, parameters,
             },
         };
+        use iroha_crypto::KeyPair;
+        #[cfg(feature = "json")]
+        use norito::json;
+        use std::sync::LazyLock;
         #[cfg(feature = "json")]
         #[test]
         fn query_with_params_json_defaults_optional_fields() {
@@ -3472,9 +3463,6 @@ mod candidate {
 }
 #[cfg(test)]
 mod json_roundtrip_tests {
-    use std::sync::LazyLock;
-    use iroha_crypto::{KeyPair, Signature, SignatureOf};
-    use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use super::*;
     use crate::{
         account::{AccountId, MultisigMember, MultisigPolicy},
@@ -3484,6 +3472,9 @@ mod json_roundtrip_tests {
             json_wrappers::{SignedQueryJson, query_request_from_json, query_request_to_json},
         },
     };
+    use iroha_crypto::{KeyPair, Signature, SignatureOf};
+    use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
+    use std::sync::LazyLock;
     static ALICE_ID: LazyLock<AccountId> =
         LazyLock::new(|| AccountId::new(ALICE_KEYPAIR.public_key().clone()));
     static ALICE_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(|| {
@@ -4244,9 +4235,9 @@ impl_singular_queries! {
 // NOTE: Query DSL projection traits are provided generically in dsl module now.
 #[cfg(test)]
 mod trait_object_tests {
-    use norito::codec::Encode;
     use super::*;
     use crate::query::dsl::{HasProjection, PredicateMarker, SelectorMarker};
+    use norito::codec::Encode;
     fn bare_bytes_with_flags(value: &dyn norito::core::NoritoSerialize, flags: u8) -> Vec<u8> {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
@@ -4394,8 +4385,8 @@ pub mod sns {
     //! SNS-related query definitions.
     //!
     //! Queries related to authoritative SNS-backed ownership.
-    use derive_more::Display;
     use crate::nexus::DataSpaceId;
+    use derive_more::Display;
     queries! {
         /// Fetch the active SNS owner for a dataspace alias resolved from the current catalog.
         #[derive(Display)]
@@ -4422,11 +4413,10 @@ pub mod trigger {
     //! Trigger-related query definitions.
     //!
     //! Trigger-related queries.
-    use std::{format, string::String, vec::Vec};
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     queries! {
-        /// Find all currently active (as in not disabled and/or expired)
-        /// trigger IDs.
+        /// Find all currently active (as in not disabled and/or expired) trigger IDs.
         #[derive(Copy, Display)]
         #[display("Find all trigger ids")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -4481,8 +4471,8 @@ pub mod transaction {
     //!
     //! Queries related to transactions.
     #![allow(clippy::missing_inline_in_public_items)]
-    use std::{format, string::String, vec::Vec};
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     queries! {
         /// [`FindTransactions`] Iroha Query lists all transactions included in a blockchain
         #[derive(Copy, Display)]
@@ -4500,11 +4490,10 @@ pub mod block {
     //!
     //! Queries related to blocks.
     #![allow(clippy::missing_inline_in_public_items)]
-    use std::{format, string::String, vec::Vec};
     use derive_more::Display;
+    use std::{format, string::String, vec::Vec};
     queries! {
-        /// [`FindBlocks`] Iroha Query lists all blocks sorted by
-        /// height in descending order
+        /// [`FindBlocks`] Iroha Query lists all blocks sorted by height in descending order
         #[derive(Copy, Display)]
         #[display("Find all blocks")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]

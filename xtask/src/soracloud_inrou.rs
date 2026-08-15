@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::{
     collections::BTreeMap,
     env,
@@ -6,7 +7,6 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-use serde::Deserialize;
 pub enum CommandMode {
     Portable,
     Firecracker,

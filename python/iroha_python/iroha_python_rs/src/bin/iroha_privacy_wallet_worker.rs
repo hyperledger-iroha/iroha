@@ -1,6 +1,6 @@
 #![deny(unsafe_code)]
-use std::io::{self, BufReader, BufWriter, Read};
 use iroha_python_rs::privacy_wallet_worker::run_pipe_session;
+use std::io::{self, BufReader, BufWriter, Read};
 use zeroize::Zeroizing;
 #[cfg(all(unix, not(target_os = "haiku")))]
 fn harden_process() -> Result<(), ()> {

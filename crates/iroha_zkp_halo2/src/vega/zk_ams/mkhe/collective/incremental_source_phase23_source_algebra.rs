@@ -592,9 +592,8 @@ pub(super) struct Phase23SourceAlgebraPrerequisiteV2<K, P> {
 #[path = "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1.rs"]
 mod global_lookup_source_replay_v1;
 pub(super) use global_lookup_source_replay_v1::{
-    GlobalLookupCanonicalReopenSealV1, GlobalLookupProofSessionEntropySealV1,
-    GlobalLookupSourceReplaySinkSealV1, Phase23GlobalLookupRadixSourceCursorV2,
-    Phase23GlobalLookupSourceReopenedV1, Phase23GlobalLookupSourceReplayEvidenceV1,
+    GlobalLookupProofSessionEntropySealV1, GlobalLookupSourceReplaySinkSealV1,
+    Phase23GlobalLookupRadixSourceCursorV2, Phase23GlobalLookupSourceReplayEvidenceV1,
     Phase23GlobalLookupSourceReplayV1, bind_radix_hyrax_replay_after_materialization_v2,
 };
 impl<K, P> SourceAlgebraIngressV2<K, P> {

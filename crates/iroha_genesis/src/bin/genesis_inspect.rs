@@ -1,5 +1,4 @@
 //! Inspect a Norito-framed genesis block for validator and `PoP` registrations.
-use std::{env, path::Path};
 use eyre::{Result, eyre};
 use iroha_data_model::{
     isi::{
@@ -8,6 +7,7 @@ use iroha_data_model::{
     },
     transaction::Executable,
 };
+use std::{env, path::Path};
 fn main() -> Result<()> {
     iroha_genesis::init_instruction_registry();
     let path = env::args()

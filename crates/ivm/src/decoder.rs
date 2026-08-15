@@ -3,12 +3,12 @@
 //! Every instruction occupies one 32-bit little-endian word aligned on a
 //! 4-byte boundary, so decoding reduces to a bounds check followed by a single
 //! load.  Compressed forms predating the wide encoding are no longer supported.
-#[cfg(test)]
-use std::sync::atomic::{AtomicU64, Ordering};
 use crate::{
     error::{Perm, VMError},
     memory::Memory,
 };
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 pub static DECODE_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Decode the instruction at `pc`, returning the raw word and its length (always 4).

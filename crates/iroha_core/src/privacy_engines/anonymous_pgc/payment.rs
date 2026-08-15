@@ -20,9 +20,6 @@
 //! revealing the indices.  Since positive, zero, and negative openings are
 //! mutually exclusive and the admitted counts sum to `n`, these proofs cover
 //! exactly one sender, exactly `k` recipients, and exactly `n-k-1` decoys.
-use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
-use rand_core_06::{CryptoRng, RngCore};
-use sha2::{Digest, Sha256};
 use super::{
     AnonymousPgcError, AnonymousPgcParametersV1, AnonymousPgcPoolInvariantV1,
     TwistedElGamalCiphertextV1, TwistedElGamalPublicKeyV1,
@@ -31,6 +28,9 @@ use crate::privacy_engines::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
     TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar,
 };
+use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
+use rand_core_06::{CryptoRng, RngCore};
+use sha2::{Digest, Sha256};
 /// Closed suite for the complete payment proof.
 pub const PGC_PAYMENT_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.payment.p256.sha256.v1";
 /// Canonical payment-proof wire version.
@@ -2277,9 +2277,9 @@ pub fn verify_payment_encoded(
 }
 #[cfg(test)]
 mod tests {
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use super::*;
     use crate::privacy_engines::anonymous_pgc::TwistedElGamalKeyPairV1;
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicUnsignedRangeProofV1 {
         bit_commitments: Vec<CompressedPointV1>,

@@ -55,8 +55,8 @@ pub trait RequestBuilder {
 }
 /// Generalization of `WebSocket` client's functionality
 pub mod ws {
-    use url::Url;
     use super::{RequestBuilder, Result, eyre};
+    use url::Url;
     /// `WebSocket` connection flow stages.
     ///
     /// Flow consists of the following:

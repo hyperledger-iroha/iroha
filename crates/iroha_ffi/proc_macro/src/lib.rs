@@ -1,4 +1,10 @@
 //! Crate containing FFI related macro functionality
+use crate::{
+    attr_parse::derive::Derive,
+    convert::{FfiTypeData, FfiTypeInput, derive_ffi_type},
+    emitter_ext::EmitterExt,
+    utils::darling_result,
+};
 use darling::FromDeriveInput;
 use impl_visitor::{FnDescriptor, ImplDescriptor};
 use manyhow::{Emitter, emit, manyhow};
@@ -6,12 +12,6 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Item;
 use wrapper::wrap_method;
-use crate::{
-    attr_parse::derive::Derive,
-    convert::{FfiTypeData, FfiTypeInput, derive_ffi_type},
-    emitter_ext::EmitterExt,
-    utils::darling_result,
-};
 mod attr_parse;
 mod convert;
 mod emitter_ext;

@@ -1,6 +1,6 @@
-use std::hint::black_box;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use sm3::{Digest, Sm3};
+use std::hint::black_box;
 fn bench_digest(c: &mut Criterion) {
     let message = vec![0u8; 1024];
     if !sm3_neon::is_supported() {

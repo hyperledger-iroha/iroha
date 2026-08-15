@@ -1,10 +1,4 @@
 #[cfg(feature = "cuda")]
-use std::cell::Cell;
-#[cfg(feature = "cuda")]
-use std::collections::HashMap;
-#[cfg(feature = "cuda")]
-use std::sync::{Arc, OnceLock, atomic::AtomicU64};
-#[cfg(feature = "cuda")]
 use cust::context::CurrentContext;
 #[cfg(feature = "cuda")]
 use cust::error::CudaError;
@@ -14,6 +8,12 @@ use cust::init;
 use cust::prelude::*;
 #[cfg(feature = "cuda")]
 use parking_lot::{Mutex, RwLock};
+#[cfg(feature = "cuda")]
+use std::cell::Cell;
+#[cfg(feature = "cuda")]
+use std::collections::HashMap;
+#[cfg(feature = "cuda")]
+use std::sync::{Arc, OnceLock, atomic::AtomicU64};
 #[cfg(feature = "cuda")]
 #[derive(Debug)]
 pub struct GpuContext {
@@ -331,8 +331,8 @@ impl GpuManager {
 }
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
-    use std::sync::Arc;
     use super::*;
+    use std::sync::Arc;
     static ADD_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/add.ptx"));
     #[test]
     fn map_host_flag_fallback_drops_map_host_for_known_primary_context_errors() {

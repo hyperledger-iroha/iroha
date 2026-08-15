@@ -1,8 +1,8 @@
 //! CLI regressions for the SoraFS Taikai CAR bundler.
 #![cfg(feature = "cli")]
-use std::fs;
 use assert_cmd::{Command, cargo::cargo_bin_cmd};
 use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;
+use std::fs;
 use tempfile::tempdir;
 #[test]
 fn taikai_car_cli_generates_bundle() {

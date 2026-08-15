@@ -1,6 +1,5 @@
 //! Deterministic SoraFS PoR and cross-SDK fixture regeneration checks.
 #![allow(unexpected_cfgs)]
-use std::{fs, path::Path};
 use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     PotrReceiptV1, ProofStreamTier, RepairTaskRecordV1, RepairTaskStateV1,
@@ -9,6 +8,7 @@ use sorafs_manifest::{
     },
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, decode_por_proof_v1},
 };
+use std::{fs, path::Path};
 use tempfile::tempdir;
 const FIXTURES_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

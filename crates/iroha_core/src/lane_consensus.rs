@@ -1,6 +1,10 @@
 //! Lane-local block vote validation, session caching, and QC aggregation helpers.
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::time::Instant;
+use crate::{
+    json_macros::{JsonDeserialize, JsonSerialize},
+    kura::LaneReadyAuthorization,
+    queue::{LaneQueueReservationKeyV2, RouteLegRole, RoutingPlan},
+    tx::AcceptedTransaction,
+};
 use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey, Signature};
 use iroha_data_model::merge::MergeSignerProof;
 use iroha_data_model::{
@@ -26,13 +30,9 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 use norito::codec::{Decode, Encode};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::time::Instant;
 use thiserror::Error;
-use crate::{
-    json_macros::{JsonDeserialize, JsonSerialize},
-    kura::LaneReadyAuthorization,
-    queue::{LaneQueueReservationKeyV2, RouteLegRole, RoutingPlan},
-    tx::AcceptedTransaction,
-};
 /// Maximum executable entrypoints retained in one autonomous lane payload.
 ///
 /// The proposal path applies tighter configured block limits. This hard ceiling
@@ -5318,10 +5318,7 @@ fn validate_lane_block_validator_set_fields(
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        time::{Duration, Instant},
-    };
+    use super::*;
     use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove};
     use iroha_data_model::{
         account::AccountId,
@@ -5338,7 +5335,10 @@ mod tests {
         trigger::time::TimeTriggerEntrypoint,
     };
     use iroha_primitives::const_vec::ConstVec;
-    use super::*;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        time::{Duration, Instant},
+    };
     fn checked_bls_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
             .expect("generate checked lane block BLS fixture keypair")

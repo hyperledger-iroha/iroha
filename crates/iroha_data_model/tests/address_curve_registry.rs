@@ -1,8 +1,8 @@
 //! Ensures the published curve registry matches the runtime identifiers.
-use std::{collections::BTreeSet, path::Path};
 use iroha_crypto::Algorithm;
 use iroha_data_model::account::curve::CurveId;
 use norito::json::{self, JsonDeserialize};
+use std::{collections::BTreeSet, path::Path};
 #[derive(Debug, JsonDeserialize)]
 struct Registry {
     version: u32,

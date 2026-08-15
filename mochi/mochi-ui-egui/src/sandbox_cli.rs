@@ -1,4 +1,13 @@
 //! Headless Mochi sandbox lifecycle commands.
+use super::{
+    CliOverrides, configured_readiness_options_for, configured_readiness_smoke_for,
+    prepare_supervisor_with_overrides, resolve_workspace_root_for_cli,
+};
+use mochi_core::{
+    BootstrapBundle, BootstrapInputs, BootstrapWriteError, LocalMcpProbeResult, PeerState,
+    ReadinessOptions, Supervisor, SupervisorSessionInfo, ToriiClient, ToriiError,
+    wait_for_all_managed_peers_genesis, write_bootstrap_bundle,
+};
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -8,16 +17,7 @@ use std::{
     process,
     time::Duration,
 };
-use mochi_core::{
-    BootstrapBundle, BootstrapInputs, BootstrapWriteError, LocalMcpProbeResult, PeerState,
-    ReadinessOptions, Supervisor, SupervisorSessionInfo, ToriiClient, ToriiError,
-    wait_for_all_managed_peers_genesis, write_bootstrap_bundle,
-};
 use tokio::runtime::Runtime;
-use super::{
-    CliOverrides, configured_readiness_options_for, configured_readiness_smoke_for,
-    prepare_supervisor_with_overrides, resolve_workspace_root_for_cli,
-};
 const LOCAL_MCP_STARTUP_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const LOCAL_MCP_STARTUP_MAX_BACKOFF: Duration = Duration::from_secs(1);
 const REHEARSAL_PEER_COUNT: usize = 4;
@@ -589,12 +589,12 @@ async fn wait_for_shutdown_signal() {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use norito::json::Value;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    use norito::json::Value;
-    use super::*;
     fn aliases() -> Vec<String> {
         (0..REHEARSAL_PEER_COUNT)
             .map(|index| format!("peer{index}"))

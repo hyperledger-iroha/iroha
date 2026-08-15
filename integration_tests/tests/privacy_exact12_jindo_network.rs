@@ -1,10 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Four-peer lifecycle, admission, replay, and restart coverage for the
 //! canonical native Jindo direct action.
-use std::{
-    num::NonZeroU32,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -37,6 +33,10 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use std::{
+    num::NonZeroU32,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::time::{Instant, sleep, timeout};
 const JINDO_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(60);

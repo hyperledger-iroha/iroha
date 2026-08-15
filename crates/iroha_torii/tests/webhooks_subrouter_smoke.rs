@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke test that Webhooks endpoints are exposed via the merged sub-router.
 #![cfg(feature = "app_api")]
-use std::sync::Arc;
 use axum::http::Request;
 use http::StatusCode;
 use iroha_core::{
@@ -14,6 +13,7 @@ use iroha_data_model::peer::PeerId;
 #[cfg(feature = "telemetry")]
 use iroha_primitives::time::TimeSource;
 use iroha_torii::Torii;
+use std::sync::Arc;
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;

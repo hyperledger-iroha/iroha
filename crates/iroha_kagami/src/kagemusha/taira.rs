@@ -1,11 +1,5 @@
 //! Testnet-only Taira Kagemusha release and genesis bootstrap helpers.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::Write as _,
-    num::NonZeroU64,
-    path::PathBuf,
-    str::FromStr as _,
-};
+use super::{Outcome, Result, publish_new_durable_file};
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
 use iroha_core::zk::confidential_v2::{
@@ -42,7 +36,13 @@ use iroha_genesis::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::json::Value as JsonValue;
-use super::{Outcome, Result, publish_new_durable_file};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::Write as _,
+    num::NonZeroU64,
+    path::PathBuf,
+    str::FromStr as _,
+};
 const PUBLIC_TAIRA_CHAIN_NAME: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const TAIRA_RELEASE_GENERATION_V4: &str = "production-gate-real-artifacts-v4";
 const TAIRA_RELEASE_ACTIVATION_HEIGHT_V4: u64 = 2;

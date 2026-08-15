@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Data-trigger execution and rollback scenarios.
-use std::time::{Duration, Instant};
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{client, data_model::prelude::*};
@@ -10,6 +9,7 @@ use iroha_executor_data_model::permission::account::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::time::{Duration, Instant};
 use tokio::task::spawn_blocking;
 const ASSET_VALUE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ASSET_VALUE_TIMEOUT: Duration = Duration::from_secs(30);

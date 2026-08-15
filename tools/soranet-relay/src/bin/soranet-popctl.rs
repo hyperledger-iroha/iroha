@@ -1,9 +1,4 @@
 //! Bounded provisioning and promotion checks for SoraNet points of presence.
-use std::{
-    fs::{self, OpenOptions},
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
 use clap::{Args, Parser, Subcommand};
 use norito::{DecodeLimits, json};
 use soranet_relay::{
@@ -13,6 +8,11 @@ use soranet_relay::{
         PxeEvent, PxeLogError, SigstoreBundle, TemplateOptions, build_template, evaluate_health,
         validate_config, verify_attestation, verify_pxe_log,
     },
+};
+use std::{
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    path::{Path, PathBuf},
 };
 // First-release local-input corridors. Raw bytes are bounded before allocation,
 // lexical profiles are collected without allocation, and typed decoding runs

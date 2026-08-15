@@ -1,10 +1,10 @@
 //! Asset-related instruction type aliases.
-use iroha_primitives::numeric::Quantity;
 use super::{definition::AssetDefinition, id::AssetDefinitionId, value::Asset};
 use crate::{
     account::Account,
     isi::{Burn, Mint, Register, Transfer, Unregister},
 };
+use iroha_primitives::numeric::Quantity;
 /// Register a new [`AssetDefinition`].
 pub type RegisterAssetDefinition = Register<AssetDefinition>;
 /// Unregister an [`AssetDefinition`].

@@ -1,15 +1,5 @@
 //! Multi-version append-only key value storage for transactions
 #![allow(clippy::disallowed_types)]
-use std::{
-    borrow::Borrow,
-    collections::{BTreeMap, HashSet},
-    hash::Hash,
-    num::NonZeroUsize,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
 use arc_swap::ArcSwapOption;
 use dashmap::DashMap;
 use iroha_crypto::HashOf;
@@ -20,6 +10,16 @@ use norito::json::{
     JsonSerialize as JsonSerializeTrait,
 };
 use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
+use std::{
+    borrow::Borrow,
+    collections::{BTreeMap, HashSet},
+    hash::Hash,
+    num::NonZeroUsize,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 type Key = HashOf<SignedTransaction>;
 type Value = NonZeroUsize;
 type DirectGeneration = u64;
@@ -37,10 +37,9 @@ pub struct TransactionsStorage {
     /// Latest block. Stored separately because of reverts.
     /// `None` when there are no blocks yet, otherwise must be not `None`.
     latest_block: ArcSwapOption<BlockInfo>,
-    /// Map with aggregated transactions of multiple blocks, EXCEPT for the latest block.
-    /// Entries are retained only for finalised blocks (with heights strictly
-    /// lower than the current latest block) so that stale transactions are
-    /// discarded after rollbacks.
+    /// Map with aggregated transactions of multiple blocks, EXCEPT for the latest block. Entries
+    /// are retained only for finalised blocks (with heights strictly lower than the current latest
+    /// block) so that stale transactions are discarded after rollbacks.
     blocks: DashMap<Key, Value>,
     /// Transaction memberships committed by direct, non-canonical lane-block
     /// application. These entries do not advance `latest_block`.
@@ -90,10 +89,9 @@ impl TransactionsStorage {
     }
     /// Record transaction hashes committed by a non-canonical state application.
     ///
-    /// Direct standalone lane-block application mutates WSV without appending a
-    /// canonical block hash. These hashes must still be visible to duplicate
-    /// admission checks, but they must not advance the transaction store's
-    /// latest canonical block height.
+    /// Direct standalone lane-block application mutates WSV without appending a canonical block
+    /// hash. These hashes must still be visible to duplicate admission checks, but they must not
+    /// advance the transaction store's latest canonical block height.
     pub(crate) fn record_direct_committed_membership(
         &self,
         transactions: impl IntoIterator<Item = HashOf<SignedTransaction>>,
@@ -210,15 +208,13 @@ mod block {
     use super::*;
     /// Batched update to the storage that can be reverted later.
     ///
-    /// The block aggregates transaction hashes for a particular block height.
-    /// Call [`insert_block`] exactly once to register the transactions and
-    /// height. After all updates are collected, [`commit`](Self::commit) can be
-    /// used to persist them in [`TransactionsStorage`].
+    /// The block aggregates transaction hashes for a particular block height. Call [`insert_block`]
+    /// exactly once to register the transactions and height. After all updates are collected,
+    /// [`commit`](Self::commit) can be used to persist them in [`TransactionsStorage`].
     ///
-    /// Committing a block without first calling [`insert_block`] is considered
-    /// an error and will cause [`commit`](Self::commit) to fail. See the
-    /// release-mode tests for examples.
-    /// Errors that can occur when committing [`TransactionsBlock`]
+    /// Committing a block without first calling [`insert_block`] is considered an error and will
+    /// cause [`commit`](Self::commit) to fail. See the release-mode tests for examples. Errors that
+    /// can occur when committing [`TransactionsBlock`]
     #[derive(thiserror::Error, Debug, displaydoc::Display, Clone, Copy, PartialEq, Eq)]
     #[ignore_extra_doc_attributes]
     pub enum TransactionsBlockError {
@@ -265,11 +261,10 @@ mod block {
         }
         /// Register transactions belonging to the block.
         ///
-        /// This method **must** be called before [`commit`].
-        /// Calling it more than once with the same block payload is a no-op,
-        /// while changing the height or the transaction set triggers a panic.
-        /// Attempting to commit without inserting a block results in an error
-        /// (see `commit_without_insert_block_fails`).
+        /// This method **must** be called before [`commit`]. Calling it more than once with the
+        /// same block payload is a no-op, while changing the height or the transaction set triggers
+        /// a panic. Attempting to commit without inserting a block results in an error (see
+        /// `commit_without_insert_block_fails`).
         pub fn insert_block(&mut self, transactions: HashSet<Key>, height: Value) {
             if let Some(current_block) = &self.current_block {
                 assert_eq!(
@@ -296,19 +291,17 @@ mod block {
         /// Apply aggregated changes to the storage.
         ///
         /// # Errors
-        /// Returns an error if [`insert_block`] was not called prior to
-        /// committing or if the block height being committed does not match
-        /// the expected height derived from the current storage state. These
-        /// behaviours are illustrated in the release-mode tests.
+        /// Returns an error if [`insert_block`] was not called prior to committing or if the block
+        /// height being committed does not match the expected height derived from the current
+        /// storage state. These behaviours are illustrated in the release-mode tests.
         pub fn commit(self) -> Result<(), TransactionsBlockError> {
             self.validate_commit()?;
             self.commit_unchecked()
         }
         /// Validate that this block can be committed without mutating the storage.
         ///
-        /// This lets callers perform other fallible commit preparation after the
-        /// transaction height has been proven acceptable, but before consuming the
-        /// transaction block.
+        /// This lets callers perform other fallible commit preparation after the transaction height
+        /// has been proven acceptable, but before consuming the transaction block.
         pub(crate) fn validate_commit(&self) -> Result<(), TransactionsBlockError> {
             let previous_block = &self.latest_block_ref.load();
             let previous_block = previous_block.as_ref();
@@ -579,8 +572,8 @@ mod serialization {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_TEST_HASH: AtomicU64 = AtomicU64::new(1);
     fn random_hash() -> Key {
         let counter = NEXT_TEST_HASH.fetch_add(1, Ordering::Relaxed);

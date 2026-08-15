@@ -1,16 +1,8 @@
 //! Exact first-release SCCP route-registry wire types and commitments.
 //!
-//! A governed route is one atomic consensus object. It contains only closed,
-//! typed protocol identity. Operator checklists, URLs, RPC observations,
-//! executable blobs, prover packages, and deployment logs are deliberately not
-//! consensus state.
-use std::collections::{BTreeMap, BTreeSet};
-use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use iroha_crypto::{derive_non_signing_ed25519_public_key, keccak256};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use sha2::Sha256;
-use thiserror::Error;
+//! A governed route is one atomic consensus object. It contains only closed, typed protocol
+//! identity. Operator checklists, URLs, RPC observations, executable blobs, prover packages, and
+//! deployment logs are deliberately not consensus state.
 use super::{
     BridgeNativeProofBackendV1, SCCP_SOLANA_TESTNET_GENESIS_HASH_V1, SccpEvmSourceEmitterV1,
     SccpLaneIdV1, SccpNativeTrustAnchorV1, SccpNetworkV1, SccpSolanaSourceEmitterV1,
@@ -19,6 +11,13 @@ use super::{
 use crate::{
     NetworkId, account::AccountId, asset::AssetDefinitionId, block::consensus_v2::PROTOCOL_VERSION,
 };
+use blake2::{Blake2b, Digest as _, digest::consts::U32};
+use iroha_crypto::{derive_non_signing_ed25519_public_key, keccak256};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use sha2::Sha256;
+use std::collections::{BTreeMap, BTreeSet};
+use thiserror::Error;
 /// Oldest authoritative Sumeragi wire revision retained in SCCP V1 anchors.
 pub const SCCP_V1_MIN_SUMERAGI_PROTOCOL_VERSION: u16 = 3;
 /// Newest authoritative Sumeragi wire revision accepted by SCCP V1 anchors.
@@ -29,10 +28,9 @@ pub const SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE: u32 = 28;
 pub const SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE: u32 = 9;
 /// Maximum number of nonterminal routes in the V1 registry.
 ///
-/// Terminal revisions are immutable history needed to authenticate messages
-/// emitted before a deployment rotation. They deliberately do not consume
-/// this live-governance budget; a separate generous retained-history bound
-/// keeps the full state and registry response finite.
+/// Terminal revisions are immutable history needed to authenticate messages emitted before a
+/// deployment rotation. They deliberately do not consume this live-governance budget; a separate
+/// generous retained-history bound keeps the full state and registry response finite.
 pub const SCCP_V1_MAX_LIVE_GOVERNED_ROUTES: usize = 64;
 /// Maximum number of exact lanes in the V1 registry.
 pub const SCCP_V1_MAX_GOVERNED_LANES: usize = 16;
@@ -43,18 +41,16 @@ pub const SCCP_V1_MAX_GOVERNED_LANES: usize = 16;
 pub const SCCP_V1_MAX_LIVE_ROUTES_PER_LANE: usize = 8;
 /// Maximum retained route revisions sharing one governed lane.
 ///
-/// For a single-lineage lane, sixty-four revisions provide more than five
-/// years of monthly deployment rotation. History is never evicted implicitly;
-/// governance must stop before this shared lane bound and operators must plan
-/// an explicit first-release migration. A fixed-shape admitted V1 route fits a
-/// conservative 4 KiB canonical encoding envelope.
+/// For a single-lineage lane, sixty-four revisions provide more than five years of monthly
+/// deployment rotation. History is never evicted implicitly; governance must stop before this
+/// shared lane bound and operators must plan an explicit first-release migration. A fixed-shape
+/// admitted V1 route fits a conservative 4 KiB canonical encoding envelope.
 pub const SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE: usize = 64;
 /// Maximum retained native trust anchors sharing one governed lane.
 ///
-/// At one governed rotation per day, 4,096 checkpoints cover more than eleven
-/// years. A checkpoint fits a conservative 64-byte canonical encoding
-/// envelope; together with the route and 16-lane caps, retained entry payloads
-/// are bounded by 8 MiB before small vector/lane framing overhead.
+/// At one governed rotation per day, 4,096 checkpoints cover more than eleven years. A checkpoint
+/// fits a conservative 64-byte canonical encoding envelope; together with the route and 16-lane
+/// caps, retained entry payloads are bounded by 8 MiB before small vector/lane framing overhead.
 pub const SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE: usize = 4_096;
 /// Maximum byte length of a canonical SCCP route or asset key.
 pub const SCCP_V1_MAX_KEY_BYTES: usize = 64;
@@ -813,11 +809,10 @@ impl SccpRouteActivationV1 {
 }
 /// Authenticated upper bound for delayed claims on one retired route revision.
 ///
-/// An external event whose fully verified consensus-progress coordinate is at
-/// or below `max_anchor_interval_height` remains redeemable after retirement.
-/// Events above it are rejected, so a retired emitter cannot create new claims
-/// indefinitely. `trust_anchor_hash` binds the cutoff to a complete retained
-/// checkpoint interval; the maximum must equal that anchor's successor
+/// An external event whose fully verified consensus-progress coordinate is at or below
+/// `max_anchor_interval_height` remains redeemable after retirement. Events above it are rejected,
+/// so a retired emitter cannot create new claims indefinitely. `trust_anchor_hash` binds the cutoff
+/// to a complete retained checkpoint interval; the maximum must equal that anchor's successor
 /// checkpoint and an open-ended current anchor cannot be retired against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -832,8 +827,7 @@ pub struct SccpInboundFinalityCutoffV1 {
     pub trust_anchor_hash: [u8; 32],
     /// Greatest authenticated backend-specific consensus-progress coordinate admitted.
     ///
-    /// Ethereum lanes use a finalized beacon slot. BSC and TRON lanes use a
-    /// finalized block height.
+    /// Ethereum lanes use a finalized beacon slot. BSC and TRON lanes use a finalized block height.
     pub max_anchor_interval_height: u64,
 }
 impl SccpInboundFinalityCutoffV1 {
@@ -888,8 +882,7 @@ impl SccpRouteKeyV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`SccpRouteValidationError`] when the lane, identifiers, or
-    /// revision are invalid.
+    /// Returns [`SccpRouteValidationError`] when the lane, identifiers, or revision are invalid.
     pub fn validate(&self) -> Result<(), SccpRouteValidationError> {
         validate_inbound_lane(self.lane_id)?;
         validate_key("route_id", &self.route_id)?;
@@ -1425,13 +1418,11 @@ impl SccpGovernedRouteV1 {
                     anchor_interval_height <= cutoff.max_anchor_interval_height
                 }))
     }
-    /// Derive the exact immutable route-configuration hash exposed by the
-    /// destination contract.
+    /// Derive the exact immutable route-configuration hash exposed by the destination contract.
     ///
-    /// This is the single V1 route-configuration commitment recorded in
-    /// outbound messages and exposed as Groth16 public signal 9. It
-    /// must remain byte-identical to the governed EVM/TVM/Solana route
-    /// configuration commitment.
+    /// This is the single V1 route-configuration commitment recorded in outbound messages and
+    /// exposed as Groth16 public signal 9. It must remain byte-identical to the governed
+    /// EVM/TVM/Solana route configuration commitment.
     ///
     /// # Errors
     ///
@@ -1451,8 +1442,7 @@ impl SccpGovernedRouteV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`SccpRouteValidationError`] when the lane or destination
-    /// deployment is invalid.
+    /// Returns [`SccpRouteValidationError`] when the lane or destination deployment is invalid.
     pub fn destination_binding_hash(&self) -> Result<[u8; 32], SccpRouteValidationError> {
         self.destination.destination_binding_hash(self.lane_id)
     }
@@ -1719,11 +1709,10 @@ impl SccpRegistryV1 {
 }
 /// Return the stable one-byte V1 tag for an exact SCCP network profile.
 ///
-/// Tags `6..=9` are permanently reserved for retired pre-release identities.
-/// They are deliberately not reused after removing those profiles because the
-/// exact first-release transfer contracts commit TRON profiles as `10..=12`.
-/// Reassigning the gap would make governed lane/configuration hashes disagree
-/// with deployed contract state.
+/// Tags `6..=9` are permanently reserved for retired pre-release identities. They are deliberately
+/// not reused after removing those profiles because the exact first-release transfer contracts
+/// commit TRON profiles as `10..=12`. Reassigning the gap would make governed lane/configuration
+/// hashes disagree with deployed contract state.
 #[must_use]
 pub const fn sccp_network_tag_v1(network: SccpNetworkV1) -> u8 {
     match network {
@@ -2046,9 +2035,8 @@ pub fn sccp_tron_destination_binding_hash_v1(
 ///
 /// # Errors
 ///
-/// Returns [`SccpRouteValidationError`] when `network` is not the exact
-/// genesis-bound Solana testnet profile or any governed deployment role is
-/// malformed.
+/// Returns [`SccpRouteValidationError`] when `network` is not the exact genesis-bound Solana
+/// testnet profile or any governed deployment role is malformed.
 pub fn sccp_solana_destination_binding_hash_v1(
     network: SccpNetworkV1,
     deployment: &SccpSolanaDestinationDeploymentV1,
@@ -2089,13 +2077,12 @@ pub fn sccp_solana_destination_binding_hash_v1(
 /// Derive the one-way native-verifier material configuration commitment for
 /// the exact Solana-testnet XOR route.
 ///
-/// This preimage contains only primitive governed identities. In particular,
-/// it excludes the destination-binding and route-configuration hashes because
-/// both of those commit this config hash and the material PDA. Feeding either
-/// derived hash back into this function would create an infeasible
-/// cryptographic fixed point. The sealed material account stores those two
-/// finished hashes separately and the verifier compares them with the
-/// destination bridge state before every settlement.
+/// This preimage contains only primitive governed identities. In particular, it excludes the
+/// destination-binding and route-configuration hashes because both of those commit this config hash
+/// and the material PDA. Feeding either derived hash back into this function would create an
+/// infeasible cryptographic fixed point. The sealed material account stores those two finished
+/// hashes separately and the verifier compares them with the destination bridge state before every
+/// settlement.
 ///
 /// # Errors
 ///

@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![doc = "Generate canonical Halo2 IPA IVM execution verifier and prover key artifacts."]
-use std::{env, fs, path::PathBuf};
 use base64::Engine as _;
+use std::{env, fs, path::PathBuf};
 fn take_arg(args: &mut Vec<String>, name: &str) -> Result<String, String> {
     let Some(index) = args.iter().position(|arg| arg == name) else {
         return Err(format!("missing required argument {name}"));

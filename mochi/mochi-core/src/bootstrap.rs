@@ -311,12 +311,12 @@ fn render_ts_optional(value: Option<&str>) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::TempDir;
     use super::{
         BootstrapBundle, BootstrapInputs, BootstrapWriteError, ENV_LOCAL_FILE, KOTLIN_SAMPLE_FILE,
         RUST_SAMPLE_FILE, TYPESCRIPT_SAMPLE_FILE, ensure_http_base, shell_quote,
         write_bootstrap_bundle,
     };
+    use tempfile::TempDir;
     fn sample_inputs() -> BootstrapInputs {
         BootstrapInputs {
             api_base: "127.0.0.1:8080".to_owned(),

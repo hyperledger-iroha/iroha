@@ -88,9 +88,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetDefinitionAlias {
 }
 #[cfg(test)]
 mod tests {
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::asset::AssetDefinitionAlias;
+    use norito::core::DecodeFromSlice;
     fn asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),

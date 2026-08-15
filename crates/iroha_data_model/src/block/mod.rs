@@ -1,15 +1,12 @@
 //! This module contains `Block` and related implementations.
 //!
 //! `Block`s are organized into a linear sequence over time (also known as the block chain).
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet},
-    convert::TryInto,
-    fmt, format,
-    string::String,
-    time::Duration,
-    vec::Vec,
+use self::proofs::{BlockReceiptProof, ExecutionReceiptProof};
+use crate::da::commitment::{
+    DaCommitmentBundle, DaProofPolicy, DaProofPolicyBundle, DaProofScheme,
 };
+#[cfg(any(test, feature = "test-fixtures"))]
+use crate::da::pin_intent::DaPinIntentBundle;
 use iroha_crypto::{Hash, HashOf, MerkleTree, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
@@ -21,10 +18,15 @@ use norito::{
         default_encode_flags, hardware_crc64 as norito_crc64,
     },
 };
-use self::proofs::{BlockReceiptProof, ExecutionReceiptProof};
-use crate::da::commitment::{DaCommitmentBundle, DaProofPolicy, DaProofPolicyBundle, DaProofScheme};
-#[cfg(any(test, feature = "test-fixtures"))]
-use crate::da::pin_intent::DaPinIntentBundle;
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+    convert::TryInto,
+    fmt, format,
+    string::String,
+    time::Duration,
+    vec::Vec,
+};
 pub mod proofs;
 fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
     let limit = norito::core::max_archive_len();
@@ -53,14 +55,6 @@ pub mod execution_context;
 pub mod header;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
-pub use execution_context::{
-    AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
-    BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1, BlockExecutionContextBundle,
-    CertifiedMergeLedgerReference, ExternalExecutionContext, ExternalExecutionRouteLeg,
-    ExternalExecutionRouteRole,
-};
-pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
-pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
 #[cfg(feature = "transparent_api")]
 use crate::fastpq::TransferTranscript;
 #[cfg(feature = "transparent_api")]
@@ -70,6 +64,14 @@ use crate::transaction::signed::TransactionResultInner;
 use crate::transaction::signed::{SignedTransaction, TransactionEntrypoint};
 #[cfg(feature = "transparent_api")]
 use crate::trigger::TimeTriggerEntrypoint;
+pub use execution_context::{
+    AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
+    BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1, BlockExecutionContextBundle,
+    CertifiedMergeLedgerReference, ExternalExecutionContext, ExternalExecutionRouteLeg,
+    ExternalExecutionRouteRole,
+};
+pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
+pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
 #[model]
 mod model {
     use super::*;
@@ -1010,18 +1012,18 @@ impl iroha_version::codec::DecodeVersioned for SignedBlock {
 #[cfg(feature = "http")]
 pub mod stream {
     //! Blocks for streaming API.
-    use std::{num::NonZeroU64, sync::Arc};
+    pub use self::model::*;
+    use super::*;
     use iroha_schema::IntoSchema;
     use norito::{
         codec::{Decode, Encode},
         core::{Error as NoritoError, NoritoSerialize},
     };
-    pub use self::model::*;
-    use super::*;
+    use std::{num::NonZeroU64, sync::Arc};
     #[model]
     mod model {
-        use std::num::NonZeroU64;
         use super::*;
+        use std::num::NonZeroU64;
         /// Request sent to subscribe to blocks stream starting from the given height.
         #[derive(Debug, Clone, Copy, Decode, Encode, IntoSchema)]
         #[cfg_attr(
@@ -1605,12 +1607,12 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use super::*;
+    use crate::consensus::PreviousRosterEvidence;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use norito::codec::{DecodeAll as _, Encode};
-    use super::*;
-    use crate::consensus::PreviousRosterEvidence;
+    use std::num::NonZeroU64;
     // Bring commonly used types referenced in transparent API tests.
     #[cfg(feature = "transparent_api")]
     use crate::ValidationFail;
@@ -2453,7 +2455,9 @@ mod tests {
     }
     #[test]
     fn genesis_defaults_confidential_digest() {
-        use crate::{account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder};
+        use crate::{
+            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
+        };
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -2719,7 +2723,9 @@ mod tests {
     }
     #[test]
     fn canonical_wire_roundtrips_genesis_block() {
-        use crate::{account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder};
+        use crate::{
+            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
+        };
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -2953,11 +2959,11 @@ mod tests {
     }
     #[test]
     fn signed_block_previous_roster_evidence_setter_updates_header_hash_and_roundtrips() {
-        use nonzero_ext::nonzero;
         use crate::consensus::{
             PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
         };
         use crate::peer::PeerId;
+        use nonzero_ext::nonzero;
         let kp_a = checked_random_keypair();
         let kp_b = checked_random_keypair();
         let validator_set = vec![
@@ -3213,15 +3219,15 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_records_fastpq_transcripts() {
-        use std::{collections::BTreeMap, num::NonZeroU64};
-        use iroha_crypto::Hash;
-        use iroha_primitives::numeric::Quantity;
         use crate::{
             account::AccountId,
             asset::id::AssetDefinitionId,
             domain::DomainId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
         };
+        use iroha_crypto::Hash;
+        use iroha_primitives::numeric::Quantity;
+        use std::{collections::BTreeMap, num::NonZeroU64};
         fn fixture_account(_domain: &DomainId) -> AccountId {
             let keypair = checked_random_keypair();
             AccountId::new(keypair.public_key().clone())
@@ -3300,8 +3306,8 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_records_committed_fragment_count() {
-        use std::num::NonZeroU64;
         use crate::transaction::TransactionResultInner;
+        use std::num::NonZeroU64;
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let keypair = checked_random_keypair();
         let signature = checked_block_signature(0, &keypair, &header);
@@ -3374,9 +3380,6 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn block_proofs_include_fastpq_transcripts() {
-        use std::{collections::BTreeMap, num::NonZeroU64};
-        use iroha_crypto::Hash;
-        use iroha_primitives::numeric::Quantity;
         use crate::{
             account::AccountId,
             asset::id::AssetDefinitionId,
@@ -3384,6 +3387,9 @@ mod tests {
             fastpq::{TransferDeltaTranscript, TransferTranscript},
             transaction::{TransactionResultInner, signed::TransactionBuilder},
         };
+        use iroha_crypto::Hash;
+        use iroha_primitives::numeric::Quantity;
+        use std::{collections::BTreeMap, num::NonZeroU64};
         let keypair = checked_random_keypair();
         let _authority_domain: DomainId =
             DomainId::try_new("chain", "universal").expect("chain domain id");
@@ -3483,9 +3489,6 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_updates_merkle_roots_with_time_triggers() {
-        use std::num::NonZeroU64;
-        use iroha_crypto::MerkleTree;
-        use iroha_primitives::const_vec::ConstVec;
         use crate::{
             account::AccountId,
             domain::DomainId,
@@ -3495,6 +3498,9 @@ mod tests {
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
+        use iroha_crypto::MerkleTree;
+        use iroha_primitives::const_vec::ConstVec;
+        use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3548,11 +3554,11 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_too_short_external_hash_prefix() {
-        use std::num::NonZeroU64;
         use crate::{
             account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
+        use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
@@ -3582,12 +3588,12 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_result_count_mismatch() {
-        use std::num::NonZeroU64;
         use crate::{
             account::AccountId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
             trigger::DataTriggerSequence,
         };
+        use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
@@ -3633,12 +3639,12 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_external_hash_mismatch() {
-        use std::num::NonZeroU64;
-        use iroha_crypto::Hash;
         use crate::{
             account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
+        use iroha_crypto::Hash;
+        use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
@@ -3671,12 +3677,12 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_existing_header_merkle_mismatch() {
-        use std::num::NonZeroU64;
-        use iroha_crypto::{Hash, MerkleTree};
         use crate::{
             account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
+        use iroha_crypto::{Hash, MerkleTree};
+        use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
@@ -3708,13 +3714,13 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_entry_hash_matches_merkle_roots() {
-        use std::num::NonZeroU64;
-        use iroha_crypto::MerkleTree;
         use crate::{
             account::AccountId,
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
+        use iroha_crypto::MerkleTree;
+        use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3781,9 +3787,6 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_external_entry_with_time_trigger_use_full_executed_root() {
-        use std::num::NonZeroU64;
-        use iroha_crypto::MerkleTree;
-        use iroha_primitives::const_vec::ConstVec;
         use crate::{
             account::AccountId,
             transaction::{
@@ -3792,6 +3795,9 @@ mod tests {
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
+        use iroha_crypto::MerkleTree;
+        use iroha_primitives::const_vec::ConstVec;
+        use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
@@ -3846,9 +3852,6 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_time_trigger_use_extended_root() {
-        use std::num::NonZeroU64;
-        use iroha_crypto::MerkleTree;
-        use iroha_primitives::const_vec::ConstVec;
         use crate::{
             account::AccountId,
             domain::DomainId,
@@ -3858,6 +3861,9 @@ mod tests {
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
+        use iroha_crypto::MerkleTree;
+        use iroha_primitives::const_vec::ConstVec;
+        use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3922,13 +3928,13 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_entry_hash_missing_returns_none() {
-        use std::num::NonZeroU64;
-        use iroha_crypto::Hash;
         use crate::{
             account::AccountId,
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
+        use iroha_crypto::Hash;
+        use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3986,7 +3992,9 @@ mod tests {
     }
     #[test]
     fn framing_derives_flags_instead_of_reusing_tls_state() {
-        use crate::{account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder};
+        use crate::{
+            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
+        };
         let keypair = checked_random_keypair();
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());

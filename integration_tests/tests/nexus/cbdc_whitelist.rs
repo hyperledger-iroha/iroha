@@ -1,12 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Nexus CBDC whitelist validation workflow.
 #![cfg(target_family = "unix")]
-use std::{
-    collections::HashSet,
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
 use eyre::{Result, WrapErr, ensure, eyre};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -20,6 +14,12 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use norito::{decode_from_bytes, json::Value, to_bytes};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

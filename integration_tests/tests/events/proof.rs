@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for ZK proof events over the Torii event stream.
-use std::time::Duration;
 use assert_matches::assert_matches;
 use eyre::{Result, eyre};
 use futures_util::StreamExt;
@@ -17,6 +16,7 @@ use iroha_data_model::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+use std::time::Duration;
 use tokio::{task::spawn_blocking, time::timeout};
 const PROOF_VERIFY_TIMEOUT_MS: i64 = 600_000;
 const CLIENT_STATUS_TIMEOUT: Duration = Duration::from_secs(600);

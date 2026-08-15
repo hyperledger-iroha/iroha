@@ -10,21 +10,25 @@
 //! queued ISIs without mutating state) and to incorporate trigger side effects.
 //! For now the type is mostly a thin wrapper that keeps chunking logic and
 //! admission limits (`pipeline.overlay_max_*`) in one place.
+use crate::{
+    executor::{
+        ContractEntrypointAuthorizationSnapshot, ensure_asset_definition_registration_allowed,
+        extract_register_asset_definition, transaction_gas_limit,
+    },
+    smartcontracts::{
+        code,
+        isi::settlement::{
+            admission_validate_dvp, admission_validate_fx_corridor, admission_validate_pvp,
+        },
+        ivm::{
+            cache::{ExecutableProgramSummary, GenericProgramSummary, IvmCache, ProgramSummary},
+            host::{AmxBudgetViolation, HostOutputLimits, QueryStateSource},
+        },
+    },
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+    streaming,
+};
 use core::str::FromStr;
-#[cfg(feature = "telemetry")]
-use std::time::Instant;
-#[cfg(test)]
-use std::{
-    collections::VecDeque,
-    sync::{LazyLock, Mutex},
-};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::{Cursor, Seek, SeekFrom, Write},
-    mem,
-    num::NonZeroU64,
-    sync::{Arc, OnceLock},
-};
 use iroha_config::parameters::actual::QueryCursorMode;
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
@@ -57,23 +61,19 @@ use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
 use sha2::{Digest as _, Sha256};
-use crate::{
-    executor::{
-        ContractEntrypointAuthorizationSnapshot, ensure_asset_definition_registration_allowed,
-        extract_register_asset_definition, transaction_gas_limit,
-    },
-    smartcontracts::{
-        code,
-        isi::settlement::{
-            admission_validate_dvp, admission_validate_fx_corridor, admission_validate_pvp,
-        },
-        ivm::{
-            cache::{ExecutableProgramSummary, GenericProgramSummary, IvmCache, ProgramSummary},
-            host::{AmxBudgetViolation, HostOutputLimits, QueryStateSource},
-        },
-    },
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
-    streaming,
+#[cfg(feature = "telemetry")]
+use std::time::Instant;
+#[cfg(test)]
+use std::{
+    collections::VecDeque,
+    sync::{LazyLock, Mutex},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::{Cursor, Seek, SeekFrom, Write},
+    mem,
+    num::NonZeroU64,
+    sync::{Arc, OnceLock},
 };
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct StreamingOverlayMetadata {
@@ -3547,12 +3547,12 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
 }
 #[cfg(test)]
 mod tests_overlay_manifest {
+    use super::*;
+    use crate::state::State;
     use iroha_data_model::prelude::*;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::state::State;
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
@@ -4834,7 +4834,9 @@ seiyaku PermissionlessStateFreeOverlay {
     }
     #[test]
     fn parameterized_contract_call_denial_precedes_argument_record_decode() {
-        use iroha_data_model::transaction::executable::{ContractArgumentRecord, ContractInvocation};
+        use iroha_data_model::transaction::executable::{
+            ContractArgumentRecord, ContractInvocation,
+        };
         const REQUIRED_PERMISSION: &str = "CanWriteParameterizedOverlay";
         let program = ivm::KotodamaCompiler::new()
             .compile_source(
@@ -6005,6 +6007,8 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
 // (Chunking and limit enforcement driven by caller: see block.rs)
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::state::State;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ChainId, Registrable,
@@ -6016,8 +6020,6 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::state::State;
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
@@ -9423,9 +9425,9 @@ seiyaku AliasBoundArguments {
     }
     #[test]
     fn redundant_contract_ops_are_pruned() {
-        use std::sync::Arc;
-        use iroha_data_model::smart_contract::manifest::ContractManifest;
         use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
+        use iroha_data_model::smart_contract::manifest::ContractManifest;
+        use std::sync::Arc;
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let mut world = crate::state::World::default();
@@ -9486,11 +9488,11 @@ seiyaku AliasBoundArguments {
     }
     #[test]
     fn sample_smart_contract_overlay_executes() {
-        use std::sync::Arc;
         use iroha_data_model::{
             metadata::Metadata, prelude::TransactionBuilder, transaction::Executable,
         };
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+        use std::sync::Arc;
         let metadata = Metadata::default();
         let (program, _, _) = sample_program();
         let tx = TransactionBuilder::new(

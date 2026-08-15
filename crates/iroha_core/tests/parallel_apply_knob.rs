@@ -5,13 +5,13 @@
 //! With telemetry enabled, the detached-pipeline metrics should remain zero in
 //! sequential mode and be non-zero in parallel mode. Without telemetry, the
 //! public status snapshot should still expose post-apply detached counters.
-use std::{borrow::Cow, sync::Arc};
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
     state::StateReadOnly,
 };
 use iroha_data_model::prelude::*;
+use std::{borrow::Cow, sync::Arc};
 fn build_world() -> (
     iroha_core::state::State,
     NetworkId,

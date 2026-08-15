@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 //! Runtime configuration and CLI parsing for the Izanami chaos tool.
-use std::{ops::RangeInclusive, path::PathBuf, sync::OnceLock, time::Duration};
+use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
 use clap::{Args, Parser, ValueEnum};
 use color_eyre::{Result, eyre::eyre};
 use humantime::parse_duration;
@@ -23,9 +23,9 @@ use iroha_data_model::{
     nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
 };
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
+use std::{ops::RangeInclusive, path::PathBuf, sync::OnceLock, time::Duration};
 use toml::{Table, Value};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
 /// Command-line arguments exposed by the `izanami` binary.
 #[derive(Debug, Parser, Clone)]
 #[command(author, version, about = "Izanami chaosnet orchestrator for Iroha", long_about = None)]

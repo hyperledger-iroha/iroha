@@ -14,6 +14,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 #[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2-ipa-poseidon"))]
 mod benches {
+    use super::*;
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
@@ -31,7 +32,6 @@ mod benches {
         transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
     };
     use rand_core_06::OsRng;
-    use super::*;
     // Local native Pow5 compressor used for comparison
     fn compress2_native(a: Scalar, b: Scalar) -> Scalar {
         let t0 = a + Scalar::from(7u64);

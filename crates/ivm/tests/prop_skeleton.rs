@@ -1,8 +1,8 @@
 //! Deterministic IVM memory Merkle proof regression tests.
-use std::num::NonZeroU64;
 use iroha_crypto::{Hash, HashOf, MerkleTreeCommitment};
 use ivm::Memory;
 use sha2::Digest as _;
+use std::num::NonZeroU64;
 const CHUNK_BYTES: usize = 32;
 fn leaf_hash(bytes: &[u8; CHUNK_BYTES]) -> HashOf<[u8; CHUNK_BYTES]> {
     let digest = sha2::Sha256::digest(bytes);

@@ -1,5 +1,4 @@
 //! Benchmarks for Norito encoding and decoding of real chain wire payloads.
-use std::hint::black_box;
 use criterion::Criterion;
 use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey};
 use iroha_data_model::{
@@ -15,6 +14,7 @@ use iroha_primitives::const_vec::ConstVec;
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use nonzero_ext::nonzero;
 use norito::core::{self as ncore, DecodeFlagsGuard, header_flags};
+use std::hint::black_box;
 #[derive(Clone, Copy)]
 struct LayoutCandidate {
     name: &'static str,

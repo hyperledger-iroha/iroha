@@ -1,6 +1,6 @@
-use std::fs;
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
+use std::fs;
 use tempfile::tempdir;
 #[test]
 fn soranet_gateway_m0_pack_is_deterministic() {

@@ -4,8 +4,8 @@
 //!
 //! Builds a minimal Torii instance and checks that a couple of App API
 //! endpoints are reachable via the consolidated helper-built router.
-use std::sync::Arc;
 use axum::http::{Request, StatusCode, Uri, header::CONTENT_TYPE};
+use std::sync::Arc;
 // use iroha_config::base::WithOrigin; // unused in this smoke test
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,

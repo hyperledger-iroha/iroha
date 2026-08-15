@@ -6,6 +6,8 @@
 //! transport-agnostic: callers provide an async fetcher that knows how to talk
 //! to their networking stack or storage adapters, while the scheduler handles
 //! determinism, retry policy, and basic fairness.
+use crate::{CarBuildPlan, CarPlanError, ChunkFetchSpec};
+use futures::{Future, FutureExt, StreamExt, stream::FuturesUnordered};
 use std::{
     collections::VecDeque,
     fmt,
@@ -13,8 +15,6 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-use futures::{Future, FutureExt, StreamExt, stream::FuturesUnordered};
-use crate::{CarBuildPlan, CarPlanError, ChunkFetchSpec};
 /// Identifier used to reference providers that can serve SoraFS chunks.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProviderId(String);
@@ -1294,6 +1294,9 @@ where
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use futures::{executor::block_on, future::poll_fn};
+    use sorafs_chunker::ChunkProfile;
     use std::{
         error::Error,
         num::{NonZeroU32, NonZeroUsize},
@@ -1302,9 +1305,6 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
-    use futures::{executor::block_on, future::poll_fn};
-    use sorafs_chunker::ChunkProfile;
-    use super::*;
     #[derive(Debug, Clone)]
     struct TestError(&'static str);
     #[test]

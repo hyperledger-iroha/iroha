@@ -1,8 +1,13 @@
-use std::{
-    collections::VecDeque,
-    num::NonZeroU64,
-    path::Path,
-    time::{Duration, Instant},
+use super::test_support::{
+    TestEnvGuard, env_lock, genesis_invocation_count, install_kagami_stub, install_noop_stub,
+    kagami_sign_invocation_count,
+};
+use super::{
+    ActiveView, CliOverrides, InstructionPermission, MaintenanceCommand, MaintenanceState,
+    MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm, SignerEntryState, StatePageCache,
+    StateQueryKind, SupervisorBuilder, SupervisorError, compose_app_env_recipe,
+    compose_launch_recipe, ensure_http_base, filter_state_entries, reset_cli_overrides_for_tests,
+    shell_quote,
 };
 use egui::{CentralPanel, Color32, Context, FontFamily, TextStyle};
 use iroha_data_model::{
@@ -34,16 +39,11 @@ use mochi_core::{
     torii::{GovernanceStatus, StatusMetrics, Uptime},
 };
 use norito::json::{self, Value};
-use super::test_support::{
-    TestEnvGuard, env_lock, genesis_invocation_count, install_kagami_stub, install_noop_stub,
-    kagami_sign_invocation_count,
-};
-use super::{
-    ActiveView, CliOverrides, InstructionPermission, MaintenanceCommand, MaintenanceState,
-    MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm, SignerEntryState, StatePageCache,
-    StateQueryKind, SupervisorBuilder, SupervisorError, compose_app_env_recipe,
-    compose_launch_recipe, ensure_http_base, filter_state_entries, reset_cli_overrides_for_tests,
-    shell_quote,
+use std::{
+    collections::VecDeque,
+    num::NonZeroU64,
+    path::Path,
+    time::{Duration, Instant},
 };
 #[test]
 fn snapshot_label_preview_matches_expectations() {

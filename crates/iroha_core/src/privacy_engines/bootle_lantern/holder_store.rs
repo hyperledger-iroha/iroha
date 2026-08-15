@@ -12,27 +12,6 @@
 //! directory snapshot.  The injected sealed-head provider is consequently a
 //! mandatory production dependency, not an optional hardening layer.  It must
 //! provide linearizable compare-and-swap and rollback-resistant storage.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
-};
-#[cfg(test)]
-use std::sync::atomic::{AtomicU8, Ordering};
-use chacha20poly1305::{
-    XChaCha20Poly1305,
-    aead::{Aead as _, KeyInit as _, Payload},
-};
-use iroha_data_model::privacy::{
-    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyV1,
-    IrohaBootleLanternAnoncredStatementV1, PrivacyStatementContextV1,
-};
-use rand_core_06::{CryptoRng, OsRng, RngCore};
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
 use super::{
     codec::{BLIND_ISSUANCE_REQUEST_BYTES_V1, BLIND_ISSUANCE_RESPONSE_BYTES_V1, PROOF_BYTES_V1},
     issuer::{
@@ -45,6 +24,27 @@ use super::{
     ring::ApplicationPolynomialV1,
     scope::BootleLanternCredentialScopeV1,
 };
+use chacha20poly1305::{
+    XChaCha20Poly1305,
+    aead::{Aead as _, KeyInit as _, Payload},
+};
+use iroha_data_model::privacy::{
+    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyV1,
+    IrohaBootleLanternAnoncredStatementV1, PrivacyStatementContextV1,
+};
+use rand_core_06::{CryptoRng, OsRng, RngCore};
+use sha2::{Digest as _, Sha256};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+};
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 const HOLDER_ENVELOPE_MAGIC_V1: [u8; 4] = *b"ILV1";
 const HOLDER_MANIFEST_MAGIC_V1: [u8; 4] = *b"ILM1";
 const HOLDER_PENDING_MAGIC_V1: [u8; 4] = *b"ILP1";
@@ -3214,6 +3214,11 @@ fn take_slice_v1<'a>(
 }
 #[cfg(test)]
 mod tests {
+    use super::super::issuer::{
+        BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
+        BootleLanternIssuerPolicyMetadataV1, issuer_authorize_blind_issuance_with_rng_v1,
+        issuer_blind_issue_once_encoded_with_rng_v1,
+    };
     use super::*;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::privacy::{
@@ -3224,11 +3229,6 @@ mod tests {
     };
     use iroha_data_model::{NetworkId, block::BlockHeader};
     use rand_core_06::Error as RngError;
-    use super::super::issuer::{
-        BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
-        BootleLanternIssuerPolicyMetadataV1, issuer_authorize_blind_issuance_with_rng_v1,
-        issuer_blind_issue_once_encoded_with_rng_v1,
-    };
     struct TestRng {
         state: u64,
     }

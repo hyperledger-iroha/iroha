@@ -1,13 +1,6 @@
 //! Billing harness for the SoraGlobal Gateway CDN (SN15-M0-9).
 //! Rates usage against the meter catalog, enforces guardrails, and emits ledger
 //! projections plus CSV/Parquet exports for reconciliation.
-use std::{
-    collections::BTreeMap,
-    fs::{self, File},
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-};
 use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt16Array, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use eyre::{Result, WrapErr};
@@ -22,6 +15,13 @@ use norito::{
     json,
 };
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File},
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct MeterDefinition {
     pub id: String,
@@ -601,10 +601,10 @@ Next steps:\n\
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs::File};
-    use norito::json::{self, Value};
-    use tempfile::tempdir;
     use super::*;
+    use norito::json::{self, Value};
+    use std::{collections::BTreeMap, fs::File};
+    use tempfile::tempdir;
     #[test]
     fn billing_normalizes_duplicate_usage_entries() {
         let temp = tempdir().expect("tempdir");

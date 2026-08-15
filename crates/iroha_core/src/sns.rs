@@ -5,10 +5,13 @@
 //! HTTP API. SNS records and policies are stored in `World.smart_contract_state`
 //! so the ledger-backed lifecycle model remains deterministic across peers.
 #[cfg(test)]
-use std::time::SystemTime;
-use std::{collections::BTreeMap, str::FromStr};
+use crate::state::{State, StateReadOnly};
+use crate::state::{StateBlock, StateTransaction, World, WorldReadOnly};
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
+pub use iroha_data_model::sns::{
+    ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
+};
 #[cfg(test)]
 use iroha_data_model::transaction::Executable;
 use iroha_data_model::{
@@ -38,13 +41,10 @@ use iroha_primitives::numeric::{Numeric, Quantity};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode as _, Encode as _};
 use regex::Regex;
-use thiserror::Error;
 #[cfg(test)]
-use crate::state::{State, StateReadOnly};
-use crate::state::{StateBlock, StateTransaction, World, WorldReadOnly};
-pub use iroha_data_model::sns::{
-    ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
-};
+use std::time::SystemTime;
+use std::{collections::BTreeMap, str::FromStr};
+use thiserror::Error;
 const MS_PER_DAY: u64 = 86_400_000;
 const MS_PER_YEAR: u64 = iroha_data_model::alias_setup::ALIAS_LEASE_YEAR_MS;
 const EXPIRED_TOMBSTONE_REASON: &str = "expired";
@@ -2838,6 +2838,12 @@ pub fn active_dataspace_owner_by_id(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         Registrable,
@@ -2861,12 +2867,6 @@ mod tests {
             NameTombstoneStateV1,
         },
         transaction::TransactionBuilder,
-    };
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
     };
     include!("sns_core_tests.rs");
     #[test]
@@ -3144,7 +3144,9 @@ mod tests {
     }
     #[test]
     fn account_id_rekey_lineage_requires_typed_live_unambiguous_retired_history() {
-        use iroha_data_model::account::rekey::{AccountRekeyRecord, AccountRekeyTransitionProvenance};
+        use iroha_data_model::account::rekey::{
+            AccountRekeyRecord, AccountRekeyTransitionProvenance,
+        };
         let catalog = dataspace_catalog();
         let alias =
             AccountAlias::domainless("lineage".parse().expect("label"), DataSpaceId::UNIVERSAL);
@@ -4219,9 +4221,9 @@ mod tests {
     }
     #[test]
     fn sns_state_block_does_not_advance_transaction_height() {
-        use std::collections::HashSet;
         use iroha_data_model::block::BlockHeader;
         use nonzero_ext::nonzero;
+        use std::collections::HashSet;
         let state = State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),

@@ -9,12 +9,9 @@
 //! [`iroha_data_model::block::consensus_v2::HeightContext`], recomputes its identifier, and
 //! authenticates the exact
 //! [`Vote::signature_preimage`]; no retired consensus vote format is accepted.
-use std::{
-    collections::VecDeque,
-    sync::{
-        OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
+use crate::sumeragi::smt::{
+    KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KagemushaTopUpMerkleProof, KvPair,
+    build_kagemusha_topup_block_commitment, verify_kagemusha_topup_write_inclusion,
 };
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
@@ -32,11 +29,14 @@ use iroha_data_model::{
 };
 use parking_lot::Mutex;
 use sha2::{Digest as _, Sha256};
-use thiserror::Error;
-use crate::sumeragi::smt::{
-    KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KagemushaTopUpMerkleProof, KvPair,
-    build_kagemusha_topup_block_commitment, verify_kagemusha_topup_write_inclusion,
+use std::{
+    collections::VecDeque,
+    sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
+use thiserror::Error;
 /// Consensus execution-commitment material for a block containing one
 /// finalized Kagemusha top-up anchor and no unrelated writes.
 ///
@@ -538,6 +538,8 @@ fn canonical_hash(bytes: [u8; Hash::LENGTH]) -> Result<Hash, KagemushaTopUpFinal
 #[cfg(test)]
 mod tests {
     // Adversarial coverage is kept in this module because it needs direct
+    use super::*;
+    use crate::sumeragi::smt::{KvPair, build_kagemusha_topup_block_commitment};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         AccountId, NetworkId,
@@ -592,8 +594,6 @@ mod tests {
         peer::PeerId,
         proof::VerifyingKeyId,
     };
-    use super::*;
-    use crate::sumeragi::smt::{KvPair, build_kagemusha_topup_block_commitment};
     struct Fixture {
         proof: KagemushaTopUpFinalityProofV2,
         roster: KagemushaTopUpFinalityRosterArtifactV2,

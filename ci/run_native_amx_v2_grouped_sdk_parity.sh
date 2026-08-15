@@ -129,18 +129,30 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
+openapi_require_signed=0
 if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" == 1 ]]; then
+  openapi_require_signed=1
   readonly sdk_input_root="${IROHA_RELEASE_SDK_INPUT_ROOT:-}"
   readonly sdk_input_inventory="${IROHA_RELEASE_SDK_INPUT_INVENTORY:-}"
   readonly sdk_input_inventory_sha256="${IROHA_RELEASE_SDK_INPUT_INVENTORY_SHA256:-}"
   readonly sdk_work_parent="${IROHA_RELEASE_SDK_WORK_PARENT:-}"
   readonly sdk_work_helper="${IROHA_RELEASE_SDK_WORK_HELPER:-}"
   readonly sdk_work_helper_sha256="${IROHA_RELEASE_SDK_WORK_HELPER_SHA256:-}"
+  readonly sdk_runtime_inventory="${IROHA_RELEASE_RUNTIME_INVENTORY:-}"
+  readonly sdk_runtime_inventory_sha256="${IROHA_RELEASE_RUNTIME_INVENTORY_SHA256:-}"
+  readonly sdk_openapi_node_bin="${IROHA_RELEASE_NODE_BIN:-}"
   if [[ "$sdk_input_root" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/sdk-inputs" \
     || "$sdk_input_inventory" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/sdk-dependency-input.json" \
     || "$sdk_work_parent" != "${IROHA_RELEASE_INVOCATION_ROOT:-}" \
     || ! "$sdk_input_inventory_sha256" =~ ^[0-9a-f]{64}$ \
     || ! "$sdk_work_helper_sha256" =~ ^[0-9a-f]{64}$ \
+    || "$sdk_openapi_node_bin" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/runtime/bin/node" \
+    || ! -f "$sdk_openapi_node_bin" || -L "$sdk_openapi_node_bin" \
+    || ! -x "$sdk_openapi_node_bin" \
+    || "$sdk_runtime_inventory" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/runtime-input.json" \
+    || ! "$sdk_runtime_inventory_sha256" =~ ^[0-9a-f]{64}$ \
+    || ! -f "$sdk_runtime_inventory" || -L "$sdk_runtime_inventory" \
+    || "$(sha256_file "$sdk_runtime_inventory")" != "$sdk_runtime_inventory_sha256" \
     || ! -d "$sdk_input_root/node/node_modules" \
     || -L "$sdk_input_root/node/node_modules" \
     || ! -f "$sdk_work_helper" || -L "$sdk_work_helper" \
@@ -169,6 +181,142 @@ if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" == 1 ]]; then
   readonly sdk_swiftpm_work_root="$sdk_command_work_root/swiftpm"
   readonly sdk_gradle_user_home="$sdk_command_work_root/gradle-home"
   readonly sdk_node_modules_root="$sdk_input_root/node/node_modules"
+  readonly sdk_openapi_node_modules_root="$sdk_input_root/openapi/node_modules"
+  if [[ ! -d "$sdk_openapi_node_modules_root" \
+    || -L "$sdk_openapi_node_modules_root" \
+    || ! -f "$sdk_input_root/openapi/package-lock.json" \
+    || -L "$sdk_input_root/openapi/package-lock.json" ]]; then
+    echo "sealed grouped OpenAPI parity lacks its authenticated private Node closure" >&2
+    exit 1
+  fi
+  "$python_bin" -I -S - \
+    "$sdk_input_inventory" "$sdk_input_root" \
+    "$sdk_runtime_inventory" "$sdk_openapi_node_bin" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+inventory_path = Path(sys.argv[1])
+sdk_root = Path(sys.argv[2])
+runtime_inventory_path = Path(sys.argv[3])
+node_bin = Path(sys.argv[4])
+data = inventory_path.read_bytes()
+document = json.loads(data)
+if data != (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode():
+    raise SystemExit("SDK dependency inventory is not canonical JSON")
+binding = document.get("bindings", {}).get("openapi_node")
+expected = {
+    "node_modules_archive_name": "openapi/node_modules",
+    "package_lock_archive_name": "openapi/package-lock.json",
+}
+if (
+    not isinstance(binding, dict)
+    or any(binding.get(key) != value for key, value in expected.items())
+    or not isinstance(binding.get("package_lock_sha256"), str)
+    or not isinstance(binding.get("installed_lock_sha256"), str)
+):
+    raise SystemExit("authenticated SDK inventory lacks the exact OpenAPI Node binding")
+if any(re.fullmatch(r"[0-9a-f]{64}", binding[key]) is None for key in (
+    "package_lock_sha256", "installed_lock_sha256",
+)):
+    raise SystemExit("authenticated OpenAPI Node binding has an invalid digest")
+records = document.get("records")
+if not isinstance(records, list):
+    raise SystemExit("authenticated SDK inventory lacks member records")
+by_path = {
+    record.get("path"): record
+    for record in records
+    if isinstance(record, dict) and isinstance(record.get("path"), str)
+}
+root_record = by_path.get("openapi/node_modules")
+if not isinstance(root_record, dict) or root_record.get("kind") != "directory":
+    raise SystemExit("authenticated SDK inventory omits OpenAPI node_modules")
+for relative, key in (
+    ("openapi/package-lock.json", "package_lock_sha256"),
+    ("openapi/node_modules/.package-lock.json", "installed_lock_sha256"),
+):
+    path = sdk_root / relative
+    metadata = path.lstat()
+    record = by_path.get(relative)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+        or not isinstance(record, dict)
+        or record.get("kind") != "file"
+        or record.get("mode") != format(stat.S_IMODE(metadata.st_mode), "04o")
+        or record.get("size") != metadata.st_size
+    ):
+        raise SystemExit(f"authenticated OpenAPI Node control metadata changed: {relative}")
+    if digest != binding[key]:
+        raise SystemExit(f"authenticated OpenAPI Node control changed: {relative}")
+    if record.get("sha256") != binding[key]:
+        raise SystemExit(f"authenticated OpenAPI Node record changed: {relative}")
+observed = set()
+root = sdk_root / "openapi/node_modules"
+for path in [root, *sorted(root.rglob("*"))]:
+    metadata = path.lstat()
+    relative = "openapi/node_modules" if path == root else (
+        "openapi/node_modules/" + path.relative_to(root).as_posix()
+    )
+    record = by_path.get(relative)
+    if (
+        not isinstance(record, dict)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or record.get("mode") != format(stat.S_IMODE(metadata.st_mode), "04o")
+    ):
+        raise SystemExit("OpenAPI Node copied-input inventory differs")
+    if stat.S_ISDIR(metadata.st_mode):
+        if record.get("kind") != "directory":
+            raise SystemExit("OpenAPI Node directory inventory differs")
+    elif stat.S_ISREG(metadata.st_mode):
+        if metadata.st_nlink != 1 or record.get("kind") != "file":
+            raise SystemExit("OpenAPI Node file metadata is unsafe")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if record.get("size") != metadata.st_size or record.get("sha256") != digest:
+            raise SystemExit("OpenAPI Node file inventory differs")
+    else:
+        raise SystemExit("OpenAPI Node copied input contains a special file")
+    observed.add(relative)
+expected_members = {
+    relative for relative in by_path
+    if relative == "openapi/node_modules"
+    or relative.startswith("openapi/node_modules/")
+}
+if observed != expected_members:
+    raise SystemExit("OpenAPI Node copied-input inventory has omissions or extras")
+runtime = json.loads(runtime_inventory_path.read_bytes())
+runtime_records = runtime.get("records")
+node_record = next(
+    (
+        record for record in runtime_records
+        if isinstance(record, dict) and record.get("path") == "bin/node"
+    ),
+    None,
+) if isinstance(runtime_records, list) else None
+metadata = node_bin.lstat()
+if (
+    node_bin.resolve(strict=True) != node_bin
+    or not stat.S_ISREG(metadata.st_mode)
+    or stat.S_ISLNK(metadata.st_mode)
+    or metadata.st_nlink != 1
+    or metadata.st_uid != os.geteuid()
+    or metadata.st_mode & 0o111 == 0
+    or not isinstance(node_record, dict)
+    or node_record.get("kind") != "file"
+    or node_record.get("mode") != format(stat.S_IMODE(metadata.st_mode), "04o")
+    or node_record.get("size") != metadata.st_size
+    or node_record.get("sha256") != hashlib.sha256(node_bin.read_bytes()).hexdigest()
+):
+    raise SystemExit("protected OpenAPI Node executable disagrees with runtime inventory")
+PY
   sdk_gradle_launcher="$(
     "$python_bin" -I -S - "$sdk_input_inventory" "$sdk_gradle_user_home" <<'PY'
 import json
@@ -219,10 +367,21 @@ PY
 else
   readonly sdk_work_helper=""
   readonly sdk_node_modules_root="${repo_root}/javascript/iroha_js/node_modules"
+  readonly sdk_openapi_node_modules_root="${repo_root}/tools/openapi/node_modules"
+  sdk_openapi_node_bin="$(command -v node || true)"
+  if [[ -z "$sdk_openapi_node_bin" ]]; then
+    echo "Node.js is required for grouped Native AMX V2 OpenAPI parity" >&2
+    exit 1
+  fi
+  sdk_openapi_node_bin="$($python_bin -I -S -c \
+    'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+    "$sdk_openapi_node_bin")"
+  readonly sdk_openapi_node_bin
   readonly sdk_swiftpm_work_root="${temporary_root}/swift-build"
   readonly sdk_gradle_user_home="${GRADLE_USER_HOME:-${HOME}/.gradle}"
   readonly sdk_gradle_launcher=""
 fi
+readonly openapi_require_signed
 readonly transcript="${temporary_root}/${surface}.log"
 
 run_and_capture() {
@@ -287,6 +446,26 @@ if len(matches) != 1 or int(matches[0].group(1)) != expected:
 PY
 }
 
+assert_openapi_replay_marker() {
+  local candidate_oid
+  local candidate_tree
+  local require_signed
+  local expected_marker
+  candidate_oid="$(
+    GIT_OPTIONAL_LOCKS=0 git -C "$repo_root" rev-parse --verify "HEAD^{commit}"
+  )"
+  candidate_tree="$(
+    GIT_OPTIONAL_LOCKS=0 git -C "$repo_root" rev-parse --verify "${candidate_oid}^{tree}"
+  )"
+  require_signed="$openapi_require_signed"
+  expected_marker="openapi-two-mirror-replay status=success candidate_oid=${candidate_oid} candidate_tree=${candidate_tree} mirrors=2 artifacts=5 require_signed=${require_signed}"
+  if [[ "$(grep -Fxc -- "$expected_marker" "$transcript" || true)" != 1 \
+    || "$(grep -Ec -- '^openapi-two-mirror-replay ' "$transcript" || true)" != 1 ]]; then
+    echo "grouped Native AMX V2 OpenAPI parity lacks one exact path-free two-mirror replay marker" >&2
+    exit 1
+  fi
+}
+
 assert_gradle_report() {
   local report_root="$1"
   local class_name="$2"
@@ -321,12 +500,19 @@ observed_test_count=0
 case "$surface" in
   openapi)
     observed_test_count=7
-    run_and_capture \
+    run_openapi_grouped_parity() {
+      OPENAPI_NODE_BIN="$sdk_openapi_node_bin" \
+        OPENAPI_NODE_MODULES_ROOT="$sdk_openapi_node_modules_root" \
+        OPENAPI_REQUIRE_SIGNED="$openapi_require_signed" \
+        bash "${repo_root}/ci/check_openapi_spec.sh"
       env PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
-      "$python_bin" -m pytest -q -p no:cacheprovider \
-      --basetemp="${temporary_root}/pytest" \
-      "${repo_root}/pytests/scripts/native_amx_v2_grouped_fixture_test.py"
+        "$python_bin" -m pytest -q -p no:cacheprovider \
+        --basetemp="${temporary_root}/pytest" \
+        "${repo_root}/pytests/scripts/native_amx_v2_grouped_fixture_test.py"
+    }
+    run_and_capture run_openapi_grouped_parity
     assert_pytest_count "$observed_test_count"
+    assert_openapi_replay_marker
     ;;
   python)
     observed_test_count=62

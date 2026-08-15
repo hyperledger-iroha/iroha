@@ -1,10 +1,4 @@
 //! Pipeline events.
-use std::{boxed::Box, format, num::NonZeroU64, string::String, vec::Vec};
-use iroha_crypto::HashOf;
-use iroha_data_model_derive::model;
-use iroha_macro::FromVariant;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 pub use self::model::*;
 use crate::{
     block::{BlockHeader, consensus::ExecWitnessMsg},
@@ -12,10 +6,16 @@ use crate::{
     nexus::{DataSpaceId, LaneId},
     transaction::SignedTransaction,
 };
+use iroha_crypto::HashOf;
+use iroha_data_model_derive::model;
+use iroha_macro::FromVariant;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{boxed::Box, format, num::NonZeroU64, string::String, vec::Vec};
 #[model]
 mod model {
-    use getset::{CopyGetters, Getters};
     use super::*;
+    use getset::{CopyGetters, Getters};
     #[derive(Debug, Clone, PartialEq, Eq, FromVariant, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum PipelineEventBox {
@@ -235,9 +235,9 @@ impl_json_via_norito_bytes!(
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod getter_tests {
+    use super::*;
     use iroha_crypto::Hash;
     use nonzero_ext::nonzero;
-    use super::*;
     #[test]
     fn transaction_event_filter_block_height_getter_works() {
         let h = HashOf::from_untyped_unchecked(Hash::prehashed([0u8; Hash::LENGTH]));
@@ -408,14 +408,14 @@ pub mod prelude {
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod tests {
-    use std::vec::Vec;
-    use iroha_crypto::Hash;
-    use nonzero_ext::nonzero;
     use super::{super::EventFilter, *};
     use crate::{
         ValidationFail, block::consensus::LaneBlockCommitment, merge::MergeQuorumCertificate,
         peer::PeerId, transaction::error::TransactionRejectionReason::*,
     };
+    use iroha_crypto::Hash;
+    use nonzero_ext::nonzero;
+    use std::vec::Vec;
     impl BlockHeader {
         fn dummy(height: NonZeroU64) -> Self {
             let merkle_root = HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH]));

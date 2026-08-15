@@ -1,5 +1,13 @@
 //! Host execution for bilateral settlements and owner-funded native FX corridors.
-use std::collections::BTreeSet;
+use super::*;
+use crate::smartcontracts::isi::asset::isi::{
+    assert_numeric_spec_with, execute_native_fx_numeric_asset_pair,
+    validate_authorized_numeric_asset_pair, validate_native_fx_numeric_asset_pair,
+};
+#[cfg(test)]
+use crate::smartcontracts::isi::error::MathError;
+#[cfg(feature = "telemetry")]
+use crate::sumeragi::status::SettlementOutcomeKind;
 #[cfg(any(feature = "telemetry", test))]
 use iroha_data_model::isi::error::{AssetTransferAdmissionError, InstructionEvaluationError};
 use iroha_data_model::{
@@ -24,15 +32,7 @@ use iroha_primitives::{
     json::Json,
     numeric::{Numeric, NumericSpec, Quantity},
 };
-use super::*;
-use crate::smartcontracts::isi::asset::isi::{
-    assert_numeric_spec_with, execute_native_fx_numeric_asset_pair,
-    validate_authorized_numeric_asset_pair, validate_native_fx_numeric_asset_pair,
-};
-#[cfg(test)]
-use crate::smartcontracts::isi::error::MathError;
-#[cfg(feature = "telemetry")]
-use crate::sumeragi::status::SettlementOutcomeKind;
+use std::collections::BTreeSet;
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 pub(crate) const SETTLEMENT_KIND_DVP: &str = "dvp";
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
@@ -1470,7 +1470,8 @@ impl Execute for PvpIsi {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use super::*;
+    use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
     use iroha_data_model::{
         account::{
             Account, AccountAddress, NewAccount,
@@ -1495,8 +1496,7 @@ mod tests {
     use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID};
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
+    use std::collections::BTreeSet;
     fn quantity(value: &str) -> Quantity {
         value
             .parse::<Quantity>()

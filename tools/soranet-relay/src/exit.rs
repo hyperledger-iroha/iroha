@@ -10,6 +10,15 @@
 //! independent hard corridor declared below. Catalog files must be direct,
 //! stable regular files and their filename route/stream IDs must match the
 //! decoded update before the route can enter the cache.
+use crate::config::{
+    ConfigError, ExitRoutingConfig, KaigiStreamRoutingConfig, NoritoStreamRoutingConfig,
+};
+use blake3::Hasher as Blake3Hasher;
+use iroha_data_model::soranet::RelayId;
+use norito::{
+    DecodeLimits, Error as NoritoError, decode_from_bytes_with_limits,
+    streaming::{PrivacyRouteUpdate, SoranetAccessKind, SoranetRoute, SoranetStreamTag},
+};
 use std::{
     collections::HashMap,
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
@@ -18,16 +27,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use blake3::Hasher as Blake3Hasher;
-use iroha_data_model::soranet::RelayId;
-use norito::{
-    DecodeLimits, Error as NoritoError, decode_from_bytes_with_limits,
-    streaming::{PrivacyRouteUpdate, SoranetAccessKind, SoranetRoute, SoranetStreamTag},
-};
 use thiserror::Error;
-use crate::config::{
-    ConfigError, ExitRoutingConfig, KaigiStreamRoutingConfig, NoritoStreamRoutingConfig,
-};
 const DEFAULT_GAR_CATEGORY_READ_ONLY: &str = "stream.norito.read_only";
 const DEFAULT_GAR_CATEGORY_AUTH: &str = "stream.norito.authenticated";
 const ROUTE_OPEN_FRAME_LEN: usize = 34;
@@ -1069,12 +1069,12 @@ pub enum RouteOpenFrameError {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use norito::{
         streaming::{PrivacyRouteUpdate, SoranetChannelId, SoranetRoute, SoranetStreamTag},
         to_bytes,
     };
     use tempfile::TempDir;
-    use super::*;
     fn sample_route() -> NoritoStreamRoutingConfig {
         NoritoStreamRoutingConfig {
             torii_ws_url: "wss://torii.test/norito/stream".into(),

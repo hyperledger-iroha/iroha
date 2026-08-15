@@ -1,16 +1,5 @@
 //! Criterion benchmarks for Torii hot paths.
 #![cfg(feature = "app_api")]
-use std::{
-    borrow::Cow,
-    net::SocketAddr,
-    num::{NonZeroU64, NonZeroUsize},
-    str::FromStr,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -61,6 +50,17 @@ use iroha_torii::{
     verify_signed_query_request_for_bench,
 };
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
+use std::{
+    borrow::Cow,
+    net::SocketAddr,
+    num::{NonZeroU64, NonZeroUsize},
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tower::ServiceExt as _;
 fn direct_metrics_telemetry() -> MaybeTelemetry {
     let metrics = Arc::new(Metrics::default());

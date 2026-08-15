@@ -1,5 +1,4 @@
 //! Module for cursor-based pagination functionality.
-use std::{fmt::Debug, iter::Peekable, num::NonZeroU64};
 use iroha_data_model::{
     prelude::SelectorTuple,
     query::{
@@ -8,6 +7,7 @@ use iroha_data_model::{
         error::QueryExecutionFail,
     },
 };
+use std::{fmt::Debug, iter::Peekable, num::NonZeroU64};
 fn evaluate_selector_tuple<T>(
     batch: Vec<T>,
     selector: &SelectorTuple<T>,
@@ -259,9 +259,9 @@ impl ErasedQueryIterator {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::prelude::*;
     use nonzero_ext::nonzero;
-    use super::*;
     #[test]
     fn empty_selector_projects_full_items() {
         let d1: DomainId = DomainId::try_new("wonderland", "universal").unwrap();

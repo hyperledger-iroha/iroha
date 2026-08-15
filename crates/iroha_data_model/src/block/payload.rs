@@ -1,8 +1,3 @@
-use std::{cmp::Ordering, collections::BTreeMap, fmt, vec::Vec};
-use iroha_crypto::{Hash, HashOf, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
-use iroha_data_model_derive::model;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use super::{SignedBlock, execution_context::BlockExecutionContextBundle, header::BlockHeader};
 use crate::{
     consensus::{NposConsensusEffects, PreviousRosterEvidence},
@@ -18,6 +13,11 @@ use crate::{
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
+use iroha_crypto::{Hash, HashOf, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
+use iroha_data_model_derive::model;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{cmp::Ordering, collections::BTreeMap, fmt, vec::Vec};
 #[model]
 mod model {
     use super::*;

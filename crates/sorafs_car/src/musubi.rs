@@ -3,10 +3,6 @@
 //! A provider must parse and verify the complete semantic bundle before it may attest to an
 //! archive. This module centralizes that fail-closed check so seed ingress, storage providers, and
 //! later cache integration use one canonical transcript implementation.
-use std::{
-    fmt,
-    io::{self, Read},
-};
 use crate::{
     CarBuildPlan, CarStreamingWriter, CarVerifier, CarWriteStats, ChunkStore, ProfileId,
     compute_chunk_plan_digest_sha3,
@@ -17,6 +13,10 @@ use iroha_data_model::musubi::{
     MUSUBI_MAX_FILES_V1, MusubiArchiveCommitmentV1, MusubiArtifactDescriptorV1,
     MusubiContentDigestV1, MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
     validate_musubi_portable_path_set_v1,
+};
+use std::{
+    fmt,
+    io::{self, Read},
 };
 /// Canonical bundle path of the archive-independent semantic release manifest.
 pub const MUSUBI_BUNDLE_SEMANTIC_RELEASE_PATH_V1: &str = ".musubi/semantic-release.norito";
@@ -728,10 +728,8 @@ fn update_frame(hasher: &mut blake3::Hasher, bytes: &[u8]) -> Result<(), ()> {
 // establish that evidence.
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::Cell,
-        io::{self, Cursor, Read},
-    };
+    use super::*;
+    use crate::{CarWriter, FileEntry, compute_por_root};
     use iroha_data_model::{
         musubi::{
             MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiDependencyReqV1,
@@ -742,8 +740,10 @@ mod tests {
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     };
     use norito::codec::Encode as _;
-    use super::*;
-    use crate::{CarWriter, FileEntry, compute_por_root};
+    use std::{
+        cell::Cell,
+        io::{self, Cursor, Read},
+    };
     #[derive(Clone, Copy)]
     enum FixtureFault {
         None,

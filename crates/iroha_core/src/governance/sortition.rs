@@ -28,9 +28,9 @@ pub fn compute_seed(
 }
 #[cfg(test)]
 mod tests {
+    use super::compute_seed;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{NetworkId, block::BlockHeader};
-    use super::compute_seed;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),

@@ -8,8 +8,8 @@
 //! Build (requires blstrs backend):
 //!   cargo run -p `iroha_crypto` --features "dev-tools bls bls-backend-blstrs" --bin bls-variant-detect
 #![allow(clippy::print_stdout)]
-use std::error::Error;
 use iroha_crypto::{BlsNormal, BlsSmall, KeyGenOption};
+use std::error::Error;
 use w3f_bls::SerializableToBytes as _;
 const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

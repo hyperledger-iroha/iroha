@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, fmt::Write as _, fs, io::Write as _};
+use crate::JsonTarget;
 use eyre::eyre;
 use norito::json::{self, Value};
-use crate::JsonTarget;
+use std::{collections::BTreeMap, fmt::Write as _, fs, io::Write as _};
 #[derive(Debug, Clone)]
 pub struct LocalGateOptions {
     pub input: std::path::PathBuf,
@@ -338,8 +338,8 @@ fn collect_offenders(series: &[Series], metric_label: &str) -> OffenderReport {
 }
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
     use super::*;
+    use tempfile::tempdir;
     fn write_json_to_temp(value: &Value) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempdir().expect("temp dir");
         let path = dir.path().join("input.json");

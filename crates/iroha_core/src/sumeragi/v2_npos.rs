@@ -4,7 +4,8 @@
 //! world state directly: the only persistence path is a
 //! [`VrfEpochRecord`] carried by a finalized block's
 //! [`NposConsensusEffects`](iroha_data_model::consensus::NposConsensusEffects).
-use std::collections::{BTreeMap, BTreeSet};
+use super::consensus::{NPOS_TAG, v2_vrf_commit_preimage, v2_vrf_reveal_preimage};
+use crate::state::{State, WorldReadOnly};
 use iroha_crypto::{Hash, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     block::consensus_v2 as wire,
@@ -16,11 +17,10 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
-use zeroize::Zeroizing;
-use super::consensus::{NPOS_TAG, v2_vrf_commit_preimage, v2_vrf_reveal_preimage};
-use crate::state::{State, WorldReadOnly};
 use wire::{VrfCommit, VrfReveal};
+use zeroize::Zeroizing;
 /// Domain separator for deterministic NPoS VRF input derivation.
 const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
 fn derive_vrf_material_from_key(
@@ -1447,14 +1447,14 @@ fn record_extends(base: &VrfEpochRecord, candidate: &VrfEpochRecord) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ChainId, NetworkId,
         consensus::{NposConsensusEffects, VrfEpochRecord},
         parameter::system::SumeragiNposParameters,
     };
-    use super::*;
-    use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(

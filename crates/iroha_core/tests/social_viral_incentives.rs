@@ -1,6 +1,5 @@
 //! Viral incentive contract flows (SOC-2): follow rewards, escrows, caps, and governance controls.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::num::NonZeroU64;
 use iroha_config::parameters::{actual::ViralIncentives, defaults};
 use iroha_core::{
     kura::Kura,
@@ -32,6 +31,7 @@ use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use norito::codec::Encode;
+use std::num::NonZeroU64;
 fn oracle_config() -> iroha_config::parameters::actual::Oracle {
     use iroha_config::parameters::actual::{
         Oracle as OracleConfig, OracleChangeThresholds, OracleEconomics, OracleGovernance,

@@ -1,7 +1,7 @@
 //! Tests for unambiguous FFI method name generation with trait impls and inherent methods.
 #![allow(unsafe_code)]
-use std::mem::MaybeUninit;
 use iroha_ffi::{FfiOutPtrRead, FfiReturn, FfiType, ffi_export};
+use std::mem::MaybeUninit;
 /// Enum of ambiguous method sources used to validate name mangling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FfiType)]
 #[repr(u8)]

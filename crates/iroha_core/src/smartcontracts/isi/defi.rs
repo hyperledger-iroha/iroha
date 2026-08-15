@@ -1,4 +1,5 @@
 //! Metadata-backed DeFi instruction handlers.
+use super::prelude::*;
 use iroha_data_model::{
     events::data::prelude::{AccountEvent, MetadataChanged},
     isi::{
@@ -13,7 +14,6 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_primitives::numeric::Quantity;
-use super::prelude::*;
 fn invalid(message: impl Into<String>) -> Error {
     InstructionExecutionError::InvariantViolation(message.into().into())
 }
@@ -490,11 +490,11 @@ impl Execute for DeFiInstructionBox {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
     use iroha_data_model::block::BlockHeader;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
     #[test]
     fn defi_quantity_guards_reject_invalid_values() {
         assert!(ensure_quantity_non_zero(&Quantity::zero(), "amount").is_err());

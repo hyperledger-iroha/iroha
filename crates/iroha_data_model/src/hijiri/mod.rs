@@ -6,12 +6,12 @@
 //! them, and incentives determine how much an attestation can boost the
 //! `S_attestation` component of the global risk score as well as how registries
 //! are compensated.
-use std::{convert::TryFrom, fmt};
+use crate::{account::AccountId, metadata::Metadata, name::Name};
 use derive_more::{AsRef, Deref};
 use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity};
 use norito::codec::{Decode, Encode};
+use std::{convert::TryFrom, fmt};
 use thiserror::Error;
-use crate::{account::AccountId, metadata::Metadata, name::Name};
 /// Unsigned Q16.16 fixed-point representation backed by `u32`.
 ///
 /// Hijiri scoring relies on Q16.16 arithmetic. This lightweight wrapper keeps
@@ -456,9 +456,9 @@ pub enum FeePolicyError {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
     use super::*;
     use crate::metadata::Metadata;
+    use iroha_crypto::KeyPair;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
     }

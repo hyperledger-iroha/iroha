@@ -8,12 +8,12 @@
 //!
 //! Run manually with:
 //!   cargo test -p `integration_tests` --test `nexus_and_streaming` `kotodama_examples::` -- --nocapture
+use integration_tests::process::{output_with_timeout, process_timeout, status_with_timeout};
 use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
-use integration_tests::process::{output_with_timeout, process_timeout, status_with_timeout};
 fn on_path(bin: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     for p in env::split_paths(&path) {

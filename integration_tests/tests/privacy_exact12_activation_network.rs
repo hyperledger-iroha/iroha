@@ -15,7 +15,6 @@
 //! privacy_exact12_activation_network::canonical_exact12_governance_survives_four_peer_activation_replay_and_restart \
 //! -- --exact --nocapture --test-threads=1
 //! ```
-use std::time::Duration;
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -47,6 +46,7 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use std::time::Duration;
 use tokio::time::{Instant, sleep, timeout};
 const TEST_NAME: &str =
     "canonical_exact12_governance_survives_four_peer_activation_replay_and_restart";

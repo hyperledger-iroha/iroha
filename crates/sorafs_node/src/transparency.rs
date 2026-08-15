@@ -1,13 +1,10 @@
 //! Local SFM-4c transparency aggregate worker helpers.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
-};
 use crate::{GovernanceSubmissionProvenanceV1, moderation::ModerationEvidenceViewerAuditReport};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
-use iroha_crypto::sorafs::proof_token::{ModerationAction as ProofTokenModerationAction, ProofToken};
+use iroha_crypto::sorafs::proof_token::{
+    ModerationAction as ProofTokenModerationAction, ProofToken,
+};
 use iroha_data_model::{
     events::data::sorafs::SorafsReserveLedgerEventKind,
     sorafs::{
@@ -29,6 +26,11 @@ use sorafs_manifest::{
     MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1, ModerationPrivacyNoiseSourceV1,
     ModerationPrivacyThresholdPrfCommitmentV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsModerationBallotGovernanceEventV1,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 const SOURCE_ENTRY_SUBJECT_DIGEST_DOMAIN_V1: &[u8] =
@@ -593,16 +595,14 @@ pub fn moderation_evidence_viewer_audit_report_source_entry(
 }
 /// Derive a transparency source entry from one typed committed reserve-ledger event.
 ///
-/// The finalized event cursor, rather than a process-local sequence or wall
-/// clock, is the source identity. This makes duplicate suppression
-/// byte-identical across replicas and prevents a stale-fork event from
-/// masquerading as the committed transition with the same journal sequence.
+/// The finalized event cursor, rather than a process-local sequence or wall clock, is the source
+/// identity. This makes duplicate suppression byte-identical across replicas and prevents a
+/// stale-fork event from masquerading as the committed transition with the same journal sequence.
 ///
 /// # Errors
 ///
-/// Returns [`TransparencySourceEntryAdapterError`] when the event/cursor
-/// invariants emitted by the native reserve ledger are malformed or the
-/// derived public entry is invalid.
+/// Returns [`TransparencySourceEntryAdapterError`] when the event/cursor invariants emitted by the
+/// native reserve ledger are malformed or the derived public entry is invalid.
 pub fn reserve_finalized_event_source_entry(
     record: &ReserveFinalizedEventV1,
 ) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
@@ -1019,9 +1019,8 @@ impl PrivacyReleaseAnchorHeadV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyReleaseAnchorErrorV1::InvalidState`] when the fields
-    /// do not encode either the query-specific genesis head or a nonzero
-    /// finalized release.
+    /// Returns [`PrivacyReleaseAnchorErrorV1::InvalidState`] when the fields do not encode either
+    /// the query-specific genesis head or a nonzero finalized release.
     pub fn try_from_parts(
         query_id: [u8; 32],
         sequence: u64,
@@ -2273,9 +2272,8 @@ impl TransparencyRuntimeProviderQualificationV1 {
 }
 /// Exact non-secret runtime-provider identity and public-policy pin.
 ///
-/// Launchers construct this value only from reviewed `iroha_config` fields.
-/// Credentials, private keys, threshold shares, bearer material, and provider
-/// diagnostics are deliberately absent.
+/// Launchers construct this value only from reviewed `iroha_config` fields. Credentials, private
+/// keys, threshold shares, bearer material, and provider diagnostics are deliberately absent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransparencyRuntimeProviderBindingV1 {
     handle: String,
@@ -2370,18 +2368,16 @@ pub enum TransparencyRuntimeProviderQualificationErrorV1 {
 }
 /// Stable identity and qualification exposed by a production transparency provider.
 ///
-/// Implementations own all credentials, key shares, and authentication
-/// material. The handle is stable, opaque, non-secret deployment metadata;
-/// qualification diagnostics remain inside the provider's protected telemetry
-/// boundary.
+/// Implementations own all credentials, key shares, and authentication material. The handle is
+/// stable, opaque, non-secret deployment metadata; qualification diagnostics remain inside the
+/// provider's protected telemetry boundary.
 pub trait ProductionTransparencyRuntimeProviderV1: Send + Sync {
     /// Return the stable opaque deployment handle for this provider.
     fn handle(&self) -> &str;
     /// Qualify the active adapter and its public policy revision.
     ///
-    /// Implementations must fail when the provider is unavailable, revoked,
-    /// stale, test-marked, or otherwise not production-ready. Callers always
-    /// redact the returned diagnostic string.
+    /// Implementations must fail when the provider is unavailable, revoked, stale, test-marked, or
+    /// otherwise not production-ready. Callers always redact the returned diagnostic string.
     fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String>;
 }
 /// Production qualification extension for a threshold-PRF provider.
@@ -2446,13 +2442,12 @@ pub enum PrivacyReleaseAnchorErrorV1 {
 }
 /// Runtime-only finalized-head service for the privacy release hash chain.
 ///
-/// Production implementations are expected to read and advance a
-/// quorum-finalized Governance DAG projection. The interface is deliberately
-/// compare-and-set: two workers may race, but neither can replace or fork an
-/// already finalized head. Production adapters also implement
+/// Production implementations are expected to read and advance a quorum-finalized Governance DAG
+/// projection. The interface is deliberately compare-and-set: two workers may race, but neither can
+/// replace or fork an already finalized head. Production adapters also implement
 /// [`ProductionPrivacyReleaseAnchorV1`] and are injected through
-/// [`QualifiedPrivacyReleaseAnchorV1`]; injecting this operation-only trait
-/// directly does not satisfy production qualification.
+/// [`QualifiedPrivacyReleaseAnchorV1`]; injecting this operation-only trait directly does not
+/// satisfy production qualification.
 pub trait PrivacyReleaseAnchorV1: Send + Sync {
     /// Read the exact finalized head for `query_id`.
     fn finalized_head(
@@ -2469,17 +2464,15 @@ pub trait PrivacyReleaseAnchorV1: Send + Sync {
 }
 /// Startup-qualified, rotation-aware finalized release-anchor boundary.
 ///
-/// Construction validates the configured handle and pins the provider's exact
-/// public qualification without reading a finalized head. Every read and
-/// compare-and-set revalidates the pinned handle, revision, and policy digest
-/// before and after the security-sensitive operation. This type implements
-/// [`PrivacyReleaseAnchorV1`], so launcher code can inject only the qualified
-/// wrapper into the existing node seam.
+/// Construction validates the configured handle and pins the provider's exact public qualification
+/// without reading a finalized head. Every read and compare-and-set revalidates the pinned handle,
+/// revision, and policy digest before and after the security-sensitive operation. This type
+/// implements [`PrivacyReleaseAnchorV1`], so launcher code can inject only the qualified wrapper
+/// into the existing node seam.
 ///
-/// A deployment leader lease is a separate coordination boundary and must be
-/// acquired by launcher/service orchestration before invoking this anchor.
-/// This wrapper protects finalized-head identity and policy; it does not claim
-/// or emulate leadership.
+/// A deployment leader lease is a separate coordination boundary and must be acquired by
+/// launcher/service orchestration before invoking this anchor. This wrapper protects finalized-head
+/// identity and policy; it does not claim or emulate leadership.
 pub struct QualifiedPrivacyReleaseAnchorV1 {
     binding: TransparencyRuntimeProviderBindingV1,
     provider: Arc<dyn ProductionPrivacyReleaseAnchorV1>,
@@ -2489,11 +2482,10 @@ impl QualifiedPrivacyReleaseAnchorV1 {
     ///
     /// # Errors
     ///
-    /// Fails closed when the provider is absent, either handle is malformed or
-    /// test-marked, the injected handle or qualification differs from the
-    /// exact configured binding, or the provider is unavailable, stale, or
-    /// returns an invalid qualification. Provider diagnostic text is never
-    /// included in the returned error.
+    /// Fails closed when the provider is absent, either handle is malformed or test-marked, the
+    /// injected handle or qualification differs from the exact configured binding, or the provider
+    /// is unavailable, stale, or returns an invalid qualification. Provider diagnostic text is
+    /// never included in the returned error.
     pub fn try_new(
         binding: TransparencyRuntimeProviderBindingV1,
         provider: Option<Arc<dyn ProductionPrivacyReleaseAnchorV1>>,
@@ -2635,12 +2627,11 @@ impl Drop for PrivacyCyclePrfOutputV1 {
 }
 /// Runtime-only provider for hidden threshold-PRF cycle outputs.
 ///
-/// Implementations must bind evaluation to [`PrivacyCyclePrfRequestV1`] and
-/// must never expose raw provider diagnostics, key shares, seeds, or outputs
-/// through logs or durable state. Production adapters also implement
-/// [`ProductionPrivacyCyclePrfProviderV1`] and are injected through
-/// [`QualifiedPrivacyCyclePrfProviderV1`]; injecting this operation-only trait
-/// directly does not satisfy production qualification.
+/// Implementations must bind evaluation to [`PrivacyCyclePrfRequestV1`] and must never expose raw
+/// provider diagnostics, key shares, seeds, or outputs through logs or durable state. Production
+/// adapters also implement [`ProductionPrivacyCyclePrfProviderV1`] and are injected through
+/// [`QualifiedPrivacyCyclePrfProviderV1`]; injecting this operation-only trait directly does not
+/// satisfy production qualification.
 pub trait PrivacyCyclePrfProviderV1: Send + Sync {
     /// Derive the hidden 32-byte output for one exact cycle request.
     fn derive_cycle_output(
@@ -2650,11 +2641,10 @@ pub trait PrivacyCyclePrfProviderV1: Send + Sync {
 }
 /// Startup-qualified, rotation-aware threshold-PRF provider boundary.
 ///
-/// Construction validates the configured handle and pins the provider's exact
-/// public qualification without deriving a cycle output. Every derivation
-/// revalidates the pinned handle, revision, and policy digest before and after
-/// the request. This type implements [`PrivacyCyclePrfProviderV1`], so launcher
-/// code can inject only the qualified wrapper into the existing node seam.
+/// Construction validates the configured handle and pins the provider's exact public qualification
+/// without deriving a cycle output. Every derivation revalidates the pinned handle, revision, and
+/// policy digest before and after the request. This type implements [`PrivacyCyclePrfProviderV1`],
+/// so launcher code can inject only the qualified wrapper into the existing node seam.
 pub struct QualifiedPrivacyCyclePrfProviderV1 {
     binding: TransparencyRuntimeProviderBindingV1,
     provider: Arc<dyn ProductionPrivacyCyclePrfProviderV1>,
@@ -2664,11 +2654,10 @@ impl QualifiedPrivacyCyclePrfProviderV1 {
     ///
     /// # Errors
     ///
-    /// Fails closed when the provider is absent, either handle is malformed or
-    /// test-marked, the injected handle or qualification differs from the
-    /// exact configured binding, or the provider is unavailable, stale, or
-    /// returns an invalid qualification. Provider diagnostic text is never
-    /// included in the returned error.
+    /// Fails closed when the provider is absent, either handle is malformed or test-marked, the
+    /// injected handle or qualification differs from the exact configured binding, or the provider
+    /// is unavailable, stale, or returns an invalid qualification. Provider diagnostic text is
+    /// never included in the returned error.
     pub fn try_new(
         binding: TransparencyRuntimeProviderBindingV1,
         provider: Option<Arc<dyn ProductionPrivacyCyclePrfProviderV1>>,
@@ -2739,10 +2728,9 @@ impl PrivacyCyclePrfProviderV1 for QualifiedPrivacyCyclePrfProviderV1 {
 pub const TRANSPARENCY_LEADER_LEASE_VERSION_V1: u16 = 1;
 /// Stable, payload-free external leader-lease provider failures.
 ///
-/// Except for [`Self::Ambiguous`], implementations must return an error only
-/// after proving that the requested state transition did not take effect.
-/// Protected vendor diagnostics, credentials, and private key identifiers must
-/// remain inside the deployment-owned provider.
+/// Except for [`Self::Ambiguous`], implementations must return an error only after proving that the
+/// requested state transition did not take effect. Protected vendor diagnostics, credentials, and
+/// private key identifiers must remain inside the deployment-owned provider.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum TransparencyLeaderLeaseProviderErrorV1 {
     /// The external lease service or its quorum is unavailable.
@@ -2818,9 +2806,8 @@ pub enum TransparencyLeaderLeaseErrorV1 {
 }
 /// Exact public query, cycle, and holder identity covered by one leader lease.
 ///
-/// `holder_identity` is a public, deployment-stable identity digest. It must
-/// not be a credential, private key, bearer token, personal identifier, or a
-/// digest of any such secret.
+/// `holder_identity` is a public, deployment-stable identity digest. It must not be a credential,
+/// private key, bearer token, personal identifier, or a digest of any such secret.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransparencyLeaderLeaseScopeV1 {
     query_id: [u8; 32],
@@ -3078,9 +3065,8 @@ impl TransparencyLeaderLeaseRenewRequestV1 {
     ///
     /// # Errors
     ///
-    /// Rejects malformed current grants, validity rollback, and an
-    /// unadvanceable fencing floor. Runtime transports must use this
-    /// constructor after canonical decoding.
+    /// Rejects malformed current grants, validity rollback, and an unadvanceable fencing floor.
+    /// Runtime transports must use this constructor after canonical decoding.
     pub fn try_new(
         current_grant: TransparencyLeaderLeaseGrantV1,
         renew_at_unix: u64,
@@ -3138,9 +3124,8 @@ impl TransparencyLeaderLeaseReleaseRequestV1 {
     ///
     /// # Errors
     ///
-    /// Rejects malformed current grants and release observations outside the
-    /// active lease interval. Runtime transports must use this constructor
-    /// after canonical decoding.
+    /// Rejects malformed current grants and release observations outside the active lease interval.
+    /// Runtime transports must use this constructor after canonical decoding.
     pub fn try_new(
         current_grant: TransparencyLeaderLeaseGrantV1,
         release_at_unix: u64,
@@ -3251,14 +3236,12 @@ impl TransparencyLeaderLeaseReleaseReceiptV1 {
 }
 /// Runtime-only external CAS boundary for transparency publisher leadership.
 ///
-/// Implementations must atomically serialize acquisition, renewal, and release
-/// across all replicas and issue globally strict monotonic fencing tokens.
-/// They must not persist or log credentials, private keys, bearer material,
-/// private evidence, or personally identifying holder data. Production
-/// implementations also implement
-/// [`ProductionTransparencyLeaderLeaseProviderV1`] and are admitted only
-/// through [`QualifiedTransparencyLeaderLeaseProviderV1`].
-/// This module intentionally supplies no concrete production adapter.
+/// Implementations must atomically serialize acquisition, renewal, and release across all replicas
+/// and issue globally strict monotonic fencing tokens. They must not persist or log credentials,
+/// private keys, bearer material, private evidence, or personally identifying holder data.
+/// Production implementations also implement [`ProductionTransparencyLeaderLeaseProviderV1`] and
+/// are admitted only through [`QualifiedTransparencyLeaderLeaseProviderV1`]. This module
+/// intentionally supplies no concrete production adapter.
 pub trait TransparencyLeaderLeaseProviderV1: Send + Sync {
     /// Atomically acquire the exact requested query/cycle lease.
     ///
@@ -3352,21 +3335,18 @@ impl TransparencyLeaderLeaseStateV1 {
 }
 /// Qualification-pinned, rollback-aware transparency leader-lease boundary.
 ///
-/// Construction pins one exact production handle, revision, and public-policy
-/// digest. Every state transition and per-use validation revalidates that pin.
-/// All time decisions use explicit caller-supplied Unix seconds; this boundary
-/// never reads a wall clock and must not be called from deterministic ledger
-/// calculations with nondeterministic inputs.
+/// Construction pins one exact production handle, revision, and public-policy digest. Every state
+/// transition and per-use validation revalidates that pin. All time decisions use explicit
+/// caller-supplied Unix seconds; this boundary never reads a wall clock and must not be called from
+/// deterministic ledger calculations with nondeterministic inputs.
 ///
-/// `fencing_floor` must be restored from the last durably accepted external
-/// token. Zero is valid only for the first activation of a provider lineage.
-/// The deployment-owned provider remains responsible for globally monotonic
-/// CAS state across process and host failure.
+/// `fencing_floor` must be restored from the last durably accepted external token. Zero is valid
+/// only for the first activation of a provider lineage. The deployment-owned provider remains
+/// responsible for globally monotonic CAS state across process and host failure.
 ///
-/// Any post-startup qualification failure terminally poisons this wrapper,
-/// including an unavailable qualification service. Recovery requires explicit
-/// requalification and construction of a new wrapper; a provider that later
-/// advertises the old revision cannot revive the prior instance.
+/// Any post-startup qualification failure terminally poisons this wrapper, including an unavailable
+/// qualification service. Recovery requires explicit requalification and construction of a new
+/// wrapper; a provider that later advertises the old revision cannot revive the prior instance.
 pub struct QualifiedTransparencyLeaderLeaseProviderV1 {
     binding: TransparencyRuntimeProviderBindingV1,
     provider: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1>,
@@ -3377,10 +3357,9 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
     ///
     /// # Errors
     ///
-    /// Fails closed when the provider is absent, malformed, test-marked,
-    /// substituted, unavailable, stale, or does not match the configured
-    /// revision and public-policy digest, or when the restored fencing floor
-    /// cannot be advanced. Provider diagnostic text is discarded.
+    /// Fails closed when the provider is absent, malformed, test-marked, substituted, unavailable,
+    /// stale, or does not match the configured revision and public-policy digest, or when the
+    /// restored fencing floor cannot be advanced. Provider diagnostic text is discarded.
     pub fn try_new(
         binding: TransparencyRuntimeProviderBindingV1,
         provider: Option<Arc<dyn ProductionTransparencyLeaderLeaseProviderV1>>,
@@ -3494,9 +3473,8 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
     ///
     /// # Errors
     ///
-    /// Fails closed on qualification drift, local overlap, invalid time,
-    /// provider conflict or ambiguity, malformed bindings, and reused fencing
-    /// tokens.
+    /// Fails closed on qualification drift, local overlap, invalid time, provider conflict or
+    /// ambiguity, malformed bindings, and reused fencing tokens.
     pub fn acquire(
         &self,
         scope: TransparencyLeaderLeaseScopeV1,
@@ -3551,14 +3529,12 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
     }
     /// Atomically renew the exact active lease.
     ///
-    /// Every accepted renewal must strictly extend expiry and advance the
-    /// global fencing token.
+    /// Every accepted renewal must strictly extend expiry and advance the global fencing token.
     ///
     /// # Errors
     ///
-    /// Fails closed on scope mismatch, expiry or time rollback, provider
-    /// ambiguity/conflict, qualification drift, malformed responses, and
-    /// non-monotonic fencing tokens.
+    /// Fails closed on scope mismatch, expiry or time rollback, provider ambiguity/conflict,
+    /// qualification drift, malformed responses, and non-monotonic fencing tokens.
     pub fn renew(
         &self,
         scope: TransparencyLeaderLeaseScopeV1,
@@ -3675,10 +3651,9 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
     }
     /// Revalidate and return the exact active grant for one security-sensitive use.
     ///
-    /// The caller must pass the returned fencing token to the external
-    /// publication/readback operation. Local validation alone cannot fence a
-    /// different process; the deployment-owned adapter must reject stale
-    /// tokens atomically.
+    /// The caller must pass the returned fencing token to the external publication/readback
+    /// operation. Local validation alone cannot fence a different process; the deployment-owned
+    /// adapter must reject stale tokens atomically.
     ///
     /// # Errors
     ///
@@ -3874,9 +3849,8 @@ fn assert_transparency_runtime_provider_qualification<
 }
 /// Runtime-only, request-bound threshold-PRF material for one DP cycle.
 ///
-/// The hidden output is deliberately not serializable and its `Debug`
-/// implementation is redacted. Only [`Self::commitment`] may enter a public
-/// aggregate.
+/// The hidden output is deliberately not serializable and its `Debug` implementation is redacted.
+/// Only [`Self::commitment`] may enter a public aggregate.
 pub struct PrivacyCyclePrfInputV1 {
     request: PrivacyCyclePrfRequestV1,
     output: PrivacyCyclePrfOutputV1,
@@ -3897,9 +3871,8 @@ impl PrivacyCyclePrfInputV1 {
     }
     /// Return the opaque public commitment to this hidden cycle output.
     ///
-    /// V1 treats this nonzero value as external threshold-attestation
-    /// evidence. It deliberately does not expose enough material for local
-    /// verification or recovery of the hidden PRF output.
+    /// V1 treats this nonzero value as external threshold-attestation evidence. It deliberately
+    /// does not expose enough material for local verification or recovery of the hidden PRF output.
     #[must_use]
     pub const fn commitment(&self) -> ModerationPrivacyThresholdPrfCommitmentV1 {
         self.commitment
@@ -4148,9 +4121,8 @@ pub enum ProofTokenIssuanceIngestError {
 ///
 /// # Errors
 ///
-/// Returns [`ProofTokenIssuanceIngestError`] when the frame is malformed, the
-/// signature does not verify, timestamps are not representable, or the derived
-/// transparency payload fails validation.
+/// Returns [`ProofTokenIssuanceIngestError`] when the frame is malformed, the signature does not
+/// verify, timestamps are not representable, or the derived transparency payload fails validation.
 pub fn proof_token_issuance_from_frame(
     encoded_token: &[u8],
     signer_key: [u8; 32],
@@ -4202,9 +4174,8 @@ pub fn proof_token_issuance_from_frame(
 ///
 /// # Errors
 ///
-/// Returns [`ProofTokenIssuanceIngestError`] when base64 decoding, frame
-/// decoding, signature verification, timestamp conversion, or data-model
-/// validation fails.
+/// Returns [`ProofTokenIssuanceIngestError`] when base64 decoding, frame decoding, signature
+/// verification, timestamp conversion, or data-model validation fails.
 pub fn proof_token_issuance_from_base64(
     token_b64: &str,
     signer_key: [u8; 32],

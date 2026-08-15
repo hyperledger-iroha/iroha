@@ -4,13 +4,13 @@
 //! `/metrics` endpoints.  This module hides the blocking HTTP client behind
 //! `tokio::spawn_blocking` and normalises the responses into lightweight
 //! snapshots used by the TUI.
+use eyre::Result;
+use norito::{derive::JsonDeserialize, json};
 use std::{
     collections::HashMap,
     io::Read,
     time::{Duration, Instant},
 };
-use eyre::Result;
-use norito::{derive::JsonDeserialize, json};
 use tokio::{sync::mpsc, task::JoinHandle};
 pub const STATUS_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 pub const METRICS_HTTP_TIMEOUT: Duration = Duration::from_secs(2);

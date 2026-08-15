@@ -1,5 +1,3 @@
-use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
-use norito::core::DecodeFromSlice;
 use super::*;
 use crate::{
     Domain, DomainId, Level,
@@ -29,6 +27,8 @@ use crate::{
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
+use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
+use norito::core::DecodeFromSlice;
 fn sample_signed_transaction() -> SignedTransaction {
     let chain = test_network_id(0x11);
     let public_key: iroha_crypto::PublicKey =

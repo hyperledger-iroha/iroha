@@ -4,10 +4,7 @@
 //! These helpers load and canonicalize those receipts, enforce monotonic
 //! sequencing per `(lane, epoch)`, and map them onto the sanitized commitment
 //! bundle that block assembly embeds.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
-};
+use crate::da::{LaneEpoch, ReplayFingerprint};
 use blake3::Hasher as Blake3Hasher;
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_data_model::{
@@ -15,8 +12,11 @@ use iroha_data_model::{
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
-use crate::da::{LaneEpoch, ReplayFingerprint};
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -1017,10 +1017,7 @@ pub fn receipt_fingerprint(receipt: &DaIngestReceipt) -> ReplayFingerprint {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        num::NonZeroU32,
-    };
+    use super::*;
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
@@ -1033,8 +1030,11 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
     };
     use norito::to_bytes;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        num::NonZeroU32,
+    };
     use tempfile::tempdir;
-    use super::*;
     fn sample_receipt(lane: u32, epoch: u64, sequence: u64) -> DaIngestReceipt {
         let lane_id = LaneId::new(lane);
         let seq_byte = u8::try_from(sequence).unwrap_or(0);

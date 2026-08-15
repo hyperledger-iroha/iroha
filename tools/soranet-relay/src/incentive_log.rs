@@ -2,20 +2,6 @@
 //!
 //! Writes Norito-encoded `RelayEpochMetricsV1` payloads to a spool directory so
 //! offline auditors can replay the incentive pipeline deterministically.
-use std::{
-    fs,
-    io::Write,
-    path::PathBuf,
-    sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
-};
-use iroha_data_model::soranet::incentives::RelayEpochMetricsV1;
-use norito::{
-    core::to_bytes_bounded,
-    derive::{JsonDeserialize, JsonSerialize},
-};
-use sha2::{Digest, Sha256};
-use thiserror::Error;
 use crate::{
     error::RelayError,
     incentives::{
@@ -23,6 +9,20 @@ use crate::{
         INCENTIVE_MAX_ACTIVE_EPOCHS_V1, INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1,
     },
 };
+use iroha_data_model::soranet::incentives::RelayEpochMetricsV1;
+use norito::{
+    core::to_bytes_bounded,
+    derive::{JsonDeserialize, JsonSerialize},
+};
+use sha2::{Digest, Sha256};
+use std::{
+    fs,
+    io::Write,
+    path::PathBuf,
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use thiserror::Error;
 /// First-release maximum encoded incentive snapshot size.
 pub const INCENTIVE_SNAPSHOT_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
 /// Errors surfaced while persisting incentive snapshots.
@@ -275,12 +275,12 @@ impl IncentiveLogger {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{
         metadata::Metadata,
         soranet::incentives::{RelayComplianceStatusV1, RelayEpochMetricsV1},
     };
     use tempfile::TempDir;
-    use super::*;
     fn sample_metrics(epoch: u32) -> RelayEpochMetricsV1 {
         RelayEpochMetricsV1 {
             relay_id: [0x11; 32],

@@ -283,6 +283,7 @@ fn push_unique(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
@@ -296,7 +297,6 @@ mod tests {
         prelude::Numeric,
         role::RoleId,
     };
-    use super::*;
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair");

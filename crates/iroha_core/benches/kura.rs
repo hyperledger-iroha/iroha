@@ -2,9 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::all)]
 #![allow(clippy::disallowed_types)]
-use std::{fs, sync::Arc};
-#[cfg(feature = "bench")]
-use std::{num::NonZeroUsize, time::Duration};
 #[cfg(feature = "bench")]
 use criterion::BatchSize;
 use criterion::Criterion;
@@ -30,6 +27,9 @@ use iroha_crypto::KeyPair;
 use iroha_crypto::{Algorithm, Hash, Signature, bls_normal_pop_prove};
 use iroha_data_model::prelude::*;
 use iroha_test_samples::gen_account_in;
+use std::{fs, sync::Arc};
+#[cfg(feature = "bench")]
+use std::{num::NonZeroUsize, time::Duration};
 use tokio::runtime::Builder;
 #[cfg(feature = "bench")]
 struct BenchBlocks {

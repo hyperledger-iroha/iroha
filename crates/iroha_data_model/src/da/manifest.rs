@@ -1,5 +1,3 @@
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -9,6 +7,8 @@ use crate::{
     },
     nexus::LaneId,
 };
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Role for a chunk within an erasure-coded stripe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]

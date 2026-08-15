@@ -6,14 +6,14 @@
 //! anchor a quarterly transparency bundle in the governance DAG.
 #![allow(clippy::module_name_repetitions)]
 mod jury;
-use std::{collections::BTreeSet, string::String, vec::Vec};
-use iroha_schema::IntoSchema;
-pub use jury::*;
-use thiserror::Error;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use crate::{Decode, Encode};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use iroha_schema::IntoSchema;
+pub use jury::*;
+use std::{collections::BTreeSet, string::String, vec::Vec};
+use thiserror::Error;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 /// Governance payload describing a Ministry transparency release bundle.
 ///
 /// Releases refer to the signed `transparency_manifest.json` artefact emitted by
@@ -1251,8 +1251,8 @@ pub mod prelude {
 }
 #[cfg(feature = "json")]
 mod json {
-    use norito::json::{self, BoundedJsonError, JsonSerialize, JsonWriteSink, Parser};
     use super::{AgendaEvidenceKind, AgendaProposalAction};
+    use norito::json::{self, BoundedJsonError, JsonSerialize, JsonWriteSink, Parser};
     pub mod action {
         use super::*;
         #[allow(clippy::trivially_copy_pass_by_ref)] // Norito serializer signature
@@ -1325,8 +1325,8 @@ mod json {
 }
 #[cfg(test)]
 mod tests {
-    use norito::{decode_from_bytes, json, to_bytes};
     use super::*;
+    use norito::{decode_from_bytes, json, to_bytes};
     fn sample_review_summary() -> ReviewPanelSummaryV1 {
         ReviewPanelSummaryV1 {
             version: REVIEW_PANEL_SUMMARY_VERSION_V1,

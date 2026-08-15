@@ -2,15 +2,15 @@
 //! Generates a repeatable packet (overview, triage checklist, remediation
 //! template, JSON summary) so SRE/Security can contract testers and prove
 //! scope/SLA compliance for the gateway CDN.
-use std::{
-    fmt::Write as FmtWrite,
-    fs,
-    path::{Path, PathBuf},
-};
 use eyre::{Result, WrapErr};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
+};
+use std::{
+    fmt::Write as FmtWrite,
+    fs,
+    path::{Path, PathBuf},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 #[derive(Debug)]
@@ -520,9 +520,9 @@ fn render_remediation_template(reporting: &Reporting) -> String {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use norito::{json, json::Value};
     use tempfile::tempdir;
-    use super::*;
     fn sample_config() -> BugBountyConfig {
         BugBountyConfig {
             program: "Gateway Bug Bounty".to_string(),

@@ -1,6 +1,5 @@
 //! Fraud monitoring admission tests ensure configuration knobs gate transaction acceptance.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::{borrow::Cow, str::FromStr, sync::Arc, time::Duration};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::actual::{FraudAttester, FraudMonitoring, FraudRiskBand};
 use iroha_core::{
@@ -26,6 +25,7 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 use norito::codec::Encode;
+use std::{borrow::Cow, str::FromStr, sync::Arc, time::Duration};
 fn checked_random_fraud_monitoring_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked fraud monitoring keypair")
 }

@@ -3,11 +3,13 @@
 //! Structures and macros related to FFI and generation of FFI bindings. Any type that implements
 //! [`FfiType`] can be used in the FFI bindings generated with [`ffi_export`]/[`ffi_import`]. It
 //! is advisable to implement [`Ir`] and benefit from automatic implementation of [`FfiType`]
-use std::{boxed::Box, format, string::String, vec::Vec};
 use derive_more::Display;
 use ir::{Ir, Transmute};
 pub use iroha_ffi_proc_macro::*;
-use repr_c::{COutPtr, COutPtrRead, COutPtrWrite, CType, CTypeConvert, CWrapperType, Cloned, NonLocal};
+use repr_c::{
+    COutPtr, COutPtrRead, COutPtrWrite, CType, CTypeConvert, CWrapperType, Cloned, NonLocal,
+};
+use std::{boxed::Box, format, string::String, vec::Vec};
 pub mod handle;
 pub mod ir;
 pub mod option;
@@ -628,8 +630,8 @@ impl<R: Ir + COutPtrRead<R::Type>> FfiOutPtrRead for R {
     }
 }
 mod tuple_helpers {
-    use core::mem::MaybeUninit;
     use crate::{FfiConvert, FfiOutPtrRead, FfiOutPtrWrite, ReprC, Result};
+    use core::mem::MaybeUninit;
     #[inline]
     pub fn make_out_value<T>(value: T) -> T::OutPtr
     where

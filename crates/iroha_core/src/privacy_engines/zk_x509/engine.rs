@@ -8,12 +8,6 @@
 //! `X5S1` MAIN/compact-CA envelope. A native reference check, projection-only
 //! proof, or collection of unbound subproofs is never accepted as a
 //! credential proof.
-use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use iroha_data_model::privacy::PrivacyConsensusLimitsV1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use rand::TryCryptoRng;
-use thiserror::Error;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     accumulator_stark::{
@@ -79,6 +73,12 @@ use crate::privacy_engines::prover_randomness::{
 use crate::privacy_state::PrivacyZkX509AuthoritativeStateV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_state::validate_privacy_zk_x509_statement_state_v1;
+use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use iroha_data_model::privacy::PrivacyConsensusLimitsV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use rand::TryCryptoRng;
+use thiserror::Error;
 const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.compiled-profile.v1";
 const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-IRX509W1-private-witness+strict-reference-relation";
 const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 29;
@@ -491,10 +491,10 @@ pub(crate) fn construct_zk_x509_compiled_profile_v1()
 }
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest, Sha256};
     use super::super::profile::ZK_X509_HASH_FRAME_DOMAIN_V1;
     use super::*;
     use crate::privacy_engines::zk_x509::credential_stark::encode_zk_x509_credential_envelope_v1;
+    use sha2::{Digest, Sha256};
     fn independently_encode_compiled_profile_frame_v1(fields: &[&[u8]]) -> Vec<u8> {
         let domain_len =
             u16::try_from(COMPILED_PROFILE_DIGEST_DOMAIN_V1.len()).expect("small domain");

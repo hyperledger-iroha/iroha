@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests covering single-mint asset semantics.
-use std::time::{Duration, Instant};
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -9,6 +8,7 @@ use iroha::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
+use std::time::{Duration, Instant};
 fn wait_for_asset_value(
     client: &Client,
     asset_id: &AssetId,

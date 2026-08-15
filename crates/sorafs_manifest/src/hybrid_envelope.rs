@@ -5,7 +5,6 @@
 //! and ChaCha20-Poly1305 DEM. Gateways and SDKs use the helpers exposed here as
 //! part of the `sorafs_manifest_builder` CLI and Torii publishing flows to wrap and
 //! unwrap manifest payloads.
-use std::str::FromStr;
 use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit as _,
     aead::{Aead as _, Payload},
@@ -16,6 +15,7 @@ use iroha_crypto::{
 };
 use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use rand::rand_core::TryCryptoRng;
+use std::str::FromStr;
 use thiserror::Error;
 /// Envelope schema version.
 pub const HYBRID_PAYLOAD_ENVELOPE_VERSION_V1: u8 = 1;
@@ -128,11 +128,11 @@ pub fn decrypt_payload(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::HybridKeyPair;
     use rand::SeedableRng as _;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use rand_chacha::ChaCha20Rng;
-    use super::*;
     struct FailingAfterFills {
         remaining_ok_fills: usize,
     }

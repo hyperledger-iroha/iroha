@@ -1,9 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Stress block production with randomized mint bursts.
-use std::{
-    num::NonZero,
-    time::{Duration, Instant},
-};
 use eyre::{Result, eyre};
 use integration_tests::{sandbox, sync::get_status_with_retry_async};
 use iroha::data_model::{parameter::BlockParameter, prelude::*};
@@ -11,6 +7,10 @@ use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
+use std::{
+    num::NonZero,
+    time::{Duration, Instant},
+};
 use tokio::{task::spawn_blocking, time::sleep};
 /// Bombard random peers with random mints in multiple rounds, ensuring they all have
 /// a consistent total amount in the end.

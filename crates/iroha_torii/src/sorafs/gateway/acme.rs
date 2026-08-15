@@ -1,12 +1,12 @@
 //! Deterministic ACME automation harness for the SoraFS gateway.
+use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
+use blake3::Hasher;
 use std::{
     fmt::{self, Debug},
     sync::Arc,
     time::{Duration, SystemTime},
 };
-use blake3::Hasher;
 use thiserror::Error;
-use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
 /// Challenge profile describing which ACME flows must be exercised.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChallengeProfile {
@@ -445,11 +445,11 @@ fn qualify_acme_client(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     };
-    use super::*;
     const TEST_PROVIDER_HANDLE: &str = "runtime://sorafs/gateway-acme/primary";
     const TEST_PROVIDER_REVISION: u64 = 7;
     const TEST_PROVIDER_POLICY_DIGEST: [u8; 32] = [0xA7; 32];

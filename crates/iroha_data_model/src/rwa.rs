@@ -1,11 +1,4 @@
 //! Real-world asset lot structures and helper types.
-use std::{format, str::FromStr, string::String, vec::Vec};
-use derive_more::{Constructor, Display};
-use getset::{Getters, MutGetters};
-use iroha_crypto::Hash;
-use iroha_primitives::numeric::{NumericSpec, Quantity};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     HasMetadata, Identifiable, IntoKeyValue, Registered,
     common::{Owned, Ref, split_nonempty},
@@ -13,6 +6,13 @@ use crate::{
     metadata::Metadata,
     prelude::{AccountId, DomainId, Name, RoleId},
 };
+use derive_more::{Constructor, Display};
+use getset::{Getters, MutGetters};
+use iroha_crypto::Hash;
+use iroha_primitives::numeric::{NumericSpec, Quantity};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{format, str::FromStr, string::String, vec::Vec};
 /// Identifier of a single canonical RWA lot.
 #[derive(
     Debug,
@@ -389,9 +389,9 @@ impl IntoKeyValue for Rwa {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
-    use super::*;
     #[derive(Encode)]
     struct ForgedRwaParentRef {
         rwa: RwaId,

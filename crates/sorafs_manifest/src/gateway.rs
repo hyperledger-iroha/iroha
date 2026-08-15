@@ -1,14 +1,14 @@
 //! Helpers for SoraFS gateway policy enforcement.
-use std::collections::HashMap;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use hex::FromHex;
-use iroha_crypto::{Algorithm, PublicKey};
-use norito::json::{Map, Value};
-use thiserror::Error;
 use crate::gar::{
     GarCdnPolicyV1, GarLicenseSetV1, GarMetricsPolicyV1, GarModerationAction,
     GarModerationDirectiveV1, GarPolicyPayloadV1,
 };
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use hex::FromHex;
+use iroha_crypto::{Algorithm, PublicKey};
+use norito::json::{Map, Value};
+use std::collections::HashMap;
+use thiserror::Error;
 const MAX_SAMPLING_BPS: u64 = 10_000;
 const GAR_RECORD_VERSION_V1: u16 = 1;
 /// Errors returned when decoding or verifying a gateway authorisation record.
@@ -881,9 +881,9 @@ fn take_optional_array(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, PublicKey};
-    use super::*;
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

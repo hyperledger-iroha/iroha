@@ -2241,11 +2241,11 @@ impl Builtin {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use super::{
         Builtin, BuiltinAccess, BuiltinCallPolicy, BuiltinEffects, BuiltinGasClass,
         BuiltinLowering, BuiltinMode, BuiltinSurface, PointerConstructor,
     };
+    use std::collections::HashSet;
     #[test]
     fn release_mutators_are_effectful_in_canonical_registry() {
         for name in [

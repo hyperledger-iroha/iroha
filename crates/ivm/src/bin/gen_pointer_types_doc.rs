@@ -132,13 +132,13 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        sync::atomic::{AtomicU64, Ordering},
-    };
     use super::{
         BEGIN, END, POINTER_TYPE_GOLDEN_BEGIN, POINTER_TYPE_GOLDEN_END,
         prepare_generated_block_outputs, render_generated_block, render_pointer_type_golden_block,
+    };
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
     };
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
     #[test]

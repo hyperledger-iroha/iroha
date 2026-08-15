@@ -1,5 +1,4 @@
 //! Utility to print the expected `SoraFS` pin registry snapshot fixture.
-use std::{convert::TryInto, error::Error, fs, path::PathBuf};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
     kura::Kura,
@@ -38,6 +37,7 @@ use sorafs_manifest::{
     ReplicationOrderV1, chunker_registry,
     pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
 };
+use std::{convert::TryInto, error::Error, fs, path::PathBuf};
 const FIXTURE_PATH: &str = "crates/iroha_core/tests/fixtures/sorafs_pin_registry/snapshot.json";
 fn main() -> Result<(), Box<dyn Error>> {
     let state = make_state();

@@ -1,11 +1,5 @@
 //! Native AMX control-plane messages and deterministic vote-session cache.
-use std::{
-    collections::BTreeMap,
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-};
+use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan, RoutingPlan::NativeAmx};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -21,13 +15,19 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
-use thiserror::Error;
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+};
 #[cfg(unix)]
 use std::{
     fs::DirBuilder,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
 };
-use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan, RoutingPlan::NativeAmx};
+use thiserror::Error;
 const DEFAULT_SESSION_BODY_BUCKET_MAX: usize = 256;
 const NATIVE_AMX_SIGNING_GUARD_VERSION: u8 = 4;
 #[cfg(unix)]
@@ -3234,7 +3234,7 @@ impl NativeAmxSessionCache {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         block::{
@@ -3245,7 +3245,7 @@ mod tests {
         peer::PeerId,
         transaction::TransactionEntrypoint,
     };
-    use super::*;
+    use std::num::NonZeroUsize;
     fn checked_bls_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
             .expect("generate checked native AMX BLS fixture keypair")

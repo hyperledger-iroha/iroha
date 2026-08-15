@@ -57,9 +57,9 @@ impl_decode_verifying_key_instruction!(RegisterVerifyingKey);
 impl_decode_verifying_key_instruction!(UpdateVerifyingKey);
 #[cfg(test)]
 mod tests {
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{proof::VerifyingKeyRecord, zk::BackendTag};
+    use norito::core::DecodeFromSlice;
     fn key_id(name: &str) -> VerifyingKeyId {
         VerifyingKeyId::new("halo2/ipa", name)
     }

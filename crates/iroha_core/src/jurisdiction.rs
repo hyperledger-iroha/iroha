@@ -6,14 +6,9 @@
 //! - An attestation guard that enforces dataspace/committee/signer/expiry rules and verifies signatures.
 //! - A small in-memory retention store for attestation history (indexed per dataspace and epoch) to
 //!   support audit replay and evidence retrieval.
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
-    sync::OnceLock,
+use iroha_crypto::{
+    Algorithm, HashOf, Signature, ed25519_parse_signature, mldsa65_parse_signature,
 };
-use iroha_crypto::{Algorithm, HashOf, Signature, ed25519_parse_signature, mldsa65_parse_signature};
 use iroha_data_model::{
     jurisdiction::{
         JdgAttestation, JdgCommitteeId, JdgSdnKeyRecord, JdgSdnPolicy, JdgSdnRegistry,
@@ -23,6 +18,13 @@ use iroha_data_model::{
 };
 use iroha_schema::IntoSchema;
 use norito::{codec::Encode, decode_from_reader};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 use thiserror::Error;
 /// Enforces JDG SDN commitments with a registry and policy.
 #[derive(Debug, Clone)]
@@ -1019,7 +1021,7 @@ pub enum JdgAttestationGuardError {
 }
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use super::*;
     #[cfg(feature = "bls")]
     use iroha_crypto::Algorithm;
     use iroha_crypto::{Hash, Signature, SignatureOf};
@@ -1029,8 +1031,8 @@ mod tests {
         },
         nexus::DataSpaceId,
     };
+    use std::io::Cursor;
     use tempfile::tempdir;
-    use super::*;
     fn simple_signature_schemes() -> BTreeSet<JdgSignatureScheme> {
         BTreeSet::from([JdgSignatureScheme::SimpleThreshold])
     }

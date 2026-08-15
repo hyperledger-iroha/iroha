@@ -1,11 +1,11 @@
 //! Linear-scan register allocator and stack frame layout for Kotodama IR.
+#[cfg(test)]
+use super::ir::Program;
+use super::ir::{BasicBlock, Function, Instr, Label, Temp, Terminator};
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
 };
-#[cfg(test)]
-use super::ir::Program;
-use super::ir::{BasicBlock, Function, Instr, Label, Temp, Terminator};
 /// Result of register allocation for a function.
 #[derive(Debug, PartialEq)]
 pub struct Allocation {

@@ -11,15 +11,6 @@
 //! - The advisory access set is optional and never authoritative; executors
 //!   must enforce actual access at runtime. Supersets are safe; subsets may be
 //!   rejected or routed to a quarantine lane by policy.
-use std::{string::String, vec::Vec};
-#[cfg(feature = "json")]
-use base64::engine::general_purpose::STANDARD;
-use derive_more::Constructor;
-use iroha_crypto::HashOf;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
-use norito::json::{self, JsonDeserialize, JsonSerialize};
 use crate::{
     account::AccountId,
     asset::id::{AssetDefinitionId, AssetId},
@@ -31,6 +22,15 @@ use crate::{
     transaction::signed::SignedTransaction,
     trigger::TriggerId,
 };
+#[cfg(feature = "json")]
+use base64::engine::general_purpose::STANDARD;
+use derive_more::Constructor;
+use iroha_crypto::HashOf;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json::{self, JsonDeserialize, JsonSerialize};
+use std::{string::String, vec::Vec};
 #[cfg(feature = "json")]
 macro_rules! impl_state_json_via_norito_bytes {
     ($($ty:path),+ $(,)?) => {
@@ -234,9 +234,9 @@ impl StateAccessSetAdvisory {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Hash, KeyPair};
     use super::*;
     use crate::{prelude::*, role::RoleId};
+    use iroha_crypto::{Hash, KeyPair};
     fn checked_account_id() -> AccountId {
         let keypair = KeyPair::try_random().expect("generate checked state fixture keypair");
         AccountId::new(keypair.public_key().clone())

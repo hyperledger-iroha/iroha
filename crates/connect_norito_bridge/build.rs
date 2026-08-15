@@ -1,6 +1,6 @@
 //! Build-time embedding for immutable mobile proving artifacts.
-use std::{env, fs, path::PathBuf};
 use sha2::{Digest as _, Sha256};
+use std::{env, fs, path::PathBuf};
 const ARTIFACTS: [(&str, &str, &str); 2] = [
     (
         "TRANSFER_V2",

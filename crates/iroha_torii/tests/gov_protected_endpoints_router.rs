@@ -3,7 +3,6 @@
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs)]
-use std::sync::Arc;
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -12,6 +11,7 @@ use iroha_core::{
     state::{State, World},
 };
 use norito::json;
+use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
 #[tokio::test]
 async fn protected_namespaces_endpoints_work() {

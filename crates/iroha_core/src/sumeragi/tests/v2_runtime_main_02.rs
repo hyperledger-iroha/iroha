@@ -938,12 +938,11 @@ fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
         .expect("external Serve ticket shares the actor ordinal source");
-    let first_witness = runtime
-        .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
-        .expect("older runnable predecessor is visible")
-        .expect("older prefix issues one runtime witness");
-    assert_eq!(first_witness.serve_lifecycle_ordinal(), serve_ordinal);
-    assert_eq!(first_witness.episode(), 1);
+    let first_observation = runtime
+        .exact_serve_predecessor_observation(start, serve_ordinal, None)
+        .expect("older runnable predecessor is visible");
+    assert!(first_observation.should_open_predecessor_admission());
+    assert!(first_observation.has_runnable_predecessor());
     let retained_response_ordinal = runtime
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
@@ -953,13 +952,11 @@ fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
             .older_lifecycle_predates_retained_response(start, retained_response_ordinal)
             .expect("alternate retained-response target sees the same older owner")
     );
-    assert_eq!(
-        runtime
-            .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
-            .expect("alternate target cannot reset selected-Serve witness state"),
-        Some(first_witness),
-        "selected Serve retains one monotone witness across the legacy target probe"
-    );
+    let repeated = runtime
+        .exact_serve_predecessor_observation(start, serve_ordinal, None)
+        .expect("alternate target cannot reset selected-Serve state");
+    assert!(repeated.should_open_predecessor_admission());
+    assert!(repeated.has_runnable_predecessor());
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(start),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
@@ -977,17 +974,11 @@ fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
         Some(retained_response_ordinal)
     );
     assert!(runtime.retained_response_predecessor_retry_attempted);
-    assert!(runtime.exact_serve_predecessor_physically_present);
-    assert_eq!(runtime.exact_serve_predecessor_episode, 1);
-    assert_eq!(runtime.exact_serve_predecessor_witness, Some(first_witness));
-    assert!(
-        runtime
-            .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
-            .expect("the restored predecessor remains a suppressed physical owner")
-            .is_none(),
-        "retry polling cannot mint a second predecessor episode"
-    );
-    assert_eq!(runtime.exact_serve_predecessor_episode, 1);
+    let suppressed = runtime
+        .exact_serve_predecessor_observation(start, serve_ordinal, None)
+        .expect("the restored predecessor remains a suppressed physical owner");
+    assert!(!suppressed.should_open_predecessor_admission());
+    assert!(!suppressed.has_runnable_predecessor());
     assert!(
         !runtime
             .older_lifecycle_predates_retained_response(start, retained_response_ordinal)
@@ -998,14 +989,12 @@ fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
         .step_and_take_scheduler_ownership_for_test(start)
         .expect("the restored owner remains available after Serve settlement");
     assert_eq!(runtime.driver.delivered, vec![(owner_tag, 7)]);
-    assert!(
-        runtime
-            .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
-            .expect("settled retry clears its physical-presence latch")
-            .is_none()
-    );
+    let settled = runtime
+        .exact_serve_predecessor_observation(start, serve_ordinal, None)
+        .expect("settled retry clears its direct suppression latch");
+    assert!(!settled.should_open_predecessor_admission());
+    assert!(!settled.has_runnable_predecessor());
     assert!(!runtime.exact_serve_predecessor_retry_attempted);
-    assert!(!runtime.exact_serve_predecessor_physically_present);
     assert!(
         !runtime
             .older_lifecycle_predates_retained_response(start, retained_response_ordinal)
@@ -1016,43 +1005,32 @@ fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
         .expect("completed service owner shares the actor ordinal source");
-    let completed_evidence = ExactServePredecessorCompletionEvidence::try_new(completed_ordinal)
-        .expect("completed service evidence is nonzero and exact");
+    let completed_evidence =
+        ExactServePredecessorCompletionEvidence::try_new(completed_ordinal)
+            .expect("completed service evidence is nonzero and exact");
     let completed_target = runtime
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
         .expect("new Serve target follows the completed service owner");
-    assert!(
-        runtime
-            .exact_serve_predecessor_episode_witness(start, completed_target, None)
-            .expect("passive ownership alone remains absent")
-            .is_none()
-    );
-    let completed_witness = runtime
-        .exact_serve_predecessor_episode_witness(start, completed_target, Some(completed_evidence))
-        .expect("completion-qualified owner is accepted")
-        .expect("completion-qualified owner opens one predecessor episode");
-    assert_eq!(
-        completed_witness.predecessor_lifecycle_ordinal(),
-        completed_ordinal
-    );
-    assert_eq!(completed_witness.episode(), 1);
-    assert_eq!(
-        runtime
-            .exact_serve_predecessor_episode_witness(
-                start,
-                completed_target,
-                Some(completed_evidence),
-            )
-            .expect("repeated completion evidence remains stable"),
-        Some(completed_witness)
-    );
-    assert!(
-        runtime
-            .exact_serve_predecessor_episode_witness(start, completed_target, None)
-            .expect("consumed completion evidence closes its episode")
-            .is_none()
-    );
+    let initial_completed_target = runtime
+        .exact_serve_predecessor_observation(start, completed_target, None)
+        .expect("passive ownership alone remains absent");
+    assert!(initial_completed_target.should_open_predecessor_admission());
+    assert!(!initial_completed_target.has_runnable_predecessor());
+    let completed_observation = runtime
+        .exact_serve_predecessor_observation(start, completed_target, Some(completed_evidence))
+        .expect("completion-qualified owner is accepted");
+    assert!(completed_observation.should_open_predecessor_admission());
+    assert!(completed_observation.has_runnable_predecessor());
+    let repeated_completed = runtime
+        .exact_serve_predecessor_observation(start, completed_target, Some(completed_evidence))
+        .expect("repeated completion evidence remains directly visible");
+    assert!(repeated_completed.has_runnable_predecessor());
+    let consumed = runtime
+        .exact_serve_predecessor_observation(start, completed_target, None)
+        .expect("consumed completion evidence clears the direct census");
+    assert!(!consumed.should_open_predecessor_admission());
+    assert!(!consumed.has_runnable_predecessor());
 }
 #[test]
 fn typed_pacemaker_escape_selects_only_progress_root() {

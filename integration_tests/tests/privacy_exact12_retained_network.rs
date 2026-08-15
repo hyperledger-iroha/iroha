@@ -4,10 +4,6 @@
 //! exact-finality, and restart gate for the six retained exact-12 native
 //! engines: ZK-ACE, Anonymous PGC, VeRange, Bootle/Lantern, FCMP++, and the
 //! private-IVM note protocol.
-use std::{
-    num::{NonZeroU32, NonZeroU64},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -62,6 +58,10 @@ use iroha_core::{
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::{
+    num::{NonZeroU32, NonZeroU64},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::time::{Instant, sleep, timeout};
 const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
 const PGC_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;

@@ -319,6 +319,7 @@ fn ensure_field_docs(fields: &mut syn::Fields, owner: &syn::Ident, variant: Opti
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -327,7 +328,6 @@ mod tests {
         Attribute, Expr, File, Item, ItemEnum, ItemStruct, ItemUnion, Lit, Visibility,
         parse::Parser as _, parse_quote,
     };
-    use super::*;
     fn doc_strings(attrs: &[Attribute]) -> Vec<String> {
         attrs
             .iter()

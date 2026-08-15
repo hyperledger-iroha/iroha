@@ -1,10 +1,5 @@
 //! Extensive export tests for `iroha_ffi`: enums, structs, options, slices, and more.
 #![allow(unsafe_code, clippy::pedantic)]
-use std::{
-    collections::BTreeMap,
-    mem::{ManuallyDrop, MaybeUninit},
-    string::String,
-};
 use iroha_ffi::{
     FfiConvert, FfiOutPtrRead, FfiReturn, FfiTuple1, FfiTuple2, FfiType, FromFfiReturn,
     IntoFfiReturn, LocalRef, ReprC, Result, ffi_export,
@@ -15,6 +10,11 @@ use iroha_ffi::{
         read_non_local, write_non_local,
     },
     slice::OutBoxedSlice,
+};
+use std::{
+    collections::BTreeMap,
+    mem::{ManuallyDrop, MaybeUninit},
+    string::String,
 };
 iroha_ffi::handles! {OpaqueStruct}
 iroha_ffi::def_ffi_fns! { dealloc }

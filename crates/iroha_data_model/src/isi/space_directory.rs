@@ -140,10 +140,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ExpireSpaceDirectoryManifest {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::Hash;
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::nexus::ManifestVersion;
+    use iroha_crypto::Hash;
+    use norito::core::DecodeFromSlice;
     fn uaid() -> UniversalAccountId {
         UniversalAccountId::from_hash(Hash::new(b"space-directory-uaid"))
     }

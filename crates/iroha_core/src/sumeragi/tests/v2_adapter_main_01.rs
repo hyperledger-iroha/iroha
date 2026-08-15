@@ -27,7 +27,7 @@ fn write_and_reopen_authenticated_wal_startup_at_path(
 ) -> RecoveredAdapterStartup {
     let verified = VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.to_vec())
         .expect("verify authenticated FIFO context");
-    let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
+    let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator_and_publication(
         wal_path.clone(),
         verified,
         Some(local_validator),
@@ -35,6 +35,7 @@ fn write_and_reopen_authenticated_wal_startup_at_path(
         consensus_key_hash,
         fingerprints(),
         Box::new(TestAggregator),
+        false,
         deferred_admission_ordinals(),
     )
     .expect("open authenticated FIFO WAL writer");

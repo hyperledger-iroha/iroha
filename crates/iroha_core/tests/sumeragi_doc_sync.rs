@@ -1,7 +1,7 @@
 //! Doc-sync tests for the Sumeragi governance and evidence documentation.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::path::Path;
 use iroha_config::parameters::defaults::sumeragi::npos;
+use std::path::Path;
 #[test]
 fn sumeragi_doc_mentions_reconfig_defaults_and_errors() {
     let repo_root = workspace_root();

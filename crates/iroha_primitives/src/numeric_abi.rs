@@ -3,16 +3,16 @@
 //! These frames are consensus-visible. They deliberately use fixed-width
 //! `u32` mantissa lengths, minimal little-endian two's-complement bytes, no
 //! compression, no layout flags, and no alignment padding.
-use norito::{
-    Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
-    json::{self, FastJsonWrite, JsonDeserialize},
-};
 use crate::{
     bigint::{BigInt, BigIntError},
     numeric::{
         MAX_DECIMAL_SCALE, MAX_MANTISSA_BYTES, Numeric, NumericOperationError, NumericWorkStep,
         ObservedNumericError, Quantity,
     },
+};
+use norito::{
+    Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
+    json::{self, FastJsonWrite, JsonDeserialize},
 };
 /// Nominal schema name of a V1 integer frame.
 pub const INT_SCHEMA_NAME_V1: &str = "iroha.numeric.IntValueV1";
@@ -664,8 +664,8 @@ impl_frame_codec!(
 );
 #[cfg(test)]
 mod tests {
-    use core::fmt::Write as _;
     use super::*;
+    use core::fmt::Write as _;
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let (payload, canonical_flags) = norito::codec::encode_with_header_flags(value);
         assert_eq!(

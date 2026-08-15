@@ -1,14 +1,3 @@
-use std::{
-    fmt, fs,
-    io::{BufWriter, Write},
-    num::NonZeroU16,
-    path::PathBuf,
-};
-use clap::Args as ClapArgs;
-use color_eyre::eyre::WrapErr as _;
-use inquire::{Confirm, CustomType, Select, Text};
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
-use iroha_test_samples::ALICE_ID;
 use crate::{
     Outcome, RunArgs,
     localnet::{
@@ -17,6 +6,17 @@ use crate::{
         canonical_asset_definition_literal, generate_localnet,
     },
     tui,
+};
+use clap::Args as ClapArgs;
+use color_eyre::eyre::WrapErr as _;
+use inquire::{Confirm, CustomType, Select, Text};
+use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use iroha_test_samples::ALICE_ID;
+use std::{
+    fmt, fs,
+    io::{BufWriter, Write},
+    num::NonZeroU16,
+    path::PathBuf,
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SoraProfileChoice {

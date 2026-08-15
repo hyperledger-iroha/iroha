@@ -5,11 +5,9 @@
 //! per-client metadata. Buckets are emitted once they satisfy the configured
 //! contribution thresholds; otherwise they surface as
 //! `soranet_privacy_bucket_suppressed` markers.
-use std::{
-    collections::{BTreeMap, VecDeque},
-    fmt,
-    sync::Mutex,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+use crate::config::{
+    PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1, PRIVACY_MAX_COMPLETED_BUCKETS_V1,
+    PRIVACY_MAX_OPEN_BUCKETS_V1, PrivacyTelemetryConfig, RelayMode,
 };
 use blake3::Hasher as Blake3Hasher;
 use hex::ToHex;
@@ -21,9 +19,11 @@ use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyThrottleScopeV1,
 };
 use norito::json;
-use crate::config::{
-    PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1, PRIVACY_MAX_COMPLETED_BUCKETS_V1,
-    PRIVACY_MAX_OPEN_BUCKETS_V1, PrivacyTelemetryConfig, RelayMode,
+use std::{
+    collections::{BTreeMap, VecDeque},
+    fmt,
+    sync::Mutex,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 /// Percentiles captured in RTT exports.
 const RTT_PERCENTILES: &[f64] = &[0.5, 0.9, 0.99];

@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use iroha_crypto::{
     Hash, HashOf, MerkleProof,
     blake2::{
@@ -10,6 +9,7 @@ use iroha_data_model::{name::Name, prelude::AccountId};
 use ivm::{ExecutionProof, IVM, PointerType, VMError, encoding, instruction, syscalls};
 use sha2::Digest as Sha2Digest;
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
+use std::collections::BTreeMap;
 mod common;
 use common::assemble;
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();

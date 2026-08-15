@@ -4,9 +4,9 @@
 //! the typed consensus statement and authoritative finalized state; private
 //! witness parsing and proof construction live behind the release-evidence
 //! boundary.
-use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyX509ExtendedKeyUsageV1};
 use super::der_air::{ZkX509DerEkuV1, ZkX509Rfc5280StatementV1};
 use crate::privacy_state::PrivacyZkX509AuthoritativeStateV1;
+use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyX509ExtendedKeyUsageV1};
 /// Manifest descriptor for the verifier-bound local SHA-256 circuit.
 pub(crate) const ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1: &[u8] = b"sha256-local-air-v1:canonical-padding:private-message-length:word-input-bits-le:sha256-bytes-be:boolean-and-xor-full-adder:gates-per-block=55552:fixed-canonical-topology:acyclic-single-assignment-wire-addresses:mod2^32-carry-discard:output-digest-reconstruction:global-wire-copy-and-cross-segment-binding=complete-via-sha256-word-air+sha-call-bus-stark";
 /// Stable identity of the canonical production material assembler.

@@ -1,11 +1,11 @@
 //! Strict Torii ownership checks for the production stream-token runtime.
-use std::sync::Arc;
-use iroha_config::parameters::actual::{SorafsTokenConfig, Torii as ToriiConfig};
-use iroha_data_model::{NetworkId, sorafs::reputation::derive_stream_token_gateway_id_v1};
 use super::{
     StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionQualificationV1, StreamTokenIssuer,
     StreamTokenRuntimeSigner,
 };
+use iroha_config::parameters::actual::{SorafsTokenConfig, Torii as ToriiConfig};
+use iroha_data_model::{NetworkId, sorafs::reputation::derive_stream_token_gateway_id_v1};
+use std::sync::Arc;
 /// Reject missing, unexpected, or drifting production admission ownership.
 pub(crate) fn preflight_admission_capture(
     network_id: &NetworkId,

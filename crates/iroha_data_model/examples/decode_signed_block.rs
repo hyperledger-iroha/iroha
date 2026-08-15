@@ -1,5 +1,4 @@
 //! Inspect a Norito-framed `SignedBlock` (e.g., encoded genesis) for debugging.
-use std::{collections::BTreeSet, convert::TryFrom, env, error::Error, fs};
 use iroha_crypto::{KeyPair, SignatureOf};
 use iroha_data_model::{
     block::{
@@ -10,6 +9,7 @@ use iroha_data_model::{
     transaction::{ExecutableBatchItem, executable::Executable},
 };
 use nonzero_ext::nonzero;
+use std::{collections::BTreeSet, convert::TryFrom, env, error::Error, fs};
 fn reference_signer() -> Result<KeyPair, iroha_crypto::Error> {
     KeyPair::try_random()
 }

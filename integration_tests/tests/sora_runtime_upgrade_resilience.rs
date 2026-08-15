@@ -1,11 +1,11 @@
 //! SORA runtime-upgrade governance resilience tests on 4-peer local networks.
 use super::sora_parliament_lifecycle_smoke::sora_runtime_governance;
-use std::time::Duration;
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
     isi::governance::{ProposeRuntimeUpgradeProposal, VotingMode},
     runtime::RuntimeUpgradeManifest,
 };
+use std::time::Duration;
 #[tokio::test]
 async fn sora_runtime_upgrade_resilience_peer_restart_during_multibody_sortition() -> Result<()> {
     let Some(mut fixture) = sora_runtime_governance::setup_runtime_governance_fixture(stringify!(

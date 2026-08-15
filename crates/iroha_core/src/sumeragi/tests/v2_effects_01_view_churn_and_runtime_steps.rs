@@ -568,7 +568,10 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
     let started = Instant::now();
     fixture
         .executor
-        .arm_live_clocks(started)
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
         .expect("arm the production serialized runtime");
     let mut services = FakeServices::default();
     let conflicting_body = b"delayed-GST equivocation payload".to_vec();

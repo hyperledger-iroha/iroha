@@ -1,9 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ignored Torii HTTP hot-path load profile for focused performance validation.
-use std::{
-    env,
-    time::{Duration, Instant},
-};
 use eyre::{WrapErr, ensure, eyre};
 use futures_util::StreamExt as _;
 use integration_tests::sandbox;
@@ -22,6 +18,10 @@ use iroha_data_model::{
 };
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use std::{
+    env,
+    time::{Duration, Instant},
+};
 const DEFAULT_HTTP_QUERY_SAMPLES: usize = 512;
 const DEFAULT_HTTP_TX_SAMPLES: usize = 256;
 const DEFAULT_HTTP_COMMIT_SAMPLES: usize = 32;

@@ -328,6 +328,17 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         staged.stage(),
         PendingKuraApplyRecoveryStage::ApplicationDispatched
     );
+
+    let mut clock_fixture = ProductionTransportFixture::new();
+    clock_fixture.executor.pending_tip_recovery = Some(evidence.clone());
+    assert_eq!(
+        clock_fixture.executor.arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            Instant::now(),
+        ),
+        Err(RuntimeClockError::PendingKuraRecovery),
+        "pending Kura recovery must keep the ordinary pacemaker sealed",
+    );
     let mut direct_apply_executor = fixture.executor(EffectQueueConfig::default());
     direct_apply_executor.validated_bodies = validations.clone();
     direct_apply_executor.pending_tip_recovery = Some(evidence.clone());
@@ -485,6 +496,7 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
     ));
     assert_eq!(validated.durable(), &durable);
 }
+
 #[test]
 fn mismatched_kura_completion_fails_closed_before_application_ack() {
     let fixture = Fixture::new();
@@ -1138,6 +1150,7 @@ fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
         "an exact retransmission coalesces into the retained runtime owner"
     );
     assert!(!executor.status().fail_closed);
+
     executor.config.max_ready_body_bytes = u64::try_from(fixture.body.len()).expect("body length");
     services.retry_certified_fetch_once = true;
     assert_eq!(
@@ -2355,6 +2368,7 @@ fn enter_view_rejects_a_protected_lock_with_a_conflicting_execution_commitment()
         1,
         Hash::new(b"conflicting EnterView executed block"),
     );
+
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {
@@ -2706,7 +2720,10 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
         rebound_tag
     );
     executor
-        .arm_live_clocks(started)
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
         .expect("arm clocks after startup effects");
     assert!(matches!(
         executor

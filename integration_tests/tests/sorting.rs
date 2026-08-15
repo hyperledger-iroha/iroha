@@ -1,9 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for sorting and pagination queries
-use std::{
-    collections::HashSet,
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr as _};
 use integration_tests::sandbox;
 use iroha::{
@@ -16,6 +12,10 @@ use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 use rand::{SeedableRng, seq::SliceRandom};
 use rand_chacha::ChaCha8Rng;
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 use tokio::runtime::Runtime;
 fn start_network(
     builder: NetworkBuilder,

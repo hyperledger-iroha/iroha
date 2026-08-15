@@ -3,10 +3,10 @@
 //! These benchmarks exercise the canonical planner across CPU and GPU
 //! execution paths so operators can capture comparative performance data
 //! on reference hardware.
-use std::{convert::TryFrom, hint::black_box, sync::OnceLock};
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use fastpq_isi::{CANONICAL_PARAMETER_SETS, StarkParameterSet};
 use fastpq_prover::{ExecutionMode, Planner};
+use std::{convert::TryFrom, hint::black_box, sync::OnceLock};
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 const COLUMN_COUNT: usize = 16;
 fn trace_logs(max_log: u32) -> Vec<u32> {

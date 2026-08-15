@@ -4,12 +4,6 @@
 //! driving manifest lifecycle, alias bindings, replication orders, and
 //! governance policy snapshots. Validation helpers ensure the records obey
 //! canonical encoding and governance constraints before they are persisted.
-use blake3::Hasher;
-use norito::{
-    Error as NoritoError,
-    derive::{NoritoDeserialize, NoritoSerialize},
-};
-use thiserror::Error;
 use crate::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, chunker_registry,
     provider_admission::{
@@ -18,6 +12,12 @@ use crate::{
     },
     validation::{ManifestValidationError, validate_manifest_root_cid},
 };
+use blake3::Hasher;
+use norito::{
+    Error as NoritoError,
+    derive::{NoritoDeserialize, NoritoSerialize},
+};
+use thiserror::Error;
 fn validate_first_release_manifest_cid(cid: &[u8]) -> Result<(), ManifestValidationError> {
     validate_manifest_root_cid(
         cid,
@@ -490,9 +490,9 @@ pub enum ManifestPolicyValidationError {
 }
 #[cfg(test)]
 mod tests {
-    use std::convert::TryInto;
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+    use std::convert::TryInto;
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

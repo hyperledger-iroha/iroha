@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Happy-path NPoS coverage for canonical v2 data availability and telemetry.
-use std::{num::NonZeroU64, time::Duration};
 use eyre::{WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
@@ -10,6 +9,7 @@ use iroha::data_model::{
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Value};
+use std::{num::NonZeroU64, time::Duration};
 use tokio::time::sleep;
 const BLOCK_TARGET: u64 = 6;
 const METRIC_ATTEMPTS: usize = 40;

@@ -3,8 +3,8 @@
 //! While you can implement [`crate::FfiType`] on your `Rust` type directly, it is encouraged
 //! that you map your type into IR by providing the implementation of [`Ir`] and benefit
 //! from automatic, correct and performant conversions from IR to C type equivalent.
-use std::{boxed::Box, vec::Vec};
 use crate::{Extern, LocalRef, LocalSlice, repr_c::Cloned};
+use std::{boxed::Box, vec::Vec};
 /// Type which is replaced by an opaque pointer on FFI import
 ///
 /// # Safety

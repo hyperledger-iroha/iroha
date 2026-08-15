@@ -1,15 +1,15 @@
 //! Cross-module gateway policy tests.
 
 #![allow(clippy::restriction)]
-use std::{
-    sync::Arc,
-    time::{Instant, SystemTime},
-};
 use super::{
     policy::{GatewayPolicy, GatewayPolicyConfig, PolicyDecision, PolicyViolation, RequestContext},
     rate_limit::{ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter},
 };
 use crate::sorafs::AdmissionRegistry;
+use std::{
+    sync::Arc,
+    time::{Instant, SystemTime},
+};
 fn sample_fingerprint() -> ClientFingerprint {
     ClientFingerprint::from_identifier("gateway-test-client")
 }

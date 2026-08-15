@@ -1,11 +1,8 @@
 //! Exact process-resource controls and accounting for isolated release stages.
-#[cfg(target_os = "linux")]
-use std::{fs, path::PathBuf};
-use std::{
-    mem::MaybeUninit,
-    os::unix::process::ExitStatusExt,
-    process::{Child, ExitStatus},
-    time::Duration,
+use super::{
+    DynError, MAX_CHILD_RESULT_BYTES, MAX_STAGE_ADDRESS_SPACE_BYTES, MAX_STAGE_ELAPSED_MILLIS,
+    MAX_STAGE_PEAK_RSS_BYTES, MAX_STAGE_SETUP_OPEN_FILES_V1, MAX_STAGE_TASKS_V1,
+    MIN_STAGE_ADDRESS_SPACE_BYTES, MIN_STAGE_PEAK_RSS_BYTES,
 };
 use iroha_core::privacy_release_evidence::{
     PRIVACY_RELEASE_STAGE_STACK_BYTES_V1, privacy_release_process_profile_v1,
@@ -19,10 +16,13 @@ use nix::{
     },
     unistd::Pid,
 };
-use super::{
-    DynError, MAX_CHILD_RESULT_BYTES, MAX_STAGE_ADDRESS_SPACE_BYTES, MAX_STAGE_ELAPSED_MILLIS,
-    MAX_STAGE_PEAK_RSS_BYTES, MAX_STAGE_SETUP_OPEN_FILES_V1, MAX_STAGE_TASKS_V1,
-    MIN_STAGE_ADDRESS_SPACE_BYTES, MIN_STAGE_PEAK_RSS_BYTES,
+#[cfg(target_os = "linux")]
+use std::{fs, path::PathBuf};
+use std::{
+    mem::MaybeUninit,
+    os::unix::process::ExitStatusExt,
+    process::{Child, ExitStatus},
+    time::Duration,
 };
 pub(super) fn stage_option_names() -> Vec<&'static str> {
     vec![

@@ -4,6 +4,10 @@
 //! synthesis has established the virtual-to-physical cell map, five Table16
 //! lanes realize those relations. Source bytes and digest words are
 //! copy-constrained across the two layouts.
+use super::kagemusha_sha256_table16_v4::{
+    AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions,
+    TABLE16_SPREAD_TABLE_ROWS, Table16Chip, Table16Config, canonical_padding_suffix,
+};
 use ff::PrimeField;
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
@@ -16,10 +20,6 @@ use halo2_base::{
     virtual_region::copy_constraints::SharedCopyConstraintManager,
 };
 use sha2::{Digest as _, Sha256};
-use super::kagemusha_sha256_table16_v4::{
-    AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions,
-    TABLE16_SPREAD_TABLE_ROWS, Table16Chip, Table16Config, canonical_padding_suffix,
-};
 /// Independent Table16 lanes fixed by the V4 circuit identity.
 pub(crate) const KAGEMUSHA_SHA256_LANES_V4: usize = 5;
 // Table16 uses about 2,267 rows per compression block. Keep a small explicit
@@ -565,6 +565,7 @@ impl KagemushaSha256ConfigV4 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use halo2_base::gates::circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder};
     use halo2_proofs::{
         circuit::{Layouter, V1},
@@ -572,7 +573,6 @@ mod tests {
         halo2curves::pasta::Fp,
         plonk::{Circuit, ConstraintSystem, Error},
     };
-    use super::*;
     const TEST_K: u32 = 17;
     const TEST_UNUSABLE_ROWS: usize = 9;
     #[derive(Clone, Debug)]

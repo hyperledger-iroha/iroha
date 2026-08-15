@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for notifications emitted after trigger execution.
-use std::time::Duration;
 use eyre::Result;
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -10,6 +9,7 @@ use iroha::data_model::{
 use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
+use std::time::Duration;
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},

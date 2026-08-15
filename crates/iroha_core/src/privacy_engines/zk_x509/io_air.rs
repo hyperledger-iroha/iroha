@@ -10,10 +10,10 @@
 //!
 //! The transcript challenges must be sampled only after both endpoint and
 //! address-sorted traces have been committed.
-use thiserror::Error;
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
+use thiserror::Error;
 /// Manifest descriptor for cross-segment byte-channel binding.
 pub(crate) const ZK_X509_IO_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-cross-segment-io-v1:fixed-sequential-channel-ids:fixed-producer-and-consumer-endpoints:byte-offsets-contiguous:one-write-per-channel-byte:all-reads-equal-write:public-input-reads-verifier-fixed:four-independent-lane-and-coordinate-labelled-transcript-challenged-channel-offset-value-write-grand-products:max-accesses=byte-memory-segment-capacity:first-release";
 /// Exact fixed-capacity byte-memory registration in the canonical aggregate.

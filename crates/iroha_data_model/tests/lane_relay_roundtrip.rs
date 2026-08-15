@@ -1,5 +1,4 @@
 //! Lane relay envelope regression tests.
-use std::num::NonZeroU64;
 use iroha_crypto::{Hash, HashOf, MerkleProof};
 use iroha_data_model::{
     block::{
@@ -14,6 +13,7 @@ use iroha_data_model::{
     },
 };
 use norito::core::NoritoDeserialize;
+use std::num::NonZeroU64;
 fn sample_block_header(da_hash: Option<HashOf<commitment::DaCommitmentBundle>>) -> BlockHeader {
     let mut header = BlockHeader::new(
         NonZeroU64::new(5).expect("non-zero height"),

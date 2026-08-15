@@ -4,14 +4,6 @@
 //! helpers convert between Norito JSON values and strongly-typed query objects,
 //! ensuring field ordering stays deterministic and validation errors surface
 //! with precise context.
-use std::{
-    format,
-    num::NonZeroU64,
-    str::FromStr,
-    string::{String, ToString},
-};
-use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
-use thiserror::Error;
 use crate::{
     name::Name,
     query::{
@@ -21,6 +13,14 @@ use crate::{
         parameters::{FetchSize, Pagination, QueryParams, Sorting},
     },
 };
+use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
+use std::{
+    format,
+    num::NonZeroU64,
+    str::FromStr,
+    string::{String, ToString},
+};
+use thiserror::Error;
 fn build_query_with_params<T, Q, F>(
     predicate: CompoundPredicate<T>,
     selector: SelectorTuple<T>,
@@ -1268,9 +1268,9 @@ impl IterableQueryJson {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use std::num::NonZeroU64;
     #[test]
     fn singular_roundtrip() {
         let singular = SingularQueryJson::FindParameters;

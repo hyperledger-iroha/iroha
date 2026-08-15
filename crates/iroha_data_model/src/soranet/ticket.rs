@@ -5,13 +5,13 @@
 //! lean so Halo2 commitments can be layered on top without frequent changes.
 //! The cryptographic proof plumbing (commitments, nullifier checks, Halo2
 //! verification) lives in the host runtime and the `iroha_zkp_halo2` crate.
-use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use super::Digest32;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, metadata::Metadata};
+use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 const LEAF_TAG_BLINDED_CID: &[u8] = b"soranet.ticket.body.blinded_cid.v1";
 const LEAF_TAG_SCOPE: &[u8] = b"soranet.ticket.body.scope.v1";
 const LEAF_TAG_MAX_USES: &[u8] = b"soranet.ticket.body.max_uses.v1";
@@ -322,10 +322,10 @@ fn finalize_hash(hasher: &blake3::Hasher) -> Digest32 {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use norito::codec::{Decode, Encode};
     use super::*;
     use crate::{account::AccountId, domain::DomainId};
+    use iroha_crypto::{Algorithm, KeyPair};
+    use norito::codec::{Decode, Encode};
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

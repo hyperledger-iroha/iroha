@@ -53,9 +53,9 @@ impl EmitterExt for Emitter {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use manyhow::{Error as ManyhowError, error_message};
     use quote::quote;
-    use super::*;
     #[test]
     fn handle_ok() {
         let mut e = Emitter::new();

@@ -3,12 +3,12 @@
 //! These types provide a shared, machine-readable schema for the NX-17 error
 //! catalog. Each variant maps to a deterministic `reason_code` so operators and
 //! SDKs can branch on stable integers instead of parsing strings.
-use iroha_crypto::Hash;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::nexus::DataSpaceId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use iroha_crypto::Hash;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Canonical error envelope containing the stable reason code and structured
 /// context.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -245,8 +245,8 @@ pub enum SettlementRouterOutage {
 }
 #[cfg(test)]
 mod tests {
-    use norito::core::NoritoDeserialize;
     use super::*;
+    use norito::core::NoritoDeserialize;
     #[test]
     fn reason_codes_are_stable() {
         let ds = DataSpaceId::new(7);

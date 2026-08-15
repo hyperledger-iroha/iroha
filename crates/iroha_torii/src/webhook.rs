@@ -17,7 +17,17 @@
 //! - POST `/v1/webhooks` – Create a webhook.
 //! - GET  `/v1/webhooks` – List webhooks.
 //! - DELETE `/v1/webhooks/{id}` – Delete a webhook by id.
+use crate::filter::filter_expr_to_value;
+use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use core::{convert::TryFrom, str::FromStr};
+use iroha_config::parameters::defaults;
+use iroha_data_model::{
+    events::data::prelude as df,
+    nexus::{DataSpaceId, LaneId},
+    prelude::DataEvent,
+};
+use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::sync::{
     Arc,
@@ -33,18 +43,8 @@ use std::{
     sync::{Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use iroha_config::parameters::defaults;
-use iroha_data_model::{
-    events::data::prelude as df,
-    nexus::{DataSpaceId, LaneId},
-    prelude::DataEvent,
-};
-use sha2::{Digest, Sha256};
 use tokio::fs as tokio_fs;
 use url::{Host, Url};
-use crate::filter::filter_expr_to_value;
 const WEBHOOK_REGISTRY_MAX_ENTRIES: usize = 1_024;
 const WEBHOOK_REGISTRY_MAX_BYTES: usize = 8 * 1024 * 1024;
 const WEBHOOK_ENTRY_MAX_BYTES: usize = 64 * 1024;
@@ -1139,7 +1139,7 @@ fn expr_contains_only_proof_filters(expr: &crate::filter::FilterExpr) -> bool {
 fn event_filter_boxes_from_expr(
     expr: &crate::filter::FilterExpr,
 ) -> Vec<iroha_data_model::events::EventFilterBox> {
-    use std::num::NonZeroU64;
+    use crate::filter::FilterExpr as F;
     use iroha_data_model::events::{
         EventFilterBox,
         execute_trigger::prelude::ExecuteTriggerEventFilter,
@@ -1147,7 +1147,7 @@ fn event_filter_boxes_from_expr(
         time::{ExecutionTime, TimeEventFilter},
         trigger_completed::prelude::{TriggerCompletedEventFilter, TriggerCompletedOutcomeType},
     };
-    use crate::filter::FilterExpr as F;
+    use std::num::NonZeroU64;
     #[derive(Clone)]
     enum PF {
         Tx(TransactionEventFilter),
@@ -2223,8 +2223,8 @@ async fn ws_send(
     headers: &[(&str, String)],
     body: &[u8],
 ) -> std::io::Result<u16> {
-    use std::str::FromStr;
     use futures::SinkExt as _;
+    use std::str::FromStr;
     use tokio_tungstenite::{client_async_tls_with_config, connect_async};
     use tungstenite::{Message, client::IntoClientRequest, http::HeaderName};
     let mut req = url.as_str().into_client_request().map_err(|e| {
@@ -2652,11 +2652,8 @@ async fn process_queue_once() -> Duration {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        convert::TryFrom,
-        fs,
-        sync::{Arc, Barrier, Mutex, MutexGuard},
-    };
+    use super::*;
+    use crate::test_utils::TestDataDirGuard;
     use http_body_util::BodyExt as _;
     use iroha_crypto::Hash;
     use iroha_data_model::events::EventFilter; // bring .matches()
@@ -2664,12 +2661,15 @@ mod tests {
         EventBox,
         pipeline::{TransactionEvent, TransactionStatus},
     };
+    use std::{
+        convert::TryFrom,
+        fs,
+        sync::{Arc, Barrier, Mutex, MutexGuard},
+    };
     use tokio::{
         runtime::Runtime,
         time::{Duration, sleep},
     };
-    use super::*;
-    use crate::test_utils::TestDataDirGuard;
     fn registry_entry(id: u64, url: String) -> WebhookEntry {
         WebhookEntry {
             id,
@@ -3656,11 +3656,11 @@ mod tests {
     }
     #[test]
     fn enqueue_respects_proof_envelope_hash_filter() {
+        use crate::filter::{FieldPath, FilterExpr};
         use iroha_data_model::events::data::{
             prelude::DataEvent,
             proof::{ProofEvent, ProofVerified},
         };
-        use crate::filter::{FieldPath, FilterExpr};
         let _env = TestDataDirGuard::new();
         super::init_persistence();
         // Two webhooks: one matches specific envelope hash, one with different hash

@@ -1,4 +1,8 @@
 //! Python bindings for Connect key and exact-network session derivation.
+use super::{
+    PyNetworkId, ensure_ed25519_account, fixed_array, parse_exact_i105_account_id,
+    parse_permissions, parse_sign_in_proof, require_non_blank_unpadded, require_single_signatory,
+};
 use iroha_crypto::{
     KeyGenOption,
     kex::{KeyExchangeScheme, X25519Sha256},
@@ -12,10 +16,6 @@ use pyo3::{
     wrap_pyfunction,
 };
 use x25519_dalek::StaticSecret;
-use super::{
-    PyNetworkId, ensure_ed25519_account, fixed_array, parse_exact_i105_account_id,
-    parse_permissions, parse_sign_in_proof, require_non_blank_unpadded, require_single_signatory,
-};
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(generate_connect_keypair_py, module)?)?;
     module.add_function(wrap_pyfunction!(derive_connect_sid_py, module)?)?;

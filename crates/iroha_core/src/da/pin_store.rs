@@ -3,10 +3,6 @@
 //! Pin intents are persisted into WSV during block application. This cache
 //! provides fast lookups for Torii/query paths and can be rebuilt from the
 //! block log or WSV indexes after restart.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ops::Bound::{Excluded, Unbounded},
-};
 use iroha_data_model::{
     da::{
         commitment::DaCommitmentLocation,
@@ -14,6 +10,10 @@ use iroha_data_model::{
         types::StorageTicketId,
     },
     sorafs::pin_registry::ManifestDigest,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Bound::{Excluded, Unbounded},
 };
 /// Simple index over DA pin intents with stable block locations.
 #[derive(Clone, Debug, Default)]
@@ -164,9 +164,9 @@ impl DaPinStore {
 }
 #[cfg(test)]
 mod tests {
-    use std::convert::TryFrom;
-    use iroha_data_model::{nexus::LaneId, sorafs::pin_registry::ManifestDigest};
     use super::*;
+    use iroha_data_model::{nexus::LaneId, sorafs::pin_registry::ManifestDigest};
+    use std::convert::TryFrom;
     fn sample_intent(lane: u32, seq: u64, alias: Option<&str>) -> DaPinIntent {
         let lane_byte = u8::try_from(lane).expect("lane id fits in byte for test intent");
         let seq_byte = u8::try_from(seq).expect("sequence fits in byte for test intent");

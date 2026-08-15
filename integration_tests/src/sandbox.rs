@@ -1,3 +1,6 @@
+use crate::sync::get_status_with_retry;
+use eyre::{Report, Result};
+use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use std::{
     any::Any,
     env,
@@ -6,10 +9,7 @@ use std::{
     sync::{Arc, Condvar, Mutex, OnceLock},
     time::Duration,
 };
-use eyre::{Report, Result};
-use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
-use crate::sync::get_status_with_retry;
 const NETWORK_BASE_SEED_ENV: &str = "IROHA_TEST_NETWORK_BASE_SEED";
 fn scenario_seed_override() -> Option<String> {
     env::var(NETWORK_BASE_SEED_ENV)
@@ -736,11 +736,11 @@ fn is_sandbox_message(message: &str) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::time::Instant;
-    use super::*;
     use tempfile::TempDir;
     use toml::Value as TomlValue;
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

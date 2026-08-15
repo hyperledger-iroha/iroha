@@ -1,4 +1,3 @@
-use iroha_primitives::numeric::Quantity;
 use super::*;
 use crate::{
     oracle::{
@@ -8,6 +7,7 @@ use crate::{
     },
     prelude::Hash,
 };
+use iroha_primitives::numeric::Quantity;
 isi! {
     /// Register an oracle feed configuration on-chain.
     pub struct RegisterOracleFeed {
@@ -516,8 +516,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RevokeTwitterBinding {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         nexus::UniversalAccountId,
@@ -526,6 +524,8 @@ mod tests {
             TwitterBindingStatus, kits,
         },
     };
+    use iroha_primitives::numeric::Numeric;
+    use norito::core::DecodeFromSlice;
     #[derive(norito::codec::Encode)]
     struct ForgedOpenOracleDispute {
         feed_id: FeedId,

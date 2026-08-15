@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that Connect routes are stable while runtime configuration controls availability.
-use std::{path::PathBuf, sync::Arc};
 use axum::http::{Request, StatusCode, Uri};
 use iroha_config::base::WithOrigin;
 use iroha_core::{
@@ -11,6 +10,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{ChainId, block::BlockHeader};
 use iroha_primitives::addr::socket_addr;
 use nonzero_ext::nonzero;
+use std::{path::PathBuf, sync::Arc};
 use tower::ServiceExt;
 fn request_with_loopback_connect_info(
     request: Request<axum::body::Body>,

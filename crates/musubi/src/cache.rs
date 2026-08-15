@@ -1,12 +1,11 @@
 //! Immutable, commitment-addressed source cache for Musubi V1.
 //!
-//! Cache paths are derived exclusively from a trusted user cache root and an
-//! [`ArchiveId`]. Consumer lockfiles never supply a filesystem path. Incoming
-//! CAR bytes are checked incrementally against the finalized archive
-//! commitment, their raw payload is written to a private temporary file, and
-//! the validated `SoraFS` file plan materializes the source tree. Publication is
-//! an absent-destination atomic rename, so readers observe either no entry or a
-//! complete immutable `src` directory.
+//! Cache paths are derived exclusively from a trusted user cache root and an [`ArchiveId`].
+//! Consumer lockfiles never supply a filesystem path. Incoming CAR bytes are checked incrementally
+//! against the finalized archive commitment, their raw payload is written to a private temporary
+//! file, and the validated `SoraFS` file plan materializes the source tree. Publication is an
+//! absent-destination atomic rename, so readers observe either no entry or a complete immutable
+//! `src` directory.
 //!
 //! Cache access is qualified on Unix. Other targets return
 //! [`CacheError::UnsupportedPlatform`] before inspecting or creating the requested root until a
@@ -14,16 +13,7 @@
 //! intentionally unavailable on every platform. Safe `std` does not expose an atomic
 //! handle-relative compare-and-delete operation, so explicit prune fails before isolation and
 //! install failures retain their private staging and payload residue for inspection.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fmt, fs,
-    fs::{File, OpenOptions},
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use crate::workspace::MAX_MANIFEST_BYTES;
 use iroha_data_model::musubi::{
     ArchiveId, MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1, MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
     MUSUBI_MAX_FILES_V1, MusubiArchiveCommitmentV1, MusubiArtifactDescriptorV1,
@@ -37,13 +27,22 @@ use sorafs_car::{
     streaming_verifier::{StreamingCarVerifier, StreamingVerifierConfig},
 };
 use sorafs_manifest::{DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy, StorageClass};
-use crate::workspace::MAX_MANIFEST_BYTES;
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt as _;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt, fs,
+    fs::{File, OpenOptions},
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::atomic::{AtomicU64, Ordering},
+};
 const REGISTRY_DIRECTORY: &str = "registry-v1";
 const SOURCE_DIRECTORY: &str = "src";
 const RELEASE_PATH: &str = ".musubi/semantic-release.norito";
@@ -329,9 +328,8 @@ impl Error for CacheError {
 impl MusubiCache {
     /// Open or create `registry-v1` below an explicit user cache root.
     ///
-    /// The supplied path is configuration, not lockfile data. Its final
-    /// component must not be a symlink and neither it nor the registry root may
-    /// be group- or world-writable.
+    /// The supplied path is configuration, not lockfile data. Its final component must not be a
+    /// symlink and neither it nor the registry root may be group- or world-writable.
     ///
     /// # Errors
     ///
@@ -392,11 +390,10 @@ impl MusubiCache {
     }
     /// Enumerate canonical archive identities currently owned by this cache.
     ///
-    /// Fixed non-archive files, temporary siblings, resolver-index snapshots,
-    /// and every noncanonical name are ignored. A canonical archive name must
-    /// identify a real private directory; a symlink or other substituted object
-    /// fails the inventory instead of being treated as a verification or prune
-    /// target.
+    /// Fixed non-archive files, temporary siblings, resolver-index snapshots, and every
+    /// noncanonical name are ignored. A canonical archive name must identify a real private
+    /// directory; a symlink or other substituted object fails the inventory instead of being
+    /// treated as a verification or prune target.
     ///
     /// # Errors
     ///
@@ -439,19 +436,17 @@ impl MusubiCache {
     }
     /// Re-authenticate one immutable cached bundle for compiler consumption.
     ///
-    /// This boundary does not trust permissions or a consumer lock as cache
-    /// integrity evidence. It re-inventories every descendant without following
-    /// links, reproduces the normalized source digest, validates the canonical
-    /// bundle metadata, and binds the semantic release to the consumer node's
-    /// exact archive and release digest. The publisher's packaged proof lock is
-    /// validated independently; its exact selections need not match a consumer's
-    /// independently resolved graph.
+    /// This boundary does not trust permissions or a consumer lock as cache integrity evidence. It
+    /// re-inventories every descendant without following links, reproduces the normalized source
+    /// digest, validates the canonical bundle metadata, and binds the semantic release to the
+    /// consumer node's exact archive and release digest. The publisher's packaged proof lock is
+    /// validated independently; its exact selections need not match a consumer's independently
+    /// resolved graph.
     ///
     /// # Errors
     ///
-    /// Returns an error if the cache ancestry is unsafe, the tree changed while
-    /// being read, a bound is exceeded, or any immutable node/bundle commitment
-    /// disagrees.
+    /// Returns an error if the cache ancestry is unsafe, the tree changed while being read, a bound
+    /// is exceeded, or any immutable node/bundle commitment disagrees.
     pub fn load_compiler_package(
         &self,
         node: &MusubiVerificationNodeV1,
@@ -477,17 +472,15 @@ impl MusubiCache {
     }
     /// Verify and atomically install a canonical CAR stream.
     ///
-    /// The reader is consumed to EOF. Any trailing byte, malformed section,
-    /// digest mismatch, unsafe plan, or incomplete commitment leaves `src`
-    /// absent. A racing identical installer is treated idempotently. Private
-    /// `.src.*.partial` and `.payload.*.partial` residue is retained because
+    /// The reader is consumed to EOF. Any trailing byte, malformed section, digest mismatch, unsafe
+    /// plan, or incomplete commitment leaves `src` absent. A racing identical installer is treated
+    /// idempotently. Private `.src.*.partial` and `.payload.*.partial` residue is retained because
     /// safe automatic compare-and-delete is unavailable.
     ///
     /// # Errors
     ///
-    /// Returns an error for invalid commitments, untrusted CAR bytes, unsafe
-    /// filesystem state, failed durability operations, or a corrupt existing
-    /// destination.
+    /// Returns an error for invalid commitments, untrusted CAR bytes, unsafe filesystem state,
+    /// failed durability operations, or a corrupt existing destination.
     pub fn install<R: Read>(
         &self,
         commitment: &MusubiArchiveCommitmentV1,
@@ -620,9 +613,8 @@ impl MusubiCache {
     /// state is interpreted. Only an integrity failure reported while verifying
     /// the local tree is eligible for quarantine.
     ///
-    /// Content-corrupt regular trees are renamed to a private sibling. Trees
-    /// containing symlinks, hardlinks, special files, or unstable identities
-    /// are left untouched for manual inspection.
+    /// Content-corrupt regular trees are renamed to a private sibling. Trees containing symlinks,
+    /// hardlinks, special files, or unstable identities are left untouched for manual inspection.
     ///
     /// # Errors
     ///
@@ -2761,7 +2753,8 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> CacheErr
 }
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{io::Cursor, path::Path};
+    use super::*;
+    use crate::package::{PackageCar, PackageLayout, plan_package};
     use iroha_data_model::{
         musubi::{
             MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiContentDigestV1,
@@ -2773,9 +2766,8 @@ mod tests {
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     };
     use norito::codec::Encode as _;
+    use std::{io::Cursor, path::Path};
     use tempfile::TempDir;
-    use super::*;
-    use crate::package::{PackageCar, PackageLayout, plan_package};
     struct Fixture {
         car: PackageCar,
         commitment: MusubiArchiveCommitmentV1,

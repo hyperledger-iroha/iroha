@@ -5,11 +5,11 @@
 //! contains distinct challenges whose difference is a zero divisor. A future
 //! certificate therefore needs a distribution-wide numerical bound, its exact
 //! extractor/composition loss, and pinned machine-checkable evidence.
-use thiserror::Error;
 use super::{
     JINDO_RING_DEGREE_V1,
     ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoRnsPolynomialV1},
 };
+use thiserror::Error;
 const JINDO_CHALLENGE_WEIGHT_V1: usize = 35;
 /// Requirements for issuing the first theorem-backed Jindo security
 /// certificate.

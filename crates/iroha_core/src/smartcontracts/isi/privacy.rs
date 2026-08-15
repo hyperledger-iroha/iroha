@@ -3,55 +3,6 @@
 //! Governance checks and all deterministic validation precede storage writes.
 //! Proof admission is added only through the exhaustive native verifier
 //! boundary; there is deliberately no generic or opaque fallback verifier.
-use std::collections::BTreeSet;
-use iroha_data_model::{
-    isi::{
-        error::{InstructionExecutionError as Error, InvalidParameterError},
-        privacy::{
-            BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
-            BootstrapPrivacyProofManagedPoolV1, BootstrapPrivacyZkAmsRegistryV1,
-            PublishPrivacyRootV1, RegisterPrivacyBootleLanternIssuerPolicyV1,
-            RegisterPrivacyProtocolActivationV1, RegisterPrivacyVegaIssuerV1,
-            RegisterPrivacyZkAcePolicyV1, RegisterPrivacyZkX509CertificatePolicyV1,
-            RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
-            RevokePrivacyBootleLanternIssuerPolicyV1, RevokePrivacyVegaIssuerV1,
-            RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
-            RevokePrivacyZkX509CrlV1, RevokePrivacyZkX509TrustAnchorV1,
-            RotatePrivacyBootleLanternIssuerPolicyV1, RotatePrivacyVegaIssuerV1,
-            RotatePrivacyZkAcePolicyV1, RotatePrivacyZkX509CertificatePolicyV1,
-            RotatePrivacyZkX509CrlV1, RotatePrivacyZkX509TrustAnchorV1,
-            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
-            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
-        },
-    },
-    permission::Permission,
-    prelude::{Account, AccountId, Quantity, Register},
-    privacy::{
-        BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1, BootleLanternIssuerPolicyLifecycleV1,
-        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
-        IrohaIvmPrivateNoteStarkStatementV1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
-        PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusPolicyTighteningV1,
-        PrivacyFcmpInputPublicV1, PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1,
-        PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-        PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1, PrivacyRootPublicationV1,
-        PrivacyRootRoleV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyValueBalanceDirectionV1, PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyLifecycleV1,
-        PrivacyZkAmsActionV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
-        PrivacyZkX509TrustAnchorRecordV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
-        VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
-        ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
-        ZK_X509_MAX_CRL_LINEAGES_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
-        ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1, validate_vega_issuer_revocation_v1,
-        validate_vega_issuer_rotation_v1, validate_zk_ace_policy_revocation_v1,
-        validate_zk_ace_policy_rotation_v1, validate_zk_x509_certificate_policy_revocation_v1,
-        validate_zk_x509_certificate_policy_rotation_v1, validate_zk_x509_crl_revocation_v1,
-        validate_zk_x509_crl_rotation_v1, validate_zk_x509_trust_anchor_revocation_v1,
-        validate_zk_x509_trust_anchor_rotation_v1, zk_ams_issuer_policy_record_digest_v1,
-        zk_ams_registry_record_digest_v1,
-    },
-};
-use iroha_executor_data_model::permission::governance::CanEnactGovernance;
-use mv::storage::StorageReadOnly;
 use super::Execute;
 #[cfg(test)]
 use crate::privacy_verifier::VerifiedProofManagedPoolLedgerEffectTestPartsV1;
@@ -106,6 +57,55 @@ use crate::{
     },
     state::{StateTransaction, WorldReadOnly},
 };
+use iroha_data_model::{
+    isi::{
+        error::{InstructionExecutionError as Error, InvalidParameterError},
+        privacy::{
+            BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
+            BootstrapPrivacyProofManagedPoolV1, BootstrapPrivacyZkAmsRegistryV1,
+            PublishPrivacyRootV1, RegisterPrivacyBootleLanternIssuerPolicyV1,
+            RegisterPrivacyProtocolActivationV1, RegisterPrivacyVegaIssuerV1,
+            RegisterPrivacyZkAcePolicyV1, RegisterPrivacyZkX509CertificatePolicyV1,
+            RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
+            RevokePrivacyBootleLanternIssuerPolicyV1, RevokePrivacyVegaIssuerV1,
+            RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
+            RevokePrivacyZkX509CrlV1, RevokePrivacyZkX509TrustAnchorV1,
+            RotatePrivacyBootleLanternIssuerPolicyV1, RotatePrivacyVegaIssuerV1,
+            RotatePrivacyZkAcePolicyV1, RotatePrivacyZkX509CertificatePolicyV1,
+            RotatePrivacyZkX509CrlV1, RotatePrivacyZkX509TrustAnchorV1,
+            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
+            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
+        },
+    },
+    permission::Permission,
+    prelude::{Account, AccountId, Quantity, Register},
+    privacy::{
+        BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
+        IrohaIvmPrivateNoteStarkStatementV1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
+        PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusPolicyTighteningV1,
+        PrivacyFcmpInputPublicV1, PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1,
+        PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1, PrivacyRootPublicationV1,
+        PrivacyRootRoleV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyValueBalanceDirectionV1, PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyLifecycleV1,
+        PrivacyZkAmsActionV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
+        PrivacyZkX509TrustAnchorRecordV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+        VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
+        ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
+        ZK_X509_MAX_CRL_LINEAGES_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
+        ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1, validate_vega_issuer_revocation_v1,
+        validate_vega_issuer_rotation_v1, validate_zk_ace_policy_revocation_v1,
+        validate_zk_ace_policy_rotation_v1, validate_zk_x509_certificate_policy_revocation_v1,
+        validate_zk_x509_certificate_policy_rotation_v1, validate_zk_x509_crl_revocation_v1,
+        validate_zk_x509_crl_rotation_v1, validate_zk_x509_trust_anchor_revocation_v1,
+        validate_zk_x509_trust_anchor_rotation_v1, zk_ams_issuer_policy_record_digest_v1,
+        zk_ams_registry_record_digest_v1,
+    },
+};
+use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use mv::storage::StorageReadOnly;
+use std::collections::BTreeSet;
 include!("privacy/governance_authorization.rs");
 fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
     let message = format!("privacy proof admission rejected: {error}");
@@ -5803,8 +5803,36 @@ impl Execute for SubmitPrivacyProofV1 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    #[cfg(feature = "zk-stark")]
+    use crate::privacy_verifier::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_test};
+    use crate::{
+        kura::Kura,
+        privacy_engines::{
+            anonymous_pgc::{
+                AnonymousPgcPoolInvariantV1, TwistedElGamalKeyPairV1, add_ciphertexts,
+                bootstrap::{AnonymousPgcBootstrapWitnessV1, prove_bootstrap},
+                encrypt_with_randomness,
+                payment::{
+                    AnonymousPgcPaymentStatementV1, AnonymousPgcPaymentWitnessV1,
+                    encrypt_signed_with_randomness, prove_payment,
+                },
+            },
+            ivm_private_note::private_note_statement_fixture_v1,
+            p256::SecretScalarV1,
+            pq_masp::relation::{
+                derive_pq_masp_note_commitment_v1, tests::valid_fixture as pq_masp_fixture,
+            },
+        },
+        privacy_profiles::compiled_privacy_profile_v1,
+        privacy_verifier::{
+            FcmpRuntimeFixtureForTest, ZkAmsRuntimeFixtureForTest, fcmp_runtime_fixture_for_test,
+            zk_ams_runtime_fixture_for_test,
+        },
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use core::num::NonZeroU64;
-    use std::{str::FromStr as _, sync::OnceLock};
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         NetworkId, Registrable,
@@ -5848,35 +5876,7 @@ mod tests {
     use mv::storage::Storage;
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest, Sha256};
-    use super::*;
-    #[cfg(feature = "zk-stark")]
-    use crate::privacy_verifier::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_test};
-    use crate::{
-        kura::Kura,
-        privacy_engines::{
-            anonymous_pgc::{
-                AnonymousPgcPoolInvariantV1, TwistedElGamalKeyPairV1, add_ciphertexts,
-                bootstrap::{AnonymousPgcBootstrapWitnessV1, prove_bootstrap},
-                encrypt_with_randomness,
-                payment::{
-                    AnonymousPgcPaymentStatementV1, AnonymousPgcPaymentWitnessV1,
-                    encrypt_signed_with_randomness, prove_payment,
-                },
-            },
-            ivm_private_note::private_note_statement_fixture_v1,
-            p256::SecretScalarV1,
-            pq_masp::relation::{
-                derive_pq_masp_note_commitment_v1, tests::valid_fixture as pq_masp_fixture,
-            },
-        },
-        privacy_profiles::compiled_privacy_profile_v1,
-        privacy_verifier::{
-            FcmpRuntimeFixtureForTest, ZkAmsRuntimeFixtureForTest, fcmp_runtime_fixture_for_test,
-            zk_ams_runtime_fixture_for_test,
-        },
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
+    use std::{str::FromStr as _, sync::OnceLock};
     const TEST_CHAIN_ID: &str = "taira-pgc-runtime-test";
     const TEST_GENESIS_HASH: [u8; 32] = [0x91; 32];
     const TEST_BLOCK_HEIGHT: u64 = 2;

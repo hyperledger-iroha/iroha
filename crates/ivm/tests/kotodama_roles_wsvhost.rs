@@ -1,11 +1,11 @@
 //! Smoke test: Kotodama role ops compile to correct pointer-ABI syscalls
 //! and execute against the mock WSV host.
-use std::collections::HashMap;
 use ivm::{
     AssetDefinitionId, IVM, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
+use std::collections::HashMap;
 mod common;
 const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const TEST_ASSET_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";

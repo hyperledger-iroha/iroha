@@ -5,14 +5,16 @@
 //! every reachable registry bundle is re-authenticated before it can become a
 //! compiler input. Filesystem-backed execution is qualified on Unix; other
 //! targets fail closed before reading workspace, cache, or test-source state.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fmt, fs, io,
-    path::{Path, PathBuf},
+use crate::{
+    cache::{CachedCompilerPackageV1, MusubiCache},
+    compiler::validate_exact_registry_interfaces_v1,
+    graph::collect_local_members,
+    local_file::read_bounded_single_link_regular_file_v1,
+    lockfile::{LockedRootV1, LockfileV1},
+    manifest::{ConcreteDependency, DependencySpec, PortablePath, parse_manifest},
+    package::{is_excluded_directory, is_sensitive_component},
+    workspace::{DependencyKind, EffectiveDependency, Workspace, WorkspaceMember},
 };
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
 #[cfg(all(test, unix))]
 use iroha_data_model::musubi::MusubiExactDependencyEdgeV1;
 use iroha_data_model::musubi::{
@@ -34,15 +36,13 @@ use ivm::{
     },
     syscalls::compute_abi_hash,
 };
-use crate::{
-    cache::{CachedCompilerPackageV1, MusubiCache},
-    compiler::validate_exact_registry_interfaces_v1,
-    graph::collect_local_members,
-    local_file::read_bounded_single_link_regular_file_v1,
-    lockfile::{LockedRootV1, LockfileV1},
-    manifest::{ConcreteDependency, DependencySpec, PortablePath, parse_manifest},
-    package::{is_excluded_directory, is_sensitive_component},
-    workspace::{DependencyKind, EffectiveDependency, Workspace, WorkspaceMember},
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt, fs, io,
+    path::{Path, PathBuf},
 };
 /// Runtime controls for one authenticated Musubi workspace test invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1170,9 +1170,11 @@ fn same_test_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 }
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{cell::RefCell, fs, path::Path};
-    #[cfg(unix)]
-    use std::process::Command;
+    use super::*;
+    use crate::{
+        lockfile::LockedRootV1,
+        workspace::{Workspace, load_workspace},
+    };
     use iroha_data_model::{
         musubi::{
             ArchiveId, MusubiAbiBindingV1, MusubiContentDigestV1, MusubiPackageIdV1,
@@ -1185,12 +1187,10 @@ mod tests {
         linker::{ModuleBuildGraph, SourcePackageGraphRequest},
         session::CompilerSession,
     };
+    #[cfg(unix)]
+    use std::process::Command;
+    use std::{cell::RefCell, fs, path::Path};
     use tempfile::tempdir;
-    use super::*;
-    use crate::{
-        lockfile::LockedRootV1,
-        workspace::{Workspace, load_workspace},
-    };
     struct RecordingRegistry {
         releases: RefCell<Vec<String>>,
         packages: BTreeMap<String, SourcePackageUnit>,

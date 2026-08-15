@@ -23,11 +23,6 @@ pub mod sampling;
 pub mod scope;
 mod toolbox;
 pub mod transcript;
-use iroha_data_model::privacy::{
-    BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, PrivacyStatementV1,
-};
-use rand_core_06::{CryptoRng, RngCore};
-use thiserror::Error;
 pub(crate) use credential_sampling::{
     BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1,
     CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1, CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1,
@@ -43,10 +38,15 @@ pub(crate) use falcon512::{
     BOOTLE_LANTERN_FALCON512_PREIMAGE_TOTAL_PROPOSALS_V1,
     BOOTLE_LANTERN_FALCON512_PROFILE_DESCRIPTOR_V1,
 };
+use iroha_data_model::privacy::{
+    BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, PrivacyStatementV1,
+};
 pub(crate) use issuance_store::BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1;
 pub(crate) use issuer::BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1;
+use rand_core_06::{CryptoRng, RngCore};
 pub(crate) use randomness::BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1;
 pub(crate) use scope::BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1;
+use thiserror::Error;
 pub(crate) use toolbox::application_relation_digest_v1;
 /// The complete first-release fixed-profile prover, verifier, strict codec,
 /// governed binding pipeline, masked coefficient-field compiler, and exact

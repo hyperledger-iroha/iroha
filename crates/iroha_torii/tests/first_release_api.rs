@@ -1,10 +1,6 @@
 //! Integration coverage for the single, first-release Torii API surface.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
-};
 use axum::http::Request;
 use http::{
     HeaderMap, HeaderValue, Method, StatusCode,
@@ -20,6 +16,10 @@ use iroha_core::{
 };
 use iroha_torii::{OnlinePeersProvider, Torii, test_utils};
 use iroha_torii_shared::{ErrorEnvelope, uri};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
 use tower::ServiceExt as _;
 fn local_connect_info() -> axum::extract::connect_info::ConnectInfo<SocketAddr> {
     axum::extract::connect_info::ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))

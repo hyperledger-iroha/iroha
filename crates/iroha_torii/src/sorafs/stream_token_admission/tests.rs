@@ -1,4 +1,10 @@
 //! Exact replay, crash recovery, and lease-boundary tests.
+use super::*;
+use iroha_data_model::sorafs::reputation::{
+    PorTerminalOutcomeV1, ReputationJournalEventIdV1, StreamTokenRequestRouteV1,
+    StreamTokenValidationBindingV1,
+};
+use sorafs_node::reputation::runtime::{ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError};
 use std::{
     collections::VecDeque,
     sync::{
@@ -6,12 +12,6 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
-use iroha_data_model::sorafs::reputation::{
-    PorTerminalOutcomeV1, ReputationJournalEventIdV1, StreamTokenRequestRouteV1,
-    StreamTokenValidationBindingV1,
-};
-use sorafs_node::reputation::runtime::{ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError};
-use super::*;
 const VALIDATED_AT_MS: u64 = 1_800_000_000_000;
 const HANDLE: &str = "sealed://sorafs/stream-admission/eu-1";
 fn qualification() -> StreamTokenGatewayAdmissionQualificationV1 {

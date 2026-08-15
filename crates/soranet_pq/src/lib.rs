@@ -14,14 +14,6 @@ mod mlkem;
 mod rng;
 #[cfg(not(feature = "pqc"))]
 mod wire;
-pub use crate::{
-    hkdf::{HkdfDomain, HkdfSuite, derive_labeled_hkdf},
-    rng::{
-        HedgedChaCha20Rng, HedgedEntropyStatus, HedgedRngSeed, RngError,
-        deterministic_chacha20_rng, hedged_chacha20_rng, hedged_chacha20_rng_from_os,
-        hedged_chacha20_rng_from_rng,
-    },
-};
 #[cfg(feature = "pqc")]
 pub use crate::mldsa::{
     MlDsaError, MlDsaKeyPair, MlDsaSignature, MlDsaSuite, generate_mldsa_keypair,
@@ -42,3 +34,11 @@ pub use crate::mlkem::{
 };
 #[cfg(not(feature = "pqc"))]
 pub use crate::wire::{MlDsaSuite, UnsupportedPqcError};
+pub use crate::{
+    hkdf::{HkdfDomain, HkdfSuite, derive_labeled_hkdf},
+    rng::{
+        HedgedChaCha20Rng, HedgedEntropyStatus, HedgedRngSeed, RngError,
+        deterministic_chacha20_rng, hedged_chacha20_rng, hedged_chacha20_rng_from_os,
+        hedged_chacha20_rng_from_rng,
+    },
+};

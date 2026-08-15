@@ -1,13 +1,6 @@
 //! Build exact Soracloud uploaded-model and private-runtime request payloads for desktop clients.
 //! Private signing material is consumed only by this local helper; generated
 //! Torii request JSON contains signed provenance and never embeds the key.
-use std::{
-    env, fs,
-    io::{self, Read as _},
-    num::NonZeroU32,
-    path::PathBuf,
-    str::FromStr as _,
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_crypto::{ExposedPrivateKey, Hash, PublicKey, Signature};
 use iroha_data_model::{
@@ -27,6 +20,13 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{json, to_bytes};
+use std::{
+    env, fs,
+    io::{self, Read as _},
+    num::NonZeroU32,
+    path::PathBuf,
+    str::FromStr as _,
+};
 #[derive(Debug, norito::json::JsonDeserialize)]
 struct SignUploadInput {
     manifest_path: String,

@@ -4,12 +4,12 @@
 //! refusal scenario fixtures defined in `fixtures/sorafs_gateway/capability_refusal`.
 //! Scenarios drive the capability refusal conformance suite, operator
 //! self-certification kit, and SDK regression matrix.
+use eyre::{Result as EyreResult, WrapErr};
+use norito::json::{self, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use eyre::{Result as EyreResult, WrapErr};
-use norito::json::{self, Value};
 const SCENARIOS_FILE: &str = "scenarios.json";
 /// Describes a single capability refusal scenario.
 #[derive(Debug, Clone)]

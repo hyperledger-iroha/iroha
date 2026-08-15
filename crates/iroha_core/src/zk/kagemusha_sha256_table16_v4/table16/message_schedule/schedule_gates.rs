@@ -10,10 +10,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::marker::PhantomData;
+use super::super::Gate;
 use ff::PrimeField;
 use halo2_proofs::plonk::Expression;
-use super::super::Gate;
+use std::marker::PhantomData;
 pub struct ScheduleGate<F: PrimeField>(PhantomData<F>);
 impl<F: PrimeField> ScheduleGate<F> {
     /// s_word for W_16 to W_63
@@ -52,8 +52,7 @@ impl<F: PrimeField> ScheduleGate<F> {
         let check = lo + hi * F::from(1 << 16) - word;
         Some(("s_decompose_0", s_decompose_0 * check))
     }
-    /// s_decompose_1 for W_1 to W_13
-    /// (3, 4, 11, 14)-bit chunks
+    /// s_decompose_1 for W_1 to W_13 (3, 4, 11, 14)-bit chunks
     #[allow(clippy::too_many_arguments)]
     pub fn s_decompose_1(
         s_decompose_1: Expression<F>,
@@ -77,8 +76,7 @@ impl<F: PrimeField> ScheduleGate<F> {
         .into_iter()
         .map(move |(name, poly)| (name, s_decompose_1.clone() * poly))
     }
-    /// s_decompose_2 for W_14 to W_48
-    /// (3, 4, 3, 7, 1, 1, 13)-bit chunks
+    /// s_decompose_2 for W_14 to W_48 (3, 4, 3, 7, 1, 1, 13)-bit chunks
     #[allow(clippy::many_single_char_names)]
     #[allow(clippy::too_many_arguments)]
     pub fn s_decompose_2(
@@ -119,8 +117,7 @@ impl<F: PrimeField> ScheduleGate<F> {
         .into_iter()
         .map(move |(name, poly)| (name, s_decompose_2.clone() * poly))
     }
-    /// s_decompose_3 for W_49 to W_61
-    /// (10, 7, 2, 13)-bit chunks
+    /// s_decompose_3 for W_49 to W_61 (10, 7, 2, 13)-bit chunks
     #[allow(clippy::too_many_arguments)]
     pub fn s_decompose_3(
         s_decompose_3: Expression<F>,
@@ -152,8 +149,7 @@ impl<F: PrimeField> ScheduleGate<F> {
         let expected_b = b_lo + b_hi * F::from(1 << 2);
         expected_b - b
     }
-    /// sigma_0 v1 on W_1 to W_13
-    /// (3, 4, 11, 14)-bit chunks
+    /// sigma_0 v1 on W_1 to W_13 (3, 4, 11, 14)-bit chunks
     #[allow(clippy::too_many_arguments)]
     pub fn s_lower_sigma_0(
         s_lower_sigma_0: Expression<F>,
@@ -202,8 +198,7 @@ impl<F: PrimeField> ScheduleGate<F> {
             .chain(Some(("lower_sigma_0", spread_witness - xor)))
             .map(move |(name, poly)| (name, s_lower_sigma_0.clone() * poly))
     }
-    /// sigma_1 v1 on W_49 to W_61
-    /// (10, 7, 2, 13)-bit chunks
+    /// sigma_1 v1 on W_49 to W_61 (10, 7, 2, 13)-bit chunks
     #[allow(clippy::too_many_arguments)]
     pub fn s_lower_sigma_1(
         s_lower_sigma_1: Expression<F>,
@@ -265,8 +260,7 @@ impl<F: PrimeField> ScheduleGate<F> {
             .chain(Some(("lower_sigma_1", spread_witness - xor)))
             .map(move |(name, poly)| (name, s_lower_sigma_1.clone() * poly))
     }
-    /// sigma_0 v2 on W_14 to W_48
-    /// (3, 4, 3, 7, 1, 1, 13)-bit chunks
+    /// sigma_0 v2 on W_14 to W_48 (3, 4, 3, 7, 1, 1, 13)-bit chunks
     #[allow(clippy::too_many_arguments)]
     pub fn s_lower_sigma_0_v2(
         s_lower_sigma_0_v2: Expression<F>,
@@ -329,8 +323,7 @@ impl<F: PrimeField> ScheduleGate<F> {
             .chain(Some(("lower_sigma_0_v2", spread_witness - xor)))
             .map(move |(name, poly)| (name, s_lower_sigma_0_v2.clone() * poly))
     }
-    /// sigma_1 v2 on W_14 to W_48
-    /// (3, 4, 3, 7, 1, 1, 13)-bit chunks
+    /// sigma_1 v2 on W_14 to W_48 (3, 4, 3, 7, 1, 1, 13)-bit chunks
     #[allow(clippy::too_many_arguments)]
     pub fn s_lower_sigma_1_v2(
         s_lower_sigma_1_v2: Expression<F>,

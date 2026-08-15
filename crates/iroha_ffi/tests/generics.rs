@@ -1,9 +1,9 @@
 //! Generic FFI tests: verify generic structs can be passed across FFI.
 #![allow(unsafe_code)]
-use std::mem::MaybeUninit;
 #[allow(unused_imports)]
 use getset::Getters;
 use iroha_ffi::{FfiConvert, FfiType, ffi_export};
+use std::mem::MaybeUninit;
 /// Struct
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FfiType)]
 pub struct GenericFfiStruct<T>(T);

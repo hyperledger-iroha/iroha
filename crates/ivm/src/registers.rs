@@ -9,11 +9,11 @@
 //! each register when zero–knowledge mode is active.  Vector operations no
 //! longer use a dedicated register file – instead groups of the general
 //! registers are interpreted as vectors.  This module implements that design.
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::zk::{RegEvent, with_reg_logger};
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
-use crate::zk::{RegEvent, with_reg_logger};
+use std::sync::atomic::{AtomicBool, Ordering};
 pub struct Registers {
     /// 256 general purpose 64-bit registers. `r0` is hardwired to zero.
     gpr: [u64; 256],

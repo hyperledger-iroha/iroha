@@ -3618,6 +3618,11 @@ where
         || Ok(|_: &[[u8; 32]], _: &[i64], _: &[i64], _: &[i64], _: &[u8; 32]| Ok(())),
     )
 }
+// TODO: Reconnect the private Phase-23 source prototype after its confidential
+// spool dependency can enter the authorized workspace lock graph.
+#[cfg(any())]
+#[path = "incremental_source_phase23.rs"]
+mod incremental_source_phase23;
 #[cfg(test)]
 #[path = "incremental_source_tests.rs"]
 mod tests;

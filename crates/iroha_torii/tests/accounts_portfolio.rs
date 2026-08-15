@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii UAID portfolio endpoint tests.
 #![cfg(feature = "app_api")]
-use std::sync::Arc;
 use axum::{Router, extract::connect_info::ConnectInfo};
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -27,6 +26,7 @@ use iroha_data_model::{
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 use norito::json::{self, Value};
+use std::sync::Arc;
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;

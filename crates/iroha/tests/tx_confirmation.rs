@@ -1,5 +1,4 @@
 //! Tests for transaction confirmation stream behavior
-use std::{num::NonZeroU64, time::Duration};
 use eyre::Report;
 use futures_util::stream;
 use iroha::{
@@ -14,6 +13,7 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneId},
 };
+use std::{num::NonZeroU64, time::Duration};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 fn make_hash() -> HashOf<SignedTransaction> {

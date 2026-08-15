@@ -4,36 +4,6 @@
 //! never construct a signer; network reads and mutations load one only at their explicit registry
 //! boundary. Resolution, authenticated fetch,
 //! compiler, test, cache, and publication work stays in dedicated V1 modules.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ffi::OsString,
-    fmt::Write as _,
-    fs,
-    io::{self, Read},
-    path::{Path, PathBuf},
-    str::FromStr,
-};
-use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
-use iroha_data_model::{
-    isi::musubi::{
-        AcceptMusubiPackageMaintainerV1, InviteMusubiPackageMaintainerV1, RegisterMusubiAliasV1,
-        RemoveMusubiPackageMaintainerV1, RevokeMusubiPackageMaintainerInvitationV1,
-        SetMusubiPackageMaintainerRoleV1, SetMusubiReleaseYankV1,
-    },
-    musubi::{
-        MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1, MUSUBI_MAX_PACKAGE_MEMBERS_V1,
-        MUSUBI_MAX_PAGE_SIZE_V1, MUSUBI_MAX_PENDING_INVITATIONS_V1, MusubiAliasNameV1,
-        MusubiAliasQueryV1, MusubiArchiveRetentionDispositionV1, MusubiArchiveRetentionQueryV1,
-        MusubiContentDigestV1, MusubiDependencyKindV1, MusubiExactDependencyEdgeV1,
-        MusubiInviteIdV1, MusubiMaintainerDirectoryEntryV1, MusubiMaintainerPermissionsV1,
-        MusubiNamespaceV1, MusubiPackageNameV1, MusubiPackagePageQueryV1, MusubiPackageRoleV1,
-        MusubiPackageSelectorV1, MusubiPageRequestV1, MusubiReasonV1, MusubiRegistrySnapshotV1,
-        MusubiReleaseIdV1, MusubiSearchPageRequestV1, MusubiSearchQueryV1,
-        MusubiStorageAvailabilityV1, MusubiVersionReqV1, MusubiVersionV1,
-    },
-    name::Name,
-};
-use norito::json::{Map, Value};
 use crate::{
     archive_fetch::{
         ArchiveFetchErrorV1, ArchiveFetchFailureClassV1, ArchiveTransportErrorV1,
@@ -81,6 +51,36 @@ use crate::{
         DependencyKind, EffectiveDependency, MAX_MANIFEST_BYTES, Workspace, WorkspaceErrorKind,
         WorkspaceMember, discover_manifest, load_workspace,
     },
+};
+use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
+use iroha_data_model::{
+    isi::musubi::{
+        AcceptMusubiPackageMaintainerV1, InviteMusubiPackageMaintainerV1, RegisterMusubiAliasV1,
+        RemoveMusubiPackageMaintainerV1, RevokeMusubiPackageMaintainerInvitationV1,
+        SetMusubiPackageMaintainerRoleV1, SetMusubiReleaseYankV1,
+    },
+    musubi::{
+        MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1, MUSUBI_MAX_PACKAGE_MEMBERS_V1,
+        MUSUBI_MAX_PAGE_SIZE_V1, MUSUBI_MAX_PENDING_INVITATIONS_V1, MusubiAliasNameV1,
+        MusubiAliasQueryV1, MusubiArchiveRetentionDispositionV1, MusubiArchiveRetentionQueryV1,
+        MusubiContentDigestV1, MusubiDependencyKindV1, MusubiExactDependencyEdgeV1,
+        MusubiInviteIdV1, MusubiMaintainerDirectoryEntryV1, MusubiMaintainerPermissionsV1,
+        MusubiNamespaceV1, MusubiPackageNameV1, MusubiPackagePageQueryV1, MusubiPackageRoleV1,
+        MusubiPackageSelectorV1, MusubiPageRequestV1, MusubiReasonV1, MusubiRegistrySnapshotV1,
+        MusubiReleaseIdV1, MusubiSearchPageRequestV1, MusubiSearchQueryV1,
+        MusubiStorageAvailabilityV1, MusubiVersionReqV1, MusubiVersionV1,
+    },
+    name::Name,
+};
+use norito::json::{Map, Value};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
+    fmt::Write as _,
+    fs,
+    io::{self, Read},
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 const LOCK_FILE_NAME: &str = "Musubi.lock";
 /// Parsed presentation mode and logical command result.

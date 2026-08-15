@@ -1,7 +1,7 @@
 #![allow(clippy::restriction)]
-use std::time::Duration;
-use norito::json::{self, Value};
 use super::*;
+use norito::json::{self, Value};
+use std::time::Duration;
 fn assert_float_metric_eq(actual: f64, expected: f64, context: &str) {
     assert!(
         (actual - expected).abs() < f64::EPSILON,

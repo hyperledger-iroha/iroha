@@ -1,4 +1,9 @@
 //! Generate per-client Iroha CLI configs from a base client.toml.
+use crate::{Outcome, RunArgs, tui};
+use clap::Args as ClapArgs;
+use color_eyre::eyre::{Result, WrapErr as _, eyre};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+use iroha_data_model::NetworkId;
 use std::{
     collections::BTreeSet,
     fmt::Write as _,
@@ -6,12 +11,7 @@ use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
-use clap::Args as ClapArgs;
-use color_eyre::eyre::{Result, WrapErr as _, eyre};
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
-use iroha_data_model::NetworkId;
 use zeroize::Zeroizing;
-use crate::{Outcome, RunArgs, tui};
 const DEFAULT_TTL_MS: u64 = 120_000;
 const DEFAULT_STATUS_TIMEOUT_MS: u64 = 120_000;
 #[derive(Debug, Clone)]
@@ -220,8 +220,8 @@ fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> 
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::BufWriter};
     use super::*;
+    use std::{fs, io::BufWriter};
     fn write_base_config(path: &Path) {
         let payload = r#"
 chain = "demo-chain"

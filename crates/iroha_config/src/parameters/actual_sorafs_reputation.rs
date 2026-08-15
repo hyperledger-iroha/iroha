@@ -1,6 +1,6 @@
 //! Validated non-secret policy for SoraFS reputation and reserve transparency runtimes.
-use std::{path::PathBuf, time::Duration};
 use iroha_config_base::util::Bytes;
+use std::{path::PathBuf, time::Duration};
 /// Public binding for the reputation finalized-archive retention authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsReputationFinalizedArchiveRetentionAuthority {

@@ -1,8 +1,4 @@
 #![cfg(feature = "cli")]
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-};
 use assert_cmd::cargo::cargo_bin_cmd;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use norito::{
@@ -12,6 +8,10 @@ use norito::{
 use sorafs_manifest::capacity::{
     CapacityDeclarationV1, CapacityDisputeKind, CapacityDisputeV1, CapacityTelemetryV1,
     ReplicationOrderV1,
+};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
 };
 use tempfile::{Builder, TempDir};
 fn canonical_temp_base() -> std::path::PathBuf {

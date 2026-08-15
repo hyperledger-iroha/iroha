@@ -1,5 +1,5 @@
 //! Transfer gadget validation shared between the planner and trace builder.
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use crate::{Error, OperationKind, StateTransition};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -12,7 +12,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_zkp_halo2::poseidon;
 use norito::{codec::Encode as NoritoEncode, decode_from_bytes};
-use crate::{Error, OperationKind, StateTransition};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 /// Height of the V1 transfer SMT used by the transfer gadget.
 pub const TRANSFER_MERKLE_HEIGHT: usize = 32;
 /// Witness describing a single transfer delta after validation.
@@ -876,6 +876,8 @@ fn numeric_to_u64(field: &'static str, value: &Quantity, target_scale: u32) -> R
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{OperationKind, StateTransition};
     use iroha_crypto::Hash;
     use iroha_data_model::{
         DomainId,
@@ -885,8 +887,6 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
-    use super::*;
-    use crate::{OperationKind, StateTransition};
     #[test]
     fn decode_transcripts_absent_metadata() {
         let metadata = BTreeMap::new();

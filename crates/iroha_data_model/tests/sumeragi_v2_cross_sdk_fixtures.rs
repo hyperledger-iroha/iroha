@@ -1,5 +1,4 @@
 //! Rust-authority checks for shared Sumeragi v2 SDK wire fixtures.
-use std::collections::BTreeMap;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -24,6 +23,7 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::codec::{DecodeAll, Encode};
+use std::collections::BTreeMap;
 const FIXTURES: &str = include_str!("../../../fixtures/sumeragi_v2/wire_v2.tsv");
 fn peer(seed: u8) -> PeerId {
     let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

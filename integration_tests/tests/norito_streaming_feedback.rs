@@ -1,9 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Loopback integration test covering FeedbackHint/ReceiverReport flow and parity decisions.
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr},
-    time::Duration,
-};
 use eyre::{Result as EyreResult, eyre};
 use iroha_core::streaming::StreamingHandle;
 use iroha_crypto::{Algorithm, KeyPair, streaming::FeedbackStateSnapshot};
@@ -16,6 +12,10 @@ use iroha_primitives::addr::SocketAddr;
 use norito::streaming::{
     AudioCapability, CapabilityFlags, CapabilityReport, CapabilityRole, ControlFrame,
     FeedbackHintFrame, ReceiverReport, Resolution, SyncDiagnostics, TransportCapabilities,
+};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr},
+    time::Duration,
 };
 use tokio::time::timeout;
 const FEEDBACK_FP_SHIFT: u32 = 16;

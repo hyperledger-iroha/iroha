@@ -7,6 +7,14 @@
 //! Theme intro with animated ASCII prologue and optional audio playback.
 //! The builtin audio path renders a gagaku-inspired chamber arrangement of
 //! Etenraku with softer winds and a slower shō bed.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(target_os = "linux", feature = "linux-builtin-synth")
+))]
+use crate::synth;
+use crate::{ascii::AsciiAnimator, etenraku};
+use eyre::{Context as _, Result};
 use std::{fs, io::Write as _, path::PathBuf};
 #[cfg(any(
     target_os = "macos",
@@ -18,18 +26,10 @@ use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
-use eyre::{Context as _, Result};
 use tokio::{
     process::Child,
     time::{Duration, sleep},
 };
-use crate::{ascii::AsciiAnimator, etenraku};
-#[cfg(any(
-    target_os = "macos",
-    target_os = "windows",
-    all(target_os = "linux", feature = "linux-builtin-synth")
-))]
-use crate::synth;
 #[cfg(any(
     target_os = "macos",
     target_os = "windows",

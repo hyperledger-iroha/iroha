@@ -2,7 +2,6 @@
 //! DA-4 regression: Torii must enforce the configured retention profile even
 //! when callers submit stale values. The manifest fetched from Torii should
 //! always expose the canonical policy, not the caller intent.
-use std::{collections::BTreeMap, path::Path};
 use eyre::Result;
 use hex::encode as hex_encode;
 use integration_tests::sandbox::start_network_async_or_skip;
@@ -28,6 +27,7 @@ use norito::{
     to_bytes,
 };
 use reqwest::{Client, StatusCode};
+use std::{collections::BTreeMap, path::Path};
 use tempfile::tempdir;
 use toml::value::{Table, Value as TomlValue};
 const TEST_NAME: &str = "da_replication_policy_is_enforced";

@@ -170,9 +170,9 @@ fn build_rng(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rand::RngCore;
     use rand_core::{TryCryptoRng, TryRngCore};
-    use super::*;
     #[derive(Debug)]
     struct FailingSeedRng;
     #[derive(Debug)]

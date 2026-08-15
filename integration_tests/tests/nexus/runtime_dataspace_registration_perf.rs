@@ -1,12 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Runtime Nexus lane and dataspace-registration benchmark with isolated timing metrics.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    path::PathBuf,
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -41,6 +34,13 @@ use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManife
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use norito::json::Value as JsonValue;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::PathBuf,
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},

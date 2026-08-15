@@ -1,8 +1,8 @@
 //! Secret-free composition of the exact first-release Taira privacy inputs.
-use std::{
-    collections::BTreeSet,
-    io::Write,
-    path::{Path, PathBuf},
+use super::{
+    MAX_INSTRUCTIONS_JSON_BYTES_V1, MAX_REPORT_JSON_BYTES_V1, create_new_file, read_bounded,
+    remove_created_file_if_unchanged_v1, resolved_new_output_path_v1,
+    validate_taira_privacy_bootstrap_v1,
 };
 #[cfg(test)]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -30,10 +30,10 @@ use iroha_data_model::{
 };
 use iroha_genesis::{RawGenesisTransaction, validate_genesis_manifest_json};
 use norito::json::{Map as JsonMap, Value as JsonValue};
-use super::{
-    MAX_INSTRUCTIONS_JSON_BYTES_V1, MAX_REPORT_JSON_BYTES_V1, create_new_file, read_bounded,
-    remove_created_file_if_unchanged_v1, resolved_new_output_path_v1,
-    validate_taira_privacy_bootstrap_v1,
+use std::{
+    collections::BTreeSet,
+    io::Write,
+    path::{Path, PathBuf},
 };
 const MAX_TEMPLATE_BYTES_V1: u64 = 8 * 1024 * 1024;
 const MAX_BROKER_EXPORT_BYTES_V1: u64 = 4 * 1024 * 1024;
@@ -1315,7 +1315,10 @@ fn write_new_artifact_set_v1<const N: usize>(
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::OnceLock};
+    use super::*;
+    use crate::privacy_bootstrap::{
+        TairaPrivacyBootstrapArtifactsV1, build_artifacts_from_profiles_v1,
+    };
     use iroha_core::{
         privacy_engines::bootle_lantern::issuer::{
             BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
@@ -1332,8 +1335,7 @@ mod tests {
             PrivacyIssuerIdV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
         },
     };
-    use super::*;
-    use crate::privacy_bootstrap::{TairaPrivacyBootstrapArtifactsV1, build_artifacts_from_profiles_v1};
+    use std::{fs, sync::OnceLock};
     const PLAN_TEMPLATE_V1: &[u8] =
         include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
     const CONFIG_TEMPLATE_V1: &[u8] =

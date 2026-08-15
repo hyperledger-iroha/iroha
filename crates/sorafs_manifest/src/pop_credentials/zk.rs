@@ -6,13 +6,12 @@
 //! holder secret, credential identifier, holder commitment, nonce, and both
 //! authentication paths remain advice values and never enter the public-input
 //! or proof-envelope schemas.
-use std::{
-    collections::BTreeMap,
-    io::{self, Read},
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
+use super::{
+    POP_CREDENTIAL_TREE_DEPTH_V1, POP_MEMBERSHIP_PROOF_MAX_BYTES_V1,
+    POP_MEMBERSHIP_PROOF_VERSION_V1, POP_REVOCATION_TREE_DEPTH_V1, PopCredentialV1,
+    PopCredentialValidationError, PopEligibilityClassV1, PopMembershipProofSystemV1,
+    PopMembershipProofV1, PopMembershipVerifierMaterialV1, PopMembershipWitnessV1,
+    PopRevocationEntryV1, PopRevocationNonMembershipPathV1,
 };
 use blake3::Hasher;
 use halo2_proofs::{
@@ -42,12 +41,13 @@ use halo2_proofs::{
 };
 use poseidon_primitives::poseidon::primitives::Spec;
 use rand_core_06::OsRng;
-use super::{
-    POP_CREDENTIAL_TREE_DEPTH_V1, POP_MEMBERSHIP_PROOF_MAX_BYTES_V1,
-    POP_MEMBERSHIP_PROOF_VERSION_V1, POP_REVOCATION_TREE_DEPTH_V1, PopCredentialV1,
-    PopCredentialValidationError, PopEligibilityClassV1, PopMembershipProofSystemV1,
-    PopMembershipProofV1, PopMembershipVerifierMaterialV1, PopMembershipWitnessV1,
-    PopRevocationEntryV1, PopRevocationNonMembershipPathV1,
+use std::{
+    collections::BTreeMap,
+    io::{self, Read},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 pub(super) const POP_MEMBERSHIP_CIRCUIT_ID_V1: &str = "sorafs-pop-membership-halo2-ipa-pasta-v1";
 pub(super) const POP_MEMBERSHIP_CIRCUIT_K_V1: u32 = 14;

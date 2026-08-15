@@ -9,14 +9,7 @@
 //! HTTP signature or witness headers.
 //! Node-local autonomy summaries are read through the same 16 MiB V1 ceiling
 //! enforced by the runtime writer and from a stable direct file description.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    io::{self, Read as _},
-    num::NonZeroU64,
-    path::{Path as FsPath, PathBuf},
-    time::Duration,
-};
+use crate::{JsonBody, NoritoJson, NoritoQuery, SharedAppState};
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -109,9 +102,16 @@ use iroha_primitives::{
 };
 use mv::storage::StorageReadOnly;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::{self, Read as _},
+    num::NonZeroU64,
+    path::{Path as FsPath, PathBuf},
+    time::Duration,
+};
 #[cfg(test)]
 use tokio::sync::RwLock;
-use crate::{JsonBody, NoritoJson, NoritoQuery, SharedAppState};
 mod bounded_public_response;
 mod hf_model_info_response;
 const CONTROL_PLANE_SCHEMA_VERSION: u16 = 1;
@@ -11794,12 +11794,7 @@ pub(crate) async fn handle_health_compliance_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        num::{NonZeroU16, NonZeroU32, NonZeroU64},
-        path::{Path, PathBuf},
-        sync::Arc,
-    };
+    use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world;
     use iroha_core::soracloud_runtime::{
         SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
         SoracloudApartmentAutonomyExecutionSummaryV1, SoracloudApartmentExecutionRequest,
@@ -11848,7 +11843,12 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
-    use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world;
+    use std::{
+        fs,
+        num::{NonZeroU16, NonZeroU32, NonZeroU64},
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
     #[cfg(any(unix, windows))]
     #[test]
     fn autonomy_summary_reader_accepts_v1_limit_and_rejects_first_overflow_byte() {

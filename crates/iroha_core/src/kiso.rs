@@ -7,7 +7,6 @@
 //! Mutable node-local settings are relayed through [`tokio::sync::watch`] channels.
 //! Consensus-relevant settings, including confidential gas, are deliberately absent
 //! from the runtime update surface.
-use std::{num::NonZeroU32, time::Duration};
 use eyre::Result;
 use hex;
 use iroha_config::{
@@ -22,6 +21,7 @@ use iroha_config::{
     },
 };
 use iroha_futures::supervisor::{Child, OnShutdown};
+use std::{num::NonZeroU32, time::Duration};
 use tokio::sync::{mpsc, oneshot, watch};
 const DEFAULT_CHANNEL_SIZE: usize = 32;
 /// Handle to work with the actor.
@@ -563,11 +563,7 @@ fn default_puzzle_params() -> SoranetPuzzle {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-        path::PathBuf,
-        time::Duration,
-    };
+    use super::*;
     use iroha_config::{
         base::WithOrigin,
         client_api::{
@@ -596,7 +592,11 @@ mod tests {
     };
     use iroha_logger::Level;
     use iroha_primitives::addr::socket_addr;
-    use super::*;
+    use std::{
+        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+        path::PathBuf,
+        time::Duration,
+    };
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("Kiso fixture key generation should succeed")
     }

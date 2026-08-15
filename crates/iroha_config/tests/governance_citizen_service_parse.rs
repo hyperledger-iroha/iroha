@@ -1,6 +1,6 @@
 //! Ensure citizen service discipline fields roundtrip from user to actual config.
-use std::collections::BTreeMap;
 use iroha_config::parameters::{defaults, user};
+use std::collections::BTreeMap;
 #[test]
 fn citizen_service_defaults_and_overrides_parse() {
     let default_actual = user::Governance::default().parse();

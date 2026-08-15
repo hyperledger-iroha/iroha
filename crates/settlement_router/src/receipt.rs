@@ -1,11 +1,11 @@
 //! Deterministic settlement receipts serialised via Norito.
-use std::convert::TryFrom;
+use crate::{Quantity, ShadowPrice};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
 };
+use std::convert::TryFrom;
 use time::OffsetDateTime;
-use crate::{Quantity, ShadowPrice};
 /// Receipt construction failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SettlementReceiptError {
@@ -67,8 +67,6 @@ impl SettlementReceipt {
 }
 #[cfg(test)]
 mod tests {
-    use norito::{decode_from_bytes, json};
-    use time::Duration;
     use crate::{
         Numeric, Quantity,
         config::{EpsilonBps, SettlementConfig},
@@ -77,6 +75,8 @@ mod tests {
         receipt::{SettlementReceipt, SettlementReceiptError},
         volatility::VolatilityBucket,
     };
+    use norito::{decode_from_bytes, json};
+    use time::Duration;
     fn shadow(local: &Quantity) -> crate::ShadowPrice {
         ShadowPriceCalculator::new(SettlementConfig {
             twap_window: crate::DurationSeconds::new(Duration::seconds(60)),

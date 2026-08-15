@@ -1,4 +1,3 @@
-use std::{fs, net::SocketAddr, num::NonZeroU64, path::Path, sync::Arc, time::Duration};
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -40,6 +39,7 @@ use iroha_telemetry::metrics::{
 use iroha_torii_shared::{NORITO_V1_WEBSOCKET_SUBPROTOCOL, uri as torii_uri};
 use norito::json::{self, Value};
 use parking_lot::Mutex;
+use std::{fs, net::SocketAddr, num::NonZeroU64, path::Path, sync::Arc, time::Duration};
 use tokio::{
     net::TcpListener,
     sync::{broadcast, oneshot},

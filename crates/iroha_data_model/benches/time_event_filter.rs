@@ -1,9 +1,9 @@
 //! Benchmarks for `TimeEventFilter` matching performance.
 //!
 //! Measures counting matches for a frequent schedule with a very small period.
-use std::time::Duration;
 use criterion::Criterion;
 use iroha_data_model::prelude::*;
+use std::time::Duration;
 /// Compute the number of scheduled executions that fall within `interval`.
 ///
 /// Mirrors the library logic without requiring the `transparent_api` feature.

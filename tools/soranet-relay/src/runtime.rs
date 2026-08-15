@@ -1,19 +1,5 @@
 //! Runtime orchestration for the relay daemon.
 #![allow(unexpected_cfgs)]
-use std::{
-    collections::HashSet,
-    fmt::{self, Write as _},
-    fs,
-    io::{self, Read as _, Write as _},
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{
-        Arc, Mutex as StdMutex,
-        atomic::{AtomicBool, AtomicU16, Ordering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use iroha_crypto::{
@@ -37,7 +23,62 @@ use iroha_crypto::{
         token::{self, AdmissionToken, DecodeError as TokenDecodeError},
     },
 };
+use std::{
+    collections::HashSet,
+    fmt::{self, Write as _},
+    fs,
+    io::{self, Read as _, Write as _},
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, AtomicU16, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
+use crate::{
+    capability::{
+        self, CapabilityError, CapabilityWarning, GreaseEntry, NegotiatedCapabilities,
+        ServerCapabilities, SignatureId, encode_relay_advertisement, negotiate_capabilities,
+        parse_client_advertisement,
+    },
+    circuit::{
+        CircuitAdmissionError, CircuitRegistry, PaddingBudget, abort_padding_task,
+        spawn_padding_task,
+    },
+    compliance::{ComplianceLogger, ThrottleAudit},
+    config::{
+        self, ConfigError, RelayConfig, RelayMode, VpnBackendEndpoint,
+        read_bounded_direct_regular_file,
+    },
+    congestion::{CongestionController, CongestionError, CongestionLease},
+    constant_rate::ConstantRateProfileSpec,
+    dos::{DoSControls, ThrottleReason, TokenPolicyError},
+    error::RelayError,
+    exit::{
+        ExitRouting, ExitRoutingState, ExitStreamTag, KaigiStreamState, NoritoStreamState,
+        RouteCatalogError, RouteOpenFrame, RouteOpenFrameError, derive_kaigi_room_id,
+    },
+    guard::{self, GuardDirectoryError},
+    handshake::{ClientHello, MAX_CLIENT_HELLO_LEN},
+    incentive_log::IncentiveLogger,
+    incentives::{
+        BandwidthProofIngest, EpochSummary, INCENTIVE_MAX_ACTIVE_EPOCHS_V1, IncentiveCapacityError,
+        RelayPerformanceAccumulator,
+    },
+    metrics::{Metrics, VpnRuntimeState, normalize_downgrade_reason},
+    privacy::{
+        PrivacyAggregator, PrivacyEventBuffer, ProxyPolicyEventBuffer, RejectReason, ThrottleScope,
+    },
+    scheduler::{
+        CELL_SIZE_BYTES, Cell, CellClass, CellScheduler, OverflowPolicy, QueueDepths,
+        SchedulerConfig,
+    },
+    vpn::{VpnFrameIoError, VpnOverlay, VpnSessionHandle, VpnSettlementArtifact},
+    vpn_adapter::{VpnAdapter, VpnBridge},
+};
 use iroha_data_model::{
     metadata::Metadata,
     prelude::Name,
@@ -83,47 +124,6 @@ use tokio_tungstenite::{
     tungstenite::{self, protocol::Message},
 };
 use tracing::{debug, info, warn};
-use crate::{
-    capability::{
-        self, CapabilityError, CapabilityWarning, GreaseEntry, NegotiatedCapabilities,
-        ServerCapabilities, SignatureId, encode_relay_advertisement, negotiate_capabilities,
-        parse_client_advertisement,
-    },
-    circuit::{
-        CircuitAdmissionError, CircuitRegistry, PaddingBudget, abort_padding_task,
-        spawn_padding_task,
-    },
-    compliance::{ComplianceLogger, ThrottleAudit},
-    config::{
-        self, ConfigError, RelayConfig, RelayMode, VpnBackendEndpoint,
-        read_bounded_direct_regular_file,
-    },
-    congestion::{CongestionController, CongestionError, CongestionLease},
-    constant_rate::ConstantRateProfileSpec,
-    dos::{DoSControls, ThrottleReason, TokenPolicyError},
-    error::RelayError,
-    exit::{
-        ExitRouting, ExitRoutingState, ExitStreamTag, KaigiStreamState, NoritoStreamState,
-        RouteCatalogError, RouteOpenFrame, RouteOpenFrameError, derive_kaigi_room_id,
-    },
-    guard::{self, GuardDirectoryError},
-    handshake::{ClientHello, MAX_CLIENT_HELLO_LEN},
-    incentive_log::IncentiveLogger,
-    incentives::{
-        BandwidthProofIngest, EpochSummary, INCENTIVE_MAX_ACTIVE_EPOCHS_V1, IncentiveCapacityError,
-        RelayPerformanceAccumulator,
-    },
-    metrics::{Metrics, VpnRuntimeState, normalize_downgrade_reason},
-    privacy::{
-        PrivacyAggregator, PrivacyEventBuffer, ProxyPolicyEventBuffer, RejectReason, ThrottleScope,
-    },
-    scheduler::{
-        CELL_SIZE_BYTES, Cell, CellClass, CellScheduler, OverflowPolicy, QueueDepths,
-        SchedulerConfig,
-    },
-    vpn::{VpnFrameIoError, VpnOverlay, VpnSessionHandle, VpnSettlementArtifact},
-    vpn_adapter::{VpnAdapter, VpnBridge},
-};
 struct AdminRenderContext<'a> {
     metrics: &'a Metrics,
     privacy: &'a PrivacyAggregator,

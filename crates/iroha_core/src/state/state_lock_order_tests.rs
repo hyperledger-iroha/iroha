@@ -1,11 +1,11 @@
 //! State lock-order regression tests.
+use super::*;
+use core::num::NonZeroU64;
 use std::{
     sync::{Arc, mpsc},
     thread,
     time::Duration,
 };
-use core::num::NonZeroU64;
-use super::*;
 fn test_state() -> State {
     let kura = crate::kura::Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();

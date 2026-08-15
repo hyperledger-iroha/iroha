@@ -1,15 +1,15 @@
+use crate::i3_bench_suite::{I3BenchOptions, I3BenchReport, run_i3_bench_suite};
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
+};
 use std::{
     collections::HashMap,
     error::Error,
     fs,
     path::{Path, PathBuf},
 };
-use norito::{
-    derive::{JsonDeserialize, JsonSerialize},
-    json,
-};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use crate::i3_bench_suite::{I3BenchOptions, I3BenchReport, run_i3_bench_suite};
 /// Options for the Iroha 3 SLO harness.
 #[derive(Clone, Debug)]
 pub struct SloHarnessOptions {

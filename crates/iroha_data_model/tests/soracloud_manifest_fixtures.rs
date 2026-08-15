@@ -1,11 +1,4 @@
 //! Canonical fixture and roundtrip checks for `Soracloud` V1 manifests.
-use std::{
-    collections::BTreeMap,
-    fmt::Debug,
-    fs,
-    num::{NonZeroU16, NonZeroU32, NonZeroU64},
-    path::Path,
-};
 use iroha_crypto::{
     Hash,
     fhe_bfv::{
@@ -48,6 +41,13 @@ use iroha_data_model::{
 use iroha_primitives::numeric::{Numeric, Quantity};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
+use std::{
+    collections::BTreeMap,
+    fmt::Debug,
+    fs,
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
+    path::Path,
+};
 const CONTAINER_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/soracloud/sora_container_manifest_v1.json"

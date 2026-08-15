@@ -1,4 +1,6 @@
 //! Space Directory manifest publication flow.
+use super::*;
+use crate::{nexus::space_directory::SpaceDirectoryManifestRecord, state::StateTransaction};
 use iroha_data_model::{
     account::AccountId,
     events::data::space_directory::{
@@ -18,8 +20,6 @@ use iroha_executor_data_model::permission::nexus::{
     CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
     CanPublishSpaceDirectoryManifestForUaid,
 };
-use super::*;
-use crate::{nexus::space_directory::SpaceDirectoryManifestRecord, state::StateTransaction};
 impl Execute for PublishSpaceDirectoryManifest {
     fn execute(
         self,
@@ -346,7 +346,11 @@ fn uaid_is_bound_to_account_domain(
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use super::*;
+    use crate::{
+        nexus::space_directory::SpaceDirectoryManifestSet,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::isi::error::InvalidParameterError;
     use iroha_data_model::{
@@ -364,11 +368,7 @@ mod tests {
     };
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{
-        nexus::space_directory::SpaceDirectoryManifestSet,
-        state::{State, World},
-    };
+    use std::collections::BTreeSet;
     fn test_state() -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();

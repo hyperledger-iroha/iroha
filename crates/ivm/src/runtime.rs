@@ -23,15 +23,15 @@
 //!     .build();
 //! // ... attach host, load programs, run, etc.
 //! ```
-use std::{
-    any::Any,
-    sync::{Arc, Mutex},
-};
 pub use crate::ivm::{
     AccelerationPolicy, HardwareCapabilities, IvmBuilder, IvmConfig, IvmConfigBuilder,
 };
 pub use crate::stack_policy::IvmStackPolicy;
 use crate::{VMError, host::IVMHost, ivm::IVM, metadata::ProgramMetadata, syscalls};
+use std::{
+    any::Any,
+    sync::{Arc, Mutex},
+};
 /// Runtime operations exposed by the VM core.
 pub trait VmEngine {
     /// Attach a host implementation. Hosts are responsible for syscall handling

@@ -1,6 +1,6 @@
-use std::{fs, path::Path};
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
+use std::{fs, path::Path};
 use tempfile::tempdir;
 #[test]
 fn bug_bounty_pack_is_emitted() {

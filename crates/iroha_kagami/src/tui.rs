@@ -1,11 +1,11 @@
 //! Lightweight terminal UI helpers for Kagami commands.
+use clap::ValueEnum;
+use owo_colors::OwoColorize as _;
 use std::{
     fmt::Display,
     io::{self, IsTerminal as _, Write},
     sync::OnceLock,
 };
-use clap::ValueEnum;
-use owo_colors::OwoColorize as _;
 /// Mode in which the UI renders status messages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiMode {

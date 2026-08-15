@@ -1,11 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test for /v1/proofs/query (signed core query wrapper).
 #![cfg(feature = "app_api")]
-use std::{
-    num::{NonZeroU64, NonZeroUsize},
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use axum::{Router, routing::post};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
@@ -24,6 +19,11 @@ use iroha_torii::QueryOptions;
 use iroha_version::codec::EncodeVersioned as _;
 use mv::storage::StorageReadOnly;
 use norito::json;
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tower::ServiceExt as _;
 fn checked_proof_query_authority_fixture() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()

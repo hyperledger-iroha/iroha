@@ -10,14 +10,14 @@
     clippy::match_same_arms,
     clippy::unnecessary_debug_formatting
 )]
+use clap::{Args as ClapArgs, Parser, Subcommand};
+use color_eyre::eyre::WrapErr as _;
+use iroha_genesis::init_instruction_registry;
 use std::{
     fmt,
     io::{BufWriter, Write, stdout},
     process::ExitCode,
 };
-use clap::{Args as ClapArgs, Parser, Subcommand};
-use color_eyre::eyre::WrapErr as _;
-use iroha_genesis::init_instruction_registry;
 mod client_configs;
 mod codec;
 mod crypto;
@@ -210,8 +210,8 @@ impl<T: Write> RunArgs<T> for MarkdownHelp {
 }
 #[cfg(test)]
 mod tests {
-    use clap::{CommandFactory, Error};
     use super::{Cli, Parser};
+    use clap::{CommandFactory, Error};
     fn parse(args: &str) -> Result<Cli, Error> {
         Cli::try_parse_from(args.split(' '))
     }

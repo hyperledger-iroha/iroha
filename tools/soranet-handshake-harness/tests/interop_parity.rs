@@ -1,9 +1,9 @@
+use norito::json::{self, Value};
 use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     fs,
     path::{Path, PathBuf},
 };
-use norito::json::{self, Value};
 const LANGUAGES: &[&str] = &["rust", "go", "cpp"];
 #[test]
 fn interop_vectors_stay_in_sync_across_languages() {

@@ -1,9 +1,9 @@
-use std::collections::HashSet;
 use iroha_data_model::prelude::PublicKey;
 use iroha_primitives::numeric::Quantity;
 use ivm::mock_wsv::{
     AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId, PermissionToken,
 };
+use std::collections::HashSet;
 fn num(value: u64) -> Quantity {
     Quantity::from(value)
 }

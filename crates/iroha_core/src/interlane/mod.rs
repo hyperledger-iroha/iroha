@@ -3,14 +3,16 @@
 //! This module wires the NX-10 domain-separated Merkle descriptors into a
 //! deterministic registry so admission/compliance logic can look up the
 //! commitments advertised by each lane.
+use crate::governance::manifest::{LaneManifestRegistry, LaneManifestStatus};
+use iroha_crypto::privacy::{
+    LaneCommitmentId, LanePrivacyCommitment, PrivacyError, PrivacyWitness,
+};
+use iroha_data_model::nexus::{DataSpaceId, LaneId, LanePrivacyProof};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
-use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, PrivacyError, PrivacyWitness};
-use iroha_data_model::nexus::{DataSpaceId, LaneId, LanePrivacyProof};
 use thiserror::Error;
-use crate::governance::manifest::{LaneManifestRegistry, LaneManifestStatus};
 /// Registry of per-lane privacy commitments derived from governance manifests.
 #[derive(Debug, Clone, Default)]
 pub struct LanePrivacyRegistry {
@@ -179,6 +181,7 @@ pub enum LanePrivacyRegistryError {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{
         MerkleProof,
         privacy::{
@@ -190,7 +193,6 @@ mod tests {
         DataSpaceId, LaneId, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
         LaneStorageProfile, LaneVisibility,
     };
-    use super::*;
     fn status_with_commitments(
         lane: LaneId,
         dataspace: DataSpaceId,

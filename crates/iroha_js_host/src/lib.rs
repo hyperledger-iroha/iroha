@@ -26,17 +26,6 @@ macro_rules! norito_json {
         norito::json::Value::Object(object)
     }};
 }
-use std::{
-    collections::{BTreeMap, HashSet},
-    convert::{TryFrom, TryInto},
-    fmt, fs, mem,
-    num::{NonZeroU32, NonZeroU64},
-    panic::{AssertUnwindSafe, catch_unwind},
-    path::PathBuf,
-    ptr,
-    str::FromStr,
-    time::Duration,
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake3::hash as blake3_hash;
 use halo2_proofs::{
@@ -181,6 +170,17 @@ use iroha_data_model::{
         ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
         ValidationFeeTreasuryPayoutBindingV1,
     },
+};
+use std::{
+    collections::{BTreeMap, HashSet},
+    convert::{TryFrom, TryInto},
+    fmt, fs, mem,
+    num::{NonZeroU32, NonZeroU64},
+    panic::{AssertUnwindSafe, catch_unwind},
+    path::PathBuf,
+    ptr,
+    str::FromStr,
+    time::Duration,
 };
 // These types only construct fixtures in the in-file test module.
 // Keeping them cfg-scoped avoids carrying test topology into production builds.
@@ -13247,7 +13247,7 @@ mod tests {
             "equal display labels must not collapse distinct genesis identities"
         );
     }
-    use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
+    use super::*;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
@@ -13330,8 +13330,8 @@ mod tests {
         PolicyStatus, RolloutPhase, TransportPolicy, prelude::BrowserExtensionManifest,
         proxy::ProxyMode, taikai_cache::PromotionStats,
     };
+    use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
     use tempfile::tempdir;
-    use super::*;
     #[test]
     fn retired_generic_zk_instruction_variants_are_not_parseable() {
         for variant in [

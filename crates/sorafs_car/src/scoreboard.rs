@@ -5,6 +5,13 @@
 //! instances that the orchestrator can schedule deterministically. Each run
 //! evaluates capability constraints, honouring range and stream budgets, and
 //! applies the weighting formula described in `specs/sorafs_orchestrator_plan.md`.
+use crate::{
+    CarBuildPlan, ChunkFetchSpec,
+    multi_fetch::{CapabilityMismatch, FetchProvider, ProviderMetadata, provider_can_serve_chunk},
+};
+use norito::json::{Map, Number, Value, to_string_pretty};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::HashMap,
     fs,
@@ -13,13 +20,6 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use norito::json::{Map, Number, Value, to_string_pretty};
-use crate::{
-    CarBuildPlan, ChunkFetchSpec,
-    multi_fetch::{CapabilityMismatch, FetchProvider, ProviderMetadata, provider_can_serve_chunk},
-};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 /// Default cap (in milliseconds) applied when normalising latency scores.
 const DEFAULT_LATENCY_CAP_MS: u32 = 5_000;
 /// Default integer scale used when converting normalised weights into scheduler credits.
@@ -712,11 +712,11 @@ fn number_from_f64(value: f64) -> io::Result<Number> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use blake3::Hash;
     use norito::json::Value;
     use sorafs_chunker::ChunkProfile;
     use tempfile::{TempDir, tempdir};
-    use super::*;
     #[test]
     fn non_finite_scoreboard_numbers_are_rejected() {
         assert!(weight_from_normalised(f64::NAN, DEFAULT_WEIGHT_SCALE).is_err());

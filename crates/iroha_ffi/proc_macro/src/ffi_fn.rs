@@ -1,10 +1,10 @@
-use proc_macro2::TokenStream;
-use quote::quote;
-use syn::{Ident, visit_mut::VisitMut};
 use crate::{
     getset_gen::{gen_resolve_type, gen_store_name},
     impl_visitor::{Arg, FnDescriptor},
 };
+use proc_macro2::TokenStream;
+use quote::quote;
+use syn::{Ident, visit_mut::VisitMut};
 fn prune_fn_declaration_attributes<'a>(
     attrs: impl Iterator<Item = &'a syn::Attribute>,
 ) -> Vec<&'a syn::Attribute> {

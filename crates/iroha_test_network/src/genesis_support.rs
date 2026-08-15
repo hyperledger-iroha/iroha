@@ -1,8 +1,4 @@
 //! Shared orchestration helpers for preparing and validating local genesis artifacts.
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
@@ -14,6 +10,10 @@ use iroha_data_model::{
     parameter::system::SumeragiConsensusMode,
 };
 use iroha_genesis::{RawGenesisTransaction, ValidatedGenesisBundle};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 /// Exact placeholder accepted while a genesis hash is not yet known.
 ///
 /// The placeholder is replaced only in memory and only by
@@ -314,11 +314,11 @@ fn load_node_config(path: &Path, allow_unresolved_hash: bool) -> Result<(actual:
 }
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use super::*;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
     use iroha_data_model::peer::PeerId;
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
-    use super::*;
+    use std::fs;
     const CONFIGURED_HASH: &str =
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
     const FIXTURE_GENESIS_PUBLIC_KEY: &str =

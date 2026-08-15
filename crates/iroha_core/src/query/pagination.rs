@@ -52,9 +52,9 @@ impl<I: DoubleEndedIterator + ExactSizeIterator> DoubleEndedIterator for Paginat
 impl<I: Iterator + core::iter::FusedIterator> core::iter::FusedIterator for Paginated<I> {}
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::query::parameters::Pagination;
     use nonzero_ext::nonzero;
-    use super::*;
     #[test]
     fn empty() {
         assert_eq!(

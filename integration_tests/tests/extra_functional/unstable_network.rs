@@ -1,13 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Adversarial relay and partition scenarios for unstable networks.
-use std::{
-    any::Any,
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-    panic::{self, AssertUnwindSafe},
-    sync::Arc,
-    time::{Duration, Instant},
-};
 use eyre::{Result, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::sandbox;
@@ -27,6 +19,14 @@ use nonzero_ext::nonzero;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
 use relay::P2pRelay;
+use std::{
+    any::Any,
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    panic::{self, AssertUnwindSafe},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::{
     self,
     task::spawn_blocking,
@@ -50,6 +50,13 @@ mod relay {
     //! It is possible to "suspend" a particular peer in the network by suspending all incoming/outgoing packages from/to other peers.
     //! Relay provides [`P2pRelay::suspend`] to acquire a [`Suspend`] control (per-peer), which provides
     //! [`Suspend::activate`] and [`Suspend::deactivate`] in turn.
+    use futures_util::{StreamExt, stream::FuturesUnordered};
+    use iroha_data_model::{peer::PeerId, prelude::Peer};
+    use iroha_primitives::{
+        addr::{SocketAddr, socket_addr},
+        unique_vec::UniqueVec,
+    };
+    use iroha_test_network::{Network, fslock_ports::AllocatedPort};
     use std::{
         collections::HashMap,
         iter::once,
@@ -59,13 +66,6 @@ mod relay {
             atomic::{AtomicBool, Ordering},
         },
     };
-    use futures_util::{StreamExt, stream::FuturesUnordered};
-    use iroha_data_model::{peer::PeerId, prelude::Peer};
-    use iroha_primitives::{
-        addr::{SocketAddr, socket_addr},
-        unique_vec::UniqueVec,
-    };
-    use iroha_test_network::{Network, fslock_ports::AllocatedPort};
     use tokio::{
         io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
         net::{TcpListener, TcpStream},
@@ -1746,8 +1746,8 @@ struct RoundContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
     use iroha_crypto::KeyPair;
+    use std::collections::BTreeSet;
     #[test]
     fn faulty_peer_selection_preserves_the_active_leader() {
         let peer_ids: Vec<_> = (0..10)

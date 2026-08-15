@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test for /v1/zk/proof-tags/{backend}/{hash} (feature `zk-proof-tags`).
 #![cfg(all(feature = "app_api", feature = "zk-proof-tags"))]
-use std::sync::Arc;
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -11,6 +10,7 @@ use iroha_core::{
 };
 use iroha_data_model::proof::ProofId;
 use nonzero_ext::nonzero;
+use std::sync::Arc;
 use tower::ServiceExt as _;
 #[tokio::test]
 async fn proof_tags_returns_ascii_tags() {

@@ -1,8 +1,4 @@
-//! Canonical first-message reconstruction for one direct-response chunk.
-//!
-//! This is verifier-only arithmetic. It reuses the governed T256
-//! Bulletproof basis and emits one canonical point encoding, but grants no
-//! verification receipt, admission capability, or release authority.
+//! Canonical creator/verifier first-message arithmetic; grants no receipt, admission, or release.
 
 #![allow(dead_code, reason = "the semantic direct verifier is not wired yet")]
 

@@ -1,12 +1,12 @@
 //! Network configuration presets, topology metadata, and filesystem helpers.
+use iroha_data_model::{
+    block::consensus_v2::is_valid_committee_size, parameter::system::SumeragiConsensusMode,
+};
 use std::{
     fmt, fs, io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener},
     num::NonZeroU64,
     path::{Path, PathBuf},
-};
-use iroha_data_model::{
-    block::consensus_v2::is_valid_committee_size, parameter::system::SumeragiConsensusMode,
 };
 const MIN_PEER_COUNT: usize = 4;
 const MAX_PEER_COUNT: usize = 7;

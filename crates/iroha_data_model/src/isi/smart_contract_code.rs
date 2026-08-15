@@ -415,14 +415,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSmartContractBytes {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         account::AccountId,
         nexus::DataSpaceId,
         smart_contract::{ContractAddress, ContractAlias},
     };
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use norito::core::DecodeFromSlice;
     fn account() -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519)
             .expect("derive checked smart-contract-code fixture account keypair");

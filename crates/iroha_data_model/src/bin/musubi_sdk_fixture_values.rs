@@ -1,5 +1,5 @@
 //! Typed construction of the shared Musubi SDK V1 fixture.
-use std::fmt::Debug;
+use crate::musubi_fixture_values::{account, fixture_network_id, keypair};
 use iroha_crypto::SignatureOf;
 use iroha_data_model::{
     account::AccountId,
@@ -44,7 +44,7 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
-use crate::musubi_fixture_values::{account, fixture_network_id, keypair};
+use std::fmt::Debug;
 // Public test material only. Every non-zero Ed25519 seed has one fixture role.
 const SDK_PUBLISHER_SEED: u8 = 0x31;
 const SDK_RECEIPT_BROKER_SEED: u8 = 0x32;
@@ -790,9 +790,9 @@ pub(crate) fn sdk_document() -> Value {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{NetworkId, block::BlockHeader};
-    use super::*;
     fn substituted_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0xA7; Hash::LENGTH]),

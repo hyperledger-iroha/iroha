@@ -1,7 +1,6 @@
 //! Router-level coverage for the authoritative Sumeragi v2 leader endpoint.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "telemetry")]
-use std::sync::Mutex;
 use axum::{Router, body::Body, http::Request, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::sumeragi::status;
@@ -10,6 +9,7 @@ use iroha_data_model::block::consensus_v2::{
     ConsensusMode, DualQuorum, HeightContext, HeightContextId, PROTOCOL_VERSION,
     SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
 };
+use std::sync::Mutex;
 use tower::ServiceExt as _;
 static LEADER_ENDPOINT_TEST_LOCK: Mutex<()> = Mutex::new(());
 #[tokio::test]

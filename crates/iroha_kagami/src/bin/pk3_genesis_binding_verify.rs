@@ -1,12 +1,5 @@
 //! Verify that one canonical signed genesis is the semantic realization of
 //! one policy genesis and is signed by the expected root account.
-use std::{
-    fs::{self, OpenOptions},
-    io::Read as _,
-    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
-    path::{Path, PathBuf},
-    process::ExitCode,
-};
 use clap::Parser;
 use iroha_core::validate_genesis_block;
 use iroha_crypto::PublicKey;
@@ -20,6 +13,13 @@ use iroha_data_model::{
 use iroha_genesis::{
     GENESIS_MANIFEST_JSON_MAX_BYTES_V1, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
     decode_signed_genesis,
+};
+use std::{
+    fs::{self, OpenOptions},
+    io::Read as _,
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
+    path::{Path, PathBuf},
+    process::ExitCode,
 };
 const MAX_POLICY_GENESIS_BYTES: usize = GENESIS_MANIFEST_JSON_MAX_BYTES_V1;
 const MAX_SIGNED_GENESIS_BYTES: usize = SIGNED_GENESIS_MAX_BYTES_V1;
@@ -254,8 +254,8 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt as _;
     use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
     #[test]
     fn owner_file_reader_rejects_first_byte_over_limit() {
         let directory = tempfile::tempdir().expect("create owner-file test directory");

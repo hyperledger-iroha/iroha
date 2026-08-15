@@ -1,5 +1,4 @@
 //! Canonical decoder for unsigned verifying-key transaction drafts.
-use std::str::FromStr;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
@@ -14,6 +13,7 @@ use pyo3::{
     pyfunction,
     types::{PyBytes, PyDict, PyDictMethods},
 };
+use std::str::FromStr;
 #[derive(Clone, Copy)]
 enum VerifyingKeyOperation {
     Register,
@@ -183,11 +183,11 @@ pub(crate) fn decode_zk_vk_transaction_payload_py(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::BlockHeader, proof::VerifyingKeyBox, transaction::FeePaymentIntent, zk::BackendTag,
     };
-    use super::*;
     const CANONICAL_GENESIS_HASH: [u8; 32] = [0xA5; 32];
     fn network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(

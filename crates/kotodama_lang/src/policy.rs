@@ -4,11 +4,11 @@
 //! forbids aggregate, optional, result, JSON, secret, and state-map keys. Runtime
 //! iteration orders the encoded key bytes, so peers do not depend on host locale,
 //! hash iteration order, or numeric representation.
-use std::collections::HashSet;
 use super::semantic::{
     self, ExprKind, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedProgram,
     TypedStatement,
 };
+use std::collections::HashSet;
 /// Violation emitted when on-chain policy checks fail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyError {

@@ -1,8 +1,4 @@
 //! Native preparation adapter for the shared artifact-admission crate.
-use std::sync::Arc;
-pub use ivm_artifact_admission::{
-    ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
-};
 use crate::{
     ProgramMetadata, SyscallPolicy,
     ivm::{
@@ -12,6 +8,10 @@ use crate::{
     metadata::{EmbeddedContractInterfaceV1, ParsedProgramMetadata},
     prepared::{PreparedContract, PreparedContractParts, PreparedControlFlow},
 };
+pub use ivm_artifact_admission::{
+    ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
+};
+use std::sync::Arc;
 /// Prepare a validated self-describing contract for repeated VM loading.
 ///
 /// Admission is delegated to [`ivm_artifact_admission`]. This module only

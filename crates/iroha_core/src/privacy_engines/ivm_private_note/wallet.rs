@@ -5,6 +5,14 @@
 //! private note. Associated data authenticates the pool, governed program,
 //! recipient, ephemeral key, and public note commitment. The action digest
 //! cannot be included because it already commits the ciphertext.
+use super::relation::{PrivateNotePlaintextV1, derive_note_commitment_v1};
+use crate::privacy_engines::{
+    prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1},
+    x25519_wallet::{
+        X25519WalletErrorV1, validate_x25519_public_key_v1, x25519_public_key_v1,
+        x25519_shared_secret_v1,
+    },
+};
 use chacha20poly1305::{
     XChaCha20Poly1305,
     aead::{Aead as _, KeyInit as _, Payload},
@@ -19,14 +27,6 @@ use rand_core_06::{CryptoRng, OsRng, RngCore};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
-use super::relation::{PrivateNotePlaintextV1, derive_note_commitment_v1};
-use crate::privacy_engines::{
-    prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1},
-    x25519_wallet::{
-        X25519WalletErrorV1, validate_x25519_public_key_v1, x25519_public_key_v1,
-        x25519_shared_secret_v1,
-    },
-};
 const NOTE_MAGIC_V1: [u8; 4] = *b"IPW1";
 const RECIPIENT_ID_DOMAIN_V1: &[u8] = b"iroha.privacy.ivm-private-note.recipient-id.v1";
 const NOTE_AAD_DOMAIN_V1: &[u8] = b"iroha.privacy.ivm-private-note.note-aad.v1";
@@ -390,10 +390,10 @@ pub fn decrypt_ivm_private_wallet_note_v1(
 }
 #[cfg(test)]
 mod tests {
-    use rand_08::{SeedableRng as _, rngs::StdRng};
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use super::*;
     use crate::privacy_engines::ivm_private_note::relation::derive_note_authority_v1;
+    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     #[derive(Clone, Copy)]
     enum AuditedEntropyMode {
         Healthy,

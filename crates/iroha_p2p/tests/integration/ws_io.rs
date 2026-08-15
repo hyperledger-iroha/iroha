@@ -230,6 +230,7 @@ where
 }
 #[cfg(test)]
 mod tests {
+    use super::WsByteStream;
     use core::{
         pin::Pin,
         task::{Context, Poll},
@@ -237,7 +238,6 @@ mod tests {
     use futures::{SinkExt as _, StreamExt as _, task::noop_waker_ref};
     use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf};
     use tokio_tungstenite::{WebSocketStream, client_async};
-    use super::WsByteStream;
     async fn websocket_pair(
         capacity: usize,
     ) -> (

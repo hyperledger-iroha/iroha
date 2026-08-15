@@ -1,7 +1,7 @@
 //! Validate that SCCP consensus state cannot enter through node-local TOML.
-use std::path::PathBuf;
 use iroha_config::parameters::user::Root as UserConfig;
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+use std::path::PathBuf;
 fn strip_ansi_codes(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();

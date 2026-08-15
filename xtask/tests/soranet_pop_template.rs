@@ -1,7 +1,7 @@
-use std::{fs, io::Read, path::Path};
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use sha2::{Digest, Sha256};
+use std::{fs, io::Read, path::Path};
 use tempfile::tempdir;
 #[test]
 fn soranet_pop_template_renders_fixture() {

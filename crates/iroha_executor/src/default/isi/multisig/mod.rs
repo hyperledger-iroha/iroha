@@ -1,3 +1,8 @@
+use super::*;
+use crate::data_model::{
+    prelude::Json,
+    query::{builder::SingleQueryError, dsl::CompoundPredicate, error::FindError},
+};
 use iroha_executor_data_model::isi::multisig::*;
 use iroha_smart_contract::data_model::{
     account::Account,
@@ -7,11 +12,6 @@ use iroha_smart_contract::data_model::{
     },
 };
 use norito::json::Value;
-use super::*;
-use crate::data_model::{
-    prelude::Json,
-    query::{builder::SingleQueryError, dsl::CompoundPredicate, error::FindError},
-};
 mod account;
 mod transaction;
 impl VisitExecute for MultisigInstructionBox {

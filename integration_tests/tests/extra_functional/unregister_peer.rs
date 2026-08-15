@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Peer unregister flows under churn.
-use std::time::{Duration, Instant};
 use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -10,6 +9,7 @@ use iroha::{
 use iroha_test_network::{NetworkBuilder, NetworkPeer, domain_setup_instruction};
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
+use std::time::{Duration, Instant};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},

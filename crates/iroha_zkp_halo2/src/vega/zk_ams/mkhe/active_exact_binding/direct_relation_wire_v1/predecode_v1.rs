@@ -1,10 +1,14 @@
+#[cfg(test)]
+use super::super::super::exact_eight_chunk_membership::{
+    ExactEightChunkMembershipErrorV1, ExactEightChunkMembershipEvidenceV1,
+};
 use super::super::super::{
     ZkAmsMkheErrorV1,
     direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1,
     exact_eight_chunk_membership::{
         DirectRelationBoundOneMembershipRoleV1, DirectRelationBoundTwoMembershipRoleV1,
-        ExactEightChunkMembershipContextV1, ExactEightChunkMembershipEvidenceV1,
-        ExactEightChunkMembershipRoleV1, PreflightedExactEightChunkMembershipWireV1,
+        ExactEightChunkMembershipContextV1, ExactEightChunkMembershipRoleV1,
+        PreflightedExactEightChunkMembershipWireV1,
     },
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
@@ -14,14 +18,14 @@ use super::super::{
 };
 use super::statement_v1::ExpectedDirectRelationStatementV1;
 use super::{
-    BLIND_RESPONSE_BYTES_V1, BODY_BYTES_V1, CHALLENGE_SEED_BYTES_V1,
+    BLIND_RESPONSE_BYTES_V1, BODY_BYTES_V1, CHALLENGE_SEED_BYTES_V1, CHUNKS_PER_WITNESS_V1,
     DIRECT_BOUND_ONE_MEMBERSHIP_BYTES_V1, DIRECT_BOUND_TWO_MEMBERSHIP_BYTES_V1,
     DirectRelationFirstMessageDigestsV1, DirectRelationPublicObjectsV1, HEADER_BYTES_V1,
-    MEMBERSHIP_BYTES_V1, MEMBERSHIP_FRAME_OFFSETS_V1, RESPONSE_BYTES_V1, canonical_header,
-    challenge_vector_from_first_messages, membership_share_statement_digest,
+    MEMBERSHIP_BYTES_V1, MEMBERSHIP_FRAME_OFFSETS_V1, RESPONSE_BYTES_V1, WITNESS_COUNT_V1,
+    canonical_header, challenge_vector_from_first_messages, membership_share_statement_digest,
     ordered_membership_roots,
 };
-use crate::vega::VegaT256ScalarV1 as Scalar;
+use crate::vega::{VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar};
 #[path = "predecode_v1/galois_semantic_verifier_v1.rs"]
 mod galois_semantic_verifier_v1;
 pub(in super::super) use galois_semantic_verifier_v1::{
@@ -36,6 +40,16 @@ pub(super) const MEMBERSHIP_HEADER_BYTES_V1: usize = 339;
 pub(super) const BOUND_ONE_CHUNK_WIRE_BYTES_V1: usize = 1_494;
 pub(super) const BOUND_TWO_CHUNK_WIRE_BYTES_V1: usize = 1_560;
 pub(super) const INNER_COMMITMENT_OFFSET_V1: usize = 12;
+const INNER_PROOF_OFFSET_V1: usize = 47;
+pub(super) const BORROWED_MEMBERSHIP_PROOF_ALLOCATIONS_ELIDED_V1: usize =
+    WITNESS_COUNT_V1 * CHUNKS_PER_WITNESS_V1;
+pub(super) const BORROWED_MEMBERSHIP_PROOF_LOGICAL_BYTES_ELIDED_V1: usize =
+    2 * CHUNKS_PER_WITNESS_V1 * (BOUND_ONE_CHUNK_WIRE_BYTES_V1 - INNER_PROOF_OFFSET_V1)
+        + 4 * CHUNKS_PER_WITNESS_V1 * (BOUND_TWO_CHUNK_WIRE_BYTES_V1 - INNER_PROOF_OFFSET_V1);
+const _: () = {
+    assert!(BORROWED_MEMBERSHIP_PROOF_ALLOCATIONS_ELIDED_V1 == 48);
+    assert!(BORROWED_MEMBERSHIP_PROOF_LOGICAL_BYTES_ELIDED_V1 == 71_568);
+};
 struct PreflightedDirectRelationMembershipFramesV1<'a> {
     bound_one:
         [PreflightedExactEightChunkMembershipWireV1<'a, DirectRelationBoundOneMembershipRoleV1>; 2],
@@ -92,6 +106,53 @@ impl<'a> PreflightedDirectRelationMembershipFramesV1<'a> {
             bound_two,
         })
     }
+    fn verify_replayable(&self) -> Result<(), ZkAmsMkheErrorV1> {
+        for evidence in &self.bound_one {
+            evidence
+                .verify_replayable()
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        }
+        for evidence in &self.bound_two {
+            evidence
+                .verify_replayable()
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        }
+        Ok(())
+    }
+    #[cfg(test)]
+    fn verify_replayable_with_for_test<F>(
+        &self,
+        mut verify_chunk: F,
+    ) -> Result<(), ZkAmsMkheErrorV1>
+    where
+        F: FnMut(usize, [u8; 32], u16, &[u8]) -> Result<[u8; 32], ExactEightChunkMembershipErrorV1>,
+    {
+        for (slot, evidence) in self.bound_one.iter().enumerate() {
+            evidence
+                .verify_replayable_with_for_test(|context, ordinal, wire| {
+                    verify_chunk(slot, context, ordinal, wire)
+                })
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        }
+        for (index, evidence) in self.bound_two.iter().enumerate() {
+            evidence
+                .verify_replayable_with_for_test(|context, ordinal, wire| {
+                    verify_chunk(index + 2, context, ordinal, wire)
+                })
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        }
+        Ok(())
+    }
+    fn copied_commitments(&self) -> [[Point; CHUNKS_PER_WITNESS_V1]; WITNESS_COUNT_V1] {
+        [
+            *self.bound_one[0].commitments(),
+            *self.bound_one[1].commitments(),
+            *self.bound_two[0].commitments(),
+            *self.bound_two[1].commitments(),
+            *self.bound_two[2].commitments(),
+            *self.bound_two[3].commitments(),
+        ]
+    }
     fn validate_expected(
         &self,
         context: ZkAmsMkheDirectCeremonyContextV1,
@@ -127,6 +188,7 @@ impl<'a> PreflightedDirectRelationMembershipFramesV1<'a> {
         }
         Ok(())
     }
+    #[cfg(test)]
     #[allow(
         clippy::type_complexity,
         reason = "fixed membership arrays preserve reviewed direct-relation tuple order"
@@ -190,9 +252,9 @@ pub(super) fn owned_membership_materializations_for_test() -> usize {
 pub(super) fn preflight_and_materialize_membership_frames_for_test(
     membership: &[u8],
 ) -> Result<(), ZkAmsMkheErrorV1> {
-    PreflightedDirectRelationMembershipFramesV1::preflight(membership)?
-        .materialize()
-        .map(|_| ())
+    let preflighted = PreflightedDirectRelationMembershipFramesV1::preflight(membership)?;
+    preflighted.materialize()?;
+    Ok(())
 }
 fn preflight_membership_frame<'a, R: ExactEightChunkMembershipRoleV1>(
     membership: &'a [u8],
@@ -272,26 +334,22 @@ pub(in super::super) struct PredecodedDirectRelationProofV1<'a> {
     relation: PersistentDirectRelationV1,
     statement_digest: [u8; 32],
     transcript_context: ExactBindingTranscriptContextV1,
-    bound_one_membership:
-        [ExactEightChunkMembershipEvidenceV1<DirectRelationBoundOneMembershipRoleV1>; 2],
-    bound_two_membership:
-        [ExactEightChunkMembershipEvidenceV1<DirectRelationBoundTwoMembershipRoleV1>; 4],
+    membership_frames: PreflightedDirectRelationMembershipFramesV1<'a>,
     responses: &'a [u8],
     blind_responses: &'a [u8],
     challenge_seed: [u8; 32],
 }
-impl PredecodedDirectRelationProofV1<'_> {
-    fn validate_reconstructed_challenge(
-        &self,
-        first_messages: DirectRelationFirstMessageDigestsV1,
-    ) -> Result<[u32; 4], ZkAmsMkheErrorV1> {
-        let (seed, challenges) =
-            challenge_vector_from_first_messages(self.transcript_context, first_messages)?;
-        if seed != self.challenge_seed {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
-        Ok(challenges)
+fn validate_reconstructed_challenge(
+    transcript_context: ExactBindingTranscriptContextV1,
+    challenge_seed: [u8; 32],
+    first_messages: DirectRelationFirstMessageDigestsV1,
+) -> Result<[u32; 4], ZkAmsMkheErrorV1> {
+    let (seed, challenges) =
+        challenge_vector_from_first_messages(transcript_context, first_messages)?;
+    if seed != challenge_seed {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
+    Ok(challenges)
 }
 /// Strictly predecode one exact candidate without proving any relation.
 pub(in super::super) fn predecode_direct_relation_proof_v1<'a>(
@@ -371,18 +429,17 @@ pub(in super::super) fn predecode_direct_relation_proof_v1<'a>(
         persistent_graph_digest: expected.lineage_digest(),
     };
     transcript_context.validate()?;
-    // Owned proof buffers are allocated only after the complete borrowed
-    // proof, all six role frames, every response, and every transcript axis
-    // have passed their exact preflight. The move-only token has no visibility
-    // outside this predecoder in non-test builds.
-    let (bound_one_membership, bound_two_membership) = preflighted.materialize()?;
+    // All six preflighted frames and the candidate proof remain borrowed and
+    // live. Avoiding their 48 owned proof buffers elides exactly 71,568
+    // logical proof-payload bytes and 48 retained per-proof Vec allocations;
+    // this is not a total-allocation, heap, or RSS claim. No move-only
+    // authority is constructed by this predecoder.
     Ok(PredecodedDirectRelationProofV1 {
         capability,
         relation: expected.relation(),
         statement_digest: expected.statement_digest(),
         transcript_context,
-        bound_one_membership,
-        bound_two_membership,
+        membership_frames: preflighted,
         responses,
         blind_responses,
         challenge_seed,

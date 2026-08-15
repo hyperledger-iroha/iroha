@@ -8,7 +8,6 @@
 //! The metadata header encodes the VM version, execution mode flags, optional
 //! vector length and cycle limit.  It also reserves bits for hardware
 //! transactional memory (HTM) support.
-use std::io::Write;
 use crate::error::VMError;
 use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, ContractErrorCodeDescriptor, EntryPointKind, EntrypointDescriptor,
@@ -21,6 +20,7 @@ use norito::{
         serialize_to_buffer,
     },
 };
+use std::io::Write;
 /// Domain separator for the canonical deployable contract artifact hash.
 ///
 /// The hash deliberately covers the complete `.to` image, including the fixed

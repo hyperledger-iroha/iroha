@@ -1,3 +1,6 @@
+use super::*;
+use iroha_crypto::PublicKey;
+use iroha_data_model::peer::PeerId;
 #[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::{
@@ -10,10 +13,7 @@ use std::{
     sync::{Mutex, OnceLock},
     time::Duration,
 };
-use iroha_crypto::PublicKey;
-use iroha_data_model::peer::PeerId;
 use tokio::runtime::Runtime;
-use super::*;
 
 fn collect_files_recursive(
     root: &Path,

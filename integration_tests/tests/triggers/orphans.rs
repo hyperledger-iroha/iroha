@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Orphaned trigger cleanup scenarios.
-use std::time::{Duration, Instant};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
@@ -9,6 +8,7 @@ use iroha::{
 use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
+use std::time::{Duration, Instant};
 use tokio::task::spawn_blocking;
 const TRIGGER_STATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TRIGGER_STATE_TIMEOUT: Duration = Duration::from_secs(30);

@@ -1,3 +1,4 @@
+use crate::state::StateTransaction;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     isi::error::{InstructionExecutionError as Error, InvalidParameterError},
@@ -5,7 +6,6 @@ use iroha_data_model::{
     prelude::*,
 };
 use ivm::limits::GasScheduleEntry;
-use crate::state::StateTransaction;
 /// Default maximum size in bytes for JSON payloads (1 MiB).
 pub const DEFAULT_JSON_LIMIT: usize = 1_048_576;
 /// Enforce a maximum JSON size for values, consulting a custom parameter if present.

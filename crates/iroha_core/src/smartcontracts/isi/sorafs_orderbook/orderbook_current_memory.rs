@@ -1,7 +1,7 @@
 //! Bounded orderbook current-memory helpers and their focused regressions.
+use super::*;
 use iroha_data_model::account::{AccountController, curve::CurveId};
 use sorafs_manifest::orderbook::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1;
-use super::*;
 /// Compare one signed-payload owner literal with its authoritative account
 /// without populating the process-wide I105 cache or retaining parse scratch.
 pub(super) fn owner_literal_matches_for_current(
@@ -342,6 +342,12 @@ fn consume_exact(remaining: &mut &[u8], expected: &[u8]) -> bool {
 }
 #[cfg(test)]
 pub(super) mod tests {
+    use super::super::tests::*;
+    use super::*;
+    use crate::smartcontracts::isi::query::{
+        QueryLimits, SingularQueryOutputLimits, ValidQueryRequest,
+    };
+    use crate::state::StateReadOnly;
     use iroha_data_model::{
         query::QueryRequest,
         sorafs::orderbook::{
@@ -352,10 +358,6 @@ pub(super) mod tests {
     use sorafs_manifest::orderbook::{
         ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1, decode_trade_event_v1_with_limits,
     };
-    use super::super::tests::*;
-    use super::*;
-    use crate::smartcontracts::isi::query::{QueryLimits, SingularQueryOutputLimits, ValidQueryRequest};
-    use crate::state::StateReadOnly;
     #[test]
     fn receipt_index_bounded_scratch_preserves_order_and_rejects_duplicate_ids() {
         let channel_id = [0x41; 32];

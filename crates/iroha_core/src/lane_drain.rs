@@ -1,10 +1,5 @@
 //! Crash-safe local signing guard for automatic lane drain certificates.
-use std::{
-    collections::BTreeSet,
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    path::{Path, PathBuf},
-};
+use crate::{lane_consensus::validate_lane_drain_certificate_body, sumeragi::consensus::Phase};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     block::consensus::LaneBlockVoteBodyV1,
@@ -13,10 +8,15 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
-use thiserror::Error;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use crate::{lane_consensus::validate_lane_drain_certificate_body, sumeragi::consensus::Phase};
+use std::{
+    collections::BTreeSet,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
+use thiserror::Error;
 const GUARD_VERSION: u8 = 1;
 const GUARD_DIRECTORY: &str = "lane-drain-signing-guard-v1";
 const RECORD_EXTENSION: &str = "norito";

@@ -2,7 +2,6 @@
 //! Integration tests for /v1/zk/prover/reports endpoints (`app_api`).
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::similar_names, unused_imports)]
-use std::sync::{Arc, Once};
 use axum::{
     Router,
     response::IntoResponse,
@@ -16,6 +15,7 @@ use iroha_data_model::{
     zk::BackendTag,
 };
 use iroha_torii::zk_attachments::AttachmentTenant;
+use std::sync::{Arc, Once};
 use tower::ServiceExt as _;
 const FIXTURE_BACKEND: &str = "halo2/ipa";
 const FIXTURE_CIRCUIT_ID: &str = "tiny-add-public";

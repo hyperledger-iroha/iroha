@@ -453,11 +453,6 @@ impl_decode_fields!(WithdrawFeeSponsorProgram {
 });
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_primitives::numeric::{Numeric, Quantity};
-    use norito::codec::{Decode, Encode};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         block::{BlockHeader, consensus::LaneBlockCommitment},
@@ -466,6 +461,11 @@ mod tests {
             FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect, LaneId,
         },
     };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::{Numeric, Quantity};
+    use norito::codec::{Decode, Encode};
+    use norito::core::DecodeFromSlice;
+    use std::num::NonZeroU64;
     #[derive(Encode)]
     struct ForgedRegisterVerifiedFeeSponsorVaultAllocation {
         program_id: FeeSponsorProgramId,

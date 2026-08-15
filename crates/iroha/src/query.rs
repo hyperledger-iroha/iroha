@@ -1,18 +1,5 @@
 //! Functions and types to make queries to the Iroha peer.
 #![allow(clippy::result_large_err)]
-use std::{
-    collections::HashMap,
-    fmt::Debug,
-    num::NonZeroU64,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-use eyre::{Report, Result, eyre};
-use http::{StatusCode, header::CONTENT_TYPE};
-use iroha_data_model::query::QueryOutputBatchBoxTuple;
-use iroha_torii_shared::uri as torii_uri;
-use iroha_version::codec::EncodeVersioned;
-use norito::json;
-use url::Url;
 use crate::{
     client::{APPLICATION_NORITO, Client, QueryResult, ResponseReport, join_torii_url},
     crypto::KeyPair,
@@ -30,6 +17,19 @@ use crate::{
     http::{Method as HttpMethod, RequestBuilder},
     http_default::DefaultRequestBuilder,
 };
+use eyre::{Report, Result, eyre};
+use http::{StatusCode, header::CONTENT_TYPE};
+use iroha_data_model::query::QueryOutputBatchBoxTuple;
+use iroha_torii_shared::uri as torii_uri;
+use iroha_version::codec::EncodeVersioned;
+use norito::json;
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    num::NonZeroU64,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use url::Url;
 #[derive(Debug)]
 struct ClientQueryRequestHead {
     torii_url: Url,
@@ -335,10 +335,10 @@ impl QueryExecutor for Client {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
     use iroha_data_model::query::{SignedQuery, executor::prelude::FindExecutorDataModel};
     use iroha_version::codec::DecodeVersioned as _;
-    use super::*;
+    use std::sync::Arc;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked query fixture keypair")
     }
@@ -545,14 +545,12 @@ impl Client {
 }
 #[cfg(test)]
 mod query_errors_handling {
-    use std::{
-        collections::HashMap,
-        num::NonZeroU64,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-        },
-        time::Duration,
+    use super::*;
+    use crate::{
+        client::{APPLICATION_NORITO, DataModelCompatibility, DataModelCompatibilityError},
+        data_model::ValidationFail,
+        http::StatusCode as HttpStatusCode,
+        http_default::{RequestSnapshot, with_send_hook},
     };
     use http::Response;
     use iroha_config::parameters::actual::SorafsRolloutPhase;
@@ -564,14 +562,16 @@ mod query_errors_handling {
     use norito::codec::Encode;
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use sorafs_orchestrator::AnonymityPolicy;
-    use url::Url;
-    use super::*;
-    use crate::{
-        client::{APPLICATION_NORITO, DataModelCompatibility, DataModelCompatibilityError},
-        data_model::ValidationFail,
-        http::StatusCode as HttpStatusCode,
-        http_default::{RequestSnapshot, with_send_hook},
+    use std::{
+        collections::HashMap,
+        num::NonZeroU64,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
+    use url::Url;
     #[test]
     fn certain_errors() -> Result<()> {
         let responses = vec![(StatusCode::UNPROCESSABLE_ENTITY, ValidationFail::TooComplex)];

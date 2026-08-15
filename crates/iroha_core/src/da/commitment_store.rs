@@ -5,10 +5,6 @@
 //! committed-identity indexes for consensus validation. Committed block bodies in
 //! Kura are the recovery source of truth; [`crate::state::State`] hydrates this
 //! projection from those DA commitment bundles during access or rewind.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ops::Bound::{Excluded, Unbounded},
-};
 use iroha_data_model::{
     da::commitment::{
         DaCommitmentBundle, DaCommitmentKey, DaCommitmentLocation, DaCommitmentRecord,
@@ -17,6 +13,10 @@ use iroha_data_model::{
     da::types::StorageTicketId,
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Bound::{Excluded, Unbounded},
 };
 use tracing::warn;
 /// Simple index over DA commitments.
@@ -265,6 +265,7 @@ impl DaCommitmentStore {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
@@ -273,7 +274,6 @@ mod tests {
         },
         nexus::LaneId,
     };
-    use super::*;
     fn sample_record(id: u32, epoch: u64, seq: u64) -> DaCommitmentRecord {
         let id_u8 = u8::try_from(id).expect("lane id fits in u8 for test");
         let epoch_u8 = u8::try_from(epoch).unwrap_or(u8::MAX);

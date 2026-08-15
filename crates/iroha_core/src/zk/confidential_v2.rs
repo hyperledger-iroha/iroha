@@ -1,5 +1,4 @@
 use blake3::Hasher as Blake3Hasher;
-use iroha_data_model::proof::VerifyingKeyBox;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use halo2_proofs::{
     halo2curves::{
@@ -10,6 +9,7 @@ use halo2_proofs::{
 };
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use iroha_crypto::Hash as CryptoHash;
+use iroha_data_model::proof::VerifyingKeyBox;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use iroha_data_model::{
     NetworkId,
@@ -1228,6 +1228,17 @@ pub(super) mod confidential_relation_gadget {
 /// bridges between advice cells and virtual-region hashes.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(in crate::zk) mod secure_relation_v3 {
+    use super::{
+        CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
+        CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3, CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
+        CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, ConfidentialMerklePathV2,
+        ConfidentialTransferWitnessV2, ConfidentialUnshieldChangePublicInputV1,
+        ConfidentialUnshieldChangePublicInputsV1, ConfidentialUnshieldFullPublicInputV1,
+        ConfidentialUnshieldFullPublicInputsV1, ConfidentialUnshieldWitnessV2,
+        ConfidentialUnshieldWitnessV3, ConfidentialUnsignedRangeV1, KagemushaTopUpPublicInputV1,
+        KagemushaTopUpShieldPublicInputsV2, KagemushaTopUpShieldWitnessV2, Scalar,
+        confidential_relation_gadget, scalar_from_repr, scalar_from_u128,
+    };
     use halo2_base::{
         AssignedValue, Context, QuantumCell,
         gates::{
@@ -1242,17 +1253,6 @@ pub(in crate::zk) mod secure_relation_v3 {
         plonk::{Circuit, ConstraintSystem, Error as PlonkError},
     };
     use zeroize::Zeroize as _;
-    use super::{
-        CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
-        CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3, CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
-        CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, ConfidentialMerklePathV2,
-        ConfidentialTransferWitnessV2, ConfidentialUnshieldChangePublicInputV1,
-        ConfidentialUnshieldChangePublicInputsV1, ConfidentialUnshieldFullPublicInputV1,
-        ConfidentialUnshieldFullPublicInputsV1, ConfidentialUnshieldWitnessV2,
-        ConfidentialUnshieldWitnessV3, ConfidentialUnsignedRangeV1, KagemushaTopUpPublicInputV1,
-        KagemushaTopUpShieldPublicInputsV2, KagemushaTopUpShieldWitnessV2, Scalar,
-        confidential_relation_gadget, scalar_from_repr, scalar_from_u128,
-    };
     const MINIMUM_UNUSABLE_ROWS: usize = 9;
     fn canonical_scalar(bytes: [u8; 32], label: &str) -> Result<Scalar, String> {
         scalar_from_repr(bytes).ok_or_else(|| format!("{label} must be a canonical Pasta scalar"))
@@ -2590,9 +2590,9 @@ pub(in crate::zk) mod secure_relation_v3 {
     }
     #[cfg(test)]
     mod tests {
-        use halo2_proofs::dev::MockProver;
         use super::*;
         use crate::zk::confidential_v2::{confidential_poseidon_hash_v3, scalar_to_repr_bytes};
+        use halo2_proofs::dev::MockProver;
         fn native_hash(domain: u64, inputs: &[Scalar]) -> Scalar {
             confidential_poseidon_hash_v3(domain, inputs)
         }

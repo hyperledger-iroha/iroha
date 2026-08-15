@@ -10,17 +10,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::{convert::TryInto, marker::PhantomData};
+use crate::zk::kagemusha_sha256_table16_v4::{
+    AssignedBits, TABLE16_SPREAD_TABLE_ROWS,
+    util::{lebs2ip, spread_bits},
+};
 use ff::{Field, PrimeField};
 use halo2_proofs::{
     circuit::{Chip, Layouter, Region, Value},
     plonk::{Advice, Column, ConstraintSystem, Error, Expression, TableColumn},
     poly::Rotation,
 };
-use crate::zk::kagemusha_sha256_table16_v4::{
-    AssignedBits, TABLE16_SPREAD_TABLE_ROWS,
-    util::{lebs2ip, spread_bits},
-};
+use std::{convert::TryInto, marker::PhantomData};
 const BITS_4: usize = 1 << 4;
 const BITS_7: usize = 1 << 7;
 const BITS_10: usize = 1 << 10;
@@ -378,6 +378,11 @@ impl SpreadTableConfig {
 }
 #[cfg(test)]
 mod tests {
+    use super::{
+        FIRST_TAIL_DENSE, LAST_SPREAD, SpreadTableChip, SpreadTableConfig, SpreadVar, SpreadWord,
+        get_tag,
+    };
+    use crate::zk::kagemusha_sha256_table16_v4::{TABLE16_SPREAD_TABLE_ROWS, util::i2lebsp};
     use halo2_proofs::halo2curves::pasta::Fp;
     use halo2_proofs::{
         circuit::{Layouter, V1, Value},
@@ -385,11 +390,6 @@ mod tests {
         plonk::{Circuit, ConstraintSystem, Error},
     };
     use rand::Rng;
-    use super::{
-        FIRST_TAIL_DENSE, LAST_SPREAD, SpreadTableChip, SpreadTableConfig, SpreadVar, SpreadWord,
-        get_tag,
-    };
-    use crate::zk::kagemusha_sha256_table16_v4::{TABLE16_SPREAD_TABLE_ROWS, util::i2lebsp};
     #[derive(Clone, Copy, Debug)]
     struct LookupWitness {
         tag: u64,

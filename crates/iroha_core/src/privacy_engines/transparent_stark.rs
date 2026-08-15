@@ -1,21 +1,19 @@
 //! Protocol-neutral transparent Goldilocks STARK primitives.
 //!
-//! This module contains only proof-system substrate: canonical Goldilocks base
-//! and quartic-extension arithmetic, FFT/coset evaluation, zero-knowledge
-//! trace masking, framed Fiat–Shamir, SHA-256 Merkle commitments, binary FRI
-//! folding, grinding, and exact byte readers/writers. Protocol relations and
-//! AIR constraints do not belong here. ZK-ACE, zk-X509, private IVM, and PQ
-//! actions can therefore share one audited implementation without sharing or
+//! This module contains only proof-system substrate: canonical Goldilocks base and
+//! quartic-extension arithmetic, FFT/coset evaluation, zero-knowledge trace masking, framed
+//! Fiat–Shamir, SHA-256 Merkle commitments, binary FRI folding, grinding, and exact byte
+//! readers/writers. Protocol relations and AIR constraints do not belong here. ZK-ACE, zk-X509,
+//! private IVM, and PQ actions can therefore share one audited implementation without sharing or
 //! weakening relations.
 //!
-//! The historical generic `crate::zk_stark` development envelope is not used:
-//! its query schedule does not establish knowledge of the witness-bearing row.
-//! Callers of this substrate must commit and query every masked witness column,
-//! bind composition quotients to those same openings, and perform the complete
-//! FRI terminal-degree check.
-use std::collections::BTreeSet;
+//! The historical generic `crate::zk_stark` development envelope is not used: its query schedule
+//! does not establish knowledge of the witness-bearing row. Callers of this substrate must commit
+//! and query every masked witness column, bind composition quotients to those same openings, and
+//! perform the complete FRI terminal-degree check.
 use rand::TryRngCore;
 use sha2::{Digest as _, Sha256};
+use std::collections::BTreeSet;
 use thiserror::Error;
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub(crate) const GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
@@ -63,15 +61,13 @@ pub(crate) struct TransparentStarkZkMaskGeometryV1 {
 }
 /// Conservative classical-ROM work-normalized Fiat--Shamir certificate.
 ///
-/// The caller must separately prove the supplied round-by-round soundness
-/// exponent for its concrete FRI/DEEP construction. This helper checks the
-/// protocol-neutral BCS accounting
+/// The caller must separately prove the supplied round-by-round soundness exponent for its concrete
+/// FRI/DEEP construction. This helper checks the protocol-neutral BCS accounting
 ///
 /// `epsilon_FS / Q <= epsilon_RBR + 3 * (Q + 1/Q) / 2^kappa`
 ///
-/// using an exact power-of-two split of the target error budget. It deliberately
-/// does not use floating-point arithmetic and makes no qROM or post-quantum
-/// claim for the Fiat--Shamir layer.
+/// using an exact power-of-two split of the target error budget. It deliberately does not use
+/// floating-point arithmetic and makes no qROM or post-quantum claim for the Fiat--Shamir layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TransparentStarkWorkSecurityV1 {
     /// Claimed work-normalized security level.
@@ -183,12 +179,11 @@ impl GoldilocksFieldV1 {
 }
 /// Quartic extension of Goldilocks defined by `w^4 = 7`.
 ///
-/// Coefficients are in ascending power order:
-/// `c[0] + c[1] w + c[2] w^2 + c[3] w^3`. Seven is a quadratic
-/// non-residue in Goldilocks and the prime is one modulo four. A monic
-/// factorization of `X^4 - 7` into two quadratics would therefore imply that
-/// either `7` or `-7` is a square; both are impossible because `-1` is a
-/// square. Thus this quotient is a field, rather than merely a ring.
+/// Coefficients are in ascending power order: `c[0] + c[1] w + c[2] w^2 + c[3] w^3`. Seven is a
+/// quadratic non-residue in Goldilocks and the prime is one modulo four. A monic factorization of
+/// `X^4 - 7` into two quadratics would therefore imply that either `7` or `-7` is a square; both
+/// are impossible because `-1` is a square. Thus this quotient is a field, rather than merely a
+/// ring.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GoldilocksFp4V1 {
     coefficients: [GoldilocksFieldV1; GOLDILOCKS_FP4_DEGREE_V1],
@@ -336,9 +331,8 @@ impl GoldilocksFp4V1 {
     }
     /// Multiplicative inverse, absent for zero.
     ///
-    /// Write the element as `A + B w` over the quadratic subfield
-    /// `Fp[u] / (u^2 - 7)`, where `u = w^2`. Then
-    /// `(A + B w)^-1 = (A - B w) / (A^2 - B^2 u)`.
+    /// Write the element as `A + B w` over the quadratic subfield `Fp[u] / (u^2 - 7)`, where `u =
+    /// w^2`. Then `(A + B w)^-1 = (A - B w) / (A^2 - B^2 u)`.
     pub(crate) fn inv(self) -> Option<Self> {
         if self == Self::ZERO || !self.is_canonical() {
             return None;
@@ -785,12 +779,11 @@ pub(crate) fn random_nonzero_goldilocks_fp4_v1<R: TryRngCore>(
 }
 /// Interpolate one native trace column and apply an exact replayable mask.
 ///
-/// For a native domain of size `n`, the returned polynomial is
-/// `T(X) + r(X) * (X^n - 1)`. Its ascending coefficient vector has exactly
-/// `n + r.len()` entries, including canonical trailing zero coefficients.
-/// Keeping this operation separate from coset evaluation lets bounded
-/// provers retain the much smaller polynomial while replaying commitments on
-/// more than one verifier-derived evaluation domain.
+/// For a native domain of size `n`, the returned polynomial is `T(X) + r(X) * (X^n - 1)`. Its
+/// ascending coefficient vector has exactly `n + r.len()` entries, including canonical trailing
+/// zero coefficients. Keeping this operation separate from coset evaluation lets bounded provers
+/// retain the much smaller polynomial while replaying commitments on more than one verifier-derived
+/// evaluation domain.
 pub(crate) fn masked_trace_coefficients_with_mask_v1(
     base_column: &[GoldilocksFieldV1],
     base_log_size: u8,
@@ -855,9 +848,8 @@ pub(crate) fn masked_trace_coefficients_on_coset_v1(
 }
 /// Interpolate and mask one trace column before evaluating its LDE.
 ///
-/// The mask is `r(X) * (X^n - 1)`, so every base-domain trace value is
-/// unchanged while all queried coset values are randomized.  `mask_degree`
-/// is inclusive.
+/// The mask is `r(X) * (X^n - 1)`, so every base-domain trace value is unchanged while all queried
+/// coset values are randomized. `mask_degree` is inclusive.
 pub(crate) fn masked_trace_lde_column_with_mask_v1(
     base_column: &[GoldilocksFieldV1],
     base_log_size: u8,
@@ -884,10 +876,9 @@ impl Drop for ReplayableTraceMaskV1 {
 }
 /// Sample and retain the exact mask coefficients for one replayable column.
 ///
-/// Streaming provers keep these few coefficients until post-query openings are
-/// reconstructed, instead of retaining the entire LDE column. Callers should
-/// drop them as soon as proof construction completes; [`Drop`] overwrites the
-/// backing allocation before release.
+/// Streaming provers keep these few coefficients until post-query openings are reconstructed,
+/// instead of retaining the entire LDE column. Callers should drop them as soon as proof
+/// construction completes; [`Drop`] overwrites the backing allocation before release.
 pub(crate) fn sample_trace_mask_v1<R: TryRngCore>(
     mask_degree: usize,
     rng: &mut R,
@@ -1030,8 +1021,7 @@ pub(crate) struct TransparentTranscriptV1 {
     challenge_counter: u64,
 }
 impl TransparentTranscriptV1 {
-    /// Initialize with the engine suite, complete profile digest, and exact
-    /// public-input digest.
+    /// Initialize with the engine suite, complete profile digest, and exact public-input digest.
     pub(crate) fn new(
         engine_suite: &[u8],
         profile_digest: &[u8; 32],
@@ -1099,11 +1089,10 @@ impl TransparentTranscriptV1 {
     }
     /// Derive one uniform challenge in the quartic Goldilocks extension.
     ///
-    /// A complete SHA-256 digest supplies the four fixed-order coefficients.
-    /// Rejection is over the entire 256-bit tuple, so accepting canonical
-    /// tuples is uniform over all of `Fp4`, including zero. FRI and polynomial
-    /// identity theorems sample the whole challenge field; callers that need
-    /// an invertible or out-of-domain value must state that as a predicate via
+    /// A complete SHA-256 digest supplies the four fixed-order coefficients. Rejection is over the
+    /// entire 256-bit tuple, so accepting canonical tuples is uniform over all of `Fp4`, including
+    /// zero. FRI and polynomial identity theorems sample the whole challenge field; callers that
+    /// need an invertible or out-of-domain value must state that as a predicate via
     /// [`Self::challenge_fp4_where`].
     pub(crate) fn challenge_fp4(
         &mut self,
@@ -1111,8 +1100,7 @@ impl TransparentTranscriptV1 {
     ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
         self.challenge_fp4_where(label, |_| true)
     }
-    /// Derive a uniform quartic challenge satisfying an additional
-    /// deterministic public predicate.
+    /// Derive a uniform quartic challenge satisfying an additional deterministic public predicate.
     ///
     /// DEEP protocols use this to exclude their base and evaluation domains
     /// without absorbing a rejected candidate or introducing modulo bias.
@@ -1221,10 +1209,9 @@ pub(crate) fn fri_fold_pair_v1(
 }
 /// Compute one binary FRI fold when the caller already tracks `x^-1`.
 ///
-/// Provers fold an entire multiplicative coset in order and can update the
-/// inverse point with one multiplication per entry.  Keeping that optimization
-/// here avoids duplicating the consensus-critical fold equation in each
-/// relation-specific engine.
+/// Provers fold an entire multiplicative coset in order and can update the inverse point with one
+/// multiplication per entry. Keeping that optimization here avoids duplicating the
+/// consensus-critical fold equation in each relation-specific engine.
 #[cfg(test)]
 pub(crate) fn fri_fold_pair_with_inverse_x_v1(
     low: GoldilocksFieldV1,
@@ -1446,8 +1433,8 @@ pub(crate) fn append_goldilocks_fp4_v1(bytes: &mut Vec<u8>, value: GoldilocksFp4
 }
 #[cfg(test)]
 mod tests {
-    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
     use super::*;
+    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
     fn fp4(coefficients: [u64; 4]) -> GoldilocksFp4V1 {
         GoldilocksFp4V1::canonical(coefficients).expect("small canonical coefficients")
     }

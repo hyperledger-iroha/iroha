@@ -4,11 +4,11 @@
 //! optional XOR parity frames, and wraps each chunk in a CRC32-protected frame.
 //! The format matches the existing Swift/Android/JS SDK implementations to
 //! ensure cross-platform parity for the first release.
-use std::time::{Duration, Instant};
 use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
 };
+use std::time::{Duration, Instant};
 use thiserror::Error;
 /// Magic bytes that start every QR stream frame (`IQ`).
 pub const QR_STREAM_MAGIC: [u8; 2] = [0x49, 0x51];
@@ -482,24 +482,36 @@ impl QrStreamAssembler {
         self.track_timeout()?;
         match frame.kind {
             QrStreamFrameKind::Header => {
+                if self
+                    .envelope
+                    .is_some_and(|envelope| frame.stream_id != envelope.stream_id())
+                {
+                    return Ok(self.progress());
+                }
                 let envelope = QrStreamEnvelope::decode(&frame.payload)?;
                 if frame.stream_id != envelope.stream_id() {
                     return Err(QrStreamError::InvalidStreamId);
                 }
-                self.validate_limits(&envelope)?;
-                let data_chunks = envelope.data_chunks as usize;
-                let parity_chunks = envelope.parity_chunks as usize;
-                self.envelope = Some(envelope);
-                self.data_chunks = vec![None; data_chunks];
-                self.parity_chunks = vec![None; parity_chunks];
-                self.recovered = vec![false; data_chunks];
-                if !self.pending.is_empty() {
-                    let pending = std::mem::take(&mut self.pending);
-                    for buffered in pending
-                        .into_iter()
-                        .filter(|f| f.stream_id == frame.stream_id)
-                    {
-                        self.ingest_frame(buffered)?;
+                if let Some(current) = self.envelope {
+                    if envelope != current {
+                        return Err(QrStreamError::InvalidEnvelope("conflicting header"));
+                    }
+                } else {
+                    self.validate_limits(&envelope)?;
+                    let data_chunks = envelope.data_chunks as usize;
+                    let parity_chunks = envelope.parity_chunks as usize;
+                    self.envelope = Some(envelope);
+                    self.data_chunks = vec![None; data_chunks];
+                    self.parity_chunks = vec![None; parity_chunks];
+                    self.recovered = vec![false; data_chunks];
+                    if !self.pending.is_empty() {
+                        let pending = std::mem::take(&mut self.pending);
+                        for buffered in pending
+                            .into_iter()
+                            .filter(|f| f.stream_id == frame.stream_id)
+                        {
+                            self.ingest_frame(buffered)?;
+                        }
                     }
                 }
             }
@@ -514,8 +526,14 @@ impl QrStreamAssembler {
                     return Ok(self.progress());
                 }
                 match frame.kind {
-                    QrStreamFrameKind::Data => self.store_data(&frame),
-                    QrStreamFrameKind::Parity => self.store_parity(&frame),
+                    QrStreamFrameKind::Data => {
+                        self.validate_data_frame(&frame, &envelope)?;
+                        self.store_data(&frame);
+                    }
+                    QrStreamFrameKind::Parity => {
+                        self.validate_parity_frame(&frame, &envelope)?;
+                        self.store_parity(&frame);
+                    }
                     QrStreamFrameKind::Header => {}
                 }
                 self.recover_missing(&envelope);
@@ -569,6 +587,40 @@ impl QrStreamAssembler {
             .saturating_add(1);
         if total_frames > self.limits.max_frames {
             return Err(QrStreamError::LimitExceeded("frame_count"));
+        }
+        Ok(())
+    }
+    fn validate_data_frame(
+        &self,
+        frame: &QrStreamFrame,
+        envelope: &QrStreamEnvelope,
+    ) -> Result<(), QrStreamError> {
+        let index = usize::from(frame.index);
+        if frame.total != envelope.data_chunks || index >= self.data_chunks.len() {
+            return Err(QrStreamError::InvalidEnvelope("data frame shape"));
+        }
+        let expected_len = expected_chunk_length(
+            envelope.payload_length as usize,
+            envelope.chunk_size as usize,
+            index,
+            self.data_chunks.len(),
+        );
+        if frame.payload.len() != expected_len {
+            return Err(QrStreamError::InvalidLength("data chunk"));
+        }
+        Ok(())
+    }
+    fn validate_parity_frame(
+        &self,
+        frame: &QrStreamFrame,
+        envelope: &QrStreamEnvelope,
+    ) -> Result<(), QrStreamError> {
+        let index = usize::from(frame.index);
+        if frame.total != envelope.parity_chunks || index >= self.parity_chunks.len() {
+            return Err(QrStreamError::InvalidEnvelope("parity frame shape"));
+        }
+        if frame.payload.len() != usize::from(envelope.chunk_size) {
+            return Err(QrStreamError::InvalidLength("parity chunk"));
         }
         Ok(())
     }
@@ -949,5 +1001,58 @@ mod tests {
         let final_result = assembler.ingest_bytes(&data.bytes).expect("dup");
         assert!(final_result.is_complete());
         assert_eq!(final_result.payload, Some(fixture.payload));
+    }
+
+    #[test]
+    fn qr_stream_rejects_oversized_parity_payload() {
+        let payload = b"ab";
+        let options = QrStreamOptions {
+            chunk_size: 1,
+            parity_group: 2,
+            ..QrStreamOptions::default()
+        };
+        let (envelope, frames) = QrStreamEncoder::encode_frames(payload, options).expect("encode");
+        let mut assembler = QrStreamAssembler::default();
+        assembler
+            .ingest_bytes(&frames[0].encode())
+            .expect("ingest header");
+
+        let oversized_parity = QrStreamFrame {
+            kind: QrStreamFrameKind::Parity,
+            stream_id: envelope.stream_id(),
+            index: 0,
+            total: envelope.parity_chunks,
+            payload: vec![0; usize::from(envelope.chunk_size) + 1],
+        };
+        let error = assembler
+            .ingest_bytes(&oversized_parity.encode())
+            .expect_err("oversized parity payload must be rejected");
+        assert_eq!(error, QrStreamError::InvalidLength("parity chunk"));
+    }
+
+    #[test]
+    fn qr_stream_duplicate_header_preserves_progress() {
+        let payload = b"ab";
+        let options = QrStreamOptions {
+            chunk_size: 1,
+            ..QrStreamOptions::default()
+        };
+        let (_, frames) = QrStreamEncoder::encode_frames(payload, options).expect("encode");
+        let mut assembler = QrStreamAssembler::default();
+
+        assembler
+            .ingest_bytes(&frames[0].encode())
+            .expect("ingest header");
+        assembler
+            .ingest_bytes(&frames[1].encode())
+            .expect("ingest first data chunk");
+        assembler
+            .ingest_bytes(&frames[0].encode())
+            .expect("ingest repeated header");
+        let result = assembler
+            .ingest_bytes(&frames[2].encode())
+            .expect("ingest second data chunk");
+
+        assert_eq!(result.payload.as_deref(), Some(payload.as_slice()));
     }
 }

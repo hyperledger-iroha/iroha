@@ -1,5 +1,4 @@
 //! One-shot local helper for refreshing execution-captured FASTPQ measurement fixtures.
-use std::env;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use fastpq_prover::{PublicInputs, transition_batch_to_model};
 use iroha_core::{
@@ -12,6 +11,7 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::prelude::*;
 use nonzero_ext::nonzero;
+use std::env;
 fn account(label: &str) -> AccountId {
     let seed: [u8; Hash::LENGTH] = Hash::new(label).into();
     let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::default())

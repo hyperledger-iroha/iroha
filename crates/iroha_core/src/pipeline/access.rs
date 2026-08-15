@@ -3,12 +3,18 @@
 //! Produces deterministic read/write key sets to feed the conflict-aware
 //! scheduler described in `new_pipeline.md`.
 use core::fmt::Write as _;
+use iroha_crypto::Hash as IrohaHash;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, OnceLock},
 };
-use iroha_crypto::Hash as IrohaHash;
 // ZK ISIs live in the data model; import the module for pattern matches
+use crate::{
+    executor::transaction_gas_limit,
+    smartcontracts::triggers::set::{ExecutableRef, SetReadOnly},
+    smartcontracts::{code, ivm::host::QueryStateSource},
+    state::{StateReadOnly, WorldReadOnly},
+};
 use iroha_data_model::isi::ExecuteTrigger;
 use iroha_data_model::{
     account::AccountId,
@@ -37,12 +43,6 @@ use iroha_data_model::{
 use ivm::host::IVMHost;
 use mv::storage::StorageReadOnly; // bring trait into scope for .get()
 use parking_lot::RwLock;
-use crate::{
-    executor::transaction_gas_limit,
-    smartcontracts::triggers::set::{ExecutableRef, SetReadOnly},
-    smartcontracts::{code, ivm::host::QueryStateSource},
-    state::{StateReadOnly, WorldReadOnly},
-};
 /// Canonical string key used for conflict detection (Norito-like ordering).
 ///
 /// Keys are generated deterministically from data model identifiers such as
@@ -2531,14 +2531,14 @@ fn access_key_from_state_log(key: &str) -> AccessKey {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::smartcontracts::Execute;
+    use crate::state::{State, World};
     use iroha_data_model::{
         isi::Log,
         level::Level,
         transaction::{Executable, ExecutableBatchItem, IvmBytecode, TransactionBuilder},
     };
-    use super::*;
-    use crate::smartcontracts::Execute;
-    use crate::state::{State, World};
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
     const TEST_GAS_LIMIT: u64 = 50_000_000;
     fn test_network_id() -> iroha_data_model::NetworkId {

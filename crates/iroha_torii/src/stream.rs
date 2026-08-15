@@ -1,6 +1,6 @@
 //! Adds support for sending/receiving custom Iroha messages over the WebSocket
-use core::{result::Result, time::Duration};
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
+use core::{result::Result, time::Duration};
 use futures::{SinkExt, StreamExt};
 use norito::prelude::*;
 /// Error type with generic for actual Stream/Sink error type
@@ -226,11 +226,11 @@ impl WebSocketNorito {
 }
 #[cfg(test)]
 mod subscription_decode_tests {
-    use std::num::NonZeroU64;
+    use super::*;
     use iroha_data_model::{
         block::stream::BlockSubscriptionRequest, events::stream::EventSubscriptionRequest,
     };
-    use super::*;
+    use std::num::NonZeroU64;
     fn assert_common_noncanonical_frames_rejected<T>(value: &T)
     where
         T: NoritoSerialize,
@@ -298,10 +298,10 @@ pub fn extract_ws_closed(error: axum::Error) -> Error {
 }
 #[cfg(feature = "p2p_ws")]
 mod ws_io {
+    use super::*;
     use futures::stream::{SplitSink, SplitStream};
     use futures::{Sink, Stream};
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-    use super::*;
     /// Read half adapter over a WebSocket stream that yields bytes from Binary frames.
     pub struct WsReadHalf {
         inner: SplitStream<WebSocket>,
@@ -430,8 +430,9 @@ mod ws_io {
     }
     #[cfg(test)]
     mod tests {
-        use std::sync::{Arc, Mutex};
+        use super::*;
         use axum::{Router, extract::ws::WebSocketUpgrade, routing::get};
+        use std::sync::{Arc, Mutex};
         use tokio::{
             io::{AsyncReadExt as _, AsyncWriteExt as _},
             net::TcpListener,
@@ -443,7 +444,6 @@ mod ws_io {
             Message as TungsteniteMessage, client::connect_with_config, protocol::WebSocketConfig,
             stream::MaybeTlsStream,
         };
-        use super::*;
         const TEST_TIMEOUT: Duration = Duration::from_secs(30);
         fn websocket_config() -> WebSocketConfig {
             let chunk_bytes = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;

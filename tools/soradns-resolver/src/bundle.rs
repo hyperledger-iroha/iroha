@@ -1,6 +1,6 @@
+use crate::limits::{MAX_CHILD_STRINGS, MAX_FIELD_BYTES, MAX_IDENTIFIER_BYTES};
 use norito_derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-use crate::limits::{MAX_CHILD_STRINGS, MAX_FIELD_BYTES, MAX_IDENTIFIER_BYTES};
 /// Expected length of a Blake3 digest used for namehash and manifest hashes.
 pub const BLAKE3_HASH_LEN: usize = 32;
 /// Proof bundle describing the linkage between registry entries, manifests, and CAR archives.
@@ -306,10 +306,10 @@ pub enum ProofBundleValidationError {
 }
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use super::*;
     use expect_test::expect;
     use norito::{Compression, deserialize_from, serialize_into};
-    use super::*;
+    use std::io::Cursor;
     fn make_hash(seed: u8) -> [u8; BLAKE3_HASH_LEN] {
         let mut hash = [0_u8; BLAKE3_HASH_LEN];
         for (idx, byte) in hash.iter_mut().enumerate() {

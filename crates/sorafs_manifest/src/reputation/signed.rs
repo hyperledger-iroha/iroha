@@ -1,13 +1,13 @@
 //! Externally governed signatures and freshness policy for reputation snapshots.
-use std::cmp::Ordering;
-use blake3::Hasher;
-use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
 use super::{
     MAX_REPUTATION_PROVIDERS, MAX_REPUTATION_TRUST_EDGES, ReputationProviderInputV1,
     ReputationSnapshotV1, ReputationTrustEdgeV1, ReputationValidationError,
     build_reputation_snapshot_with_trust_edges,
 };
+use blake3::Hasher;
+use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::cmp::Ordering;
+use thiserror::Error;
 /// Schema version for [`ReputationSnapshotTrustPolicyV1`].
 pub const REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1: u8 = 1;
 /// Schema version for [`ReputationTrustedSignerV1`].
@@ -984,7 +984,6 @@ pub enum SignedReputationSnapshotError {
 }
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
     use super::*;
     use crate::reputation::{
         MAX_REPUTATION_DEGRADATION_FLAGS, REPUTATION_PROVIDER_INPUT_VERSION_V1,
@@ -992,6 +991,7 @@ mod tests {
         ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
         ReputationWeightsV1, build_reputation_snapshot,
     };
+    use ed25519_dalek::{Signer, SigningKey};
     const GENERATED_AT: u64 = 1_800_000_000;
     fn input(provider_id: &str) -> ReputationProviderInputV1 {
         ReputationProviderInputV1 {

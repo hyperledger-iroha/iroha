@@ -7,7 +7,6 @@
 //! outcome; [`StreamTokenAdmissionCaptureV1`] passes it unchanged to the
 //! committed reputation runtime and acknowledges the external row only after
 //! that callback succeeds.
-use std::{fmt, sync::Arc};
 use iroha_config::parameters::is_production_runtime_handle;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
@@ -22,6 +21,7 @@ use sorafs_node::reputation::runtime::{
     ReputationNativeOutcomeAdmissionApiV1, ReputationNativeOutcomeAdmissionStateV1,
     StreamTokenReputationAdmissionOutcomeV1,
 };
+use std::{fmt, sync::Arc};
 use thiserror::Error;
 /// Hard V1 ceiling for one reconciliation call.
 pub const STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1: u32 = 1_024;

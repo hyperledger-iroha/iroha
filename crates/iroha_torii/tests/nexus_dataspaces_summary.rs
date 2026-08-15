@@ -1,11 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii Nexus dataspaces account summary endpoint tests.
 #![cfg(feature = "app_api")]
-use std::{
-    collections::HashSet,
-    num::NonZeroU64,
-    sync::{Arc, LazyLock, Mutex, MutexGuard},
-};
 use axum::{body::Body, http::Request};
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -38,6 +33,11 @@ use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use norito::json::{self, Value};
+use std::{
+    collections::HashSet,
+    num::NonZeroU64,
+    sync::{Arc, LazyLock, Mutex, MutexGuard},
+};
 use tokio::sync::broadcast;
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]

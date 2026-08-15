@@ -248,3 +248,762 @@ def _successor_stale_token_mutation_source_fidelity_errors(
                 f"must equal {expected_lines!r}; found {actual_lines!r}"
             )
     return errors
+
+def _successor_activation_rank_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the exact finite-rank corridor used by successor liveness."""
+
+    proof_path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    if not proof_path.is_file():
+        return []
+
+    source = proof_path.read_text(encoding="utf-8")
+    errors: list[str] = []
+    operator_contracts = {
+        "SuccessorActivationRankCarrier": "0..21",
+        "SuccessorActivationPipelineDistance": " ".join(
+            r'''
+            LET successorContext ==
+                  CanonicalIndexedContext(parentContext.height + 1)
+                marker ==
+                  SuccessorActivationMarker(parentContext, node, successorContext)
+            IN CASE successorActivationStatus[parentContext][node] = "Queued" -> 10
+               [] /\ successorActivationStatus[parentContext][node] = "Running"
+                  /\ ~SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                      -> 9
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node] = {}
+                      -> 8
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationAdapterPrerequisites
+                      -> 7
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationRuntimePrerequisites
+                      -> 6
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationServicePrerequisites
+                      -> 5
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationStartupPrerequisites
+                      -> 4
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationClockPrerequisites
+                  /\ marker \notin preparedSuccessorActivationMarkers
+                      -> 3
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationClockPrerequisites
+                  /\ marker \in preparedSuccessorActivationMarkers
+                      -> 2
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationRequiredPrerequisites
+                      -> 1
+               [] OTHER -> 0
+            '''.split()
+        ),
+        "SuccessorActivationRank": (
+            "IF SuccessorPublicationOrSuperseded(parentContext, node) THEN 0 "
+            "ELSE IF successorPredecessorStatusOwnership[parentContext][node] "
+            '= "Published" THEN 11 + '
+            "SuccessorActivationPipelineDistance(parentContext, node) "
+            "ELSE SuccessorActivationPipelineDistance(parentContext, node)"
+        ),
+        "SuccessorActivationPending": (
+            "IndexedSuccessorActivationPending(parentContext, node)"
+        ),
+        "SuccessorActivationHasDurableParentWitness": (
+            "/\\ \\E application \\in Chain!DecisionEvidenceSet: "
+            "ExactDurableParentApplication(parentContext, node, application)"
+        ),
+        "SuccessorActivationAtRank": (
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationRank(parentContext, node) = rank"
+        ),
+        "SuccessorActivationFailureAbsent": (
+            "SuccessorActivationOwner(parentContext, node) "
+            "\\notin successorActivationFailures"
+        ),
+        "SuccessorActivationPendingStructureProperty": (
+            "[](\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "SuccessorActivationPending(parentContext, node) "
+            "=> /\\ SuccessorActivationHasDurableParentWitness( "
+            "parentContext, node) "
+            "/\\ SuccessorActivationPipelineDistance(parentContext, node) "
+            "\\in 1..10 "
+            "/\\ SuccessorActivationRank(parentContext, node) "
+            "\\in SuccessorActivationRankCarrier "
+            "/\\ ENABLED <<IndexedSuccessorActivationProgressStep( "
+            "parentContext, node)>>_(IndexedChainVars))"
+        ),
+        "SuccessorActivationStepDecreasesRankProperty": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "[][ /\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
+            "/\\ IndexedSuccessorActivationProgressStep(parentContext, node) "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "< SuccessorActivationRank(parentContext, node) "
+            "]_IndexedChainVars"
+        ),
+        "SuccessorActivationPendingIsNotOrphanedProperty": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "[][ /\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ [IndexedChainNext]_IndexedChainVars "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ SuccessorActivationPending(parentContext, node)' "
+            "]_IndexedChainVars"
+        ),
+        "SuccessorActivationOutcomeIsStableProperty": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "[][ /\\ SuccessorPublicationOrSuperseded(parentContext, node) "
+            "/\\ [IndexedChainNext]_IndexedChainVars "
+            "=> SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "]_IndexedChainVars"
+        ),
+        "SuccessorActivationRankProgressProperty": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "rank \\in SuccessorActivationRankCarrier: "
+            "SuccessorActivationAtRank(parentContext, node, rank) "
+            "~> (SuccessorPublicationOrSuperseded(parentContext, node) "
+            "\\/ \\E lower \\in SetLessThan( rank, OpToRel(<, Nat), "
+            "SuccessorActivationRankCarrier): "
+            "SuccessorActivationAtRank(parentContext, node, lower))"
+        ),
+        "SuccessorActivationStarvationFreedomProperty": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "SuccessorActivationPending(parentContext, node) "
+            "~> SuccessorPublicationOrSuperseded(parentContext, node)"
+        ),
+        "SuccessorActivationTemporalKernel": (
+            "/\\ []IndexedCompositionInvariant "
+            "/\\ []SuccessorActivationProtocolInvariant "
+            "/\\ [][IndexedChainNext]_IndexedChainVars "
+            "/\\ WF_IndexedChainVars( "
+            "IndexedSuccessorActivationProgressStep(parentContext, node))"
+        ),
+        "SuccessorActivationFailureFreeSuffix": (
+            "[]SuccessorActivationFailureAbsent(parentContext, node)"
+        ),
+        "FailedSuccessorStartupRestartStep": (
+            "\\E successorContext \\in AdmissibleContextRecords, "
+            "application \\in Chain!DecisionEvidenceSet: "
+            "RehydrateFailedSuccessorStartup( "
+            "parentContext, node, successorContext, application)"
+        ),
+    }
+    for symbol, exact_body in operator_contracts.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{proof_path}: missing successor-rank operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != exact_body:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must equal only "
+                f"{exact_body!r}; found {normalized!r}"
+            )
+
+    theorem_contracts = {
+        "SuccessorActivationPendingRankTierClassification": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ SuccessorActivationShape "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "=> \\/ /\\ successorPredecessorStatusOwnership"
+            "[parentContext][node] = \"Published\" "
+            "/\\ SuccessorActivationRank(parentContext, node) \\in 12..21 "
+            "\\/ /\\ successorPredecessorStatusOwnership"
+            "[parentContext][node] = \"Absent\" "
+            "/\\ SuccessorActivationRank(parentContext, node) \\in 1..10",
+            (
+                "SuccessorActivationShape",
+                "SuccessorActivationProtocolInvariant",
+                "SuccessorActivationRank",
+                "Isa",
+            ),
+        ),
+        "ExactDurableParentApplicationHasAdmissibleSuccessorContext": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in ValidatorIds, "
+            "application \\in Chain!DecisionEvidenceSet: "
+            "/\\ Chain!ChainEpochInvariant "
+            "/\\ ExactDurableParentApplication(parentContext, node, application) "
+            "=> CanonicalIndexedContext(parentContext.height + 1) "
+            "\\in AdmissibleContextRecords",
+            (
+                "Chain!ChainEpochTypeInvariant",
+                "Chain!NodesDoNotOutrunCertificates",
+                "Chain!CertifiedPrefixBacked",
+                "FrozenContextAdmissible",
+                "Isa",
+            ),
+        ),
+        "SuccessorActivationProgressPreservesProtocolInvariant": (
+            "\\A selectedParent \\in AdmissibleContextRecords, "
+            "selectedNode \\in ValidatorIds: "
+            "Chain!ChainEpochInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ IndexedSuccessorActivationProgressStep( "
+            "selectedParent, selectedNode) "
+            "=> SuccessorActivationProtocolInvariant'",
+            (
+                "ExactDurableParentApplicationHasAdmissibleSuccessorContext",
+                "ExpandENABLED",
+                "Isa",
+            ),
+        ),
+        "IndexedActionPreservesSuccessorActivationProtocolInvariant": (
+            "IndexedCompositionInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ IndexedChainNext "
+            "=> SuccessorActivationProtocolInvariant'",
+            (
+                "IndexedProductActionPreservesSuccessorActivationProtocolInvariant",
+                "SuccessorActivationProgressPreservesProtocolInvariant",
+                "DEF IndexedCompositionInvariant",
+            ),
+        ),
+        "CleanCompleteTipRestartDescendsPublishedTier": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "successorContext \\in AdmissibleContextRecords, "
+            "application \\in Chain!DecisionEvidenceSet: "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ RehydrateCleanCompleteTipSuccessorStartup( "
+            "parentContext, node, successorContext, application) "
+            "=> /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "< SuccessorActivationRank(parentContext, node)",
+            (
+                "CleanCompleteTipRestartCrossesPublishedToAbsentTier",
+                "Isa",
+            ),
+        ),
+        "FailureFreeBracketExcludesSuccessorResetActions": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
+            "=> /\\ ~SuccessorStartupFailureStep(parentContext, node) "
+            "/\\ ~FailedSuccessorStartupRestartStep(parentContext, node)",
+            (
+                "SuccessorStartupFailureStep",
+                "FailedSuccessorStartupRestartStep",
+                "LatchAppliedSuccessorStartupFailure",
+                "LatchRecoveredSuccessorStartupFailure",
+                "RehydrateFailedSuccessorStartup",
+                "Isa",
+            ),
+        ),
+        "CleanCompleteTipRestartCrossesPublishedToAbsentTier": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "successorContext \\in AdmissibleContextRecords, "
+            "application \\in Chain!DecisionEvidenceSet: "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ RehydrateCleanCompleteTipSuccessorStartup( "
+            "parentContext, node, successorContext, application) "
+            "=> /\\ SuccessorActivationRank(parentContext, node) \\in 12..21 "
+            "/\\ successorPredecessorStatusOwnership'[parentContext][node] "
+            "= \"Absent\" "
+            "/\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' = 10 "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)'",
+            (
+                "SuccessorActivationRank",
+                "SuccessorActivationPipelineDistance",
+                "RehydrateCleanCompleteTipSuccessorStartup",
+                "ExactDurableParentApplication",
+                "Isa",
+            ),
+        ),
+        "RecoveredAuthenticationDescendsAbsentTier": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "successorContext \\in AdmissibleContextRecords, "
+            "application \\in Chain!DecisionEvidenceSet: "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ AuthenticateRecoveredSuccessorActivation( "
+            "parentContext, node, successorContext, application) "
+            "=> /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ successorPredecessorStatusOwnership'[parentContext][node] "
+            "= \"Absent\" "
+            "/\\ SuccessorActivationRank(parentContext, node) = 10 "
+            "/\\ SuccessorActivationRank(parentContext, node)' = 8 "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)'",
+            (
+                "AuthenticateRecoveredSuccessorActivation",
+                "SuccessorActivationCredentialReady",
+                "ExactSuccessorActivationToken",
+                "ExactCompleteTipRecoveryAuthority",
+                "SuccessorActivationRank",
+                "SuccessorActivationPipelineDistance",
+                "Isa",
+            ),
+        ),
+        "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
+            "/\\ IndexedSuccessorActivationProgressStep(parentContext, node) "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "< SuccessorActivationRank(parentContext, node)",
+            (
+                "FailureFreeBracketExcludesSuccessorResetActions",
+                "SuccessorActivationPendingRankTierClassification",
+                "RecoveredAuthenticationDescendsAbsentTier",
+                "CleanCompleteTipRestartDescendsPublishedTier",
+                "LatchAppliedSuccessorStartupFailure",
+                "LatchRecoveredSuccessorStartupFailure",
+                "RehydrateFailedSuccessorStartup",
+                "Isa",
+            ),
+        ),
+        "IndexedProductActionDoesNotRaisePendingSuccessorRank": (
+            "\\A initialContext \\in JoinedContexts, "
+            "parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ IndexedCompositionInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ IndexedProductActionAt(initialContext) "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "<= SuccessorActivationRank(parentContext, node)",
+            (
+                "IndexedStepDoesNotOrphanSuccessorActivation",
+                "IndexedProductActionAt",
+                "IndexedReceiptClassification",
+                "QueueSuccessorActivation",
+                "Isa",
+            ),
+        ),
+        "OtherOwnerProgressFramesPendingSuccessorRankOrSupersedes": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "selectedParent \\in AdmissibleContextRecords, "
+            "selectedNode \\in ValidatorIds: "
+            "/\\ IndexedCompositionInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationOwner(selectedParent, selectedNode) "
+            "# SuccessorActivationOwner(parentContext, node) "
+            "/\\ IndexedSuccessorActivationProgressStep( "
+            "selectedParent, selectedNode) "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "= SuccessorActivationRank(parentContext, node)",
+            (
+                "IndexedStepDoesNotOrphanSuccessorActivation",
+                "SuccessorActivationOwner",
+                "IndexedSuccessorActivationProgressStep",
+                "Isa",
+            ),
+        ),
+        "IndexedStepRetainsExactDurableParentWitnessOrExits": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ IndexedCompositionInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ [IndexedChainNext]_IndexedChainVars "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationHasDurableParentWitness( "
+            "parentContext, node)'",
+            (
+                "IndexedStepDoesNotOrphanSuccessorActivation",
+                "IndexedStepPreservesSuccessorActivationProtocolInvariant",
+                "SuccessorActivationHasDurableParentWitness",
+                "Isa",
+            ),
+        ),
+        "IndexedFailureFreeStepDoesNotRaiseSuccessorActivationRank": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ IndexedCompositionInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
+            "/\\ [IndexedChainNext]_IndexedChainVars "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "<= SuccessorActivationRank(parentContext, node)",
+            (
+                "IndexedStepDoesNotOrphanSuccessorActivation",
+                "IndexedProductActionDoesNotRaisePendingSuccessorRank",
+                "OtherOwnerProgressFramesPendingSuccessorRankOrSupersedes",
+                "FailureFreeBracketExcludesSuccessorResetActions",
+                "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank",
+                "IndexedChainNext",
+                "Isa",
+            ),
+        ),
+        "SuccessorActivationFailureFreeRankPersistsOrExits": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "rank \\in SuccessorActivationRankCarrier: "
+            "/\\ IndexedCompositionInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationAtRank(parentContext, node, rank) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
+            "/\\ [IndexedChainNext]_IndexedChainVars "
+            "=> \\/ SuccessorActivationAtRank(parentContext, node, rank)' "
+            "\\/ SuccessorActivationRankExit(parentContext, node, rank)'",
+            (
+                "IndexedFailureFreeStepDoesNotRaiseSuccessorActivationRank",
+                "IndexedStepRetainsExactDurableParentWitnessOrExits",
+                "IndexedStepPreservesSuccessorActivationProtocolInvariant",
+                "Isa",
+            ),
+        ),
+        "SuccessorActivationFailureFreeProgressExitsCurrentRank": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "rank \\in SuccessorActivationRankCarrier: "
+            "/\\ Chain!ChainEpochInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationAtRank(parentContext, node, rank) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
+            "/\\ <<IndexedSuccessorActivationProgressStep( "
+            "parentContext, node)>>_(IndexedChainVars) "
+            "=> SuccessorActivationRankExit(parentContext, node, rank)'",
+            (
+                "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank",
+                "SuccessorActivationProgressPreservesProtocolInvariant",
+                "Isa",
+            ),
+        ),
+        "FailureFreeSuccessorActivationRankLeadsToExit": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "rank \\in SuccessorActivationRankCarrier: "
+            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> (SuccessorActivationAtRank(parentContext, node, rank) "
+            "~> SuccessorActivationRankExit(parentContext, node, rank))",
+            (
+                "SuccessorActivationFailureFreeRankPersistsOrExits",
+                "SuccessorActivationAtRankEnablesFairProgress",
+                "SuccessorActivationFailureFreeProgressExitsCurrentRank",
+                "Chain!ChainEpochInvariant",
+                "DEF IndexedCompositionInvariant",
+                "WF_IndexedChainVars",
+                "PTL",
+            ),
+        ),
+        "FailureFreeSuccessorActivationRankConverges": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> \\A rank \\in SuccessorActivationRankCarrier: "
+            "SuccessorActivationAtRank(parentContext, node, rank) "
+            "~> SuccessorPublicationOrSuperseded(parentContext, node)",
+            (
+                "SuccessorActivationRankOrderingIsWellFounded",
+                "FailureFreeSuccessorActivationRankLeadsToExit",
+                "WellFoundedLeadsTo",
+            ),
+        ),
+        "FailureFreeSuccessorActivationConverges": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> (SuccessorActivationPending(parentContext, node) "
+            "~> SuccessorPublicationOrSuperseded(parentContext, node))",
+            (
+                "FailureFreeSuccessorActivationRankConverges",
+                "SuccessorActivationRankExistentialLift",
+                "SuccessorActivationPendingHasRankWitness",
+                "PTL",
+            ),
+        ),
+        "SuccessorActivationTemporalKernelIsSuffixClosed": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "SuccessorActivationTemporalKernel(parentContext, node) "
+            "=> []SuccessorActivationTemporalKernel(parentContext, node)",
+            ("PTL", "SuccessorActivationTemporalKernel"),
+        ),
+        "FailureFreeSuccessorActivationConvergenceAtEverySuffix": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "[]( /\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> (SuccessorActivationPending(parentContext, node) "
+            "~> SuccessorPublicationOrSuperseded(parentContext, node)))",
+            ("FailureFreeSuccessorActivationConverges", "PTL"),
+        ),
+        "SuccessorActivationPendingReachesFailureFreeSuffixOrOutcome": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ <>SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> (SuccessorActivationPending(parentContext, node) "
+            "~> (SuccessorPublicationOrSuperseded(parentContext, node) "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationFailureFreeSuffix( "
+            "parentContext, node)))",
+            (
+                "IndexedStepRetainsExactDurableParentWitnessOrExits",
+                "SuccessorActivationTemporalKernel",
+                "SuccessorActivationFailureFreeSuffix",
+                "PTL",
+            ),
+        ),
+        "EventualFailureFreeSuffixLiftsSuccessorConvergence": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
+            "/\\ <>SuccessorActivationFailureFreeSuffix(parentContext, node) "
+            "=> (SuccessorActivationPending(parentContext, node) "
+            "~> SuccessorPublicationOrSuperseded(parentContext, node))",
+            (
+                "SuccessorActivationTemporalKernelIsSuffixClosed",
+                "FailureFreeSuccessorActivationConvergenceAtEverySuffix",
+                "SuccessorActivationPendingReachesFailureFreeSuffixOrOutcome",
+                "PTL",
+            ),
+        ),
+        "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom": (
+            "IndexedChainSpec => "
+            "SuccessorActivationStarvationFreedomProperty",
+            (
+                "IndexedChainSpecEstablishesSuccessorActivationTemporalKernel",
+                "EventualFailureFreeSuccessorStartupSuffix",
+                "EventualFailureFreeSuffixLiftsSuccessorConvergence",
+            ),
+        ),
+        "IndexedChainSpecEstablishesSuccessorActivationRankProgress": (
+            "IndexedChainSpec => SuccessorActivationRankProgressProperty",
+            (
+                "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom",
+                "SuccessorActivationRankProgressProperty",
+                "PTL",
+            ),
+        ),
+    }
+    exact_proof_token_counts = {
+        "IndexedActionPreservesSuccessorActivationProtocolInvariant": {
+            "DEF IndexedCompositionInvariant": 2,
+        },
+        "FailureFreeSuccessorActivationRankLeadsToExit": {
+            "Chain!ChainEpochInvariant": 1,
+            "DEF IndexedCompositionInvariant": 1,
+        },
+    }
+    for symbol, (exact_statement, required_proof_tokens) in (
+        theorem_contracts.items()
+    ):
+        theorem = _top_level_theorem_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if theorem is None:
+            errors.append(f"{proof_path}: missing successor-rank theorem {symbol}")
+            continue
+        theorem_body, line = theorem
+        observed_statement = _tla_statement_without_proof(theorem_body)
+        if observed_statement != exact_statement:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must state only "
+                f"{exact_statement!r}; found {observed_statement!r}"
+            )
+        theorem_parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            theorem_body,
+            maxsplit=1,
+        )
+        if len(theorem_parts) != 2:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must retain an explicit "
+                "non-vacuous proof body"
+            )
+            continue
+        observed_proof = theorem_parts[1]
+        for required_token in required_proof_tokens:
+            if not _tla_dependency_present(observed_proof, required_token):
+                errors.append(
+                    f"{proof_path}:{line}: {symbol} proof must invoke "
+                    f"{required_token}"
+                )
+        for exact_token, exact_count in exact_proof_token_counts.get(
+            symbol, {}
+        ).items():
+            observed_count = len(
+                _tla_dependency_positions(observed_proof, exact_token)
+            )
+            if observed_count != exact_count:
+                errors.append(
+                    f"{proof_path}:{line}: {symbol} proof must contain "
+                    f"{exact_token!r} exactly {exact_count} time(s); found "
+                    f"{observed_count}"
+                )
+        if re.search(
+            r"(?:\bOBVIOUS\b|\bASSUME\s+FALSE\b|\bBY\s+TRUE\b|"
+            r"\bPROVE\s+TRUE\b)",
+            observed_proof,
+        ):
+            errors.append(
+                f"{proof_path}:{line}: {symbol} proof may not use a "
+                "vacuous assertion"
+            )
+
+    chain_path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    if chain_path.is_file():
+        chain_source = chain_path.read_text(encoding="utf-8")
+        pending = _top_level_operator_body(
+            chain_source,
+            "IndexedSuccessorActivationPending",
+            preserve_string_contents=True,
+        )
+        exact_pending = (
+            "/\\ parentContext \\in AdmissibleContextRecords "
+            "/\\ node \\in ValidatorIds "
+            "/\\ parentContext.height < MaxHeight "
+            "/\\ successorActivationStatus[parentContext][node] "
+            '\\in {"Queued", "Running"} '
+            "/\\ ~SuccessorPublicationOrSuperseded(parentContext, node)"
+        )
+        if pending is None:
+            errors.append(
+                f"{chain_path}: missing IndexedSuccessorActivationPending"
+            )
+        else:
+            body, line = pending
+            normalized = " ".join(body.split())
+            if normalized != exact_pending:
+                errors.append(
+                    f"{chain_path}:{line}: IndexedSuccessorActivationPending "
+                    f"must equal only {exact_pending!r}; found {normalized!r}"
+                )
+
+    theorem_symbol = "SuccessorActivationStarvationFreedomObligation"
+    theorem = _top_level_theorem_body(
+        source, theorem_symbol, preserve_string_contents=True
+    )
+    exact_statement = (
+        "IndexedChainSpec "
+        "=> /\\ SuccessorActivationPendingStructureProperty "
+        "/\\ SuccessorActivationStepDecreasesRankProperty "
+        "/\\ SuccessorActivationPendingIsNotOrphanedProperty "
+        "/\\ SuccessorActivationOutcomeIsStableProperty "
+        "/\\ SuccessorActivationRankProgressProperty "
+        "/\\ SuccessorActivationStarvationFreedomProperty"
+    )
+    if theorem is None:
+        errors.append(f"{proof_path}: missing {theorem_symbol}")
+    else:
+        body, line = theorem
+        theorem_parts = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )
+        statement = theorem_parts[0]
+        normalized = " ".join(statement.split())
+        if normalized != exact_statement:
+            errors.append(
+                f"{proof_path}:{line}: {theorem_symbol} must state only "
+                f"{exact_statement!r}; found {normalized!r}"
+            )
+        if len(theorem_parts) != 2:
+            errors.append(
+                f"{proof_path}:{line}: {theorem_symbol} must retain the "
+                "explicit candidate TLAPS proof while strict verification "
+                "remains pending"
+            )
+        else:
+            aggregate_proof = theorem_parts[1]
+            required_aggregate_dependencies = (
+                "IndexedChainSpecEstablishesSuccessorActivationPendingStructure",
+                "IndexedChainSpecEstablishesSuccessorActivationStepDecrease",
+                "IndexedChainSpecEstablishesSuccessorActivationNonOrphaning",
+                "IndexedChainSpecEstablishesSuccessorActivationOutcomeStability",
+                "IndexedChainSpecEstablishesSuccessorActivationRankProgress",
+                "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom",
+            )
+            for dependency in required_aggregate_dependencies:
+                if len(
+                    _tla_dependency_positions(aggregate_proof, dependency)
+                ) != 1:
+                    errors.append(
+                        f"{proof_path}:{line}: {theorem_symbol} proof must "
+                        f"invoke {dependency} exactly once"
+                    )
+            if re.search(
+                r"(?:\bOBVIOUS\b|\bASSUME\s+FALSE\b|\bBY\s+TRUE\b|"
+                r"\bPROVE\s+TRUE\b)",
+                aggregate_proof,
+            ):
+                errors.append(
+                    f"{proof_path}:{line}: {theorem_symbol} proof may not "
+                    "use a vacuous assertion"
+                )
+
+    equivalence_symbol = "SuccessorActivationStarvationMatchesChainProgress"
+    equivalence = _top_level_theorem_body(
+        source, equivalence_symbol, preserve_string_contents=True
+    )
+    exact_equivalence = (
+        "SuccessorActivationStarvationFreedomProperty "
+        "<=> IndexedSuccessorActivationProgress"
+    )
+    if equivalence is None:
+        errors.append(f"{proof_path}: missing {equivalence_symbol}")
+    else:
+        body, line = equivalence
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
+        normalized = " ".join(statement.split())
+        if normalized != exact_equivalence:
+            errors.append(
+                f"{proof_path}:{line}: {equivalence_symbol} must state only "
+                f"{exact_equivalence!r}; found {normalized!r}"
+            )
+    return errors

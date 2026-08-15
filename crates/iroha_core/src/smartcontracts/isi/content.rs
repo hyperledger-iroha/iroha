@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, str};
+use super::*;
 use blake3::{Hasher, hash as blake3_hash};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -7,7 +7,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
 };
 use norito::codec::Encode;
-use super::*;
+use std::{collections::BTreeMap, str};
 impl Execute for iroha_data_model::isi::content::PublishContentBundle {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -382,6 +382,11 @@ fn compute_chunk_root(chunks: &[[u8; 32]]) -> [u8; 32] {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
@@ -390,11 +395,6 @@ mod tests {
         prelude::*,
     };
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
     fn make_tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
         const HEADER_LEN: usize = 512;
         let mut out = Vec::new();

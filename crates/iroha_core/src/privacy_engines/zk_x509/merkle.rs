@@ -12,8 +12,12 @@
 //! DER bytes are domain-framed and hashed to the governed CRL-record digest.
 //! Keeping these commitments here gives the native reference code and the SHA
 //! adapter one canonical preimage encoder.
-use sha2::{Digest, Sha256};
-use thiserror::Error;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::profile::ZK_X509_CA_EMPTY_LEAF_DOMAIN_V1;
+use super::profile::{
+    ZK_X509_CA_LEAF_DOMAIN_V1, ZK_X509_CA_NODE_DOMAIN_V1, ZK_X509_CRL_DER_DIGEST_DOMAIN_V1,
+    ZK_X509_CRL_ISSUER_SPKI_DIGEST_DOMAIN_V1, ZK_X509_HASH_FRAME_DOMAIN_V1,
+};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use iroha_data_model::privacy::{
     PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1, PrivacyZkX509CertificatePolicyRecordV1,
@@ -21,12 +25,8 @@ use iroha_data_model::privacy::{
     ZK_X509_CERTIFICATE_POLICY_RECORD_DIGEST_DOMAIN_V1, ZK_X509_CRL_RECORD_DIGEST_DOMAIN_V1,
     ZK_X509_GOVERNANCE_RECORD_VERSION_V1, ZK_X509_TRUST_ANCHOR_RECORD_DIGEST_DOMAIN_V1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::profile::ZK_X509_CA_EMPTY_LEAF_DOMAIN_V1;
-use super::profile::{
-    ZK_X509_CA_LEAF_DOMAIN_V1, ZK_X509_CA_NODE_DOMAIN_V1, ZK_X509_CRL_DER_DIGEST_DOMAIN_V1,
-    ZK_X509_CRL_ISSUER_SPKI_DIGEST_DOMAIN_V1, ZK_X509_HASH_FRAME_DOMAIN_V1,
-};
+use sha2::{Digest, Sha256};
+use thiserror::Error;
 /// Number of leaves in the governed compact trust-anchor tree.
 pub(crate) const ZK_X509_CA_COMPACT_TREE_CAPACITY_V1: usize = 4_096;
 /// Depth of the governed compact trust-anchor tree.
@@ -585,12 +585,12 @@ pub(crate) fn crl_record_preimage_v1(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::privacy::{
         PrivacyIssuerIdV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyRootV1,
         PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
         PrivacyX509KeyUsageRequirementV1, PrivacyX509TrustStoreDigestV1,
     };
-    use super::*;
     fn spki(index: u16) -> [u8; ZK_X509_CA_SPKI_DER_BYTES_V1] {
         let mut value = [0x42_u8; ZK_X509_CA_SPKI_DER_BYTES_V1];
         value[..2].copy_from_slice(&index.to_be_bytes());

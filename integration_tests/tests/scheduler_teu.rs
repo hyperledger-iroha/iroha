@@ -1,12 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry scheduler TEU integration tests.
 #![cfg(feature = "telemetry")]
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
-    sync::Arc,
-    time::Duration,
-};
 use eyre::Result;
 use iroha_config::parameters::actual::{
     LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule, Nexus, Queue as QueueConfig,
@@ -35,6 +29,12 @@ use iroha_primitives::{json::Json, time::TimeSource};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::broadcast;
 fn disable_nexus_fee_admission(nexus: &mut Nexus) {
     nexus.fees.base_fee = Quantity::zero();

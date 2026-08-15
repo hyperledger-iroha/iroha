@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii account faucet tests.
 #![cfg(feature = "app_api")]
-use std::{borrow::Cow, num::NonZeroU8, sync::Arc};
 use axum::{body::to_bytes, http::Request, response::Response};
 use http::StatusCode;
 use iroha_core::{
@@ -27,6 +26,7 @@ use iroha_torii::{Torii, json_entry, json_object};
 use mv::storage::StorageReadOnly;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest as _, Sha256};
+use std::{borrow::Cow, num::NonZeroU8, sync::Arc};
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;

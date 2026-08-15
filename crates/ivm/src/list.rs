@@ -4,11 +4,11 @@
 //! owned heap allocation whose exact element shape and capacity come from the
 //! compiler-emitted schema. Hosts must therefore validate the complete range
 //! against that schema before reading it.
+use crate::{IVM, VMError};
 #[cfg(test)]
 use ivm_abi::list::LIST_HEADER_WORDS_V1;
 use ivm_abi::list::LIST_WORD_BYTES_V1;
 pub use ivm_abi::list::ListLayoutV1;
-use crate::{IVM, VMError};
 fn layout_error() -> VMError {
     VMError::DecodeError
 }

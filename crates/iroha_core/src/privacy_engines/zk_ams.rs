@@ -1,18 +1,15 @@
 //! Native Iroha testnet instantiation of ZK-AMS anonymous provisioning.
 //!
-//! The protocol workflow follows ZK-AMS v2, arXiv:2602.16130, Algorithms
-//! 1--4 and Appendices A/C.  The paper intentionally leaves the concrete
-//! linkable ring-signature group, hash, transcript, and wire unspecified.
-//! This module closes Phase V to an LSAG instance over prime-order
-//! Ristretto255 with SHA3-512 and supplies the holder-possession Schnorr
-//! component composed with the admission relation. This module defines the
-//! sole Iroha first-release testnet profile; no paper-prototype or legacy wire
-//! is admitted.
+//! The protocol workflow follows ZK-AMS v2, arXiv:2602.16130, Algorithms 1--4 and Appendices A/C.
+//! The paper intentionally leaves the concrete linkable ring-signature group, hash, transcript, and
+//! wire unspecified. This module closes Phase V to an LSAG instance over prime-order Ristretto255
+//! with SHA3-512 and supplies the holder-possession Schnorr component composed with the admission
+//! relation. This module defines the sole Iroha first-release testnet profile; no paper-prototype
+//! or legacy wire is admitted.
 //!
-//! Batch admission composes an exact low-s ES256 credential relation, a
-//! setup-free masked relaxed-R1CS proof, and one transcript-bound Ristretto
-//! possession proof per ordered anchor. Provisioning then consumes those
-//! admitted seed keys through the closed LSAG suite below.
+//! Batch admission composes an exact low-s ES256 credential relation, a setup-free masked
+//! relaxed-R1CS proof, and one transcript-bound Ristretto possession proof per ordered anchor.
+//! Provisioning then consumes those admitted seed keys through the closed LSAG suite below.
 use core::{num::NonZeroU32, time::Duration};
 use curve25519_dalek::{
     RistrettoPoint, constants::RISTRETTO_BASEPOINT_POINT, ristretto::CompressedRistretto,
@@ -54,6 +51,12 @@ fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
         ),
     )
 }
+use super::{
+    p256::{P256EngineError, TranscriptBindingV1},
+    prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1},
+};
+/// Deterministic worker configuration for the canonical masked admission prover.
+pub use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
 use p256::{
     AffinePoint as P256AffinePoint, FieldBytes as P256FieldBytes,
     ProjectivePoint as P256ProjectivePoint, Scalar as P256Scalar,
@@ -70,12 +73,6 @@ use sha2::Sha256;
 use sha3::{Digest, Sha3_256, Sha3_512};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-use super::{
-    p256::{P256EngineError, TranscriptBindingV1},
-    prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1},
-};
-/// Deterministic worker configuration for the canonical masked admission prover.
-pub use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
 /// Pinned source used for the Iroha ZK-AMS workflow and relation.
 pub const ZK_AMS_SOURCE_PROFILE_V1: &[u8] = b"arxiv:2602.16130v2:algorithms-1-4:appendices-a-c";
 /// Exact Iroha Phase-V suite label.
@@ -155,9 +152,8 @@ pub enum ZkAmsPrivacyActionEffectV1 {
 }
 /// Pure ZK-AMS proving output ready for transaction signing.
 ///
-/// The payload and canonical genesis binding are private. This type deliberately
-/// implements neither `Clone` nor a serialization trait, so the only public
-/// production transition is the consuming
+/// The payload and canonical genesis binding are private. This type deliberately implements neither
+/// `Clone` nor a serialization trait, so the only public production transition is the consuming
 /// [`sign_prepared_zk_ams_privacy_action_v1`] boundary.
 pub struct ZkAmsPreparedPrivacyActionV1 {
     payload: TransactionPayload,
@@ -732,9 +728,8 @@ pub fn prepare_zk_ams_provision_account_transaction_intent_v1(
 /// Validate a prepared ZK-AMS statement against its exact single-action
 /// transaction context and return the canonical transaction-intent digest.
 ///
-/// The local proof-empty envelope exists only long enough to reproduce the
-/// proof-independent data-model projection. It cannot escape this helper or be
-/// submitted as an incomplete proof.
+/// The local proof-empty envelope exists only long enough to reproduce the proof-independent
+/// data-model projection. It cannot escape this helper or be submitted as an incomplete proof.
 ///
 /// # Errors
 ///
@@ -1159,8 +1154,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns the same closed failures as
-/// [`prepare_zk_ams_provision_privacy_action_with_rng_v1`].
+/// Returns the same closed failures as [`prepare_zk_ams_provision_privacy_action_with_rng_v1`].
 pub fn prepare_zk_ams_provision_privacy_action_v1(
     context: ZkAmsPrivacyActionTransactionContextV1,
     governance: ZkAmsPrivacyActionGovernanceV1,
@@ -1181,9 +1175,8 @@ pub fn prepare_zk_ams_provision_privacy_action_v1(
 }
 /// Consume and sign a payload returned by the canonical ZK-AMS prover.
 ///
-/// The complete proof, statement, envelope hash, genesis binding, and
-/// proof-independent intent are revalidated immediately before and after
-/// signing.
+/// The complete proof, statement, envelope hash, genesis binding, and proof-independent intent are
+/// revalidated immediately before and after signing.
 ///
 /// # Errors
 ///
@@ -1742,15 +1735,13 @@ pub fn zk_ams_registry_transition_root_v1(
 }
 /// Prove one complete ordered ZK-AMS credential-admission batch.
 ///
-/// The returned envelope contains the masked relaxed-R1CS proof plus one
-/// transcript-bound Ristretto Schnorr possession proof per anchor. The prover
-/// runs the public verifier before releasing bytes.
+/// The returned envelope contains the masked relaxed-R1CS proof plus one transcript-bound Ristretto
+/// Schnorr possession proof per anchor. The prover runs the public verifier before releasing bytes.
 ///
 /// # Errors
 ///
-/// Fails closed for statement/binding drift, malformed credentials or low-s
-/// signatures, seed mismatch, root-transition mismatch, random failure, or
-/// native relation failure.
+/// Fails closed for statement/binding drift, malformed credentials or low-s signatures, seed
+/// mismatch, root-transition mismatch, random failure, or native relation failure.
 pub fn prove_zk_ams_batch_admission_v1<R: CryptoRng + RngCore>(
     statement: &IrohaZkAmsStatementV1,
     binding: &TranscriptBindingV1<'_>,
@@ -1860,9 +1851,8 @@ pub fn prove_zk_ams_batch_admission_v1<R: CryptoRng + RngCore>(
 ///
 /// # Errors
 ///
-/// Oversized input is rejected before Norito. Exact decoding, relation
-/// verification, every possession proof, and the final transition root must
-/// all succeed before an effect is returned.
+/// Oversized input is rejected before Norito. Exact decoding, relation verification, every
+/// possession proof, and the final transition root must all succeed before an effect is returned.
 pub fn verify_zk_ams_batch_admission_v1(
     statement: &IrohaZkAmsStatementV1,
     binding: &TranscriptBindingV1<'_>,
@@ -2241,9 +2231,8 @@ fn verify_preflighted_zk_ams_admission_possession_v1(
 ///
 /// # Errors
 ///
-/// Fails closed before allocation for oversized proof bytes, then rejects
-/// non-canonical Norito, scalars, points, ring order, or verification
-/// equations.
+/// Fails closed before allocation for oversized proof bytes, then rejects non-canonical Norito,
+/// scalars, points, ring order, or verification equations.
 pub fn verify_zk_ams_provision_v1(
     binding: &TranscriptBindingV1<'_>,
     ring: &[[u8; 32]],
@@ -2294,8 +2283,7 @@ pub fn verify_zk_ams_provision_v1(
     }
     Ok(())
 }
-/// Verify one complete typed provisioning statement and derive its atomic
-/// ledger effect.
+/// Verify one complete typed provisioning statement and derive its atomic ledger effect.
 pub fn verify_zk_ams_provision_statement_v1(
     statement: &IrohaZkAmsStatementV1,
     binding: &TranscriptBindingV1<'_>,
@@ -2805,6 +2793,7 @@ fn append_field(hash: &mut Sha3_512, label: &[u8], value: &[u8]) -> Result<(), Z
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use core::{
         num::{NonZeroU32, NonZeroU64},
         time::Duration,
@@ -2823,7 +2812,6 @@ mod tests {
     use iroha_primitives::json::Json;
     use p256::ecdsa::{SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _};
     use rand_core_06::Error as RngError;
-    use super::*;
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyZkAmsBatchAdmissionProofWireV1 {
         version: u8,

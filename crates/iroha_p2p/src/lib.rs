@@ -3,7 +3,6 @@
 //! Cryptography are chosen in this module, and encapsulated.
 #![allow(unexpected_cfgs)]
 #![allow(clippy::all)]
-use std::{io, net::AddrParseError};
 use aead::{Nonce, Tag};
 use iroha_crypto::{Algorithm, KeyPair, encryption::ChaCha20Poly1305};
 pub use iroha_data_model::{
@@ -11,6 +10,7 @@ pub use iroha_data_model::{
 };
 pub use network::message::{UpdateTrustedPeers, *};
 use norito::codec::{Decode, Encode};
+use std::{io, net::AddrParseError};
 use thiserror::Error;
 pub mod network;
 pub mod peer;

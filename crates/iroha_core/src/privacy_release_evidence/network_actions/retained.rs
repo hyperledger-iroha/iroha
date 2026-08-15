@@ -5,31 +5,6 @@
 //! `iroha_core` and returns ordinary production transactions and governance
 //! records so integration gates exercise the exact Torii, DA/RBC, verifier,
 //! and atomic state-transition paths used by validators.
-use iroha_crypto::{PrivateKey, PublicKey};
-use iroha_data_model::{
-    prelude::{AccountId, AssetDefinitionId},
-    privacy::{
-        AnonymousPgcKOutOfNStatementV1, BootleLanternAllowedAttributeValuesV1,
-        BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
-        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
-        IrohaIvmPrivateNoteStarkStatementV1, MoneroFcmpPlusPlusStatementV1,
-        PrivacyConsensusLimitsV1, PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1,
-        PrivacyFcmpOutputTupleV1, PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1,
-        PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyNamespaceScopeV1,
-        PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1, PrivacyP256CiphertextV1,
-        PrivacyP256PointV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
-        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-        PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1, PrivacyRootV1,
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-        PrivacyVeRangeBitLengthV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
-        VeRangeTransparentRangeStatementV1, ZkAcePqAuthorizationStatementV1,
-    },
-    transaction::SignedTransaction,
-    zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
-};
-use rand_core_06::{CryptoRng, Error as RngError06, RngCore};
-use zeroize::Zeroizing;
 use super::{
     PrivacyReleaseTransactionContextV1, network_seed_v1, signed_payload_v1, statement_context_v1,
     transaction_payload_v1,
@@ -79,6 +54,31 @@ use crate::{
     privacy_release_evidence::{EvidenceRng06, EvidenceRng09, PrivacyReleaseEvidenceErrorClassV1},
     privacy_state::compute_privacy_pgc_account_state_root_v1,
 };
+use iroha_crypto::{PrivateKey, PublicKey};
+use iroha_data_model::{
+    prelude::{AccountId, AssetDefinitionId},
+    privacy::{
+        AnonymousPgcKOutOfNStatementV1, BootleLanternAllowedAttributeValuesV1,
+        BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
+        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
+        IrohaIvmPrivateNoteStarkStatementV1, MoneroFcmpPlusPlusStatementV1,
+        PrivacyConsensusLimitsV1, PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1,
+        PrivacyFcmpOutputTupleV1, PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1,
+        PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyNamespaceScopeV1,
+        PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1, PrivacyP256CiphertextV1,
+        PrivacyP256PointV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+        PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1, PrivacyRootV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyVeRangeBitLengthV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
+        VeRangeTransparentRangeStatementV1, ZkAcePqAuthorizationStatementV1,
+    },
+    transaction::SignedTransaction,
+    zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
+};
+use rand_core_06::{CryptoRng, Error as RngError06, RngCore};
+use zeroize::Zeroizing;
 struct UnavailableIssuanceRngV1;
 impl RngCore for UnavailableIssuanceRngV1 {
     fn next_u32(&mut self) -> u32 {
@@ -1232,14 +1232,14 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
 // envelope checks above.
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         metadata::Metadata,
         prelude::{DomainId, Name},
         transaction::FeePaymentIntent,
     };
-    use super::*;
+    use std::time::Duration;
     fn context(key_pair: &KeyPair) -> PrivacyReleaseTransactionContextV1 {
         PrivacyReleaseTransactionContextV1 {
             network_id: crate::privacy_release_evidence::release_network_id_from_genesis_hash(

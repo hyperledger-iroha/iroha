@@ -1,5 +1,4 @@
 //! Minimal Nexus App Facade transfer recipe with fake wallet/Torii dependencies.
-use std::{error::Error, num::NonZeroU32, time::Duration};
 use iroha::{
     crypto::{Algorithm, Hash, HashOf, KeyPair, Signature},
     data_model::{
@@ -14,6 +13,7 @@ use iroha::{
         NexusToriiSubmitter, NexusTransferInput, NexusTransferReceipt, NexusWalletSignature,
     },
 };
+use std::{error::Error, num::NonZeroU32, time::Duration};
 #[derive(Clone)]
 struct DemoConnectTransport {
     key_pair: KeyPair,

@@ -2,13 +2,15 @@
 #![cfg(feature = "sm")]
 #[path = "sm2_negative_vector_fixture.rs"]
 mod negative_fixture;
-use std::sync::{Arc, OnceLock};
 use hex::decode as hex_decode;
-use iroha_crypto::{Algorithm, Error, KeyPair, Signature, Sm2PrivateKey, Sm2PublicKey, Sm2Signature};
+use iroha_crypto::{
+    Algorithm, Error, KeyPair, Signature, Sm2PrivateKey, Sm2PublicKey, Sm2Signature,
+};
 use negative_fixture::{NegativeVector, apply_mutation, load_negative_vectors};
 use norito::json::Value;
 use sm2::dsa::{Signature as Sm2RawSignature, signature::hazmat::PrehashVerifier};
 use sm3::{Digest, Sm3};
+use std::sync::{Arc, OnceLock};
 #[derive(Clone, Debug)]
 struct WycheproofCase {
     distid: String,

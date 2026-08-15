@@ -1,14 +1,14 @@
 //! WsvHost durable state syscalls: STATE_GET/SET/DEL with pointer-ABI.
-use std::{
-    fs,
-    time::{SystemTime, UNIX_EPOCH},
-};
 use iroha_crypto::PublicKey;
 use ivm::{
     IVM, Memory, PointerType, VMError,
     host::IVMHost,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
+};
+use std::{
+    fs,
+    time::{SystemTime, UNIX_EPOCH},
 };
 mod common;
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {

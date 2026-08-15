@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for transferring assets between accounts.
-use std::time::{Duration, Instant};
 use integration_tests::{sandbox, sync::sync_after_submission};
 use iroha::{
     client::Client,
@@ -14,6 +13,7 @@ use iroha::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::time::{Duration, Instant};
 fn start_default(
     context: &'static str,
 ) -> Option<(sandbox::SerializedNetwork, tokio::runtime::Runtime)> {

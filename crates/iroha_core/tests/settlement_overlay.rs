@@ -1,7 +1,6 @@
 //! Integration tests covering settlement admission and overlay execution paths.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::unwrap_used)]
-use std::str::FromStr as _;
 use iroha_core::{
     kura::Kura,
     pipeline::overlay::TxOverlay,
@@ -32,6 +31,7 @@ use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use std::str::FromStr as _;
 fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);

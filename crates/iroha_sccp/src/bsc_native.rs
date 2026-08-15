@@ -7,6 +7,10 @@
 //! supports the post-Mendel first-release protocol and refuses unknown header
 //! layouts or validator-set changes that were not finalized by the preceding
 //! set.
+use super::{
+    H256, SccpPayloadV1, canonical_sccp_payload_bytes, decode_canonical_sccp_payload_bytes,
+    prefixed_blake2b, sccp_lane_id_hash_v1, sccp_message_id, sccp_source_identity_hash_v1,
+};
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec,
@@ -16,10 +20,6 @@ use iroha_crypto::EcdsaSecp256k1Sha256;
 use iroha_crypto::{ethereum_bls_pop_fast_aggregate_verify, ethereum_bls_pop_validate_public_key};
 use iroha_data_model::bridge::sccp::{SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1};
 use tiny_keccak::{Hasher as _, Keccak};
-use super::{
-    H256, SccpPayloadV1, canonical_sccp_payload_bytes, decode_canonical_sccp_payload_bytes,
-    prefixed_blake2b, sccp_lane_id_hash_v1, sccp_message_id, sccp_source_identity_hash_v1,
-};
 /// BNB Smart Chain mainnet EIP-155 chain identifier.
 pub const BSC_NATIVE_MAINNET_CHAIN_ID: u64 = 56;
 /// BNB Smart Chain Chapel testnet EIP-155 chain identifier.

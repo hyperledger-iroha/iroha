@@ -1,9 +1,4 @@
 //! Incremental block builder that uses typed incremental Merkle updates during assembly.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    vec::Vec,
-};
-use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
 use super::{
     BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockResult, BlockSignature,
     SignedBlock,
@@ -19,6 +14,11 @@ use crate::{
         TransactionEntrypoint, TransactionResult, TransactionResultInner,
     },
     trigger::TimeTriggerEntrypoint,
+};
+use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
 };
 /// Helper to incrementally assemble a block while maintaining Merkle roots.
 #[derive(Debug, Clone)]
@@ -251,8 +251,6 @@ impl BlockBuilder {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use nonzero_ext::nonzero;
     use super::*;
     use crate::{
         da::{
@@ -266,6 +264,8 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
         transaction::signed::TransactionBuilder,
     };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use nonzero_ext::nonzero;
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("generate checked block-builder fixture keypair")

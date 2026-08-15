@@ -4,12 +4,9 @@
 //! validator-set checkpoints. Structural validation and durable hashing do **not** authenticate
 //! the legacy BLS certificate. Live first-release consensus, block sync, and startup recovery must
 //! use Kura's cryptographically verified Sumeragi-v2 finality artifacts instead.
-use std::{
-    collections::{BTreeMap, btree_map::Entry},
-    fs,
-    io::{self, Read, Write},
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
+use crate::sumeragi::{
+    consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase},
+    stake_snapshot::CommitStakeSnapshot,
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -22,11 +19,14 @@ use norito::{
     decode_from_bytes, to_bytes,
 };
 use sha2::{Digest, Sha256};
-use thiserror::Error;
-use crate::sumeragi::{
-    consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase},
-    stake_snapshot::CommitStakeSnapshot,
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    fs,
+    io::{self, Read, Write},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
 };
+use thiserror::Error;
 static COMMIT_ROSTER_PUBLICATION_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 /// Exact durable publication shape for truncating one commit-roster journal.
 ///

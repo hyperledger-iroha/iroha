@@ -1,9 +1,9 @@
 //! Canonical Sumeragi v2 consensus-parameters fingerprint projection.
+use super::{ConsensusMode, SumeragiV2GenesisContextParameters};
+use crate::block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams};
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_primitives::numeric::Quantity;
 use norito::codec::Encode;
-use super::{ConsensusMode, SumeragiV2GenesisContextParameters};
-use crate::block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams};
 const DOMAIN: &[u8] = b"iroha:sumeragi:v2:consensus-parameters-fingerprint:v1\0";
 /// Version of the canonical v2 consensus-parameters projection.
 pub const FORMAT_VERSION: u16 = 1;

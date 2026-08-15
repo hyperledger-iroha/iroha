@@ -1,10 +1,3 @@
-use std::default::Default;
-use darling::ast::Style;
-use manyhow::{Emitter, emit};
-use proc_macro2::TokenStream;
-use quote::quote;
-use rustc_hash::FxHashMap;
-use syn::{Ident, parse_quote, visit::Visit};
 use crate::{
     attr_parse::{
         derive::DeriveAttrs,
@@ -13,6 +6,13 @@ use crate::{
     convert::{FfiTypeField, FfiTypeFields},
     impl_visitor::{Arg, FnDescriptor, unwrap_result_type},
 };
+use darling::ast::Style;
+use manyhow::{Emitter, emit};
+use proc_macro2::TokenStream;
+use quote::quote;
+use rustc_hash::FxHashMap;
+use std::default::Default;
+use syn::{Ident, parse_quote, visit::Visit};
 /// Generate FFI function equivalents of getset-derived methods
 pub fn gen_derived_methods<'a>(
     emitter: &mut Emitter,

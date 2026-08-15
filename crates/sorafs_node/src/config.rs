@@ -1,17 +1,4 @@
 //! Storage configuration helpers for the embedded SoraFS worker.
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
-use iroha_config::parameters::actual;
-use iroha_data_model::sorafs::{
-    capacity::ProviderId,
-    orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
-    transparency::{
-        MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
-        ModerationPrivacyParametersV1,
-    },
-};
 use crate::{
     governance::GovernanceDagRuntimeProviderQualificationV1,
     metering::SmoothingConfig,
@@ -25,6 +12,19 @@ use crate::{
         PrivacyAggregateScheduleConfig, PrivacyCompositionBudgetPolicyV1,
         TransparencyRuntimeProviderBindingV1,
     },
+};
+use iroha_config::parameters::actual;
+use iroha_data_model::sorafs::{
+    capacity::ProviderId,
+    orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
+    transparency::{
+        MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
+        ModerationPrivacyParametersV1,
+    },
+};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
 };
 /// Convenience wrapper around the Torii-level SoraFS storage configuration.
 #[derive(Debug, Clone)]

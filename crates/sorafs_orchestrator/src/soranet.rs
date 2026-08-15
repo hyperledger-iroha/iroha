@@ -6,14 +6,7 @@
 //! caches across sessions. This underpins SNNet-5 by providing deterministic
 //! guard pinning ahead of the circuit manager and transport integration.
 #![allow(unexpected_cfgs)]
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, HashMap, HashSet},
-    convert::TryFrom,
-    fmt,
-    num::{NonZeroU64, NonZeroUsize},
-    time::Duration,
-};
+use crate::{AnonymityPolicy, SORANET_BANDWIDTH_UNIT_BYTES};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::Hasher as Blake3Hasher;
 use ed25519_dalek::VerifyingKey as Ed25519VerifyingKey;
@@ -29,8 +22,15 @@ use iroha_data_model::soranet::prelude::{RelayBondLedgerEntryV1, RelayBondPolicy
 use iroha_logger::info;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, HashMap, HashSet},
+    convert::TryFrom,
+    fmt,
+    num::{NonZeroU64, NonZeroUsize},
+    time::Duration,
+};
 use thiserror::Error;
-use crate::{AnonymityPolicy, SORANET_BANDWIDTH_UNIT_BYTES};
 const GUARD_SET_VERSION_MIN: u8 = 1;
 const GUARD_SET_VERSION: u8 = 7;
 const DEFAULT_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
@@ -2336,11 +2336,7 @@ fn select_relay<'a>(
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        str::FromStr,
-        time::Duration,
-    };
+    use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::soranet::{
         certificate::{
@@ -2359,8 +2355,14 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use rand::rand_core::TryRngCore;
     use rand::{RngCore, SeedableRng, rngs::StdRng};
-    use soranet_pq::{MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
-    use super::*;
+    use soranet_pq::{
+        MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
+    };
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        str::FromStr,
+        time::Duration,
+    };
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

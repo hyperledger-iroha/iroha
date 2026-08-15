@@ -1,5 +1,12 @@
 //! Authoritative SoraFS moderation commit/reveal ledger handlers.
-use std::{str::FromStr, sync::OnceLock};
+use super::*;
+use crate::{
+    smartcontracts::ValidSingularQuery,
+    smartcontracts::isi::sorafs_pop_registry::{
+        read_active_publications, read_pinned_publications,
+    },
+    state::{StateTransaction, WorldReadOnly},
+};
 use iroha_data_model::{
     account::AccountId,
     events::data::sorafs::{
@@ -63,14 +70,7 @@ use sorafs_manifest::pop_credentials::{
     POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopEligibilityClassV1, PopMembershipProofV1,
     verify_pop_membership_proof_v1,
 };
-use super::*;
-use crate::{
-    smartcontracts::ValidSingularQuery,
-    smartcontracts::isi::sorafs_pop_registry::{
-        read_active_publications, read_pinned_publications,
-    },
-    state::{StateTransaction, WorldReadOnly},
-};
+use std::{str::FromStr, sync::OnceLock};
 const POLICY_STATE_KEY: &str = "sorafs_moderation_policy_v1";
 const STATUS_STATE_KEY: &str = "sorafs_moderation_status_v1";
 const APPEAL_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_v1_";
@@ -4986,6 +4986,12 @@ impl ValidSingularQuery for FindSorafsModerationEvents {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::too_many_lines)]
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
@@ -5031,12 +5037,6 @@ mod tests {
         pop_credential_signature_digest_v1, pop_revocation_list_signature_digest_v1,
         pop_revocation_root_v1, prove_pop_membership_v1, verify_pop_commitment_root_signature_v1,
         verify_pop_credential_signature_v1, verify_pop_revocation_list_signature_v1,
-    };
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
     };
     const OPENED_AT: u64 = 1_000;
     const COMMIT_DEADLINE: u64 = 2_000;

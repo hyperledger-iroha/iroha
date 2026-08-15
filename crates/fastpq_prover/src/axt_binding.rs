@@ -1,3 +1,8 @@
+use crate::{
+    Error, OperationKind, PublicInputs, Result, StateTransition, TransitionBatch,
+    gadgets::transfer::decode_transcripts,
+    proof::{Proof, verify},
+};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
@@ -9,11 +14,6 @@ use iroha_data_model::{
 };
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
-use crate::{
-    Error, OperationKind, PublicInputs, Result, StateTransition, TransitionBatch,
-    gadgets::transfer::decode_transcripts,
-    proof::{Proof, verify},
-};
 /// Metadata key binding the structured AXT FASTPQ payload into the proof trace.
 pub const AXT_FASTPQ_BINDING_METADATA_KEY: &str = "axt_fastpq_binding";
 /// Metadata key sealing a concrete FASTPQ batch to its AXT statement.

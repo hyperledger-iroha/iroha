@@ -3,13 +3,13 @@
 //! Schemas are resolved only through explicitly registered names and families.
 //! Unsupported names fail closed; registered schemas expose a stable 32-byte id
 //! and version for host metadata.
-use std::sync::Arc;
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::query::{
     QueryRequest, QueryResponse,
     json_wrappers::{QueryRequestJson, query_request_from_json, query_request_to_json},
 };
 use ivm_abi::codec::{decode_canonical_norito, encode_canonical_norito};
+use std::sync::Arc;
 // Canonical schema type definitions used by the default registry for encoding/decoding.
 // Keep these at module scope so Norito type identity remains stable across encode/decode.
 #[derive(norito::Decode, norito::Encode, Clone, Debug)]
@@ -287,12 +287,12 @@ impl SchemaRegistry for DefaultRegistry {
 }
 #[cfg(test)]
 mod tests {
-    use norito::json as njson;
     use super::*;
     use iroha_data_model::query::{
         QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
         executor::prelude::FindParameters, runtime::AbiVersion,
     };
+    use norito::json as njson;
     fn eq_json(a: &[u8], b: &[u8]) -> bool {
         let va: njson::Value = match njson::from_slice(a) {
             Ok(v) => v,

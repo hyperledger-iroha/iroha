@@ -4,8 +4,10 @@
 //! deterministic mock proofs so that unit and integration tests can exercise
 //! privacy-mode workflows. Production builds wire into the canonical verifier
 //! pipeline to validate Halo2 envelopes against the configured roster circuit.
+use super::{Error, privacy_error};
+use crate::state::StateTransaction;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
-use std::str::FromStr;
+use crate::zk;
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_crypto::Hash;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
@@ -28,10 +30,8 @@ use kaigi_zk::{
 };
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use mv::storage::StorageReadOnly;
-use super::{Error, privacy_error};
-use crate::state::StateTransaction;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
-use crate::zk;
+use std::str::FromStr;
 /// Information supplied with a privacy-mode join/leave request.
 #[derive(Debug)]
 pub struct PrivacyArtifacts<'a> {
@@ -544,12 +544,12 @@ fn scalar_le_u64(value: halo2_proofs::halo2curves::pasta::Fp) -> Option<u64> {
 }
 #[cfg(all(test, not(feature = "kaigi_privacy_mocks")))]
 mod tests {
+    use super::*;
     use halo2_proofs::halo2curves::pasta::Fp;
     use kaigi_zk::{
         compute_commitment_hash, compute_nullifier_hash, compute_usage_commitment_hash,
         empty_roster_root_hash,
     };
-    use super::*;
     #[test]
     fn roster_public_input_validation_binds_every_instruction_artifact() {
         let root = empty_roster_root_hash();

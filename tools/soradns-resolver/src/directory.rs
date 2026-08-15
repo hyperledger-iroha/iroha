@@ -1,8 +1,3 @@
-use eyre::{Result, WrapErr};
-use hex::encode as hex_encode;
-use iroha_data_model::soradns::ResolverDirectoryRecordV1;
-use norito::json::{self, value};
-use norito_derive::{JsonDeserialize, JsonSerialize};
 use crate::{
     canonical::{canonicalize_json_bytes_bounded, sha256_digest},
     limits::{
@@ -10,6 +5,11 @@ use crate::{
         MAX_RAD_ENTRIES, directory_json_decode_limits,
     },
 };
+use eyre::{Result, WrapErr};
+use hex::encode as hex_encode;
+use iroha_data_model::soradns::ResolverDirectoryRecordV1;
+use norito::json::{self, value};
+use norito_derive::{JsonDeserialize, JsonSerialize};
 /// Parsed representation of `directory.json` emitted by the release tooling.
 #[derive(Debug, Clone, JsonDeserialize)]
 pub struct DirectoryListing {

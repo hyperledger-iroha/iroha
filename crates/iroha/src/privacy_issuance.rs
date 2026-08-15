@@ -3,8 +3,8 @@
 //! This deliberately does not reuse the general Torii request pipeline. Issuance
 //! credentials must never cross redirects, proxies, transparent decompression,
 //! retry middleware, or generic request observers.
-use std::{fmt, hint::black_box, io::Read as _, time::Duration};
 use base64::{Engine as _, encoded_len, engine::general_purpose::URL_SAFE_NO_PAD};
+use iroha_torii_shared::ErrorEnvelope;
 use reqwest::{
     StatusCode, Url,
     blocking::{Client, Response},
@@ -14,8 +14,8 @@ use reqwest::{
     },
     redirect::Policy,
 };
+use std::{fmt, hint::black_box, io::Read as _, time::Duration};
 use thiserror::Error;
-use iroha_torii_shared::ErrorEnvelope;
 /// Canonical authorization endpoint.
 pub const BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1: &str =
     "/v1/privacy/bootle-lantern/issuance/authorize";
@@ -576,10 +576,10 @@ fn canonical_content_length_v1(bytes: &[u8], expected_bytes: usize) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use super::*;
     use base64::Engine as _;
     use sha2::{Digest as _, Sha256};
-    use super::*;
+    use std::cell::Cell;
     const CLIENT_CONTRACT_FIXTURE_V1: &str =
         include_str!("../../../fixtures/privacy/bootle_lantern_issuance_client_v1.json");
     fn patterned_v1(length: usize) -> Vec<u8> {

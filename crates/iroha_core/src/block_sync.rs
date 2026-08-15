@@ -6,7 +6,7 @@
 //! this module. Production ingress rejects every `NetworkMessage::BlockSync`;
 //! Sumeragi v2 synchronizes only through its context-bound certified body and
 //! CommitQC services.
-use std::collections::BTreeSet;
+use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
@@ -14,7 +14,7 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::codec::{Decode, Encode};
-use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
+use std::collections::BTreeSet;
 /// Retired v1 block-sync message declarations.
 pub mod message {
     use super::*;
@@ -75,10 +75,10 @@ pub mod message {
 }
 #[cfg(test)]
 mod tests {
+    use super::message::{GetBlocksAfter, Message};
     use iroha_crypto::KeyPair;
     use iroha_p2p::ClassifyTopic;
     use norito::codec::{Decode, Encode};
-    use super::message::{GetBlocksAfter, Message};
     #[derive(Encode)]
     enum ArchivedMessage {
         GetBlocksAfter(GetBlocksAfter),

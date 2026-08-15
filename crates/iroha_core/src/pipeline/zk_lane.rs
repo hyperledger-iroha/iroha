@@ -10,6 +10,12 @@
 //!   formal trace and submit a job if ZK is enabled in config.
 //! - Node startup: call `start()` once to initialize the worker.
 #![deny(missing_docs)]
+#[cfg(test)]
+use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
+use ivm::zk::{Constraint, MemEvent, RegEvent, RegisterState, StepEntry};
+use norito::streaming::CapabilityFlags;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroU64,
@@ -18,12 +24,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-#[cfg(test)]
-use iroha_crypto::HashOf;
-use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
-use ivm::zk::{Constraint, MemEvent, RegEvent, RegisterState, StepEntry};
-use norito::streaming::CapabilityFlags;
-use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 /// Task carrying a single IVM execution's formal trace and metadata.
 #[derive(Clone)]
@@ -1039,8 +1039,8 @@ mod tests {
     #[cfg(feature = "zk-preverify")]
     #[test]
     fn process_batch_enqueues_digest_and_trace_jobs() {
-        use std::num::NonZeroU64;
         use iroha_data_model::block::BlockHeader;
+        use std::num::NonZeroU64;
         crate::zk::reset_trace_proof_state_for_tests();
         crate::zk::reset_trace_proving_state_for_tests();
         let header = BlockHeader::new(

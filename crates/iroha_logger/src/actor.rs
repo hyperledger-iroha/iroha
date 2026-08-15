@@ -1,9 +1,9 @@
 //! Actor encapsulating interaction with logger & telemetry subsystems.
+use crate::telemetry;
 use iroha_config::logger::Directives;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing_core::Subscriber;
 use tracing_subscriber::reload::{self, Error as ReloadError};
-use crate::telemetry;
 /// Handle for communicating with the logging actor.
 ///
 /// `LoggerHandle` is used to dynamically reload log levels and subscribe to

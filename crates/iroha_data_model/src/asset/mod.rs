@@ -1,6 +1,6 @@
 //! Asset-related types and instructions.
-use std::collections::btree_map;
 use iroha_primitives::numeric::Quantity;
+use std::collections::btree_map;
 pub mod alias;
 pub mod definition;
 pub mod id;

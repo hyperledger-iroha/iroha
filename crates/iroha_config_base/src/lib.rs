@@ -147,12 +147,12 @@ pub mod env;
 pub mod read;
 pub mod toml;
 pub mod util;
+use crate::attach::ConfigValueAndOrigin;
+pub use iroha_derive::ReadConfig;
 use std::{
     fmt::{Debug, Display, Formatter},
     path::{Path, PathBuf},
 };
-pub use iroha_derive::ReadConfig;
-use crate::attach::ConfigValueAndOrigin;
 /// Config parameter ID, which is a path in config file, e.g. `foo.bar`.
 ///
 /// ```

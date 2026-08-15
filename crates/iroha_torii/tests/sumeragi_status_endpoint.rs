@@ -1,10 +1,6 @@
 //! Router-level coverage for the authoritative Sumeragi v2 status endpoint.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "telemetry")]
-use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex, MutexGuard},
-};
 use axum::{body::Body, http::Request};
 use http::{StatusCode, header};
 use http_body_util::BodyExt as _;
@@ -22,6 +18,10 @@ use iroha_data_model::block::consensus_v2::{
     SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
 };
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex, MutexGuard},
+};
 use tower::ServiceExt as _;
 const NORITO_MIME_TYPE: &str = "application/x-norito";
 static STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());

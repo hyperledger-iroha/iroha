@@ -1,10 +1,10 @@
 //! Regression test for reading blocks from large sparse files without loading the entire file into memory.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::time::{Duration, Instant};
 use iroha_config::kura::FsyncMode;
 use iroha_core::kura::BlockStore;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::BlockHeader;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
 #[test]
 #[cfg_attr(

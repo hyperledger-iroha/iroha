@@ -1,5 +1,4 @@
 //! Finalized-state adapter for the production SFM-4b3 evidence viewer.
-use std::{fmt, sync::Arc};
 use iroha_core::{
     smartcontracts::ValidSingularQuery,
     state::{State, StateReadOnly, WorldReadOnly, WorldStateSnapshot},
@@ -12,6 +11,7 @@ use sorafs_node::evidence_viewer::{
     EvidenceViewerAuthorizationErrorV1, EvidenceViewerFinalizedAuthorizationReaderV1,
     EvidenceViewerFinalizedAuthorizationV1, EvidenceViewerRoleV1,
 };
+use std::{fmt, sync::Arc};
 const EVIDENCE_AUDITOR_ROLE_V1: &str = "sorafs_evidence_auditor";
 const LEGAL_REVIEWER_ROLE_V1: &str = "sorafs_legal_reviewer";
 /// Reads one exact case, role assignment, and finalized block anchor from a

@@ -9,12 +9,12 @@
 //!
 //! FCMP++ deliberately does not use this module.  Its canonical accumulator is
 //! the Selene/Helios curve tree from the FCMP++ construction.
-use std::collections::BTreeSet;
 use incrementalmerkletree::{Hashable, Level, Position, frontier::Frontier};
 use iroha_data_model::privacy::{
     PrivacyCommitmentV1, PrivacyNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
 };
 use sha2::{Digest as _, Sha256};
+use std::collections::BTreeSet;
 use thiserror::Error;
 const TREE_DEPTH_V1: u8 = 32;
 const EMPTY_LEAF_DOMAIN_V1: &[u8] = b"iroha.privacy.proof-managed-note-tree.empty-leaf.v1";
@@ -261,11 +261,11 @@ pub(crate) fn append_proof_managed_commitments_v1(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::privacy::{
         PrivacyNamespaceScopeV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
         PrivacyPoolProgramNamespaceV1, PrivacyProgramIdV1,
     };
-    use super::*;
     fn commitment(byte: u8) -> PrivacyCommitmentV1 {
         PrivacyCommitmentV1::new([byte; 32])
     }

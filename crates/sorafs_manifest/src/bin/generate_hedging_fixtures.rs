@@ -1,9 +1,4 @@
 //! Generates deterministic SoraFS hedging and billing fixtures.
-use std::{
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-};
 use hex::encode;
 use norito::{
     core::NoritoSerialize,
@@ -15,6 +10,11 @@ use sorafs_manifest::{
     HedgingReferencePriceDecisionV1, XorQuantity, billing_line_item_id_v1, billing_statement_id_v1,
     build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
     reference_price_decision_id_v1,
+};
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
 };
 fn main() -> Result<(), Box<dyn Error>> {
     let fixture_dir = PathBuf::from("fixtures/sorafs_manifest/hedging");

@@ -11,9 +11,9 @@
 //! All word, result, comparison-difference, carry, borrow, and quotient cells
 //! are range constrained. The production value/byte buses bind `word` and
 //! `reduced` to SHA/P-256 inputs and scalar-arithmetic values respectively.
-use thiserror::Error;
 use super::p256_air::P256_SCALAR_MODULUS_BE_V1;
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use thiserror::Error;
 /// Stable descriptor for 256-bit-to-scalar canonical reduction.
 #[cfg(test)]
 pub(crate) const ZK_X509_P256_REDUCTION_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-reduction-air-v2-incompatible:input-u256:output-canonical-scalar:16xu16-little-endian:word=reduced+boolean-q-times-order:2pow256-less-than-2n:carry-and-borrow-boolean:all-word-result-difference-limbs-bit-ranged:wallet-low-s-strict-less-than-floor-order-half-plus1:fixed-16-row-topologies:reduction-numeric-fixed36-aux1-constraints122-degree4:low-s-numeric-fixed36-aux1-constraints77-degree3:verifier-preprocessed-one-hot-limb-selectors-and-all-limb-constants:fixed-schedule-derived-only-from-protocol-limb-count-and-native-domain:no-witness-fixed-input:first-last-boundaries:canonical-zero-padding:no-native-row-branch-on-lde:io-and-value-bus-binding=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";

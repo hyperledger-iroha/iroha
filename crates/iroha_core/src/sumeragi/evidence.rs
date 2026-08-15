@@ -3,11 +3,10 @@
 //! basic commit-certificate shape checks, an in-memory deduplication store for the Sumeragi
 //! actor, exact Sumeragi v2 equivocation-pair verification, and routines that
 //! persist new evidence records into the world state.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    convert::TryFrom,
-    time::{SystemTime, UNIX_EPOCH},
+use super::consensus::{
+    Evidence, EvidenceKind, EvidencePayload, NPOS_TAG, PERMISSIONED_TAG, Phase, Vote, vote_preimage,
 };
+use crate::state::{State, WorldReadOnly};
 #[cfg(test)]
 use iroha_crypto::HashOf;
 use iroha_crypto::{Algorithm, Signature};
@@ -23,10 +22,11 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use mv::storage::StorageReadOnly;
-use super::consensus::{
-    Evidence, EvidenceKind, EvidencePayload, NPOS_TAG, PERMISSIONED_TAG, Phase, Vote, vote_preimage,
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::TryFrom,
+    time::{SystemTime, UNIX_EPOCH},
 };
-use crate::state::{State, WorldReadOnly};
 /// Minimum expected length for BLS signatures attached to consensus votes.
 ///
 /// Consensus validators authenticate votes with BLS-normal signatures (96 bytes). Treating this
@@ -1333,6 +1333,13 @@ fn verify_v2_aggregate_signature(
 }
 #[cfg(test)]
 mod tests {
+    use super::{
+        super::consensus::{
+            ConsensusBlockHeader, Phase, Proposal, Qc, QcAggregate, QcHeaderRef, Vote,
+        },
+        *,
+    };
+    use crate::state::{State, World};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         NetworkId,
@@ -1348,13 +1355,6 @@ mod tests {
     use mv::cell::Cell;
     use norito::codec::{Decode, Encode as _};
     use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
-    use super::{
-        super::consensus::{
-            ConsensusBlockHeader, Phase, Proposal, Qc, QcAggregate, QcHeaderRef, Vote,
-        },
-        *,
-    };
-    use crate::state::{State, World};
     type EvidenceCase = (EvidenceKind, EvidencePayload, EvidenceValidationError);
     type EvidenceRoundtripCase = (
         &'static str,

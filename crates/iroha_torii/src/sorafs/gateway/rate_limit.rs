@@ -1,11 +1,11 @@
 //! Lightweight rolling-window rate limiter for the SoraFS gateway.
+use blake3::Hasher;
+use dashmap::DashMap;
+use parking_lot::Mutex;
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
 };
-use blake3::Hasher;
-use dashmap::DashMap;
-use parking_lot::Mutex;
 use thiserror::Error;
 const MAX_CLIENT_BUCKETS: usize = 4_096;
 /// Fingerprint derived from client connection metadata (e.g., IP address).

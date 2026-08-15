@@ -1,10 +1,5 @@
 //! Fail-closed Exact12 governance activation templates for the Taira testnet.
-use std::{
-    collections::BTreeSet,
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write},
-    path::{Component, Path, PathBuf},
-};
+use crate::{Outcome, RunArgs};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
@@ -24,7 +19,12 @@ use iroha_data_model::{
 };
 use iroha_genesis::genesis_instructions_json;
 use norito::json::Value as JsonValue;
-use crate::{Outcome, RunArgs};
+use std::{
+    collections::BTreeSet,
+    fs::{self, File, OpenOptions},
+    io::{Read as _, Write},
+    path::{Component, Path, PathBuf},
+};
 mod release;
 const REPORT_SCHEMA_V1: &str = "iroha.taira.privacy-governance-templates.v1";
 const NOTICE_INTERVAL_BLOCKS_V1: u64 = 300;
@@ -633,14 +633,14 @@ fn remove_created_file_if_unchanged_v1(path: &Path, file: &File) {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
+    use super::*;
     use iroha_core::privacy_profiles::zk_x509_release_candidate_profile_material_v1;
     use iroha_data_model::{
         Level,
         isi::Log,
         privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolLimitsTighteningV1},
     };
-    use super::*;
+    use std::sync::OnceLock;
     fn fixture_artifacts() -> TairaPrivacyBootstrapArtifactsV1 {
         static ARTIFACTS: OnceLock<TairaPrivacyBootstrapArtifactsV1> = OnceLock::new();
         ARTIFACTS

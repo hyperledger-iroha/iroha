@@ -1,10 +1,10 @@
+pub use self::model::*;
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use thiserror::Error;
-pub use self::model::*;
 #[model]
 mod model {
     use super::*;
@@ -96,8 +96,8 @@ impl JsonDeserialize for Level {
 }
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use norito::json::{self, FastJsonWrite};
     use super::*;
+    use norito::json::{self, FastJsonWrite};
     #[test]
     fn parse_level_from_str() {
         assert_eq!("INFO".parse::<Level>().unwrap(), Level::INFO);

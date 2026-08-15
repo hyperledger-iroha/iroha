@@ -1,8 +1,5 @@
 //! Exact-network operator request signing for MOCHI's Torii client.
-use std::{
-    fmt,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use super::{NORITO_MIME_TYPE, ToriiError, ToriiResult};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
@@ -14,8 +11,11 @@ use reqwest::{
     Client, Method, Request,
     header::{ACCEPT, HeaderMap, HeaderValue},
 };
+use std::{
+    fmt,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use url::Url;
-use super::{NORITO_MIME_TYPE, ToriiError, ToriiResult};
 const OPERATOR_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha.operator.http-request.network.v1\0";
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
@@ -206,10 +206,10 @@ fn operator_request_message(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use base64::Engine as _;
     use iroha_crypto::{Algorithm, KeyPair, ed25519_parse_signature};
     use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-    use super::*;
     fn context() -> OperatorSigningContext {
         OperatorSigningContext::new(
             crate::torii::test_network_id(),

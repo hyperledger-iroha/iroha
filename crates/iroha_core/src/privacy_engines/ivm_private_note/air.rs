@@ -4,9 +4,6 @@
 //! byte-copy permutation connects note fields, hash inputs and outputs,
 //! accumulator children, value arithmetic, and VM state.  Public statement
 //! bytes are fixed constraints at their final endpoints only.
-use std::collections::BTreeMap;
-use iroha_data_model::privacy::IrohaIvmPrivateNoteStarkStatementV1;
-use thiserror::Error;
 use super::{
     codec::{PRIVATE_PROGRAM_BYTES_V1, decode_private_program_v1, encode_private_program_v1},
     relation::{
@@ -20,6 +17,9 @@ use super::{
     },
 };
 use crate::privacy_engines::transparent_stark::{GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F};
+use iroha_data_model::privacy::IrohaIvmPrivateNoteStarkStatementV1;
+use std::collections::BTreeMap;
+use thiserror::Error;
 pub(super) const PRIVATE_NOTE_TRACE_LOG2_V1: u8 = 14;
 pub(super) const PRIVATE_NOTE_TRACE_SIZE_V1: usize = 1 << PRIVATE_NOTE_TRACE_LOG2_V1;
 pub(super) const PRIVATE_NOTE_COPY_WIDTH_V1: usize = 8;
@@ -1654,7 +1654,9 @@ pub(super) fn build_private_note_copy_schedule_v1(
     crate::privacy_engines::proof_managed_note_stark::NoteCopyScheduleV1,
     IvmPrivateNoteAirErrorV1,
 > {
-    use crate::privacy_engines::proof_managed_note_stark::{NoteCopyCellPolicyV1, NoteCopyScheduleV1};
+    use crate::privacy_engines::proof_managed_note_stark::{
+        NoteCopyCellPolicyV1, NoteCopyScheduleV1,
+    };
     let fixed = build_private_note_fixed_trace_v1(statement)?;
     let policies = fixed
         .copy_cells
@@ -3001,9 +3003,6 @@ pub(super) fn validate_private_note_base_trace_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use iroha_data_model::privacy::{PrivacyActionDigestV1, PrivacyRootV1};
-    use rand_08::{SeedableRng as _, rngs::StdRng};
     use super::*;
     use crate::privacy_engines::ivm_private_note::{
         derive_note_authority_v1, derive_note_commitment_v1, derive_note_nullifier_v1,
@@ -3014,6 +3013,9 @@ mod tests {
         },
         tests::fixture,
     };
+    use iroha_data_model::privacy::{PrivacyActionDigestV1, PrivacyRootV1};
+    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use std::collections::BTreeSet;
     fn changed(value: F) -> F {
         if value == F::ZERO { F::ONE } else { F::ZERO }
     }

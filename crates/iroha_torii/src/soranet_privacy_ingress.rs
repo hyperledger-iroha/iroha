@@ -1,5 +1,11 @@
 //! Pre-decode admission for SoraNet privacy telemetry collectors.
-use std::net::IpAddr;
+use crate::operator_signatures::AuthenticatedOperatorPublicKey;
+#[cfg(feature = "telemetry")]
+use crate::{
+    Error, NoritoJson,
+    routing::{self, RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto},
+};
+use crate::{SharedAppState, limits, utils};
 #[cfg(feature = "telemetry")]
 use axum::extract::Extension;
 use axum::{
@@ -10,13 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use iroha_torii_shared::ErrorEnvelope;
-use crate::operator_signatures::AuthenticatedOperatorPublicKey;
-#[cfg(feature = "telemetry")]
-use crate::{
-    Error, NoritoJson,
-    routing::{self, RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto},
-};
-use crate::{SharedAppState, limits, utils};
+use std::net::IpAddr;
 /// Maximum encoded body accepted by either SoraNet privacy ingest route.
 pub(crate) const SORANET_PRIVACY_INGEST_MAX_BODY_BYTES: usize = 128 * 1024;
 const RETIRED_SORANET_PRIVACY_TOKEN_HEADERS: [&str; 2] = ["x-soranet-privacy-token", "x-api-token"];

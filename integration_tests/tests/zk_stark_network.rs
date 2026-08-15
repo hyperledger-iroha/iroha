@@ -1,10 +1,5 @@
 //! Multi-peer STARK integration coverage for governance voting and shielded IVM admission.
 #![cfg(feature = "zk-stark")]
-use std::{
-    num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -35,6 +30,11 @@ use iroha_torii::{
     canonical_network_request_signature_message, signature_header_value,
 };
 use reqwest::{Client as HttpClient, StatusCode};
+use std::{
+    num::NonZeroU64,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 #[derive(norito::JsonSerialize)]
 struct ZkIvmDeriveRequest {
     vk_ref: VerifyingKeyId,

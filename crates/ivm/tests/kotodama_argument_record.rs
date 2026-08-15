@@ -1,8 +1,4 @@
 //! End-to-end coverage for one-shot public entrypoint argument decoding.
-use std::{
-    collections::{BTreeMap, HashMap},
-    fs,
-};
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::json::Json;
@@ -10,6 +6,10 @@ use ivm::{
     IVM, ProgramMetadata,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     pointer_abi::PointerType,
+};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs,
 };
 mod common;
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {

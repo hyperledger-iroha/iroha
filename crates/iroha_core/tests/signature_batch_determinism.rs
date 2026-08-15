@@ -4,7 +4,6 @@
 //! Ensures that, for a block containing one bad signature among valid ones,
 //! the offending transaction identified by batch verification is stable across
 //! different input orders.
-use std::sync::Arc;
 use iroha_core::{
     block::{BlockValidationError as BErr, ValidBlock},
     prelude::*,
@@ -21,6 +20,7 @@ use iroha_data_model::{
     prelude::*,
 };
 use nonzero_ext::nonzero;
+use std::sync::Arc;
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     let kura = Kura::blank_kura_for_testing();

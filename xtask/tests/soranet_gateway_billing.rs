@@ -1,7 +1,7 @@
-use std::{fs, path::Path};
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use std::{fs, path::Path};
 use tempfile::tempdir;
 #[test]
 fn soranet_gateway_billing_runs_end_to_end() {

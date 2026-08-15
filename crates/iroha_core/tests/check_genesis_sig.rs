@@ -2,7 +2,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Skipped by default; enable with `IROHA_RUN_IGNORED=1`.
 use iroha_crypto::{PublicKey, SignatureOf};
-use iroha_data_model::block::{BlockHeader, decode_framed_signed_block, decode_versioned_signed_block};
+use iroha_data_model::block::{
+    BlockHeader, decode_framed_signed_block, decode_versioned_signed_block,
+};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;

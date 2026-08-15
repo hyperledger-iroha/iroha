@@ -2111,8 +2111,6 @@ impl_sorafs_decode_from_slice!(FinalizeSorafsModerationCase {
 });
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::{Numeric, Quantity};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::sorafs::{
         capacity::{CapacityDisputeEvidence, CapacityDisputeId},
@@ -2122,6 +2120,8 @@ mod tests {
             StreamTokenValidationStatusV1,
         },
     };
+    use iroha_primitives::numeric::{Numeric, Quantity};
+    use norito::core::DecodeFromSlice;
     fn owner() -> AccountId {
         AccountId::new(
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"

@@ -1,7 +1,6 @@
 //! Regression tests for account asset lookup queries.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use core::num::NonZeroU64;
-use std::collections::BTreeSet;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -10,6 +9,7 @@ use iroha_core::{
 };
 use iroha_data_model::{prelude::*, query::dsl::CompoundPredicate};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::collections::BTreeSet;
 #[test]
 fn multi_account_mint_returns_only_positive_holders() {
     let kura = Kura::blank_kura_for_testing();

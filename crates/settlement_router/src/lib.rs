@@ -193,8 +193,8 @@ impl JsonDeserialize for DurationSeconds {
 }
 #[cfg(test)]
 mod tests {
-    use norito::decode_from_bytes;
     use super::{TimestampMs, XorQuantity};
+    use norito::decode_from_bytes;
     #[test]
     fn xor_quantity_norito_roundtrip() {
         let amount: XorQuantity = "1234.56".parse().expect("canonical XOR quantity");

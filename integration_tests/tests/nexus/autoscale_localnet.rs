@@ -1,19 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Localnet autoscale regressions for Nexus expansion and certified two-phase contraction.
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet, btree_map::Entry},
-    fs,
-    io::{BufWriter, Write},
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    thread,
-    time::{Duration, Instant, UNIX_EPOCH},
-};
 use eyre::{Result, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -72,6 +58,20 @@ use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::{DecodeAll, Encode};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    fs,
+    io::{BufWriter, Write},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread,
+    time::{Duration, Instant, UNIX_EPOCH},
+};
 use toml::{Table, Value as TomlValue};
 const TOTAL_PEERS: usize = 4;
 const MULTILANE_RELEASE_MODE_ENV: &str = "IROHA_MULTILANE_RELEASE_MODE";
@@ -7629,28 +7629,6 @@ fn nexus_autoscale_soak_expand_contract_cycles_in_localnet() -> Result<()> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, fs, time::Duration};
-    use eyre::Result;
-    use iroha::{
-        client::TxConfirmationStatus,
-        crypto::Hash,
-        data_model::{
-            block::consensus::{
-                COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
-                COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
-                COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
-                COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
-                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
-                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
-                COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
-            },
-            nexus::{DataSpaceId, LaneId},
-        },
-    };
-    use norito::codec::Encode;
-    use tempfile::tempdir;
     use super::{
         AUTOSCALE_DRAIN_COMMITMENT_LOG_MARKER, AUTOSCALE_DRAIN_INTENT_LOG_MARKER,
         AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER, AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
@@ -7689,6 +7667,28 @@ mod tests {
         tx_confirmation_status_counts_as_post_cycle_progress, validate_lane_drain_lifecycle_order,
         validate_load_submission_outcome,
     };
+    use eyre::Result;
+    use iroha::{
+        client::TxConfirmationStatus,
+        crypto::Hash,
+        data_model::{
+            block::consensus::{
+                COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
+                COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
+                COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
+                COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
+                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
+                COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            },
+            nexus::{DataSpaceId, LaneId},
+        },
+    };
+    use norito::codec::Encode;
+    use std::{collections::BTreeSet, fs, time::Duration};
+    use tempfile::tempdir;
     fn status_with_declared_lanes(lane_ids: &[u32]) -> PeerStatusSnapshot {
         PeerStatusSnapshot {
             lanes: lane_ids

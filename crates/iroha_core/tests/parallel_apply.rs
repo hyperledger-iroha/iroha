@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures that enabling the skeleton parallel-apply path yields identical
 //! outcomes to the sequential apply path.
-use std::{borrow::Cow, collections::BTreeSet, sync::Arc, time::Duration};
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -11,6 +10,7 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
+use std::{borrow::Cow, collections::BTreeSet, sync::Arc, time::Duration};
 mod snapshots;
 use snapshots::assert_events;
 // Use a fixed creation time so event fixtures do not depend on wall clock.

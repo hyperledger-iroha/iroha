@@ -1,10 +1,10 @@
 //! Buffer sizing and guard-rail policies.
+use crate::{Numeric, XorQuantity, XorQuantityError};
 use derive_more::{Display, From};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
 };
-use crate::{Numeric, XorQuantity, XorQuantityError};
 /// Outcome of evaluating the remaining buffer against the configured policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BufferStatus {

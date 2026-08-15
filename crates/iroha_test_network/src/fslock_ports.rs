@@ -5,6 +5,9 @@
 //! - `.lock` file persists and is not deleted
 //! - locking and recreating JSON file for each port each time is suboptimal, could be optimised
 //! - _sometimes_ locked ports aren't cleaned after test execution (_usually_ on failures)
+use color_eyre::{Result, eyre::Context};
+use derive_more::{Deref, Display};
+use norito::json::{JsonDeserialize, JsonSerialize};
 use std::{
     collections::BTreeSet,
     fs::OpenOptions,
@@ -12,9 +15,6 @@ use std::{
     sync::Once,
     time::{SystemTime, UNIX_EPOCH},
 };
-use color_eyre::{Result, eyre::Context};
-use derive_more::{Deref, Display};
-use norito::json::{JsonDeserialize, JsonSerialize};
 #[cfg(unix)]
 const TARGET_NOFILE_LIMIT: u64 = 4_096;
 // Prefer ports below the OS ephemeral range to avoid racing outbound client sockets.

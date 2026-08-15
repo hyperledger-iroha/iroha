@@ -1,10 +1,11 @@
 //! Telemetry for development rather than production purposes
-use std::path::PathBuf;
+use crate::integrity::ChainState;
 use chrono::Utc;
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::actual::TelemetryIntegrity;
 use iroha_futures::FuturePollTelemetry;
 use iroha_logger::telemetry::Event as Telemetry;
+use std::path::PathBuf;
 use tokio::{
     fs::{File, OpenOptions},
     io::AsyncWriteExt,
@@ -12,7 +13,6 @@ use tokio::{
     task::{self, JoinHandle},
 };
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
-use crate::integrity::ChainState;
 /// Starts telemetry writing to a file. Will create all parent directories.
 ///
 /// # Errors
@@ -80,10 +80,10 @@ async fn write_telemetry(
 }
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    use norito::json::Value;
-    use tokio::io::AsyncWriteExt;
     use super::*;
+    use norito::json::Value;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::io::AsyncWriteExt;
     #[tokio::test]
     async fn dev_output_includes_chain() {
         let filename = format!(

@@ -1,7 +1,9 @@
 //! Transaction trait conformance and Merkle tests
-use std::fmt::Debug;
 use iroha_crypto::MerkleTree;
-use iroha_data_model::transaction::signed::{ExecutionStep, TransactionEntrypoint, TransactionResult};
+use iroha_data_model::transaction::signed::{
+    ExecutionStep, TransactionEntrypoint, TransactionResult,
+};
+use std::fmt::Debug;
 fn assert_traits<T: Debug + Clone + PartialEq + Eq + PartialOrd + Ord>() {}
 #[test]
 fn transaction_structs_impl_standard_traits() {

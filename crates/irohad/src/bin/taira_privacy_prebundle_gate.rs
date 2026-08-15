@@ -1,5 +1,4 @@
 //! Fail-closed privacy capability gate for public Taira validator bundles.
-use std::collections::BTreeSet;
 use iroha_core::privacy_profiles::compiled_privacy_profile_v1;
 #[cfg(test)]
 use iroha_data_model::privacy::privacy_protocol_label_is_reserved_v1;
@@ -7,6 +6,7 @@ use iroha_data_model::privacy::{
     PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyCompiledProfileSnapshotV1, PrivacyProtocolIdV1,
 };
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 const EXACT12_MATRIX: &str = include_str!("../../../../fixtures/privacy/exact12_v1.tsv");
 const EXPECTED_PROFILE_COUNT: usize = 12;
 const EXPECTED_REGISTRY_SHA256: &str =

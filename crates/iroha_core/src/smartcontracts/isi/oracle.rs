@@ -1,9 +1,8 @@
 //! On-chain oracle instruction handlers.
-#[cfg(feature = "telemetry")]
-use std::time::Instant;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
+use super::prelude::*;
+use crate::{
+    oracle::{FeedEventRecord, ObservationWindow, ObservationWindowKey},
+    state::{StateTransaction, WorldTransaction},
 };
 use blake3::Hasher;
 use iroha_crypto::{Algorithm, Hash, PublicKey, SignatureOf, ed25519_parse_signature};
@@ -35,10 +34,11 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::oracle as oracle_permission;
 use iroha_primitives::numeric::Quantity;
-use super::prelude::*;
-use crate::{
-    oracle::{FeedEventRecord, ObservationWindow, ObservationWindowKey},
-    state::{StateTransaction, WorldTransaction},
+#[cfg(feature = "telemetry")]
+use std::time::Instant;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
 };
 /// Exact retained Oracle purpose carried by a one-shot numeric movement capability.
 pub(in crate::smartcontracts::isi) enum VerifiedOracleNumericPurpose {
@@ -1001,9 +1001,9 @@ fn validate_defi_sources(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{KeyPair, Signature, SignatureOf};
     use iroha_data_model::oracle::{DefiOracleAttestationKey, kits};
-    use super::*;
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("DeFi oracle fixture key generation should succeed")
@@ -2056,6 +2056,10 @@ impl Execute for VoteOracleChangeStage {
 }
 /// Oracle-specific query handlers.
 pub mod query {
+    use crate::{
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::{StateReadOnly, WorldReadOnly},
+    };
     use eyre::Result;
     use iroha_data_model::{
         events::data::oracle::FeedEventRecord,
@@ -2077,10 +2081,6 @@ pub mod query {
     };
     use iroha_telemetry::metrics;
     use mv::storage::StorageReadOnly;
-    use crate::{
-        smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::{StateReadOnly, WorldReadOnly},
-    };
     impl ValidSingularQuery for FindOracleFeedById {
         #[metrics(+"find_oracle_feed_by_id")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<FeedConfig, Error> {

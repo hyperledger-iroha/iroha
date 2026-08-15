@@ -1,4 +1,8 @@
 //! Bounded durable state storage for development and test hosts.
+use crate::VMError;
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64_STANDARD};
+use iroha_data_model::state_path::StatePath;
+use norito::json;
 use std::{
     collections::BTreeMap,
     fs,
@@ -6,10 +10,6 @@ use std::{
     ops::Bound,
     path::{Path, PathBuf},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as B64_STANDARD};
-use iroha_data_model::state_path::StatePath;
-use norito::json;
-use crate::VMError;
 /// Maximum number of entries retained by one first-release development overlay.
 pub(crate) const STATE_OVERLAY_MAX_ENTRIES_V1: usize = 4_096;
 /// Maximum aggregate UTF-8 bytes retained in overlay paths.

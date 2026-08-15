@@ -3,9 +3,6 @@
 #![allow(clippy::similar_names)]
 #![allow(clippy::too_many_lines)]
 #![cfg(feature = "iroha-core-tests")]
-#[cfg(feature = "app_api")]
-use std::collections::BTreeMap;
-use std::{num::NonZeroU64, sync::Arc, time::Duration};
 use iroha_config::parameters::actual::NexusAxt as ActualAxtTiming;
 #[cfg(feature = "app_api")]
 use iroha_core::block::BlockBuilder;
@@ -50,6 +47,9 @@ use ivm::{
 };
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+#[cfg(feature = "app_api")]
+use std::collections::BTreeMap;
+use std::{num::NonZeroU64, sync::Arc, time::Duration};
 fn ensure_alias_resolver() {
     // No-op by design.
 }
@@ -391,9 +391,9 @@ fn abi_asset_handle_from_model(handle: &iroha_data_model::nexus::AssetHandle) ->
 fn nexus_with_lane_catalog(
     lane_catalog: iroha_data_model::nexus::LaneCatalog,
 ) -> iroha_config::parameters::actual::Nexus {
-    use std::collections::BTreeSet;
     use iroha_config::parameters::actual::LaneRoutingPolicy;
     use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata};
+    use std::collections::BTreeSet;
     let mut dataspace_ids: BTreeSet<DataSpaceId> = lane_catalog
         .lanes()
         .iter()
@@ -925,7 +925,6 @@ fn axt_handle_rejects_clock_skew_above_config() {
 }
 #[test]
 fn axt_replay_ledger_persists_through_kura_replay() {
-    use std::collections::BTreeMap;
     use iroha_core::block::{BlockBuilder, ValidBlock};
     use iroha_crypto::HashOf;
     use iroha_data_model::{
@@ -941,6 +940,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         transaction::TransactionEntrypoint,
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+    use std::collections::BTreeMap;
     ensure_alias_resolver();
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(99);

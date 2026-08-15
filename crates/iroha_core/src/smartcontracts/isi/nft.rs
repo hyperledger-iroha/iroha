@@ -1,17 +1,17 @@
 //! This module contains [`Nft`] instructions and queries implementations.
-use iroha_telemetry::metrics;
 use super::prelude::*;
+use iroha_telemetry::metrics;
 /// ISI module contains all instructions related to NFTs:
 /// - register/unregister NFT
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
+    use super::*;
+    use crate::smartcontracts::isi::account_admission::ensure_receiving_account;
     use iroha_data_model::{
         IntoKeyValue, isi::error::RepetitionError, permission::Permission, query::error::FindError,
     };
     use iroha_telemetry::metrics;
-    use super::*;
-    use crate::smartcontracts::isi::account_admission::ensure_receiving_account;
     fn is_permission_nft_associated(permission: &Permission, nft_id: &NftId) -> bool {
         if let Ok(permission) =
             iroha_executor_data_model::permission::nft::CanUnregisterNft::try_from(permission)
@@ -273,6 +273,13 @@ pub mod isi {
     }
     #[cfg(test)]
     mod tests {
+        use super::*;
+        use crate::{
+            block::ValidBlock,
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+        };
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
@@ -281,13 +288,6 @@ pub mod isi {
             role::{Role, RoleId},
         };
         use iroha_test_samples::ALICE_ID;
-        use super::*;
-        use crate::{
-            block::ValidBlock,
-            kura::Kura,
-            query::store::LiveQueryStore,
-            state::{State, World},
-        };
         fn checked_keypair() -> KeyPair {
             KeyPair::try_random().expect("NFT ISI fixture key generation should succeed")
         }
@@ -503,7 +503,11 @@ pub mod isi {
 }
 /// NFT-related query implementations.
 pub mod query {
-    use std::collections::BTreeSet;
+    use super::*;
+    use crate::{
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::{StateReadOnly, WorldReadOnly},
+    };
     use eyre::Result;
     use iroha_data_model::{
         nft::NftEntry,
@@ -514,11 +518,7 @@ pub mod query {
         },
     };
     use norito::json::Value;
-    use super::*;
-    use crate::{
-        smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::{StateReadOnly, WorldReadOnly},
-    };
+    use std::collections::BTreeSet;
     #[derive(Debug, Default)]
     struct NftPredicateView {
         ids: BTreeSet<NftId>,
@@ -801,12 +801,6 @@ pub mod query {
     }
     #[cfg(test)]
     mod tests {
-        use core::num::NonZeroU64;
-        use std::collections::BTreeSet;
-        use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_data_model::IntoKeyValue;
-        use iroha_primitives::json::Json;
-        use iroha_test_samples::ALICE_ID;
         use super::*;
         use crate::{
             block::ValidBlock,
@@ -814,6 +808,12 @@ pub mod query {
             query::store::LiveQueryStore,
             state::{State, World, WorldReadOnly},
         };
+        use core::num::NonZeroU64;
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::IntoKeyValue;
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::ALICE_ID;
+        use std::collections::BTreeSet;
         fn checked_keypair() -> KeyPair {
             KeyPair::try_random().expect("NFT query fixture key generation should succeed")
         }

@@ -1,5 +1,8 @@
 //! Host-side execution of Kaigi instruction family.
-use std::{collections::BTreeSet, convert::TryFrom};
+use crate::{
+    smartcontracts::limits,
+    state::{StateTransaction, WorldReadOnly},
+};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     HasMetadata,
@@ -28,10 +31,7 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use privacy::{HostPrivacyArtifacts, PrivacyArtifacts};
-use crate::{
-    smartcontracts::limits,
-    state::{StateTransaction, WorldReadOnly},
-};
+use std::{collections::BTreeSet, convert::TryFrom};
 mod privacy;
 /// Signature-authenticated account authorizing a Kaigi state transition.
 #[derive(Clone, Copy, Debug)]
@@ -1122,8 +1122,13 @@ fn process_leave(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World, WorldReadOnly},
+    };
     use core::num::NonZeroU64;
-    use std::str::FromStr;
     use iroha_data_model::{
         events::{
             data::prelude::{DataEvent, DomainEvent, KaigiRelayRegistrationSummary},
@@ -1133,12 +1138,7 @@ mod tests {
         prelude::*,
     };
     use iroha_test_samples::{ALICE_ID, gen_account_in};
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World, WorldReadOnly},
-    };
+    use std::str::FromStr;
     #[test]
     fn unauthorized_error_contains_message() {
         match unauthorized("test message") {

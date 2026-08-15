@@ -10,8 +10,8 @@
 //! If the hashing rules change, re-run
 //! `cargo test -p iroha_crypto --test merkle_shielded_golden -- --nocapture`
 //! to dump updated values and replace the hex literals.
-use std::num::NonZeroU64;
 use iroha_crypto::{Hash, MerkleTree, MerkleTreeCommitment};
+use std::num::NonZeroU64;
 fn to_hex(h: &Hash) -> String {
     hex::encode_upper(h.as_ref())
 }

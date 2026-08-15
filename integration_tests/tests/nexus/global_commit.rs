@@ -1,10 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Regression tests for Nexus lane commitment fixtures.
-use std::{fs, path::PathBuf};
 use eyre::{Result, WrapErr, ensure};
 use iroha_data_model::block::consensus::LaneBlockCommitment;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{core::NoritoDeserialize as _, json};
+use std::{fs, path::PathBuf};
 struct CommitmentFixture {
     name: String,
     json_path: PathBuf,

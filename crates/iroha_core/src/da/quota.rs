@@ -1,11 +1,13 @@
 //! Deterministic consensus accounting for authenticated DA ingest.
-use std::{collections::BTreeMap, str::FromStr};
+use super::DaPinIntentValidationError;
 use iroha_config::parameters::actual::Da as DaPolicy;
 use iroha_crypto::blake3_256;
-use iroha_data_model::{account::AccountId, da::pin_intent::DaPinIntentBundle, state_path::StatePath};
+use iroha_data_model::{
+    account::AccountId, da::pin_intent::DaPinIntentBundle, state_path::StatePath,
+};
 use mv::storage::StorageReadOnly;
 use norito::{Decode, Encode, decode_from_bytes, to_bytes};
-use super::DaPinIntentValidationError;
+use std::{collections::BTreeMap, str::FromStr};
 const QUOTA_USAGE_KEY_PREFIX_V1: &str = "da_ingest_quota_v1/authority/";
 const QUOTA_USAGE_VERSION_V1: u8 = 1;
 const MAX_QUOTA_USAGE_BYTES: usize = 128;
@@ -188,7 +190,7 @@ pub(crate) fn prepare_ingest_quota_writes(
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         NetworkId,
@@ -201,7 +203,7 @@ mod tests {
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
-    use super::*;
+    use std::num::NonZeroU64;
     fn authorized_intent(owner_seed: u8, sequence: u64, payload_bytes: u64) -> DaPinIntent {
         let key_pair = KeyPair::try_from_seed(vec![owner_seed; 32], Algorithm::Ed25519)
             .expect("valid deterministic key");

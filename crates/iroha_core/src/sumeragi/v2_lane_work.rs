@@ -51,7 +51,6 @@ use super::{
         check_production_in_flight_first_release_serve_late_body_transition,
         check_production_in_flight_first_release_transition,
     },
-    v2_effects::VerifiedPendingGenesisNexusAmxContext,
     v2_worker::{
         DurableExactOutputHandoffReceipt, DurableExactOutputServiceOwner,
         DurableExactOutputTransportOwner, ExactFanoutOwnership, ProductionV2Services,
@@ -490,14 +489,11 @@ fn merge_entry_carries_lane(
 pub(crate) enum AuthenticatedGenesisNexusAmxContext {
     /// Projection recomputed from the validated, uncommitted genesis overlay.
     Staged(StagedGenesisNexusAmxContext),
-    /// Projection bound by exact pending-Decision/body/validation replay.
-    ReplayedPending(VerifiedPendingGenesisNexusAmxContext),
 }
 impl AuthenticatedGenesisNexusAmxContext {
     const fn hash(self) -> Hash {
         match self {
             Self::Staged(staged) => staged.hash(),
-            Self::ReplayedPending(replayed) => replayed.hash(),
         }
     }
 }
@@ -3459,6 +3455,66 @@ impl V2LaneWorkAdapter {
         )?;
         adapter.activate_for_test_without_lane_drain_queue()?;
         Ok(adapter)
+    }
+
+    /// Open the exact unactivated lane owner used by pending-Kura lifecycle tests.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn pending_kura_lifecycle_fixture_for_test(
+        context: wire::HeightContext,
+        local_peer: PeerId,
+        key_pair: KeyPair,
+        state: Arc<State>,
+        kura: Arc<Kura>,
+        expected: super::v2_recovery::PendingKuraApply,
+        output_guard: Arc<ConsensusOutputGuard>,
+        exact_output_handoff_owner: DurableExactOutputTransportOwner,
+    ) -> Result<Self, V2LaneWorkError> {
+        let nonzero = NonZeroUsize::new(8).expect("non-zero pending Kura lane fixture bound");
+        let limits = V2LaneWorkLimits::new(
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
+            iroha_config::parameters::defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+            MergeSidecarLimits::defaults(),
+            MergeSigningGuardLimits::defaults(),
+            NativeAmxSigningGuardLimits::new(
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+            )
+            .expect("default Native AMX signing limits"),
+        );
+        Self::new_with_output_guard_and_transport_for_test(
+            context,
+            local_peer,
+            key_pair,
+            false,
+            state,
+            kura,
+            limits,
+            None,
+            Some(expected),
+            output_guard,
+            exact_output_handoff_owner,
+            None,
+            None,
+        )
     }
 
     /// Open one production adapter and retain process-local sidecar ownership

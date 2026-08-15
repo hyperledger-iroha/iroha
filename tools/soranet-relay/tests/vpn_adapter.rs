@@ -1,4 +1,3 @@
-use std::{sync::Arc, time::Duration};
 use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VpnCellClassV1, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1, VpnExitClassV1,
     VpnFlowLabelV1,
@@ -12,6 +11,7 @@ use soranet_relay::{
     },
     vpn_adapter::{VpnAdapter, VpnBridge, VpnDataFrameBatch},
 };
+use std::{sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 #[test]
 fn vpn_adapter_records_ingress_and_egress() {

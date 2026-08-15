@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use norito::json::{self, Error, Value};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 #[test]
 fn from_value_vec_avoids_string_roundtrip() {
     let input = Value::Array(vec![

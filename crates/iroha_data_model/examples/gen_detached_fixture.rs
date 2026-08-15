@@ -1,5 +1,4 @@
 //! Generates the canonical detached-contract transaction fixture used by SDK tests.
-use std::{num::NonZeroU64, str::FromStr as _, time::Duration};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
@@ -17,6 +16,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_version::codec::EncodeVersioned as _;
+use std::{num::NonZeroU64, str::FromStr as _, time::Duration};
 fn main() {
     let authority_keypair =
         KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519).expect("authority key");

@@ -13,6 +13,14 @@
     dead_code,
     reason = "the authenticated production snapshot seal is uninhabited"
 )]
+#![cfg_attr(
+    not(test),
+    allow(
+        unreachable_code,
+        unused_variables,
+        reason = "the authenticated production snapshot seal is intentionally uninhabited"
+    )
+)]
 
 use core::convert::Infallible;
 

@@ -1,8 +1,8 @@
 //! Validate Nexus autoscale configuration parsing and guardrails.
-use std::path::PathBuf;
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 use iroha_data_model::nexus::LaneId;
+use std::path::PathBuf;
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()

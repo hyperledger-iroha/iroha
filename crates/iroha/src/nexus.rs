@@ -3,7 +3,6 @@
 //! The helpers here let SDK callers build and validate the `LaneRelayEnvelope`
 //! payloads surfaced by `/v1/sumeragi/status`, ensuring settlement proofs stay
 //! self-consistent before they are forwarded to other lanes.
-use std::collections::HashSet;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, consensus::LaneBlockCommitment},
@@ -11,6 +10,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope, LaneRelayError},
 };
 use iroha_logger::prelude::*;
+use std::collections::HashSet;
 use thiserror::Error;
 /// Error surfaced when validating or building cross-lane relay proofs.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -154,7 +154,7 @@ pub fn verify_lane_relay_envelopes(
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use super::*;
     use iroha_crypto::{Hash, MerkleProof};
     use iroha_data_model::{
         block::{
@@ -165,7 +165,7 @@ mod tests {
         },
         nexus::LaneId,
     };
-    use super::*;
+    use std::num::NonZeroU64;
     fn sample_settlement(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,

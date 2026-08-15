@@ -1,9 +1,4 @@
 //! Build, rotate, inspect, and verify SoraNet guard-directory artifacts.
-use std::{
-    fs,
-    io::{Error as IoError, ErrorKind},
-    path::{Path, PathBuf},
-};
 use clap::{Parser, Subcommand};
 use iroha_crypto::soranet::directory::{
     GuardDirectorySnapshotV2, compute_snapshot_digest, read_guard_directory_snapshot_file,
@@ -17,6 +12,11 @@ use soranet_relay::{
         read_guard_pinning_proof_file, rotate_snapshot_with_os_rng,
     },
     guard::verify_guard_pinning_proof,
+};
+use std::{
+    fs,
+    io::{Error as IoError, ErrorKind},
+    path::{Path, PathBuf},
 };
 #[derive(Parser, Debug)]
 #[command(

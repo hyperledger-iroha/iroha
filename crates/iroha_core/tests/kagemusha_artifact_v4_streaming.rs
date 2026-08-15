@@ -1,5 +1,4 @@
 //! Regression tests for bounded reader-based KRV4 artifact framing.
-use std::io::{self, Cursor};
 use iroha_core::zk::kagemusha_artifact_v4::{
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4,
     write_kagemusha_pasta_cycle_artifact_from_reader_v4, write_kagemusha_pasta_cycle_artifact_v4,
@@ -14,6 +13,7 @@ use iroha_data_model::offline::{
     KagemushaStepCircuitParamsV4,
 };
 use sha2::{Digest as _, Sha256};
+use std::io::{self, Cursor};
 fn test_profile() -> KagemushaPastaCycleProofProfileV4 {
     let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
     let layout =

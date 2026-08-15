@@ -1,3 +1,7 @@
+use crate::{
+    HedgedChaCha20Rng, HedgedRngSeed, RngError, deterministic_chacha20_rng,
+    hedged_chacha20_rng_from_rng,
+};
 use pqcrypto_mldsa::{mldsa44, mldsa65, mldsa87};
 use pqcrypto_traits::{
     Error as PqError,
@@ -9,10 +13,6 @@ use pqcrypto_traits::{
 use rand_core::{RngCore, TryCryptoRng};
 use thiserror::Error;
 use zeroize::Zeroizing;
-use crate::{
-    HedgedChaCha20Rng, HedgedRngSeed, RngError, deterministic_chacha20_rng,
-    hedged_chacha20_rng_from_rng,
-};
 #[path = "mldsa_backend.rs"]
 mod backend;
 #[path = "mldsa_primitives.rs"]
@@ -501,9 +501,9 @@ pub fn validate_mldsa_signature(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), M
 }
 #[cfg(test)]
 mod tests {
-    use rand_core::{TryCryptoRng, TryRngCore};
-    use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
     use super::*;
+    use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
+    use rand_core::{TryCryptoRng, TryRngCore};
     const ML_DSA_SECRET_TR_OFFSET: usize = 64;
     #[derive(Debug)]
     struct FailingPqSeedRng;

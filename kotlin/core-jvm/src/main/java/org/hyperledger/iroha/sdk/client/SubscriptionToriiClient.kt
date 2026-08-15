@@ -206,9 +206,13 @@ class SubscriptionToriiClient private constructor(builder: Builder) {
 
         private fun appendQuery(target: URI, params: Map<String, String>?): URI {
             if (params.isNullOrEmpty()) return target
-            val builder = StringBuilder(target.toString())
-            builder.append(if (target.toString().contains("?")) "&" else "?")
+            val targetText = target.toString()
+            val fragmentIndex = targetText.indexOf('#').let { if (it >= 0) it else targetText.length }
+            val builder = StringBuilder(targetText.length + 1)
+                .append(targetText, 0, fragmentIndex)
+            builder.append(if (builder.indexOf("?") >= 0) "&" else "?")
             builder.append(encodeQuery(params))
+            builder.append(targetText, fragmentIndex, targetText.length)
             return URI.create(builder.toString())
         }
 

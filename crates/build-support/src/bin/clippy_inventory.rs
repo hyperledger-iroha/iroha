@@ -1,5 +1,6 @@
 #![deny(warnings)]
 //! Emit a Norito JSON inventory of remaining Clippy warnings per crate.
+use norito::json::{self, Value};
 use std::{
     collections::BTreeMap,
     fs,
@@ -7,7 +8,6 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
 };
-use norito::json::{self, Value};
 const REPORT_PATH: &str = "target/clippy-inventory.norito.json";
 const INVENTORY_PREFIX: &str = "clippy inventory:";
 #[derive(Debug, Clone, PartialEq, Eq)]

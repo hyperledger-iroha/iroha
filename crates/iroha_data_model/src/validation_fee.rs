@@ -1,12 +1,4 @@
 //! Validation-fee policy data shared by validators and clients.
-use std::collections::BTreeSet;
-use iroha_crypto::Hash;
-use iroha_primitives::{
-    json::Json,
-    numeric::{Numeric, Quantity},
-};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     Level, NetworkId,
     account::AccountId,
@@ -16,6 +8,14 @@ use crate::{
     parameter::{CustomParameter, CustomParameterId},
     smart_contract::ContractAddress,
 };
+use iroha_crypto::Hash;
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeSet;
 /// Schema version for the initial validation-fee policy.
 pub const VALIDATION_FEE_POLICY_SCHEMA_VERSION: u16 = 1;
 /// Decimal scale required for the initial policy fee asset.
@@ -1810,14 +1810,14 @@ pub fn validation_fee_payout_recipient_share() -> Numeric {
 }
 #[cfg(test)]
 mod parliament_tests {
-    use std::str::FromStr as _;
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
     #[cfg(feature = "governance")]
     use crate::governance::types::{
         ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     };
     use crate::{domain::DomainId, name::Name};
+    use iroha_crypto::{Algorithm, KeyPair};
+    use std::str::FromStr as _;
     const TEST_AUTHORIZATION_STRIDE: u64 = 10_000;
     fn account(seed: u8) -> AccountId {
         let key_pair =

@@ -1,7 +1,7 @@
-use std::{fs, path::PathBuf};
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use norito::json::Value;
 use sorafs_chunker::{chunk_bytes, fixtures::FixtureProfile};
+use std::{fs, path::PathBuf};
 const CANONICAL_PROFILE_HANDLE: &str = "sorafs.sf1@1.0.0";
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -1,4 +1,16 @@
 //! Provider advert ingestion and validation for Torii's SoraFS discovery pipeline.
+use super::admission::{AdmissionCheckError, AdmissionRegistry, verify_advert_against_envelope};
+use blake3::hash as blake3_hash;
+use norito::{
+    derive::{NoritoDeserialize, NoritoSerialize},
+    to_bytes,
+};
+use sorafs_manifest::{
+    AdvertSignatureError, AdvertValidationError, CapabilityType, ProviderAdvertV1,
+    SignatureAlgorithm,
+};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
@@ -10,19 +22,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-use blake3::hash as blake3_hash;
-use norito::{
-    derive::{NoritoDeserialize, NoritoSerialize},
-    to_bytes,
-};
-use sorafs_manifest::{
-    AdvertSignatureError, AdvertValidationError, CapabilityType, ProviderAdvertV1,
-    SignatureAlgorithm,
-};
 use thiserror::Error;
-use super::admission::{AdmissionCheckError, AdmissionRegistry, verify_advert_against_envelope};
 /// Fingerprint size for stored adverts (BLAKE3-256).
 pub const FINGERPRINT_LEN: usize = 32;
 const REPLAY_CHECKPOINT_VERSION_V1: u8 = 1;

@@ -1,7 +1,7 @@
 //! Dedicated instructions for real-world asset lots.
-use iroha_primitives::numeric::Quantity;
 use super::*;
 use crate::rwa::{NewRwa, Rwa, RwaControlPolicy, RwaId, RwaParentRef};
+use iroha_primitives::numeric::Quantity;
 isi! {
     /// Issue a new canonical RWA lot.
     pub struct RegisterRwa {
@@ -395,6 +395,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RwaInstructionBox {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_primitives::{
         json::Json,
@@ -402,7 +403,6 @@ mod tests {
     };
     use norito::codec::Encode;
     use norito::core::DecodeFromSlice;
-    use super::*;
     #[derive(Encode)]
     struct ForgedTransferRwa {
         source: AccountId,

@@ -1,10 +1,3 @@
-use std::{
-    collections::{HashSet, TryReserveError},
-    fs::{self, File, Metadata as FsMetadata, OpenOptions},
-    io::{self, Read as _},
-    path::Path,
-    time::{Duration, SystemTime},
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hex::FromHexError;
 use iroha_crypto::soranet::token::{self, AdmissionToken, MintError, compute_issuer_fingerprint};
@@ -14,6 +7,13 @@ use norito::{
 };
 use rand::{CryptoRng, RngCore};
 use soranet_pq::MlDsaSuite;
+use std::{
+    collections::{HashSet, TryReserveError},
+    fs::{self, File, Metadata as FsMetadata, OpenOptions},
+    io::{self, Read as _},
+    path::Path,
+    time::{Duration, SystemTime},
+};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 /// First-release maximum number of revoked token identifiers retained in one list.
@@ -777,11 +777,11 @@ pub fn parse_hex_bytes(value: &str, field: &'static str) -> Result<Vec<u8>, Toke
 }
 #[cfg(test)]
 mod tests {
-    use std::time::UNIX_EPOCH;
+    use super::*;
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
+    use std::time::UNIX_EPOCH;
     use tempfile::tempdir;
-    use super::*;
     const RELAY_ID: [u8; 32] = [0x45; 32];
     const TRANSCRIPT: [u8; 32] = [0xAB; 32];
     fn revocation_id(index: usize) -> [u8; REVOCATION_TOKEN_ID_BYTES] {

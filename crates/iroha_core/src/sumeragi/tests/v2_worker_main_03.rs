@@ -872,19 +872,18 @@ fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
     };
     assert!(
         command_tx
-            .claim_serve_runtime_episode(stale_carrier)
-            .expect_err("a different physical carrier cannot claim this exact ticket")
+            .open_serve_predecessor_admission(stale_carrier)
+            .expect_err("a different physical carrier cannot open this exact ticket")
             .contains("changed barrier identity")
     );
+    command_tx
+        .open_serve_predecessor_admission(first_barrier)
+        .expect("open the bounded predecessor admission");
     assert!(
         command_tx
-            .claim_serve_runtime_episode(first_barrier)
-            .expect("claim the bounded predecessor episode")
-    );
-    assert!(
-        !command_tx
-            .claim_serve_runtime_episode(first_barrier)
-            .expect("same ticket cannot reopen its episode")
+            .open_serve_predecessor_admission(first_barrier)
+            .is_err(),
+        "same ticket cannot overlap predecessor admissions"
     );
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
@@ -906,10 +905,14 @@ fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
         Some(first_barrier)
     );
     assert!(
-        !command_tx
-            .claim_serve_runtime_episode(first_barrier)
-            .expect("carrier retry retains the currently claimed episode turn")
+        command_tx
+            .open_serve_predecessor_admission(first_barrier)
+            .is_err(),
+        "carrier retry retains the currently open predecessor admission"
     );
+    command_tx
+        .close_serve_predecessor_admission(first_barrier)
+        .expect("close the bounded predecessor admission before target drain");
     {
         let state = command_tx.queue.lock();
         assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
@@ -1278,19 +1281,12 @@ fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
         .expect("inspect first exact barrier")
         .expect("first carrier owns a barrier");
     assert_eq!(first_barrier.carrier_ordinal(), 1);
-    assert!(
-        command_tx
-            .claim_serve_runtime_episode(first_barrier)
-            .expect("claim first physical occurrence")
-    );
     command_tx
-        .finish_serve_runtime_episode_turn(first_barrier, false)
-        .expect("seal the drained occurrence after its full predecessor recheck");
-    assert!(
-        !command_tx
-            .claim_serve_runtime_episode(first_barrier)
-            .expect("one physical occurrence cannot resurrect its sealed episode")
-    );
+        .open_serve_predecessor_admission(first_barrier)
+        .expect("open first physical occurrence");
+    command_tx
+        .close_serve_predecessor_admission(first_barrier)
+        .expect("close the occurrence after its full predecessor recheck");
     let (first_admission, first_commit) = drain_and_commit_gated_serve(
         &ingress,
         &command_tx,
@@ -1338,19 +1334,12 @@ fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
         retry_barrier.carrier_ordinal() > first_barrier.carrier_ordinal(),
         "a drained exact retransmission receives a fresh physical carrier position"
     );
-    assert!(
-        command_tx
-            .claim_serve_runtime_episode(retry_barrier)
-            .expect("fresh physical occurrence owns its own bounded episode")
-    );
     command_tx
-        .finish_serve_runtime_episode_turn(retry_barrier, false)
-        .expect("seal the retransmission occurrence independently");
-    assert!(
-        !command_tx
-            .claim_serve_runtime_episode(retry_barrier)
-            .expect("the retransmission cannot reopen its completed episode")
-    );
+        .open_serve_predecessor_admission(retry_barrier)
+        .expect("fresh physical occurrence owns its own bounded admission");
+    command_tx
+        .close_serve_predecessor_admission(retry_barrier)
+        .expect("close the retransmission occurrence independently");
     let (retry_admission, retry_commit) = drain_and_commit_gated_serve(
         &ingress,
         &command_tx,

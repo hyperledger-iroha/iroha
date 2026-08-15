@@ -1,6 +1,6 @@
 //! Exact conformance guard for the generated Musubi SDK V1 fixture.
-use norito::json::{self, Value};
 use super::musubi_sdk_fixture_values;
+use norito::json::{self, Value};
 const FIXTURE: &str = include_str!("../../../fixtures/musubi/sdk_v1.json");
 #[test]
 fn shared_musubi_sdk_fixture_matches_its_typed_owner() {

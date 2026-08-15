@@ -34,7 +34,7 @@ QUARANTINE_RESTART_TEST = (
     / "quarantine_restart.rs"
 )
 QUARANTINE_RESTART_SHA256 = (
-    "948a6740a3e9dd9629e60bae59fc47d7abe054e73bb1c7944216981f2a516786"
+    "5c13efd115fce53b9ef2d4036a1a04394047ea4162d75b4f1252dd9cbc756fc7"
 )
 CONFIG_USER = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"

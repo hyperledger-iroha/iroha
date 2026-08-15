@@ -11,8 +11,13 @@
 //! Notes
 //! - JSON parsing uses Norito's serde wrappers via the `NoritoJson` extractor.
 //! - Keep responses stable and explicit; map input errors to 400.
-use core::str::FromStr;
+use crate::{
+    JsonBody, NoritoJson, NoritoJsonWithBytes, NoritoQuery,
+    json_macros::{JsonDeserialize, JsonSerialize},
+    routing::{MaybeTelemetry, parse_account_literal_with_state},
+};
 use base64::Engine as _;
+use core::str::FromStr;
 use iroha_core::{
     smartcontracts::Execute as _,
     state::{StateReadOnly, WorldReadOnly},
@@ -34,11 +39,6 @@ use norito::{
     codec::Encode as _,
     derive::{NoritoDeserialize, NoritoSerialize},
     json,
-};
-use crate::{
-    JsonBody, NoritoJson, NoritoJsonWithBytes, NoritoQuery,
-    json_macros::{JsonDeserialize, JsonSerialize},
-    routing::{MaybeTelemetry, parse_account_literal_with_state},
 };
 const CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY: &str = "/v1/gov/ballots/zk-v1#authority";
 const CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY: &str =
@@ -1774,8 +1774,8 @@ pub async fn handle_gov_protected_set(
     telemetry: MaybeTelemetry,
     NoritoJson(body): NoritoJson<ProtectedNamespacesDto>,
 ) -> Result<JsonBody<ProtectedNamespacesApplyResponse>, crate::Error> {
-    use std::str::FromStr as _;
     use iroha_data_model::parameter::{CustomParameterId, Parameter, custom::CustomParameter};
+    use std::str::FromStr as _;
     let namespaces: Vec<String> = body
         .namespaces
         .into_iter()
@@ -1848,8 +1848,8 @@ pub struct ProtectedNamespacesGetResponse {
 pub async fn handle_gov_protected_get(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<ProtectedNamespacesGetResponse>, crate::Error> {
-    use std::str::FromStr as _;
     use iroha_data_model::{name::Name, parameter::CustomParameterId};
+    use std::str::FromStr as _;
     let world = state.world_view();
     let params = world.parameters();
     let mut namespaces: Vec<String> = Vec::new();
@@ -2400,7 +2400,8 @@ pub async fn handle_gov_council_current(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
+    use crate::routing::MaybeTelemetry;
     use axum::body::Bytes;
     use iroha_config::parameters::actual::LaneConfig;
     use iroha_core::{
@@ -2431,8 +2432,7 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::routing::MaybeTelemetry;
+    use std::sync::Arc;
     const ACCOUNT_AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const ACCOUNT_OWNER_ALT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     #[test]

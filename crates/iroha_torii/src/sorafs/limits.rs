@@ -1,13 +1,13 @@
 //! Quota enforcement for SoraFS control-plane endpoints.
+use dashmap::DashMap;
+use iroha_logger::warn;
+use parking_lot::Mutex;
 use std::{
     collections::VecDeque,
     fmt,
     sync::Arc,
     time::{Duration, Instant},
 };
-use dashmap::DashMap;
-use iroha_logger::warn;
-use parking_lot::Mutex;
 const MAX_QUOTA_SUBJECTS: usize = 4_096;
 /// Categories of SoraFS operations subject to quotas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -308,8 +308,8 @@ fn limiter_from_window(window: SorafsQuotaWindow) -> Option<Arc<ActionLimiter>> 
 }
 #[cfg(test)]
 mod tests {
-    use std::thread;
     use super::*;
+    use std::thread;
     #[test]
     fn quota_allows_within_window() {
         let enforcer = SorafsQuotaEnforcer {

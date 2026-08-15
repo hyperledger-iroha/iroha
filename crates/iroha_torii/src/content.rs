@@ -1,7 +1,3 @@
-use std::{
-    str::FromStr,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
 use crate::{SharedAppState, app_auth::verify_canonical_network_request, limits};
 use axum::{
     extract::ConnectInfo,
@@ -22,6 +18,10 @@ use iroha_data_model::{
     da::types::BlobDigest,
 };
 use iroha_logger::{error, info};
+use std::{
+    str::FromStr,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 #[derive(Debug)]
 pub enum ContentError {
     BadRequest(String),
@@ -692,7 +692,6 @@ fn install_content_representation_headers(
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use super::*;
     use base64::Engine;
     use iroha_config::parameters::actual::ContentPow;
@@ -711,6 +710,7 @@ mod tests {
         nexus::{DataSpaceId, LaneId},
         role::RoleId,
     };
+    use std::collections::BTreeMap;
     fn sample_manifest() -> ContentBundleManifest {
         ContentBundleManifest {
             bundle_id: Hash::new(b"bundle"),

@@ -1,5 +1,5 @@
-use norito::core::{Archived, Error as NoritoCodecError};
 use crate::error::ParseError;
+use norito::core::{Archived, Error as NoritoCodecError};
 /// Split a string into two non-empty parts separated by `delimiter`.
 ///
 /// Returns the left and right parts or [`ParseError`] with the provided messages.

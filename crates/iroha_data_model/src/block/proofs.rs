@@ -8,11 +8,6 @@
 //! `CommitQC` authenticates the exact executed block wire and therefore that
 //! tree. `BlockHeader::merkle_root` is checked as proposal metadata, but is
 //! never selected as the entry-proof anchor.
-use core::num::NonZeroU64;
-use std::collections::BTreeMap;
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     block::{
         BlockHeader, SignedBlock,
@@ -26,6 +21,11 @@ use crate::{
     fastpq::TransferTranscript,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
+use core::num::NonZeroU64;
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeMap;
 /// Maximum leaf count representable by block receipt proof indices.
 const BLOCK_MERKLE_MAX_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
 /// Maximum exact executed `SignedBlockWire` bytes accepted by the first-release
@@ -363,13 +363,6 @@ impl BlockProofs {
 }
 #[cfg(test)]
 mod tests {
-    use std::iter::FromIterator;
-    #[cfg(feature = "transparent_api")]
-    use iroha_crypto::{Algorithm, Signature, SignatureOf};
-    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree};
-    #[cfg(feature = "transparent_api")]
-    use iroha_primitives::const_vec::ConstVec;
-    use norito::codec::DecodeAll as _;
     use super::*;
     use crate::{
         account::AccountId,
@@ -393,6 +386,13 @@ mod tests {
         transaction::ExecutionStep,
         trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
     };
+    #[cfg(feature = "transparent_api")]
+    use iroha_crypto::{Algorithm, Signature, SignatureOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree};
+    #[cfg(feature = "transparent_api")]
+    use iroha_primitives::const_vec::ConstVec;
+    use norito::codec::DecodeAll as _;
+    use std::iter::FromIterator;
     fn sample_entrypoint_hash() -> HashOf<TransactionEntrypoint> {
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");

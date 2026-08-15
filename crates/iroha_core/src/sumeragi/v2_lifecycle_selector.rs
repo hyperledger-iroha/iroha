@@ -980,7 +980,11 @@ pub(super) enum LifecycleIngressSchedulerCarrierError {
 /// selector, coordinator, and concrete registry together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct LifecycleIngressSchedulerFetchSeal {
+    owner: super::OwnerId,
     ordinal: u128,
+    key: LifecycleKey,
+    slot: super::PhysicalSlotId,
+    incumbent_digest: LifecycleDigest,
     wake_generation: (WaitSource, u64),
     post_submit_wait: super::WaitToken,
 }
@@ -988,6 +992,25 @@ impl LifecycleIngressSchedulerFetchSeal {
     /// Return the exact waiting Fetch ordinal.
     pub(super) const fn ordinal(self) -> u128 {
         self.ordinal
+    }
+    /// Reauthenticate the exact Waiting Fetch row used to mint this seal.
+    pub(super) fn matches_waiting_record(self, record: &super::LifecycleRecord) -> bool {
+        let LifecycleState::Waiting(wait) = record.state else {
+            return false;
+        };
+        let (source, generation) = self.wake_generation;
+        record.owner == self.owner
+            && record.ordinal == self.ordinal
+            && record.key == self.key
+            && record.work_class == LifecycleWorkClass::Fetch
+            && record
+                .work_class
+                .accepts_stage(record.key.phase(), record.stage)
+            && record.physical_slots.len() == 1
+            && record.physical_slots.get(&self.slot) == Some(&self.incumbent_digest)
+            && wait.source() == source
+            && certified_fetch_scheduler_generation(wait) == Some(generation)
+            && self.post_submit_wait == super::WaitToken::new(source, generation)
     }
     /// Return the authenticated prospective-ready generation advancement.
     pub(super) const fn wake_generation(self) -> (WaitSource, u64) {
@@ -1169,7 +1192,11 @@ impl PreparedLifecycleIngressSelector {
             })?;
         drop(prepared);
         Ok(LifecycleIngressSchedulerFetchSeal {
+            owner: location.owner(),
             ordinal: location.ordinal(),
+            key: authority.key,
+            slot: location.slot(),
+            incumbent_digest: location.incumbent_digest(),
             wake_generation: (wait.source(), next_generation),
             post_submit_wait: super::WaitToken::new(wait.source(), next_generation),
         })
@@ -1534,8 +1561,9 @@ impl PreparedLifecycleIngressSelector {
             .selected_certified_fetch_ready_authority()
             .map_err(|error| format!("selected Fetch authority rejected: {error:?}"))?;
         let expected_effect = incumbent_effect.clone();
-        let incumbent = ConcreteLifecycleWork::from_exact(incumbent_effect, incumbent_pending)
-            .map_err(|(error, _, _)| format!("exact Fetch incumbent rejected: {error:?}"))?;
+        let incumbent =
+            ConcreteLifecycleWork::from_inert_fixture_for_test(incumbent_effect, incumbent_pending)
+                .map_err(|(error, _, _)| format!("exact Fetch incumbent rejected: {error:?}"))?;
         if incumbent.causal_root() != ready.causal_root {
             return Err("real Fetch incumbent differs from selector causal authority".to_owned());
         }
@@ -2412,8 +2440,8 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     /// `None` for pass-through; no later recovered response may leapfrog it.
     /// Neither selection nor classification claims, dequeues, or publishes
     /// worker capacity.
-    // TODO: Consume this queue-owned selector only from the unified lifecycle
-    // Ingress-turn driver when the atomic runner cutover replaces raw dequeue.
+    // The production lifecycle Ingress turn is the sole consumer of this
+    // queue-owned selector; ordinary winners retain the same fair cut.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(
         &self,

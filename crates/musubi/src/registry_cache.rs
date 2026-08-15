@@ -16,12 +16,12 @@
 //! an equivalent safe descriptor-rooted primitive is available.
 //! TODO: Verify and retain a portable finalized-state inclusion proof here once
 //! the public query contract exposes one.
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fmt, fs, io,
-    path::{Path, PathBuf},
+use crate::{
+    atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
+    cache::{CacheError, MusubiCache},
+    graph::{GraphErrorV1, ResolverRegistrySourceV1},
+    lockfile::LockfileV1,
+    registry::{RegistryErrorV1, RegistryReadClientV1},
 };
 use iroha_data_model::{
     NetworkId,
@@ -37,12 +37,12 @@ use norito::{
 };
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-use crate::{
-    atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
-    cache::{CacheError, MusubiCache},
-    graph::{GraphErrorV1, ResolverRegistrySourceV1},
-    lockfile::LockfileV1,
-    registry::{RegistryErrorV1, RegistryReadClientV1},
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt, fs, io,
+    path::{Path, PathBuf},
 };
 const CACHE_SCHEMA: &str = "musubi-resolver-cache";
 const CACHE_VERSION: u8 = 1;

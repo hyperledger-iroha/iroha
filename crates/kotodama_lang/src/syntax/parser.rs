@@ -1,13 +1,13 @@
 //! Canonical single-scan source parser and lossless CST construction.
-use crate::{
-    ast::Program,
-    diagnostic::DiagnosticBundle,
-    source::{FrontendBudget, SourceFile},
-};
 use super::{
     cst::{SyntaxOutline, SyntaxOutlineBuilder, SyntaxTree, build_tree_from_outline},
     kind::SyntaxKind,
     lexer::lex,
+};
+use crate::{
+    ast::Program,
+    diagnostic::DiagnosticBundle,
+    source::{FrontendBudget, SourceFile},
 };
 /// Result of parsing for lossless editor and formatter consumers.
 #[derive(Clone, Debug)]
@@ -193,9 +193,9 @@ fn error_outline(source: &SourceFile) -> SyntaxOutline {
 }
 #[cfg(test)]
 mod tests {
-    use std::fmt::Write as _;
     use super::*;
     use crate::source::SourceId;
+    use std::fmt::Write as _;
     fn count_nodes(node: &crate::syntax::GreenNode, kind: SyntaxKind) -> usize {
         let mut count = usize::from(node.kind == kind);
         for child in &node.children {

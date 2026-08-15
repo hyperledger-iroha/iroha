@@ -4,14 +4,6 @@
 //! `ILR1` wires. Issuer keys and authentication policy are supplied by an
 //! explicitly qualified deployment runtime provider and never enter node
 //! configuration or response diagnostics.
-use std::{
-    collections::BTreeSet,
-    fmt,
-    hint::black_box,
-    panic::{AssertUnwindSafe, catch_unwind},
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -55,6 +47,14 @@ use iroha_data_model::privacy::{
     PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
 };
 use sha2::{Digest as _, Sha256};
+use std::{
+    collections::BTreeSet,
+    fmt,
+    hint::black_box,
+    panic::{AssertUnwindSafe, catch_unwind},
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 /// Canonical authorization endpoint.
@@ -1890,15 +1890,7 @@ pub fn bootle_lantern_issuance_router_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        sync::{
-            Mutex, OnceLock,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-            mpsc,
-        },
-        time::Duration,
-    };
+    use super::*;
     use http_body_util::BodyExt as _;
     use iroha_core::privacy_engines::bootle_lantern::issuer::{
         BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
@@ -1914,7 +1906,15 @@ mod tests {
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::Digest as _;
-    use super::*;
+    use std::{
+        collections::VecDeque,
+        sync::{
+            Mutex, OnceLock,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            mpsc,
+        },
+        time::Duration,
+    };
     fn raw(byte: u8) -> [u8; 32] {
         [byte; 32]
     }

@@ -4,17 +4,6 @@
 //! workspace crate. It validates Norito-encoded provider adverts and
 //! replication orders, then emits stable `ValidationOutcomeV1`
 //! JSON/table/YAML output.
-use std::{
-    collections::BTreeSet,
-    env,
-    fs::{self, OpenOptions},
-    io::{self, Read, Write},
-    path::{Component, Path, PathBuf},
-    process::ExitCode,
-    time::{SystemTime, UNIX_EPOCH},
-};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use iroha_crypto::sha256;
 use norito::json;
@@ -39,6 +28,17 @@ use sorafs_manifest::{
     validate_provider_admission_renewal_bytes, validate_provider_admission_revocation_bytes,
     validate_provider_advert_bytes, validate_repair_payload_bytes,
     validate_replication_order_bytes, validate_signed_replication_order_bytes,
+};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::{
+    collections::BTreeSet,
+    env,
+    fs::{self, OpenOptions},
+    io::{self, Read, Write},
+    path::{Component, Path, PathBuf},
+    process::ExitCode,
+    time::{SystemTime, UNIX_EPOCH},
 };
 fn main() -> ExitCode {
     match run(env::args().skip(1)) {

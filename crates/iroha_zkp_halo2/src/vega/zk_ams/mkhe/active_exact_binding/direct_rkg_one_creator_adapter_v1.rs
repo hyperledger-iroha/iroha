@@ -288,7 +288,7 @@ impl PreparedDirectRkgOneCreatorPermitV1<'_> {
         put(bytes, 352, &authority.ephemeral_identity_digest);
         put(bytes, 384, &authority.ephemeral_source_context_digest);
         put(bytes, 416, &authority.ephemeral_source_statement_digest);
-        let common_destination: &mut [u8; 32] = bytes[448..480]
+        let common_destination: &mut [u8; 32] = (&mut bytes[448..480])
             .try_into()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
         self.completed

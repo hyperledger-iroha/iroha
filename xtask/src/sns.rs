@@ -1,12 +1,12 @@
+use crate::workspace_root;
+use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
+use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     fs,
     path::{Path, PathBuf},
 };
-use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
-use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
-use crate::workspace_root;
 const SCORECARD_VERSION: u32 = 1;
 const HANDOFF_VERSION: u32 = 1;
 const DEFAULT_RENEWAL_TARGET: f64 = 0.55;
@@ -1487,9 +1487,9 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{fs, path::Path};
     use tempfile::{NamedTempFile, tempdir};
-    use super::*;
     fn sample_source(
         renewal_rate: f64,
         support_rate: f64,

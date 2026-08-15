@@ -1,17 +1,13 @@
 //! Orchestration layer that wires configuration, workload generation, and fault injection together.
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fs,
-    future::Future,
-    io::Write,
-    num::NonZeroU64,
-    path::Path,
-    sync::{
-        Arc, Mutex as StdMutex, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+use crate::{
+    config::{ChaosConfig, WorkloadProfile},
+    faults::{
+        self, CpuStressConfig, DiskSaturationConfig, FaultConfig, NetworkLatencyConfig,
+        NetworkPacketLossConfig, NetworkPartitionConfig,
     },
-    time::{Duration, Instant},
+    instructions::{
+        self, AccountRecord, PlanUpdate, PreparedChaos, TransactionPlan, WorkloadEngine,
+    },
 };
 use color_eyre::{
     Result,
@@ -43,6 +39,20 @@ use iroha_genesis::GenesisBlock;
 use iroha_primitives::json::Json;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fs,
+    future::Future,
+    io::Write,
+    num::NonZeroU64,
+    path::Path,
+    sync::{
+        Arc, Mutex as StdMutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 use tokio::{
     sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc},
     task::{JoinHandle, JoinSet, spawn_blocking},
@@ -50,16 +60,6 @@ use tokio::{
 };
 use toml::{Table, Value as TomlValue};
 use tracing::{debug, info, warn};
-use crate::{
-    config::{ChaosConfig, WorkloadProfile},
-    faults::{
-        self, CpuStressConfig, DiskSaturationConfig, FaultConfig, NetworkLatencyConfig,
-        NetworkPacketLossConfig, NetworkPartitionConfig,
-    },
-    instructions::{
-        self, AccountRecord, PlanUpdate, PreparedChaos, TransactionPlan, WorkloadEngine,
-    },
-};
 const IZANAMI_SUMERAGI_QUEUE_COMMANDS: i64 = 4_096;
 const IZANAMI_SUMERAGI_QUEUE_BODIES: i64 = 512;
 const IZANAMI_SUMERAGI_QUEUE_CHUNKS: i64 = 4_096;
@@ -7485,12 +7485,6 @@ struct MetricsSnapshot {
 }
 #[cfg(test)]
 mod tests {
-    use std::{env, io};
-    use color_eyre::eyre::{WrapErr, eyre};
-    use iroha_crypto::Hash;
-    use iroha_data_model::isi::SetParameter;
-    use iroha_test_network::init_instruction_registry;
-    use tokio::time::timeout;
     use super::*;
     use crate::config::{
         DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
@@ -7498,6 +7492,12 @@ mod tests {
         FaultArgs, FaultToggles, IzanamiArgs, NexusProfile, WorkloadProfile,
     };
     use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
+    use color_eyre::eyre::{WrapErr, eyre};
+    use iroha_crypto::Hash;
+    use iroha_data_model::isi::SetParameter;
+    use iroha_test_network::init_instruction_registry;
+    use std::{env, io};
+    use tokio::time::timeout;
     fn allow_net_for_tests() -> bool {
         std::env::var("IZANAMI_ALLOW_NET")
             .or_else(|_| std::env::var("IROHA_ALLOW_NET"))

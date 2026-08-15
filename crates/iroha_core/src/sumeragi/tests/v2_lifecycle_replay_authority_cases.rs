@@ -1491,8 +1491,10 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
         "fn admit_selected_certified_serve(",
         "target: super::LifecycleIngressIoTargetSeal",
         "target.matches_certified_serve_request(authenticated.request_hash())",
+        "!registry.exactly_covers_all_live_work(&self.verified, &self.coordinator)",
         "prepare_certified_serve_admission(",
         ".install_certified_serve_fresh_batch_before_publication(",
+        "batch,\n                &self.verified,\n                &self.coordinator,\n                &staged,",
         "|| self.coordinator.persist_exact_staged_successor(&staged)",
         "fn certified_serve_terminal_replay_decision(",
         ".exactly_matches_certified_serve_publication(authenticated, publication.receipt())",
@@ -1654,8 +1656,53 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
     }
     for required in [
         "fn exactly_matches_fresh_staged_append(",
-        "exactly_covers_recovered_ready_work(current)",
-        "exactly_covers_recovered_ready_work_and_wal_authority(current)",
+        "fn exactly_covers_all_live_work(",
+        "verified: &VerifiedHeightContext",
+        "LifecycleLedgerV1::from_coordinator(coordinator)",
+        "coordinator.episode_authority.context() != coordinator.active_context",
+        "coordinator.episode_authority.capacity_geometry() != &coordinator.capacity_geometry",
+        "let exact_capacity_classes = CapacityClass::ALL",
+        "frozen_predecessors_are_invalid",
+        "WaitSource::Capacity(_) => true",
+        "wait.observed_generation == u64::MAX",
+        ".unwrap_or(0)",
+        "!= wait.observed_generation",
+        "coordinator.owner_index != exact_owners",
+        "coordinator.ready_index != exact_ready",
+        "coordinator.capacity_used != exact_capacity_used",
+        "self.entries.len() != live.len()",
+        "serve_ordinal_pair_is_exact(serve, producer)",
+        ".same_persisted_family(&producer_metadata.replay_authority)",
+        "Arc::ptr_eq(&serve.replay_evidence, &producer.replay_evidence)",
+        "broadcast.pairs_exact_next_sign(next_address, next_digest)",
+        "!paired_next_vote_addresses.is_subset(&exact_next_vote_addresses)",
+        "replay_authority: LifecycleReplayAuthorityV1",
+        "ConcreteLifecycleWork::from_authorized_exact(effect, pending, replay_authority)",
+        "replay_authority == &metadata.replay_authority",
+        "ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion)",
+        "ConcreteLifecycleWorkKind::DurableStoreBody(store)",
+        "ConcreteLifecycleWorkKind::DurableValidateBody(validate)",
+        "ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)",
+        "ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign)",
+        "sign.dispatch_key.is_none()",
+        "sign.repair.validates_in_ledger(&exact_ledger)",
+        "ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(sign)",
+        "ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(sign)",
+        "sign.carrier.validates_in_ledger(verified, &exact_ledger)",
+        "ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(broadcast)",
+        "broadcast.validates_in_ledger(&exact_ledger)",
+        "ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(fetch)",
+        "fetch.dispatch_key.is_none()",
+        "fetch.carrier.validates_in_ledger(verified, &exact_ledger)",
+        "ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store)",
+        "store.fetch.validates(verified)",
+        ".validates_recovered_store_in_ledger(",
+        "ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)",
+        "apply.dispatch_key.is_none()",
+        ".validates_in_ledger(",
+        "ConcreteLifecycleWorkKind::DurableCertifiedServe(serve)",
+        "ConcreteLifecycleWorkKind::DurableProducerTurn(producer)",
+        "registry.exactly_covers_all_live_work(verified, current)",
         "carrier.matches_record(record, metadata, work.digest)",
         "fn matches_current_ready_record(",
         "fn exact_optional_recovered_wal_authority(",
@@ -1671,6 +1718,18 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
             "fresh Serve whole-census preflight omitted {required}"
         );
     }
+    let ledger = reviewed_lifecycle_ledger_source_for_test();
+    for required in [
+        "fn exactly_matches_recovered_decision_apply_carrier(",
+        "installed_apply_ordinal: u128",
+        "apply_ordinal == installed_apply_ordinal",
+    ] {
+        assert!(
+            ledger.contains(required),
+            "recovered Apply ledger census omitted {required}"
+        );
+    }
+
     let authority = include_str!("../v2_lifecycle_authority.rs");
     assert!(authority.contains(
         "#[cfg(test)]\n#[derive(Clone, Debug, PartialEq, Eq)]\npub(crate) struct RolloverSnapshot"

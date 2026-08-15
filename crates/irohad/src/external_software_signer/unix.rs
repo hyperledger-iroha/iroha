@@ -1,27 +1,4 @@
 //! Peer-credential-authenticated Unix transport and runtime credential loading.
-use std::{
-    ffi::OsString,
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    os::{
-        fd::{AsRawFd as _, OwnedFd},
-        unix::{
-            fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
-            net::UnixStream,
-        },
-    },
-    path::{Component, Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
-use iroha_crypto::Signature;
-use norito::{
-    NoritoDeserialize, NoritoSerialize,
-    codec::{Decode, Encode},
-};
 use super::{
     SoftwareSignerWrappingKeyV1,
     protocol::{
@@ -39,6 +16,29 @@ use super::{
         SoftwareSignerServiceV1, native_payload_matches_role, verify_provenance,
         verify_response_attestation,
     },
+};
+use iroha_crypto::Signature;
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    codec::{Decode, Encode},
+};
+use std::{
+    ffi::OsString,
+    fs::{self, File, OpenOptions},
+    io::{Read as _, Write as _},
+    os::{
+        fd::{AsRawFd as _, OwnedFd},
+        unix::{
+            fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
+            net::UnixStream,
+        },
+    },
+    path::{Component, Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 const SOCKET_MODE_V1: u32 = 0o666;
 const RUNTIME_DIRECTORY_MODE_V1: u32 = 0o711;

@@ -1,5 +1,4 @@
 use core::iter::FromIterator;
-use std::{collections::HashSet, time::Duration};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     block::decode_framed_signed_block,
@@ -10,6 +9,7 @@ use iroha_data_model::{
 use iroha_primitives::unique_vec::UniqueVec;
 use iroha_test_network::{NetworkBuilder, genesis_factory, init_instruction_registry};
 use nonzero_ext::nonzero;
+use std::{collections::HashSet, time::Duration};
 fn checked_bls_fixture_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("checked genesis roundtrip BLS fixture key generation")

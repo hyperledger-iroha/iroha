@@ -13,9 +13,26 @@
 /// Opaque phase boundaries used by the compiler regression benchmark.
 #[doc(hidden)]
 pub mod benchmark;
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+use super::{
+    ast::{BinaryOp, FunctionKind, FunctionModifiers, SourceLocation, SourceUnitKind, UnaryOp},
+    diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
+    i18n::{self, Language, Message},
+    ir::{self, Instr, Terminator},
+    policy, regalloc,
+    semantic::{self, TypedItem, TypedProgram},
+};
+use crate::{
+    builtins::{Builtin, BuiltinAccess},
+    encoding, instruction,
+    metadata::{
+        self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
+        EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
+        EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
+        EmbeddedStateType, KOTO_TEST_RETURN_ENTRYPOINT, LITERAL_SECTION_MAGIC, LiteralKindV1,
+        ProgramMetadata, encode_literal_descriptor,
+    },
+    pointer_abi::PointerType,
+    syscalls,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -46,26 +63,9 @@ use iroha_data_model::{
     trigger::{Trigger, TriggerId},
 };
 use norito::json;
-use super::{
-    ast::{BinaryOp, FunctionKind, FunctionModifiers, SourceLocation, SourceUnitKind, UnaryOp},
-    diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
-    i18n::{self, Language, Message},
-    ir::{self, Instr, Terminator},
-    policy, regalloc,
-    semantic::{self, TypedItem, TypedProgram},
-};
-use crate::{
-    builtins::{Builtin, BuiltinAccess},
-    encoding, instruction,
-    metadata::{
-        self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
-        EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
-        EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
-        EmbeddedStateType, KOTO_TEST_RETURN_ENTRYPOINT, LITERAL_SECTION_MAGIC, LiteralKindV1,
-        ProgramMetadata, encode_literal_descriptor,
-    },
-    pointer_abi::PointerType,
-    syscalls,
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
 };
 const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;
@@ -1690,12 +1690,6 @@ impl Default for CompilerOptions {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-    use indexmap::IndexSet;
-    use iroha_data_model::{
-        DomainId,
-        asset::{AssetBalanceScope, id::AssetDefinitionId},
-    };
     use super::{
         ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
         COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,
@@ -1722,7 +1716,13 @@ mod tests {
         metadata::{EmbeddedStateDescriptor, EmbeddedStateType, ProgramMetadata},
         pointer_abi::PointerType,
     };
+    use indexmap::IndexSet;
+    use iroha_data_model::{
+        DomainId,
+        asset::{AssetBalanceScope, id::AssetDefinitionId},
+    };
     use ivm_abi::syscalls;
+    use std::collections::{HashMap, HashSet};
     fn test_mode_compiler() -> Compiler {
         Compiler::new_with_options(CompilerOptions {
             mode: CompilerMode::Test,
@@ -1742,8 +1742,8 @@ mod tests {
         format!("0x{}", hex::encode(bytes))
     }
     fn sample_asset_handle() -> crate::axt::AssetHandle {
-        use iroha_data_model::nexus::{DataSpaceId, LaneId};
         use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject};
+        use iroha_data_model::nexus::{DataSpaceId, LaneId};
         AssetHandle {
             scope: vec!["transfer".to_owned()],
             subject: HandleSubject {
@@ -2112,8 +2112,8 @@ mod tests {
     }
     #[test]
     fn axt_descriptor_literal_encoding_enforces_host_invariants() {
-        use iroha_data_model::nexus::DataSpaceId;
         use crate::axt::{AxtDescriptor, AxtTouchSpec};
+        use iroha_data_model::nexus::DataSpaceId;
         fn literal(descriptor: &AxtDescriptor) -> String {
             let bytes = norito::to_bytes(descriptor).expect("encode AXT descriptor");
             format!("0x{}", hex::encode(bytes))
@@ -2199,8 +2199,8 @@ mod tests {
     }
     #[test]
     fn capability_pointer_encoding_rejects_context_free_faults() {
-        use iroha_data_model::nexus::{DataSpaceId, LaneId};
         use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject, ProofBlob};
+        use iroha_data_model::nexus::{DataSpaceId, LaneId};
         fn literal<T: norito::NoritoSerialize>(value: &T) -> String {
             let bytes = norito::to_bytes(value).expect("encode capability literal");
             format!("0x{}", hex::encode(bytes))
@@ -2408,8 +2408,8 @@ mod tests {
     }
     #[test]
     fn codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents() {
-        use iroha_data_model::nexus::DataSpaceId;
         use crate::axt::{RemoteSpendIntent, SpendOp};
+        use iroha_data_model::nexus::DataSpaceId;
         let invalid = RemoteSpendIntent {
             asset_dsid: DataSpaceId::new(7),
             op: SpendOp {
@@ -8921,7 +8921,6 @@ seiyaku Test {{
     }
     #[test]
     fn manifest_access_set_hints_include_create_trigger() {
-        use std::str::FromStr;
         use iroha_data_model::{
             account::AccountId,
             events::{EventFilterBox, execute_trigger::ExecuteTriggerEventFilter},
@@ -8932,6 +8931,7 @@ seiyaku Test {{
                 action::{Action, Repeats},
             },
         };
+        use std::str::FromStr;
         let trigger_id = TriggerId::new(Name::from_str("wake").expect("trigger name"));
         let authority = AccountId::new(
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"

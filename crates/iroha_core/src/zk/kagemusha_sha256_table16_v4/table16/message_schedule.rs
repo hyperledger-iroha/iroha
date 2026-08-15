@@ -10,23 +10,23 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use super::{super::BLOCK_SIZE, SpreadInputs, Table16Assignment};
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::Layouter,
     plonk::{Advice, Column, ConstraintSystem, Error, Selector},
     poly::Rotation,
 };
-use super::{super::BLOCK_SIZE, SpreadInputs, Table16Assignment};
 mod schedule_gates;
 mod schedule_util;
 mod subregion1;
 mod subregion2;
 mod subregion3;
+use crate::zk::kagemusha_sha256_table16_v4::{AssignedBits, BlockWord, ROUNDS};
 use schedule_gates::ScheduleGate;
 #[cfg(test)]
 pub(crate) use schedule_util::msg_schedule_test_input;
 use schedule_util::*;
-use crate::zk::kagemusha_sha256_table16_v4::{AssignedBits, BlockWord, ROUNDS};
 #[derive(Clone, Debug)]
 pub(crate) struct MessageWord<F: PrimeField>(pub(super) AssignedBits<32, F>);
 impl<F: PrimeField> std::ops::Deref for MessageWord<F> {
@@ -374,6 +374,11 @@ impl MessageScheduleConfig {
 }
 #[cfg(test)]
 mod tests {
+    use super::{
+        super::{super::BLOCK_SIZE, SpreadTableChip, Table16Chip, Table16Config},
+        schedule_util::*,
+    };
+    use crate::zk::kagemusha_sha256_table16_v4::{BlockWord, util::lebs2ip};
     use ff::PrimeField;
     use halo2_proofs::halo2curves::pasta::pallas;
     use halo2_proofs::{
@@ -381,11 +386,6 @@ mod tests {
         dev::MockProver,
         plonk::{Circuit, ConstraintSystem, Error},
     };
-    use super::{
-        super::{super::BLOCK_SIZE, SpreadTableChip, Table16Chip, Table16Config},
-        schedule_util::*,
-    };
-    use crate::zk::kagemusha_sha256_table16_v4::{BlockWord, util::lebs2ip};
     #[test]
     fn message_schedule() {
         struct MyCircuit {}

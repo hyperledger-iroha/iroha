@@ -1572,7 +1572,8 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
         "an existing dedicated owner is corruption/ownership, not capacity backpressure"
     );
 
-    let ingress = crate::sumeragi::FairV2Ingress::new(32, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
+    let ingress =
+        crate::sumeragi::FairV2Ingress::new(32, 5 * 512 * 1024, 512 * 1024, 0, 512 * 1024);
     ingress
         .configure_roster(
             fixture
@@ -1829,7 +1830,8 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     let second_response = response(1);
     assert_eq!(first_response.request_hash, second_response.request_hash);
     assert_ne!(HashOf::new(&first_response), HashOf::new(&second_response));
-    let ingress = crate::sumeragi::FairV2Ingress::new(32, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
+    let ingress =
+        crate::sumeragi::FairV2Ingress::new(32, 5 * 512 * 1024, 512 * 1024, 0, 512 * 1024);
     ingress
         .configure_roster(
             fixture

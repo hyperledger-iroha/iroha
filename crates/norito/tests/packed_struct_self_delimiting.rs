@@ -1,10 +1,10 @@
 //! Regression tests for packed-struct decoding of self-delimiting fields.
-use std::collections::{BTreeMap, BTreeSet};
 use norito::{
     codec::{Decode, Encode, decode_adaptive, encode_adaptive, encode_with_header_flags},
     core::{DecodeFlagsGuard, frame_bare_with_header_flags, header_flags},
     decode_from_bytes,
 };
+use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, PartialEq, Eq, Encode, Decode)]
 struct NamedPackedSelfDelimiting {
     domains: BTreeSet<String>,

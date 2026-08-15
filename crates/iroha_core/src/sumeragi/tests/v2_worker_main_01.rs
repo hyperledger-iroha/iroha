@@ -1952,6 +1952,7 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
         &mut service,
         service_context.clone(),
         proposal.proposer,
+        tag,
         Arc::clone(&output_guard),
         body_store,
         body_store_identity.clone(),

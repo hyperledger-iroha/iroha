@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use iroha_primitives::{bigint::BigInt, numeric_abi::IntValueV1};
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::{
     analysis::SimpleRng,
@@ -8,6 +6,8 @@ use crate::{
         self, ExprKind, Type, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement,
     },
 };
+use iroha_primitives::{bigint::BigInt, numeric_abi::IntValueV1};
+use std::collections::HashMap;
 /// Outcome of the Kotodama source fuzz pass.
 #[derive(Debug, Default)]
 pub struct FuzzReport {

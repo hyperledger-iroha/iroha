@@ -1,5 +1,4 @@
 //! ABI v1 host syscall coverage checks.
-use std::{collections::HashMap, str::FromStr};
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     CoreHost, IVM, IVMHost, VMError, gas,
@@ -13,6 +12,7 @@ use ivm::{
     syscall_metering::SyscallMetering,
     syscalls,
 };
+use std::{collections::HashMap, str::FromStr};
 fn sample_account() -> AccountId {
     let public_key = PublicKey::from_str(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",

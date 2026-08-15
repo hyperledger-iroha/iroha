@@ -1,5 +1,8 @@
 //! UAID portfolio aggregation helpers.
-use std::collections::BTreeMap;
+use crate::{
+    nexus::space_directory::UaidDataspaceBindings,
+    state::{AsAssetIdAccountCompare, AssetByAccountBounds, StateReadOnly, WorldReadOnly},
+};
 use iroha_data_model::{
     asset::{AssetBalanceScope, AssetValue},
     nexus::{
@@ -11,10 +14,7 @@ use iroha_data_model::{
     },
 };
 use mv::storage::StorageReadOnly;
-use crate::{
-    nexus::space_directory::UaidDataspaceBindings,
-    state::{AsAssetIdAccountCompare, AssetByAccountBounds, StateReadOnly, WorldReadOnly},
-};
+use std::collections::BTreeMap;
 /// Collect a deterministic UAID portfolio snapshot from the given state view.
 pub fn collect_portfolio(
     state: &impl StateReadOnly,
@@ -157,6 +157,12 @@ impl DataspaceAliasLookup {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::Hash;
     use iroha_data_model::{
         account::AccountDetails,
@@ -171,12 +177,6 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
     #[test]
     fn aggregates_account_by_uaid() {
         let kura = Kura::blank_kura_for_testing();

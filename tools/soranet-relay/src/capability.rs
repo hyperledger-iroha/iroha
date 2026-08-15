@@ -3,15 +3,15 @@
 //! This module implements the TLV parsing and negotiation rules documented in
 //! `specs/soranet_handshake.md`. It is intentionally deterministic so
 //! transcript hashes computed by clients and relays match byte-for-byte.
-use std::fmt;
-use hex::FromHex;
-pub use iroha_crypto::soranet::handshake::CapabilityWarning;
-use thiserror::Error;
 use crate::{
     config::PaddingConfig,
     constant_rate::CONSTANT_RATE_CELL_BYTES,
     scheduler::{Cell, CellClass},
 };
+use hex::FromHex;
+pub use iroha_crypto::soranet::handshake::CapabilityWarning;
+use std::fmt;
+use thiserror::Error;
 /// Maximum capability vector size we accept during negotiation.
 pub const MAX_CAP_VECTOR_LEN: usize = 4096;
 /// `snnet.pqkem` TLV type.

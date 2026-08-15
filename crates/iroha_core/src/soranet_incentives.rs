@@ -4,7 +4,6 @@
 //! and emits deterministic reward instructions destined for the XOR treasury. The scoring model
 //! operates on per-mille ratios so results remain deterministic across hardware while allowing
 //! fine-grained weighting of availability, bandwidth, and compliance signals.
-use std::{collections::BTreeMap, str::FromStr};
 #[cfg(test)]
 use iroha_data_model::isi::transfer::TransferBox;
 use iroha_data_model::{
@@ -24,6 +23,7 @@ use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity, RoundingMode},
 };
+use std::{collections::BTreeMap, str::FromStr};
 use thiserror::Error;
 /// Weight distribution (basis points) applied to each reward component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,6 +501,7 @@ fn skip_reason_label(reason: RewardSkipReason) -> &'static str {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -512,7 +513,6 @@ mod tests {
         },
     };
     use iroha_primitives::BigInt;
-    use super::*;
     fn quantity(value: u64) -> Quantity {
         Quantity::from(value)
     }

@@ -1,9 +1,5 @@
 //! Implementations for transaction queries.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
-    ops::ControlFlow,
-};
+use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 use eyre::Result;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
@@ -20,7 +16,11 @@ use iroha_data_model::{
 use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
 use norito::json::Value;
-use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+    ops::ControlFlow,
+};
 fn block_hash_from_value(value: &Value) -> Option<HashOf<BlockHeader>> {
     norito::json::from_value(value.clone()).ok()
 }
@@ -1140,10 +1140,10 @@ impl ValidQuery for FindTransactions {
 #[cfg(test)]
 /// Transaction-history regression fixtures and tests.
 pub(crate) mod tests {
-    use std::{
-        num::{NonZeroU64, NonZeroUsize},
-        sync::Arc,
-        time::Duration,
+    use super::*;
+    use crate::{
+        block::BlockBuilder,
+        tx::{AcceptedTransaction, tests::*},
     };
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -1165,10 +1165,10 @@ pub(crate) mod tests {
         },
         transaction::error::TransactionRejectionReason,
     };
-    use super::*;
-    use crate::{
-        block::BlockBuilder,
-        tx::{AcceptedTransaction, tests::*},
+    use std::{
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
     };
     fn sample_certified_merge_execution_entry(epoch: u64, result_ok: bool) -> MergeLedgerEntry {
         let network_id = NetworkId::from_genesis_hash(

@@ -4,14 +4,7 @@
 //! verification flows described in `specs/sorafs_gateway_profile.md`.
 //! Authenticated proof-stream coverage lives in Torii finalized-state tests, where
 //! finalized ledger state and its cursor are available as genuine trust inputs.
-use std::{
-    collections::{BTreeMap, HashMap},
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::OnceLock,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
+use crate::sorafs_gateway_capability_refusal::{self, CapabilityRefusalScenario};
 use blake3::Hasher;
 use eyre::{Result as EyreResult, WrapErr, eyre};
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
@@ -32,7 +25,14 @@ use sorafs_manifest::{
     por::{PorChallengeV1, PorProofV1, derive_challenge_id, derive_challenge_seed},
     validation::{PinPolicyConstraints, validate_manifest},
 };
-use crate::sorafs_gateway_capability_refusal::{self, CapabilityRefusalScenario};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::OnceLock,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 /// Describes a single replay scenario (positive or negative).
 #[derive(Debug, Clone)]
 struct ReplayScenario {

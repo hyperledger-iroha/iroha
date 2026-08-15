@@ -11,13 +11,6 @@
     clippy::redundant_closure_for_method_calls,
     clippy::too_many_lines
 )]
-use std::{
-    fs,
-    io::Read as _,
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
 use clap::Parser;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
@@ -49,6 +42,13 @@ use iroha_torii_shared::FeeQuoteResponse;
 use iroha_version::codec::EncodeVersioned;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
+use std::{
+    fs,
+    io::Read as _,
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
+};
 use url::Url;
 use zeroize::Zeroizing;
 const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
@@ -606,8 +606,8 @@ fn build_native_upload_transaction_plan(
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
     use super::*;
+    use std::num::NonZeroU64;
     fn test_network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()

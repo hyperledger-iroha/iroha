@@ -1,19 +1,19 @@
 //! This module contains [`Domain`](`crate::domain::Domain`) structure
 //! and related implementations and trait implementations.
-use std::{format, str::FromStr, string::String, vec::Vec};
-use derive_more::Display;
-use iroha_data_model_derive::{IdEqOrdHash, model};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 pub use self::model::*;
 use crate::{
     HasMetadata, Identifiable, Name, Registered, Registrable, error::ParseError,
     metadata::Metadata, name, prelude::*, sorafs_uri::SorafsUri,
 };
+use derive_more::Display;
+use iroha_data_model_derive::{IdEqOrdHash, model};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{format, str::FromStr, string::String, vec::Vec};
 #[model]
 mod model {
-    use getset::Getters;
     use super::*;
+    use getset::Getters;
     /// Identification of a [`Domain`].
     #[derive(
         Debug,

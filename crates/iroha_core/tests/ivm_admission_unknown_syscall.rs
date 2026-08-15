@@ -1,6 +1,5 @@
 //! Admission-time guard: reject IVM programs that invoke unknown syscalls under ABI v1.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 use iroha_core::{
     governance::manifest::LaneManifestRegistry, kura::Kura, prelude::World,
     query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache, state::State,
@@ -13,6 +12,7 @@ use iroha_data_model::{
 };
 use ivm::{ProgramMetadata, encoding, instruction};
 use nonzero_ext::nonzero;
+use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 10_000;
 fn checked_random_unknown_syscall_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked unknown syscall admission keypair")

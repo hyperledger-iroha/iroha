@@ -3,11 +3,6 @@
 //! This module is compiled by the release-only generator and included directly by
 //! the grouped integration tests. Generated JSON is never read while constructing
 //! either fixture.
-use std::{
-    any::type_name,
-    collections::BTreeSet,
-    fmt::{Debug, Write as _},
-};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
     NetworkId,
@@ -64,6 +59,11 @@ use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{DecodeFlagsGuard, DecodeFromSlice},
     json::{self, JsonDeserialize, JsonSerialize, Value},
+};
+use std::{
+    any::type_name,
+    collections::BTreeSet,
+    fmt::{Debug, Write as _},
 };
 /// Odd network marker used by both V1 fixture documents.
 ///

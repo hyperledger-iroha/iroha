@@ -1,11 +1,11 @@
 //! Runtime upgrade lifecycle events.
-use iroha_data_model_derive::model;
 pub use self::model::*;
 use super::*;
+use iroha_data_model_derive::model;
 #[model]
 mod model {
-    use getset::Getters;
     use super::*;
+    use getset::Getters;
     /// Runtime upgrade lifecycle events (proposal/activation/cancellation).
     #[derive(
         Debug,

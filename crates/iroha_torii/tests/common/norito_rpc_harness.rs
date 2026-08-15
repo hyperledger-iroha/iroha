@@ -1,12 +1,4 @@
 //! Shared harness for Norito-RPC ingress/capability tests to avoid ad-hoc runtimes.
-use std::{
-    num::NonZeroU64,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{SystemTime, UNIX_EPOCH},
-};
 use axum::{
     body::Body,
     extract::connect_info::ConnectInfo,
@@ -34,6 +26,14 @@ use iroha_logger::Level;
 use iroha_torii::{OnlinePeersProvider, Torii};
 use iroha_torii_shared::uri;
 use iroha_version::codec::EncodeVersioned;
+use std::{
+    num::NonZeroU64,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tower::ServiceExt as _;
 #[allow(dead_code)]
 const NORITO_MIME: &str = "application/x-norito";

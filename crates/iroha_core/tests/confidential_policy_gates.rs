@@ -1,6 +1,5 @@
 //! Tests covering confidential policy gating for transparent asset instructions.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::num::NonZeroU64;
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
@@ -24,6 +23,7 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use std::num::NonZeroU64;
 fn checked_random_confidential_policy_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked confidential policy keypair")
 }

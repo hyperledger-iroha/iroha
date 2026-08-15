@@ -1,9 +1,9 @@
-use iroha_crypto::Hash;
 use super::*;
 use crate::kaigi::{
     KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
     KaigiRelayManifest, KaigiRelayRegistration, NewKaigi,
 };
+use iroha_crypto::Hash;
 isi! {
     /// Create a new Kaigi session anchored to a domain.
     pub struct CreateKaigi {
@@ -211,15 +211,15 @@ impl_kaigi_decode_from_slice!(ReportKaigiRelayHealth {
 });
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-    use iroha_crypto::{Algorithm, KeyPair};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         domain::DomainId,
         kaigi::{KaigiPrivacyMode, KaigiRelayHop, KaigiRoomPolicy},
         name::Name,
     };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use norito::core::DecodeFromSlice;
+    use std::str::FromStr as _;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked Kaigi ISI fixture keypair");

@@ -1,18 +1,18 @@
 //! Crate with various Iroha futures
 pub mod supervisor;
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::atomic::{AtomicU64, Ordering},
-    task::{Context, Poll},
-    time::{Duration, Instant},
-};
 pub use iroha_derive::telemetry_future;
 use iroha_logger::telemetry::{Event as Telemetry, Fields as TelemetryFields};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     derive::{JsonDeserialize, JsonSerialize},
     json::Value,
+};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::atomic::{AtomicU64, Ordering},
+    task::{Context, Poll},
+    time::{Duration, Instant},
 };
 /// Future which sends info with telemetry about number and length of polls
 #[derive(Debug, Clone, Copy)]
@@ -129,10 +129,10 @@ impl<F: Future> Future for TelemetryFuture<F> {
 }
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use super::*;
     use iroha_logger::telemetry::{Event as Telemetry, Fields as TelemetryFields};
     use norito::json::Value;
-    use super::*;
+    use std::time::Duration;
     fn telemetry_event(id: Value, duration: Value) -> Telemetry {
         Telemetry {
             target: "iroha_futures",

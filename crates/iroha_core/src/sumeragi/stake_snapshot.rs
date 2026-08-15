@@ -1,5 +1,7 @@
 //! Stake snapshot helpers for commit-roster validation.
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use crate::state::StateView;
+use crate::state::{WorldReadOnly, public_lane_validator_record_matches_key};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::consensus_v2,
@@ -11,9 +13,7 @@ use iroha_primitives::numeric::Quantity;
 use iroha_primitives::numeric::{Numeric, RoundingMode};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
-#[cfg(test)]
-use crate::state::StateView;
-use crate::state::{WorldReadOnly, public_lane_validator_record_matches_key};
+use std::collections::{BTreeMap, BTreeSet};
 /// Stake snapshot entry for a single validator.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct CommitStakeSnapshotEntry {
@@ -358,7 +358,12 @@ fn commit_stake_snapshot_from_exact_map(
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
@@ -367,12 +372,7 @@ mod tests {
         prelude::PeerId,
     };
     use iroha_primitives::numeric::{Numeric, Quantity};
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
+    use std::collections::BTreeSet;
     #[derive(Encode)]
     struct ForgedCommitStakeSnapshotEntry {
         peer_id: PeerId,

@@ -7,15 +7,15 @@
 //! relying on out-of-band config.
 //! Public pin admission fees are computed here, while provider credit deposits,
 //! settlement, and slashing remain separate authority-checked ledger flows.
-use std::collections::BTreeSet;
-use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
 use crate::{
     metadata::Metadata,
     sorafs::{capacity::ProviderId, pin_registry::StorageClass},
 };
+use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeSet;
+use thiserror::Error;
 /// First-version schema identifier for [`PricingScheduleRecord`].
 pub const PRICING_SCHEDULE_VERSION_V1: u16 = 1;
 /// Seconds used for billing a "month" when converting average utilisation to GiB·month.
@@ -1069,8 +1069,8 @@ fn add_mod(left: u128, right: u128, modulus: u128) -> (u128, bool) {
 }
 #[cfg(test)]
 mod tests {
-    use std::convert::TryFrom;
     use super::*;
+    use std::convert::TryFrom;
     fn quantity_nanos(value: u128) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, XOR_QUANTITY_SCALE))
             .expect("u128 nano-XOR fixture fits Quantity")

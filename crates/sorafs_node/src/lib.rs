@@ -405,7 +405,9 @@ use capacity::{
     CapacityReconciliationOutcomeV1, CapacityUsageSnapshot,
 };
 #[cfg(test)]
-use capacity::{DeclarationWindow, FinalizedReplicationBindingV1, ReplicationPlan, ReplicationRelease};
+use capacity::{
+    DeclarationWindow, FinalizedReplicationBindingV1, ReplicationPlan, ReplicationRelease,
+};
 use config::{GcConfig, RepairConfig, StorageConfig};
 #[cfg(test)]
 use iroha_data_model::sorafs::pin_registry::{PinManifestFinalizedRecordV1, PinStatus};
@@ -1567,10 +1569,9 @@ impl PrivacyPublicationAuthorizationV1 {
     }
     /// Reconstruct a checked authorization from its exact public runtime fields.
     ///
-    /// This constructor exists for canonical process-boundary transports. It
-    /// accepts no credential or private evidence and revalidates the lease,
-    /// finalized query lineage, release sequence, and payload digest before a
-    /// decoded publication request reaches a deployment-owned provider.
+    /// This constructor exists for canonical process-boundary transports. It accepts no credential
+    /// or private evidence and revalidates the lease, finalized query lineage, release sequence,
+    /// and payload digest before a decoded publication request reaches a deployment-owned provider.
     ///
     /// # Errors
     ///
@@ -2240,10 +2241,9 @@ impl FencedPrivacyPublicationReceiptV1 {
     }
     /// Build a receipt for an identity already included by an earlier lease.
     ///
-    /// The provider may call this constructor only after atomically finding the
-    /// exact stable identity, verifying that its release and payload evidence do
-    /// not conflict, and reading back an authoritative head containing the
-    /// original inclusion head without appending.
+    /// The provider may call this constructor only after atomically finding the exact stable
+    /// identity, verifying that its release and payload evidence do not conflict, and reading back
+    /// an authoritative head containing the original inclusion head without appending.
     ///
     /// # Errors
     ///
@@ -2388,30 +2388,26 @@ pub trait FencedTransparencyPublisherV1: Send + Sync + std::fmt::Debug {
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
     /// Atomically compare the target head, fence, append, read back, and prove inclusion.
     ///
-    /// The provider must retain and return the original receipt when the exact
-    /// same request digest and request are retried, even after later appends. A
-    /// request for an absent stable scope with an obsolete fencing token must return
-    /// [`FencedTransparencyPublishErrorV1::StaleFencingToken`], while a current
-    /// token paired with a substituted predecessor must return
-    /// [`FencedTransparencyPublishErrorV1::CompareConflict`]. Success is valid
-    /// only after the append, exact readback, and target-head inclusion happen
-    /// as one atomic target-owned operation.
+    /// The provider must retain and return the original receipt when the exact same request digest
+    /// and request are retried, even after later appends. A request for an absent stable scope with
+    /// an obsolete fencing token must return
+    /// [`FencedTransparencyPublishErrorV1::StaleFencingToken`], while a current token paired with a
+    /// substituted predecessor must return [`FencedTransparencyPublishErrorV1::CompareConflict`].
+    /// Success is valid only after the append, exact readback, and target-head inclusion happen as
+    /// one atomic target-owned operation.
     ///
-    /// Before comparing the predecessor or fencing token, the target must
-    /// atomically look up [`FencedPrivacyPublicationRequestV1::publication_scope`].
-    /// An absent scope is appended together with a durable mapping from that
-    /// scope to the stable idempotency digest, payload/release evidence, and
-    /// inclusion head. An identical stable identity returns
-    /// [`FencedPrivacyPublicationDispositionV1::AlreadyIncluded`] without an
-    /// append, even under a different lease, replica, predecessor, or restored
-    /// local root. A scope mapped to different evidence returns
-    /// [`FencedTransparencyPublishErrorV1::PublicationConflict`].
+    /// Before comparing the predecessor or fencing token, the target must atomically look up
+    /// [`FencedPrivacyPublicationRequestV1::publication_scope`]. An absent scope is appended
+    /// together with a durable mapping from that scope to the stable idempotency digest,
+    /// payload/release evidence, and inclusion head. An identical stable identity returns
+    /// [`FencedPrivacyPublicationDispositionV1::AlreadyIncluded`] without an append, even under a
+    /// different lease, replica, predecessor, or restored local root. A scope mapped to different
+    /// evidence returns [`FencedTransparencyPublishErrorV1::PublicationConflict`].
     ///
     /// # Errors
     ///
-    /// Returns a stable, payload-free failure when qualification, validation,
-    /// conflict detection, fencing, compare-and-append, readback, or inclusion
-    /// proof cannot complete.
+    /// Returns a stable, payload-free failure when qualification, validation, conflict detection,
+    /// fencing, compare-and-append, readback, or inclusion proof cannot complete.
     fn compare_and_append_privacy(
         &self,
         request: &FencedPrivacyPublicationRequestV1,
@@ -2679,8 +2675,7 @@ pub enum GovernancePublishError {
     #[error("{0}")]
     Other(String),
 }
-/// One canonical publication-authority generation read through the retained
-/// Governance DAG root.
+/// One canonical publication-authority generation read through the retained Governance DAG root.
 #[derive(Debug, PartialEq, Eq)]
 pub struct GovernanceDagPublicationSnapshotV1 {
     canonical_bytes: Vec<u8>,
@@ -3201,9 +3196,8 @@ pub trait RepairOrchestrator: Send + Sync + std::fmt::Debug {
 }
 /// Runtime-only dependencies supplied by the embedding daemon.
 ///
-/// Secret-bearing providers are deliberately absent from [`StorageConfig`].
-/// This container records only opaque service handles and never formats their
-/// implementation state.
+/// Secret-bearing providers are deliberately absent from [`StorageConfig`]. This container records
+/// only opaque service handles and never formats their implementation state.
 #[derive(Clone, Default)]
 pub struct NodeRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn ModerationQuarantineKeyWrapper>>,
@@ -4920,8 +4914,7 @@ pub enum NodeInitError {
         /// Validation or I/O diagnostic.
         message: String,
     },
-    /// The configured public hedging/billing service policy could not be read
-    /// or validated.
+    /// The configured public hedging/billing service policy could not be read or validated.
     #[error(
         "failed to load SoraFS hedging/billing service policy `{path}`: {message}",
         path = path.display()
@@ -5403,14 +5396,12 @@ impl NodeHandle {
             NodeRuntimeDeps::default().with_moderation_quarantine_key_wrapper(key_wrapper),
         )
     }
-    /// Construct a new handle with explicit policies and deployment-owned
-    /// runtime dependencies.
+    /// Construct a new handle with explicit policies and deployment-owned runtime dependencies.
     ///
     /// # Errors
     ///
-    /// Returns an error when a configured service is missing its runtime
-    /// dependency, a dependency exposes an invalid public handle, or durable
-    /// state cannot be trusted.
+    /// Returns an error when a configured service is missing its runtime dependency, a dependency
+    /// exposes an invalid public handle, or durable state cannot be trusted.
     pub fn try_new_with_policies_and_runtime_deps(
         config: StorageConfig,
         repair_config: RepairConfig,
@@ -6350,16 +6341,14 @@ impl NodeHandle {
     /// Read one typed runtime-DAG generation authenticated by the exact sealed
     /// producer checkpoint retained by this node.
     ///
-    /// This boundary is read-only: it brackets the typed head/index read with
-    /// sealed checkpoint and intent checks, but never performs recovery or
-    /// producer reconciliation. An authenticated genesis checkpoint returns
-    /// `None`.
+    /// This boundary is read-only: it brackets the typed head/index read with sealed checkpoint and
+    /// intent checks, but never performs recovery or producer reconciliation. An authenticated
+    /// genesis checkpoint returns `None`.
     ///
     /// # Errors
     ///
-    /// Returns an error when the configured root or runtime providers are
-    /// absent, substituted, unqualified, or disagree with the typed committed
-    /// generation and sealed producer checkpoint.
+    /// Returns an error when the configured root or runtime providers are absent, substituted,
+    /// unqualified, or disagree with the typed committed generation and sealed producer checkpoint.
     pub fn governance_dag_runtime_snapshot(
         &self,
     ) -> Result<Option<GovernanceDagRuntimeSnapshotV1>, GovernancePublishError> {
@@ -6406,9 +6395,8 @@ impl NodeHandle {
                 })
             })
     }
-    /// Install the service-owned authenticated mirror-read capability exactly
-    /// once across this node handle and every clone sharing its installation
-    /// slot.
+    /// Install the service-owned authenticated mirror-read capability exactly once across this node
+    /// handle and every clone sharing its installation slot.
     ///
     /// The path-free capability binding must match this node's logical and
     /// physical producer root plus every retained signer and checkpoint-store
@@ -6568,10 +6556,9 @@ impl NodeHandle {
     ///
     /// # Errors
     ///
-    /// Returns `Ok(None)` when no mirror capability was installed or when the
-    /// installed capability authenticates the empty pre-checkpoint bootstrap
-    /// state. Returns an error when its retained roots, typed store, sealed
-    /// intent/checkpoint, or provider binding changed.
+    /// Returns `Ok(None)` when no mirror capability was installed or when the installed capability
+    /// authenticates the empty pre-checkpoint bootstrap state. Returns an error when its retained
+    /// roots, typed store, sealed intent/checkpoint, or provider binding changed.
     pub fn governance_dag_mirror_snapshot(
         &self,
     ) -> Result<Option<GovernanceDagMirrorSnapshotV1>, GovernanceDagServiceError> {
@@ -6582,18 +6569,16 @@ impl NodeHandle {
     }
     /// Read one Governance DAG file through the node's retained filesystem root.
     ///
-    /// Every path component is resolved relative to the descriptor-pinned
-    /// Governance root without following links or reparse points. The opened
-    /// regular file, its parent bindings, and the root identity are revalidated
-    /// after the bounded read, so callers never authenticate one path and read
-    /// a concurrently substituted object.
+    /// Every path component is resolved relative to the descriptor-pinned Governance root without
+    /// following links or reparse points. The opened regular file, its parent bindings, and the
+    /// root identity are revalidated after the bounded read, so callers never authenticate one path
+    /// and read a concurrently substituted object.
     ///
     /// # Errors
     ///
-    /// Returns an error when Governance DAG storage is not configured, the path
-    /// is absolute or non-canonical, any retained filesystem identity or access
-    /// policy changed, the target is not a direct single-link regular file, or
-    /// its contents exceed `max_bytes`.
+    /// Returns an error when Governance DAG storage is not configured, the path is absolute or
+    /// non-canonical, any retained filesystem identity or access policy changed, the target is not
+    /// a direct single-link regular file, or its contents exceed `max_bytes`.
     pub fn read_governance_dag_file(
         &self,
         relative_path: &Path,
@@ -7369,9 +7354,8 @@ impl NodeHandle {
     ///
     /// # Errors
     ///
-    /// Returns an error if startup pinned a different publisher, the publisher
-    /// lock is poisoned, or a pending artifact cannot be published and durably
-    /// acknowledged.
+    /// Returns an error if startup pinned a different publisher, the publisher lock is poisoned, or
+    /// a pending artifact cannot be published and durably acknowledged.
     pub fn try_set_governance_publisher(
         &self,
         publisher: Arc<dyn GovernancePublisher>,
@@ -7405,8 +7389,7 @@ impl NodeHandle {
     /// Remove any unpinned governance publisher.
     ///
     /// Startup-installed signed publishers cannot be cleared; use
-    /// [`Self::try_clear_governance_publisher`] when the caller needs the
-    /// explicit failure.
+    /// [`Self::try_clear_governance_publisher`] when the caller needs the explicit failure.
     pub fn clear_governance_publisher(&self) {
         if let Err(err) = self.try_clear_governance_publisher() {
             iroha_logger::error!(%err, "failed to clear SoraFS governance publisher");
@@ -7991,10 +7974,9 @@ impl NodeHandle {
     }
     /// Admit, persist, and publish an externally authorized reputation snapshot.
     ///
-    /// The local snapshot, head linkage, replay event, and publication intent
-    /// are committed together before external delivery. Retrying the exact same
-    /// snapshot id is idempotent and retries publication; conflicting ids or
-    /// non-monotonic heads are rejected.
+    /// The local snapshot, head linkage, replay event, and publication intent are committed
+    /// together before external delivery. Retrying the exact same snapshot id is idempotent and
+    /// retries publication; conflicting ids or non-monotonic heads are rejected.
     pub fn publish_signed_reputation_snapshot(
         &self,
         envelope: SignedReputationSnapshotV1,
@@ -8360,8 +8342,7 @@ impl NodeHandle {
     }
     /// Derive and publish a proof-token issuance summary from URL-safe base64.
     ///
-    /// This is the transport-friendly counterpart to
-    /// [`Self::publish_proof_token_frame_issuance`].
+    /// This is the transport-friendly counterpart to [`Self::publish_proof_token_frame_issuance`].
     pub fn publish_proof_token_base64_issuance(
         &self,
         token_b64: &str,
@@ -8530,10 +8511,9 @@ impl NodeHandle {
     }
     /// Build and publish a transparency cycle from locally recorded source entries.
     ///
-    /// The worker selects retained source entries whose occurrence timestamps
-    /// fall inside the requested cycle window, sorts them deterministically,
-    /// assigns stable entry ids and sequence numbers, and publishes the
-    /// resulting `ModerationLedgerCyclePublicationV1`.
+    /// The worker selects retained source entries whose occurrence timestamps fall inside the
+    /// requested cycle window, sorts them deterministically, assigns stable entry ids and sequence
+    /// numbers, and publishes the resulting `ModerationLedgerCyclePublicationV1`.
     pub fn publish_transparency_ledger_cycle_from_source_entries(
         &self,
         cycle_id: [u8; 16],
@@ -9026,10 +9006,9 @@ impl NodeHandle {
     }
     /// Build and publish a transparency cycle from privacy-safe moderation aggregates.
     ///
-    /// Aggregates are validated, required to fit inside the supplied cycle
-    /// window, sorted deterministically by source window and aggregate id, then
-    /// converted into `PrivacyAggregate` ledger entries before being published
-    /// through the configured governance pipeline.
+    /// Aggregates are validated, required to fit inside the supplied cycle window, sorted
+    /// deterministically by source window and aggregate id, then converted into `PrivacyAggregate`
+    /// ledger entries before being published through the configured governance pipeline.
     #[cfg(test)]
     fn publish_privacy_aggregate_cycle(
         &self,
@@ -9181,10 +9160,9 @@ impl NodeHandle {
     }
     /// Build and publish a privacy aggregate cycle from locally recorded source events.
     ///
-    /// The worker filters recorded events to the requested cycle window, applies
-    /// suppression/noise policy from `config`, builds aggregate payloads, and
-    /// publishes the resulting transparency cycle through
-    /// [`Self::publish_privacy_aggregate_cycle`].
+    /// The worker filters recorded events to the requested cycle window, applies suppression/noise
+    /// policy from `config`, builds aggregate payloads, and publishes the resulting transparency
+    /// cycle through [`Self::publish_privacy_aggregate_cycle`].
     #[cfg(test)]
     fn publish_privacy_aggregate_cycle_from_source_events(
         &self,
@@ -9230,9 +9208,8 @@ impl NodeHandle {
     }
     /// Publish exactly one direct-successor privacy aggregate cycle.
     ///
-    /// Window selection depends only on the governed activation/cadence and the
-    /// durable release cursor. Source-event presence never affects which cycle
-    /// is selected.
+    /// Window selection depends only on the governed activation/cadence and the durable release
+    /// cursor. Source-event presence never affects which cycle is selected.
     #[cfg(test)]
     fn publish_due_privacy_aggregate_cycle_from_source_events(
         &self,
@@ -9986,10 +9963,9 @@ impl NodeHandle {
     }
     /// Publish the next due privacy aggregate cycle using storage configuration.
     ///
-    /// The complete public policy and composition budget come from
-    /// `iroha_config`; hidden cycle randomness comes exclusively from the
-    /// runtime threshold-PRF provider. The predecessor and trusted evaluation
-    /// time are derived inside the node; callers supply only the expected
+    /// The complete public policy and composition budget come from `iroha_config`; hidden cycle
+    /// randomness comes exclusively from the runtime threshold-PRF provider. The predecessor and
+    /// trusted evaluation time are derived inside the node; callers supply only the expected
     /// direct-successor cycle and a bounded idempotency key.
     pub fn publish_due_configured_privacy_aggregate_cycle_from_source_events(
         &self,
@@ -10102,20 +10078,17 @@ impl NodeHandle {
     }
     /// Return the immutable public trust policy loaded for reputation admission.
     ///
-    /// The policy contains no signing material. Exposing the same `Arc` lets a
-    /// supervised committed projector bind publication verification to the
-    /// exact policy already admitted during node startup, avoiding a competing
-    /// file read or divergent policy authority.
+    /// The policy contains no signing material. Exposing the same `Arc` lets a supervised committed
+    /// projector bind publication verification to the exact policy already admitted during node
+    /// startup, avoiding a competing file read or divergent policy authority.
     #[must_use]
     pub fn reputation_trust_policy(&self) -> Option<Arc<ReputationSnapshotTrustPolicyV1>> {
         self.reputation_trust_policy.clone()
     }
-    /// Return the immutable public trust policy loaded for signed hedging-feed
-    /// admission.
+    /// Return the immutable public trust policy loaded for signed hedging-feed admission.
     ///
-    /// A supervised billing projector reuses this exact `Arc` so feed
-    /// validation and billing period closure cannot observe divergent policy
-    /// files.
+    /// A supervised billing projector reuses this exact `Arc` so feed validation and billing period
+    /// closure cannot observe divergent policy files.
     #[must_use]
     pub fn hedging_feed_trust_policy(&self) -> Option<Arc<HedgingFeedTrustPolicyV1>> {
         self.hedging_feed_trust_policy.clone()
@@ -10370,11 +10343,10 @@ impl NodeHandle {
     }
     /// Install or rotate the active externally anchored screening authority.
     ///
-    /// Reinstalling the byte-identical authority is idempotent. Policies with
-    /// an older issue timestamp, or a different digest at the same timestamp,
-    /// are rejected to prevent in-process rollback/equivocation. Operators must
-    /// reconstruct this non-secret authority from canonical `iroha_config`
-    /// inputs after every restart; it is never accepted from an HTTP request.
+    /// Reinstalling the byte-identical authority is idempotent. Policies with an older issue
+    /// timestamp, or a different digest at the same timestamp, are rejected to prevent in-process
+    /// rollback/equivocation. Operators must reconstruct this non-secret authority from canonical
+    /// `iroha_config` inputs after every restart; it is never accepted from an HTTP request.
     ///
     /// # Errors
     ///
@@ -10465,8 +10437,7 @@ impl NodeHandle {
             (None, Some(_)) | (Some(_), None) => false,
         }
     }
-    /// Return whether `candidate` is the exact runtime wrapper retained by this
-    /// node handle.
+    /// Return whether `candidate` is the exact runtime wrapper retained by this node handle.
     #[must_use]
     pub fn uses_moderation_quarantine_key_wrapper(
         &self,
@@ -10476,8 +10447,7 @@ impl NodeHandle {
             .as_ref()
             .is_some_and(|active| Arc::ptr_eq(&active.0, candidate))
     }
-    /// Return whether the configured privacy policy requires threshold-PRF
-    /// cycle outputs.
+    /// Return whether the configured privacy policy requires threshold-PRF cycle outputs.
     #[must_use]
     pub fn privacy_cycle_prf_required(&self) -> bool {
         self.config.privacy_aggregate_schedule().is_some()
@@ -10524,24 +10494,21 @@ impl NodeHandle {
     }
     /// Revalidate the pinned signed Governance publisher and fused privacy target.
     ///
-    /// Torii and other prebuilt-node launchers call this before starting any
-    /// side-effectful worker. A configured Governance root must retain the exact
-    /// startup-installed publisher, signer, and producer checkpoint store. Both
-    /// providers are requalified and the sealed producer root is reconciled
-    /// live. Enabled privacy publication additionally requires both retained
-    /// target roles to match the exact configured handle, revision, and policy
-    /// digest. The authenticated reader must prove that every persisted cache
-    /// head and stable publication identity reaches the current target head.
-    /// Disabled privacy rejects a configured or retained fused role.
+    /// Torii and other prebuilt-node launchers call this before starting any side-effectful worker.
+    /// A configured Governance root must retain the exact startup-installed publisher, signer, and
+    /// producer checkpoint store. Both providers are requalified and the sealed producer root is
+    /// reconciled live. Enabled privacy publication additionally requires both retained target
+    /// roles to match the exact configured handle, revision, and policy digest. The authenticated
+    /// reader must prove that every persisted cache head and stable publication identity reaches
+    /// the current target head. Disabled privacy rejects a configured or retained fused role.
     ///
     /// # Errors
     ///
-    /// Returns [`GovernancePublishError`] when the configured/retained role set is
-    /// incomplete or unexpected, the pinned publisher was removed or
-    /// substituted, the signer, checkpoint store, or either privacy provider is
-    /// unavailable, stale, revoked, substituted, or test-marked, the live
-    /// bindings differ, the local producer root does not match its sealed
-    /// checkpoint, or persisted target ancestry/inclusion cannot be authenticated.
+    /// Returns [`GovernancePublishError`] when the configured/retained role set is incomplete or
+    /// unexpected, the pinned publisher was removed or substituted, the signer, checkpoint store,
+    /// or either privacy provider is unavailable, stale, revoked, substituted, or test-marked, the
+    /// live bindings differ, the local producer root does not match its sealed checkpoint, or
+    /// persisted target ancestry/inclusion cannot be authenticated.
     pub fn revalidate_fenced_privacy_runtime(&self) -> Result<(), GovernancePublishError> {
         match (
             self.config.governance_dir(),
@@ -10689,18 +10656,16 @@ impl NodeHandle {
     }
     /// Authenticate and durably record one governed moderation screening result.
     ///
-    /// The result must be either a canonical runner-signed result under a
-    /// single-signer policy or an exact committee aggregate reconstructed from
-    /// its bounded signed member inventory. The durable snapshot atomically
-    /// binds the idempotency key, authenticated authority digest, and resulting
-    /// screening record so replay under a different key fails closed.
+    /// The result must be either a canonical runner-signed result under a single-signer policy or
+    /// an exact committee aggregate reconstructed from its bounded signed member inventory. The
+    /// durable snapshot atomically binds the idempotency key, authenticated authority digest, and
+    /// resulting screening record so replay under a different key fails closed.
     ///
     /// # Errors
     ///
-    /// Returns an error if governance signatures, runner authorization,
-    /// subject/evidence bindings, score/verdict consistency, freshness,
-    /// revocation, committee uniqueness/quorum, or replay validation fails, or
-    /// if the authenticated projection cannot be durably committed.
+    /// Returns an error if governance signatures, runner authorization, subject/evidence bindings,
+    /// score/verdict consistency, freshness, revocation, committee uniqueness/quorum, or replay
+    /// validation fails, or if the authenticated projection cannot be durably committed.
     pub fn record_authenticated_moderation_screening_result(
         &self,
         request: ModerationAuthenticatedScreeningRequestV1,
@@ -10770,13 +10735,11 @@ impl NodeHandle {
     }
     /// Record one deterministic local moderation screening projection.
     ///
-    /// This unsigned projection hook exists for tests and development tooling.
-    /// Production request handlers must use
-    /// [`Self::record_authenticated_moderation_screening_result`].
+    /// This unsigned projection hook exists for tests and development tooling. Production request
+    /// handlers must use [`Self::record_authenticated_moderation_screening_result`].
     ///
-    /// `quarantine` and `escalate` verdicts also create a pending quarantine
-    /// queue record. Successful updates are persisted to the local checkpoint
-    /// when SoraFS storage is enabled.
+    /// `quarantine` and `escalate` verdicts also create a pending quarantine queue record.
+    /// Successful updates are persisted to the local checkpoint when SoraFS storage is enabled.
     ///
     /// # Errors
     ///
@@ -10821,8 +10784,7 @@ impl NodeHandle {
     }
     /// Mark a pending local quarantine record as reviewed.
     ///
-    /// Successful updates are persisted to the local checkpoint when SoraFS
-    /// storage is enabled.
+    /// Successful updates are persisted to the local checkpoint when SoraFS storage is enabled.
     ///
     /// # Errors
     ///
@@ -10866,14 +10828,12 @@ impl NodeHandle {
     }
     /// Release a reviewed local quarantine record.
     ///
-    /// Successful updates are persisted to the local checkpoint when SoraFS
-    /// storage is enabled.
+    /// Successful updates are persisted to the local checkpoint when SoraFS storage is enabled.
     ///
     /// # Errors
     ///
-    /// Returns an error if the quarantine id is unknown, the record has not
-    /// been reviewed, the transition is invalid, or the runtime lock is
-    /// poisoned.
+    /// Returns an error if the quarantine id is unknown, the record has not been reviewed, the
+    /// transition is invalid, or the runtime lock is poisoned.
     pub fn release_moderation_quarantine_record(
         &self,
         input: ModerationQuarantineReleaseInput,
@@ -10973,8 +10933,7 @@ impl NodeHandle {
     ///
     /// # Errors
     ///
-    /// Returns an error if the snapshot is internally inconsistent or the
-    /// runtime lock is poisoned.
+    /// Returns an error if the snapshot is internally inconsistent or the runtime lock is poisoned.
     pub fn restore_moderation_screening_snapshot(
         &self,
         snapshot: ModerationScreeningSnapshot,
@@ -11268,17 +11227,15 @@ impl NodeHandle {
     }
     /// Rewrap one object's DEK under the wrapper's current active key.
     ///
-    /// The injected wrapper must remain able to unwrap the historical key
-    /// handle stored in the object envelope. Ciphertext chunks, object id, and
-    /// the durable index stay byte-identical; only the context-bound wrapped
-    /// DEK and its non-secret key handle are atomically replaced.
+    /// The injected wrapper must remain able to unwrap the historical key handle stored in the
+    /// object envelope. Ciphertext chunks, object id, and the durable index stay byte-identical;
+    /// only the context-bound wrapped DEK and its non-secret key handle are atomically replaced.
     ///
     /// # Errors
     ///
-    /// Returns an error if storage or the runtime PKCS#11/KMS wrapper is
-    /// unavailable or unqualified, the object is missing, old/new key
-    /// operations fail, the replacement cannot be authenticated, or the
-    /// atomic write fails.
+    /// Returns an error if storage or the runtime PKCS#11/KMS wrapper is unavailable or
+    /// unqualified, the object is missing, old/new key operations fail, the replacement cannot be
+    /// authenticated, or the atomic write fails.
     pub fn rewrap_moderation_quarantine_object_dek(
         &self,
         quarantine_id: [u8; 16],
@@ -11446,10 +11403,9 @@ impl NodeHandle {
     }
     /// Create or return a payload-free local evidence viewer session record.
     ///
-    /// The session is bound to an existing encrypted quarantine object by
-    /// object id and payload digest. The request is rejected if it includes raw
-    /// evidence, signed URLs, session tokens, watermark secrets, or a session
-    /// duration longer than the local short-lived window.
+    /// The session is bound to an existing encrypted quarantine object by object id and payload
+    /// digest. The request is rejected if it includes raw evidence, signed URLs, session tokens,
+    /// watermark secrets, or a session duration longer than the local short-lived window.
     ///
     /// # Errors
     ///
@@ -11570,9 +11526,8 @@ impl NodeHandle {
     ///
     /// # Errors
     ///
-    /// Returns an error if the snapshot is internally inconsistent, references
-    /// missing quarantine object state, cannot be persisted, or the state lock is
-    /// poisoned.
+    /// Returns an error if the snapshot is internally inconsistent, references missing quarantine
+    /// object state, cannot be persisted, or the state lock is poisoned.
     pub fn restore_moderation_evidence_viewer_snapshot(
         &self,
         snapshot: ModerationEvidenceViewerSnapshot,
@@ -11633,10 +11588,9 @@ impl NodeHandle {
     }
     /// Build and record a payload-free evidence-viewer audit report as a transparency source entry.
     ///
-    /// The report is recorded into the local transparency source-entry worker
-    /// under the `EvidenceAccess` ledger kind. Existing transparency publication
-    /// APIs can then include it in a ledger cycle and publish that cycle through
-    /// the configured Governance DAG publisher.
+    /// The report is recorded into the local transparency source-entry worker under the
+    /// `EvidenceAccess` ledger kind. Existing transparency publication APIs can then include it in
+    /// a ledger cycle and publish that cycle through the configured Governance DAG publisher.
     ///
     /// # Errors
     ///
@@ -11664,11 +11618,10 @@ impl NodeHandle {
     }
     /// Publish the oldest due payload-free evidence-viewer audit report cycle.
     ///
-    /// The scheduler derives report windows from local viewer sessions and
-    /// access events, records the oldest due report as an `EvidenceAccess`
-    /// source entry, then publishes the matching transparency ledger cycle
-    /// through the configured governance pipeline. Duplicate cycle publication
-    /// is suppressed within the node runtime.
+    /// The scheduler derives report windows from local viewer sessions and access events, records
+    /// the oldest due report as an `EvidenceAccess` source entry, then publishes the matching
+    /// transparency ledger cycle through the configured governance pipeline. Duplicate cycle
+    /// publication is suppressed within the node runtime.
     ///
     /// # Errors
     ///
@@ -15088,9 +15041,8 @@ impl NodeHandle {
     }
     /// Durably acknowledge the exact next retained PoR reputation terminal.
     ///
-    /// The cursor advances in the same auxiliary checkpoint family as PoR
-    /// finalization. Missing durable storage, skipped or substituted work, and
-    /// checkpoint failures all fail closed.
+    /// The cursor advances in the same auxiliary checkpoint family as PoR finalization. Missing
+    /// durable storage, skipped or substituted work, and checkpoint failures all fail closed.
     pub fn acknowledge_por_reputation_terminal(
         &self,
         sequence: u64,
@@ -15214,10 +15166,9 @@ impl NodeHandle {
     }
     /// Reconcile one retained PoR terminal into the durable reputation outbox.
     ///
-    /// Admission happens before acknowledgement. If the process crashes or the
-    /// node checkpoint fails after admission, restart presents the identical
-    /// work again; the admission boundary must return `ExactReplay`, after
-    /// which the node durably advances its cursor.
+    /// Admission happens before acknowledgement. If the process crashes or the node checkpoint
+    /// fails after admission, restart presents the identical work again; the admission boundary
+    /// must return `ExactReplay`, after which the node durably advances its cursor.
     pub fn reconcile_next_por_reputation_terminal(
         &self,
         admission: &dyn reputation::runtime::ReputationNativeOutcomeAdmissionApiV1,
@@ -15699,8 +15650,7 @@ impl NodeHandle {
             .statuses_page(after_job_id, limit)
             .map_err(Into::into)
     }
-    /// Return exact payload-free provider-ingest outbox counts from one bounded
-    /// cached snapshot.
+    /// Return exact payload-free provider-ingest outbox counts from one bounded cached snapshot.
     pub fn finalized_provider_ingest_counts(
         &self,
     ) -> Result<ProviderIngestOutboxCountsV1, FinalizedProviderIngestError> {
@@ -15712,26 +15662,22 @@ impl NodeHandle {
     }
     /// Reserve this store incarnation's completed-Musubi capture coordinator.
     ///
-    /// The reservation is shared by every clone of this handle and is never
-    /// reset, including when the returned coordinator is dropped or its lazy
-    /// signed-reader binding is temporarily unavailable. A separately
-    /// constructed handle owns a distinct reservation. This call retains the
-    /// exact erased reader without consulting it, allowing height-zero daemon
-    /// startup to await genesis before the private coordinator binds a capture
-    /// session.
+    /// The reservation is shared by every clone of this handle and is never reset, including when
+    /// the returned coordinator is dropped or its lazy signed-reader binding is temporarily
+    /// unavailable. A separately constructed handle owns a distinct reservation. This call retains
+    /// the exact erased reader without consulting it, allowing height-zero daemon startup to await
+    /// genesis before the private coordinator binds a capture session.
     ///
-    /// The returned opaque coordinator intentionally has no public operational
-    /// surface: it cannot expose scanner pages, finalized claims, approval
-    /// requests, or any signing, journal, inventory, transaction, or registry
-    /// effect.
+    /// The returned opaque coordinator intentionally has no public operational surface: it cannot
+    /// expose scanner pages, finalized claims, approval requests, or any signing, journal,
+    /// inventory, transaction, or registry effect.
     ///
     /// # Errors
     ///
-    /// Returns an error when provider ingest is disabled, another caller
-    /// already consumed the tenure, the configured provider/network
-    /// identity is invalid, or the page bound is outside the hard finalized
-    /// limit. Once an enabled store's reservation is attempted, every failure
-    /// is non-resetting so a different reader cannot be substituted.
+    /// Returns an error when provider ingest is disabled, another caller already consumed the
+    /// tenure, the configured provider/network identity is invalid, or the page bound is outside
+    /// the hard finalized limit. Once an enabled store's reservation is attempted, every failure is
+    /// non-resetting so a different reader cannot be substituted.
     #[doc(hidden)]
     pub fn take_provider_ingest_completed_musubi_capture_coordinator(
         &self,
@@ -15927,10 +15873,9 @@ impl NodeHandle {
     }
     /// Ingest a manifest payload into the local storage backend.
     ///
-    /// This raw primitive exists for tests, bootstrap fixtures, and non-provider
-    /// internal artifacts. Production provider replication supplies an exact
-    /// [`ProviderIngestLocalStorageV1`] implementation to
-    /// [`Self::build_provider_ingest_runtime`].
+    /// This raw primitive exists for tests, bootstrap fixtures, and non-provider internal
+    /// artifacts. Production provider replication supplies an exact
+    /// [`ProviderIngestLocalStorageV1`] implementation to [`Self::build_provider_ingest_runtime`].
     pub fn ingest_manifest<R: Read>(
         &self,
         manifest: &ManifestV1,
@@ -16455,7 +16400,9 @@ mod tests {
         sample_verdict as por_sample_verdict,
     };
     use crate::repair_ledger_projection::RepairLedgerTaskProjectionBuilderV1;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature, SignatureOf};
+    use iroha_crypto::{
+        Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature, SignatureOf,
+    };
     use iroha_data_model::{
         block::BlockHeader,
         isi::{InstructionBox, sorafs::CompleteReplicationOrder},

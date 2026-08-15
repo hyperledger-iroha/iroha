@@ -1,13 +1,15 @@
 //! Durable, bounded, one-shot authorization state for native blind issuance.
 //!
-//! The file-backed implementation is the first-release production store. It
-//! persists one strict, versioned record per authorization with atomic
-//! replace-and-sync transitions. A held Unix advisory lock enforces exactly
-//! one live issuer process per directory without stale lock-file recovery.
-//! Reopen, crash recovery, and pruning stay within the configured count and
-//! byte budget without materializing secondary full-store batches.
-//! The directory and its ancestors are an authenticated local trust boundary
-//! and must not be writable by an attacker while the issuer is running.
+//! The file-backed implementation is the first-release production store. It persists one strict,
+//! versioned record per authorization with atomic replace-and-sync transitions. A held Unix
+//! advisory lock enforces exactly one live issuer process per directory without stale lock-file
+//! recovery. Reopen, crash recovery, and pruning stay within the configured count and byte budget
+//! without materializing secondary full-store batches. The directory and its ancestors are an
+//! authenticated local trust boundary and must not be writable by an attacker while the issuer is
+//! running.
+use super::codec::BLIND_ISSUANCE_RESPONSE_BYTES_V1;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -16,10 +18,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
-#[cfg(test)]
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use thiserror::Error;
-use super::codec::BLIND_ISSUANCE_RESPONSE_BYTES_V1;
 const STORE_RECORD_MAGIC_V1: [u8; 4] = *b"ILS1";
 const STORE_RECORD_VERSION_V1: u8 = 1;
 const STORE_RECORD_EXTENSION_V1: &str = ".bls1";
@@ -147,11 +146,10 @@ pub enum BootleLanternIssuanceClaimV1 {
 }
 /// Thread-safe persistence boundary for one-shot blind issuance.
 ///
-/// Every transition is atomic with respect to the authorization identifier.
-/// Implementations must never change `Processing`, `Completed`, or `Failed`
-/// back to `Fresh`. Completed same-request retries remain readable after
-/// authorization expiry until explicit height-based pruning reaches their
-/// configured retention horizon.
+/// Every transition is atomic with respect to the authorization identifier. Implementations must
+/// never change `Processing`, `Completed`, or `Failed` back to `Fresh`. Completed same-request
+/// retries remain readable after authorization expiry until explicit height-based pruning reaches
+/// their configured retention horizon.
 pub trait BootleLanternIssuanceStoreV1: Send + Sync {
     /// Register a newly generated authorization as fresh.
     fn register_fresh_v1(
@@ -175,9 +173,8 @@ pub trait BootleLanternIssuanceStoreV1: Send + Sync {
     ) -> Result<BootleLanternIssuancePreflightV1, BootleLanternIssuanceStoreErrorV1>;
     /// Atomically claim a fresh authorization for one exact request.
     ///
-    /// A completed retry for the same request returns the cached response even
-    /// after expiry. An in-flight retry returns
-    /// [`BootleLanternIssuanceStoreErrorV1::Busy`]. Every request
+    /// A completed retry for the same request returns the cached response even after expiry. An
+    /// in-flight retry returns [`BootleLanternIssuanceStoreErrorV1::Busy`]. Every request
     /// substitution and terminal failure returns
     /// [`BootleLanternIssuanceStoreErrorV1::AuthorizationConsumed`].
     fn claim_v1(
@@ -207,11 +204,10 @@ pub trait BootleLanternIssuanceStoreV1: Send + Sync {
     /// Irreversibly fail every issuance left in `Processing` by a recovered
     /// store at an authoritative committed height.
     ///
-    /// Implementations must validate the supplied height against every
-    /// record's issue height and every observed claim or terminal transition
-    /// before changing any record.
-    /// `Fresh`, `Completed`, and `Failed` records are never changed. Repeating
-    /// recovery at the same height is idempotent and returns zero.
+    /// Implementations must validate the supplied height against every record's issue height and
+    /// every observed claim or terminal transition before changing any record. `Fresh`,
+    /// `Completed`, and `Failed` records are never changed. Repeating recovery at the same height
+    /// is idempotent and returns zero.
     ///
     /// The default fails closed for test or adapter stores that do not persist
     /// recoverable processing state.
@@ -224,9 +220,8 @@ pub trait BootleLanternIssuanceStoreV1: Send + Sync {
     /// Remove only expired-fresh and terminal records whose retention horizon
     /// has been reached at the supplied authoritative height.
     ///
-    /// Processing records are never silently evicted. Callers must explicitly
-    /// resolve a recovered in-flight record to `Failed` before it can become
-    /// eligible for terminal pruning.
+    /// Processing records are never silently evicted. Callers must explicitly resolve a recovered
+    /// in-flight record to `Failed` before it can become eligible for terminal pruning.
     fn prune_v1(
         &self,
         authoritative_height: u64,
@@ -575,23 +570,20 @@ impl Drop for FileStoreDirectoryLeaseV1 {
 }
 /// Atomic, file-backed first-release issuance store.
 ///
-/// Each authorization is one `ILS1` file named by its lowercase hexadecimal
-/// identifier. Open rejects every unknown, non-regular, symlinked, oversized,
-/// truncated, non-canonical, or duplicate entry. State transitions write and
-/// sync a temporary file, atomically rename it, then sync both affected
-/// directories before reporting durable success. Open admits the configured
-/// count and aggregate byte footprint before allocating each record buffer;
-/// recovery and pruning stream one record at a time in identifier order.
+/// Each authorization is one `ILS1` file named by its lowercase hexadecimal identifier. Open
+/// rejects every unknown, non-regular, symlinked, oversized, truncated, non-canonical, or duplicate
+/// entry. State transitions write and sync a temporary file, atomically rename it, then sync both
+/// affected directories before reporting durable success. Open admits the configured count and
+/// aggregate byte footprint before allocating each record buffer; recovery and pruning stream one
+/// record at a time in identifier order.
 ///
-/// `Processing` records loaded by [`Self::open`] form the explicit recovery
-/// set. Claims started after open remain live and are not failed by a delayed
-/// recovery call; they enter the recovery set only if a later open observes
-/// them still in progress.
+/// `Processing` records loaded by [`Self::open`] form the explicit recovery set. Claims started
+/// after open remain live and are not failed by a delayed recovery call; they enter the recovery
+/// set only if a later open observes them still in progress.
 ///
-/// A process-local directory lease and a held Unix advisory lock reject every
-/// second live opener, including another process, without a stale-lock-file
-/// protocol. Non-Unix construction fails explicitly. Never place this store
-/// in an attacker-writable directory hierarchy.
+/// A process-local directory lease and a held Unix advisory lock reject every second live opener,
+/// including another process, without a stale-lock-file protocol. Non-Unix construction fails
+/// explicitly. Never place this store in an attacker-writable directory hierarchy.
 #[derive(Debug)]
 pub struct BootleLanternFileIssuanceStoreV1 {
     root: PathBuf,
@@ -613,10 +605,9 @@ impl BootleLanternFileIssuanceStoreV1 {
     ///
     /// # Errors
     ///
-    /// Rejects invalid configuration, every concurrent opener, untrusted entry
-    /// types, unknown names, stale malformed temporary files,
-    /// corrupt/non-canonical records, configured-capacity violations, and all
-    /// filesystem failures.
+    /// Rejects invalid configuration, every concurrent opener, untrusted entry types, unknown
+    /// names, stale malformed temporary files, corrupt/non-canonical records, configured-capacity
+    /// violations, and all filesystem failures.
     pub fn open(
         root: impl AsRef<Path>,
         config: BootleLanternIssuanceStoreConfigV1,
@@ -1951,8 +1942,8 @@ fn acquire_file_store_lease_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Barrier};
     use super::*;
+    use std::sync::{Arc, Barrier};
     const AUTHORIZATION_ID: [u8; 32] = [1; 32];
     const AUTHORIZATION_DIGEST: [u8; 32] = [2; 32];
     const REQUEST_DIGEST: [u8; 32] = [3; 32];

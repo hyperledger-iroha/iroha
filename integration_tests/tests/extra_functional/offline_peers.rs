@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Startup and operation with subsets of peers offline.
-use std::time::{Duration, Instant};
 use eyre::{OptionExt, Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -9,6 +8,7 @@ use iroha::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
+use std::time::{Duration, Instant};
 use tokio::{task::spawn_blocking, time::sleep};
 #[tokio::test]
 async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {

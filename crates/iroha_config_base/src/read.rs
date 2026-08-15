@@ -1,4 +1,7 @@
 //! Configuration reader API.
+use drop_bomb::DropBomb;
+use error_stack::{Report, ResultExt};
+use norito::json::{self, JsonDeserializeOwned};
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::identity,
@@ -6,9 +9,6 @@ use std::{
     fmt::{Debug, Write as _},
     path::{Path, PathBuf},
 };
-use drop_bomb::DropBomb;
-use error_stack::{Report, ResultExt};
-use norito::json::{self, JsonDeserializeOwned};
 use thiserror::Error;
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 use crate::{
@@ -896,11 +896,11 @@ impl<T> FinalWrap<T> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
     };
-    use super::*;
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
     fn temp_config_dir(label: &str) -> PathBuf {
         let nonce = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);

@@ -2,8 +2,8 @@
 //!
 //! These structures represent the parsed Kotodama source surface accepted by
 //! the compiler.
-use iroha_primitives::bigint::BigInt;
 use crate::source::{SourceRange, TextRange};
+use iroha_primitives::bigint::BigInt;
 /// Stable identity assigned when a spanned AST node enters resolved HIR.
 ///
 /// The identity is local to one source unit. It is embedded in resolver-only

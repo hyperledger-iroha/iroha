@@ -1,8 +1,8 @@
-use std::sync::Mutex;
 use ivm::kotodama::{
     compiler::Compiler,
     i18n::{self, Language, Message},
 };
+use std::sync::Mutex;
 static LANG_LOCK: Mutex<()> = Mutex::new(());
 #[test]
 fn detect_language_default() {

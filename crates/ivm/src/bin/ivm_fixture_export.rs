@@ -4,11 +4,6 @@
 //! `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --check`
 //! `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write`
 //! `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write --output-root /tmp/ivm-fixtures`
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    process,
-};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     events::{
@@ -23,6 +18,11 @@ use iroha_data_model::{
 };
 use ivm::prebuilt_fixtures::build_default_executor_program;
 use norito::json::{FastJsonWrite, JsonSerialize};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process,
+};
 // Public deterministic fixture material; this key must never authorize a real account.
 const CONTRACT_MANIFEST_FIXTURE_SIGNER_SEED: [u8; 32] = [0x33; 32];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

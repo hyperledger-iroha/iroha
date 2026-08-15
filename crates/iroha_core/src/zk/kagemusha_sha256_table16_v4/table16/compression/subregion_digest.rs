@@ -10,17 +10,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use ff::PrimeField;
-use halo2_proofs::{
-    circuit::Region,
-    plonk::{Advice, Column, Error},
-};
 use super::{
     super::{super::DIGEST_SIZE, RoundWordDense},
     CompressionConfig, State,
     compression_util::*,
 };
 use crate::zk::kagemusha_sha256_table16_v4::AssignedWord;
+use ff::PrimeField;
+use halo2_proofs::{
+    circuit::Region,
+    plonk::{Advice, Column, Error},
+};
 impl CompressionConfig {
     #[allow(clippy::many_single_char_names)]
     pub fn assign_digest<F: PrimeField>(

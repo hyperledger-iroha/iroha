@@ -1,7 +1,6 @@
 //! Adversarial SORA parliament tests for wealthy Sybil-style sortition capture.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use core::num::NonZeroU64;
-use std::collections::BTreeSet;
 use iroha_core::{
     governance::{draw, state::ParliamentTerm},
     kura::Kura,
@@ -22,6 +21,7 @@ use iroha_data_model::{
     smart_contract::manifest::{ContractManifest, ManifestProvenance},
 };
 use mv::storage::StorageReadOnly;
+use std::collections::BTreeSet;
 const ATTACKER_BOND_XOR: u128 = 10_000;
 const ATTACKER_COUNT: usize = 97;
 const HONEST_COUNT: usize = 3;

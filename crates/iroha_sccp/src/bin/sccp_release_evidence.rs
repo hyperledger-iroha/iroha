@@ -4,14 +4,6 @@
 //! bounded canonical Norito JSON file, invokes the same typed native verifier
 //! used by admission, and emits one bounded machine-readable validation
 //! receipt. It never accesses a network, signs data, or writes files.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    env,
-    fs::{self, File},
-    io::{self, Read},
-    path::{Path, PathBuf},
-    process::ExitCode,
-};
 use iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as SUMERAGI_V2_PROTOCOL_VERSION;
 use iroha_data_model::bridge::{
     BridgeSccpDestinationProofBackendV1, SccpDestinationDeploymentV1,
@@ -32,6 +24,14 @@ use iroha_sccp::{
     verify_sccp_native_inbound_message_proof_v1,
 };
 use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env,
+    fs::{self, File},
+    io::{self, Read},
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 use tiny_keccak::{Hasher as _, Keccak};
 const INPUT_SCHEMA: &str = "sccp-release-lane-evidence-v1";
 const OUTPUT_SCHEMA: &str = "sccp-release-lane-validation-v1";
@@ -3420,7 +3420,9 @@ mod tests {
     #[cfg(feature = "test-fixtures")]
     fn exact_tron_destination_readback_route()
     -> (SccpGovernedRouteV1, SccpTronDestinationDeploymentV1) {
-        use iroha_data_model::bridge::{SccpLaneIdV1, SccpSourceEmitterV1, SccpTronSourceEmitterV1};
+        use iroha_data_model::bridge::{
+            SccpLaneIdV1, SccpSourceEmitterV1, SccpTronSourceEmitterV1,
+        };
         let (mut route, evm_deployment) = exact_evm_destination_readback_route();
         let deployment = SccpTronDestinationDeploymentV1 {
             token_address: evm_deployment.token_address,

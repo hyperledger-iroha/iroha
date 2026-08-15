@@ -1,13 +1,5 @@
 #![allow(clippy::assertions_on_constants)]
 //! Test fixtures exercising `iroha_config` parameter loading and validation.
-use std::{
-    collections::{HashMap, HashSet},
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{Mutex, MutexGuard, Once},
-    time::Duration,
-};
 use assertables::assert_contains;
 use error_stack::{Report, ResultExt};
 use expect_test::expect_file;
@@ -33,6 +25,14 @@ use iroha_config_base::{
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PrivateKey, PublicKey};
 use iroha_data_model::account::AccountId;
 use soranet_pq::MlKemSuite;
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{Mutex, MutexGuard, Once},
+    time::Duration,
+};
 use thiserror::Error;
 use toml::{Table, Value as TomlValue};
 use url::Url;
@@ -232,9 +232,9 @@ fn ivm_banner_override_applies() {
 }
 #[test]
 fn nexus_lane_requires_alias() {
-    use std::num::NonZeroU32;
     use iroha_config::parameters::user::{LaneDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -251,9 +251,9 @@ fn nexus_lane_requires_alias() {
 }
 #[test]
 fn nexus_rejects_zero_axt_slot_length() {
-    use std::num::NonZeroU32;
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -341,9 +341,9 @@ fn nexus_rejects_negative_axt_slot_length() {
 }
 #[test]
 fn nexus_rejects_axt_clock_skew_above_slot_length() {
-    use std::num::NonZeroU32;
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -368,9 +368,9 @@ fn nexus_rejects_axt_clock_skew_above_slot_length() {
 }
 #[test]
 fn nexus_rejects_zero_axt_replay_retention_slots() {
-    use std::num::NonZeroU32;
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -480,9 +480,9 @@ fn nexus_lane_relay_emergency_requires_nexus_enabled() {
 }
 #[test]
 fn nexus_lane_relay_emergency_rejects_zero_threshold() {
-    use std::num::NonZeroU32;
     use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         enabled: true,
@@ -513,9 +513,9 @@ fn nexus_lane_relay_emergency_rejects_zero_threshold() {
 }
 #[test]
 fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
-    use std::num::NonZeroU32;
     use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         enabled: true,
@@ -605,19 +605,80 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .join("defaults/nexus/config.toml");
     let source = fs::read_to_string(&config_path).expect("read Nexus signing profile");
     let mut table: toml::Table = toml::from_str(&source).expect("parse Nexus signing profile");
-    let expected_hash = table
+
+    let validator_private_key_file = table
+        .remove("private_key_file")
+        .expect("Nexus signing profile validator private-key file");
+    assert_eq!(
+        validator_private_key_file.as_str(),
+        Some("/run/secrets/iroha/nexus-validator-private-key")
+    );
+    table.insert(
+        "private_key".to_owned(),
+        TomlValue::String(
+            "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F".to_owned(),
+        ),
+    );
+
+    let transport_private_key_file = table
+        .remove("soranet_transport_private_key_file")
+        .expect("Nexus signing profile SoraNet transport private-key file");
+    assert_eq!(
+        transport_private_key_file.as_str(),
+        Some("/run/secrets/iroha/nexus-soranet-transport-private-key")
+    );
+    let transport_key_pair = fixture_soranet_transport_key_pair();
+    table.insert(
+        "soranet_transport_public_key".to_owned(),
+        TomlValue::String(transport_key_pair.public_key().to_string()),
+    );
+    table.insert(
+        "soranet_transport_private_key".to_owned(),
+        TomlValue::String(ExposedPrivateKey(transport_key_pair.private_key().clone()).to_string()),
+    );
+
+    let streaming = table
+        .get_mut("streaming")
+        .and_then(TomlValue::as_table_mut)
+        .expect("Nexus signing profile streaming table");
+    let streaming_private_key_file = streaming
+        .remove("identity_private_key_file")
+        .expect("Nexus signing profile streaming private-key file");
+    assert_eq!(
+        streaming_private_key_file.as_str(),
+        Some("/run/secrets/iroha/nexus-streaming-identity-private-key")
+    );
+    let streaming_key_pair = fixture_streaming_key_pair();
+    streaming.insert(
+        "identity_public_key".to_owned(),
+        TomlValue::String(streaming_key_pair.public_key().to_string()),
+    );
+    streaming.insert(
+        "identity_private_key".to_owned(),
+        TomlValue::String(ExposedPrivateKey(streaming_key_pair.private_key().clone()).to_string()),
+    );
+
+    let genesis = table
         .get_mut("genesis")
         .and_then(TomlValue::as_table_mut)
-        .and_then(|genesis| genesis.get_mut("expected_hash"))
-        .expect("Nexus signing profile expected-hash placeholder");
+        .expect("Nexus signing profile genesis table");
+    let expected_hash_file = genesis
+        .remove("expected_hash_file")
+        .expect("Nexus signing profile expected-hash file");
     assert_eq!(
-        expected_hash.as_str(),
-        Some("REPLACE_WITH_GENESIS_EXPECTED_HASH")
+        expected_hash_file.as_str(),
+        Some("/run/iroha/genesis.expected_hash")
     );
-    // Substitute only inside this inspection test; the checked-in profile must fail runtime
-    // normalization until an operator provisions the signed genesis hash.
-    *expected_hash = TomlValue::String(
-        Hash::new(b"iroha-config non-runtime Nexus profile inspection").to_string(),
+    // Substitute only inside this inspection test; the checked-in profile resolves the hash
+    // from an operator-provisioned runtime file.
+    genesis.insert(
+        "expected_hash".to_owned(),
+        TomlValue::String(norito::literal::format(
+            "hash",
+            &Hash::new(b"iroha-config non-runtime Nexus profile inspection")
+                .to_string()
+                .to_ascii_uppercase(),
+        )),
     );
     let config = ConfigReader::new()
         .with_toml_source(iroha_config_base::toml::TomlSource::inline(table))
@@ -645,10 +706,7 @@ fn nexus_profile_template_enables_multilane_defaults() {
     assert_eq!(
         lane_bindings,
         [
-            (
-                "core",
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-            ),
+            ("core", iroha_data_model::nexus::DataSpaceId::UNIVERSAL,),
             (
                 "governance",
                 iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -665,9 +723,11 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .collect();
     assert_eq!(dataspace_aliases, ["universal"]);
     assert_eq!(config.nexus.routing_policy.rules.len(), 2);
-    assert!(config.nexus.routing_policy.rules.iter().all(|rule| {
-        rule.dataspace == Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
-    }));
+    assert!(
+        config.nexus.routing_policy.rules.iter().all(|rule| {
+            rule.dataspace == Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
+        })
+    );
     assert!(
         !config.nexus.lane_relay_emergency.enabled,
         "Nexus profile must leave lane relay emergency overrides disabled by default"
@@ -920,12 +980,12 @@ fn soranet_handshake_zero_difficulty_rejected() {
 }
 #[test]
 fn routing_policy_dataspace_resolution() {
-    use std::num::NonZeroU32;
     use iroha_config::parameters::user::{
         DataSpaceDescriptor, LaneDescriptor, Nexus, RouteMatcher, RoutingPolicy, RoutingRule,
     };
     use iroha_config_base::util::Emitter;
     use iroha_data_model::nexus::DataSpaceId;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(2).expect("nonzero"),
@@ -978,9 +1038,11 @@ fn routing_policy_dataspace_resolution() {
 }
 #[test]
 fn routing_policy_lane_dataspace_mismatch_rejected() {
-    use std::num::NonZeroU32;
-    use iroha_config::parameters::user::{DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy};
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
+    };
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1024,9 +1086,9 @@ fn routing_policy_lane_dataspace_mismatch_rejected() {
 }
 #[test]
 fn dataspace_fault_tolerance_zero_rejected() {
-    use std::num::NonZeroU32;
     use iroha_config::parameters::user::{DataSpaceDescriptor, LaneDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1100,10 +1162,12 @@ fn dataspace_explicit_id_must_match_manifest_hash() {
 }
 #[test]
 fn dataspace_fee_sponsor_program_id_parses() {
-    use std::num::NonZeroU32;
-    use iroha_config::parameters::user::{DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy};
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
+    };
     use iroha_config_base::util::Emitter;
     use iroha_data_model::nexus::DataSpaceId;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let program_id = format!(
         "{}/default",
@@ -1150,9 +1214,11 @@ fn dataspace_fee_sponsor_program_id_parses() {
 }
 #[test]
 fn dataspace_fee_sponsor_program_id_rejects_malformed_literal() {
-    use std::num::NonZeroU32;
-    use iroha_config::parameters::user::{DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy};
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
+    };
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         enabled: true,
@@ -1214,9 +1280,9 @@ fn dataspace_fee_sponsor_program_id_requires_nexus_enabled() {
 }
 #[test]
 fn routing_policy_unknown_dataspace_rejected() {
-    use std::num::NonZeroU32;
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, RoutingPolicy};
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1238,9 +1304,9 @@ fn routing_policy_unknown_dataspace_rejected() {
 }
 #[test]
 fn lane_registry_rejects_zero_poll_interval() {
-    use std::{num::NonZeroU32, time::Duration};
     use iroha_config::parameters::user::{LaneDescriptor, LaneRegistryConfig, Nexus};
     use iroha_config_base::util::Emitter;
+    use std::{num::NonZeroU32, time::Duration};
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1261,9 +1327,9 @@ fn lane_registry_rejects_zero_poll_interval() {
 }
 #[test]
 fn governance_default_module_must_exist() {
-    use std::num::NonZeroU32;
     use iroha_config::parameters::user::{GovernanceCatalogConfig, LaneDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
+    use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1284,11 +1350,11 @@ fn governance_default_module_must_exist() {
 }
 #[test]
 fn governance_catalog_trims_and_parses_modules() {
-    use std::{collections::BTreeMap, num::NonZeroU32};
     use iroha_config::parameters::user::{
         GovernanceCatalogConfig, GovernanceModule, LaneDescriptor, Nexus,
     };
     use iroha_config_base::util::Emitter;
+    use std::{collections::BTreeMap, num::NonZeroU32};
     let mut modules = BTreeMap::new();
     modules.insert(
         " parliament ".into(),
@@ -1668,8 +1734,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
     for retired in ["shield", "zk::zk_transfer", "unshield"] {
         assert!(
             !routing_rules.iter().any(|rule| {
-                rule
-                    .get("matcher")
+                rule.get("matcher")
                     .and_then(TomlValue::as_table)
                     .and_then(|matcher| matcher.get("instruction"))
                     .and_then(TomlValue::as_str)
@@ -1702,7 +1767,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
         block
             .get("max_payload_bytes")
             .and_then(TomlValue::as_integer),
-        Some(21 * 1024 * 1024),
+        Some(16 * 1024 * 1024),
         "Taira profile should cap proposal payload bytes"
     );
     assert_eq!(
@@ -1727,14 +1792,14 @@ fn taira_config_enables_untrusted_cid_hosting() {
     );
     assert_eq!(
         queues.get("body_bytes").and_then(TomlValue::as_integer),
-        Some(301 * 1024 * 1024),
+        Some(231 * 1024 * 1024),
         "Taira aggregate canonical wire-byte budget should isolate its seven ingress source lanes"
     );
     assert_eq!(
         queues
             .get("body_source_bytes")
             .and_then(TomlValue::as_integer),
-        Some(43 * 1024 * 1024),
+        Some(33 * 1024 * 1024),
         "Taira should retain one canonical outer-ingress wire-byte quota per source"
     );
     let untrusted = doc

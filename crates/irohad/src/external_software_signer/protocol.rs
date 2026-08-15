@@ -1,7 +1,7 @@
 //! Canonical public identities and wire containers for the signer service.
-use std::{fmt, str::FromStr};
 use iroha_crypto::{Algorithm, PublicKey};
 use norito::codec::{Decode, Encode};
+use std::{fmt, str::FromStr};
 pub(super) const SIGNER_PROTOCOL_MAGIC_V1: [u8; 8] = *b"IRSGNR01";
 pub(super) const SIGNER_PROTOCOL_VERSION_V1: u16 = 1;
 pub(super) const SIGNER_KEY_MAGIC_V1: [u8; 8] = *b"IRSGKY01";

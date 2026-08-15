@@ -3,14 +3,16 @@
 //! This module provides request/response representations that match the Torii
 //! `/v1/sorafs/proof/stream` endpoint together with lightweight aggregation
 //! utilities used by the CLI and SDK integrations.
-use std::collections::BTreeMap;
+use crate::{PorProof, PorSampleIndices, por_json::proof_from_value};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use norito::{
     decode_from_bytes,
     json::{Map, Value, from_slice},
 };
-use sorafs_manifest::{PotrReceiptV1, PotrStatus, ProofStreamRequestV1, potr_request_scope_digest_v1};
-use crate::{PorProof, PorSampleIndices, por_json::proof_from_value};
+use sorafs_manifest::{
+    PotrReceiptV1, PotrStatus, ProofStreamRequestV1, potr_request_scope_digest_v1,
+};
+use std::collections::BTreeMap;
 const PROOF_STREAM_REQUEST_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.proof-stream.request-digest.v1\0";
 const POR_REQUEST_SAMPLE_SEED_DOMAIN_V1: &[u8] = b"sorafs.proof-stream.por-sample-seed.v1\0";
 /// Canonical proof flavour shared with the request schema.

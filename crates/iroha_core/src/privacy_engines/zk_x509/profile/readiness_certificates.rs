@@ -1,6 +1,4 @@
 //! Typed, digest-pinned activation certificates for the X.509 release profile.
-use iroha_data_model::privacy::ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1;
-use sha2::{Digest as _, Sha256};
 use super::*;
 use crate::privacy_engines::{
     aggregate_stark::{
@@ -26,6 +24,8 @@ use crate::privacy_engines::{
         },
     },
 };
+use iroha_data_model::privacy::ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1;
+use sha2::{Digest as _, Sha256};
 const SOUNDNESS_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
 const SOUNDNESS_CERTIFICATE_DOMAIN_V1: &[u8] = b"iroha.zk-x509.soundness-certificate.payload.v1";
 const SOUNDNESS_CERTIFICATE_FIELD_COUNT_V1: u16 = 61;

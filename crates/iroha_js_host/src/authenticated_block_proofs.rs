@@ -5,7 +5,6 @@
 //! canonical finality/proof archives, verifies Sumeragi-v2 finality under an
 //! application-pinned network context, and only then asks the data model to
 //! derive its non-serializable `TrustedBlockProofAnchor` capability.
-use std::{fmt, str::FromStr as _};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
@@ -23,6 +22,7 @@ use iroha_data_model::{
 };
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
+use std::{fmt, str::FromStr as _};
 /// First-release authenticated block-proof bridge version.
 const AUTHENTICATED_BLOCK_PROOFS_VERSION_V1: u8 = 1;
 /// Maximum canonical Norito bytes accepted for one bridge finality proof.
@@ -409,7 +409,7 @@ fn enforce_archive_size(
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, MerkleTreeCommitment, Signature, SignatureOf};
     use iroha_data_model::{
         account::AccountId,
@@ -430,7 +430,7 @@ mod tests {
         },
         trigger::DataTriggerSequence,
     };
-    use super::*;
+    use std::num::NonZeroU64;
     const FIXTURE_NETWORK_ID: &str =
         "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5";
     struct Fixture {

@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use sorafs_car::{
     CarBuildPlan, CarWriteStats, CarWriter, chunker_registry, compute_chunk_plan_digest_sha3,
     compute_por_root,
@@ -13,6 +12,7 @@ use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, ManifestVerificationContext, ManifestVerificationError,
     PolicyReport, PolicyStatus,
 };
+use std::sync::Arc;
 struct FetchFixture {
     payload: Vec<u8>,
     plan: CarBuildPlan,

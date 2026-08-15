@@ -3,7 +3,10 @@
 //! This module provides a deterministic implementation of "implicit accounts":
 //! when global policy allows receipt-like operations (asset mint/transfer, NFT transfer), the
 //! destination `Account` object may be created automatically if it does not exist yet.
-use std::sync::LazyLock;
+use crate::{
+    role::RoleIdWithOwner,
+    state::{StateTransaction, WorldReadOnly},
+};
 use iroha_data_model::query::error::FindError;
 use iroha_data_model::{
     IntoKeyValue,
@@ -22,10 +25,7 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
-use crate::{
-    role::RoleIdWithOwner,
-    state::{StateTransaction, WorldReadOnly},
-};
+use std::sync::LazyLock;
 static IMPLICIT_CREATED_VIA_KEY: LazyLock<Name> = LazyLock::new(|| {
     "iroha:created_via"
         .parse()
@@ -339,7 +339,13 @@ pub(super) fn ensure_receiving_account(
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::Execute,
+        state::{State, StateTransaction, World},
+    };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::{ACCOUNT_ADMISSION_POLICY_METADATA_KEY, admission::ImplicitAccountCreationFee},
@@ -349,13 +355,7 @@ mod tests {
     use iroha_test_samples::ALICE_ID;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::Execute,
-        state::{State, StateTransaction, World},
-    };
+    use std::collections::BTreeMap;
     static POLICY_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
         ACCOUNT_ADMISSION_POLICY_METADATA_KEY
             .parse()

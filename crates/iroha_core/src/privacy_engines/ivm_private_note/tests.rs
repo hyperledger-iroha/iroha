@@ -1,17 +1,3 @@
-use std::str::FromStr as _;
-use iroha_data_model::{
-    NetworkId,
-    asset::AssetDefinitionId,
-    domain::DomainId,
-    privacy::{
-        IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyCommitmentV1,
-        PrivacyEngineManifestDigestV1, PrivacyNullifierV1, PrivacyParameterDigestV1,
-        PrivacyParameterIdV1, PrivacyPoolIdV1, PrivacyRootV1, PrivacyStatementContextV1,
-        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1,
-        PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVerifierDigestV1,
-    },
-};
-use rand_08::{SeedableRng as _, rngs::StdRng};
 use super::{
     PRIVATE_PROGRAM_BYTES_V1, PrivateInstructionV1, PrivateNotePlaintextV1, PrivateOpcodeV1,
     PrivateProgramV1,
@@ -25,6 +11,20 @@ use super::{
         validate_private_note_relation_v1,
     },
 };
+use iroha_data_model::{
+    NetworkId,
+    asset::AssetDefinitionId,
+    domain::DomainId,
+    privacy::{
+        IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyCommitmentV1,
+        PrivacyEngineManifestDigestV1, PrivacyNullifierV1, PrivacyParameterDigestV1,
+        PrivacyParameterIdV1, PrivacyPoolIdV1, PrivacyRootV1, PrivacyStatementContextV1,
+        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1,
+        PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVerifierDigestV1,
+    },
+};
+use rand_08::{SeedableRng as _, rngs::StdRng};
+use std::str::FromStr as _;
 fn bytes(seed: u8) -> [u8; 32] {
     [seed; 32]
 }

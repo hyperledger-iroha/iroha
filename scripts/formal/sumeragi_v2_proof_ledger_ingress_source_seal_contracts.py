@@ -268,102 +268,11 @@ Arc::clone(&output_guard),
 Arc::clone(&block_rx),
 Arc::clone(&kura_replica_advert_refresh),
 leader_wire_recovery_authority,
-exact_output_service_owner,
-)
-.map_err(V2RunnerError::Service)?;
+    exact_output_service_owner,
+    )
+    .map_err(V2RunnerError::Service)?;
 """,
-    "certified_serve_preparation": """
-let Some(sender) = inbound.sender() else {
-    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-        "reserved certified-body ingress lost its authenticated sender".to_owned(),
-    ));
-    return true;
-};
-let Some(authenticated_via) = inbound.via() else {
-    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-        "reserved certified-body ingress lost its authenticated source".to_owned(),
-    ));
-    return true;
-};
-let Some(reply_routes) = inbound.reply_routes() else {
-    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-        "reserved certified-body ingress lost its reply capability".to_owned(),
-    ));
-    return true;
-};
-let Some(ingress_ownership) = inbound.ingress_ownership() else {
-    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-        "reserved certified-body ingress lost its ownership evidence".to_owned(),
-    ));
-    return true;
-};
-if reply_routes.semantic_target() != sender
-    || !ingress_ownership.validate_exact()
-    || !ingress_ownership.matches_message(inbound.message())
-    || !ingress_ownership.matches_semantic_origin(Some(sender))
-    || !ingress_ownership.matches_reply_routes(Some(reply_routes))
-{
-    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-        "reserved certified-body ingress changed its transport ownership"
-            .to_owned(),
-    ));
-    return true;
-}
-let authenticated =
-    match executor.authenticate_certified_body_request(request.clone(), sender) {
-        Ok(authenticated) => authenticated,
-        Err(error) => {
-            prepared_serve = Some(
-                match services.stage_certified_serve_rejection(
-                    HashOf::new(request),
-                    CertifiedServeNegativeOutcome::InvalidCertificate,
-                ) {
-                    Ok(()) => {
-                        ProductionPreparedCertifiedServeV1::Rejected(error.to_string())
-                    }
-                    Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-                },
-            );
-            return true;
-        }
-    };
-if superseded_by_decision {
-    let decided = terminal_subject.expect(
-        "Decision supersession requires the durable exact terminal subject",
-    );
-    prepared_serve = Some(
-        match services.stage_certified_serve_rejection(
-            authenticated.request_hash(),
-            CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
-        ) {
-            Ok(()) => ProductionPreparedCertifiedServeV1::Rejected(
-                "certified body request was superseded by durable Decision"
-                    .to_owned(),
-            ),
-            Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-        },
-    );
-    return true;
-}
-match services.prepare_certified_request(authenticated_via, authenticated) {
-    Ok(admission) => {
-        prepared_serve = Some(ProductionPreparedCertifiedServeV1::Admitted(admission));
-        true
-    }
-    Err(CertifiedServePrepareError::Backpressure) => {
-        false
-    }
-    Err(CertifiedServePrepareError::Rejected(reason)) => {
-        prepared_serve = Some(ProductionPreparedCertifiedServeV1::Rejected(reason));
-        true
-    }
-    Err(CertifiedServePrepareError::Service(reason)) => {
-        prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(reason));
-        true
-    }
-}
-""",
-    "historical_body_guard": """
+"historical_body_guard": """
 let served = serve_block_sync_while_guarded(
     services_output_guard.as_ref(),
     || block_sync_server.serve_historical_body(kura, request, &sender, local_key),

@@ -1,5 +1,5 @@
-use std::{fs, path::Path};
 use assert_cmd::cargo::cargo_bin_cmd;
+use std::{fs, path::Path};
 use tempfile::tempdir;
 #[test]
 fn sorafs_fetch_fixture_copies_and_verifies_local_files() {

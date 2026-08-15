@@ -260,7 +260,7 @@ fn has_exact_private_module_declaration_v3(parent: &str) -> bool {
             declaration_start = index + 1;
         }
     }
-    (delimiter_depth == [0; 3] && exact_private_declaration == Some(true))
+    delimiter_depth == [0; 3] && exact_private_declaration == Some(true)
 }
 
 fn has_exact_private_session_declaration_v3(source: &str) -> bool {

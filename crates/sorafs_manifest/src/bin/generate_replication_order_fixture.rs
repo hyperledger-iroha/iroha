@@ -1,5 +1,4 @@
 //! Generates reference Norito fixtures for replication orders.
-use std::{error::Error, fs, path::PathBuf};
 use hex::encode;
 use sorafs_manifest::{
     CapacityMetadataEntry, canonical_manifest_root_cid,
@@ -8,6 +7,7 @@ use sorafs_manifest::{
         ReplicationOrderV1,
     },
 };
+use std::{error::Error, fs, path::PathBuf};
 fn main() -> Result<(), Box<dyn Error>> {
     let fixture_dir = PathBuf::from("fixtures/sorafs_manifest/replication_order");
     fs::create_dir_all(&fixture_dir)?;

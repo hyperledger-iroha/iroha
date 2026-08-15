@@ -1,5 +1,8 @@
 //! Authenticated, atomic smart-contract deployment compare-and-swap state.
-use std::str::FromStr as _;
+use crate::{
+    AxResponse, Error, SharedAppState,
+    routing::{ContractDeploymentStateRequestDto, ContractDeploymentStateResponseDto},
+};
 use axum::{
     extract::{ConnectInfo, State},
     http::{HeaderMap, Method, Uri},
@@ -15,10 +18,7 @@ use iroha_data_model::{
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAlias},
 };
 use mv::storage::StorageReadOnly as _;
-use crate::{
-    AxResponse, Error, SharedAppState,
-    routing::{ContractDeploymentStateRequestDto, ContractDeploymentStateResponseDto},
-};
+use std::str::FromStr as _;
 fn conversion_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
@@ -377,7 +377,14 @@ pub(crate) async fn handler_contract_deployment_state(
 }
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::Arc};
+    use super::*;
+    use crate::{
+        app_auth::CanonicalRequestAuthConfig,
+        tests_runtime_handlers::{
+            app_auth_test_guard, checked_torii_test_ed25519_keypair,
+            mk_app_state_for_tests_with_world, signed_app_headers,
+        },
+    };
     use axum::{body::Bytes, http::StatusCode, response::IntoResponse as _};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
@@ -391,14 +398,7 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use norito::codec::Encode as _;
-    use super::*;
-    use crate::{
-        app_auth::CanonicalRequestAuthConfig,
-        tests_runtime_handlers::{
-            app_auth_test_guard, checked_torii_test_ed25519_keypair,
-            mk_app_state_for_tests_with_world, signed_app_headers,
-        },
-    };
+    use std::{num::NonZeroU64, sync::Arc};
     enum NonceFixture {
         Missing,
         U64(u64),

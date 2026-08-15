@@ -1,11 +1,11 @@
 //! Shared binary resolution helpers for CLI-oriented integration tests.
+use crate::process::{output_with_timeout, process_timeout};
 use std::{
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
     sync::Once,
     time::SystemTime,
 };
-use crate::process::{output_with_timeout, process_timeout};
 /// Resolve the `iroha` CLI binary, preferring already-built targets when available.
 pub fn iroha_program() -> eyre::Result<PathBuf> {
     prepare_iroha_cli_test_environment();

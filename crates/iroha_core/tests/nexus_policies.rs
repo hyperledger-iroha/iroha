@@ -1,7 +1,7 @@
 //! Tests covering Nexus configuration helpers.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::num::{NonZeroU16, NonZeroU32};
 use iroha_config::parameters::actual::Nexus;
+use std::num::{NonZeroU16, NonZeroU32};
 #[test]
 fn da_max_public_dataspaces_tracks_config() {
     let mut nexus = Nexus::default();

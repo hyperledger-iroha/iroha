@@ -80,16 +80,6 @@ pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str =
     iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE;
 /// Canonical Halo2 IPA parameter degree for recursive-spend lineage proofs.
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K: u32 = 12;
-use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
-#[cfg(feature = "zk-preverify")]
-use ivm::halo2::VMExecutionCircuit;
-#[cfg(feature = "zk-halo2")]
-use kaigi_zk::{
-    KAIGI_ROSTER_BACKEND, KAIGI_USAGE_BACKEND, KaigiRosterJoinCircuit, KaigiUsageCommitmentCircuit,
-};
-use sha2::{Digest, Sha256};
-#[cfg(feature = "zk-preverify")]
-use tokio::sync::mpsc;
 #[cfg(feature = "zk-preverify")]
 use crate::kura::PipelineProofSnapshot;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -105,8 +95,18 @@ use halo2_proofs::poly::commitment::Params as _;
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
+use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
+#[cfg(feature = "zk-preverify")]
+use ivm::halo2::VMExecutionCircuit;
+#[cfg(feature = "zk-halo2")]
+use kaigi_zk::{
+    KAIGI_ROSTER_BACKEND, KAIGI_USAGE_BACKEND, KaigiRosterJoinCircuit, KaigiUsageCommitmentCircuit,
+};
 #[cfg(feature = "zk-halo2-ipa")]
 use norito::codec::{Decode, Encode};
+use sha2::{Digest, Sha256};
+#[cfg(feature = "zk-preverify")]
+use tokio::sync::mpsc;
 #[cfg(feature = "zk-halo2-ipa")]
 const HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION: u16 = 1;
 #[cfg(feature = "zk-halo2-ipa")]
@@ -1344,9 +1344,9 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     gas_policy_commitment: iroha_crypto::Hash,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<ProofBox, String> {
-    use std::io::Cursor;
     use halo2_backend::Scalar;
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+    use std::io::Cursor;
     if !is_ivm_execution_v1_circuit_id(circuit_id) {
         return Err(format!(
             "unsupported IVM execution circuit id `{circuit_id}`"
@@ -2079,13 +2079,13 @@ pub fn prove_stark_fri_ivm_execution_envelope(
 #[cfg(any(test, feature = "iroha-core-tests"))]
 /// Test fixtures and helpers for constructing deterministic `OpenVerifyEnvelope` payloads.
 pub mod test_utils {
+    #[allow(unused_imports)]
+    use super::*;
     use iroha_crypto::Hash as CryptoHash;
     use iroha_data_model::{
         proof::{ProofBox, VerifyingKeyBox},
         zk::{BackendTag, OpenVerifyEnvelope},
     };
-    #[allow(unused_imports)]
-    use super::*;
     const HALO2_PROOF_BYTES_LEN: usize = 64;
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     use rand_core_06::{CryptoRng, Error as RandError, RngCore};
@@ -3144,8 +3144,8 @@ fn verify_with_registry(
 /// Notes:
 ///  - Backends remain identified outside of the envelope via `ProofBox.backend`.
 mod zk1 {
-    use std::io::{Cursor, Read};
     use super::*;
+    use std::io::{Cursor, Read};
     const MAGIC: &[u8; 4] = b"ZK1\0";
     const HALO2_PASTA_PROCESSED_VK_HEADER_LEN: usize = 10;
     const HALO2_PASTA_PROCESSED_POINT_LEN: usize = 32;
@@ -3480,18 +3480,18 @@ pub mod zk1_test_helpers {
 /// checks. They are not consensus-critical and are compiled only when Halo2
 /// backends are enabled.
 pub mod depth {
-    use halo2_proofs::{
-        circuit::{Layouter, SimpleFloorPlanner, Value},
-        halo2curves::pasta::Fp as Scalar,
-        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
-        poly::Rotation,
-    };
     #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[allow(unused_imports)]
     use crate::zk::pasta_tiny::poseidon::{Poseidon2ChipWrapper, Pow5Chip, Pow5Config};
     #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[allow(unused_imports)]
     use crate::zk::pasta_tiny::poseidon_compress2_native;
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        halo2curves::pasta::Fp as Scalar,
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+        poly::Rotation,
+    };
     /// Vote-bool commit with a toy Merkle membership chain of fixed depth.
     #[derive(Clone, Default)]
     pub struct VoteBoolCommitMerkle<const DEPTH: usize>;
@@ -3981,18 +3981,18 @@ pub mod depth {
 /// round parameters and are used to exercise backends that implement
 /// transparent hashing (e.g., IPA over Pasta) in our verifier dispatch.
 pub mod poseidon_depth {
-    use halo2_proofs::{
-        circuit::{Layouter, SimpleFloorPlanner},
-        halo2curves::pasta::Fp as Scalar,
-        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
-        poly::Rotation,
-    };
     #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[allow(unused_imports)]
     use crate::zk::pasta_tiny::poseidon::{Poseidon2ChipWrapper, Pow5Chip, Pow5Config};
     #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     #[allow(unused_imports)]
     use crate::zk::pasta_tiny::poseidon_compress2_native;
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner},
+        halo2curves::pasta::Fp as Scalar,
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+        poly::Rotation,
+    };
     #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     // Simple Pow5 helpers (constraint expressions) used as a local gadget when the Poseidon
     // feature is disabled.
@@ -9601,9 +9601,9 @@ mod guardrails_tests {
 }
 #[cfg(test)]
 mod halo2_ipa_alias_tests {
+    use super::*;
     use iroha_data_model::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
-    use super::*;
     #[test]
     fn halo2_ipa_circuit_id_maps_to_pasta_backend() {
         assert_eq!(
@@ -10063,12 +10063,12 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
 /// delegating cryptographic verification to the concrete Halo2 backends.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod zkparse {
+    use super::{PastaParams, pasta_params_new};
+    use halo2_proofs::poly::commitment::Params as _;
     use std::{
         convert::TryFrom,
         io::{Cursor, Read},
     };
-    use halo2_proofs::poly::commitment::Params as _;
-    use super::{PastaParams, pasta_params_new};
     fn envelope_cursor(bytes: &[u8]) -> Option<Cursor<&[u8]>> {
         if !super::zk1::is_envelope(bytes) {
             return None;
@@ -11318,6 +11318,7 @@ mod pasta_tiny {
     // verifier, key generator, or release artifact may select these circuits.
     #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
     pub mod poseidon {
+        use super::*;
         use halo2_proofs::{
             circuit::{AssignedCell, Cell, Layouter, Value},
             plonk::{
@@ -11325,7 +11326,6 @@ mod pasta_tiny {
             },
             poly::Rotation,
         };
-        use super::*;
         pub(super) fn compress2_native(
             a: halo2_proofs::halo2curves::pasta::Fp,
             b: halo2_proofs::halo2curves::pasta::Fp,
@@ -13979,10 +13979,10 @@ mod trace_proof_queue_tests {
 }
 #[cfg(all(test, feature = "zk-preverify"))]
 mod trace_proving_queue_tests {
-    use std::{num::NonZeroU64, sync::Arc};
+    use super::*;
     use iroha_crypto::Hash;
     use ivm::encoding;
-    use super::*;
+    use std::{num::NonZeroU64, sync::Arc};
     fn assemble_zk(code: &[u8], max_cycles: u64) -> Vec<u8> {
         use ivm::ProgramMetadata;
         let meta = ProgramMetadata {
@@ -14079,8 +14079,8 @@ mod trace_proving_queue_tests {
 }
 #[cfg(test)]
 mod preverify_tests {
-    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
     use super::*;
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
     fn preverify_enveloped_proof(vk_hash: [u8; 32]) -> ProofBox {
         preverify_enveloped_proof_for_backend(
             ZK_BACKEND_HALO2_IPA,

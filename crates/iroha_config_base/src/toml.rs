@@ -2,6 +2,8 @@
 //!
 //! While it is definitely possible to support other formats than TOML, since there is no
 //! need for this for now, TOML support is integrated in a non-generic way.
+use error_stack::{Report, ResultExt};
+use norito::json::{self, Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
@@ -9,8 +11,6 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-use error_stack::{Report, ResultExt};
-use norito::json::{self, Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use thiserror::Error;
 use toml::Table;
 type Result<T, E> = core::result::Result<T, Report<E>>;
@@ -446,13 +446,13 @@ fn table_to_json(table: &toml::Table) -> Result<JsonMap, json::Error> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use expect_test::expect;
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
     };
-    use expect_test::expect;
     use toml::toml;
-    use super::*;
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
     fn temp_config_dir(label: &str) -> PathBuf {
         let nonce = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);

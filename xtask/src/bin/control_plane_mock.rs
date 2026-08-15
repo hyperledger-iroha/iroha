@@ -2,13 +2,6 @@
 //!
 //! Serves deterministic JSON responses backed by the seed OpenAPI/RBAC files so
 //! SDK/CLI integrations can exercise the shape before the real service lands.
-use std::{
-    collections::HashMap,
-    env,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
 use axum::{
     Json, Router,
     extract::{Path as AxumPath, State},
@@ -23,6 +16,13 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::{
+    collections::HashMap,
+    env,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::net::TcpListener;
 const DEFAULT_LISTEN: &str = "127.0.0.1:18080";
 const DEFAULT_OPENAPI: &str = "specs/soranet/control_plane_openapi.yaml";
@@ -352,9 +352,9 @@ async fn main() -> eyre::Result<()> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use axum::http::Request;
     use tower::ServiceExt as _;
-    use super::*;
     fn fixture_state() -> Arc<MockState> {
         build_state(&default_openapi_path(), &default_rbac_path()).unwrap()
     }

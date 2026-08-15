@@ -8,9 +8,11 @@
 //! audit-driven settlement records without introducing a second authority.
 #[cfg(test)]
 use iroha_crypto::numeric::Quantity;
+pub use iroha_crypto::numeric::{
+    XOR_QUANTITY_SCALE, XorQuantity, XorQuantityError as DealAmountError,
+};
 use norito::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-pub use iroha_crypto::numeric::{XOR_QUANTITY_SCALE, XorQuantity, XorQuantityError as DealAmountError};
 /// Schema version for [`DealTermsV1`].
 pub const DEAL_TERMS_VERSION_V1: u8 = 1;
 /// Schema version for [`MicropaymentPolicyV1`].

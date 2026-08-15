@@ -1,17 +1,6 @@
 //! Tests Torii's `SoraFS` discovery cache using the mesh harness from provider advert suites.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    convert::TryInto,
-    fs,
-    net::SocketAddr,
-    num::{NonZeroU64, NonZeroUsize},
-    path::PathBuf,
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, UNIX_EPOCH},
-};
 use axum::{
     Router,
     body::Body,
@@ -93,6 +82,17 @@ use sorafs_manifest::{
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
+};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    convert::TryInto,
+    fs,
+    net::SocketAddr,
+    num::{NonZeroU64, NonZeroUsize},
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, UNIX_EPOCH},
 };
 use tempfile::{TempDir, tempdir};
 use tower::ServiceExt as _;

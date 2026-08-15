@@ -4,7 +4,7 @@
 //! one finalized cursor and matching the chain-authoritative status count.
 //! Callers cannot obtain a partially collected projection, so local storage
 //! deletion never relies on a stale or truncated repair-task cache.
-use std::collections::BTreeSet;
+use crate::repair_transaction_forwarder::{decode_repair_report, decode_slash_proposal};
 use iroha_data_model::sorafs::moderation_ledger::{
     REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_RECEIPTS_V1,
     REPAIR_LEDGER_TASK_VERSION_V1, REPAIR_QUERY_MAX_ITEMS_V1, REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1,
@@ -13,8 +13,8 @@ use iroha_data_model::sorafs::moderation_ledger::{
     RepairLedgerTaskV1, RepairLedgerTerminalKindV1, RepairLedgerTerminalOutcomeV1,
     sorafs_repair_appeal_id_v1, sorafs_repair_task_id_v1,
 };
+use std::collections::BTreeSet;
 use thiserror::Error;
-use crate::repair_transaction_forwarder::{decode_repair_report, decode_slash_proposal};
 /// Maximum finalized task pages accepted for one GC projection.
 ///
 /// The page bound is independent of the number of tasks retained by consensus.
@@ -424,13 +424,13 @@ pub fn validate_task(task: &RepairLedgerTaskV1) -> Result<(), RepairLedgerProjec
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::account::AccountId;
     use sorafs_manifest::repair::{
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1, RepairEvidenceV1,
         RepairManualCauseV1, RepairReportV1, RepairTicketId,
     };
-    use super::*;
     fn cursor(byte: u8) -> RepairFinalizedCursorV1 {
         RepairFinalizedCursorV1 {
             height: u64::from(byte),

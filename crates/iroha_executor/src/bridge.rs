@@ -19,7 +19,6 @@ pub fn emit_bridge_receipt_log<V: Execute + Visit + ?Sized>(
 }
 #[cfg(test)]
 mod tests {
-    use core::num::NonZeroU64;
     use super::*;
     use crate::{
         Execute, Iroha,
@@ -28,6 +27,7 @@ mod tests {
         data_model::prelude::{AccountId, BlockHeader, LaneId},
         prelude::{Context, Visit},
     };
+    use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, KeyPair};
     fn checked_bridge_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)

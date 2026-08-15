@@ -4,15 +4,6 @@
 //! expected by the FASTPQ AIR. Rows are ordered lexicographically by key,
 //! operation rank, and original insertion index. Columns are padded to the
 //! next power-of-two trace length and exposed as Goldilocks field elements.
-use core::{cmp::max, convert::TryFrom};
-#[cfg(feature = "fastpq-gpu")]
-use std::sync::Mutex;
-#[cfg(feature = "fastpq-gpu")]
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::{Arc, OnceLock, RwLock},
-};
 #[cfg(feature = "fastpq-gpu")]
 use crate::gpu;
 use crate::{
@@ -22,12 +13,21 @@ use crate::{
     gadgets::transfer::{self, TransferRowKey},
     pack_bytes, poseidon,
 };
+use core::{cmp::max, convert::TryFrom};
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE;
 use fastpq_isi::{StarkParameterSet, poseidon::PoseidonSponge as CpuPoseidonSponge};
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY;
 use rayon::prelude::*;
+#[cfg(feature = "fastpq-gpu")]
+use std::sync::Mutex;
+#[cfg(feature = "fastpq-gpu")]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, OnceLock, RwLock},
+};
 /// Goldilocks modulus used by the FASTPQ AIR.
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 /// Sparse Merkle tree height used by the stage 1 trace layout.
@@ -2003,6 +2003,13 @@ fn disable_poseidon_merkle_gpu_with_warning(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        ExecutionMode, OperationKind, PoseidonExecutionMode, PublicInputs, StateTransition,
+        TransitionBatch, gadgets::transfer,
+    };
+    #[cfg(feature = "fastpq-gpu")]
+    use crate::{backend, gpu};
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use iroha_crypto::Hash;
     use iroha_data_model::{
@@ -2013,13 +2020,6 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
-    use super::*;
-    use crate::{
-        ExecutionMode, OperationKind, PoseidonExecutionMode, PublicInputs, StateTransition,
-        TransitionBatch, gadgets::transfer,
-    };
-    #[cfg(feature = "fastpq-gpu")]
-    use crate::{backend, gpu};
     fn sample_batch() -> TransitionBatch {
         let transcript = sample_transfer_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);

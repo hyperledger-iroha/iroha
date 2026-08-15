@@ -1,16 +1,16 @@
 //! Chaos drill harness for the SoraGlobal Gateway CDN (SNNet-15F1).
 //! Generates scenario packs, quarterly schedules, and runs dry-run or
 //! execution passes to capture evidence bundles for SRE/GameDay drills.
+use eyre::{Result, WrapErr, eyre};
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
+};
 use std::{
     fs::{self, File},
     path::{Path, PathBuf},
     process::Command,
     time::Instant,
-};
-use eyre::{Result, WrapErr, eyre};
-use norito::{
-    derive::{JsonDeserialize, JsonSerialize},
-    json,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
@@ -664,9 +664,9 @@ fn sanitize_label(input: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use norito::json::Value;
     use tempfile::tempdir;
-    use super::*;
     #[test]
     fn default_assets_are_written() {
         let temp = tempdir().expect("tempdir");

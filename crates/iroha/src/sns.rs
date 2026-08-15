@@ -1,5 +1,4 @@
 //! Rust client helpers for the Sora Name Service registrar routes.
-use eyre::Result;
 use crate::{
     client::{Client, ResponseReport, join_torii_url},
     data_model::sns::{
@@ -8,6 +7,7 @@ use crate::{
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
 };
+use eyre::Result;
 const APPLICATION_JSON: &str = "application/json";
 fn ensure_status(
     response: &Response<Vec<u8>>,

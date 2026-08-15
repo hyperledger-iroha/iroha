@@ -1,4 +1,7 @@
 //! Minimal metrics tracking for the relay daemon.
+use crate::{config::RelayMode, scheduler::CellClass};
+use iroha_crypto::soranet::handshake::HandshakeSuite;
+use iroha_data_model::soranet::vpn::VpnSessionReceiptV1;
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
@@ -8,9 +11,6 @@ use std::{
     },
     time::Duration,
 };
-use iroha_crypto::soranet::handshake::HandshakeSuite;
-use iroha_data_model::soranet::vpn::VpnSessionReceiptV1;
-use crate::{config::RelayMode, scheduler::CellClass};
 /// Maximum retained dynamic label series for each first-release metric family.
 const DYNAMIC_METRIC_SERIES_MAX_V1: usize = 256;
 /// Maximum bytes inspected while normalizing an untrusted metric label.
@@ -1574,8 +1574,8 @@ pub struct MetricsSnapshot {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Quantity;
     use super::*;
+    use iroha_primitives::numeric::Quantity;
     #[test]
     fn normalize_maps_known_patterns() {
         assert_eq!(

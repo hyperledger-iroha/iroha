@@ -1,4 +1,6 @@
-use ivm::{AccelerationConfig, ByteMerkleTree, acceleration_runtime_status, set_acceleration_config};
+use ivm::{
+    AccelerationConfig, ByteMerkleTree, acceleration_runtime_status, set_acceleration_config,
+};
 struct AccelConfigGuard {
     original: AccelerationConfig,
 }
@@ -41,8 +43,8 @@ fn parallel_matches_sequential() {
 }
 #[test]
 fn parallel_updates_thread_safe() {
-    use std::sync::Arc;
     use rayon::prelude::*;
+    use std::sync::Arc;
     let tree = Arc::new(ByteMerkleTree::new(4, 32));
     (0..4usize).into_par_iter().for_each(|i| {
         let chunk = [i as u8; 32];

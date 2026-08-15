@@ -1,10 +1,3 @@
-use core::cmp::Ordering;
-use iroha_crypto::{Hash, HashOf};
-use iroha_schema::IntoSchema;
-use norito::{
-    codec::{Decode, Encode},
-    to_bytes,
-};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -15,6 +8,13 @@ use crate::{
     },
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
+};
+use core::cmp::Ordering;
+use iroha_crypto::{Hash, HashOf};
+use iroha_schema::IntoSchema;
+use norito::{
+    codec::{Decode, Encode},
+    to_bytes,
 };
 /// Pin intent emitted by the DA ingest pipeline to seed the `SoraFS` registry.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
@@ -226,7 +226,6 @@ pub fn pin_intent_merkle_commitment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
     use crate::{
         NetworkId,
         account::AccountId,
@@ -238,6 +237,7 @@ mod tests {
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
     fn test_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
         let key_pair = KeyPair::try_from_seed(vec![0xD9; 32], Algorithm::Ed25519)
             .expect("valid deterministic pin-intent key");

@@ -4,18 +4,9 @@
 //! This module provides a feature-gated WS endpoint for a WalletConnect-like
 //! flow and a relay bus that bridges app↔wallet connections locally and, when
 //! enabled, propagates frames over the Iroha P2P network between nodes.
-use core::future::Future;
-use std::{
-    collections::{HashMap, VecDeque},
-    net::IpAddr,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use base64::Engine;
+use core::future::Future;
 use futures::{SinkExt, StreamExt};
 use iroha_core as corelib;
 use iroha_crypto::{Algorithm, MerkleTree, Signature};
@@ -28,6 +19,15 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 use iroha_torii_shared::{connect as proto, connect_sdk};
+use std::{
+    collections::{HashMap, VecDeque},
+    net::IpAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tokio::sync::{Mutex, RwLock, mpsc};
 // no direct HTTP responses here
 use crate::json_macros::JsonSerialize;
@@ -1688,11 +1688,11 @@ pub(crate) fn decode_sid(s: &str) -> Result<Sid, String> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU64};
+    use super::*;
     use base64::Engine as _;
     use iroha_crypto::{Hash, KeyPair};
+    use std::{collections::BTreeMap, num::NonZeroU64};
     use tokio::time::{Duration, timeout};
-    use super::*;
     fn test_session_identity(seed: u8) -> (Sid, [u8; 32], [u8; 16]) {
         let app_pk = [seed.max(1); 32];
         let nonce = [seed.wrapping_add(1).max(1); 16];

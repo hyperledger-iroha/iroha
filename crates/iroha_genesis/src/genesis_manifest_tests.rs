@@ -1,10 +1,10 @@
-use std::{convert::TryInto, num::NonZeroU64, path::PathBuf};
+use super::*;
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     block::consensus::ConsensusGenesisParams, isi::SetParameter, parameter::system::BlockParameter,
 };
 use iroha_version::codec::DecodeVersioned;
-use super::*;
+use std::{convert::TryInto, num::NonZeroU64, path::PathBuf};
 fn manifest_chain_discriminant_value() -> norito::json::Value {
     norito::json::value::to_value(&iroha_data_model::account::address::chain_discriminant())
         .expect("serialize chain discriminant")
@@ -651,8 +651,8 @@ fn debug_dump_set_parameter_order_for_manifest_path() -> Result<()> {
 #[test]
 #[ignore = "debug helper for inspecting signed genesis instruction order"]
 fn debug_dump_set_parameter_order_for_signed_genesis_path() -> Result<()> {
-    use std::{env, fs};
     use iroha_data_model::{block::decode_framed_signed_block, transaction::Executable};
+    use std::{env, fs};
     init_instruction_registry();
     let path = env::var("IROHA_DEBUG_SIGNED_GENESIS_PATH")
         .wrap_err("IROHA_DEBUG_SIGNED_GENESIS_PATH must point to a signed genesis .nrt")?;
@@ -677,8 +677,8 @@ fn debug_dump_set_parameter_order_for_signed_genesis_path() -> Result<()> {
 #[test]
 #[ignore = "debug helper for inspecting build_and_sign instruction order before encoding"]
 fn debug_dump_set_parameter_order_for_built_manifest_path() -> Result<()> {
-    use std::env;
     use iroha_data_model::transaction::Executable;
+    use std::env;
     init_instruction_registry();
     let path = env::var("IROHA_DEBUG_GENESIS_PATH")
         .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
@@ -702,8 +702,8 @@ fn debug_dump_set_parameter_order_for_built_manifest_path() -> Result<()> {
 #[test]
 #[ignore = "debug helper for inspecting build_and_sign instruction order after encode_wire roundtrip"]
 fn debug_dump_set_parameter_order_for_encoded_manifest_path() -> Result<()> {
-    use std::env;
     use iroha_data_model::{block::decode_framed_signed_block, transaction::Executable};
+    use std::env;
     init_instruction_registry();
     let path = env::var("IROHA_DEBUG_GENESIS_PATH")
         .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
@@ -1240,7 +1240,9 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
 }
 #[test]
 fn permissioned_genesis_rejects_npos_parameters() {
-    use iroha_data_model::parameter::{Parameter as DataModelParameter, system::SumeragiConsensusMode};
+    use iroha_data_model::parameter::{
+        Parameter as DataModelParameter, system::SumeragiConsensusMode,
+    };
     let chain = ChainId::from("iroha:test:permmeta");
     let mut parameters = Parameters::default();
     let npos_defaults = SumeragiNposParameters::default();

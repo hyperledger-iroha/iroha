@@ -3,10 +3,6 @@
 //! A content bundle is a hashed tar archive with a precomputed file index. The
 //! hash of the raw tar bytes serves as the bundle identifier and is used as the
 //! HTTP `ETag` when serving files through Torii.
-use std::collections::BTreeMap;
-use iroha_crypto::Hash;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     account::AccountId,
     da::{
@@ -16,6 +12,10 @@ use crate::{
     nexus::{DataSpaceId, LaneId, UniversalAccountId},
     role::RoleId,
 };
+use iroha_crypto::Hash;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeMap;
 /// Identifier for a content bundle (`Hash` of the tar archive).
 pub type ContentBundleId = Hash;
 /// Entry in a content bundle file index.

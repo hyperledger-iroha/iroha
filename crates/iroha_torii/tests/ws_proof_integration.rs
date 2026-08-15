@@ -5,13 +5,13 @@
 #[path = "common/proof_events.rs"]
 mod proof_events;
 #[cfg(feature = "ws_integration_tests")]
-use std::io::ErrorKind;
-#[cfg(feature = "ws_integration_tests")]
 use axum::{Router, routing::get};
 #[cfg(feature = "ws_integration_tests")]
 use futures_util::{SinkExt as _, StreamExt as _};
 #[cfg(feature = "ws_integration_tests")]
 use proof_events::ProofEventFixture;
+#[cfg(feature = "ws_integration_tests")]
+use std::io::ErrorKind;
 #[cfg(feature = "ws_integration_tests")]
 use tokio::net::TcpListener;
 #[cfg(feature = "ws_integration_tests")]

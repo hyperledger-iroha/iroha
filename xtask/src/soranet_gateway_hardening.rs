@@ -1,13 +1,13 @@
 //! Hardening and privacy baseline checks for the SoraGlobal Gateway CDN (SNNet-15H).
 //! Produces JSON/Markdown evidence that SBOMs, vuln scans, retention defaults,
 //! and sandbox/HSM artefacts are present before promotion.
+use blake3::Hasher as Blake3;
+use eyre::{Result, WrapErr};
+use norito::json::{self, Map, Number, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use blake3::Hasher as Blake3;
-use eyre::{Result, WrapErr};
-use norito::json::{self, Map, Number, Value};
 /// Options for the hardening auditor.
 #[derive(Debug, Clone)]
 pub struct GatewayHardeningOptions {

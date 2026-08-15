@@ -170,35 +170,55 @@ impl core::str::FromStr for Ipv6Addr {
     type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut words = [0u16; 8];
-        let mut iter = s.split(':');
         let shorthand_pos = s.find("::");
         if s.rfind("::") != shorthand_pos {
             return Err(ParseError::UnexpectedAbbreviation);
         }
-        for word in &mut words {
-            let group = iter.next().ok_or(Self::Err::NotEnoughSegments)?;
-            if group.is_empty() {
-                break;
+
+        if let Some(pos) = shorthand_pos {
+            let (head, tail) = s.split_at(pos);
+            let tail = &tail[2..];
+            let head_len = parse_ipv6_groups(head, &mut words)?;
+
+            let mut tail_words = [0u16; 8];
+            let tail_len = parse_ipv6_groups(tail, &mut tail_words)?;
+            let explicit_len = head_len
+                .checked_add(tail_len)
+                .ok_or(ParseError::TooManySegments)?;
+            if explicit_len >= words.len() {
+                // `::` must stand for at least one zero segment.
+                return Err(ParseError::TooManySegments);
             }
-            *word = u16::from_str_radix(group, 16).map_err(|_| ParseError::InvalidSegment)?;
-        }
-        if shorthand_pos.is_some() {
-            let mut rev_iter = s.rsplit(':');
-            for word in words.iter_mut().rev() {
-                let group = rev_iter.next().unwrap();
-                if group.is_empty() {
-                    return Ok(Self(words));
-                }
-                *word = u16::from_str_radix(group, 16).map_err(|_| ParseError::InvalidSegment)?;
-            }
-            return Err(ParseError::TooManySegments);
-        }
-        if iter.next().is_some() {
-            Err(ParseError::TooManySegments)
-        } else {
+
+            let tail_start = words.len() - tail_len;
+            words[tail_start..].copy_from_slice(&tail_words[..tail_len]);
             Ok(Self(words))
+        } else {
+            let len = parse_ipv6_groups(s, &mut words)?;
+            if len < words.len() {
+                Err(ParseError::NotEnoughSegments)
+            } else {
+                Ok(Self(words))
+            }
         }
     }
+}
+
+fn parse_ipv6_groups(input: &str, output: &mut [u16; 8]) -> Result<usize, ParseError> {
+    if input.is_empty() {
+        return Ok(0);
+    }
+
+    let mut len = 0;
+    for group in input.split(':') {
+        if group.is_empty() {
+            return Err(ParseError::InvalidSegment);
+        }
+        let word = output.get_mut(len).ok_or(ParseError::TooManySegments)?;
+        *word = u16::from_str_radix(group, 16).map_err(|_| ParseError::InvalidSegment)?;
+        len += 1;
+    }
+    Ok(len)
 }
 impl core::fmt::Display for Ipv6Addr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -475,7 +495,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Ipv6Addr {
 impl core::str::FromStr for SocketAddrV6 {
     type Err = ParseError;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let value = value.trim_start_matches('[');
+        let value = value.strip_prefix('[').ok_or(ParseError::NoPort)?;
         let (ip, port) = value.split_once("]:").ok_or(ParseError::NoPort)?;
         Ok(Self {
             ip: ip.parse()?,

@@ -1,9 +1,9 @@
-use std::io::{BufWriter, Write};
+use crate::{Outcome, RunArgs};
 use clap::Subcommand;
 use color_eyre::eyre::eyre;
 use iroha_data_model::{nexus::DataSpaceId, prelude::RoleId};
 use iroha_genesis::RawGenesisTransaction;
-use crate::{Outcome, RunArgs};
+use std::io::{BufWriter, Write};
 mod embed_pop;
 mod generate;
 mod normalize;

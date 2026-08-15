@@ -22,8 +22,8 @@
 //!         .all(|c| c.length >= ChunkProfile::DEFAULT.min_size)
 //! );
 //! ```
-use std::{error::Error, fmt, sync::OnceLock};
 use sha3::{Digest, Sha3_256};
+use std::{error::Error, fmt, sync::OnceLock};
 /// Rolling hash mask controlling the probability of a boundary for the default profile.
 const BREAK_MASK: u64 = 0x0000_FFFF;
 /// Rolling hash mask used by the high-density profile (smaller target chunks).

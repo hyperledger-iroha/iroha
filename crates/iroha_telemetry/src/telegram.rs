@@ -1,10 +1,10 @@
 //! Telegram alerts delivery (feature-gated).
-use std::fmt::Write as _;
 use eyre::{Result, eyre};
 use futures::StreamExt;
 use iroha_config::parameters::actual::Telemetry as Config;
 use iroha_logger::telemetry::Event as Telemetry;
 use reqwest::Client;
+use std::fmt::Write as _;
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_stream::wrappers::BroadcastStream;
 use url::Url;
@@ -524,9 +524,9 @@ async fn send_message(client: &Client, bot_key: &str, chat_id: &str, text: &str)
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_logger::telemetry::Fields;
     use norito::json::Value;
-    use super::*;
     fn event_with_level(level: &str) -> Telemetry {
         Telemetry {
             target: "telegram::tests",

@@ -1,4 +1,5 @@
 //! Merkle proof construction and verification for DA commitment bundles.
+use super::{DaProofPolicyError, enforce_committed_proof_policy};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::BlockHeader,
@@ -13,7 +14,6 @@ use iroha_data_model::{
     },
 };
 use thiserror::Error;
-use super::{DaProofPolicyError, enforce_committed_proof_policy};
 /// Errors surfaced while validating a DA commitment proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DaProofVerificationError {
@@ -448,7 +448,6 @@ fn bundle_len_u32(len: usize) -> Result<u32, DaProofVerificationError> {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
     use super::*;
     use iroha_crypto::HashOf;
     use iroha_data_model::{
@@ -463,6 +462,7 @@ mod tests {
         },
         nexus::{DataSpaceId, LaneId},
     };
+    use std::num::NonZeroU64;
     fn sample_record(lane: u32, manifest_tag: u8) -> DaCommitmentRecord {
         let lane_byte = u8::try_from(lane).expect("lane fits in u8 for test record");
         DaCommitmentRecord::new(

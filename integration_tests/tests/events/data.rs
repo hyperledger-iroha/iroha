@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for event data produced by instruction and IVM execution.
-use std::collections::BTreeSet;
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
 use integration_tests::{sandbox, sync::get_status_with_retry_async};
@@ -22,6 +21,7 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use std::collections::BTreeSet;
 use tokio::{task::spawn_blocking, time::Instant};
 const SNS_LEASE_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 fn produce_instructions(

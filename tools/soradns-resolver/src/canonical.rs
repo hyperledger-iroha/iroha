@@ -1,6 +1,6 @@
+use crate::limits::preflight_json;
 use norito::json::{self, Error as JsonError, Value as NoritoJsonValue};
 use sha2::{Digest, Sha256};
-use crate::limits::preflight_json;
 /// Convert a Norito JSON value into a canonicalised byte representation.
 pub fn canonicalize_norito_bytes(value: &NoritoJsonValue) -> Result<Vec<u8>, JsonError> {
     let mut bytes = Vec::new();

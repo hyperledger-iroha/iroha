@@ -214,8 +214,7 @@ impl SoracloudHostResponsePayloadV1 {
     /// Validate operation-specific host response payload constraints.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when response hashes or nested records
-    /// are malformed.
+    /// Returns [`SoracloudManifestError`] when response hashes or nested records are malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         match self {
             Self::ReadCommittedState(response) => response.validate(),
@@ -916,11 +915,10 @@ impl SoracloudRuntimeProvenancePurposeV1 {
 pub struct SoracloudRuntimeProvenancePurposeErrorV1;
 /// Encode one versioned, domain- and purpose-separated runtime provenance preimage.
 ///
-/// The returned bytes are the canonical Norito encoding of this exact tuple:
-/// `(domain_tag_bytes, version, purpose_wire_id, canonical_payload_bytes)`.
-/// Both byte strings are length-delimited by Norito, so no purpose or payload
-/// boundary can be reinterpreted. Callers must sign the returned preimage,
-/// never `canonical_payload` directly.
+/// The returned bytes are the canonical Norito encoding of this exact tuple: `(domain_tag_bytes,
+/// version, purpose_wire_id, canonical_payload_bytes)`. Both byte strings are length-delimited by
+/// Norito, so no purpose or payload boundary can be reinterpreted. Callers must sign the returned
+/// preimage, never `canonical_payload` directly.
 ///
 /// # Errors
 ///
@@ -957,10 +955,9 @@ pub enum SoracloudRuntimeProvenancePreimageErrorV1 {
 }
 /// Validate one canonical runtime provenance preimage against an expected purpose.
 ///
-/// Decoding uses Norito's canonical decode limits derived from `preimage.len()`;
-/// transport callers must additionally enforce their deployment-owned byte
-/// ceiling before invoking this function. No decoded payload bytes are returned
-/// or included in errors.
+/// Decoding uses Norito's canonical decode limits derived from `preimage.len()`; transport callers
+/// must additionally enforce their deployment-owned byte ceiling before invoking this function. No
+/// decoded payload bytes are returned or included in errors.
 ///
 /// # Errors
 ///
@@ -986,8 +983,7 @@ pub fn validate_soracloud_runtime_provenance_preimage_v1(
 }
 /// Encode the canonical provenance signature payload for deployment bundles.
 ///
-/// The payload layout is the canonical Norito encoding of
-/// [`SoraDeploymentBundleV1`].
+/// The payload layout is the canonical Norito encoding of [`SoraDeploymentBundleV1`].
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -998,8 +994,7 @@ pub fn encode_bundle_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for app-level infrastructure manifests.
 ///
-/// The payload layout is the canonical Norito encoding of
-/// [`SoraAppInfraManifestV1`].
+/// The payload layout is the canonical Norito encoding of [`SoraAppInfraManifestV1`].
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1055,8 +1050,7 @@ pub fn encode_set_service_config_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for service config deletions.
 ///
-/// The payload layout is a Norito tuple in this exact field order:
-/// `(service_name, config_name)`.
+/// The payload layout is a Norito tuple in this exact field order: `(service_name, config_name)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1082,8 +1076,7 @@ pub fn encode_set_service_secret_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for service secret deletions.
 ///
-/// The payload layout is a Norito tuple in this exact field order:
-/// `(service_name, secret_name)`.
+/// The payload layout is a Norito tuple in this exact field order: `(service_name, secret_name)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1095,13 +1088,11 @@ pub fn encode_delete_service_secret_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for state mutations.
 ///
-/// The payload layout is a Norito tuple in this exact field order:
-/// `(service_name, binding_name, key, operation, value_size_bytes,
-/// payload_commitment, encryption, governance_tx_hash,
+/// The payload layout is a Norito tuple in this exact field order: `(service_name, binding_name,
+/// key, operation, value_size_bytes, payload_commitment, encryption, governance_tx_hash,
 /// fhe_input_admission_proof)`.
 ///
-/// `operation` is expected to be a deterministic symbolic label such as
-/// `"upsert"` or `"delete"`.
+/// `operation` is expected to be a deterministic symbolic label such as `"upsert"` or `"delete"`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1151,16 +1142,13 @@ pub fn soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1
 }
 /// Derive the canonical statement hash for Soracloud FHE input admission.
 ///
-/// The statement layout is a nested Norito tuple in this exact field order:
-/// `((service_name, binding_name, key, operation, value_size_bytes,
-/// payload_commitment, encryption, governance_tx_hash),
-/// (bfv_parameter_digest, bfv_rns_modulus_chain_digest,
-/// bfv_key_switch_decomposition_chain_digest),
-/// ciphertext_proof_statement_digests, residual_multiple_bound,
-/// ExactResidualMultiple)`.
+/// The statement layout is a nested Norito tuple in this exact field order: `((service_name,
+/// binding_name, key, operation, value_size_bytes, payload_commitment, encryption,
+/// governance_tx_hash), (bfv_parameter_digest, bfv_rns_modulus_chain_digest,
+/// bfv_key_switch_decomposition_chain_digest), ciphertext_proof_statement_digests,
+/// residual_multiple_bound, ExactResidualMultiple)`.
 ///
-/// `operation` is expected to be a deterministic symbolic label such as
-/// `"upsert"`.
+/// `operation` is expected to be a deterministic symbolic label such as `"upsert"`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1199,12 +1187,11 @@ pub fn derive_soracloud_fhe_input_admission_statement_hash(
 }
 /// Derive a canonical statement hash for Soracloud FHE input admission with bound mode.
 ///
-/// The statement layout is a nested Norito tuple in this exact field order:
-/// `((service_name, binding_name, key, operation, value_size_bytes,
-/// payload_commitment, encryption, governance_tx_hash),
-/// (bfv_parameter_digest, bfv_rns_modulus_chain_digest,
-/// bfv_key_switch_decomposition_chain_digest),
-/// ciphertext_proof_statement_digests, residual_multiple_bound, bound_mode)`.
+/// The statement layout is a nested Norito tuple in this exact field order: `((service_name,
+/// binding_name, key, operation, value_size_bytes, payload_commitment, encryption,
+/// governance_tx_hash), (bfv_parameter_digest, bfv_rns_modulus_chain_digest,
+/// bfv_key_switch_decomposition_chain_digest), ciphertext_proof_statement_digests,
+/// residual_multiple_bound, bound_mode)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1286,8 +1273,7 @@ pub fn encode_agent_deploy_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for apartment lease renewal.
 ///
-/// The payload layout is a Norito tuple in this exact field order:
-/// `(apartment_name, lease_ticks)`.
+/// The payload layout is a Norito tuple in this exact field order: `(apartment_name, lease_ticks)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1299,8 +1285,7 @@ pub fn encode_agent_lease_renew_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for apartment restart requests.
 ///
-/// The payload layout is a Norito tuple in this exact field order:
-/// `(apartment_name, reason)`.
+/// The payload layout is a Norito tuple in this exact field order: `(apartment_name, reason)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1340,8 +1325,7 @@ pub fn encode_agent_wallet_spend_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for apartment wallet approvals.
 ///
-/// The payload layout is a Norito tuple in this exact field order:
-/// `(apartment_name, request_id)`.
+/// The payload layout is a Norito tuple in this exact field order: `(apartment_name, request_id)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1368,8 +1352,7 @@ pub fn encode_agent_message_send_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for apartment mailbox acknowledgements.
 ///
-/// The payload layout is a Norito tuple in this exact field order:
-/// `(apartment_name, message_id)`.
+/// The payload layout is a Norito tuple in this exact field order: `(apartment_name, message_id)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1763,8 +1746,7 @@ pub fn encode_hf_shared_lease_renew_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for model-host adverts.
 ///
-/// The payload layout is the canonical Norito encoding of
-/// [`SoraModelHostCapabilityRecordV1`].
+/// The payload layout is the canonical Norito encoding of [`SoraModelHostCapabilityRecordV1`].
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -1775,9 +1757,8 @@ pub fn encode_model_host_advertise_provenance_payload(
 }
 /// Encode the canonical provenance signature payload for model-host heartbeats.
 ///
-/// The semantic payload is the canonical Norito tuple
-/// `(validator_account_id, heartbeat_expires_at_ms)`. The returned signature
-/// preimage wraps those bytes with
+/// The semantic payload is the canonical Norito tuple `(validator_account_id,
+/// heartbeat_expires_at_ms)`. The returned signature preimage wraps those bytes with
 /// [`SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat`] through
 /// [`encode_soracloud_runtime_provenance_preimage_v1`].
 ///
@@ -1846,11 +1827,9 @@ struct FheJobRunProvenancePayloadV1<'a> {
 }
 /// Encode the canonical provenance signature payload for FHE job execution.
 ///
-/// The payload layout is the canonical Norito encoding of
-/// `FheJobRunProvenancePayloadV1`, preserving this exact field order:
-/// `service_name`, `binding_name`, `job`, `policy_reference`,
-/// `public_key_proof`, `bootstrap_key_zero_refresh_proof`, and
-/// `full_bootstrap_execution_proofs`.
+/// The payload layout is the canonical Norito encoding of `FheJobRunProvenancePayloadV1`,
+/// preserving this exact field order: `service_name`, `binding_name`, `job`, `policy_reference`,
+/// `public_key_proof`, `bootstrap_key_zero_refresh_proof`, and `full_bootstrap_execution_proofs`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.

@@ -2,11 +2,11 @@
 //!
 //! The module offers data structures for PoP configuration templates,
 //! validation routines, and health evaluation helpers so the CLI can stay thin.
+use norito::json::{JsonDeserialize, JsonSerialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt,
 };
-use norito::json::{JsonDeserialize, JsonSerialize};
 // First-release semantic corridors for decoded `soranet-popctl` inputs. The
 // JSON decoder applies the per-container ceilings; these aggregate limits also
 // prevent validly nested inputs from amplifying retained validation results.

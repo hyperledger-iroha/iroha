@@ -1,5 +1,8 @@
 #![cfg(feature = "app_api")]
-use std::net::SocketAddr;
+use crate::{
+    JsonBody, SharedAppState,
+    sorafs::site::{decode_content_cid, encode_content_cid},
+};
 use axum::{
     body::Bytes,
     extract::{FromRequestParts, Path, State, connect_info::ConnectInfo},
@@ -10,10 +13,7 @@ use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_data_model::soracloud::SoraRouteVisibilityV1;
 use mv::storage::StorageReadOnly;
 use norito::json::{self, Map, Value};
-use crate::{
-    JsonBody, SharedAppState,
-    sorafs::site::{decode_content_cid, encode_content_cid},
-};
+use std::net::SocketAddr;
 pub(crate) const APP_API_BINDING_CONFIG_NAME: &str = "torii/app_api_binding";
 pub(crate) const APP_API_MANIFEST_SCHEMA_VERSION_V1: u16 = 1;
 const ADAPTER_CONTRACT_VIEW_BATCH_V1: &str = "contract.view_batch.v1";

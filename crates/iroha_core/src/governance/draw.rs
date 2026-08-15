@@ -1,5 +1,5 @@
 //! Deterministic governance sortition utilities for on-chain bodies.
-use std::collections::{BTreeMap, BTreeSet};
+use crate::governance::sortition;
 use iroha_config::parameters::actual::Governance;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{
@@ -9,7 +9,7 @@ use iroha_data_model::{
     isi::governance::CouncilDerivationKind,
 };
 use iroha_primitives::numeric::Quantity;
-use crate::governance::sortition;
+use std::collections::{BTreeMap, BTreeSet};
 /// Sortition result with winners and alternates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Draw {
@@ -331,12 +331,12 @@ fn body_selection_from_bonded(
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId, account::AccountId, block::BlockHeader, governance::types::ParliamentBody,
     };
-    use super::*;
+    use std::collections::BTreeSet;
     fn mk_account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive governance draw fixture account key");

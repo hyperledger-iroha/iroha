@@ -185,8 +185,8 @@ mod halo2_bundle {
         let proof_raw = transcript.finalize();
         // Sanity check: the generated proof should verify before wrapping.
         {
-            use std::io::Cursor;
             use halo2_proofs::transcript::{Blake2bRead, TranscriptReadBuffer};
+            use std::io::Cursor;
             let cursor = Cursor::new(proof_raw.as_slice());
             let mut transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(cursor);
             let strategy = halo2_proofs::poly::ipa::strategy::SingleStrategy::new(&params);
@@ -284,13 +284,13 @@ pub use halo2_bundle::{VoteTallyProofBundle, vote_merkle8_bundle};
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 mod vote_bundle_sanity {
+    use super::halo2_bundle::vote_merkle8_bundle;
     use halo2_proofs::{
         dev::MockProver,
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
         plonk::{Circuit, ConstraintSystem},
         poly::{commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
     };
-    use super::halo2_bundle::vote_merkle8_bundle;
     #[test]
     fn mock_prover_satisfies_vote_bundle() {
         let bundle = vote_merkle8_bundle();

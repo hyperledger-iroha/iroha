@@ -1,6 +1,5 @@
 //! Stress tests for the transaction queue to guard against Arc drain panics.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, thread, time::Duration};
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
     kura::Kura,
@@ -12,6 +11,7 @@ use iroha_core::{
 use iroha_crypto::KeyPair;
 use iroha_data_model::{domain::Domain, prelude::*};
 use nonzero_ext::nonzero;
+use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, thread, time::Duration};
 fn checked_random_queue_stress_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked queue stress transaction keypair")
 }

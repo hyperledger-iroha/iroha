@@ -1,6 +1,5 @@
 //! Unit tests for executing single instructions via the IVM executor.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::sync::Arc;
 use iroha_core::{
     executor::Executor,
     kura::Kura,
@@ -10,6 +9,7 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
+use std::sync::Arc;
 #[test]
 fn ivm_instruction_executes() {
     let executor = Executor::default();

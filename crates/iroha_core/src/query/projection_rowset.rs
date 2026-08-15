@@ -4,12 +4,12 @@
 //! archive contains. The aggregate DSL can be evaluated against these rows after
 //! retrieval from DA without depending on ad hoc JSON maps or endpoint-specific
 //! response wrappers.
+use crate::query::projection_checkpoint::QueryProjectionResourceKind;
 use iroha_primitives::numeric::Quantity;
 use norito::{
     codec::{Decode, Encode},
     to_bytes,
 };
-use crate::query::projection_checkpoint::QueryProjectionResourceKind;
 /// Version of the logical rowset payload carried inside a shard archive.
 pub const QUERY_PROJECTION_ROWSET_VERSION: u16 = 1;
 /// Alias-aware projected account row.

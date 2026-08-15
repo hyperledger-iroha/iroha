@@ -17,7 +17,9 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };
-use iroha_executor_data_model::permission::governance::{CanManageParliament, CanRecordCitizenService};
+use iroha_executor_data_model::permission::governance::{
+    CanManageParliament, CanRecordCitizenService,
+};
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 use mv::storage::StorageReadOnly;

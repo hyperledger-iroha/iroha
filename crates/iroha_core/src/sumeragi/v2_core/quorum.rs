@@ -1,5 +1,5 @@
-use std::{collections::BTreeSet, error::Error, fmt};
 use super::{HeightContext, ValidatorId, VotingPower};
+use std::{collections::BTreeSet, error::Error, fmt};
 /// Equal-vote count and its redundant unit-vote projection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Quorum {

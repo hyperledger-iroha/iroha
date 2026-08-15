@@ -30,12 +30,12 @@ pub mod orderbook_submission;
 pub mod pin_registry;
 /// Authoritative proof-of-personhood issuer and registry records.
 pub mod pop_registry;
+/// Governance-controlled pricing schedule and credit policy.
+pub mod pricing;
 /// Finalized chain-authoritative PDP and PoTR outcome projections.
 pub mod proof_ledger;
 /// Chain-authoritative PoR, provider-dispute, and stream-token reputation journal.
 pub mod reputation;
-/// Governance-controlled pricing schedule and credit policy.
-pub mod pricing;
 /// Reserve + rent policy and lifecycle quoting.
 pub mod reserve;
 /// Transparency ledger entries, cycle headers, and inclusion proofs.

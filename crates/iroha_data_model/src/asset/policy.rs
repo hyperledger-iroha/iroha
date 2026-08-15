@@ -1,8 +1,8 @@
 //! Asset usage policy types shared between issuer/domain/dataspace enforcement paths.
-use std::collections::{BTreeMap, BTreeSet};
+use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId, nexus::DataSpaceId};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId, nexus::DataSpaceId};
+use std::collections::{BTreeMap, BTreeSet};
 /// Metadata key on an [`crate::asset::AssetDefinition`] storing [`AssetIssuerUsagePolicyV1`].
 pub const ASSET_ISSUER_USAGE_POLICY_METADATA_KEY: &str = "iroha:asset_issuer_usage_policy_v1";
 /// Metadata key on a [`crate::domain::Domain`] storing [`DomainAssetUsagePolicyV1`].

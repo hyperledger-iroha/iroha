@@ -6,11 +6,11 @@
 //! Resource-scoped tokens may also define a native use-time ownership root or an explicit wider
 //! parent token; ownership of an adjacent component of the scope is never sufficient.
 #![allow(clippy::missing_errors_doc)]
-use std::{format, string::String, vec::Vec};
 use iroha_data_model::prelude::*;
 pub use iroha_executor_data_model_derive::Permission;
 use iroha_schema::{Ident, IntoSchema};
 use norito::json::{JsonDeserializeOwned, JsonSerialize};
+use std::{format, string::String, vec::Vec};
 /// Used to check if the permission token is owned by the account.
 pub trait Permission: JsonSerialize + JsonDeserializeOwned + IntoSchema {
     /// Permission id, according to [`IntoSchema`].
@@ -1078,7 +1078,9 @@ mod tests {
     };
     use super::escrow::CanResolveEscrowDispute;
     use super::governance::{CanManageVerifyingKeys, CanProposeRuntimeUpgrade};
-    use super::oracle::{CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage};
+    use super::oracle::{
+        CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
+    };
     use super::query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace};
     use crate::permission::Permission as _;
     use iroha_crypto::KeyPair;

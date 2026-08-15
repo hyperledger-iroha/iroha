@@ -1,4 +1,3 @@
-use std::{collections::HashMap, str::FromStr};
 use iroha_crypto::Hash;
 use iroha_data_model::peer::Peer;
 use ivm::{
@@ -6,6 +5,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
+use std::{collections::HashMap, str::FromStr};
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {

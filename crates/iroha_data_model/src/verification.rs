@@ -1,15 +1,15 @@
 //! Formal verification helpers for the Iroha data model.
+use crate::{
+    account::{Account, AccountId},
+    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
+    domain::{Domain, DomainId},
+};
+use iroha_primitives::numeric::Quantity;
 use std::{
     collections::btree_map::{BTreeMap, Entry},
     format,
     string::String,
     vec::Vec,
-};
-use iroha_primitives::numeric::Quantity;
-use crate::{
-    account::{Account, AccountId},
-    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
-    domain::{Domain, DomainId},
 };
 const INVARIANT_DOMAIN_UNIQUE: &str = "domain.unique_id";
 const INVARIANT_DOMAIN_OWNER_EXISTS: &str = "domain.owner_exists";
@@ -292,9 +292,6 @@ fn verify_asset_totals(
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use iroha_crypto::KeyPair;
-    use iroha_primitives::numeric::{NumericSpec, Quantity};
     use super::*;
     use crate::{
         asset::{
@@ -303,6 +300,9 @@ mod tests {
         },
         metadata::Metadata,
     };
+    use iroha_crypto::KeyPair;
+    use iroha_primitives::numeric::{NumericSpec, Quantity};
+    use std::collections::BTreeSet;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked data-model verification fixture keypair")
     }

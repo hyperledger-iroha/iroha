@@ -1,4 +1,5 @@
 //! Generic RAM-LFE program-policy instruction handlers.
+use super::prelude::*;
 use iroha_crypto::{
     BfvIdentifierPublicParameters, Hash, RamLfeBackend, RamLfeVerificationMode,
     decode_bfv_programmed_public_parameters,
@@ -12,7 +13,6 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds},
 };
 use iroha_telemetry::metrics;
-use super::prelude::*;
 /// Execution handlers for RAM-LFE program-policy ISIs.
 pub mod isi {
     use super::*;
@@ -505,7 +505,7 @@ fn expected_execution_payload_hash_instances(payload_hash: Hash) -> Vec<Vec<[u8;
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, PolicyCommitment, RamLfeProofVerifierMetadata};
     use iroha_data_model::{
         account::AccountId,
@@ -513,7 +513,7 @@ mod tests {
         ram_lfe::{RamLfeProgramId, RamLfeReceiptAttestation},
         zk::OpenVerifyEnvelope,
     };
-    use super::*;
+    use std::str::FromStr as _;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("RAM-LFE fixture key generation should succeed")
     }

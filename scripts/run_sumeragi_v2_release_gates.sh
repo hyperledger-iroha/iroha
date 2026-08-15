@@ -162,7 +162,7 @@ export GIT_CONFIG_VALUE_1=false
 readonly release_runner_support_components=(
   scripts/run_sumeragi_v2_release_gates_support.sh
 )
-readonly release_runner_support_sha256="1c112ff344866044a830811900e77a8f0efc30f0b6b4a688997f2eb07959563d"
+readonly release_runner_support_sha256="7b889e930e8733f9664e4ae7bf5a7189683e4d7452e7f4397364929925a1d292"
 if ((${#release_runner_support_components[@]} != 1)); then
   echo "release runner support manifest is invalid" >&2
   exit 1
@@ -675,14 +675,10 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
 
   case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)
-      release_tlapm_platform="arm64-darwin"
-      release_verus_platform="arm64-macos"
       release_verus_sha256="f11f8a863103a3c8fcaf27e6189edfdba31081516591365b5e29b0a66f570451"
       release_cargo_verus_sha256="f918c6229c8d714640c9c9ec3d60b9c1d2e0aafc09bba8ff037332b04f85d078"
       ;;
     Linux-x86_64)
-      release_tlapm_platform="x86_64-linux-gnu"
-      release_verus_platform="x86-linux"
       release_verus_sha256="c5911ee43c7a92c49a48d2c8646c604d252a38c71c87bda88ad4d33eb9e7e0fc"
       release_cargo_verus_sha256="42a79c9afd700f8312a9ac7ab212070723e71beeb07f5ab855453010455bdc6d"
       ;;
@@ -691,14 +687,11 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
       exit 1
       ;;
   esac
-  readonly release_tlapm_platform release_verus_platform
   readonly release_verus_sha256 release_cargo_verus_sha256
   release_tlapm_bin="$(canonical_executable tlapm)" || {
     echo "the authenticated bootstrap tool inventory must provide TLAPM" >&2
     exit 1
   }
-  release_tlapm_root="$(dirname "$(dirname "$release_tlapm_bin")")"
-  release_tlapm_stdlib="${release_tlapm_root}/lib/tlapm/stdlib"
   if [[ -z "${IROHA_RELEASE_TLA2TOOLS_JAR:-}" ]]; then
     echo "the authenticated bootstrap environment must provide IROHA_RELEASE_TLA2TOOLS_JAR" >&2
     exit 1
@@ -707,6 +700,16 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     echo "the authenticated TLA2Tools path is unavailable" >&2
     exit 1
   }
+  if [[ -z "${IROHA_RELEASE_APALACHE_BIN:-}" ]]; then
+    echo "the authenticated bootstrap environment must provide IROHA_RELEASE_APALACHE_BIN" >&2
+    exit 1
+  fi
+  release_apalache_bin="$(canonical_path "$IROHA_RELEASE_APALACHE_BIN")" || {
+    echo "the authenticated Apalache launcher is unavailable" >&2
+    exit 1
+  }
+  release_apalache_root="$(dirname "$(dirname "$release_apalache_bin")")"
+  release_apalache_jar="${release_apalache_root}/lib/apalache.jar"
   release_verus_bin="$(canonical_executable verus)" || {
     echo "the authenticated bootstrap tool inventory must provide Verus" >&2
     exit 1
@@ -724,21 +727,24 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     echo "the authenticated bootstrap tool inventory must provide Java" >&2
     exit 1
   }
-  readonly release_tlapm_bin release_tlapm_root release_tlapm_stdlib
-  readonly release_tla2tools_jar release_verus_bin release_cargo_verus_bin
+  readonly release_tlapm_bin release_tla2tools_jar release_apalache_bin
+  readonly release_apalache_root release_apalache_jar release_verus_bin release_cargo_verus_bin
   readonly release_verus_dir release_java_bin
   if [[ ! -x "$release_tlapm_bin" \
-    || "$($release_tlapm_bin --version 2>&1)" != "3ab43c7" \
-    || ! -f "$release_tlapm_stdlib/Functions.tla" \
-    || "$(sha256_file "$release_tlapm_stdlib/Functions.tla")" != "b54ff63b7c76c327525c17c188d5f9f5e53d92f3fd701f5e2ba54f0f54391063" \
-    || ! -f "$release_tlapm_stdlib/Folds.tla" \
-    || "$(sha256_file "$release_tlapm_stdlib/Folds.tla")" != "aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b8b471790086da" ]]; then
+    || "$($release_tlapm_bin --version 2>&1)" != "3ab43c7" ]]; then
     echo "the authenticated external tool inventory lacks the pinned TLAPM toolchain" >&2
     exit 1
   fi
   if [[ ! -f "$release_tla2tools_jar" \
     || "$(sha256_file "$release_tla2tools_jar")" != "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88" ]]; then
     echo "the authenticated external tool inventory lacks pinned TLA2Tools v1.7.4" >&2
+    exit 1
+  fi
+  if [[ ! -x "$release_apalache_bin" || ! -f "$release_apalache_jar" \
+    || "$(sha256_file "$release_apalache_bin")" != "bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501898d33ea7d1da3a8cd7" \
+    || "$(sha256_file "$release_apalache_jar")" != "1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a" \
+    || "$($release_apalache_bin version 2>&1)" != "0.52.2" ]]; then
+    echo "the authenticated external tool inventory lacks pinned Apalache v0.52.2" >&2
     exit 1
   fi
   if [[ ! -x "$release_verus_bin" || ! -x "$release_cargo_verus_bin" \
@@ -822,81 +828,50 @@ PY
   readonly release_signature_revocation="${release_signature_evidence_dir}/identity-revocation"
   readonly release_verified_git_bin="${release_signature_evidence_dir}/identity-git"
   readonly release_verified_ssh_keygen_bin="${release_signature_evidence_dir}/identity-ssh-keygen"
-  "$release_python_bin" -I -S - \
+  release_runner_tool_source_tsv="$(authenticated_runner_tool_sources \
+    "$release_python_bin" \
     "$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION" \
     "$SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256" \
-    "$release_git_exec_path" <<'PY'
-from pathlib import Path
-import hashlib
-import json
-import os
-import stat
-import sys
-
-marker_path = Path(sys.argv[1])
-expected_marker_digest = sys.argv[2]
-exec_path = Path(sys.argv[3])
-marker_bytes = marker_path.read_bytes()
-if hashlib.sha256(marker_bytes).hexdigest() != expected_marker_digest:
-    raise SystemExit("bootstrap marker changed before Git helper validation")
-marker = json.loads(marker_bytes)
-tools = marker.get("runner", {}).get("tools", {})
-expected_tools = {
-    "awk", "basename", "cargo", "cargo-verus", "cat", "chmod", "cmp", "cp",
-    "cut", "diff", "dirname", "env", "find", "git-index-pack",
-    "git-upload-pack", "grep", "java", "ln", "ls", "mkdir", "mkfifo",
-    "mktemp", "mv", "node", "openssl", "rm", "rmdir", "rustc", "sed", "sh",
-    "sleep", "swift", "tail", "tee", "tlapm", "tr", "uname", "verus", "wc",
-    "xargs", "shasum" if sys.platform == "darwin" else "sha256sum",
-}
-if not isinstance(tools, dict) or set(tools) != expected_tools:
-    raise SystemExit("production release runner-tool command closure is not exact")
-for name in sorted(expected_tools):
-    record = tools.get(name)
-    alias = exec_path / name
-    if not isinstance(record, dict) or set(record) != {
-        "archive_id", "alias_name", "archive_name", "mode", "sha256", "size_bytes"
-    }:
-        raise SystemExit(f"production release lacks authenticated runner tool {name}")
-    expected_archive_name = f"runner-tools/{name}"
-    archive = exec_path.parent / expected_archive_name
-    relative_target = os.path.relpath(archive, alias.parent)
-    alias_metadata = alias.lstat()
-    archive_metadata = archive.lstat()
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(archive, flags)
-    try:
-        opened = os.fstat(descriptor)
-        digest = hashlib.sha256()
-        while block := os.read(descriptor, 1024 * 1024):
-            digest.update(block)
-        source_after = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    path_after = archive.lstat()
-    alias_after = alias.lstat()
-    stable_fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
-    if (
-        record["alias_name"] != name
-        or record["archive_id"] != f"release-runner-tool.{name}.v1"
-        or record["archive_name"] != expected_archive_name
-        or not stat.S_ISLNK(alias_metadata.st_mode)
-        or os.readlink(alias) != relative_target
-        or archive.resolve(strict=True) != archive
-        or stat.S_ISLNK(archive_metadata.st_mode)
-        or not stat.S_ISREG(archive_metadata.st_mode)
-        or any(getattr(archive_metadata, field) != getattr(opened, field) or getattr(opened, field) != getattr(source_after, field) or getattr(source_after, field) != getattr(path_after, field) for field in stable_fields)
-        or (alias_metadata.st_dev, alias_metadata.st_ino, alias_metadata.st_mode) != (alias_after.st_dev, alias_after.st_ino, alias_after.st_mode)
-        or os.readlink(alias) != relative_target
-        or archive_metadata.st_uid != os.geteuid()
-        or archive_metadata.st_nlink != 1
-        or stat.S_IMODE(archive_metadata.st_mode) != 0o500
-        or archive_metadata.st_size != record["size_bytes"]
-        or record["mode"] != "0500"
-        or digest.hexdigest() != record["sha256"]
-    ):
-        raise SystemExit(f"authenticated runner tool {name} changed")
-PY
+    "$release_git_exec_path" \
+    "$release_bootstrap_evidence_dir/runner-tool-manifest.json"
+  )" || {
+    echo "authenticated runner-tool source recovery failed" >&2
+    exit 1
+  }
+  readonly release_runner_tool_source_tsv
+  release_runner_tool_names=()
+  release_runner_tool_paths=()
+  while IFS=$'\t' read -r release_runner_tool_name release_runner_tool_path release_runner_tool_extra; do
+    [[ -n "$release_runner_tool_name" && -n "$release_runner_tool_path" \
+      && -z "$release_runner_tool_extra" ]] || exit 1
+    release_runner_tool_names+=("$release_runner_tool_name")
+    release_runner_tool_paths+=("$release_runner_tool_path")
+  done <<<"$release_runner_tool_source_tsv"
+  ((${#release_runner_tool_names[@]} == 41)) || {
+    echo "authenticated runner-tool source recovery is incomplete" >&2
+    exit 1
+  }
+  release_runner_tool_source() {
+    local wanted="$1" index
+    for ((index = 0; index < ${#release_runner_tool_names[@]}; index++)); do
+      [[ "${release_runner_tool_names[index]}" == "$wanted" ]] || continue
+      printf '%s\n' "${release_runner_tool_paths[index]}"
+      return 0
+    done
+    return 1
+  }
+  release_tlapm_source="$(release_runner_tool_source tlapm)"
+  release_tlapm_root="$(canonical_path "$(dirname "$(dirname "$release_tlapm_source")")")"
+  release_tlapm_stdlib="${release_tlapm_root}/lib/tlapm/stdlib"
+  if [[ "$release_tlapm_source" != "$release_tlapm_root/bin/tlapm" \
+    || ! -f "$release_tlapm_stdlib/Functions.tla" \
+    || "$(sha256_file "$release_tlapm_stdlib/Functions.tla")" != "b54ff63b7c76c327525c17c188d5f9f5e53d92f3fd701f5e2ba54f0f54391063" \
+    || ! -f "$release_tlapm_stdlib/Folds.tla" \
+    || "$(sha256_file "$release_tlapm_stdlib/Folds.tla")" != "aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b8b471790086da" ]]; then
+    echo "the authenticated TLAPM source lacks its pinned distribution closure" >&2
+    exit 1
+  fi
+  readonly release_tlapm_source release_tlapm_root release_tlapm_stdlib
   mkdir -m 0700 -- "$release_target_root" "$release_host_root"
   "$release_python_bin" -I -S - \
     "$repo_root" "$release_target_root" "$release_host_root" <<'PY'
@@ -1015,15 +990,15 @@ PY
   release_runtime_sources=(
     "$release_python_bin" "$release_git_bin" "$release_ssh_keygen_bin" "$release_bash_bin"
     "$release_bootstrap_evidence_dir/copy-release-runtime.py"
-    "$release_cargo_bin" "$release_rustc_bin" "$release_node_bin" "$release_swift_bin"
-    "$release_tlapm_bin" "$release_java_bin" "$release_verus_bin" "$release_cargo_verus_bin"
-    "$release_tla2tools_jar" "$release_tlapm_stdlib"
-    "$release_git_exec_path/git-upload-pack" "$release_git_exec_path/git-index-pack"
+    "$(release_runner_tool_source cargo)" "$(release_runner_tool_source rustc)"
+    "$(release_runner_tool_source node)" "$(release_runner_tool_source swift)"
+    "$release_tlapm_source" "$release_apalache_bin" "$(release_runner_tool_source java)"
+    "$(release_runner_tool_source verus)" "$(release_runner_tool_source cargo-verus)"
+    "$release_tla2tools_jar" "$(release_runner_tool_source git-upload-pack)"
+    "$(release_runner_tool_source git-index-pack)"
   )
   for release_shell_utility_name in "${release_shell_utility_names[@]}"; do
-    release_shell_utility_source="$(
-      canonical_executable "$release_shell_utility_name"
-    )" || {
+    release_shell_utility_source="$(release_runner_tool_source "$release_shell_utility_name")" || {
       echo "authenticated bootstrap runner-tool closure lacks ${release_shell_utility_name}" >&2
       exit 1
     }
@@ -1068,7 +1043,9 @@ def tool_path(name: str) -> Path:
     if name in {"cargo", "rustc"}:
         return runtime / "rust-toolchain" / "bin" / name
     if name == "swift":
-        return runtime / "swift-toolchain" / "bin" / name
+        return (runtime / "swift-toolchain" / "bin" / name).resolve(strict=True)
+    if name == "tlapm":
+        return runtime / "tlapm-distribution" / "bin" / name
     if name == "java":
         return runtime / "java-runtime" / "bin" / name
     if name in {"verus", "cargo-verus"}:
@@ -1265,9 +1242,10 @@ PY
     IROHA_RELEASE_SCALING_IROHAD_SHA256="$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
     IROHA_RELEASE_SCALING_IROHA_CLI_SHA256="$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
     IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256="$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
-    IROHA_RELEASE_TLAPM_BIN="$release_child_bin/tlapm" \
-    IROHA_RELEASE_TLAPM_STDLIB="$release_child_runtime/tlapm-stdlib" \
+    IROHA_RELEASE_TLAPM_BIN="$release_child_runtime/tlapm-distribution/bin/tlapm" \
+    IROHA_RELEASE_TLAPM_STDLIB="$release_child_runtime/tlapm-distribution/lib/tlapm/stdlib" \
     IROHA_RELEASE_TLA2TOOLS_JAR="$release_child_runtime/tla2tools.jar" \
+    IROHA_RELEASE_APALACHE_BIN="$release_child_runtime/apalache-distribution/bin/apalache-mc" \
     IROHA_RELEASE_VERUS_DIR="$release_child_bin" \
     IROHA_RELEASE_JAVA_BIN="$release_child_bin/java" \
     IROHA_RELEASE_GIT_BIN="$release_child_bin/git" \
@@ -1751,6 +1729,7 @@ if [[ "$profile" == "--release" ]]; then
     IROHA_RELEASE_TLAPM_BIN \
     IROHA_RELEASE_TLAPM_STDLIB \
     IROHA_RELEASE_TLA2TOOLS_JAR \
+    IROHA_RELEASE_APALACHE_BIN \
     IROHA_RELEASE_VERUS_DIR \
     IROHA_RELEASE_JAVA_BIN \
     IROHA_RELEASE_GIT_BIN \
@@ -1771,6 +1750,7 @@ if [[ "$profile" == "--release" ]]; then
   export TLAPM_BIN="$IROHA_RELEASE_TLAPM_BIN"
   export TLAPM_STDLIB="$IROHA_RELEASE_TLAPM_STDLIB"
   export TLA2TOOLS_JAR="$IROHA_RELEASE_TLA2TOOLS_JAR"
+  export APALACHE_BIN="$IROHA_RELEASE_APALACHE_BIN"
   export JAVA_BIN="$IROHA_RELEASE_JAVA_BIN"
   export SUMERAGI_V2_TLC_PROFILE=ci
   export SUMERAGI_TLAPS_THREADS=1
@@ -2206,7 +2186,7 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::production_commit_certificate_response_conflict_keeps_discovery_outstanding_and_runtime_open
   sumeragi::v2_effects::tests::proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two
   sumeragi::v2_effects::tests::passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime
-  sumeragi::v2_effects::tests::late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps
+  sumeragi::v2_effects::tests::late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps
   sumeragi::v2_effects::tests::fetch_retransmissions_reuse_one_work_slot_and_one_signed_request
   sumeragi::v2_effects::tests::apply_retransmissions_reuse_one_work_slot
   sumeragi::v2_effects::tests::full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
@@ -2241,7 +2221,7 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_preserves_exact_hard_boundary
   sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_rejects_above_hard_bound_without_clipping
   sumeragi::v2_lane_work::tests::native_amx_signing_guard_limits_reject_oversized_record_and_anchor_bytes
-  sumeragi::v2_lane_work::tests::native_amx_adapter_opens_with_bounded_production_like_limits
+  sumeragi::v2_lane_work::tests::merge_share_transport_rejects_omission_nonleader_body_and_legacy_version
   sumeragi::v2_lane_work::tests::native_amx_request_rejects_inactive_reply_route_before_signing
   sumeragi::v2_lane_work::tests::persisted_lane_session_uses_only_selected_qc_signer_pops
   sumeragi::v2_lane_work::tests::same_proposal_shortcut_rejects_unvalidated_certificate_variants
@@ -2388,7 +2368,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route
   sumeragi::v2_runner::tests::runner_dispatch_rejects_durable_response_without_reply_routes
   sumeragi::v2_runner::tests::exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift
-  sumeragi::v2_runner::tests::replayed_proposal_sign_reserves_only_the_exact_current_lock_owner
+  sumeragi::v2_runner::tests::recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner
   sumeragi::v2_runner::tests::first_same_subject_lock_preserves_pending_local_proposal_events
   sumeragi::v2_runner::tests::higher_same_subject_lock_retires_prior_origin_work
   sumeragi::v2_runner::tests::first_same_subject_lock_from_prior_view_retires_unlocked_work
@@ -2434,10 +2414,11 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::auxiliary_completion_drain_is_batch_bounded
   sumeragi::v2_worker::tests::actor_backpressure_retains_exact_final_lane_commit_qc_post
   sumeragi::v2_worker::tests::actor_backpressure_retains_complete_merge_share_fanout
-  sumeragi::v2_worker::tests::exact_serve_predecessor_episode_services_older_local_without_admitting_later_io
-  sumeragi::v2_worker::tests::repeated_exact_serve_claims_close_all_older_sources_before_later_io
-  sumeragi::v2_worker::tests::completed_exact_serve_episode_reopens_once_for_new_runtime_witness
-  sumeragi::v2_worker::tests::exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
+  sumeragi::v2_worker::tests::exact_serve_predecessor_admission_services_older_local_without_admitting_later_io
+  sumeragi::v2_worker::tests::repeated_exact_serve_admissions_close_all_older_sources_before_later_io
+  sumeragi::v2_worker::tests::dropping_exact_serve_predecessor_admission_closes_transient_aperture
+  sumeragi::v2_worker::tests::exact_serve_predecessor_admission_is_transient_and_barrier_bound
+  sumeragi::v2_worker::tests::exact_serve_admission_waits_out_full_control_prefix_before_older_causal_work
   sumeragi::v2_worker::tests::fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers
   sumeragi::v2_worker::tests::drained_exact_retransmission_gets_fresh_scheduler_ordinal
   sumeragi::v2_worker::tests::fair_ingress_gate_overflow_closes_without_partial_admission
@@ -2709,7 +2690,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=855
+readonly expected_production_liveness_test_count=856
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2800,7 +2781,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 855-test liveness inventory above. The later
+# not belong to the canonical 856-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -4094,9 +4075,9 @@ if [[ "$profile" == "--release" ]]; then
   sumeragi_v2_sdk_diagnostics_test_counts=(
     121
     88
-    17
-    26
-    24
+    33
+    42
+    41
   )
   for sumeragi_v2_sdk_diagnostics_index in \
     "${!sumeragi_v2_sdk_diagnostics_surfaces[@]}"; do
@@ -4970,4 +4951,4 @@ release_gate_boundary "child-result:after-publication" || {
   exit $?
 }
 verify_release_identity "after protected child-result publication"
-echo "Sumeragi v2 production build corridor passed; protected outer receipt validation is pending" >&2
+echo "Sumeragi v2 production build corridor passed with protected outer receipt validation pending" >&2

@@ -3,7 +3,9 @@
 //! This module provides conversions from the internal settlement router
 //! parameters to the Norito-friendly data model types published as part of the
 //! `LaneBlockCommitment` payload.
-use iroha_data_model::block::consensus::{LaneLiquidityProfile, LaneSwapMetadata, LaneVolatilityClass};
+use iroha_data_model::block::consensus::{
+    LaneLiquidityProfile, LaneSwapMetadata, LaneVolatilityClass,
+};
 use iroha_primitives::numeric::Numeric;
 use settlement_router::{VolatilityBucket, haircut::LiquidityProfile};
 /// Deterministic snapshot of the conversion parameters used for XOR settlement.
@@ -58,10 +60,10 @@ pub fn convert_volatility_bucket(bucket: VolatilityBucket) -> LaneVolatilityClas
 }
 #[cfg(test)]
 mod tests {
+    use super::{SwapEvidence, convert_liquidity_profile, convert_volatility_bucket};
     use iroha_data_model::block::consensus::LaneVolatilityClass;
     use iroha_primitives::numeric::Numeric;
     use settlement_router::{VolatilityBucket, haircut::LiquidityProfile};
-    use super::{SwapEvidence, convert_liquidity_profile, convert_volatility_bucket};
     #[test]
     fn converts_liquidity_profile() {
         assert!(matches!(

@@ -10,7 +10,6 @@ fn main() -> anyhow::Result<()> {
 }
 #[cfg(all(feature = "dev-tests", feature = "halo2-dev-tests"))]
 mod vote_tally_bundle {
-    use std::{env, fs, path::PathBuf};
     use anyhow::{Context, Result};
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
@@ -26,6 +25,7 @@ mod vote_tally_bundle {
     use iroha_data_model::proof::VerifyingKeyBox;
     use norito::json::{self, Value};
     use rand::rngs::OsRng;
+    use std::{env, fs, path::PathBuf};
     pub fn run() -> Result<()> {
         let out_dir = env::args()
             .nth(1)

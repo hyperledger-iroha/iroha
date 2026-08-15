@@ -1,10 +1,10 @@
 //! Adversarial lifecycle tests for canonical role operations.
-use std::collections::HashMap;
 use ivm::{
     IVM,
     kotodama::compiler::Compiler as KotodamaCompiler,
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost},
 };
+use std::collections::HashMap;
 mod common;
 fn load(vm: &mut IVM, program: &[u8], context: &str) {
     vm.load_program(program)

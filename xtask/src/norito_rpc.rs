@@ -3,12 +3,12 @@
 //! The implementation lives in `norito_codegen_exporter`; these adapters keep
 //! the workspace command dispatcher thin.
 mod alias_setup_fixture;
+use crate::JsonTarget;
 use eyre::Result;
 pub use norito_codegen_exporter::FixtureOptions;
 use norito_codegen_exporter::{
     JsonOutput, generate_fixtures as generate_fixtures_impl, run_verify as run_verify_impl,
 };
-use crate::JsonTarget;
 /// Verify canonical Norito RPC fixtures and optionally write a JSON report.
 pub fn run_verify(json_out: Option<JsonTarget>) -> Result<()> {
     let alias_setup_fixture = alias_setup_fixture::render()?;
@@ -27,8 +27,8 @@ fn json_output(target: JsonTarget) -> JsonOutput {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
     use super::*;
+    use std::{fs, path::PathBuf};
     #[test]
     fn output_target_adapter_preserves_variants() {
         assert_eq!(json_output(JsonTarget::Stdout), JsonOutput::Stdout);

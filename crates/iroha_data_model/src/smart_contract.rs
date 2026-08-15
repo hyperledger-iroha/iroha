@@ -1,11 +1,4 @@
 //! This module contains data and structures related only to smart contract execution
-use std::{format, str::FromStr, string::String, vec::Vec};
-use bech32::{Bech32m, Hrp};
-use iroha_data_model_derive::model;
-use iroha_primitives::conststr::ConstString;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
 use crate::{
     account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
     error::ParseError,
@@ -13,13 +6,20 @@ use crate::{
     name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
+use bech32::{Bech32m, Hrp};
+use iroha_data_model_derive::model;
+use iroha_primitives::conststr::ConstString;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{format, str::FromStr, string::String, vec::Vec};
+use thiserror::Error;
 pub mod payloads {
     //! Contexts with function arguments for different entrypoints
+    use crate::{block::BlockHeader, prelude::*};
     use norito::{
         codec::{Decode, Encode},
         core::DecodeFromSlice,
     };
-    use crate::{block::BlockHeader, prelude::*};
     /// Context for smart contract entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
@@ -69,10 +69,10 @@ pub mod payloads {
     }
     #[cfg(test)]
     mod payloads_tests {
+        use super::*;
         use core::num::NonZeroU64;
         use iroha_crypto::KeyPair;
         use norito::core::DecodeFromSlice;
-        use super::*;
         fn checked_random_account_id() -> AccountId {
             AccountId::new(
                 KeyPair::try_random()
@@ -151,8 +151,8 @@ const CONTRACT_ADDRESS_PAYLOAD_LEN_V1: usize = 1 + 8 + CONTRACT_ADDRESS_HASH_LEN
 pub use self::model::*;
 #[model]
 mod model {
-    use derive_more::Display;
     use super::*;
+    use derive_more::Display;
     /// Canonical Bech32m-encoded public contract address.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
@@ -655,9 +655,9 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod contract_address_tests {
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use super::*;
     use crate::{block::BlockHeader, id::ChainId};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     fn network_id(seed: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             seed,
@@ -947,11 +947,6 @@ pub mod manifest {
     //! It can be attached to a transaction's `metadata` under a well-known
     //! key for admission-time checks. When attached or registered, a V1
     //! manifest must carry both consensus-binding hashes.
-    use iroha_crypto::{Error as CryptoError, Hash, KeyPair, PublicKey, Signature};
-    use iroha_schema::IntoSchema;
-    use norito::codec::{Decode, Encode};
-    #[cfg(feature = "json")]
-    use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
     use crate::{
         account::AccountId,
         events::EventFilterBox,
@@ -959,6 +954,11 @@ pub mod manifest {
         smart_contract::entrypoint::{EntrypointArgumentSchemaV1, EntrypointValueTypeV1},
         trigger::{TriggerId, action::Repeats},
     };
+    use iroha_crypto::{Error as CryptoError, Hash, KeyPair, PublicKey, Signature};
+    use iroha_schema::IntoSchema;
+    use norito::codec::{Decode, Encode};
+    #[cfg(feature = "json")]
+    use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
     /// Well-known metadata key used to attach a contract manifest.
     pub const MANIFEST_METADATA_KEY: &str = "contract_manifest";
     /// Smart contract manifest used for admission-time validation.
@@ -1682,8 +1682,8 @@ pub mod manifest {
     }
     #[cfg(test)]
     mod manifest_signing_tests {
-        use iroha_crypto::KeyPair;
         use super::*;
+        use iroha_crypto::KeyPair;
         fn checked_random_keypair() -> KeyPair {
             KeyPair::try_random().expect("test fixture random key generation should succeed")
         }

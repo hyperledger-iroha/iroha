@@ -2,7 +2,16 @@
 //!
 //! The registry uses only typed first-release stores. No legacy state-path
 //! decoding or compatibility aliases live here.
-use std::collections::{BTreeMap, BTreeSet};
+use super::prelude::*;
+use crate::{
+    prelude::ValidSingularQuery,
+    smartcontracts::Execute,
+    state::{
+        GovernanceProposalStatus, MusubiResolverIndexRevisionV1, StateReadOnly, StateTransaction,
+        WorldReadOnly,
+    },
+    telemetry::{MusubiGovernanceActionV1, MusubiGovernanceRejectionReasonV1},
+};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     asset::AssetId,
@@ -20,16 +29,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
-use super::prelude::*;
-use crate::{
-    prelude::ValidSingularQuery,
-    smartcontracts::Execute,
-    state::{
-        GovernanceProposalStatus, MusubiResolverIndexRevisionV1, StateReadOnly, StateTransaction,
-        WorldReadOnly,
-    },
-    telemetry::{MusubiGovernanceActionV1, MusubiGovernanceRejectionReasonV1},
-};
+use std::collections::{BTreeMap, BTreeSet};
 impl Execute for RegisterMusubiNamespaceBindingV1 {
     fn execute(
         self,

@@ -5,11 +5,11 @@
 //! onto the production `n = 3f + 1` geometry without changing validator
 //! identities: [`ValidatorIndex`] values always refer to positions in the
 //! context's canonical roster.
-use std::{error::Error, fmt};
 use super::types::{
     HeightContext, MAX_FAULT_TOLERANCE, MAX_VOTING_ROSTER_LEN, MIN_FAULT_TOLERANCE,
     MIN_VOTING_ROSTER_LEN, ValidatorId,
 };
+use std::{error::Error, fmt};
 /// Stable position of a validator in the canonically ordered height roster.
 pub type ValidatorIndex = u32;
 /// Smallest production committee (`3 * 1 + 1`).

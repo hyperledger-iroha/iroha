@@ -10,12 +10,12 @@
 //! Unlike the original Zcash prototype, circuit boundaries use assigned cells,
 //! not host-only [`Value`]s. Message words, chaining state, constants, and the
 //! final digest therefore remain connected by permutation constraints.
-use std::{convert::TryInto, fmt::Debug, marker::PhantomData};
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::{Cell, Chip, Layouter, Region, Value},
     plonk::{Advice, Any, Assigned, Column, Error},
 };
+use std::{convert::TryInto, fmt::Debug, marker::PhantomData};
 mod table16;
 pub(crate) use table16::util;
 #[allow(unused_imports)]
@@ -327,6 +327,7 @@ pub(crate) trait Sha256Instructions<F: PrimeField>: Chip<F> + Clone + Debug {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use halo2_proofs::{
         circuit::{Layouter, V1, Value},
         dev::MockProver,
@@ -334,7 +335,6 @@ mod tests {
         plonk::{Advice, Circuit, Column, ConstraintSystem, Error},
     };
     use sha2::{Digest as _, Sha256};
-    use super::*;
     #[derive(Clone, Debug)]
     struct TestConfig {
         sha: Table16Config,

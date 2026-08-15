@@ -1,25 +1,18 @@
 //! Chain-authoritative SoraFS reputation source journal.
 //!
-//! The first-release reputation projector consumes this payload-free journal
-//! for the three source families that are not represented by the existing
-//! proof, repair, orderbook, and reserve ledgers: terminal `PoR` outcomes,
-//! provider-dispute transitions, and stream-token validation outcomes.
+//! The first-release reputation projector consumes this payload-free journal for the three source
+//! families that are not represented by the existing proof, repair, orderbook, and reserve ledgers:
+//! terminal `PoR` outcomes, provider-dispute transitions, and stream-token validation outcomes.
 //!
-//! Source identifiers are domain separated from their native identifiers.
-//! Event identifiers are the BLAKE3 digest of the complete canonical entry
-//! with its `event_id` field cleared. A ledger implementation must retain one
-//! global event-id index and one exact source-head index. Exact event-id
-//! replays are idempotent; a different event at an occupied source revision is
+//! Source identifiers are domain separated from their native identifiers. Event identifiers are the
+//! BLAKE3 digest of the complete canonical entry with its `event_id` field cleared. A ledger
+//! implementation must retain one global event-id index and one exact source-head index. Exact
+//! event-id replays are idempotent; a different event at an occupied source revision is
 //! equivocation.
 //!
-//! The module also defines the explicit finalized-archive retention request.
-//! That request is a caller-signed custom parameter with a strict digest-linked
-//! sequence and exact committed target; it intentionally contains no automatic
-//! age, capacity, or process-local retention policy.
-use std::io;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
+//! The module also defines the explicit finalized-archive retention request. That request is a
+//! caller-signed custom parameter with a strict digest-linked sequence and exact committed target;
+//! it intentionally contains no automatic age, capacity, or process-local retention policy.
 #[cfg(feature = "json")]
 use crate::parameter::{CustomParameter, CustomParameterId};
 use crate::{
@@ -27,6 +20,10 @@ use crate::{
     account::AccountId,
     sorafs::capacity::{CapacityDisputeId, CapacityDisputeOutcome, ProviderId},
 };
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::io;
+use thiserror::Error;
 /// First-release reputation-journal entry version.
 pub const REPUTATION_JOURNAL_ENTRY_VERSION_V1: u16 = 1;
 /// First-release governed recorder-policy version.
@@ -166,8 +163,7 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
     ///
     /// # Errors
     ///
-    /// Rejects invalid targets, sequence/predecessor combinations, or a
-    /// canonical encoding failure.
+    /// Rejects invalid targets, sequence/predecessor combinations, or a canonical encoding failure.
     pub fn try_new(
         network_id: NetworkId,
         sequence: u64,
@@ -212,8 +208,7 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
     ///
     /// # Errors
     ///
-    /// Returns a JSON error for malformed or semantically invalid matching
-    /// payloads.
+    /// Returns a JSON error for malformed or semantically invalid matching payloads.
     #[cfg(feature = "json")]
     pub fn from_custom_parameter(
         custom: &CustomParameter,
@@ -415,10 +410,9 @@ impl ReputationJournalSourceIdV1 {
     }
     /// Derive the globally namespaced source for one gateway validation sequence.
     ///
-    /// The request-context digest is deliberately excluded from this source
-    /// key. Reusing one gateway sequence with substituted request context must
-    /// therefore collide at the source boundary and fail as equivocation,
-    /// rather than entering the journal as a distinct event.
+    /// The request-context digest is deliberately excluded from this source key. Reusing one
+    /// gateway sequence with substituted request context must therefore collide at the source
+    /// boundary and fail as equivocation, rather than entering the journal as a distinct event.
     #[must_use]
     pub fn for_stream_token_validation(binding: StreamTokenValidationBindingV1) -> Self {
         let mut hasher = blake3::Hasher::new();
@@ -964,10 +958,9 @@ pub enum StreamTokenViolationKindV1 {
     ProfileMismatch,
     /// The token named a different admitted provider.
     ///
-    /// The resulting journal event is attributed to the authoritative local
-    /// serving provider, never the token's caller-controlled provider claim.
-    /// The claimed canonical token material remains bound by
-    /// [`StreamTokenValidationOutcomeV1::token_body_digest`].
+    /// The resulting journal event is attributed to the authoritative local serving provider, never
+    /// the token's caller-controlled provider claim. The claimed canonical token material remains
+    /// bound by [`StreamTokenValidationOutcomeV1::token_body_digest`].
     ProviderMismatch,
     /// The token exceeded its signed concurrency ceiling.
     ConcurrencyLimitExceeded,
@@ -1204,8 +1197,7 @@ impl StreamTokenPresentationV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error when an exact header cannot be length-framed or its
-    /// digest is inert.
+    /// Returns an error when an exact header cannot be length-framed or its digest is inert.
     pub fn from_exact_header(
         exact_header: Option<&[u8]>,
     ) -> Result<Self, StreamTokenRequestContextErrorV1> {
@@ -1362,15 +1354,13 @@ impl StreamTokenRequestRouteV1 {
 }
 /// Payload-free canonical serving context for one stream-token validation.
 ///
-/// The context retains only the authoritative provider and public manifest,
-/// profile, and route material. The raw nonce and token header are immediately
-/// reduced to separate domain-separated digests. Remote addresses, forwarding
-/// headers, aliases, PII, and other caller metadata are neither retained nor
-/// exposed through `Debug`.
+/// The context retains only the authoritative provider and public manifest, profile, and route
+/// material. The raw nonce and token header are immediately reduced to separate domain-separated
+/// digests. Remote addresses, forwarding headers, aliases, PII, and other caller metadata are
+/// neither retained nor exposed through `Debug`.
 ///
-/// Callers must use [`Self::try_new`] with the exact request nonce and optional
-/// raw token-header bytes. Deserialized values must pass [`Self::validate`]
-/// before use.
+/// Callers must use [`Self::try_new`] with the exact request nonce and optional raw token-header
+/// bytes. Deserialized values must pass [`Self::validate`] before use.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1539,9 +1529,8 @@ impl StreamTokenValidationRequestContextV1 {
 }
 /// Durable identity and request-context binding for one gateway validation.
 ///
-/// A production gateway must allocate `gateway_sequence` from sealed
-/// monotonic state before publishing an outcome. The exact fixed-width
-/// canonical binding is:
+/// A production gateway must allocate `gateway_sequence` from sealed monotonic state before
+/// publishing an outcome. The exact fixed-width canonical binding is:
 ///
 /// `gateway_id[32] || gateway_sequence_le[8] || request_context_digest[32]`.
 ///
@@ -1567,8 +1556,7 @@ impl StreamTokenValidationBindingV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for a zero gateway identity, zero sequence, or zero
-    /// request-context digest.
+    /// Returns an error for a zero gateway identity, zero sequence, or zero request-context digest.
     pub fn try_new(
         gateway_id: [u8; 32],
         gateway_sequence: u64,
@@ -1845,9 +1833,8 @@ impl ReputationJournalEntryV1 {
     ///
     /// # Errors
     ///
-    /// Returns a structural entry/policy error, digest mismatch, or recorder
-    /// authority mismatch. Core execution must additionally require the
-    /// transaction authority to equal `recorded_by`.
+    /// Returns a structural entry/policy error, digest mismatch, or recorder authority mismatch.
+    /// Core execution must additionally require the transaction authority to equal `recorded_by`.
     pub fn validate_against_policy(
         &self,
         policy: &ReputationJournalAuthorityPolicyV1,
@@ -2041,8 +2028,7 @@ impl ReputationJournalFinalizedEventCursorV1 {
     ///
     /// # Errors
     ///
-    /// Returns a typed error when the sequence, block height, or block hash is
-    /// inert.
+    /// Returns a typed error when the sequence, block height, or block hash is inert.
     pub fn validate(self) -> Result<(), ReputationJournalValidationError> {
         if self.sequence == 0 || self.block_height == 0 || self.block_hash == [0; 32] {
             return Err(ReputationJournalValidationError::InvalidEventCursor);
@@ -2739,8 +2725,8 @@ fn validate_source_revision_material(
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
     const BLOCK_HASH: [u8; 32] = [0xB1; 32];
     const FINAL_HASH: [u8; 32] = [0xF1; 32];
     const SOURCE_TIME: u64 = 1_700_000_001_700;

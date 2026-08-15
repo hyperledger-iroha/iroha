@@ -1,4 +1,8 @@
-use std::collections::BTreeSet;
+use super::*;
+use crate::{
+    prelude::{AcceptedTransaction, StateReadOnly},
+    smartcontracts::Execute,
+};
 use iroha_data_model::{
     account::AccountId,
     domain::DomainId,
@@ -17,11 +21,7 @@ use iroha_executor_data_model::permission::{
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
-use super::*;
-use crate::{
-    prelude::{AcceptedTransaction, StateReadOnly},
-    smartcontracts::Execute,
-};
+use std::collections::BTreeSet;
 fn wonderland_domain_id() -> DomainId {
     DomainId::try_new("wonderland", "universal").expect("domain id")
 }
@@ -265,11 +265,6 @@ fn permission_cache_rebuilds_after_restart() {
 }
 #[allow(clippy::too_many_lines)]
 fn permission_cache_rebuilds_after_restart_impl() {
-    use std::{
-        borrow::Cow,
-        num::{NonZeroU64, NonZeroUsize},
-        sync::Arc,
-    };
     use iroha_config::{
         base::WithOrigin,
         kura::InitMode,
@@ -291,6 +286,11 @@ fn permission_cache_rebuilds_after_restart_impl() {
     use iroha_primitives::time::TimeSource;
     use iroha_test_samples::{
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
+    };
+    use std::{
+        borrow::Cow,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

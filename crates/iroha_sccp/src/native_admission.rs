@@ -4,12 +4,6 @@
 //! source-chain verifier. Consensus evidence is never routed through an opaque
 //! byte field inside this envelope: every native DTO is decoded as its concrete
 //! Rust/Norito type before verifier dispatch.
-use alloc::{boxed::Box, vec::Vec};
-use core::fmt;
-use iroha_data_model::bridge::{
-    BridgeNativeProofBackendV1, BridgeNativeProtocolProofV1, SccpInboundMessageKeyV1, SccpLaneIdV1,
-    SccpNativeTrustAnchorV1, SccpNetworkV1, SccpSourceIdentityV1,
-};
 use super::{
     BscNativeSourceError, BscNativeSourceProofV1, EthereumNativeSourceErrorV1,
     EthereumNativeSourceProofV1, H256, SccpPayloadV1, SccpSolanaAgaveSourceProofV1,
@@ -19,6 +13,12 @@ use super::{
     sccp_message_source_domain, sccp_message_target_domain, sccp_source_identity_hash_v1,
     verify_bsc_native_source, verify_ethereum_native_source_proof_v1,
     verify_sccp_payload_structure, verify_sccp_solana_agave_source_v1, verify_tron_native_source,
+};
+use alloc::{boxed::Box, vec::Vec};
+use core::fmt;
+use iroha_data_model::bridge::{
+    BridgeNativeProofBackendV1, BridgeNativeProtocolProofV1, SccpInboundMessageKeyV1, SccpLaneIdV1,
+    SccpNativeTrustAnchorV1, SccpNetworkV1, SccpSourceIdentityV1,
 };
 /// Maximum canonical Norito size of a native source envelope or inbound proof.
 ///

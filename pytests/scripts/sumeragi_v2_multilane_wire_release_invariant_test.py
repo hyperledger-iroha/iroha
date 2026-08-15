@@ -29,6 +29,22 @@ def wire_release_invariant(ledger: dict) -> dict:
     )
 
 
+def api_authority_separation_invariant(ledger: dict) -> dict:
+    return next(
+        mutation
+        for mutation in ledger["closure_mutations"]
+        if mutation["id"] == "ML-MUT-API-02"
+    )
+
+
+def fixture_canonical_owner_invariant(ledger: dict) -> dict:
+    return next(
+        mutation
+        for mutation in ledger["closure_mutations"]
+        if mutation["id"] == "ML-MUT-API-04"
+    )
+
+
 def validate_closure_mutations(root: Path, module, ledger: dict) -> tuple[str, ...]:
     errors: list[str] = []
     module._validate_closure_mutation_ledger(
@@ -63,12 +79,29 @@ def test_wire_release_invariant_binds_current_semantic_sources() -> None:
     module = load_checker()
     ledger = canonical_binding_ledger()
     wire = wire_release_invariant(ledger)
+    api = api_authority_separation_invariant(ledger)
+    fixture_owner = fixture_canonical_owner_invariant(ledger)
+    assert tuple(
+        (check["path"], tuple(check["required_tokens"]))
+        for check in api["source_checks"]
+    ) == module.reviewed_source.API_AUTHORITY_SEPARATION_SOURCE_CHECKS
+    assert tuple(
+        (check["path"], tuple(check["required_tokens"]))
+        for check in fixture_owner["source_checks"]
+    ) == module.reviewed_source.FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS
     assert tuple(check["path"] for check in wire["source_checks"]) == (
         "scripts/check_no_legacy_codec.sh",
         "fixtures/sumeragi_v2/wire_v2.tsv",
         "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
         "crates/iroha_data_model/tests/sumeragi_v2_cross_sdk_fixtures.rs",
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt",
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java",
+        "ci/run_sumeragi_v2_sdk_diagnostics.sh",
+        "ci/sumeragi_v2_sdk_source_closure.json",
         "scripts/run_sumeragi_v2_release_gates.sh",
+        "scripts/write_sumeragi_v2_release_receipt.py",
         "ci/check_sumeragi_v2_multilane_release_inventory.sh",
     )
     assert validate_closure_mutations(ROOT_DIR, module, ledger) == ()
@@ -79,18 +112,23 @@ def test_wire_release_invariant_rejects_ledger_weakening(
     weakening: str,
 ) -> None:
     module = load_checker()
-    ledger = canonical_binding_ledger()
-    source_checks = wire_release_invariant(ledger)["source_checks"]
-    if weakening == "path":
-        source_checks.pop()
-        expected = "source checks differ from the exact reviewed paths"
-    else:
-        source_checks[1]["required_tokens"].pop()
-        expected = "semantic source checks differ from the exact reviewed contract"
-    assert any(
-        expected in error
-        for error in validate_closure_mutations(ROOT_DIR, module, ledger)
-    )
+    for select in (
+        api_authority_separation_invariant,
+        fixture_canonical_owner_invariant,
+        wire_release_invariant,
+    ):
+        ledger = canonical_binding_ledger()
+        source_checks = select(ledger)["source_checks"]
+        if weakening == "path":
+            source_checks.pop()
+            expected = "source checks differ from the exact reviewed paths"
+        else:
+            source_checks[1]["required_tokens"].pop()
+            expected = "semantic source checks differ from the exact reviewed contract"
+        assert any(
+            expected in error
+            for error in validate_closure_mutations(ROOT_DIR, module, ledger)
+        )
 
 
 @pytest.mark.parametrize(

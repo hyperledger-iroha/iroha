@@ -1,26 +1,4 @@
 //! Stateful software signer core independent of its Unix transport.
-use std::{
-    collections::BTreeMap,
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    path::{Component, Path, PathBuf},
-    sync::Mutex,
-};
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
-use iroha_crypto::{KeyPair, Signature};
-use iroha_data_model::{
-    account::AccountId,
-    isi::sorafs::{
-        AdvanceSorafsReserveLifecycle, ApplySorafsRepairTaskAction, ChargeSorafsReserveRent,
-        DecideSorafsReserveAppeal, DecideSorafsReserveMovement, DrawSorafsReserveCredit,
-        MaintainSorafsOrderbook, MatchSorafsOrderbook, RecordSorafsOrderbookSettlementReceipt,
-        RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
-        SubmitSorafsProofOutcome, SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
-        SubmitSorafsReserveAppeal,
-    },
-    transaction::{Executable, TransactionBuilder, TransactionPayload},
-};
 use super::{
     envelope::{
         SoftwareSignerKeyEnvelopeAadV1, SoftwareSignerKeyEnvelopeV1, SoftwareSignerWrappingKeyV1,
@@ -40,6 +18,28 @@ use super::{
         public_key_digest, sign_request_digest, sign_response_digest, valid_identity,
         valid_software_signer_handle,
     },
+};
+use iroha_crypto::{KeyPair, Signature};
+use iroha_data_model::{
+    account::AccountId,
+    isi::sorafs::{
+        AdvanceSorafsReserveLifecycle, ApplySorafsRepairTaskAction, ChargeSorafsReserveRent,
+        DecideSorafsReserveAppeal, DecideSorafsReserveMovement, DrawSorafsReserveCredit,
+        MaintainSorafsOrderbook, MatchSorafsOrderbook, RecordSorafsOrderbookSettlementReceipt,
+        RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
+        SubmitSorafsProofOutcome, SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
+        SubmitSorafsReserveAppeal,
+    },
+    transaction::{Executable, TransactionBuilder, TransactionPayload},
+};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    io::{Read as _, Write as _},
+    path::{Component, Path, PathBuf},
+    sync::Mutex,
 };
 const ACTIVE_ENVELOPE_NAME_V1: &str = "key-envelope-v1.norito";
 const PENDING_ENVELOPE_NAME_V1: &str = ".key-envelope-v1.pending";

@@ -1,15 +1,3 @@
-use std::fmt::{Display, Formatter};
-use darling::{FromAttributes, FromDeriveInput, FromField, FromVariant, ast::Style, util::SpannedValue};
-use manyhow::{Emitter, emit, error_message};
-use proc_macro2::{Delimiter, Literal, Span, TokenStream};
-use quote::{format_ident, quote};
-use syn::{
-    Attribute, Field, GenericParam, Ident, Lifetime, LifetimeParam,
-    parse::ParseStream,
-    spanned::Spanned as _,
-    token::{Gt, Lt},
-    visit::Visit as _,
-};
 use crate::{
     attr_parse::{
         derive::DeriveAttrs,
@@ -19,6 +7,20 @@ use crate::{
     },
     emitter_ext::EmitterExt,
     utils::{darling_result, parse_single_list_attr_opt},
+};
+use darling::{
+    FromAttributes, FromDeriveInput, FromField, FromVariant, ast::Style, util::SpannedValue,
+};
+use manyhow::{Emitter, emit, error_message};
+use proc_macro2::{Delimiter, Literal, Span, TokenStream};
+use quote::{format_ident, quote};
+use std::fmt::{Display, Formatter};
+use syn::{
+    Attribute, Field, GenericParam, Ident, Lifetime, LifetimeParam,
+    parse::ParseStream,
+    spanned::Spanned as _,
+    token::{Gt, Lt},
+    visit::Visit as _,
 };
 #[derive(Debug)]
 enum FfiTypeToken {

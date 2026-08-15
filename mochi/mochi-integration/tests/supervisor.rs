@@ -1,13 +1,5 @@
 //! End-to-end supervisor integration tests backed by the gated Kagami test stub.
 #![cfg(feature = "dev-tools")]
-use std::{
-    collections::HashSet,
-    fs,
-    io::ErrorKind,
-    net::{SocketAddr, TcpListener},
-    path::{Path, PathBuf},
-    time::Duration,
-};
 use color_eyre::{Result, eyre::eyre};
 use iroha_data_model::{block::stream::BlockMessage, events::EventBox};
 use mochi_core::{
@@ -16,6 +8,14 @@ use mochi_core::{
 };
 use mochi_integration::{MockToriiBuilder, MockToriiData};
 use norito::json::Value;
+use std::{
+    collections::HashSet,
+    fs,
+    io::ErrorKind,
+    net::{SocketAddr, TcpListener},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tempfile::TempDir;
 use tokio::time::timeout;
 fn reserve_port() -> std::io::Result<u16> {

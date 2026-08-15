@@ -260,7 +260,7 @@ test('OpenAPI CI replays complete bundles from independent clean sources', async
   assert.equal(
     Array.from(
       gate.matchAll(
-        /node tools\/openapi\/scripts\/verify-openapi-release-inputs\.mjs/g,
+        /tools\/openapi\/scripts\/verify-openapi-release-inputs\.mjs/g,
       ),
     ).length,
     2,
@@ -314,13 +314,27 @@ test('OpenAPI CI replays complete bundles from independent clean sources', async
   assert.doesNotMatch(gate, /cp "\$\{REPO_ROOT\}\/Cargo\.lock"/);
   for (const dependencyContract of [
     'stage_replay_openapi_dependencies()',
-    'npm --prefix "${REPO_ROOT}/tools/openapi" ls --all --omit=dev --json',
+    'local source="${OPENAPI_NODE_MODULES_ROOT}"',
+    '"${source_root}/tools/openapi/package.json"',
+    '"${source_root}/tools/openapi/package-lock.json"',
+    '"${target}/.package-lock.json"',
+    'source_packages[""] != package_policy',
+    '{name: value for name, value in source_packages.items() if name}',
     'cp -R "${source}/." "${target}/"',
     'diff -qr "${source}" "${target}"',
     'stage_replay_openapi_dependencies "${source_root}"',
   ]) {
     assert.ok(gate.includes(dependencyContract), dependencyContract);
   }
+  assert.ok(!gate.includes('npm --prefix'));
+  assert.ok(gate.includes('OPENAPI_NODE_BIN="${OPENAPI_NODE_BIN:-}"'));
+  assert.ok(gate.includes('"${OPENAPI_NODE_BIN}" --input-type=module -'));
+  assert.ok(gate.includes('OPENAPI_DEPENDENCY_STATE_BEFORE="$(openapi_dependency_state)"'));
+  assert.ok(gate.includes('OPENAPI_DEPENDENCY_STATE_AFTER="$(openapi_dependency_state)"'));
+  assert.ok(gate.includes('openapi_dependency_state "${REPLAY_SOURCE_FIRST}/tools/openapi/node_modules"'));
+  assert.ok(gate.includes('openapi_dependency_state "${REPLAY_SOURCE_SECOND}/tools/openapi/node_modules"'));
+  assert.ok(gate.includes('identity(os.fstat(descriptor)) != fingerprint'));
+  assert.ok(gate.includes('before.st_mtime_ns, before.st_ctime_ns'));
   assert.match(
     gate,
     /OPENAPI_RUN_ROOT="\$\(mktemp -d \/private\/tmp\/iroha-openapi-check\.XXXXXX\)"/,

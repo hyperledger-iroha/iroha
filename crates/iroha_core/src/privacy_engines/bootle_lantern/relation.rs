@@ -8,12 +8,6 @@
 //! Publicly disclosed attributes are removed from the witness matrix and
 //! accumulated in the public offset. This fixed-width zero-column technique
 //! preserves one canonical witness layout for every disclosure bitmap.
-use iroha_data_model::privacy::{
-    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyV1,
-    IrohaBootleLanternAnoncredStatementV1,
-};
-use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
 use super::{
     params::{
         APPLICATION_ROWS_V1, APPLICATION_WITNESS_POLYNOMIALS_V1, RANDOMNESS_NORM_SQUARED_BOUND_V1,
@@ -22,6 +16,12 @@ use super::{
     ring::ApplicationPolynomialV1,
     transcript::{MatrixRoleV1, MatrixSeedV1, expand_application_matrix_v1},
 };
+use iroha_data_model::privacy::{
+    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyV1,
+    IrohaBootleLanternAnoncredStatementV1,
+};
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 const RANDOMNESS_POLYNOMIALS_V1: usize = 16;
 const TAG_POLYNOMIALS_V1: usize = 8;
 const SIGNATURE_HALF_POLYNOMIALS_V1: usize = 8;
@@ -525,7 +525,16 @@ pub enum RelationErrorV1 {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
+    use super::*;
+    use crate::privacy_engines::bootle_lantern::{
+        issuer::{
+            BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
+            BootleLanternIssuerPolicyMetadataV1, holder_finalize_blind_issuance_v1,
+            holder_prepare_blind_issuance_with_rng_v1, issuer_authorize_blind_issuance_with_rng_v1,
+            issuer_blind_issue_once_with_rng_v1,
+        },
+        transcript::matrix_seed_v1,
+    };
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
@@ -537,16 +546,7 @@ mod tests {
     use iroha_data_model::{NetworkId, block::BlockHeader};
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest as _, Sha256};
-    use super::*;
-    use crate::privacy_engines::bootle_lantern::{
-        issuer::{
-            BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
-            BootleLanternIssuerPolicyMetadataV1, holder_finalize_blind_issuance_v1,
-            holder_prepare_blind_issuance_with_rng_v1, issuer_authorize_blind_issuance_with_rng_v1,
-            issuer_blind_issue_once_with_rng_v1,
-        },
-        transcript::matrix_seed_v1,
-    };
+    use std::sync::OnceLock;
     struct TestRng {
         seed: [u8; 32],
         counter: u64,

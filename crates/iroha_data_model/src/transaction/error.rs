@@ -1,7 +1,8 @@
 //! Module containing errors that can occur in transaction lifecycle.
-use std::{
-    fmt::{Display, Formatter, Result as FmtResult},
-    string::String,
+pub use self::model::*;
+use crate::{
+    ValidationFail,
+    isi::{Instruction, InstructionBox},
 };
 #[cfg(feature = "json")]
 use base64::Engine as _;
@@ -13,10 +14,9 @@ use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-pub use self::model::*;
-use crate::{
-    ValidationFail,
-    isi::{Instruction, InstructionBox},
+use std::{
+    fmt::{Display, Formatter, Result as FmtResult},
+    string::String,
 };
 #[model]
 mod model {

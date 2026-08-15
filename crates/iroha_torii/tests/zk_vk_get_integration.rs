@@ -3,7 +3,6 @@
 #![allow(clippy::similar_names)]
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "app_api")]
-use std::{convert::TryFrom, sync::Arc};
 use axum::{Router, routing::get};
 use base64::Engine as _;
 use http_body_util::BodyExt;
@@ -18,6 +17,7 @@ use iroha_data_model::{
     zk::BackendTag,
 };
 use nonzero_ext::nonzero;
+use std::{convert::TryFrom, sync::Arc};
 use tower::ServiceExt as _;
 #[allow(clippy::too_many_lines)]
 #[tokio::test]

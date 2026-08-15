@@ -1,13 +1,10 @@
 //! Taikai ingest helpers and anchor integration for DA.
 
 #![allow(clippy::redundant_pub_crate)]
-use std::{
-    borrow::Cow,
-    fs::{self, OpenOptions},
-    io::{self, ErrorKind},
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+use super::{ingest::ManifestArtifacts, storage_class_label};
+use crate::{
+    routing::MaybeTelemetry,
+    sorafs::{AliasCachePolicy, AliasProofEvaluation},
 };
 use async_trait::async_trait;
 use axum::http::StatusCode;
@@ -38,10 +35,13 @@ use norito::{
 use reqwest::Client;
 use sorafs_car::ChunkStore;
 use sorafs_manifest::{ProviderAdmissionCouncilPolicy, canonical_manifest_root_cid};
-use super::{ingest::ManifestArtifacts, storage_class_label};
-use crate::{
-    routing::MaybeTelemetry,
-    sorafs::{AliasCachePolicy, AliasProofEvaluation},
+use std::{
+    borrow::Cow,
+    fs::{self, OpenOptions},
+    io::{self, ErrorKind},
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 pub(crate) const TAIKAI_SPOOL_SUBDIR: &str = "taikai";
 pub(crate) const META_TAIKAI_EVENT_ID: &str = "taikai.event_id";
@@ -103,6 +103,8 @@ pub(crate) const TAIKAI_ANCHOR_LINEAGE_MAX_BYTES: usize = 64 * 1024;
 pub(crate) const TAIKAI_ANCHOR_REQUEST_MAX_BYTES: usize = 16 * 1024 * 1024;
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) mod taikai_ingest {
+    use super::*;
+    use sorafs_car::{CarBuildPlan, CarWriter};
     use std::{
         cmp::Reverse,
         collections::BinaryHeap,
@@ -111,8 +113,6 @@ pub(crate) mod taikai_ingest {
         str::FromStr,
         sync::atomic::{AtomicU64, Ordering},
     };
-    use sorafs_car::{CarBuildPlan, CarWriter};
-    use super::*;
     static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
     pub(crate) const STREAM_LABEL_FALLBACK: &str = "<unknown>";
     pub(crate) struct EnvelopeArtifacts {
@@ -1111,8 +1111,8 @@ pub(crate) mod taikai_ingest {
     }
     #[cfg(test)]
     mod temp_cleanup_tests {
-        use tempfile::tempdir;
         use super::*;
+        use tempfile::tempdir;
         #[test]
         fn taikai_temp_artifact_cleanup_reports_unremovable_path() {
             let dir = tempdir().expect("tempdir");

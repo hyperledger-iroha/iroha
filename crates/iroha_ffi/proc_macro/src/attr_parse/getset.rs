@@ -1,10 +1,10 @@
 //! This module provides parsing of custom attributes from the [`getset`](https://docs.rs/getset/latest/getset/) crate
-use std::collections::hash_map::Entry;
+use crate::attr_parse::derive::{Derive, DeriveAttrs};
 use proc_macro2::Span;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::hash_map::Entry;
 use strum::{Display, EnumString};
 use syn::{Attribute, Token, parse::ParseStream, punctuated::Punctuated};
-use crate::attr_parse::derive::{Derive, DeriveAttrs};
 /// Type of accessor method derived for a structure
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, EnumString)]
 pub enum GetSetDerive {
@@ -300,14 +300,16 @@ impl GetSetFieldAttrs {
 }
 #[cfg(test)]
 mod test {
-    use super::{GetSetFieldAttrs, GetSetGenMode, GetSetOptions, GetSetStructAttrs, RequestedAccessors};
+    use super::{
+        GetSetFieldAttrs, GetSetGenMode, GetSetOptions, GetSetStructAttrs, RequestedAccessors,
+    };
     mod parse {
+        use super::{GetSetFieldAttrs, GetSetGenMode, GetSetOptions, GetSetStructAttrs};
+        use crate::parse_attributes;
         use darling::FromAttributes;
         use quote::quote;
         use rustc_hash::FxHashMap;
         use syn::parse_quote;
-        use super::{GetSetFieldAttrs, GetSetGenMode, GetSetOptions, GetSetStructAttrs};
-        use crate::parse_attributes;
         macro_rules! assert_getset_ok {
         ($( #[$meta:meta] )*,
             $ty:ident $body:tt
@@ -571,14 +573,14 @@ mod test {
         }
     }
     mod inheritance {
-        use darling::FromAttributes;
-        use proc_macro2::TokenStream;
-        use quote::quote;
-        use syn::parse_quote;
         use super::{
             GetSetFieldAttrs, GetSetGenMode, GetSetOptions, GetSetStructAttrs, RequestedAccessors,
         };
         use crate::attr_parse::derive::DeriveAttrs;
+        use darling::FromAttributes;
+        use proc_macro2::TokenStream;
+        use quote::quote;
+        use syn::parse_quote;
         fn get_field_derives(
             derive: TokenStream,
             struct_attr: TokenStream,

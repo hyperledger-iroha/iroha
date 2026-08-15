@@ -2,15 +2,15 @@
 //!
 //! Surveys Kura lane segments and optionally archives retired lanes so auditors
 //! can keep disk usage and evidence bundles tidy.
+use eyre::{Context, Result};
+use iroha_config::parameters::actual::LaneConfig;
+use norito::{derive::JsonSerialize, json};
 use std::{
     collections::BTreeSet,
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
 };
-use eyre::{Context, Result};
-use iroha_config::parameters::actual::LaneConfig;
-use norito::{derive::JsonSerialize, json};
 #[derive(Debug, Clone)]
 pub struct LaneMaintenanceOptions {
     pub config_path: PathBuf,
@@ -252,10 +252,10 @@ fn byte_len(path: &Path) -> Result<u64> {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId};
-    use tempfile::tempdir;
     use super::*;
+    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId};
+    use std::num::NonZeroU32;
+    use tempfile::tempdir;
     fn lane_cfg() -> LaneConfig {
         let lane_count = NonZeroU32::new(3).expect("non-zero lane count");
         let lane0 = LaneMetadata::default();

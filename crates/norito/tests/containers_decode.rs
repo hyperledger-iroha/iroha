@@ -1,6 +1,6 @@
 //! Roundtrip tests for container decoders using reusable scratch buffers.
-use std::collections::{BinaryHeap, LinkedList, VecDeque};
 use norito::{core, decode_from_bytes, to_bytes};
+use std::collections::{BinaryHeap, LinkedList, VecDeque};
 #[test]
 fn vec_nested_roundtrip_sequential() {
     let mut outer: Vec<Vec<u8>> = Vec::new();

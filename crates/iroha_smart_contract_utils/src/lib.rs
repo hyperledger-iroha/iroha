@@ -3,7 +3,9 @@
 #![allow(unsafe_code)]
 pub use dbg::*;
 pub use getrandom;
-pub use iroha_smart_contract_codec::{decode_with_length_prefix_from_raw, encode_with_length_prefix};
+pub use iroha_smart_contract_codec::{
+    decode_with_length_prefix_from_raw, encode_with_length_prefix,
+};
 pub use norito::{NoritoDeserialize, NoritoSerialize};
 mod dbg;
 pub mod log;

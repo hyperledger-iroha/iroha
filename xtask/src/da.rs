@@ -1,11 +1,4 @@
-use std::{
-    collections::HashMap,
-    error::Error,
-    fmt::Write as _,
-    fs,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use crate::{JsonTarget, write_json_output};
 use blake3::hash;
 use hex::encode as hex_encode;
 use integration_tests::da::pdp_potr::{DEFAULT_SEED, SimulationConfig, run_simulation};
@@ -41,8 +34,15 @@ use norito::{
 use sorafs_car::ChunkStore;
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::ReplicationOrderV1;
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt::Write as _,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use walkdir::WalkDir;
-use crate::{JsonTarget, write_json_output};
 /// Options accepted by `cargo xtask da-threat-model-report`.
 pub(crate) struct ThreatModelReportOptions {
     pub output: JsonTarget,
@@ -1578,7 +1578,13 @@ fn render_proof_bench_markdown(report: &ProofBenchReport) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use super::{
+        CommitmentArtifact, ManifestAudit, ManifestAuditStatus, PolicySnapshot, ProofBenchOptions,
+        ReceiptArtifact, ReplicationOrderSnapshot, blob_class_label, build_remediation_plan,
+        diff_receipt_and_commitment, reconcile_receipts_and_commitments, run_proof_bench,
+        storage_class_label,
+    };
+    use crate::JsonTarget;
     use iroha_crypto::{Hash as CryptoHash, Signature};
     use iroha_data_model::{
         da::{
@@ -1589,13 +1595,7 @@ mod tests {
         nexus::LaneId,
         sorafs::pin_registry::{ManifestDigest, StorageClass},
     };
-    use super::{
-        CommitmentArtifact, ManifestAudit, ManifestAuditStatus, PolicySnapshot, ProofBenchOptions,
-        ReceiptArtifact, ReplicationOrderSnapshot, blob_class_label, build_remediation_plan,
-        diff_receipt_and_commitment, reconcile_receipts_and_commitments, run_proof_bench,
-        storage_class_label,
-    };
-    use crate::JsonTarget;
+    use std::path::PathBuf;
     fn sample_receipt(
         ticket: [u8; 32],
         manifest: [u8; 32],

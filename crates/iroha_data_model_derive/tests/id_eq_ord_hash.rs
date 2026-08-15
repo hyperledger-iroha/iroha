@@ -1,6 +1,6 @@
 //! Basic tests for traits derived by [`IdEqOrdHash`] macro
-use std::collections::BTreeSet;
 use iroha_data_model_derive::IdEqOrdHash;
+use std::collections::BTreeSet;
 /// fake `Identifiable` trait
 ///
 /// Doesn't require `Into<IdBox>` implementation

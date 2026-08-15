@@ -1,19 +1,9 @@
 //! Authenticated framing and role-safe carriers for Kagemusha ABI-21 artifacts.
 //!
-//! V4 packages are selector-free and intentionally reject any pre-release
-//! format. Every release-sized allocation is preceded by a fixed upper-bound,
-//! descriptor, and framing check. Framed bytes are first authenticated against
-//! the canonical manifest; production constructors then require a separately
-//! authenticated [`KagemushaAuthenticatedReleaseV4`].
-use std::{
-    collections::BTreeSet,
-    fs::{self, DirBuilder, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+//! V4 packages are selector-free and intentionally reject any pre-release format. Every
+//! release-sized allocation is preceded by a fixed upper-bound, descriptor, and framing check.
+//! Framed bytes are first authenticated against the canonical manifest; production constructors
+//! then require a separately authenticated [`KagemushaAuthenticatedReleaseV4`].
 use iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4;
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4,
@@ -37,6 +27,15 @@ use iroha_data_model::offline::{
     KagemushaPastaCycleProofProfileV4, KagemushaRecursiveSpendArtifactManifestV4,
 };
 use sha2::{Digest as _, Sha256};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::{
+    collections::BTreeSet,
+    fs::{self, DirBuilder, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 /// Framing magic for a streamed ABI-21 artifact.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4: &[u8; 8] =
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4;
@@ -425,9 +424,8 @@ pub fn write_kagemusha_pasta_cycle_artifact_from_reader_v4<W: Write, R: Read>(
 }
 /// Stream one canonical KRV4 package and return its exact manifest descriptor.
 ///
-/// The supplied profile is the measured profile being assembled; its inline
-/// circuit parameters are bound by the bounded header. The caller must insert
-/// the returned descriptor into that profile
+/// The supplied profile is the measured profile being assembled; its inline circuit parameters are
+/// bound by the bounded header. The caller must insert the returned descriptor into that profile
 /// and validate the completed manifest before release signing.
 pub fn write_kagemusha_pasta_cycle_artifact_v4<W: Write>(
     writer: &mut W,
@@ -527,10 +525,9 @@ fn create_private_temp_v4(directory: &Path, final_name: &str) -> Result<(PathBuf
 }
 /// Atomically publish one owner-only KRV4 file without overwriting any path.
 ///
-/// The output directory is created with mode `0700` on Unix, or rejected when
-/// an existing directory grants group/other permissions. The file is fully
-/// written and synced at mode `0600`, then atomically linked to its canonical
-/// name; an existing destination always fails closed.
+/// The output directory is created with mode `0700` on Unix, or rejected when an existing directory
+/// grants group/other permissions. The file is fully written and synced at mode `0600`, then
+/// atomically linked to its canonical name; an existing destination always fails closed.
 pub fn export_kagemusha_pasta_cycle_artifact_v4(
     output_directory: &Path,
     generation: &str,
@@ -600,9 +597,8 @@ pub struct KagemushaValidatedArtifactPayloadV4 {
 }
 /// Trust mode attached to one parsed ABI-21 inventory.
 ///
-/// The candidate variant authenticates pre-promotion qualification inputs.
-/// Keeping the mode in the carrier prevents a
-/// candidate payload from being relabelled as release-authenticated material
+/// The candidate variant authenticates pre-promotion qualification inputs. Keeping the mode in the
+/// carrier prevents a candidate payload from being relabelled as release-authenticated material
 /// while still allowing both modes to exercise the same prover and verifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum KagemushaArtifactManifestBindingV4 {
@@ -1044,9 +1040,8 @@ where
 /// Authenticate one complete KRV4 file, then expose its exact payload through
 /// a bounded reader for zero-copy typed parsing.
 ///
-/// The callback must consume the payload completely. The second pass hashes
-/// the exact bytes seen by the callback and verifies the framed digest again
-/// before returning its result.
+/// The callback must consume the payload completely. The second pass hashes the exact bytes seen by
+/// the callback and verifies the framed digest again before returning its result.
 pub fn with_kagemusha_pasta_cycle_artifact_payload_v4<R, T, F>(
     reader: &mut R,
     release: &KagemushaAuthenticatedReleaseV4,
@@ -1071,11 +1066,10 @@ where
 }
 /// Parse one pinned artifact whose complete frame was authenticated earlier.
 ///
-/// The cached inspection is only an optimization hint: this pass validates the
-/// canonical header against the authenticated release again, hashes every byte
-/// consumed by the parser against both manifest digests, requires exact payload
-/// consumption, and rejects trailing bytes. Consequently a stale or forged
-/// inspection cannot make changed artifact bytes acceptable.
+/// The cached inspection is only an optimization hint: this pass validates the canonical header
+/// against the authenticated release again, hashes every byte consumed by the parser against both
+/// manifest digests, requires exact payload consumption, and rejects trailing bytes. Consequently a
+/// stale or forged inspection cannot make changed artifact bytes acceptable.
 pub(crate) fn with_kagemusha_pasta_cycle_artifact_payload_after_inspection_v4<R, T, F>(
     reader: &mut R,
     release: &KagemushaAuthenticatedReleaseV4,
@@ -1102,9 +1096,8 @@ where
 }
 /// Read and authenticate one complete framed V4 artifact from a pinned handle.
 ///
-/// Header and payload lengths are checked against hard limits and the exact
-/// manifest descriptor before allocation. The reader must contain exactly one
-/// artifact and no trailing bytes.
+/// Header and payload lengths are checked against hard limits and the exact manifest descriptor
+/// before allocation. The reader must contain exactly one artifact and no trailing bytes.
 pub fn read_kagemusha_pasta_cycle_artifact_v4<R: Read>(
     reader: &mut R,
     release: &KagemushaAuthenticatedReleaseV4,
@@ -1113,9 +1106,8 @@ pub fn read_kagemusha_pasta_cycle_artifact_v4<R: Read>(
     let binding = KagemushaArtifactManifestBindingV4::authenticated_release(release);
     read_kagemusha_pasta_cycle_artifact_with_binding_v4(reader, &binding, descriptor)
 }
-/// Parse one exact KRV4 artifact against a clean, canonical pre-promotion
-/// candidate. This authenticates qualification inputs but does not manufacture
-/// an authenticated production release.
+/// Parse one exact KRV4 artifact against a clean, canonical pre-promotion candidate. This
+/// authenticates qualification inputs but does not manufacture an authenticated production release.
 pub fn read_kagemusha_pasta_cycle_candidate_artifact_v4<R: Read>(
     reader: &mut R,
     candidate: &KagemushaRecursiveSpendCandidateV4,
@@ -1550,7 +1542,7 @@ impl KagemushaPastaCycleProverArtifactsV4 {
 }
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use super::*;
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
         KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
@@ -1559,7 +1551,7 @@ mod tests {
         KagemushaStepCircuitParamsV4,
     };
     use sha2::Digest as _;
-    use super::*;
+    use std::io::Cursor;
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;

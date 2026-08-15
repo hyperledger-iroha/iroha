@@ -1,6 +1,5 @@
 //! Sponsored account-onboarding clean-break contract tests.
 #![cfg(feature = "app_api")]
-use std::{borrow::Cow, collections::BTreeSet, num::NonZeroU8, sync::Arc};
 use axum::{
     body::{Body, to_bytes},
     extract::connect_info::ConnectInfo,
@@ -46,6 +45,7 @@ use iroha_torii_shared::route_catalog::{
         ACCOUNTS_ONBOARD_PLAN_POST, ACCOUNTS_ONBOARD_POST, ACCOUNTS_ONBOARDING_READINESS_GET,
     },
 };
+use std::{borrow::Cow, collections::BTreeSet, num::NonZeroU8, sync::Arc};
 #[path = "fixtures.rs"]
 mod fixtures;
 const ONBOARDING_API_TOKEN: &str = "torii-onboarding-test-token-32-bytes";

@@ -60,6 +60,11 @@ pub mod tx;
 /// Native SoraNet VPN lease escrow instruction handlers.
 pub mod vpn;
 pub mod world;
+use super::Execute;
+use crate::{
+    smartcontracts::triggers::set::SetReadOnly,
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+};
 use eyre::Result;
 pub use iroha_data_model::Registrable;
 use iroha_data_model::{
@@ -68,11 +73,6 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 use mv::storage::StorageReadOnly;
-use super::Execute;
-use crate::{
-    smartcontracts::triggers::set::SetReadOnly,
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
-};
 type InstructionHandler =
     fn(&InstructionBox, &AccountId, &mut StateTransaction<'_, '_>) -> Option<Result<(), Error>>;
 fn dispatch_instruction<T: Execute + Clone + 'static>(
@@ -574,8 +574,8 @@ pub(crate) fn execute_borrowed_instruction(
 }
 #[cfg(test)]
 mod registry_dispatch_tests {
-    use std::collections::BTreeSet;
     use super::*;
+    use std::collections::BTreeSet;
     fn has_dispatch_handler(type_name: &str) -> bool {
         registered_native_instruction_type_names().contains(&type_name)
     }
@@ -916,7 +916,14 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU32, sync::Arc};
+    use super::*;
+    use crate::{
+        block::ValidBlock,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+        tx::AcceptedTransaction,
+    };
     use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
@@ -936,15 +943,8 @@ mod tests {
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
         gen_account_in,
     };
+    use std::{num::NonZeroU32, sync::Arc};
     use tokio::test;
-    use super::*;
-    use crate::{
-        block::ValidBlock,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-        tx::AcceptedTransaction,
-    };
     fn axt_test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
         let mut payload = Vec::new();
         payload.extend_from_slice(domain);
@@ -3064,12 +3064,12 @@ mod tests {
     }
     #[test]
     async fn account_metadata_limit() -> Result<()> {
-        use std::str::FromStr as _;
         use iroha_data_model::{
             parameter::{CustomParameter, CustomParameterId},
             prelude::Parameter,
         };
         use iroha_primitives::json::Json;
+        use std::str::FromStr as _;
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let block_header = ValidBlock::new_dummy(checked_keypair().private_key())

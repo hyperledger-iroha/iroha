@@ -1,11 +1,6 @@
 //! Authenticated Kagemusha ABI-21/V4 release verification and activation preparation.
 mod taira;
-use std::{
-    collections::BTreeSet,
-    fs::{self, File},
-    io::{Read, Write},
-    path::{Path, PathBuf},
-};
+use crate::{ExplicitExitError, Outcome, RunArgs};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
 use iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4;
@@ -39,7 +34,12 @@ use iroha_data_model::offline::{
     KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactV2,
     OfflineDeviceAttestationPolicy, kagemusha_recursive_spend_release_sha256,
 };
-use crate::{ExplicitExitError, Outcome, RunArgs};
+use std::{
+    collections::BTreeSet,
+    fs::{self, File},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
 type Result<T> = color_eyre::Result<T>;
 const MANIFEST_JSON_FILE_NAME: &str = "manifest.json";
 const MANIFEST_NORITO_FILE_NAME: &str = "manifest.norito";
@@ -1373,8 +1373,8 @@ impl PinnedPromotionParentV1 {
         reason = "descriptor traversal and every before/open/after identity check form one fail-closed parent-pinning operation"
     )]
     fn open(path: &Path) -> Result<Self> {
-        use std::path::Component;
         use rustix::fs::{AtFlags, Mode, OFlags, open, openat, statat};
+        use std::path::Component;
         let absolute = if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -1513,8 +1513,8 @@ impl PinnedPromotionParentV1 {
 }
 #[cfg(unix)]
 fn random_promotion_temporary_name_v1(target: &std::ffi::OsStr) -> Result<std::ffi::OsString> {
-    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
     use rand::{TryRngCore as _, rngs::OsRng};
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
     let mut random = [0_u8; 16];
     OsRng
         .try_fill_bytes(&mut random)
@@ -2086,12 +2086,6 @@ impl VerificationReportV4 {
 }
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, collections::BTreeSet, fs, rc::Rc};
-    use iroha_data_model::offline::{
-        KagemushaStepCircuitParamsV4, OfflineAndroidAppAttestationPolicy,
-        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationTrustedRoot,
-        OfflineIosAppAttestationPolicy,
-    };
     use super::{
         AUTHENTICATED_ARTIFACT_ROLES_V4, PrepareReleaseCircuitParamsV4Args,
         RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4, RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
@@ -2106,6 +2100,12 @@ mod tests {
         ReleaseCircuitParamsPublicationOutcomeV1, write_new_durable_file_with_hooks_v1,
         write_release_circuit_params_directory_with_hooks_v1,
     };
+    use iroha_data_model::offline::{
+        KagemushaStepCircuitParamsV4, OfflineAndroidAppAttestationPolicy,
+        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationTrustedRoot,
+        OfflineIosAppAttestationPolicy,
+    };
+    use std::{cell::Cell, collections::BTreeSet, fs, rc::Rc};
     struct LivePayload {
         live: Rc<Cell<usize>>,
     }

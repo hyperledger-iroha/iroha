@@ -1,15 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Localnet cross-dataspace atomic swap regression test.
 use super::localnet_npos::npos_override_transactions;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    io::{Read, Seek, SeekFrom},
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
-    thread,
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::{StreamExt, future::try_join_all};
 use integration_tests::sandbox;
@@ -86,6 +77,15 @@ use iroha_test_network::{NetworkBuilder, NetworkPeer, genesis_factory_with_post_
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use norito::codec::{DecodeAll, Encode};
 use norito::json::Value as JsonValue;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::{Read, Seek, SeekFrom},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant},
+};
 use tokio::{
     runtime::Runtime,
     task::spawn_blocking,

@@ -1,7 +1,7 @@
-use std::{fs, num::NonZeroU32, time::Duration};
-use iroha_config::parameters::actual::SoranetPuzzle as ConfigPuzzle;
-use tempfile::tempdir;
 use super::*;
+use iroha_config::parameters::actual::SoranetPuzzle as ConfigPuzzle;
+use std::{fs, num::NonZeroU32, time::Duration};
+use tempfile::tempdir;
 #[test]
 fn runtime_from_handshake_preserves_puzzle_parameters() {
     let mut handshake = ActualSoranetHandshake::default();

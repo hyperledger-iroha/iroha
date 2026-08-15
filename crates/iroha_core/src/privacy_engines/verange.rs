@@ -5,16 +5,16 @@
 //! to `N = 32, J = K = 6` and `N = 64, J = K = 8`.  It proves an existing
 //! Pedersen commitment `C = G·value + Q·blinding` opens to a value in
 //! `[0, 2^N)`.
-use once_cell::sync::Lazy;
-use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
-use rand_core_06::{CryptoRng, RngCore};
-use sha2::{Digest, Sha256};
-use thiserror::Error;
 use super::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
     TranscriptV1, generator_digest, hash_to_curve_rfc9380, health_checked_p256_rng_v1,
     random_nonzero_scalar, validate_generator_independence,
 };
+use once_cell::sync::Lazy;
+use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
+use rand_core_06::{CryptoRng, RngCore};
+use sha2::{Digest, Sha256};
+use thiserror::Error;
 /// Closed suite identifier committed by every VeRange transcript.
 pub const VERANGE_TYPE1_SUITE_V1: &[u8] = b"iroha.verange.type1.p256.sha256.v1";
 /// Proof wire version.
@@ -1191,8 +1191,8 @@ fn scalar_power_of_two(exponent: usize) -> Scalar {
 }
 #[cfg(test)]
 mod tests {
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use super::*;
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     struct KatRng {
         seed: [u8; 32],
         counter: u64,

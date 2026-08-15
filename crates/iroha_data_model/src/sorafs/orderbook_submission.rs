@@ -1,8 +1,4 @@
 //! Strict, route-aware validation for SoraFS orderbook transaction submission.
-use std::str::FromStr;
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
-use iroha_version::codec::DecodeVersioned as _;
-use thiserror::Error;
 use crate::{
     NetworkId,
     account::AccountAddress,
@@ -14,6 +10,8 @@ use crate::{
         Executable, SignedTransaction, TransactionEntrypoint, TransactionSubmissionReceipt,
     },
 };
+use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
+use iroha_version::codec::DecodeVersioned as _;
 use sorafs_manifest::{
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderCancelV1, OrderRequestV1,
     OrderSideV1, OrderTierV1, OrderbookSignatureV1, OrderbookValidationPayloadKindV1,
@@ -21,6 +19,8 @@ use sorafs_manifest::{
     decode_settlement_receipt_v1, verify_order_cancel_signature_v1,
     verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
 };
+use std::str::FromStr;
+use thiserror::Error;
 /// Hard ceiling for one exact canonical versioned signed orderbook transaction.
 pub const ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1: usize = 2 * 1024 * 1024;
 /// Hard ceiling for one canonical transaction-submission receipt.

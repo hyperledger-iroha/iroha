@@ -16,14 +16,6 @@
 //! depends on a second mutable-or-missing copy of the same authority. Their
 //! response signature uses their current P2P identity, so validator key
 //! rotation does not make a retired height unservable.
-use core::fmt;
-use std::{
-    collections::{BTreeMap, VecDeque},
-    num::NonZeroUsize,
-};
-use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
-use iroha_data_model::{NetworkId, block::consensus_v2 as wire, peer::PeerId};
-use thiserror::Error;
 #[cfg(test)]
 use super::v2::verify_historical_quorum_certificate;
 #[cfg(test)]
@@ -47,6 +39,14 @@ use super::{
     v2_effects::CommitCertificateReducerAdmission,
 };
 use crate::kura::Kura;
+use core::fmt;
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
+use iroha_data_model::{NetworkId, block::consensus_v2 as wire, peer::PeerId};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    num::NonZeroUsize,
+};
+use thiserror::Error;
 /// One authenticated CommitQC ready for ordinary reducer ingress.
 ///
 /// The request remains outstanding until the caller confirms that
@@ -761,11 +761,11 @@ impl<E> std::error::Error for CommitCertificateAdmissionError<E> where E: std::e
 #[cfg(test)]
 /// Shared deterministic fixtures for sibling Sumeragi v2 unit tests.
 pub(super) mod tests {
-    use std::{cell::Cell, num::NonZeroU64, sync::Arc};
-    use iroha_crypto::{Algorithm, Hash};
-    use iroha_data_model::{NetworkId, block::BlockHeader};
     use super::*;
     use crate::{block::ValidBlock, sumeragi::v2_transport::OutstandingCertifiedBodyRequests};
+    use iroha_crypto::{Algorithm, Hash};
+    use iroha_data_model::{NetworkId, block::BlockHeader};
+    use std::{cell::Cell, num::NonZeroU64, sync::Arc};
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),

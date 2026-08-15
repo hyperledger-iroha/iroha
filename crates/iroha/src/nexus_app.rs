@@ -4,15 +4,15 @@
 //! pipeline APIs intact. SDK applications can use this module to build a
 //! canonical transfer payload, request a wallet signature, finalize the signed
 //! transaction, submit it, and optionally wait for a terminal pipeline status.
-use std::{num::NonZeroU32, time::Duration};
+use crate::client::{Client, TransactionWaitOptions, TransactionWaitOutcome};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
     prelude::{AccountId, AssetId, ChainId, Metadata, NetworkId, Quantity, Transfer},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
+use std::{num::NonZeroU32, time::Duration};
 use thiserror::Error;
 use url::Url;
-use crate::client::{Client, TransactionWaitOptions, TransactionWaitOutcome};
 /// V1 supported signature algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NexusSignatureAlgorithm {
@@ -643,11 +643,11 @@ fn ensure_authority_matches_public_key(
 }
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
+    use super::*;
     use iroha_crypto::{KeyPair, Signature};
     use iroha_data_model::{asset::AssetDefinitionId, prelude::Name};
     use iroha_primitives::json::Json;
-    use super::*;
+    use std::{cell::RefCell, rc::Rc};
     const FIXTURE: &str = include_str!("../../../fixtures/sdk/nexus_connect_transfer_v1.json");
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(

@@ -6,8 +6,6 @@
 //! in the fixed header so decode cannot silently pair a proof with another
 //! statement, root, or root-SPKI channel. The cryptographic verifier must still
 //! derive and compare that material from its trusted statement.
-use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyStatementV1};
-use thiserror::Error;
 use super::{
     accumulator_stark::{
         ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1,
@@ -23,6 +21,8 @@ use super::{
     },
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyStatementV1};
+use thiserror::Error;
 const CREDENTIAL_MAGIC_V1: [u8; 4] = *b"X5S1";
 const MAIN_AGGREGATE_MAGIC_V1: [u8; 4] = *b"X5M1";
 const CA_SUBPROOF_MAGIC_V1: [u8; 4] = *b"X5C1";

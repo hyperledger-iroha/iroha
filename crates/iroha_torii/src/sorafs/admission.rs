@@ -1,13 +1,4 @@
 //! Provider admission registry loading and verification for SoraFS adverts.
-use std::{
-    collections::HashMap,
-    fs::{self, OpenOptions},
-    io::Read as _,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use iroha_logger::{trace, warn};
 pub use sorafs_manifest::ProviderAdmissionAdvertError as AdmissionCheckError;
 use sorafs_manifest::{
@@ -15,6 +6,15 @@ use sorafs_manifest::{
     ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalError, ProviderAdmissionRenewalV1,
     ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1, ProviderAdvertV1,
     verify_advert_against_record,
+};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::{
+    collections::HashMap,
+    fs::{self, OpenOptions},
+    io::Read as _,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 use thiserror::Error;
 /// Maximum number of admission envelopes loaded from one registry directory.
@@ -553,15 +553,15 @@ pub enum EnvelopeDecodeError {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, path::Path};
+    use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     use sorafs_manifest::{
         CouncilSignature, ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalV1,
         ProviderAdmissionRevocationV1, ProviderAdmissionSignatureError,
         compute_envelope_authorization_digest,
     };
+    use std::{fs::File, path::Path};
     use tempfile::TempDir;
-    use super::*;
     fn fixture_bytes(name: &str) -> Vec<u8> {
         fs::read(
             Path::new(env!("CARGO_MANIFEST_DIR"))

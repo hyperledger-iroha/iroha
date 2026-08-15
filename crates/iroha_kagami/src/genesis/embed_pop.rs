@@ -1,13 +1,13 @@
+use crate::{Outcome, RunArgs, tui};
+use clap::Args as ClapArgs;
+use color_eyre::eyre::{WrapErr as _, eyre};
+use iroha_crypto::PublicKey;
+use iroha_genesis::{read_genesis_manifest_bytes, validate_genesis_manifest_json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::PathBuf,
 };
-use clap::Args as ClapArgs;
-use color_eyre::eyre::{WrapErr as _, eyre};
-use iroha_crypto::PublicKey;
-use iroha_genesis::{read_genesis_manifest_bytes, validate_genesis_manifest_json};
-use crate::{Outcome, RunArgs, tui};
 /// Embed one or more PoPs into a JSON genesis manifest (inlined under `topology` entries).
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
@@ -163,9 +163,9 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::io::BufWriter;
     use tempfile::NamedTempFile;
-    use super::*;
     fn checked_embed_pop_keypair() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random()
             .expect("embed-pop fixture key generation should succeed")

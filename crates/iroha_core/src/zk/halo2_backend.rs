@@ -3,7 +3,6 @@
 //! This module intentionally keeps `halo2-axiom` proof plumbing behind a small
 //! Iroha-owned surface so runtime code does not spread direct dependency usage
 //! across verifier dispatch and proof builders.
-use std::{io, io::Write};
 use halo2_proofs::{
     SerdeFormat,
     circuit::{AssignedCell, Region, Value},
@@ -32,6 +31,7 @@ use halo2_proofs::{
     },
 };
 use rand_core_06::OsRng;
+use std::{io, io::Write};
 /// Pasta curve used by the transparent Halo2 IPA backend.
 pub(crate) type Curve = EqAffine;
 /// Pasta scalar field used by the transparent Halo2 IPA backend.
@@ -222,6 +222,7 @@ pub(crate) fn verify_ipa_proof_with_columns(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
         plonk::{Advice, Circuit, Column, ConstraintSystem, Instance},
@@ -230,7 +231,6 @@ mod tests {
             ipa::{multiopen::VerifierIPA, strategy::AccumulatorStrategy},
         },
     };
-    use super::*;
     /// A deliberately tiny circuit used to exercise Halo2's native IPA
     /// accumulator strategy. This is a host-side batch-verification proof of
     /// concept, not a recursive verifier circuit: `AccumulatorStrategy` keeps

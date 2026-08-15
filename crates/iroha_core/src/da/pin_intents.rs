@@ -3,10 +3,7 @@
 //! Torii writes `da-pin-intent-*.norito` artefacts alongside DA commitments.
 //! These helpers load and sort pin intents deterministically so they can be
 //! threaded into WSV/registry wiring without relying on filesystem ordering.
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use crate::da::ReplayFingerprint;
 use iroha_data_model::{
     da::{
         pin_intent::{DaPinIntent, DaPinIntentBundle},
@@ -15,8 +12,11 @@ use iroha_data_model::{
     nexus::LaneId,
 };
 use norito::{decode_from_bytes, to_bytes};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
-use crate::da::ReplayFingerprint;
 /// Errors encountered while loading DA pin intents from disk.
 #[derive(Debug, Error)]
 pub enum DaPinIntentSpoolError {
@@ -553,7 +553,7 @@ fn is_zero_manifest(digest: &iroha_data_model::sorafs::pin_registry::ManifestDig
 }
 #[cfg(test)]
 mod tests {
-    use std::{convert::TryFrom, path::PathBuf};
+    use super::*;
     use iroha_data_model::{
         da::{
             pin_intent::{DaPinIntent, DaPinIntentBundle},
@@ -562,8 +562,8 @@ mod tests {
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use std::{convert::TryFrom, path::PathBuf};
     use tempfile::tempdir;
-    use super::*;
     fn sample_intent(lane: u32, seq: u64) -> DaPinIntent {
         let lane_byte = u8::try_from(lane).expect("lane id fits in byte for test intent");
         let seq_byte = u8::try_from(seq).expect("sequence fits in byte for test intent");

@@ -57,7 +57,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=855
+readonly canonical_production_test_count=856
 
 for release_support_component in \
   "$release_runner_support" \
@@ -105,6 +105,23 @@ require_exact_token() {
   local token="$2"
   if [[ "$(grep -Fxc -- "$token" "$path" || true)" != 1 ]]; then
     echo "required multilane release inventory token is missing or duplicated in ${path}: ${token}" >&2
+    exit 1
+  fi
+}
+
+require_exact_fragment() {
+  local path="$1"
+  local fragment="$2"
+  local expected_count="$3"
+  local observed_count
+  observed_count="$(
+    awk -v needle="$fragment" '
+      index($0, needle) { count += 1 }
+      END { print count + 0 }
+    ' "$path"
+  )"
+  if [[ "$observed_count" != "$expected_count" ]]; then
+    echo "required multilane release inventory fragment has the wrong count in ${path}: ${fragment} (expected ${expected_count}, found ${observed_count})" >&2
     exit 1
   fi
 }
@@ -292,16 +309,28 @@ done
 for sdk_diagnostics_suite in \
   '    ("python", 121),' \
   '    ("javascript", 88),' \
-  '    ("swift", 17),' \
-  '    ("kotlin", 26),' \
-  '    ("java", 24),'; do
+  '    ("swift", 33),' \
+  '    ("kotlin", 42),' \
+  '    ("java", 41),'; do
   require_exact_token "$release_receipt_writer" "$sdk_diagnostics_suite"
 done
-for sdk_diagnostics_test_count in 121 88 17 26 24; do
+for sdk_diagnostics_test_count in 121 88 33 42 41; do
   require_exact_token \
     "$sdk_diagnostics_harness" \
     "    observed_test_count=${sdk_diagnostics_test_count}"
 done
+require_exact_fragment \
+  "$sdk_diagnostics_harness" \
+  "SumeragiV2WireFixtureTests'" \
+  1
+require_exact_fragment \
+  "$sdk_diagnostics_harness" \
+  "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest" \
+  1
+require_exact_fragment \
+  "$sdk_diagnostics_harness" \
+  "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests" \
+  1
 require_exact_token \
   "$sdk_diagnostics_harness" \
   '      assert_node_tap "$javascript_transcript" 44'
@@ -458,7 +487,8 @@ if runner_parent_source.count(
     reject("release runner support lexical-load edge is not exact")
 runner_support_functions = (
     "sha256_file", "canonical_executable", "canonical_git_executable",
-    "canonical_path", "resolve_pinned_rust_tool_executable",
+    "canonical_path", "authenticated_runner_tool_sources",
+    "resolve_pinned_rust_tool_executable",
     "release_identity_json", "identity_field",
     "localnet_binary_attestation_valid",
     "ensure_source_bound_localnet_binaries",
@@ -925,7 +955,7 @@ expected_changed_module_counts = {
     "sumeragi::v2_lane_work::tests": 61,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
     "sumeragi::v2_runner::tests": 37,
-    "sumeragi::v2_worker::tests": 133,
+    "sumeragi::v2_worker::tests": 134,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
@@ -952,8 +982,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "a40a9d7ef0dafcad2a6e3eb710d550a7"
-    "f80f905c378117ef9a52b39a86d77b1e"
+    "58a7316ef7991977ab2a414ec89fa19c"
+    "193f1464f443b3427522dbcf9b951e27"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "

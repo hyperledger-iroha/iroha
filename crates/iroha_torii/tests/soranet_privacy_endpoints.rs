@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for Torii `SoraNet` privacy ingestion endpoints.
 #![cfg(feature = "telemetry")]
-use std::time::{SystemTime, UNIX_EPOCH};
 use axum::{
     http::{StatusCode, header},
     response::IntoResponse,
@@ -17,6 +16,7 @@ use iroha_torii::{
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
 };
 use norito::json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 async fn norito_json_response_value(response: axum::response::Response) -> Value {
     assert_eq!(
         response

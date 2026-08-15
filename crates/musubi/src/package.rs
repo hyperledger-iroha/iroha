@@ -6,13 +6,10 @@
 //! verification lock documents to [`plan_package`], and use the resulting immutable plan for a
 //! clean compiler check and `SoraFS` CAR construction. Filesystem-backed planning is qualified on
 //! Unix; other targets fail with [`PackageError::UnsupportedPlatform`] before parsing or I/O.
-use std::{
-    collections::BTreeMap,
-    error::Error,
-    fmt, fs,
-    io::{self, Write},
-    path::{Component, Path, PathBuf},
-    str::FromStr,
+use crate::{
+    lockfile::{MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1, render_verification_lock},
+    manifest::Inheritable,
+    workspace::WorkspaceMember,
 };
 pub use iroha_data_model::musubi::MusubiArtifactDescriptorV1;
 use iroha_data_model::{
@@ -35,13 +32,16 @@ use sorafs_car::{
     CarBuildPlan, CarWriteStats, CarWriter, FileEntry, FilePayload, PayloadSource,
     chunker_registry::default_descriptor, compute_chunk_plan_digest_sha3, compute_por_root,
 };
-use crate::{
-    lockfile::{MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1, render_verification_lock},
-    manifest::Inheritable,
-    workspace::WorkspaceMember,
-};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fmt, fs,
+    io::{self, Write},
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+};
 /// Maximum total bytes in a Musubi V1 normalized source tree.
 pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 /// Maximum bytes in a Musubi V1 `CARv2` archive.
@@ -2303,14 +2303,8 @@ impl Write for BoundedWriter {
 }
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{
-        fs,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
-        time::Duration,
-    };
+    use super::*;
+    use crate::workspace::load_workspace;
     use iroha::{
         crypto::{Algorithm, Hash, HashOf, KeyPair},
         musubi_runtime::{
@@ -2340,9 +2334,15 @@ mod tests {
         nexus::DataSpaceId,
         sorafs::capacity::ProviderId,
     };
+    use std::{
+        fs,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
     use tempfile::tempdir;
-    use super::*;
-    use crate::workspace::load_workspace;
     const MANIFEST: &str = r#"
 manifest-version = 1
 
@@ -3579,6 +3579,7 @@ exports = []
 }
 #[cfg(all(test, not(unix)))]
 mod unsupported_platform_tests {
+    use super::{PackageError, PackageLayout, plan_package};
     use iroha_data_model::{
         musubi::{
             MUSUBI_REGISTRY_VERSION_V1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1,
@@ -3586,7 +3587,6 @@ mod unsupported_platform_tests {
         },
         nexus::DataSpaceId,
     };
-    use super::{PackageError, PackageLayout, plan_package};
     #[test]
     fn package_planning_fails_before_parsing_or_inspecting_the_root() {
         let package = MusubiPackageIdV1::new(

@@ -1,8 +1,3 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::streaming::{
     EntropyMode,
@@ -10,6 +5,11 @@ use norito::streaming::{
     codec::{
         BaselineEncoder, BaselineEncoderConfig, FrameDimensions, RawFrame, default_bundle_tables,
     },
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 use tempfile::TempDir;
 fn workspace_root() -> PathBuf {

@@ -1,11 +1,5 @@
 //! PoR challenge/proof tracking for the embedded storage node.
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use crate::store::StoredManifest;
 use ed25519_dalek::{Signature, VerifyingKey};
 use iroha_data_model::{
     metadata::Metadata,
@@ -30,8 +24,14 @@ use sorafs_manifest::{
         RepairPorFailureCauseV1, RepairReportV1, RepairTicketId,
     },
 };
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use thiserror::Error;
-use crate::store::StoredManifest;
 const SMALL_LEAF_MAX_LEN: u32 = 4 * 1024;
 const GIB: u64 = 1_073_741_824;
 const SAMPLE_TIER_EDGE: u16 = 1;
@@ -109,9 +109,8 @@ impl PorFailedRepairIntentV1 {
 }
 /// Build the canonical payload-free repair report for a failed PoR verdict.
 ///
-/// The caller supplies the runtime transaction authority; process-local
-/// history identifiers, verdict reasons, signatures, and metadata are never
-/// copied into the chain payload.
+/// The caller supplies the runtime transaction authority; process-local history identifiers,
+/// verdict reasons, signatures, and metadata are never copied into the chain payload.
 pub fn canonical_por_failure_repair_report_v1(
     intent: PorFailedRepairIntentV1,
     runtime_authority: &str,
@@ -959,14 +958,12 @@ impl PorFinalizedReplayArchiveReceiptV1 {
     }
     /// Verify that this receipt authenticates one exact canonical record.
     ///
-    /// `expected_previous_head` is an outer option so callers can either enforce
-    /// an exact predecessor (`Some`) or validate the receipt without constraining
-    /// its predecessor (`None`).
+    /// `expected_previous_head` is an outer option so callers can either enforce an exact
+    /// predecessor (`Some`) or validate the receipt without constraining its predecessor (`None`).
     ///
     /// # Errors
     ///
-    /// Returns an error for a substituted binding, record, predecessor, digest,
-    /// or signature.
+    /// Returns an error for a substituted binding, record, predecessor, digest, or signature.
     pub fn validate_record(
         self,
         expected_binding: PorFinalizedReplayArchiveBindingV1,
@@ -1065,16 +1062,14 @@ impl PorFinalizedReplayArchiveProofBoundsV1 {
     }
     /// Qualify an outer transport frame before decoding its successor receipts.
     ///
-    /// Production adapters should call this with the authenticated or
-    /// length-prefixed receipt count and frame length before reserving or
-    /// decoding the successor collection. The typed lookup boundary still
-    /// revalidates the canonical decoded representation.
+    /// Production adapters should call this with the authenticated or length-prefixed receipt count
+    /// and frame length before reserving or decoding the successor collection. The typed lookup
+    /// boundary still revalidates the canonical decoded representation.
     ///
     /// # Errors
     ///
-    /// Returns an error when the declared count is not representable, a
-    /// non-empty collection declares an empty frame, or either configured
-    /// resource ceiling is exceeded.
+    /// Returns an error when the declared count is not representable, a non-empty collection
+    /// declares an empty frame, or either configured resource ceiling is exceeded.
     pub fn validate_framed_successor_shape(
         self,
         declared_successor_receipts: u64,
@@ -1244,8 +1239,7 @@ impl PorFinalizedReplayArchiveAbsenceProofV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error when the proof is substituted, stale, malformed, or
-    /// unauthenticated.
+    /// Returns an error when the proof is substituted, stale, malformed, or unauthenticated.
     pub fn validate_at_checkpoint(
         self,
         binding: PorFinalizedReplayArchiveBindingV1,
@@ -1285,11 +1279,10 @@ pub enum PorFinalizedReplayArchiveExternalErrorV1 {
 }
 /// Deployment-injected authenticated finalized-PoR replay archive.
 ///
-/// Append must be durable before success. Repeating the same record and
-/// expected predecessor must return the exact same signed receipt even after
-/// later successors exist; it must never move the current head backwards.
-/// Substituted material must fail. Lookups must authenticate the returned record
-/// before it crosses this boundary.
+/// Append must be durable before success. Repeating the same record and expected predecessor must
+/// return the exact same signed receipt even after later successors exist; it must never move the
+/// current head backwards. Substituted material must fail. Lookups must authenticate the returned
+/// record before it crosses this boundary.
 pub trait PorFinalizedReplayArchiveV1: Send + Sync + std::fmt::Debug {
     /// Return the stable credential-free production adapter handle.
     fn runtime_handle(&self) -> &str;
@@ -1315,14 +1308,13 @@ pub trait PorFinalizedReplayArchiveV1: Send + Sync + std::fmt::Debug {
     /// Return authenticated presence or absence for `challenge_id` at the
     /// caller's exact checkpoint head.
     ///
-    /// A found record must include a signed contiguous successor chain ending
-    /// at `expected_checkpoint_head`. Absence must carry an independent
-    /// signature over that exact head. A transport-backed adapter must apply
-    /// [`PorFinalizedReplayArchiveProofBoundsV1::validate_framed_successor_shape`]
-    /// to its outer length/count envelope before allocating or decoding an
-    /// untrusted successor collection. The typed result is validated again by
-    /// the caller. An adapter unable to prove either property must return an
-    /// external error.
+    /// A found record must include a signed contiguous successor chain ending at
+    /// `expected_checkpoint_head`. Absence must carry an independent signature over that exact
+    /// head. A transport-backed adapter must apply
+    /// [`PorFinalizedReplayArchiveProofBoundsV1::validate_framed_successor_shape`] to its outer
+    /// length/count envelope before allocating or decoding an untrusted successor collection. The
+    /// typed result is validated again by the caller. An adapter unable to prove either property
+    /// must return an external error.
     fn lookup(
         &self,
         challenge_id: [u8; 32],
@@ -1387,8 +1379,7 @@ pub struct PorStatusAuthorityUpdateV1 {
     pub generation: u64,
     /// Exact retained status affected by the lifecycle operation.
     pub status: PorChallengeStatusV1,
-    /// Terminal statuses retired from the bounded local projection by the same
-    /// durable generation.
+    /// Terminal statuses retired from the bounded local projection by the same durable generation.
     pub removed_challenge_ids: Vec<[u8; 32]>,
 }
 /// Durable effect of a failed PoR lifecycle mutation.
@@ -3517,9 +3508,8 @@ pub enum PorTrackerError {
     },
     /// Finalized challenge replay retention reached its configured hard ceiling.
     ///
-    /// Acknowledged records can be compacted only through the authenticated
-    /// replay-archive seam. Nodes without that deployment adapter fail closed
-    /// at this ceiling.
+    /// Acknowledged records can be compacted only through the authenticated replay-archive seam.
+    /// Nodes without that deployment adapter fail closed at this ceiling.
     #[error("finalized PoR challenge retention exhausted (limit {limit})")]
     FinalizedRetentionExhausted {
         /// Configured entry ceiling.
@@ -3716,13 +3706,13 @@ pub enum PorTrackerError {
 #[cfg(test)]
 /// Utilities used only in tests to build attested POR inputs.
 pub mod test_support {
+    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use sorafs_manifest::{
         por::{AUDIT_VERDICT_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1},
         provider_advert::{AdvertSignature, SignatureAlgorithm},
     };
-    use super::*;
     fn signing_key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive deterministic Ed25519 test key")
@@ -3915,6 +3905,14 @@ pub mod test_support {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::por::test_support::{
+        resign_sample_proof, resign_sample_verdict, sample_auditor_keys, sample_challenge,
+        sample_proof, sample_provider_key, sample_verdict,
+    };
+    use ed25519_dalek::{Signer, SigningKey};
+    use iroha_data_model::{metadata::Metadata, name::Name};
+    use sorafs_car::{POR_LEAF_SIZE, PorMerkleTree, StoredChunk};
     use std::{
         collections::BTreeMap,
         convert::TryFrom,
@@ -3924,14 +3922,6 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
-    use super::*;
-    use crate::por::test_support::{
-        resign_sample_proof, resign_sample_verdict, sample_auditor_keys, sample_challenge,
-        sample_proof, sample_provider_key, sample_verdict,
-    };
-    use ed25519_dalek::{Signer, SigningKey};
-    use iroha_data_model::{metadata::Metadata, name::Name};
-    use sorafs_car::{POR_LEAF_SIZE, PorMerkleTree, StoredChunk};
     #[derive(Debug)]
     struct MemoryReplayArchive {
         runtime_handle: String,

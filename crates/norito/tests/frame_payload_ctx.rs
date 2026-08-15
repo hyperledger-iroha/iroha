@@ -1,5 +1,4 @@
 //! Tests covering payload framing helpers tied to the decode context.
-use std::sync::{Mutex, OnceLock};
 use iroha_schema::IntoSchema;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
@@ -9,6 +8,7 @@ use norito::{
     },
     from_bytes, to_bytes,
 };
+use std::sync::{Mutex, OnceLock};
 #[derive(Debug, Clone, IntoSchema, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct FrameSample {
     code: u32,

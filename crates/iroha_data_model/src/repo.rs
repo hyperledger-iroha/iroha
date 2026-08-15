@@ -3,9 +3,16 @@
 //! The recorded agreement is an immutable, one-shot economic contract. Exact
 //! consent-selected balance scopes and terminal settlement status are retained
 //! so maturity settlement cannot infer or substitute caller-controlled terms.
+use crate::{
+    Identifiable, Name,
+    asset::prelude::{AssetDefinitionId, AssetId},
+    metadata::Metadata,
+    prelude::AccountId,
+};
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use mv::json::JsonKeyCodec;
@@ -13,13 +20,6 @@ use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
-use crate::{
-    Identifiable, Name,
-    asset::prelude::{AssetDefinitionId, AssetId},
-    metadata::Metadata,
-    prelude::AccountId,
-};
-use iroha_primitives::numeric::Quantity;
 #[model]
 mod model {
     use super::*;
@@ -252,7 +252,9 @@ impl Identifiable for RepoAgreement {
 }
 /// Common re-exports for repo-related types.
 pub mod prelude {
-    pub use super::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance};
+    pub use super::{
+        RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance,
+    };
 }
 #[cfg(feature = "json")]
 impl JsonKeyCodec for RepoAgreementId {
@@ -267,10 +269,10 @@ impl JsonKeyCodec for RepoAgreementId {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
-    use norito::codec::{Decode, Encode};
     use super::*;
     use crate::domain::DomainId;
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode, Encode};
     #[derive(Encode)]
     struct ForgedRepoCashLeg {
         asset_definition_id: AssetDefinitionId,

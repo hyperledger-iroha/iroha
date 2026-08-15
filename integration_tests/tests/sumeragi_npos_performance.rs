@@ -3,12 +3,6 @@
 //! The scenario captures telemetry snapshots while producing a fixed number of
 //! blocks, aggregates phase latency EMAs, queue depths, and throughput, then
 //! persists a JSON summary for reporting.
-use std::{
-    collections::BTreeMap,
-    fs,
-    sync::atomic::{AtomicUsize, Ordering},
-    time::{Duration, Instant},
-};
 use eyre::{Context as _, Result, bail, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
@@ -22,6 +16,12 @@ use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use nonzero_ext::nonzero;
 use norito::json::{self, JsonSerialize, Map, Value};
+use std::{
+    collections::BTreeMap,
+    fs,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{Duration, Instant},
+};
 use tokio::time::sleep;
 const BASE_SEED: &str = "npos-baseline-1s";
 const SCENARIO_NAME: &str = "npos_baseline_1s";

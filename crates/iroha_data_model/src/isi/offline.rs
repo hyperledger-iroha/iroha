@@ -201,10 +201,10 @@ impl_decode_one_canonical_offline_field!(SetOfflineDeviceAttestationPolicy {
 });
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use norito::core::NoritoDeserialize as _;
     use super::*;
     use crate::offline::KagemushaDevicePublicKeyV2;
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use norito::core::NoritoDeserialize as _;
     fn registration_fixture() -> OfflineDeviceAttestationRegistration {
         let account_key = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
             .expect("derive checked offline attestation fixture keypair");

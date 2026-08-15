@@ -1,13 +1,4 @@
 //! Reusable canonical compiler session API.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::{Component, Path, PathBuf},
-};
-use indexmap::IndexMap;
-use iroha_data_model::{
-    account::address::ChainDiscriminantGuard, smart_contract::manifest::ContractManifest,
-};
-use ivm_abi::metadata::EmbeddedContractInterfaceV1;
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
     compiler::{CompileReport, Compiler, CompilerMode, CompilerOptions},
@@ -18,6 +9,15 @@ use crate::{
     lexer::{Token, TokenKind},
     semantic::TypedProgram,
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile, SourceId, TextRange},
+};
+use indexmap::IndexMap;
+use iroha_data_model::{
+    account::address::ChainDiscriminantGuard, smart_contract::manifest::ContractManifest,
+};
+use ivm_abi::metadata::EmbeddedContractInterfaceV1;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Component, Path, PathBuf},
 };
 /// One compilation request.
 #[derive(Clone, Copy, Debug)]

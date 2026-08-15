@@ -5,10 +5,9 @@
 //! transaction ingress, and finalized-ledger reconciliation worker. PDP, PoR,
 //! and PoTR use the same native repair handoff so no process-local scheduler
 //! can become authoritative in production.
-use std::{
-    collections::BTreeSet,
-    path::Path,
-    sync::{Arc, Mutex},
+use crate::durable_transaction_forwarder::{
+    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
+    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
 use iroha_data_model::{
     ChainId, NetworkId,
@@ -30,11 +29,12 @@ use iroha_data_model::{
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{RepairReportV1, RepairSlashProposalV1, RepairTicketId};
-use thiserror::Error;
-use crate::durable_transaction_forwarder::{
-    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
-    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
+use std::{
+    collections::BTreeSet,
+    path::Path,
+    sync::{Arc, Mutex},
 };
+use thiserror::Error;
 /// Durable repair-transaction checkpoint schema version.
 pub const REPAIR_TRANSACTION_FORWARDER_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Canonical repair-transaction checkpoint file.
@@ -1784,15 +1784,7 @@ impl From<CheckpointStoreError> for RepairTransactionForwarderError {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        io::Write as _,
-        sync::{Arc, Barrier},
-        thread,
-        time::Duration,
-    };
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt as _;
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         ChainId, Level, NetworkId,
@@ -1808,8 +1800,16 @@ mod tests {
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1, RepairEvidenceV1,
         RepairManualCauseV1,
     };
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt as _;
+    use std::{
+        fs,
+        io::Write as _,
+        sync::{Arc, Barrier},
+        thread,
+        time::Duration,
+    };
     use tempfile::TempDir;
-    use super::*;
     fn write_private_checkpoint(path: &Path, bytes: &[u8]) {
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);

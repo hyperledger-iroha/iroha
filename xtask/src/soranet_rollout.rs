@@ -1,3 +1,8 @@
+use blake3::Hasher as Blake3Hasher;
+use hex::encode as hex_encode;
+use iroha_config::parameters::actual::SorafsRolloutPhase;
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+use norito::json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use std::{
     collections::HashSet,
     error::Error,
@@ -5,11 +10,6 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-use blake3::Hasher as Blake3Hasher;
-use hex::encode as hex_encode;
-use iroha_config::parameters::actual::SorafsRolloutPhase;
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
-use norito::json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use time::{
     Duration as TimeDuration, OffsetDateTime,
     format_description::{FormatItem, well_known::Rfc3339},
@@ -471,9 +471,9 @@ pub fn parse_duration_spec(spec: &str) -> Result<TimeDuration, Box<dyn Error>> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{PublicKey, Signature};
     use tempfile::tempdir;
-    use super::*;
     #[test]
     fn capture_rollout_writes_checked_signature_metadata() {
         let temp = tempdir().expect("tempdir");

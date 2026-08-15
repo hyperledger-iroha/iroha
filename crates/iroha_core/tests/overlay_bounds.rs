@@ -3,13 +3,13 @@
 //! Ensures validation rejects transactions whose overlays exceed configured
 //! `overlay_max_instructions` or `overlay_max_bytes`, and other transactions in
 //! the same block still apply (non-forking semantics).
-use std::{borrow::Cow, str::FromStr, sync::Arc};
 use iroha_core::{
     block::BlockBuilder, governance::manifest::LaneManifestRegistry, smartcontracts::Execute,
     state::StateReadOnly,
 };
 use iroha_data_model::prelude::*;
 use norito::codec::Encode as NoritoEncode;
+use std::{borrow::Cow, str::FromStr, sync::Arc};
 fn build_min_world() -> (
     iroha_core::state::State,
     NetworkId,

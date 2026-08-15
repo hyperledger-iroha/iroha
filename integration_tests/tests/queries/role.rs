@@ -1,16 +1,16 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests queries for retrieving roles and their identifiers.
-use std::{
-    collections::HashSet,
-    thread::sleep,
-    time::{Duration, Instant},
-};
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
+use std::{
+    collections::HashSet,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 fn create_role_ids() -> [RoleId; 5] {
     [
         "a".parse().expect("Valid"),

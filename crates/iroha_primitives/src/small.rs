@@ -5,7 +5,6 @@
 //! buffer, while [`SmallVec`] can be tuned to store a handful of elements on
 //! the stack before spilling onto the heap.
 use core::fmt;
-use std::{format, string::String, vec::Vec};
 use iroha_schema::{IntoSchema, TypeId};
 use norito::{
     NoritoDeserialize, NoritoSerialize, core as ncore,
@@ -15,6 +14,7 @@ pub use small_string::SmallStr;
 pub use small_vector::SmallVec;
 use smallstr::SmallString;
 pub use smallvec::{Array, smallvec};
+use std::{format, string::String, vec::Vec};
 /// The go-to size for `SmallVec`. When in doubt, use this.
 pub const SMALL_SIZE: usize = 8_usize;
 mod small_string {
@@ -102,12 +102,12 @@ mod small_string {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use norito::{
         NoritoDeserialize, NoritoSerialize,
         codec::{Decode, Encode},
         core as ncore, decode_from_bytes, json, to_bytes,
     };
-    use super::*;
     // Encoding and decoding a `SmallVec` should produce an identical vector.
     #[test]
     fn smallvec_encode_decode_round_trip() {

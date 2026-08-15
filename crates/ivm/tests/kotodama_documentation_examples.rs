@@ -1,9 +1,3 @@
-use std::{
-    any::Any,
-    collections::HashMap,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
 use iroha_crypto::PublicKey;
 use iroha_primitives::numeric::Quantity;
 use ivm::{
@@ -15,6 +9,12 @@ use ivm::{
         PermissionToken, WsvHost,
     },
     syscalls,
+};
+use std::{
+    any::Any,
+    collections::HashMap,
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 mod common;
 fn repository_root() -> PathBuf {

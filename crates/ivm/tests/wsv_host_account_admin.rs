@@ -1,5 +1,4 @@
 //! WSV host account administration syscall tests.
-use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
@@ -7,6 +6,7 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
+use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {

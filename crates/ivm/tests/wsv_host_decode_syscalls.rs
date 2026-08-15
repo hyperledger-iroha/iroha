@@ -1,5 +1,4 @@
 //! WsvHost JSON/Name/Schema decode syscalls coverage.
-use std::str::FromStr;
 use iroha_crypto::PublicKey;
 use iroha_data_model::prelude::{AssetDefinitionId, Name};
 use iroha_primitives::json::Json;
@@ -8,6 +7,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
+use std::str::FromStr;
 mod common;
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(pty, payload);

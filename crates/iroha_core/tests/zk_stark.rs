@@ -1135,7 +1135,6 @@ fn expected_ivm_exec_public_inputs(
 }
 #[test]
 fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
-    use std::sync::Arc;
     use iroha_crypto::Hash;
     use iroha_data_model::{
         Registrable,
@@ -1149,6 +1148,7 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         transaction::{Executable, IvmProved},
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
+    use std::sync::Arc;
     let backend = "stark/fri/sha256-goldilocks";
     let circuit_id = "ivm-execution-v1";
     // Minimal ZK-mode IVM program: metadata + `HALT`.
@@ -1414,7 +1414,9 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
 #[test]
 fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     use core::num::NonZeroU64;
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
+    use iroha_core::{
+        kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State,
+    };
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -1525,7 +1527,9 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
 #[test]
 fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     use core::num::NonZeroU64;
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
+    use iroha_core::{
+        kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State,
+    };
     use iroha_data_model::{
         Registrable,
         account::Account,

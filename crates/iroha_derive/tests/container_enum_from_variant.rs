@@ -1,10 +1,10 @@
 //! Container enum derive tests for `FromVariant`.
+use impls::impls;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     sync::{Arc, Mutex, RwLock},
 };
-use impls::impls;
 struct Variant1;
 struct Variant2;
 struct Variant3;

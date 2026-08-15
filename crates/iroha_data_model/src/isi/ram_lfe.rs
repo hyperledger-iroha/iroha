@@ -84,13 +84,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeactivateRamLfeProgramPolicy {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::account::AccountId;
     use iroha_crypto::{
         Algorithm, Hash, KeyPair, PolicyCommitment, PublicKey, RamLfeBackend,
         RamLfeVerificationMode,
     };
     use norito::core::DecodeFromSlice;
-    use super::*;
-    use crate::account::AccountId;
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked RAM-LFE fixture keypair");

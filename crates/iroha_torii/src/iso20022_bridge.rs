@@ -1,13 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fmt::Write as FmtWrite,
-    fs,
-    io::Read as _,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, Instant, SystemTime},
-};
+use crate::routing::{self, MaybeTelemetry};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::DashMap;
 use eyre::WrapErr as _;
@@ -41,6 +32,16 @@ use p256::ecdsa::{
 };
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    fmt::Write as FmtWrite,
+    fs,
+    io::Read as _,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant, SystemTime},
+};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 use x509_parser::{
     extensions::{GeneralName, NameConstraints, ParsedExtension},
@@ -49,7 +50,6 @@ use x509_parser::{
     revocation_list::CertificateRevocationList,
     time::ASN1Time,
 };
-use crate::routing::{self, MaybeTelemetry};
 #[derive(Clone)]
 struct IsoCurrencyBinding {
     asset_definition: String,
@@ -9013,7 +9013,7 @@ fn dedup_codes(codes: &mut Vec<String>) {
 }
 #[cfg(test)]
 mod tests {
-    use std::{io::Write as _, str::FromStr, time::SystemTime};
+    use super::*;
     use iroha_core::iso_bridge::reference_data::SnapshotState;
     use iroha_core::state::World;
     use iroha_crypto::{Algorithm, KeyPair};
@@ -9037,8 +9037,8 @@ mod tests {
         IsCa, Issuer, KeyPair as RcgenKeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
         PKCS_ECDSA_P384_SHA384, PublicKeyData, SignatureAlgorithm, SigningKey as _, date_time_ymd,
     };
+    use std::{io::Write as _, str::FromStr, time::SystemTime};
     use tempfile::{NamedTempFile, TempDir};
-    use super::*;
     const LEGACY_PUBLIC_KEY_LITERAL: &str =
         "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@test";
     const XML_SIGNATURE_TEST_SIGNING_TIME: &str = "2026-06-02T12:00:00Z";

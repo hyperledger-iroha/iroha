@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use crate::{ContractArtifactError, DecodedOp};
 use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, DynamicAccessHint, EntryPointKind, KotobaTranslationEntry,
 };
@@ -11,7 +11,7 @@ use ivm_abi::state_value::{
     MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_SCHEMA_BYTES,
     admissible_state_value_schema_for_embedded_type_v1,
 };
-use crate::{ContractArtifactError, DecodedOp};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValidationProfile {
     Production,
@@ -1338,8 +1338,8 @@ fn schedule_nested_state_types<'a>(
 }
 #[cfg(test)]
 mod tests {
-    use ivm_abi::metadata::EmbeddedStateFieldDescriptor;
     use super::*;
+    use ivm_abi::metadata::EmbeddedStateFieldDescriptor;
     fn dynamic_hint(
         base_key: &str,
         key_type: &str,

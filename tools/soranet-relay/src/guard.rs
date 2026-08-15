@@ -1,10 +1,8 @@
 //! Guard directory validation helpers used by the relay runtime.
 #![allow(unexpected_cfgs)]
-use std::{
-    fs,
-    io::Write as _,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+use crate::{
+    checked_ed25519_verifying_key_from_bytes,
+    config::{ConfigError, GuardDirectoryConfig},
 };
 use hex::{FromHexError, encode as hex_encode};
 use iroha_crypto::soranet::{
@@ -21,12 +19,14 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
+use std::{
+    fs,
+    io::Write as _,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tempfile::NamedTempFile;
 use thiserror::Error;
-use crate::{
-    checked_ed25519_verifying_key_from_bytes,
-    config::{ConfigError, GuardDirectoryConfig},
-};
 // Keep the producer's admission contract aligned with the directory builder's
 // first-release guard-proof consumer: every decoded string is capped at 4 KiB
 // and the complete JSON document at the 64 KiB SRCv2 bundle ceiling.
@@ -639,6 +639,8 @@ impl From<GuardDirectoryError> for ConfigError {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::config::GuardDirectoryConfig;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::soranet::{
         certificate::{
@@ -655,8 +657,6 @@ mod tests {
     use rand::{RngCore, SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use tempfile::NamedTempFile;
-    use super::*;
-    use crate::config::GuardDirectoryConfig;
     struct SnapshotFixture {
         config: GuardDirectoryConfig,
         relay_id: [u8; 32],

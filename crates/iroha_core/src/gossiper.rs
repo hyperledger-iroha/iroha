@@ -1,10 +1,15 @@
 //! Gossiper actor responsible for transaction gossiping.
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    num::{NonZeroU32, NonZeroUsize},
-    sync::{Arc, OnceLock},
-    time::{Duration, Instant},
+use crate::{
+    IrohaNetwork, NetworkMessage,
+    queue::{
+        GossipBatchEntry, Queue, RoutingDecision, RoutingPlan, resolve_routing_decision,
+        resolve_routing_plan_against_catalogs,
+    },
+    state::{State, StatelessValidationContext, TransactionsReadOnly},
+    tx::{
+        AcceptTransactionFail, AcceptedTransaction, PreparedTransactionMetadata,
+        SignatureRejectionCode, SignatureVerificationFail,
+    },
 };
 use iroha_config::parameters::{
     actual::{
@@ -30,19 +35,14 @@ use norito::{
     codec::{Decode, Encode},
     core as ncore,
 };
-use tokio::sync::mpsc;
-use crate::{
-    IrohaNetwork, NetworkMessage,
-    queue::{
-        GossipBatchEntry, Queue, RoutingDecision, RoutingPlan, resolve_routing_decision,
-        resolve_routing_plan_against_catalogs,
-    },
-    state::{State, StatelessValidationContext, TransactionsReadOnly},
-    tx::{
-        AcceptTransactionFail, AcceptedTransaction, PreparedTransactionMetadata,
-        SignatureRejectionCode, SignatureVerificationFail,
-    },
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    num::{NonZeroU32, NonZeroUsize},
+    sync::{Arc, OnceLock},
+    time::{Duration, Instant},
 };
+use tokio::sync::mpsc;
 /// Grouped gossip entries and the lanes they originated from.
 #[derive(Default)]
 struct DataspaceBatch {
@@ -228,8 +228,8 @@ impl TransactionGossiperHandle {
 }
 #[cfg(test)]
 mod handle_tests {
-    use tokio::sync::mpsc;
     use super::*;
+    use tokio::sync::mpsc;
     #[test]
     fn gossip_drops_when_queue_full() {
         let (message_sender, mut message_receiver) = mpsc::channel(1);
@@ -3382,12 +3382,13 @@ fn partition_gossip_batch(
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        borrow::Cow,
-        collections::BTreeSet,
-        num::{NonZeroU32, NonZeroUsize},
-        sync::Arc,
-        time::Duration,
+    use super::*;
+    use crate::NetworkMessage;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::{LaneRouter, RoutingDecision},
+        state::{State, World},
     };
     use iroha_config::{
         kura::{FsyncMode, InitMode},
@@ -3426,17 +3427,18 @@ mod tests {
         },
     };
     use iroha_primitives::{addr::socket_addr, numeric::Quantity, time::TimeSource};
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR};
-    use norito::{codec::Decode, core as ncore};
-    use tempfile::tempdir;
-    use crate::NetworkMessage;
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        queue::{LaneRouter, RoutingDecision},
-        state::{State, World},
+    use iroha_test_samples::{
+        ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
     };
+    use norito::{codec::Decode, core as ncore};
+    use std::{
+        borrow::Cow,
+        collections::BTreeSet,
+        num::{NonZeroU32, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
+    };
+    use tempfile::tempdir;
     fn test_network_id() -> NetworkId {
         "0000000000000000000000000000000000000000000000000000000000000001"
             .parse()

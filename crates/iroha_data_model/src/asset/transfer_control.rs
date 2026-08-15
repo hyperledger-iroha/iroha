@@ -1,9 +1,9 @@
 //! Asset transfer control records used for account-scoped on-chain asset policy.
-use std::{format, string::String, vec::Vec};
+use crate::asset::AssetDefinitionId;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use crate::asset::AssetDefinitionId;
+use std::{format, string::String, vec::Vec};
 /// Account metadata key storing the v1 asset-transfer control store.
 pub const ASSET_TRANSFER_CONTROL_METADATA_KEY: &str = "asset_transfer_controls";
 /// Maximum UTF-8 byte length of an asset-transfer availability reason.
@@ -329,8 +329,8 @@ impl AssetTransferControlStoreV1 {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
     use super::*;
+    use iroha_primitives::numeric::Numeric;
     #[derive(Encode)]
     struct ForgedAssetTransferLimit {
         window: AssetTransferControlWindow,

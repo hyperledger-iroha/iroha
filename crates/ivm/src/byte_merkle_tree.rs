@@ -1,7 +1,7 @@
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use iroha_crypto::{HashOf, MerkleProof, MerkleTree};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 /// Merkle tree over fixed-size byte chunks, implemented as a thin adaptor over
 /// the canonical `iroha_crypto::MerkleTree<[u8;32]>`.
 ///

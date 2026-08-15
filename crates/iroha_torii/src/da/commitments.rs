@@ -3,7 +3,7 @@
 //! These endpoints operate on the in-memory commitment index populated during
 //! block application. Durable WSV plumbing can replace the backing store once
 //! available without changing the handler surface.
-use std::num::{NonZeroU64, NonZeroUsize};
+use crate::{Error, JsonBody, NoritoJson, SharedAppState};
 use axum::extract::State;
 use iroha_config::parameters::actual::Nexus;
 use iroha_core::da::{
@@ -19,7 +19,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::ManifestDigest,
 };
-use crate::{Error, JsonBody, NoritoJson, SharedAppState};
+use std::num::{NonZeroU64, NonZeroUsize};
 const ENDPOINT_DA_COMMITMENTS: &str = "/v1/da/commitments";
 const ENDPOINT_DA_COMMITMENTS_PROVE: &str = "/v1/da/commitments/prove";
 const ENDPOINT_DA_COMMITMENTS_VERIFY: &str = "/v1/da/commitments/verify";
@@ -467,7 +467,8 @@ fn verify_against_kura_block(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc};
+    use super::*;
+    use crate::{NoritoJson, mk_app_state_for_tests};
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::nexus::{AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED};
@@ -479,8 +480,7 @@ mod tests {
         },
         nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
     };
-    use super::*;
-    use crate::{NoritoJson, mk_app_state_for_tests};
+    use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc};
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm, context: &str) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{context}: checked random {algorithm:?} key generation failed: {err}")

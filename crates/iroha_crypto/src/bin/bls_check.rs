@@ -1,6 +1,6 @@
 //! Small helper binary that validates hard-coded BLS keypairs.
-use std::error::Error;
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey};
+use std::error::Error;
 const BLS_PAIRS: [(&str, &str); 4] = [
     (
         "ea01308683839424703437C5C8701F3A92D76E228337D2327602B8C0CED667A6ED7F8AD6360948B24FC21849E77411A0975B6D",

@@ -1,9 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Pipeline transaction and block event surface coverage.
-use std::{
-    io::{Read as _, Seek as _, SeekFrom},
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -17,6 +13,10 @@ use iroha::data_model::{
 };
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_test_network::*;
+use std::{
+    io::{Read as _, Seek as _, SeekFrom},
+    time::{Duration, Instant},
+};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},

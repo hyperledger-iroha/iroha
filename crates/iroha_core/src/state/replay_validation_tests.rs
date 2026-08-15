@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use super::*;
 use iroha_data_model::{
     ChainId, ValidationFail,
     account::AccountId,
@@ -15,7 +15,7 @@ use iroha_data_model::{
     transaction::{TransactionBuilder, error::TransactionRejectionReason},
 };
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-use super::*;
+use std::sync::Arc;
 fn run_replay_validation_test_on_stack(name: &'static str, test: fn()) {
     // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
     // platform-default worker stack for these integration-heavy scenarios.
@@ -651,10 +651,10 @@ fn replay_from_height_catches_up_state() {
 }
 #[allow(clippy::too_many_lines)]
 fn replay_from_height_catches_up_state_impl() {
-    use std::borrow::Cow;
     use iroha_crypto::Algorithm;
     use iroha_data_model::peer::PeerId;
     use iroha_genesis::GENESIS_DOMAIN_ID;
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:partial-replay");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -799,7 +799,6 @@ fn replay_rotates_topology_for_npos_prf_leader() {
 }
 #[allow(clippy::too_many_lines)]
 fn replay_rotates_topology_for_npos_prf_leader_impl() {
-    use std::borrow::Cow;
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         parameter::system::{Parameter, SumeragiConsensusMode, SumeragiNposParameters},
@@ -809,6 +808,7 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
     use iroha_test_samples::{
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
     };
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:npos-replay");
     let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -942,7 +942,6 @@ fn replay_uses_commit_roster_journal_for_signature_order() {
 }
 #[allow(clippy::too_many_lines)]
 fn replay_uses_commit_roster_journal_for_signature_order_impl() {
-    use std::borrow::Cow;
     use iroha_config::{
         base::WithOrigin,
         kura::InitMode,
@@ -954,6 +953,7 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
     use iroha_test_samples::{
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
     };
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:replay-roster-journal");
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let kura_cfg = KuraConfig {
@@ -1171,10 +1171,10 @@ fn replay_rejects_non_authoritative_signature_topology_rotation() {
 }
 #[allow(clippy::too_many_lines)]
 fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
-    use std::borrow::Cow;
     use iroha_crypto::Algorithm;
     use iroha_data_model::{DomainId, account::AccountId, peer::PeerId};
     use iroha_genesis::GENESIS_DOMAIN_ID;
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:replay-signature-rotation-recovery");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
@@ -1317,9 +1317,9 @@ fn replay_rejects_committed_execution_result_mismatch_without_mutating_that_bloc
     );
 }
 fn replay_rejects_committed_execution_result_mismatch_impl() {
-    use std::borrow::Cow;
     use iroha_crypto::{Algorithm, Hash};
     use iroha_data_model::transaction::signed::TransactionResultInner;
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:replay-result-mismatch");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1435,8 +1435,8 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch() {
     );
 }
 fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
-    use std::borrow::Cow;
     use iroha_crypto::{Algorithm, Hash};
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:replay-wsv-checkpoint-mismatch");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1585,9 +1585,9 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface() {
 }
 #[allow(clippy::too_many_lines)]
 fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
-    use std::borrow::Cow;
     use iroha_crypto::Algorithm;
     use iroha_primitives::json::Json;
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:legacy-route-replay");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let lane_id = LaneId::new(3);

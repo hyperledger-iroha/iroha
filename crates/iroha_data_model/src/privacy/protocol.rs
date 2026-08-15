@@ -117,8 +117,7 @@ pub struct PrivacyTrustAnchorNamespaceV1 {
 }
 /// Trust-anchor and certificate-policy namespace payload.
 ///
-/// This scope owns policy-specific statement state and the corresponding
-/// issuer CRL root.
+/// This scope owns policy-specific statement state and the corresponding issuer CRL root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -685,10 +684,9 @@ pub enum PrivacyRootPublicationValidationError {
 }
 /// Governance payload establishing one Orchard pool's immutable public bridge.
 ///
-/// The payload deliberately contains neither an initial root nor an initial
-/// epoch. Core derives the pinned Orchard V3 empty-tree root and installs it at
-/// [`PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1`], so governance cannot choose an
-/// alternate accumulator origin.
+/// The payload deliberately contains neither an initial root nor an initial epoch. Core derives the
+/// pinned Orchard V3 empty-tree root and installs it at [`PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1`],
+/// so governance cannot choose an alternate accumulator origin.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -792,10 +790,9 @@ pub enum PrivacyOrchardPoolBootstrapValidationErrorV1 {
 pub const PRIVACY_FCMP_OUTPUT_TUPLE_BYTES_V1: usize = 3 * 32;
 /// One complete FCMP++ output-tree leaf `(O, I, C)`.
 ///
-/// All three values are canonical compressed prime-order Edwards points. The
-/// data model preserves the exact encodings; the native FCMP++ engine performs
-/// the curve, subgroup, and non-identity checks before governance or proof
-/// admission.
+/// All three values are canonical compressed prime-order Edwards points. The data model preserves
+/// the exact encodings; the native FCMP++ engine performs the curve, subgroup, and non-identity
+/// checks before governance or proof admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -814,8 +811,7 @@ pub struct PrivacyFcmpOutputTupleV1 {
     pub amount_commitment: [u8; 32],
 }
 impl PrivacyFcmpOutputTupleV1 {
-    /// Derive the ledger-only identifier used for duplicate detection and
-    /// output lookup.
+    /// Derive the ledger-only identifier used for duplicate detection and output lookup.
     ///
     /// The native curve tree and FCMP++ relation always consume the full tuple.
     #[must_use]
@@ -873,9 +869,8 @@ pub enum PrivacyFcmpOutputTupleValidationErrorV1 {
 }
 /// Canonical typed root of the alternating FCMP++ Selene/Helios curve tree.
 ///
-/// Odd layer counts identify Selene roots and even layer counts identify
-/// Helios roots. The layer count is cryptographically significant and cannot
-/// be inferred from the compressed point.
+/// Odd layer counts identify Selene roots and even layer counts identify Helios roots. The layer
+/// count is cryptographically significant and cannot be inferred from the compressed point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1045,17 +1040,15 @@ pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1: usize = 24;
 pub const PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1: usize = 4 + 32 + 16 + 32 + 32 + 32 + 32;
 /// Poly1305 authentication-tag width.
 pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_TAG_BYTES_V1: usize = 16;
-/// Exact private-IVM ciphertext width, including codec magic and explicit
-/// nonce.
+/// Exact private-IVM ciphertext width, including codec magic and explicit nonce.
 pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1: usize = 4
     + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1
     + PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1
     + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_TAG_BYTES_V1;
 /// Typed encrypted payload for one complete FCMP++ output tuple.
 ///
-/// The output identifier is a ledger index only. The statement and native
-/// curve tree always retain and consume the corresponding full `(O, I, C)`
-/// tuple.
+/// The output identifier is a ledger index only. The statement and native curve tree always retain
+/// and consume the corresponding full `(O, I, C)` tuple.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1124,13 +1117,11 @@ pub struct PrivacyPqMaspPoolBootstrapV1 {
     /// Non-empty genesis note set in strict commitment order.
     pub initial_note_commitments: Vec<PrivacyCommitmentV1>,
 }
-/// Closed typed bootstrap for proof-managed pools that do not use Orchard's
-/// compact frontier.
+/// Closed typed bootstrap for proof-managed pools that do not use Orchard's compact frontier.
 ///
-/// Initial roots and epochs are deliberately absent. Core derives each
-/// protocol's pinned root from the complete canonical genesis commitment set at
-/// epoch one, preventing governance from selecting an alternate accumulator
-/// origin.
+/// Initial roots and epochs are deliberately absent. Core derives each protocol's pinned root from
+/// the complete canonical genesis commitment set at epoch one, preventing governance from selecting
+/// an alternate accumulator origin.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1525,10 +1516,9 @@ impl PrivacyPgcBootstrapProofBytesV1 {
     }
     /// Derive the audit digest of these exact proof bytes.
     ///
-    /// Callers admitting a proof must invoke this only after the native
-    /// verifier has performed exact decode and byte-for-byte canonical
-    /// re-encoding. The method repeats structural validation and never accepts
-    /// a caller-supplied digest.
+    /// Callers admitting a proof must invoke this only after the native verifier has performed
+    /// exact decode and byte-for-byte canonical re-encoding. The method repeats structural
+    /// validation and never accepts a caller-supplied digest.
     ///
     /// # Errors
     ///
@@ -1581,8 +1571,7 @@ pub struct PrivacyPgcAccountBootstrapV1 {
     pub namespace: PrivacyNamespaceV1,
     /// Declared root, which core must recompute from `accounts`.
     pub initial_root: PrivacyRootV1,
-    /// Canonical initial account-state epoch (exactly
-    /// [`PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1`]).
+    /// Canonical initial account-state epoch (exactly [`PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1`]).
     pub initial_epoch: u64,
     /// Exact public aggregate supply encrypted across the initial accounts.
     pub total_supply: u32,
@@ -1592,14 +1581,12 @@ pub struct PrivacyPgcAccountBootstrapV1 {
 impl PrivacyPgcAccountBootstrapV1 {
     /// Validate the closed namespace, size, ordering, and nonzero wire values.
     ///
-    /// Core must additionally recompute `initial_root` from the canonical
-    /// entries under [`PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1`] before
-    /// admitting this payload.
+    /// Core must additionally recompute `initial_root` from the canonical entries under
+    /// [`PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1`] before admitting this payload.
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyPgcAccountBootstrapValidationError`] for any malformed
-    /// bootstrap field.
+    /// Returns [`PrivacyPgcAccountBootstrapValidationError`] for any malformed bootstrap field.
     pub fn validate(&self) -> Result<(), PrivacyPgcAccountBootstrapValidationError> {
         self.namespace
             .validate()
@@ -2432,9 +2419,8 @@ impl PrivacyProtocolLifecycleV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyLifecycleTransitionError`] for invalid states,
-    /// unsupported edges, mismatched proposal/activation history, or a
-    /// non-increasing transition height.
+    /// Returns [`PrivacyLifecycleTransitionError`] for invalid states, unsupported edges,
+    /// mismatched proposal/activation history, or a non-increasing transition height.
     pub fn validate_transition_to(
         &self,
         next: &Self,
@@ -2864,10 +2850,9 @@ impl PrivacyProtocolActivationLimitsV1 {
     }
     /// Validate this governed protocol policy against a compiled ceiling.
     ///
-    /// Both values first undergo their intrinsic nonzero, hard-maximum, and
-    /// closed-set validation. The protocol variants must then match exactly,
-    /// and every governed component must be less than or equal to its compiled
-    /// counterpart.
+    /// Both values first undergo their intrinsic nonzero, hard-maximum, and closed-set validation.
+    /// The protocol variants must then match exactly, and every governed component must be less
+    /// than or equal to its compiled counterpart.
     ///
     /// # Errors
     ///
@@ -3115,8 +3100,7 @@ impl PrivacyProtocolLimitsTighteningV1 {
     ///
     /// # Errors
     ///
-    /// Rejects insufficient notice, a protocol mismatch, invalid limits, an
-    /// increase, or a no-op.
+    /// Rejects insufficient notice, a protocol mismatch, invalid limits, an increase, or a no-op.
     pub fn validate_against(
         &self,
         current_limits: &PrivacyProtocolActivationLimitsV1,
@@ -3505,10 +3489,9 @@ pub enum PrivacyCompiledProfileResultV1 {
 }
 /// One local build result in the canonical compiled-profile catalog.
 ///
-/// This row deliberately has no activation, lifecycle, committed height, or
-/// consensus-policy field. It describes only what the current binary was
-/// compiled to execute. Authoritative readiness comes exclusively from a
-/// committed [`PrivacyExact12CapabilityManifestV1`] returned by Torii.
+/// This row deliberately has no activation, lifecycle, committed height, or consensus-policy field.
+/// It describes only what the current binary was compiled to execute. Authoritative readiness comes
+/// exclusively from a committed [`PrivacyExact12CapabilityManifestV1`] returned by Torii.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -3526,8 +3509,7 @@ impl PrivacyCompiledProfileCatalogRowV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a malformed available profile or a profile tagged for a
-    /// different protocol.
+    /// Rejects a malformed available profile or a profile tagged for a different protocol.
     pub fn validate(&self) -> Result<(), PrivacyCompiledProfileCatalogRowValidationErrorV1> {
         let PrivacyCompiledProfileResultV1::Available(profile) = self.compiled_profile else {
             return Ok(());
@@ -4123,10 +4105,9 @@ impl PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
 }
 /// Validate one untrusted canonical typed local compiled-profile catalog.
 ///
-/// This validator enforces fixed byte, sequence, cumulative-element,
-/// allocation, field, and nesting ceilings before validating the exact twelve
-/// rows in [`PrivacyProtocolIdV1::ALL`] order. It establishes only that the
-/// bytes are a well-formed catalog; callers comparing against the current
+/// This validator enforces fixed byte, sequence, cumulative-element, allocation, field, and nesting
+/// ceilings before validating the exact twelve rows in [`PrivacyProtocolIdV1::ALL`] order. It
+/// establishes only that the bytes are a well-formed catalog; callers comparing against the current
 /// binary must additionally require exact equality with that binary's catalog.
 #[must_use]
 pub fn validate_privacy_compiled_profile_catalog_archive_v1(
@@ -4216,15 +4197,13 @@ impl PrivacyCapabilityArchiveValidationStatusV1 {
 }
 /// Validate one untrusted canonical typed privacy capability archive.
 ///
-/// Admission first applies the fixed 256 KiB byte ceiling, then decodes with
-/// tight per-sequence, cumulative-element, allocation, and nesting budgets.
-/// The canonical decoder enforces the exact
-/// [`PrivacyExact12CapabilityManifestV1`] schema and byte-for-byte canonical
-/// re-encoding. Finally [`PrivacyExact12CapabilityManifestV1::validate`]
-/// enforces the exact twelve rows in [`PrivacyProtocolIdV1::ALL`] order and
-/// all operation, profile, readiness, activation, policy, limitation, and
-/// self-digest bindings. The legacy snapshot schema is rejected rather than
-/// treated as a compatibility representation.
+/// Admission first applies the fixed 256 KiB byte ceiling, then decodes with tight per-sequence,
+/// cumulative-element, allocation, and nesting budgets. The canonical decoder enforces the exact
+/// [`PrivacyExact12CapabilityManifestV1`] schema and byte-for-byte canonical re-encoding. Finally
+/// [`PrivacyExact12CapabilityManifestV1::validate`] enforces the exact twelve rows in
+/// [`PrivacyProtocolIdV1::ALL`] order and all operation, profile, readiness, activation, policy,
+/// limitation, and self-digest bindings. The legacy snapshot schema is rejected rather than treated
+/// as a compatibility representation.
 #[must_use]
 pub fn validate_privacy_capability_archive_v1(
     archive: &[u8],

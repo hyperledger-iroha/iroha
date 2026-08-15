@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Validate that Sumeragi v2 stays within its round envelope under ~250ms link delays.
-use std::time::{Duration, Instant};
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
@@ -10,6 +9,7 @@ use iroha::data_model::{
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use nonzero_ext::nonzero;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 const BLOCK_TIME_MS: u64 = 1_000;
 const COMMIT_TIME_MS: u64 = 2_000;

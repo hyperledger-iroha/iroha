@@ -1,5 +1,4 @@
 //! Runtime tests for canonical pointer values in durable Kotodama state.
-use std::{collections::HashMap, str::FromStr};
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::prelude::*;
 use ivm::{
@@ -9,6 +8,7 @@ use ivm::{
     validate_tlv_bytes,
 };
 use ivm_abi::state_value::StateValueKindV1;
+use std::{collections::HashMap, str::FromStr};
 mod common;
 fn account_from_public_key(public_key: &str) -> AccountId {
     AccountId::new(public_key.parse().expect("public key must be valid"))

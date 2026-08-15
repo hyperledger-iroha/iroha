@@ -4,14 +4,14 @@
 //! smart-contract ISI definitions and the runtime registry that
 //! tracks provider capacity declarations, telemetry snapshots, and
 //! fee accrual ledgers.
+use crate::metadata::Metadata;
 use core::fmt;
-use std::cmp::Ordering;
 use hex;
 use iroha_primitives::numeric::{NumericOperationError, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use std::cmp::Ordering;
 use thiserror::Error;
-use crate::metadata::Metadata;
 /// Provider identifier (BLAKE3-256 digest allocated by governance).
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
@@ -627,8 +627,8 @@ impl Ord for CapacityDisputeRecord {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
     use super::*;
+    use iroha_primitives::numeric::Numeric;
     fn quantity_nanos(value: u128) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, 9))
             .expect("u128 nano-XOR fixture fits Quantity")

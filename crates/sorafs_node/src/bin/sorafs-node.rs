@@ -1,12 +1,4 @@
 //! Offline developer CLI helpers for inspecting the SoraFS storage backend.
-use std::{
-    env, fs,
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-    process,
-};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use norito::json::{self, Map, Value};
 use sorafs_car::{
     CarBuildPlan, CarWriter, chunker_registry, fetch_plan::try_chunk_fetch_plan_to_json,
@@ -22,6 +14,14 @@ use sorafs_manifest::{
     },
 };
 use sorafs_node::{NodeHandle, PorVerdictOutcome, config::StorageConfig, store::StorageBackend};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    env, fs,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+    process,
+};
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");

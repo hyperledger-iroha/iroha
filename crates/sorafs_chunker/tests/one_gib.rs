@@ -1,10 +1,10 @@
+use blake3::{Hash, Hasher};
+use norito::json::Value;
+use sorafs_chunker::{Chunk, ChunkProfile, Chunker, fixtures::FixtureProfile};
 use std::{
     io::Write,
     process::{Command, Stdio},
 };
-use blake3::{Hash, Hasher};
-use norito::json::Value;
-use sorafs_chunker::{Chunk, ChunkProfile, Chunker, fixtures::FixtureProfile};
 const TOTAL_LEN: usize = 1 << 30; // 1 GiB
 const PROFILE: FixtureProfile = FixtureProfile::SF1_V1;
 fn collect_chunks(template: &[u8]) -> Vec<Chunk> {

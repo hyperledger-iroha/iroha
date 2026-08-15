@@ -3,15 +3,15 @@
 //! The local moderation runtime remains useful for orchestration, but these
 //! records define the consensus-owned first-release source of truth for ballot
 //! policy, lifecycle transitions, challenges, outcomes, and no-show penalties.
-use std::collections::BTreeSet;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use thiserror::Error;
 use crate::{
     account::AccountId,
     events::data::sorafs::{SorafsModerationLedgerEvent, SorafsRepairLedgerEvent},
     sorafs::moderation::{SoraFsModerationBallotContextV1, SoraFsModerationVoteChoice},
 };
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeSet;
+use thiserror::Error;
 /// First-release moderation-ledger policy version.
 pub const MODERATION_LEDGER_POLICY_VERSION_V1: u16 = 1;
 /// First-release moderation case specification version.
@@ -2104,11 +2104,11 @@ pub struct RepairFinalizedEventPageV1 {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
     use crate::sorafs::moderation::{
         SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotContextV1,
     };
+    use iroha_crypto::{Algorithm, KeyPair};
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("nonzero deterministic Ed25519 seed");

@@ -3,14 +3,6 @@
 //! The composer utilities provide lightweight building blocks for
 //! transaction previews so front ends can offer form-based instruction
 //! builders without pulling additional crates.
-use std::{
-    collections::BTreeSet,
-    fmt,
-    num::{NonZeroU32, NonZeroU64},
-    str::FromStr,
-    sync::LazyLock,
-    time::Duration,
-};
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     NetworkId,
@@ -37,6 +29,14 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_version::codec::EncodeVersioned;
 use norito::json::{self, Map, Value};
+use std::{
+    collections::BTreeSet,
+    fmt,
+    num::{NonZeroU32, NonZeroU64},
+    str::FromStr,
+    sync::LazyLock,
+    time::Duration,
+};
 /// Permission categories used to gate high-level instruction templates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InstructionPermission {
@@ -1477,17 +1477,17 @@ pub fn drafts_from_json_str(input: &str) -> Result<Vec<InstructionDraft>, Compos
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        num::{NonZeroU32, NonZeroU64},
-        time::Duration,
-    };
+    use super::*;
     use iroha_data_model::{
         account::{AccountAdmissionMode, admission::ImplicitAccountCreationFee},
         asset::prelude::AssetDefinitionId,
     };
     use iroha_version::Version;
-    use super::*;
+    use std::{
+        collections::BTreeMap,
+        num::{NonZeroU32, NonZeroU64},
+        time::Duration,
+    };
     const FIXTURE_ADMISSION_POLICY: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../fixtures/composer/draft_account_admission_policy.json"

@@ -1,12 +1,12 @@
 //! State preverification backend-admission regression tests.
-use std::{num::NonZeroU64, sync::Arc};
+use super::*;
+use crate::{kura::Kura, zk::PreverifyResult};
 use iroha_data_model::{
     block::BlockHeader,
     proof::{ProofBox, VerifyingKeyBox},
     zk::{BackendTag, OpenVerifyEnvelope},
 };
-use super::*;
-use crate::{kura::Kura, zk::PreverifyResult};
+use std::{num::NonZeroU64, sync::Arc};
 #[test]
 fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy() {
     let kura = Kura::blank_kura_for_testing();

@@ -1,12 +1,12 @@
 //! Tokenizer for the Kotodama language.
 //!
 //! The lexer converts a source string into a sequence of [`Token`]s.
+pub use crate::source::{MAX_NESTING_DEPTH, MAX_SOURCE_BYTES, MAX_TOKENS};
 use crate::{
     diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
     source::{FrontendBudget, SourceFile, SourceId, TextRange},
     syntax::SyntaxKind,
 };
-pub use crate::source::{MAX_NESTING_DEPTH, MAX_SOURCE_BYTES, MAX_TOKENS};
 macro_rules! define_v1_keywords {
     ($($spelling:literal => $variant:ident),+ $(,)?) => {
         /// Canonical V1 keyword table consumed by the lexer, formatter,

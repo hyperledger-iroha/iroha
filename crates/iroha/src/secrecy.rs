@@ -1,7 +1,7 @@
 //! Types for representing securely printable secrets.
-use std::fmt;
 use derive_more::Constructor;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
+use std::fmt;
 /// String sensitive to printing and serialization
 #[derive(Clone, Constructor)]
 pub struct SecretString(String);

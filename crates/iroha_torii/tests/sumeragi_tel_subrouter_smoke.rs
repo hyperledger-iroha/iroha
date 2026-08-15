@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke test that Torii exposes telemetry-gated Sumeragi routes via the merged sub-router.
 #![cfg(feature = "telemetry")]
-use std::sync::Arc;
 use axum::{extract::ConnectInfo, http::Request};
 use http::StatusCode;
 use iroha_config::parameters::actual::TelemetryProfile;
@@ -12,6 +11,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_torii::{MaybeTelemetry, Torii};
+use std::sync::Arc;
 use tower::ServiceExt as _;
 mod fixtures;
 fn signed_loopback_get(

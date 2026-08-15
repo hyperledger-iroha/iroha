@@ -4,6 +4,7 @@
 //! (either passed as the first CLI argument or via `SUMERAGI_DA_ARTIFACT_DIR`),
 //! groups runs per scenario, and renders a Markdown report containing aggregated
 //! latency and throughput measurements alongside per-run details.
+use norito::json::{self, Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
@@ -12,7 +13,6 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
-use norito::json::{self, Map, Value};
 type Result<T> = std::result::Result<T, ReportError>;
 fn main() -> ExitCode {
     match emit_report(io::stdout().lock()) {
@@ -825,8 +825,8 @@ fn shorten_hash(hash: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use std::fs::{self, File};
     use super::*;
+    use std::fs::{self, File};
     fn assert_close(actual: f64, expected: f64) {
         let diff = (actual - expected).abs();
         assert!(

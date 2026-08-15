@@ -1,14 +1,14 @@
 #![allow(unexpected_cfgs)]
 //! Deterministic SoraFS hedging and billing payload foundations.
-use std::collections::HashSet;
+use crate::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity};
 use blake3::{Hash, Hasher};
 use iroha_crypto::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
 use norito::{
     core::Error as NoritoError,
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
 };
+use std::collections::HashSet;
 use thiserror::Error;
-use crate::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity};
 pub mod signed;
 /// Schema version for [`HedgingPriceFeedV1`].
 pub const HEDGING_PRICE_FEED_VERSION_V1: u8 = 1;

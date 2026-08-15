@@ -1,7 +1,7 @@
 //! Faucet proof-of-work and adjacent onboarding error-classification tests.
+use super::{adaptive_faucet_pow_extra_bits, faucet_pow_challenge};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{NetworkId, block::BlockHeader};
-use super::{adaptive_faucet_pow_extra_bits, faucet_pow_challenge};
 #[test]
 fn adaptive_faucet_pow_extra_bits_scales_and_caps() {
     assert_eq!(adaptive_faucet_pow_extra_bits(0, 4, 6), 0);

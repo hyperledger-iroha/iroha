@@ -3,19 +3,9 @@
 //! The handle maintained here keeps per-peer `StreamingSession` records so that incoming
 //! control-plane frames (key updates, content-key rotations) can be validated and made
 //! available to higher-level components.
-use std::{
-    collections::{BTreeMap, BTreeSet, btree_map::Entry},
-    error::Error as StdError,
-    fmt, fs, io,
-    io::{Read as _, Write as _},
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex, OnceLock, RwLock,
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
-    thread,
-};
+#[cfg(feature = "telemetry")]
+use crate::telemetry::StreamingTelemetry;
+use crate::{IrohaNetwork, NetworkMessage};
 use blake3::Hasher as Blake3Hasher;
 use data_events::{
     DomainEvent, StreamingPrivacyRelay, StreamingPrivacyRoute, StreamingRouteBinding,
@@ -66,11 +56,21 @@ use norito::{
     to_bytes,
 };
 use soranet_pq::MlKemSuite;
+use std::{
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    error::Error as StdError,
+    fmt, fs, io,
+    io::{Read as _, Write as _},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex, OnceLock, RwLock,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    thread,
+};
 use thiserror::Error;
 use tokio::sync::broadcast;
-#[cfg(feature = "telemetry")]
-use crate::telemetry::StreamingTelemetry;
-use crate::{IrohaNetwork, NetworkMessage};
 #[derive(Debug)]
 struct StreamingState {
     viewer_sessions: RwLock<BTreeMap<PeerId, StreamingSession>>,
@@ -3468,13 +3468,7 @@ impl TransportKeysSnapshot {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        path::PathBuf,
-        str::FromStr,
-        sync::{Arc, Mutex, mpsc},
-        time::{Duration, Instant},
-    };
+    use super::*;
     use iroha_config::parameters::defaults as config_defaults;
     use iroha_crypto::{
         Algorithm, Hash as CryptoHash, KeyPair, PublicKey,
@@ -3495,8 +3489,14 @@ mod tests {
             SoranetChannelId, SoranetRoute, StreamMetadata, TransportCapabilityResolution,
         },
     };
+    use std::{
+        fs,
+        path::PathBuf,
+        str::FromStr,
+        sync::{Arc, Mutex, mpsc},
+        time::{Duration, Instant},
+    };
     use tempfile::tempdir;
-    use super::*;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked streaming fixture keypair")
     }
@@ -5781,7 +5781,9 @@ mod tests {
         publisher_peer: Peer,
     ) {
         use iroha_p2p::streaming::StreamingClient;
-        use norito::streaming::{AudioCapability, CapabilityFlags, Resolution, TransportCapabilities};
+        use norito::streaming::{
+            AudioCapability, CapabilityFlags, Resolution, TransportCapabilities,
+        };
         let mut client = StreamingClient::connect(
             &format!("/ip4/127.0.0.1/udp/{listen_port}/quic"),
             server_certificate_fingerprint,
@@ -5822,9 +5824,9 @@ mod tests {
     #[cfg(feature = "quic")]
     #[tokio::test(flavor = "multi_thread")]
     async fn negotiate_transport_records_hashes() {
-        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         use iroha_p2p::streaming::{StreamingServer, quic::TransportConfigSettings};
         use norito::streaming::CapabilityFlags;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let settings = TransportConfigSettings::default();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
         let server = StreamingServer::bind(server_addr, settings)

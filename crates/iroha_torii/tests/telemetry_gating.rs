@@ -1,12 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![doc = "Telemetry gating integration tests exercising profile-based access."]
 #![cfg(feature = "telemetry")]
-use std::sync::Arc;
 use axum::{http::StatusCode, response::IntoResponse};
 use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::telemetry::Telemetry;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{MaybeTelemetry, handle_metrics, handle_status, handle_v1_sumeragi_pacemaker};
+use std::sync::Arc;
 #[path = "fixtures.rs"]
 mod fixtures;
 fn telemetry_disabled() -> MaybeTelemetry {

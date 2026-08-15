@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke tests for Torii NFT endpoints.
 #![cfg(feature = "app_api")]
-use std::{net::SocketAddr, sync::Arc};
 use axum::{body::Body, http::Request};
 use http::StatusCode;
 use iroha_core::{
@@ -11,6 +10,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_torii::Torii;
+use std::{net::SocketAddr, sync::Arc};
 use tower::ServiceExt as _;
 async fn call_app(app: &axum::Router, request: Request<Body>) -> axum::response::Response {
     let service = app

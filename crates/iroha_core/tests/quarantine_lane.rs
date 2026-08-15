@@ -2,11 +2,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
 // no nonzero macro used in this file
-use std::{borrow::Cow, sync::Arc};
 use iroha_core::{
     block::BlockBuilder, governance::manifest::LaneManifestRegistry, state::StateReadOnly,
 };
 use iroha_data_model::prelude::*;
+use std::{borrow::Cow, sync::Arc};
 fn quarantine_metadata() -> Metadata {
     let mut metadata = Metadata::default();
     metadata.insert(

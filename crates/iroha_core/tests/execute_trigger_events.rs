@@ -1,6 +1,5 @@
 //! Validate that by-call trigger execution emits both the trigger event and resulting data events.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::{borrow::Cow, sync::Arc};
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -14,6 +13,7 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use mv::storage::StorageReadOnly;
+use std::{borrow::Cow, sync::Arc};
 fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);

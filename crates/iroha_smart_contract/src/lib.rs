@@ -1,6 +1,5 @@
 //! API which simplifies writing of smartcontracts
 #![allow(unsafe_code)]
-use std::{boxed::Box, fmt::Debug, ptr};
 use data_model::{
     isi::BuiltInInstruction,
     prelude::*,
@@ -17,6 +16,7 @@ pub use iroha_smart_contract_derive::main;
 use iroha_smart_contract_utils::encode_and_execute;
 pub use iroha_smart_contract_utils::{DebugExpectExt, DebugUnwrapExt, dbg, dbg_panic};
 use norito::NoritoSerialize;
+use std::{boxed::Box, fmt::Debug, ptr};
 #[doc(hidden)]
 pub mod utils {
     //! Crate with utilities
@@ -238,10 +238,10 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use std::{mem::ManuallyDrop, slice};
+    use super::*;
     use data_model::isi::Log;
     use iroha_data_model::query::{QueryOutput, QueryOutputBatchBox};
-    use super::*;
+    use std::{mem::ManuallyDrop, slice};
     // Removed unused import; tests perform explicit framing locally.
     const ISI_RESULT: Result<(), ValidationFail> = Ok(());
     fn get_test_instruction() -> Log {

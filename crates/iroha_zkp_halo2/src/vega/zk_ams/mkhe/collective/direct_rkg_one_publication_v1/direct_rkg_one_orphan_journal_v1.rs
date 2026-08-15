@@ -21,7 +21,10 @@
 //! The complete state machine is `Absent -> PublicationUnknown ->
 //! PublishedUnbound`; there is no reverse or further transition here.
 
-#![allow(dead_code)]
+// TODO: Wire the durable store consumer to establish or recover PublicationUnknown before H0
+// staging, then persist PublishedUnbound before any proof, admission, aggregate, or release gate.
+
+#![expect(dead_code, reason = "durable orphan-journal consumer is not wired yet")]
 
 use super::super::super::super::{
     MKHE_VERSION_V1, ZkAmsMkheErrorV1,

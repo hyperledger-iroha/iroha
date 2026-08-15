@@ -5,7 +5,6 @@
 //! global RBC session store. Availability is committed by the signed genesis
 //! context and observed through the authoritative v2 status and committed
 //! subject.
-use std::{num::NonZeroU64, time::Duration};
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -18,6 +17,7 @@ use iroha::{
     },
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use std::{num::NonZeroU64, time::Duration};
 const LARGE_PAYLOAD_BYTES: usize = 1024 * 1024;
 const TORII_CONTENT_HEADROOM_BYTES: usize = 2 * 1024 * 1024;
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;

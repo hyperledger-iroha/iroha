@@ -1,11 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that Sumeragi operates correctly in `NPoS` mode when collectors are selected via PRF.
-use std::{
-    fs,
-    path::Path,
-    sync::atomic::{AtomicUsize, Ordering},
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -18,6 +12,12 @@ use iroha::data_model::{
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, init_instruction_registry};
 use nonzero_ext::nonzero;
 use norito::json::{self, Value};
+use std::{
+    fs,
+    path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{Duration, Instant},
+};
 use tokio::time::sleep;
 use toml::Table;
 const MAX_HEIGHT_SKEW: u64 = 2;

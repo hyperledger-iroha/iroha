@@ -4,9 +4,9 @@
 //! This is deliberately separate from Iroha's contextual BLS signatures: the
 //! message is hashed to G2 with Ethereum's standard ciphersuite DST and is not
 //! wrapped in an Iroha message context.
+use crate::Error;
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Projective, pairing};
 use group::{Curve as _, Group as _, prime::PrimeCurveAffine as _};
-use crate::Error;
 /// IETF BLS min-pk proof-of-possession signature ciphersuite DST used by
 /// Ethereum consensus.
 pub const ETHEREUM_BLS_POP_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
@@ -85,9 +85,9 @@ fn parse_signature(bytes: &[u8; 96]) -> Result<G2Affine, Error> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use blstrs::{G1Projective, G2Projective, Scalar};
     use group::{Curve as _, Group as _};
-    use super::*;
     fn key_and_signature(secret: u64, message: &[u8]) -> ([u8; 48], G2Projective) {
         let scalar = Scalar::from(secret);
         let public_key = (G1Projective::generator() * scalar)

@@ -1,4 +1,11 @@
 //! CLI utility for comparing Android vs Rust telemetry schema definitions.
+use anyhow::{Context, Result, anyhow};
+use chrono::Utc;
+use clap::{Parser, ValueEnum};
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
@@ -7,13 +14,6 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     process::Command,
-};
-use anyhow::{Context, Result, anyhow};
-use chrono::Utc;
-use clap::{Parser, ValueEnum};
-use norito::{
-    derive::{JsonDeserialize, JsonSerialize},
-    json,
 };
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Diff Android vs Rust telemetry schemas", long_about = None)]
@@ -912,12 +912,12 @@ fn origin_label(commit: Option<&String>, config: Option<&String>) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 mod policy {
-    use std::collections::BTreeSet;
-    use anyhow::{Result, anyhow};
     use super::{
         Field, SignalOnlyEntry, TelemetrySchema, canonical_field_name, find_field_in_schema,
         find_signal,
     };
+    use anyhow::{Result, anyhow};
+    use std::collections::BTreeSet;
     struct FieldAllowance {
         signal: &'static str,
         field: &'static str,
@@ -1227,8 +1227,8 @@ mod policy {
 }
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
     fn schema_from_signals(signals: Vec<Signal>) -> TelemetrySchema {
         TelemetrySchema {
             version: Some("test".to_string()),

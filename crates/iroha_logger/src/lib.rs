@@ -2,18 +2,18 @@
 pub mod actor;
 pub mod layer;
 pub mod telemetry;
+use actor::LoggerHandle;
+use color_eyre::{Report, Result, eyre::eyre};
+pub use iroha_config::{
+    logger::{Format, Level},
+    parameters::actual::{DevTelemetry as DevTelemetryConfig, Logger as Config},
+};
 use std::{
     io,
     sync::{
         OnceLock,
         atomic::{AtomicBool, Ordering},
     },
-};
-use actor::LoggerHandle;
-use color_eyre::{Report, Result, eyre::eyre};
-pub use iroha_config::{
-    logger::{Format, Level},
-    parameters::actual::{DevTelemetry as DevTelemetryConfig, Logger as Config},
 };
 use tracing::subscriber::set_global_default;
 pub use tracing::{

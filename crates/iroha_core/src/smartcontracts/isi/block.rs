@@ -1,5 +1,6 @@
 //! This module contains trait implementations related to block queries
-use std::{collections::BTreeSet, num::NonZeroUsize};
+use super::*;
+use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 use eyre::Result;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -13,8 +14,7 @@ use iroha_data_model::{
 use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
 use norito::json::Value;
-use super::*;
-use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+use std::{collections::BTreeSet, num::NonZeroUsize};
 fn block_height_from_value(value: &Value) -> Option<NonZeroUsize> {
     let height = usize::try_from(value.as_u64()?).ok()?;
     NonZeroUsize::new(height)

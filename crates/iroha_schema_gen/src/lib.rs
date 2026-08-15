@@ -114,7 +114,6 @@ schema_types!(types);
 pub mod complete_data_model {
     //! Complete set of types participating in the schema
     pub use core::num::{NonZeroU16, NonZeroU32, NonZeroU64};
-    pub use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     pub use iroha_crypto::*;
     pub use iroha_data_model::{
         Level,
@@ -169,11 +168,12 @@ pub mod complete_data_model {
     };
     pub use iroha_schema::Compact;
     pub use iroha_telemetry::metrics::{Status, Uptime};
+    pub use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 }
 #[cfg(test)]
 mod tests {
-    use iroha_schema::MetaMapEntry;
     use super::{IntoSchema, complete_data_model::*};
+    use iroha_schema::MetaMapEntry;
     fn is_const_generic(generic: &str) -> bool {
         generic.parse::<usize>().is_ok()
     }

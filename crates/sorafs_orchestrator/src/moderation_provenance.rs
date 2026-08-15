@@ -6,19 +6,6 @@
 //! synchronizes the containing directory. Unix file identity and link-count
 //! checks reject symlink and hard-link substitution. Non-Unix platforms fail
 //! closed until equivalent primitives are implemented.
-use std::{
-    collections::BTreeSet,
-    io,
-    path::{Path, PathBuf},
-};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-#[cfg(unix)]
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    sync::atomic::{AtomicU64, Ordering},
-};
 use iroha_crypto::PublicKey;
 #[cfg(unix)]
 use iroha_data_model::sorafs::moderation::MODERATION_PROVENANCE_MAX_ENTRIES_V1;
@@ -30,6 +17,19 @@ use iroha_data_model::sorafs::moderation::{
 };
 #[cfg(unix)]
 use norito::core::DecodeLimits;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::{
+    collections::BTreeSet,
+    io,
+    path::{Path, PathBuf},
+};
+#[cfg(unix)]
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    sync::atomic::{AtomicU64, Ordering},
+};
 use thiserror::Error;
 #[cfg(unix)]
 const MAX_PROVENANCE_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -592,13 +592,13 @@ fn unsafe_path(path: &Path, reason: impl Into<String>) -> ModerationProvenanceSt
 }
 #[cfg(all(test, unix))]
 mod tests {
+    use super::*;
     use iroha_crypto::{KeyPair, SignatureOf};
     use iroha_data_model::sorafs::moderation::{
         MODERATION_SIGNED_RESULT_VERSION_V1, ModerationSignedScreeningBodyV1,
         ModerationSignedScreeningResultV1,
     };
     use tempfile::TempDir;
-    use super::*;
     fn signed_payload(timestamp: u64) -> ModerationProvenancePayloadV1 {
         let keypair = KeyPair::try_random().expect("keypair");
         let mut body = ModerationSignedScreeningBodyV1 {

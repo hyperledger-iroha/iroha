@@ -1,10 +1,9 @@
 //! Module for client-related configuration and structs
-use core::str::FromStr;
-use std::{
-    env,
-    path::{Path, PathBuf},
-    time::Duration,
+use crate::{
+    crypto::KeyPair,
+    data_model::{ChainId, NetworkId, prelude::*},
 };
+use core::str::FromStr;
 use derive_more::Display;
 use error_stack::{Report, ResultExt};
 use eyre::Result;
@@ -14,12 +13,14 @@ use iroha_primitives::small::SmallStr;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 /// Re-exported `SoraNet` anonymity policy for client configuration.
 pub use sorafs_orchestrator::AnonymityPolicy;
-use url::Url;
-use crate::{
-    crypto::KeyPair,
-    data_model::{ChainId, NetworkId, prelude::*},
+use std::{
+    env,
+    path::{Path, PathBuf},
+    time::Duration,
 };
+use url::Url;
 mod user;
+use crate::secrecy::SecretString;
 pub use user::{
     MusubiFetch as MusubiFetchConfig,
     MusubiFetchProviderGateway as MusubiFetchProviderGatewayConfig,
@@ -27,7 +28,6 @@ pub use user::{
     MusubiPublicationProviderGateway as MusubiPublicationProviderGatewayConfig, ParseError,
     Root as UserConfig,
 };
-use crate::secrecy::SecretString;
 type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
 /// Default time-to-live for transactions submitted via the client API.
 pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
@@ -336,11 +336,11 @@ impl Config {
 }
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, io::Write};
+    use super::*;
     use assertables::assert_contains;
     use iroha_config_base::env::MockEnv;
     use iroha_crypto::ExposedPrivateKey;
-    use super::*;
+    use std::{collections::HashSet, io::Write};
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked config fixture keypair")
     }

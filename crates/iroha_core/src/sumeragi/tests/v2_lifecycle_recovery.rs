@@ -1,4 +1,28 @@
-use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
+use super::*;
+use crate::{
+    kura::Kura,
+    prelude::{AcceptedTransaction, World},
+    query::store::LiveQueryStore,
+    queue::{
+        LaneQueueReservationKeyV2, Queue, RoutingDecision, RoutingPlan,
+        canonical_lane_queue_reservation_group_identity_projection,
+        lane_queue_reservation_group_binding_from_ordered_keys,
+    },
+    state::State,
+    sumeragi::{
+        lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
+        v2_apply::LaneReservationSnapshotPlannerEvidence,
+        v2_core::{
+            IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED, IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+            ProductionInFlightFirstReleaseCarrierProjection,
+            ProductionInFlightFirstReleaseDecisionProjection,
+            ProductionInFlightFirstReleaseHistoryProjection,
+            ProductionInFlightFirstReleaseQueueProjection,
+            ProductionInFlightFirstReleaseReleaseProjection,
+            ProductionInFlightFirstReleaseSessionProjection,
+        },
+    },
+};
 use iroha_config::{
     base::WithOrigin,
     kura::{FsyncMode, InitMode},
@@ -28,32 +52,8 @@ use iroha_data_model::{
 };
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
 use tempfile::TempDir;
-use super::*;
-use crate::{
-    kura::Kura,
-    prelude::{AcceptedTransaction, World},
-    query::store::LiveQueryStore,
-    queue::{
-        LaneQueueReservationKeyV2, Queue, RoutingDecision, RoutingPlan,
-        canonical_lane_queue_reservation_group_identity_projection,
-        lane_queue_reservation_group_binding_from_ordered_keys,
-    },
-    state::State,
-    sumeragi::{
-        lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
-        v2_apply::LaneReservationSnapshotPlannerEvidence,
-        v2_core::{
-            IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED, IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
-            ProductionInFlightFirstReleaseCarrierProjection,
-            ProductionInFlightFirstReleaseDecisionProjection,
-            ProductionInFlightFirstReleaseHistoryProjection,
-            ProductionInFlightFirstReleaseQueueProjection,
-            ProductionInFlightFirstReleaseReleaseProjection,
-            ProductionInFlightFirstReleaseSessionProjection,
-        },
-    },
-};
 fn lifecycle_key_pair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
         .expect("deterministic BLS lifecycle key")

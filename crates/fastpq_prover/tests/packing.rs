@@ -1,6 +1,6 @@
 //! FASTPQ packing roundtrip tests.
-use std::path::{Path, PathBuf};
 use fastpq_prover::{pack_bytes, unpack_bytes};
+use std::path::{Path, PathBuf};
 #[test]
 fn roundtrip_reference_vectors() {
     for data in load_vectors() {

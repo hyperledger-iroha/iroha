@@ -1,13 +1,13 @@
-#[cfg(feature = "rand")]
-use rand_core::{TryCryptoRng, TryRngCore};
-#[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
-use w3f_bls::SerializableToBytes as _;
 use super::{
     implementation::{BlsConfiguration, BlsImpl, PreparedPublicKeyCacheAccess},
     normal::NormalConfiguration,
     small::SmallConfiguration,
 };
 use crate::{Error, KeyGenOption};
+#[cfg(feature = "rand")]
+use rand_core::{TryCryptoRng, TryRngCore};
+#[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+use w3f_bls::SerializableToBytes as _;
 const MESSAGE_1: &[u8; 22] = b"This is a test message";
 const MESSAGE_2: &[u8; 20] = b"Another test message";
 const SEED: &[u8; 10] = &[1u8; 10];

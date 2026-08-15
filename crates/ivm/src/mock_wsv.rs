@@ -1,11 +1,23 @@
-use core::str::FromStr;
-use std::{
-    any::Any,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
-    num::{NonZeroU16, NonZeroU64},
-    path::PathBuf,
-    sync::Arc,
+#[cfg(test)]
+use crate::memory::Memory;
+use crate::{
+    VMError,
+    axt::{self, AssetHandle, AxtPolicy, ProofBlob, RemoteSpendIntent, TouchManifest},
+    gas,
+    host::{
+        IVMHost, checked_state_keys_limit, common_syscall_gas_quote,
+        conservative_syscall_gas_quote, is_sm_syscall, preflight_reserved_syscall_gas,
+        quote_tlv_payload_len_at, require_host_syscall_metering_spec,
+        reserve_available_syscall_gas, reserve_available_syscall_gas_at_least,
+    },
+    ivm::IVM,
+    parallel::StateUpdate,
+    pointer_abi::{self, PointerType},
+    schema_registry::{DefaultRegistry, SchemaRegistry},
+    state_overlay::{DurableStateOverlay, DurableStateSnapshot},
+    syscalls,
 };
+use core::str::FromStr;
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
 pub use iroha_data_model::account::AccountId;
 pub use iroha_data_model::prelude::{AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer};
@@ -31,24 +43,12 @@ use norito::{
     json::{self as njson},
 };
 use sha2::{Digest as _, Sha256};
-#[cfg(test)]
-use crate::memory::Memory;
-use crate::{
-    VMError,
-    axt::{self, AssetHandle, AxtPolicy, ProofBlob, RemoteSpendIntent, TouchManifest},
-    gas,
-    host::{
-        IVMHost, checked_state_keys_limit, common_syscall_gas_quote,
-        conservative_syscall_gas_quote, is_sm_syscall, preflight_reserved_syscall_gas,
-        quote_tlv_payload_len_at, require_host_syscall_metering_spec,
-        reserve_available_syscall_gas, reserve_available_syscall_gas_at_least,
-    },
-    ivm::IVM,
-    parallel::StateUpdate,
-    pointer_abi::{self, PointerType},
-    schema_registry::{DefaultRegistry, SchemaRegistry},
-    state_overlay::{DurableStateOverlay, DurableStateSnapshot},
-    syscalls,
+use std::{
+    any::Any,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    num::{NonZeroU16, NonZeroU64},
+    path::PathBuf,
+    sync::Arc,
 };
 /// Definition of an asset type.
 #[derive(Clone, Debug)]
@@ -4864,9 +4864,9 @@ mod tests_axt_policy_snapshot {
 }
 #[cfg(test)]
 mod tests_governance_elections {
-    use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
     use super::*;
     use crate::Memory;
+    use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
     fn vote_vk_id() -> VerifyingKeyId {
         VerifyingKeyId::new("halo2/ipa", "governance_vote_vk")
     }
@@ -5491,8 +5491,8 @@ mod tests_zk_asset_bindings {
 }
 #[cfg(test)]
 mod tests_nft_decode {
-    use std::collections::HashMap;
     use super::*;
+    use std::collections::HashMap;
     #[test]
     fn decode_nft_payload_accepts_norito_encoded_bytes() {
         let nft_id: NftId = "n0$wonderland.universal".parse().unwrap();
@@ -5509,10 +5509,10 @@ mod tests_nft_decode {
 }
 #[cfg(test)]
 mod tests_null_decode {
-    use std::collections::HashMap;
     use super::*;
     use iroha_data_model::prelude::Name;
     use iroha_primitives::json::Json;
+    use std::collections::HashMap;
     fn load_int_state_map_schema(vm: &mut IVM, name: &str) {
         let interface = crate::metadata::EmbeddedContractInterfaceV1 {
             seiyaku_name: "MockWsvStateMapFixture".to_owned(),

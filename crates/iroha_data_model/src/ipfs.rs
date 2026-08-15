@@ -1,15 +1,15 @@
 //! Module with [`IpfsPath`] and related impls.
-use std::{format, str::FromStr, string::String, vec::Vec};
+pub use self::model::*;
+use crate::error::ParseError;
 use iroha_data_model_derive::model;
 use iroha_primitives::conststr::ConstString;
 use norito::{Decode, codec::Encode};
-pub use self::model::*;
-use crate::error::ParseError;
+use std::{format, str::FromStr, string::String, vec::Vec};
 #[model]
 mod model {
+    use super::*;
     use derive_more::Display;
     use iroha_schema::IntoSchema;
-    use super::*;
     /// Represents path in IPFS. Performs checks to ensure path validity.
     /// Construct using [`FromStr::from_str`] method.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -95,8 +95,8 @@ impl AsRef<str> for IpfsPath {
 // DecodeFromSlice is provided via a crate-level shim in `norito_slice_decode.rs`.
 #[cfg(test)]
 mod tests {
-    use std::string::ToString as _;
     use super::*;
+    use std::string::ToString as _;
     // Trait import not needed; tests use header-framed norito helpers directly.
     const INVALID_IPFS: [&str; 4] = [
         "",

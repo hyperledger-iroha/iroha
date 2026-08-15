@@ -1,13 +1,13 @@
 //! Externally governed authentication for hedging feeds and billing references.
-use std::cmp::Ordering;
-use blake3::Hasher;
-use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
 use super::{
     BillingStatementV1, HedgingPriceFeedV1, HedgingReferencePriceDecisionV1,
     HedgingValidationError, MAX_BILLING_LINES, MAX_HEDGING_IDENTIFIER_BYTES,
     MAX_HEDGING_PRICE_FEEDS, derive_reference_price_decision_v1,
 };
+use blake3::Hasher;
+use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::cmp::Ordering;
+use thiserror::Error;
 /// Schema version for [`HedgingFeedBindingV1`].
 pub const HEDGING_FEED_BINDING_VERSION_V1: u8 = 1;
 /// Schema version for [`HedgingTrustedSignerV1`].
@@ -1392,14 +1392,14 @@ pub enum SignedHedgingError {
 }
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
-    use iroha_crypto::numeric::Quantity;
     use super::*;
     use crate::XorQuantity;
     use crate::hedging::{
         BillingLineDirectionV1, BillingLineItemKindV1, HEDGING_PRICE_FEED_VERSION_V1,
         HedgingFeedStatusV1, build_billing_line_item_v1, build_billing_statement_v1,
     };
+    use ed25519_dalek::{Signer, SigningKey};
+    use iroha_crypto::numeric::Quantity;
     const EFFECTIVE_AT: u64 = 1_800_000_000;
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")

@@ -1,6 +1,5 @@
 //! Integration coverage for validator admission of Parliament-enacted validation-fee policy.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -60,6 +59,7 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::NumericSpec};
 use mv::storage::StorageReadOnly;
 use sha2::Sha256;
+use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 const TEST_REFERENDUM_DURATION_BLOCKS: u64 = 3_600;
 const TEST_LIFECYCLE_WINDOW_START_HEIGHT: u64 = 2;

@@ -9,10 +9,12 @@ mod fetch;
 ))]
 mod synth;
 mod theme;
-use std::{
-    collections::VecDeque,
-    io::{self, Write},
-    time::Duration,
+use crate::{
+    fetch::{
+        NoticeLevel, PeerFetcher, PeerNotice, PeerSnapshot, PeerUpdate, STATUS_BODY_LIMIT,
+        StatusPayload, spawn_stub_cluster,
+    },
+    theme::{ThemeIntro, ThemeOptions},
 };
 use axum::http::Uri;
 use clap::{Parser, ValueEnum};
@@ -25,14 +27,12 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Sparkline, Table, Wrap},
 };
-use tokio::{signal, sync::mpsc, time, time::MissedTickBehavior};
-use crate::{
-    fetch::{
-        NoticeLevel, PeerFetcher, PeerNotice, PeerSnapshot, PeerUpdate, STATUS_BODY_LIMIT,
-        StatusPayload, spawn_stub_cluster,
-    },
-    theme::{ThemeIntro, ThemeOptions},
+use std::{
+    collections::VecDeque,
+    io::{self, Write},
+    time::Duration,
 };
+use tokio::{signal, sync::mpsc, time, time::MissedTickBehavior};
 #[derive(ValueEnum, Clone, Copy, Debug)]
 enum ArtThemeArg {
     Night,
@@ -842,8 +842,8 @@ enum InputEvent {
 }
 fn spawn_input_listener(tx: mpsc::Sender<InputEvent>) {
     std::thread::spawn(move || {
-        use std::time::Duration;
         use crossterm::event::{self, Event};
+        use std::time::Duration;
         loop {
             if event::poll(Duration::from_millis(100)).unwrap_or(false) {
                 match event::read() {
@@ -1898,12 +1898,12 @@ fn compact_u64(value: u64) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-    use ratatui::backend::TestBackend;
     use super::*;
     use crate::fetch::{
         MetricsSnapshot, NoticeKind, PeerNotice, PeerSnapshot, PeerUpdate, StatusPayload,
     };
+    use ratatui::backend::TestBackend;
+    use std::time::Duration;
     fn line_text(line: &Line<'_>) -> String {
         line.spans
             .iter()

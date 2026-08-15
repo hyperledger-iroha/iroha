@@ -22,9 +22,6 @@ pub(in super::super) use radix_source_cursor_v2::Phase23GlobalLookupRadixSourceC
 #[path = "global_lookup_source_replay_v1/source_openings_v1.rs"]
 mod source_openings_v1;
 pub(in super::super) use source_openings_v1::GlobalLookupProofSessionEntropySealV1;
-pub(in crate::vega::zk_ams::mkhe) use source_openings_v1::{
-    GlobalLookupCanonicalReopenSealV1, Phase23GlobalLookupSourceReopenedV1,
-};
 use source_openings_v1::{GlobalLookupSourceOpeningMaterialV1, SourceOpeningAssemblyV1};
 const SOURCE_REPLAY_VERSION_V1: u8 = 1;
 const SIGNED_SOURCE_ROLES_V1: usize = 3;

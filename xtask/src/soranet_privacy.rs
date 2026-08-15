@@ -1,3 +1,12 @@
+use crate::{JsonTarget, write_json_output};
+use iroha_data_model::soranet::privacy_metrics::{
+    SoranetPrivacyBucketMetricsV1, SoranetPrivacyEventHandshakeFailureV1,
+    SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1,
+    SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
+    SoranetPrivacySuppressionReasonV1,
+};
+use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyConfigError, SoranetSecureAggregator};
+use norito::json::{self, Value};
 use std::{
     collections::BTreeMap,
     convert::TryFrom,
@@ -8,16 +17,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use iroha_data_model::soranet::privacy_metrics::{
-    SoranetPrivacyBucketMetricsV1, SoranetPrivacyEventHandshakeFailureV1,
-    SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1,
-    SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
-    SoranetPrivacySuppressionReasonV1,
-};
-use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyConfigError, SoranetSecureAggregator};
-use norito::json::{self, Value};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use crate::{JsonTarget, write_json_output};
 pub const DEFAULT_MAX_BUCKET_RECORDS: usize = 25;
 #[derive(Clone, Debug)]
 pub struct PrivacyReportOptions {
@@ -582,9 +582,9 @@ fn wrap_config_error(err: PrivacyConfigError, config: &PrivacyBucketConfig) -> B
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::io::Write as _;
     use tempfile::NamedTempFile;
-    use super::*;
     fn write_log(lines: &[&str]) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");
         for line in lines {

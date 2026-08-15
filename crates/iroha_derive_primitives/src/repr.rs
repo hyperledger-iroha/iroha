@@ -184,11 +184,11 @@ impl FromAttributes for Repr {
 }
 #[cfg(test)]
 mod tests {
+    use super::{Repr, ReprAlignment, ReprKind, ReprPrimitive};
     use darling::FromAttributes as _;
     use proc_macro2::TokenStream;
     use quote::quote;
     use syn::parse::Parser;
-    use super::{Repr, ReprAlignment, ReprKind, ReprPrimitive};
     #[derive(Debug)]
     struct ExpectedRepr {
         kind: Option<ReprKind>,

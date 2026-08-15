@@ -1,7 +1,4 @@
 //! Durable execution routing context committed by a block header.
-use iroha_crypto::{Hash, HashOf, MerkleTree};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     NetworkId,
     block::{
@@ -13,6 +10,9 @@ use crate::{
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
+use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Current wire version for a globally committed autonomous lane payload.
 pub const AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1: u8 = 1;
 /// Current-only first-release block execution-context bundle layout.
@@ -339,13 +339,13 @@ impl Default for BlockExecutionContextBundle {
 }
 #[cfg(test)]
 mod tests {
-    use core::num::NonZeroU64;
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
     use crate::{
         merge::{MergeExecutionBatch, MergeLedgerEntry},
         peer::PeerId,
     };
+    use core::num::NonZeroU64;
+    use iroha_crypto::{Algorithm, KeyPair};
     fn entrypoint_hash(label: &[u8]) -> HashOf<TransactionEntrypoint> {
         HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(label))
     }

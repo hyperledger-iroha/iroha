@@ -1,11 +1,11 @@
 //! Shared fixtures for Kagami integration tests.
+use color_eyre::eyre::{Result, WrapErr, ensure, eyre};
+use iroha_data_model::peer::PeerId;
 use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
 };
-use color_eyre::eyre::{Result, WrapErr, ensure, eyre};
-use iroha_data_model::peer::PeerId;
 /// Output of `kagami genesis pop --json`.
 #[derive(Clone, Debug)]
 pub struct PopFixture {

@@ -232,9 +232,9 @@ def _production_liveness_release_inventory_errors(
     canonical_sdk_diagnostics_suites = (
         ("python", 121),
         ("javascript", 88),
-        ("swift", 17),
-        ("kotlin", 26),
-        ("java", 24),
+        ("swift", 33),
+        ("kotlin", 42),
+        ("java", 41),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"
@@ -690,8 +690,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 436:
-        errors.append("internal release-regression seal must contain exactly 436 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 437:
+        errors.append("internal release-regression seal must contain exactly 437 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1610,10 +1610,10 @@ def _production_liveness_release_inventory_errors(
                     "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "f5c4e3bf8d8a86890abba38f559058df676e5a311aacead265ce0f999d6395bd"
+                    "6ff2d5337414bbbf74a9530cc1b2bd59bc62141a82a1319fa2a270b84e64ce8c"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    "0cc7e2a43479fb27305974559c331d4494df161cfc7c75fe9c51f324b09e058a"
+                    "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
                     "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
@@ -1741,8 +1741,9 @@ def _production_liveness_release_inventory_errors(
                     )
                     continue
                 try:
+                    component_source = component_path.read_text(encoding="utf-8")
                     component_tree = ast.parse(
-                        component_path.read_text(encoding="utf-8"),
+                        component_source,
                         filename=str(component_path),
                     )
                 except (OSError, UnicodeDecodeError, SyntaxError) as error:
@@ -1801,7 +1802,7 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            "a11e17139adf7257126328d7f0c9f2903a6911c9ff4a81e50bb2818362f2b39b"
+            "e336273e2a4322d125344b6bd5162fdd1a9dcfce874aa49497a03c30141bfd8b"
         ),
     }
     expected_bootstrap_component_symbols = {
@@ -1947,21 +1948,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current\ninventory to 855 tests across 40 modules.\n"
+            "current\ninventory to 856 tests across 40 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 855-test, 40-module inventory. The complete source-sealed\n"
+            "current 856-test, 40-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current\nsource-bound inventory to 855 exact tests across 40 modules and "
+            "current\nsource-bound inventory to 856 exact tests across 40 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",

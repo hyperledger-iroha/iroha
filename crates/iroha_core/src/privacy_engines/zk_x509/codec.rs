@@ -5,10 +5,6 @@
 //! duplicate, oversized, truncated, or suffix-extended witnesses have no
 //! alternate interpretation.  Proof bytes use a separate codec because they
 //! are consensus-visible while this container is a local prover input.
-use core::fmt;
-use iroha_data_model::privacy::{ZK_X509_MAX_CERTIFICATE_BYTES_V1, ZK_X509_MAX_CHAIN_BYTES_V1};
-use thiserror::Error;
-use zeroize::Zeroize;
 use super::{
     der_air::ZK_X509_RFC5280_MAX_TOP_LEVEL_DOCUMENT_BYTES_V1,
     merkle::{
@@ -20,6 +16,10 @@ use super::{
         ZK_X509_MIN_CHAIN_DEPTH_V1, ZK_X509_RELATION_VERSION_V1,
     },
 };
+use core::fmt;
+use iroha_data_model::privacy::{ZK_X509_MAX_CERTIFICATE_BYTES_V1, ZK_X509_MAX_CHAIN_BYTES_V1};
+use thiserror::Error;
+use zeroize::Zeroize;
 const WITNESS_MAGIC_V1: [u8; 8] = *b"IRX509W1";
 pub(crate) const ZK_X509_WALLET_SIGNATURE_RS_BYTES_V1: usize = 64;
 const MAX_DISCLOSED_ATTRIBUTES_V1: usize = 4;

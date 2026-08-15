@@ -6,17 +6,17 @@
 //! an empty active-validator set, respectively. Pass `--consensus-sections`
 //! before a template config to parse only its `nexus` and `pipeline` tables;
 //! this is useful for deployment templates whose runtime secrets are redacted.
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    str::FromStr as _,
-};
 use iroha_config::{
     base::toml::TomlSource,
     parameters::actual::{Nexus, Pipeline, Root, sumeragi_v2_nexus_amx_context_hash},
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
 use iroha_data_model::block::consensus_v2::GenesisActiveNexusLaneRecord;
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    str::FromStr as _,
+};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1);
     let first = args.next();

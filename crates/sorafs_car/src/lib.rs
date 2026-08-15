@@ -8,28 +8,6 @@
 //! CARv1 payload + MultihashIndexSorted index), or to `CarStreamingWriter`
 //! when the source payload cannot be buffered in memory.
 #![allow(unexpected_cfgs)]
-#[cfg(feature = "manifest")]
-use std::str::FromStr;
-use std::{
-    collections::{BTreeMap, HashSet},
-    convert::TryFrom,
-    fs::File,
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-};
-#[cfg(any(unix, test))]
-use std::fs;
-#[cfg(unix)]
-use std::fs::OpenOptions;
-#[cfg(unix)]
-use std::{
-    io::{Seek as _, SeekFrom},
-    path::Component,
-};
-#[cfg(unix)]
-use std::os::unix::fs::{
-    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
-};
 use blake3::{Hash, Hasher};
 #[cfg(feature = "manifest")]
 use iroha_data_model::{
@@ -48,6 +26,28 @@ use sorafs_chunker::{ChunkDigest, ChunkProfile};
 use sorafs_manifest::{
     ManifestV1 as SorafsManifestV1, PdpMerkleReadError, PdpMerkleTreeBuilderV1, PdpMerkleTreeError,
     PdpMerkleTreeV1, PdpProofLeafV1, PdpSampleV1, estimated_heap_bytes as estimated_pdp_heap_bytes,
+};
+#[cfg(any(unix, test))]
+use std::fs;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+};
+#[cfg(feature = "manifest")]
+use std::str::FromStr;
+use std::{
+    collections::{BTreeMap, HashSet},
+    convert::TryFrom,
+    fs::File,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+};
+#[cfg(unix)]
+use std::{
+    io::{Seek as _, SeekFrom},
+    path::Component,
 };
 use thiserror::Error;
 pub mod bundle_archive;
@@ -6633,10 +6633,10 @@ pub struct FileEntry {
 }
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, collections::HashSet, fs, io::Cursor, rc::Rc};
-    use sorafs_chunker::fixtures::FixtureProfile;
-    use tempfile::tempdir;
     use super::*;
+    use sorafs_chunker::fixtures::FixtureProfile;
+    use std::{cell::Cell, collections::HashSet, fs, io::Cursor, rc::Rc};
+    use tempfile::tempdir;
     include!("lib/decode_test_helpers.rs");
     #[derive(Debug)]
     struct StoreSnapshot {

@@ -1,13 +1,13 @@
 //! Subscription metadata schemas for trigger-based billing.
-use std::collections::BTreeMap;
-use iroha_crypto::Hash;
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     AssetDefinitionId, DeriveJsonDeserialize, DeriveJsonSerialize, account::AccountId, name::Name,
     nft::NftId, trigger::TriggerId,
 };
+use iroha_crypto::Hash;
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeMap;
 /// Metadata key storing a subscription plan payload on an asset definition.
 pub const SUBSCRIPTION_PLAN_METADATA_KEY: &str = "subscription_plan";
 /// Metadata key storing a subscription state payload on an NFT.
@@ -233,10 +233,10 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
-    use norito::codec::{Decode, Encode};
     use super::*;
     use crate::domain::DomainId;
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode, Encode};
     #[derive(Encode)]
     struct ForgedSubscriptionFixedPricing {
         amount: Numeric,

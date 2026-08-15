@@ -1,4 +1,13 @@
 //! Izanami-backed chaos helpers for the Mochi desktop shell.
+use crate::{Supervisor, ToriiClient};
+use color_eyre::{Result as EyreResult, eyre::eyre};
+use iroha_data_model::{block::SignedBlock, domain::DomainId, isi::InstructionBox};
+use iroha_genesis::GenesisBlock;
+use iroha_test_samples::ALICE_KEYPAIR;
+use izanami::faults::{
+    CpuStressConfig, DiskSaturationConfig, FaultClient, FaultConfig, FaultPeer, FaultScenarioKind,
+    NetworkLatencyConfig, NetworkPartitionConfig, apply_fault_scenario,
+};
 use std::{
     fs,
     path::PathBuf,
@@ -10,17 +19,8 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime},
 };
-use color_eyre::{Result as EyreResult, eyre::eyre};
-use iroha_data_model::{block::SignedBlock, domain::DomainId, isi::InstructionBox};
-use iroha_genesis::GenesisBlock;
-use iroha_test_samples::ALICE_KEYPAIR;
 use tokio::runtime::Handle;
 use toml::{Table, Value};
-use crate::{Supervisor, ToriiClient};
-use izanami::faults::{
-    CpuStressConfig, DiskSaturationConfig, FaultClient, FaultConfig, FaultPeer, FaultScenarioKind,
-    NetworkLatencyConfig, NetworkPartitionConfig, apply_fault_scenario,
-};
 /// Named chaos presets surfaced in the Mochi desktop shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChaosPreset {

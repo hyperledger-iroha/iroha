@@ -7,11 +7,11 @@
 //! nesting depth, value count, and `SET OF` order. Primitive `OCTET STRING`
 //! payloads remain opaque and must be parsed separately when an X.509
 //! extension assigns them an inner ASN.1 type.
-use thiserror::Error;
 pub(crate) use super::der_limits::{
     ZK_X509_DER_MAX_DOCUMENT_BYTES_V1, ZK_X509_DER_MAX_NESTING_DEPTH_V1,
     ZK_X509_DER_MAX_VALUE_BYTES_V1, ZK_X509_DER_MAX_VALUES_V1,
 };
+use thiserror::Error;
 /// DER content octets of `ecdsa-with-SHA256` (`1.2.840.10045.4.3.2`).
 pub(crate) const ZK_X509_ECDSA_WITH_SHA256_OID_CONTENT_V1: &[u8] =
     &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];

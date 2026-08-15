@@ -1,5 +1,5 @@
-use std::{io::Write as _, path::PathBuf};
 use assert_cmd::cargo::cargo_bin_cmd;
+use std::{io::Write as _, path::PathBuf};
 use tempfile::NamedTempFile;
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

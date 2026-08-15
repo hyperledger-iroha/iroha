@@ -5,13 +5,13 @@
 //! macro offers a convenient way to construct such collections inline,
 //! discarding any duplicates in the provided list.
 use core::borrow::Borrow;
-use std::vec::Vec;
 use derive_more::{AsRef, Deref};
 use iroha_schema::IntoSchema;
 use norito::{
     NoritoDeserialize, NoritoSerialize, core as ncore,
     json::{self, JsonDeserialize, JsonSerialize},
 };
+use std::vec::Vec;
 /// Creates a [`UniqueVec`](crate::unique_vec::UniqueVec) from a list of values.
 ///
 /// Works like [`vec!`] but ignores duplicate entries so the resulting
@@ -182,9 +182,9 @@ where
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use core::borrow::Borrow;
     use norito::codec::{Decode, Encode};
-    use super::*;
     // Tests covering the behaviour of `UniqueVec` to ensure it maintains
     // uniqueness of elements and behaves like a typical vector otherwise.
     // Verify that `UniqueVec` uses the `Default` trait to create an empty

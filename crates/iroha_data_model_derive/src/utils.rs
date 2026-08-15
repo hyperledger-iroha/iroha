@@ -114,8 +114,8 @@ macro_rules! attr_struct {
 pub(crate) use attr_struct;
 #[cfg(test)]
 mod tests {
-    use syn::parse_quote;
     use super::*;
+    use syn::parse_quote;
     #[test]
     fn find_single_attr_opt_works() {
         let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[test_attr(foo)])];

@@ -1,6 +1,4 @@
 //! This module contains [`Nft`] structure and it's implementation
-use std::{format, str::FromStr, string::String, vec::Vec};
-use iroha_data_model_derive::model;
 pub use self::model::*;
 use crate::{
     IntoKeyValue, Registered, Registrable,
@@ -9,15 +7,17 @@ use crate::{
     metadata::Metadata,
     prelude::AccountId,
 };
+use iroha_data_model_derive::model;
+use std::{format, str::FromStr, string::String, vec::Vec};
 #[model]
 mod model {
+    use super::*;
+    use crate::{Identifiable, Name, account::prelude::*, domain::prelude::*};
     use derive_more::Constructor;
     use getset::{CopyGetters, Getters};
     use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder};
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-    use super::*;
-    use crate::{Identifiable, Name, account::prelude::*, domain::prelude::*};
     /// Identification of an Non Fungible Asset. Consists of Asset name and Domain name.
     ///
     /// # Examples

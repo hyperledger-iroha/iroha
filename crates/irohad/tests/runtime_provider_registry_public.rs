@@ -1,5 +1,4 @@
 //! Public-surface checks for deployment-owned daemon providers and publication factories.
-use std::sync::Arc;
 use irohad::{
     BuildLine, IrohaRuntimeDeps, IrohaRuntimeProviderBindingsV1,
     IrohaRuntimeProviderCatalogErrorV1, IrohaRuntimeProviderRegistryErrorV1,
@@ -15,6 +14,7 @@ use irohad::{
     },
     serve_runtime_provider_broker_with_fallible_readiness_v1,
 };
+use std::sync::Arc;
 struct DeploymentRegistry;
 struct ExternalMusubiPublicationFactory;
 struct ExternalMusubiPublicationRunner;

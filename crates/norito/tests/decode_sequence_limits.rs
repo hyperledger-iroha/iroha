@@ -1,12 +1,12 @@
 //! Adversarial coverage for decode-scoped sequence allocation limits.
+use norito::{
+    DecodeLimits, Error,
+    codec::{Decode, Encode},
+};
 use std::{
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque},
     io::Cursor,
     sync::{Arc, Barrier},
-};
-use norito::{
-    DecodeLimits, Error,
-    codec::{Decode, Encode},
 };
 #[derive(Debug, PartialEq, Eq, Encode, Decode)]
 enum WrappedSequence {

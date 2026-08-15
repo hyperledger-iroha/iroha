@@ -1,8 +1,5 @@
 //! Lightweight query helpers feeding the MOCHI state explorer views.
-use std::{
-    num::NonZeroU64,
-    panic::{AssertUnwindSafe, catch_unwind},
-};
+use crate::torii::{ToriiClient, ToriiError};
 use iroha_data_model::{
     HasMetadata, Identifiable,
     account::{Account, AccountId},
@@ -22,7 +19,10 @@ use iroha_data_model::{
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json;
-use crate::torii::{ToriiClient, ToriiError};
+use std::{
+    num::NonZeroU64,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 /// Set of iterable queries currently supported by the state explorer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateQueryKind {
@@ -749,6 +749,7 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use httpmock::{Method::POST, MockServer};
     use iroha_data_model::{
         Registrable,
@@ -764,7 +765,6 @@ mod tests {
     use iroha_primitives::numeric::{NumericSpec, Quantity};
     use iroha_test_samples::ALICE_ID;
     use norito::{json, to_bytes};
-    use super::*;
     fn try_start_mock_server() -> Option<MockServer> {
         std::panic::catch_unwind(MockServer::start)
             .ok()

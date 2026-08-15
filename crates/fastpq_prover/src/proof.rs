@@ -1,7 +1,3 @@
-use core::convert::TryFrom;
-use fastpq_isi::{CANONICAL_PARAMETER_SETS, StarkParameterSet, find_by_name};
-use iroha_crypto::Hash;
-use norito::{NoritoDeserialize, NoritoSerialize};
 use crate::{
     Error, Result, TransitionBatch,
     backend::{
@@ -12,6 +8,10 @@ use crate::{
     },
     ordering, trace, trace_commitment,
 };
+use core::convert::TryFrom;
+use fastpq_isi::{CANONICAL_PARAMETER_SETS, StarkParameterSet, find_by_name};
+use iroha_crypto::Hash;
+use norito::{NoritoDeserialize, NoritoSerialize};
 /// Protocol version advertised by the V1 prover implementation.
 const PROTOCOL_VERSION: u16 = 1;
 /// Domain tag for permission root fallback commitments.

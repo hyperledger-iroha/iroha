@@ -1,8 +1,8 @@
 //! Logic related to the conversion of slices to and from FFI-compatible representation
 #![allow(unsafe_op_in_unsafe_fn)]
+use crate::ReprC;
 use core::{ptr::NonNull, slice};
 use std::{boxed::Box, vec::Vec};
-use crate::ReprC;
 /// Immutable slice `&[C]` with a defined C ABI layout. Consists of a data pointer and a length.
 ///
 /// If the data pointer is set to `null`, the struct represents `Option<&[C]>`.
@@ -339,8 +339,8 @@ impl<T: ReprC> From<OwnedLinearSlice<T>> for LinearSlice<T> {
 }
 #[cfg(test)]
 mod tests {
-    use std::vec;
     use super::*;
+    use std::vec;
     #[test]
     fn linear_slice_mut_allows_updates() {
         let mut data = vec![1u32, 2, 3].into_boxed_slice();

@@ -1,14 +1,14 @@
 //! Canonical private-note witness and deterministic execution relation.
-use std::{collections::BTreeSet, fmt};
+use super::{codec::encode_private_program_v1, wallet::validate_ivm_private_encrypted_output_v1};
 use iroha_data_model::privacy::{
     IrohaIvmPrivateNoteStarkStatementV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
     PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyPoolProgramNamespaceV1, PrivacyProgramIdV1,
     PrivacyProtocolIdV1, PrivacyRootV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
 };
 use sha2::{Digest as _, Sha256};
+use std::{collections::BTreeSet, fmt};
 use thiserror::Error;
 use zeroize::Zeroize;
-use super::{codec::encode_private_program_v1, wallet::validate_ivm_private_encrypted_output_v1};
 /// Maximum consumed notes in the sole compiled relation.
 pub const PRIVATE_NOTE_MAX_INPUTS_V1: usize = 2;
 /// Maximum created notes in the sole compiled relation.

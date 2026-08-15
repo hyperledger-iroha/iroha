@@ -1,7 +1,3 @@
-use manyhow::{Emitter, emit};
-use proc_macro2::{Span, TokenStream};
-use quote::quote;
-use syn::{Attribute, Ident, Type, parse_quote, visit_mut::VisitMut};
 use crate::{
     attr_parse::derive::{Derive, RustcDerive},
     convert::FfiTypeInput,
@@ -9,6 +5,10 @@ use crate::{
     getset_gen::{gen_resolve_type, gen_store_name},
     impl_visitor::{Arg, FnDescriptor, ImplDescriptor, TypeImplTraitResolver, unwrap_result_type},
 };
+use manyhow::{Emitter, emit};
+use proc_macro2::{Span, TokenStream};
+use quote::quote;
+use syn::{Attribute, Ident, Type, parse_quote, visit_mut::VisitMut};
 fn gen_lifetime_name_for_opaque() -> TokenStream {
     quote! {'a}
 }

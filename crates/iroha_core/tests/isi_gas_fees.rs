@@ -1,7 +1,6 @@
 //! Integration-style test: non-VM (native ISI) transaction gas metering and fee transfer.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::similar_names)]
-use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
 use iroha_core::{
     executor::Executor,
@@ -20,6 +19,7 @@ use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 fn test_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(
         iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(

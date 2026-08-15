@@ -3,6 +3,7 @@
 //! Private-input records are bounded before Norito decoding. Successful
 //! decoding yields an opaque private numeric TLV; only the explicitly approved
 //! full-width commitment path below may declassify it.
+use crate::{PointerType, VMError, numeric_tlv, pointer_abi};
 use blstrs::Scalar;
 use crypto_bigint::{
     Encoding, U256,
@@ -22,7 +23,6 @@ use ivm_abi::private_input::{
     PRIVATE_NUMERIC_PROJECTION_DOMAIN_V1, PRIVATE_NUMERIC_VALCOM_DOMAIN_V1, PrivateInputKindV1,
     PrivateInputRecordV1,
 };
-use crate::{PointerType, VMError, numeric_tlv, pointer_abi};
 const BLS_SCALAR_MODULUS: U256 =
     U256::from_be_hex("73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001");
 /// A fully validated private input ready to be published into opaque VM memory.

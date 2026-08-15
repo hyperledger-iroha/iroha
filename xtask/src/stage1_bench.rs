@@ -1,3 +1,9 @@
+use norito::{
+    derive::JsonSerialize,
+    json as serde_json,
+    json::{build_struct_index, build_struct_index_scalar_bench},
+};
+use serde::Serialize;
 use std::{
     error::Error,
     fmt::Write as _,
@@ -5,12 +11,6 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use norito::{
-    derive::JsonSerialize,
-    json as serde_json,
-    json::{build_struct_index, build_struct_index_scalar_bench},
-};
-use serde::Serialize;
 use time::OffsetDateTime;
 #[derive(Clone, Debug)]
 pub struct Stage1BenchOptions {

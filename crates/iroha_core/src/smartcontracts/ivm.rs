@@ -7,7 +7,7 @@ pub mod cache;
 pub mod host;
 /// Exact, privacy-safe public return decoding.
 pub mod return_value;
-use std::{collections::BTreeSet, num::NonZeroU64};
+use crate::state::WorldReadOnly;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     ValidationFail,
@@ -21,7 +21,7 @@ use iroha_data_model::{
     smart_contract::manifest::ContractManifest,
 };
 use mv::storage::StorageReadOnly;
-use crate::state::WorldReadOnly;
+use std::{collections::BTreeSet, num::NonZeroU64};
 /// Convert deterministic program preparation failures into public admission errors.
 #[must_use]
 pub(crate) fn admission_reason_from_vm_error(error: ivm::VMError) -> IvmAdmissionError {

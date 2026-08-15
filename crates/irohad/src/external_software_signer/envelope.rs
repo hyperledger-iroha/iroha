@@ -1,16 +1,16 @@
 //! AEAD key-envelope handling with explicit in-memory secret scrubbing.
-use std::fmt;
-use iroha_crypto::{
-    KeyPair, PrivateKey,
-    encryption::{ChaCha20Poly1305, SymmetricEncryptor},
-};
-use norito::codec::{Decode, Encode};
 use super::protocol::{
     SIGNER_KEY_MAGIC_V1, SIGNER_MAX_PRIVATE_KEY_BYTES_V1, SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1,
     SIGNER_PROTOCOL_VERSION_V1, SoftwareSignerKeyAlgorithmV1, SoftwareSignerPurposeBindingV1,
     SoftwareSignerRoleV1, digest_canonical, digest_parts, public_key_digest, scrub, valid_identity,
     valid_software_signer_handle,
 };
+use iroha_crypto::{
+    KeyPair, PrivateKey,
+    encryption::{ChaCha20Poly1305, SymmetricEncryptor},
+};
+use norito::codec::{Decode, Encode};
+use std::fmt;
 const KEY_ENVELOPE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.v1";
 const KEY_ENVELOPE_AAD_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.aad.v1";
 const KEY_ENVELOPE_KEK_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.kek.v1";
@@ -301,9 +301,9 @@ pub enum SoftwareSignerEnvelopeErrorV1 {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
     use crate::external_software_signer::protocol::ExternalSignerBackendV1;
+    use iroha_crypto::{Algorithm, KeyPair};
     fn wrapping(byte: u8) -> SoftwareSignerWrappingKeyV1 {
         SoftwareSignerWrappingKeyV1::try_from_bytes([byte; 32]).expect("fixture wrapping key")
     }

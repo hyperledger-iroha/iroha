@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke tests for Torii asset definitions endpoints.
 #![cfg(feature = "app_api")]
-use std::num::NonZeroU64;
-use std::sync::Arc;
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
@@ -20,6 +18,8 @@ use iroha_data_model::Registrable as _;
 use iroha_data_model::isi::SetAssetDefinitionAlias;
 use iroha_data_model::prelude as dm;
 use iroha_torii::Torii;
+use std::num::NonZeroU64;
+use std::sync::Arc;
 use tower::ServiceExt as _;
 fn checked_asset_definition_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)

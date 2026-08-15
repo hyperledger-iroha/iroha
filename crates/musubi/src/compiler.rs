@@ -4,11 +4,13 @@
 //! re-authenticated the complete bundle against an exact lock node. Local path
 //! packages remain explicit `local:` identities, while every registry import
 //! uses the exact structural release identity selected by the consumer lock.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fmt,
-    path::PathBuf,
+use crate::{
+    cache::{CachedCompilerPackageV1, MusubiCache},
+    graph::{GraphErrorV1, collect_local_members},
+    lockfile::LockfileV1,
+    manifest::{ConcreteDependency, DependencySpec, LocalTarget, PortablePath, parse_manifest},
+    package::PackagePlan,
+    workspace::{EffectiveDependency, Workspace, WorkspaceMember},
 };
 use iroha_data_model::musubi::{
     MusubiContentDigestV1, MusubiDependencyKindV1, MusubiPackageSelectorV1,
@@ -32,13 +34,11 @@ use ivm::{
     },
     syscalls::compute_abi_hash,
 };
-use crate::{
-    cache::{CachedCompilerPackageV1, MusubiCache},
-    graph::{GraphErrorV1, collect_local_members},
-    lockfile::LockfileV1,
-    manifest::{ConcreteDependency, DependencySpec, LocalTarget, PortablePath, parse_manifest},
-    package::PackagePlan,
-    workspace::{EffectiveDependency, Workspace, WorkspaceMember},
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+    path::PathBuf,
 };
 /// Compiler operation requested by the Cargo-style command surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -986,7 +986,13 @@ fn target_source_units(
 }
 #[cfg(all(test, unix))]
 mod tests {
-    use std::fs;
+    use super::*;
+    use crate::{
+        cache::CachedKotodamaSourceV1,
+        lockfile::{LockedRootV1, LockfileV1},
+        package::{PackageLayout, plan_package},
+        workspace::load_workspace,
+    };
     use iroha_data_model::{
         musubi::{
             ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiExactDependencyEdgeV1,
@@ -997,14 +1003,8 @@ mod tests {
         },
         nexus::DataSpaceId,
     };
+    use std::fs;
     use tempfile::TempDir;
-    use super::*;
-    use crate::{
-        cache::CachedKotodamaSourceV1,
-        lockfile::{LockedRootV1, LockfileV1},
-        package::{PackageLayout, plan_package},
-        workspace::load_workspace,
-    };
     struct EmptyRegistry;
     impl RegistryCompilerSourceV1 for EmptyRegistry {
         fn load(

@@ -1,10 +1,10 @@
+use norito::derive::JsonDeserialize;
+use soranet_handshake_harness::{HandshakeSuite, SimulationParams, decode_hex, simulate_handshake};
 use std::{
     fs,
     path::PathBuf,
     time::{Duration, Instant},
 };
-use norito::derive::JsonDeserialize;
-use soranet_handshake_harness::{HandshakeSuite, SimulationParams, decode_hex, simulate_handshake};
 #[derive(JsonDeserialize)]
 struct InteropInputs {
     client_capabilities_hex: String,

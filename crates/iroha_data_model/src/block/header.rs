@@ -1,8 +1,4 @@
-use std::{fmt, num::NonZeroU64, time::Duration};
-use iroha_crypto::{Hash, HashOf, MerkleTree, Signature, SignatureOf};
-use iroha_data_model_derive::model;
-use iroha_schema::IntoSchema;
-use norito::{codec::Encode, core as ncore};
+use super::execution_context::BlockExecutionContextBundle;
 use crate::{
     confidential::{ConfidentialFeatureDigest, DEFAULT_CONFIDENTIAL_FEATURE_DIGEST},
     consensus::{NposConsensusEffects, PreviousRosterEvidence},
@@ -12,13 +8,17 @@ use crate::{
     },
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
-use super::execution_context::BlockExecutionContextBundle;
+use iroha_crypto::{Hash, HashOf, MerkleTree, Signature, SignatureOf};
+use iroha_data_model_derive::model;
+use iroha_schema::IntoSchema;
+use norito::{codec::Encode, core as ncore};
+use std::{fmt, num::NonZeroU64, time::Duration};
 #[model]
 mod model {
-    use getset::{CopyGetters, Getters, Setters};
-    use norito::codec::{Decode, Encode};
     use super::*;
     use crate::{confidential::ConfidentialFeatureDigest, da::commitment::DaProofPolicyBundle};
+    use getset::{CopyGetters, Getters, Setters};
+    use norito::codec::{Decode, Encode};
     /// Essential metadata for a block in the chain.
     #[derive(
         Debug,
@@ -109,8 +109,8 @@ mod model {
 pub use self::model::{BlockHeader, BlockSignature};
 /// Internal wire helper with a stable Norito tuple layout used by codecs and tests.
 pub mod wire {
-    use norito::core as ncore;
     use super::*;
+    use norito::core as ncore;
     /// Stable transport for `BlockHeader` mapping typed hashes to raw bytes.
     #[derive(Clone, Copy)]
     pub struct BlockHeaderWire(
@@ -771,6 +771,7 @@ impl<'de> ncore::NoritoDeserialize<'de> for BlockSignature {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::block::ExternalExecutionContext;
     use iroha_crypto::{Hash, KeyPair, Signature};
     use nonzero_ext::nonzero;
@@ -778,7 +779,6 @@ mod tests {
         codec::{DecodeAll as _, Encode as _, decode_adaptive, encode_with_header_flags},
         core::NoritoSerialize,
     };
-    use super::*;
     struct SamplePayload {
         payload: Vec<u8>,
         flags: u8,

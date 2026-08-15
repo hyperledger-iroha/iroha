@@ -106,8 +106,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDomainEndorsement {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         domain::DomainId,
@@ -117,6 +115,8 @@ mod tests {
             DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
         },
     };
+    use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey};
+    use norito::core::DecodeFromSlice;
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked endorsement ISI fixture keypair")

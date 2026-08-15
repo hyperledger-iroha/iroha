@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Push bridge endpoints (FCM/APNS) – feature/config gating and happy-path smoke.
 #![cfg(all(feature = "app_api", feature = "push"))]
-use std::sync::Arc;
 use axum::{
     body::to_bytes,
     http::{Request, StatusCode},
@@ -20,6 +19,7 @@ use iroha_data_model::{
     domain::{Domain, DomainId},
 };
 use iroha_torii::{OnlinePeersProvider, Torii};
+use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
 #[path = "fixtures.rs"]
 mod fixtures;

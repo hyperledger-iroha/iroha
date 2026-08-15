@@ -1,8 +1,12 @@
 //! Profile-aware genesis verification entrypoint.
-use std::{
-    collections::{BTreeSet, HashSet},
-    io::{BufWriter, Write},
-    path::PathBuf,
+use crate::{
+    Outcome, RunArgs,
+    genesis::{
+        GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults,
+        profile_requires_npos, profile_uses_public_xor, resolve_vrf_seed,
+    },
+    genesis::{PUBLIC_XOR_ALIAS, TAIRA_XOR_ASSET_DEFINITION_ID},
+    tui,
 };
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
@@ -17,14 +21,10 @@ use iroha_data_model::{
     prelude::{AssetDefinition, DomainId, PeerId},
 };
 use iroha_genesis::RawGenesisTransaction;
-use crate::{
-    Outcome, RunArgs,
-    genesis::{
-        GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults,
-        profile_requires_npos, profile_uses_public_xor, resolve_vrf_seed,
-    },
-    genesis::{PUBLIC_XOR_ALIAS, TAIRA_XOR_ASSET_DEFINITION_ID},
-    tui,
+use std::{
+    collections::{BTreeSet, HashSet},
+    io::{BufWriter, Write},
+    path::PathBuf,
 };
 /// Verify a genesis manifest against a known profile (chain id, cadence, VRF seed, PoPs).
 #[derive(Debug, Parser, Clone)]
@@ -322,6 +322,8 @@ fn collect_topology(manifest: &RawGenesisTransaction) -> Result<Vec<PeerId>> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::genesis::profile::derive_vrf_seed_from_chain;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         asset::{AssetDefinitionAlias, AssetDefinitionId},
@@ -334,8 +336,6 @@ mod tests {
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use tempfile::NamedTempFile;
-    use super::*;
-    use crate::genesis::profile::derive_vrf_seed_from_chain;
     fn test_public_xor_asset_definition_id(profile: GenesisProfile) -> AssetDefinitionId {
         match profile {
             GenesisProfile::Iroha3Taira => {

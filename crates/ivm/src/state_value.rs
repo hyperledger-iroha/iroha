@@ -1,4 +1,10 @@
 //! Compiler-internal canonical codec for aggregate durable-state values.
+use crate::{
+    VMError,
+    host::preflight_reserved_syscall_gas,
+    ivm::IVM,
+    pointer_abi::{self, PointerType, Tlv},
+};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -21,12 +27,6 @@ use ivm_abi::{
 };
 #[cfg(test)]
 use norito::{decode_from_bytes, to_bytes};
-use crate::{
-    VMError,
-    host::preflight_reserved_syscall_gas,
-    ivm::IVM,
-    pointer_abi::{self, PointerType, Tlv},
-};
 const STATE_VALUE_GAS_BASE: u64 = 32;
 type AddressResolver = fn(&IVM, u64) -> u64;
 fn gas(bytes: usize, words: usize) -> u64 {
@@ -1459,12 +1459,12 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::nexus::{DataSpaceId, LaneId};
     use iroha_primitives::{bigint::BigInt, numeric::Quantity};
     use ivm_abi::state_value::{
         StateValueAtomV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
     };
-    use super::*;
     fn identity_address(_vm: &IVM, address: u64) -> u64 {
         address
     }

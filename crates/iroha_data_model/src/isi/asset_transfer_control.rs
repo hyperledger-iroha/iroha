@@ -1,10 +1,10 @@
 //! Built-in instructions for account- and asset-scoped transfer controls.
-use std::{format, string::String, vec::Vec};
 use super::*;
 use crate::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetTransferAvailability, AssetTransferLimit},
 };
+use std::{format, string::String, vec::Vec};
 isi! {
     /// Atomically update incoming and outgoing account-to-account transfer availability.
     ///
@@ -303,10 +303,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetTransferControl {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::asset::AssetTransferControlWindow;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked asset-transfer-control fixture keypair");

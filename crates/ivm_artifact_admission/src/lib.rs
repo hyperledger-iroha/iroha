@@ -4,7 +4,6 @@
 //! browser WebAssembly. It deliberately depends on the stable `ivm_abi`
 //! surface and canonical primitive codecs, not on the VM runtime, caches,
 //! proof systems, or host integrations.
-use std::{error::Error as StdError, fmt, fmt::Write as _};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -33,6 +32,7 @@ use ivm_abi::{
 #[cfg(test)]
 use norito::NoritoSerialize;
 use norito::codec::{Decode, Encode};
+use std::{error::Error as StdError, fmt, fmt::Write as _};
 mod policy;
 /// Maximum executable-image bytes admitted by IVM code memory.
 pub const MAX_CONTRACT_IMAGE_BYTES: u64 = 0x0010_0000;
@@ -712,6 +712,7 @@ pub fn verify_contract_artifact_json(artifact: &[u8]) -> String {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{nexus::LaneId, smart_contract::manifest::EntryPointKind};
     use ivm_abi::{
         axt::{
@@ -721,7 +722,6 @@ mod tests {
         metadata::EmbeddedStateFieldDescriptor,
         pointer_abi::PointerType,
     };
-    use super::*;
     fn encoded(descriptor: &AxtDescriptor) -> Vec<u8> {
         norito::to_bytes(descriptor).expect("encode canonical AXT descriptor")
     }

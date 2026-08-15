@@ -1,4 +1,11 @@
 //! Settlement logic for repo and reverse-repo instructions.
+use super::prelude::*;
+use crate::{
+    smartcontracts::isi::{
+        asset::isi::assert_numeric_spec_with, settlement::ensure_bilateral_counterparty_consent,
+    },
+    state::{StateTransaction, WorldReadOnly},
+};
 use iroha_data_model::{
     asset::AssetId,
     events::data::prelude::{
@@ -13,13 +20,6 @@ use iroha_data_model::{
     repo::{RepoAgreement, RepoGovernance},
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity, RoundingMode};
-use super::prelude::*;
-use crate::{
-    smartcontracts::isi::{
-        asset::isi::assert_numeric_spec_with, settlement::ensure_bilateral_counterparty_consent,
-    },
-    state::{StateTransaction, WorldReadOnly},
-};
 const MAX_HAIRCUT_BPS: u16 = 10_000;
 const MS_PER_DAY: u64 = 86_400_000;
 const ACT_360_YEAR_MS: u64 = MS_PER_DAY * 360;
@@ -649,7 +649,11 @@ impl Execute for RepoMarginCallIsi {
 }
 /// Repo-related query implementations.
 pub mod query {
-    use std::collections::BTreeSet;
+    use super::*;
+    use crate::{
+        smartcontracts::ValidQuery,
+        state::{StateReadOnly, WorldReadOnly},
+    };
     use eyre::Result;
     use iroha_data_model::{
         account::{AccountId, ParsedAccountId},
@@ -663,11 +667,7 @@ pub mod query {
     };
     use iroha_telemetry::metrics;
     use norito::json::Value;
-    use super::*;
-    use crate::{
-        smartcontracts::ValidQuery,
-        state::{StateReadOnly, WorldReadOnly},
-    };
+    use std::collections::BTreeSet;
     #[derive(Clone, Copy)]
     enum RepoAgreementAccountIndex {
         Initiator,
@@ -816,6 +816,11 @@ pub mod query {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::ValidQuery,
+        state::State,
+    };
     use hex::encode_upper;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
@@ -839,11 +844,6 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use norito::json::{Map, Number, Value};
-    use super::*;
-    use crate::{
-        kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::ValidQuery,
-        state::State,
-    };
     fn checked_account_id() -> AccountId {
         let key_pair = KeyPair::try_random().expect("repo fixture key generation should succeed");
         AccountId::new(key_pair.public_key().clone())

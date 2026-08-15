@@ -1,4 +1,5 @@
 //! Bounded process helpers for integration tests.
+use crate::timeouts::read_env_duration;
 use std::{
     future::Future,
     io::{self, Read},
@@ -8,7 +9,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use crate::timeouts::read_env_duration;
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     task::JoinHandle,

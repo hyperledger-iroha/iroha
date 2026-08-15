@@ -1,12 +1,12 @@
 //! Pricing manifests and probabilistic micropayment policies for SoraFS.
-use std::num::{NonZeroU32, NonZeroU64};
+use crate::deal::{DealAmountError, XorQuantity};
 use iroha_crypto::numeric::{Numeric, RoundingMode};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
     json::{Map, Value},
 };
+use std::num::{NonZeroU32, NonZeroU64};
 use thiserror::Error;
-use crate::deal::{DealAmountError, XorQuantity};
 pub mod signed;
 /// SoraFS pricing manifest schema version.
 pub const PRICING_MANIFEST_VERSION_V1: u8 = 1;

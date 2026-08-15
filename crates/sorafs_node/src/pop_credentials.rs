@@ -12,11 +12,9 @@
 //! There is no local-authority fallback. Issuance and verification are bound to
 //! an explicitly supplied finalized policy/root projection, and every registry
 //! submission is recovered through a durable idempotent outbox.
-use std::{
-    collections::BTreeSet,
-    fmt, fs,
-    path::{Path, PathBuf},
-    sync::Arc,
+use crate::{
+    decode_local_checkpoint_canonical, read_local_checkpoint_bounded,
+    write_local_private_checkpoint_atomic,
 };
 use iroha_config::parameters::validate_production_runtime_handle;
 #[cfg(test)]
@@ -47,11 +45,13 @@ use sorafs_manifest::{
         verify_pop_membership_proof_v1, verify_pop_revocation_list_signature_v1,
     },
 };
-use thiserror::Error;
-use crate::{
-    decode_local_checkpoint_canonical, read_local_checkpoint_bounded,
-    write_local_private_checkpoint_atomic,
+use std::{
+    collections::BTreeSet,
+    fmt, fs,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
+use thiserror::Error;
 /// V1 issuer-service policy version.
 pub const POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1: u16 = 1;
 /// V1 encrypted enrollment envelope version.
@@ -3663,13 +3663,13 @@ pub enum PopCredentialServiceError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{io, sync::Arc};
     use iroha_crypto::{HybridKeyPair, KeyPair};
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
     use sorafs_manifest::pop_credentials::{
         POP_CREDENTIAL_TREE_DEPTH_V1, POP_REVOCATION_TREE_DEPTH_V1, derive_pop_holder_commitment_v1,
     };
+    use std::{io, sync::Arc};
     use tempfile::TempDir;
     #[derive(Debug)]
     struct TestAuthenticator {

@@ -1,9 +1,4 @@
 //! Shared test fixtures for the desktop supervisor shell.
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
-};
 use iroha_data_model::{
     block::consensus_v2::{PROTOCOL_VERSION, SumeragiV2GenesisContextParameters},
     parameter::{
@@ -12,6 +7,11 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, Map, Value};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+};
 pub(super) struct TestEnvGuard {
     key: &'static str,
     prev: Option<String>,

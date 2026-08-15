@@ -1,4 +1,3 @@
-use std::{fs, path::PathBuf};
 use assert_cmd::cargo::cargo_bin_cmd;
 use blake3::hash as blake3_hash;
 use data_encoding::BASE32_NOPAD;
@@ -7,6 +6,7 @@ use iroha_primitives::soradns::{
     derive_gateway_hosts_with_profile,
 };
 use norito::json::{self as serde_json, Value};
+use std::{fs, path::PathBuf};
 use tempfile::TempDir;
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -6,22 +6,6 @@
 //! canonical public intent and witness-free transaction plan before entering a
 //! native Rust closure, decodes the exact owner bundle there, builds and
 //! self-inspects one signed transaction, and returns public signed wire only.
-use std::{
-    collections::HashMap,
-    fs::{self, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
-    num::NonZeroU32,
-    path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-use iroha_crypto::Algorithm;
-use iroha_data_model::{
-    metadata::Metadata, prelude::AccountId, privacy::PrivacyProtocolIdV1,
-    transaction::FeePaymentIntent,
-};
-use rand_core_06::{OsRng, RngCore};
-use sha2::{Digest, Sha256};
-use zeroize::{Zeroize, Zeroizing};
 use crate::{
     privacy_native_actions::{
         PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1, PrivacyActionTransactionContextV1,
@@ -34,6 +18,22 @@ use crate::{
         decode_privacy_wallet_execution_bundle_v1, inspect_privacy_wallet_execution_bundle_v1,
     },
 };
+use iroha_crypto::Algorithm;
+use iroha_data_model::{
+    metadata::Metadata, prelude::AccountId, privacy::PrivacyProtocolIdV1,
+    transaction::FeePaymentIntent,
+};
+use rand_core_06::{OsRng, RngCore};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::HashMap,
+    fs::{self, OpenOptions},
+    io::{self, Read, Seek, SeekFrom, Write},
+    num::NonZeroU32,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use zeroize::{Zeroize, Zeroizing};
 pub const PROTOCOL_VERSION: u8 = 1;
 pub const MAX_FRAME_BYTES: usize = 34 * 1_024 * 1_024;
 pub const MAX_CREDENTIAL_BYTES: u64 = 8_388_608;
@@ -1590,6 +1590,10 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use iroha_crypto::{PrivateKey, PublicKey};
+    use iroha_data_model::transaction::SignedTransaction;
+    use iroha_version::codec::DecodeVersioned;
     use std::{
         io::Cursor as IoCursor,
         path::Path,
@@ -1598,11 +1602,7 @@ mod tests {
             atomic::{AtomicBool, Ordering},
         },
     };
-    use iroha_crypto::{PrivateKey, PublicKey};
-    use iroha_data_model::transaction::SignedTransaction;
-    use iroha_version::codec::DecodeVersioned;
     use tempfile::TempDir;
-    use super::*;
     const NOW: u64 = 1_800_000_000_000;
     const KEY: [u8; 32] = [0x51; 32];
     const TEST_SIGNER_SEED: [u8; 32] = [7; 32];

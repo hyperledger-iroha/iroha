@@ -27,11 +27,11 @@ fn api_token_state(api_token: &str) -> &'static str {
 }
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
     use iroha_config::parameters::actual::TelemetryProfile;
     use iroha_core::telemetry::Telemetry;
     use iroha_telemetry::metrics::Metrics;
-    use super::*;
+    use std::sync::Arc;
     #[test]
     fn api_hits_increment_without_exporting_token_material() {
         let metrics = Arc::new(Metrics::default());

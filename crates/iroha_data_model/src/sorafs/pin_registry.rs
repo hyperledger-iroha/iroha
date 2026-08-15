@@ -1,12 +1,12 @@
+use super::capacity::ProviderId;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata, musubi::ArchiveId};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
-use super::capacity::ProviderId;
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata, musubi::ArchiveId};
 /// Exact byte length of a canonical first-release manifest root CID.
 pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;
 /// Hard maximum number of summaries in one finalized pin-manifest page.
@@ -1000,8 +1000,8 @@ impl ReplicationOrderRecord {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
     use super::*;
+    use iroha_primitives::numeric::Numeric;
     fn fixture_account() -> AccountId {
         AccountId::new(
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::str::FromStr;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::nexus::DataSpaceId;
 use iroha_primitives::json::Json;
@@ -11,6 +9,8 @@ use ivm::{
     },
     syscalls,
 };
+use std::collections::HashMap;
+use std::str::FromStr;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {

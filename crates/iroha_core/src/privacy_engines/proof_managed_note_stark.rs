@@ -11,11 +11,6 @@
 //! profile is not safe to expose until its extension-domain residue evaluator,
 //! strict proof adversaries, native differential tests, and typed state
 //! transition are all complete.
-use std::collections::BTreeSet;
-use iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1;
-use rand::TryRngCore;
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
 use super::{
     aggregate_stark::{self as aggregate, AggregateOpenedRowEvaluatorV1},
     transparent_stark::{
@@ -26,6 +21,11 @@ use super::{
         transparent_stark_zk_mask_geometry_v1, verify_grinding_nonce_v1,
     },
 };
+use iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1;
+use rand::TryRngCore;
+use sha2::{Digest as _, Sha256};
+use std::collections::BTreeSet;
+use thiserror::Error;
 /// Number of byte-copy cells in every shared note row.
 pub(crate) const NOTE_COPY_WIDTH_V1: usize = 8;
 /// Independent copy-permutation lanes.
@@ -2061,9 +2061,9 @@ pub(crate) fn verify_proof_managed_note_stark_v1<A: ProofManagedNoteStarkAdapter
 /// well as an unsound understatement.
 #[cfg(test)]
 pub(crate) mod degree_audit {
+    use super::F;
     use core::fmt::Debug;
     use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
-    use super::F;
     fn random_field_v1(rng: &mut StdRng) -> F {
         F::reduce(u128::from(rng.next_u64()))
     }
@@ -2171,9 +2171,9 @@ pub(crate) mod degree_audit {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
     use super::*;
     use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+    use std::sync::OnceLock;
     const MOCK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-mock-relation-v1:wire=PMN1-v1:trace=2^12:base=8:profile-aux=0:profile-fixed=0:profile-constraints=1:constraint-degree=2:max-proof=4194304";
     const MOCK_TRACE_LOG2_V1: u8 = 12;
     const MOCK_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =

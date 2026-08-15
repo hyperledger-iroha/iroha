@@ -3,10 +3,6 @@
 //! Generates a post-quantum readiness summary for SoraGlobal gateway PoPs by
 //! validating the supplied SRCv2 bundle, TLS/ECH artefacts, and trustless
 //! verifier configuration, then emitting JSON/Markdown evidence for runbooks.
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
 use blake3::Hasher as Blake3;
 use ed25519_dalek::VerifyingKey;
 use eyre::{Result, WrapErr, eyre};
@@ -16,6 +12,10 @@ use iroha_crypto::soranet::{
 };
 use norito::json::{self, Map, Number, Value};
 use sorafs_car::trustless::TrustlessVerifierConfig;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 /// Execution options for the gateway PQ readiness helper.
 #[derive(Debug)]
 pub struct GatewayPqOptions {
@@ -372,12 +372,12 @@ fn dashboards_label(dashboards: &Value) -> String {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::soranet::certificate::{RelayCapabilityFlagsV1, RelayCertificateV2};
     use rand_core_06::OsRng;
     use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
     use tempfile::TempDir;
-    use super::*;
     const NONCANONICAL_ED25519_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,

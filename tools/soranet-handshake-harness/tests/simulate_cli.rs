@@ -1,6 +1,6 @@
-use std::fs;
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
+use std::fs;
 use tempfile::TempDir;
 #[test]
 fn simulate_writes_frames_and_telemetry() {

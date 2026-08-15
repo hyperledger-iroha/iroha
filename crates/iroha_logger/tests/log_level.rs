@@ -2,12 +2,12 @@
 //!
 //! Confirms that the `LevelFilter` drops events below the configured
 //! level by observing event flow through a custom subscriber wrapper.
-use std::time::Duration;
 use iroha_logger::{
     debug, info,
     layer::{EventInspectorTrait, EventSubscriber, LevelFilter},
     trace,
 };
+use std::time::Duration;
 use tokio::{sync::mpsc, time};
 use tracing::{Event, Level, Subscriber};
 struct SenderFilter<S> {

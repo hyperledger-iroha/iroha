@@ -1,32 +1,10 @@
 //! Shared aggregate SHA-256/Goldilocks STARK commitment and opening core.
 //!
-//! Relation modules supply their exact transcript suite, profile digest,
-//! public-input digest, trace columns, constraint-composition values, and an
-//! [`AggregateOpenedRowEvaluatorV1`]. This module owns the canonical ordered
-//! trace-group layout, exact proof codec, SHA-256 vector-row commitments,
-//! minimal batched Merkle multiproofs, shared binary FRI, and opened-query
-//! verification. It deliberately contains no X.509, private-note, or PQ-MASP
-//! policy.
-use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
-use std::io::{Read as _, Seek as _, Write as _};
-#[cfg(all(test, target_os = "linux"))]
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-#[cfg(test)]
-use chacha20poly1305::{
-    XChaCha20Poly1305,
-    aead::{Aead as _, KeyInit as _, Payload},
-};
-use rand::TryRngCore;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use rayon::prelude::*;
-#[cfg(all(test, target_os = "linux"))]
-use rustix::fs::{MemfdFlags, SealFlags, fcntl_get_seals, memfd_create};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
-#[cfg(test)]
-use zeroize::Zeroizing;
+//! Relation modules supply their exact transcript suite, profile digest, public-input digest, trace
+//! columns, constraint-composition values, and an [`AggregateOpenedRowEvaluatorV1`]. This module
+//! owns the canonical ordered trace-group layout, exact proof codec, SHA-256 vector-row
+//! commitments, minimal batched Merkle multiproofs, shared binary FRI, and opened-query
+//! verification. It deliberately contains no X.509, private-note, or PQ-MASP policy.
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
     Sha256MerkleTreeV1, TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1,
@@ -44,6 +22,26 @@ use super::transparent_stark::{
     TRANSCRIPT_FRAME_DOMAIN_V1, goldilocks_ifft_v1, masked_trace_coefficients_on_coset_v1,
     masked_trace_coefficients_with_mask_v1, sample_trace_mask_v1,
 };
+#[cfg(test)]
+use chacha20poly1305::{
+    XChaCha20Poly1305,
+    aead::{Aead as _, KeyInit as _, Payload},
+};
+use rand::TryRngCore;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use rayon::prelude::*;
+#[cfg(all(test, target_os = "linux"))]
+use rustix::fs::{MemfdFlags, SealFlags, fcntl_get_seals, memfd_create};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use sha2::{Digest as _, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::io::{Read as _, Seek as _, Write as _};
+#[cfg(all(test, target_os = "linux"))]
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use thiserror::Error;
+#[cfg(test)]
+use zeroize::Zeroizing;
 const FRI_MASK_LEAF_DOMAIN_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-leaf:v1";
 const FRI_MASK_NODE_DOMAIN_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-node:v1";
 const FRI_MASK_ROOT_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-root:v1";
@@ -476,11 +474,10 @@ impl AggregateProofLayoutV1 {
 }
 /// Exact release certificate for the affine-batched binary-FRI theorem.
 ///
-/// `l_minus_one_*` represents the theorem's rational `L - 1`. `rho_*`
-/// represents the exact code rate, and `affine_arities` is the complete list
-/// whose sum appears in the commitment-error term. The remaining fields bind
-/// the smooth domain, Fp4 field-size lower bound, fold/terminal geometry, and
-/// the implementation's distinct-query schedule.
+/// `l_minus_one_*` represents the theorem's rational `L - 1`. `rho_*` represents the exact code
+/// rate, and `affine_arities` is the complete list whose sum appears in the commitment-error term.
+/// The remaining fields bind the smooth domain, Fp4 field-size lower bound, fold/terminal geometry,
+/// and the implementation's distinct-query schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateFriTheorem2CertificateV1 {
     /// Numerator of `L - 1`.
@@ -503,8 +500,7 @@ pub(crate) struct AggregateFriTheorem2CertificateV1 {
     pub(crate) base_field_two_adicity: u8,
     /// Every native trace domain is a power-of-two multiplicative subgroup.
     pub(crate) trace_domains_are_smooth_subgroups: bool,
-    /// The evaluation domain is the fixed primitive-generator coset of a
-    /// power-of-two subgroup.
+    /// The evaluation domain is the fixed primitive-generator coset of a power-of-two subgroup.
     pub(crate) evaluation_domain_is_smooth_generator_coset: bool,
     /// The evaluation coset is disjoint from every native trace subgroup.
     pub(crate) evaluation_domain_is_disjoint_from_trace_domains: bool,
@@ -528,8 +524,7 @@ pub(crate) struct AggregateFriTheorem2CertificateV1 {
 pub(crate) struct AggregateFriTheorem2BoundV1 {
     /// Query error is strictly below `2^-query_error_bits`.
     pub(crate) query_error_bits: u16,
-    /// Sum of both commitment-error terms is below
-    /// `2^-commitment_error_bits`.
+    /// Sum of both commitment-error terms is below `2^-commitment_error_bits`.
     pub(crate) commitment_error_bits: u16,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -949,11 +944,10 @@ pub(crate) fn deep_point_is_admissible_v1(
 /// Derive the sole uniform DEEP point outside every trace, evaluation, and
 /// query domain used by an aggregate proof.
 ///
-/// Zero remains admissible: it is outside all multiplicative domains and all
-/// required denominators remain nonzero. For every trace group the predicate
-/// also excludes `z * omega_H`, because the next-row opening is evaluated at
-/// that point. Query positions are elements of the common evaluation coset, so
-/// excluding the complete coset also excludes every possible query point
+/// Zero remains admissible: it is outside all multiplicative domains and all required denominators
+/// remain nonzero. For every trace group the predicate also excludes `z * omega_H`, because the
+/// next-row opening is evaluated at that point. Query positions are elements of the common
+/// evaluation coset, so excluding the complete coset also excludes every possible query point
 /// before grinding fixes the concrete index set.
 pub(crate) fn derive_deep_point_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -967,8 +961,7 @@ pub(crate) fn derive_deep_point_v1(
         })
         .map_err(map_transparent_error_v1)
 }
-/// Validate the exact statement-derived shape and canonicality of a DEEP
-/// opening payload.
+/// Validate the exact statement-derived shape and canonicality of a DEEP opening payload.
 pub(crate) fn validate_deep_proof_shape_v1(
     deep: &AggregateDeepProofV1,
     parameters: AggregateStarkParametersV1,
@@ -1172,9 +1165,8 @@ fn fri_mask_tree_v1(
 ///
 /// Each lane samples the normalized `D - 1` coefficients, which contains the
 /// required `|H| + h - 1`-coefficient hiding space and stays strictly inside
-/// the one FRI-enforced exclusive cap `D`. The resulting root must be
-/// transcript-bound before any challenge that batches the lane's trace and
-/// composition polynomials.
+/// the one FRI-enforced exclusive cap `D`. The resulting root must be transcript-bound before any
+/// challenge that batches the lane's trace and composition polynomials.
 pub(crate) fn build_fri_mask_oracles_v1<R: TryRngCore>(
     parameters: AggregateStarkParametersV1,
     layout: &AggregateProofLayoutV1,
@@ -1272,10 +1264,9 @@ pub(crate) struct StreamingMerkleCommitmentV1 {
 }
 /// Incremental binary Merkle accumulator with a query-aware frontier plan.
 ///
-/// Leaves must be appended in ascending index order. The accumulator retains
-/// one pending subtree per level and only those sibling hashes required by the
-/// requested canonical multiproof. Its memory is therefore
-/// `O(log(leaf_count) + frontier_len)` rather than `O(leaf_count)`.
+/// Leaves must be appended in ascending index order. The accumulator retains one pending subtree
+/// per level and only those sibling hashes required by the requested canonical multiproof. Its
+/// memory is therefore `O(log(leaf_count) + frontier_len)` rather than `O(leaf_count)`.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct StreamingMerkleAccumulatorV1 {
     node_domain: &'static [u8],
@@ -1289,8 +1280,7 @@ pub(crate) struct StreamingMerkleAccumulatorV1 {
 impl StreamingMerkleAccumulatorV1 {
     /// Create an accumulator for an exact leaf count and sorted unique opening set.
     ///
-    /// An empty opening set is permitted for the transcript's root-only
-    /// commitment pass.
+    /// An empty opening set is permitted for the transcript's root-only commitment pass.
     pub(crate) fn new(
         node_domain: &'static [u8],
         leaf_count: usize,
@@ -1458,12 +1448,11 @@ pub(crate) struct StreamingRowCommitmentResultV1 {
 }
 /// Column-at-a-time vector-row commitment builder.
 ///
-/// This is the bounded-memory replacement for retaining every LDE column.
-/// Each row owns one incremental SHA-256 state while columns are supplied in
-/// canonical order. The final leaf digests are immediately consumed by
-/// [`StreamingMerkleAccumulatorV1`], so neither leaves nor tree levels are
-/// retained. A second deterministic pass after Fiat–Shamir query derivation
-/// supplies the canonical frontier and the small set of opened rows.
+/// This is the bounded-memory replacement for retaining every LDE column. Each row owns one
+/// incremental SHA-256 state while columns are supplied in canonical order. The final leaf digests
+/// are immediately consumed by [`StreamingMerkleAccumulatorV1`], so neither leaves nor tree levels
+/// are retained. A second deterministic pass after Fiat–Shamir query derivation supplies the
+/// canonical frontier and the small set of opened rows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct StreamingRowCommitmentV1 {
     rows: usize,
@@ -1596,17 +1585,15 @@ impl StreamingRowCommitmentV1 {
 }
 /// Secret replay material for one exact ordered set of streamed trace columns.
 ///
-/// This type deliberately implements neither `Clone` nor `Debug`. Dropping it
-/// recursively overwrites every mask coefficient through
-/// [`ReplayableTraceMaskV1`].
+/// This type deliberately implements neither `Clone` nor `Debug`. Dropping it recursively
+/// overwrites every mask coefficient through [`ReplayableTraceMaskV1`].
 #[cfg(test)]
 pub(crate) struct StreamingTraceMaskSetV1 {
     native_trace_log2: u8,
     lde_log2: u8,
     masks: Vec<ReplayableTraceMaskV1>,
 }
-/// Owner of one secret-bearing field column that overwrites every cell on
-/// every return path.
+/// Owner of one secret-bearing field column that overwrites every cell on every return path.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1664,12 +1651,11 @@ impl StreamingTraceMaskSetV1 {
 }
 /// Secret retained masked polynomials for one exact streamed trace commitment.
 ///
-/// Each column stores ascending coefficients of
-/// `T(X) + r(X) * (X^n - 1)`, rather than a common-domain LDE. This lets a
-/// prover evaluate the same committed polynomial on its large commitment
-/// domain, a smaller quotient domain, and transcript-derived DEEP points
-/// without anonymous matrix scratch. The type implements neither `Clone` nor
-/// `Debug`; every coefficient is overwritten recursively on drop.
+/// Each column stores ascending coefficients of `T(X) + r(X) * (X^n - 1)`, rather than a
+/// common-domain LDE. This lets a prover evaluate the same committed polynomial on its large
+/// commitment domain, a smaller quotient domain, and transcript-derived DEEP points without
+/// anonymous matrix scratch. The type implements neither `Clone` nor `Debug`; every coefficient is
+/// overwritten recursively on drop.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct MaskedTracePolynomialSetV1 {
     native_trace_log2: u8,
@@ -1901,11 +1887,10 @@ where
 }
 /// Sample masks, commit their LDEs, and retain only the masked coefficients.
 ///
-/// All verifier-derived shape checks and commitment allocations finish before
-/// the witness source is called. The retained coefficient set is sufficient
-/// to replay the exact commitment, evaluate smaller quotient cosets, and
-/// construct DEEP openings without materializing anonymous common-domain
-/// scratch.
+/// All verifier-derived shape checks and commitment allocations finish before the witness source is
+/// called. The retained coefficient set is sufficient to replay the exact commitment, evaluate
+/// smaller quotient cosets, and construct DEEP openings without materializing anonymous
+/// common-domain scratch.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn commit_masked_trace_polynomial_columns_v1<R, S>(
     leaf_domain: &[u8],
@@ -1989,9 +1974,8 @@ where
 }
 /// Replay a retained masked-polynomial commitment and requested row frontier.
 ///
-/// No native witness source or mask RNG is needed: the exact committed
-/// polynomials, including canonical trailing zero coefficients, are owned by
-/// `polynomials`.
+/// No native witness source or mask RNG is needed: the exact committed polynomials, including
+/// canonical trailing zero coefficients, are owned by `polynomials`.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn replay_masked_trace_polynomial_columns_v1(
     leaf_domain: &[u8],
@@ -2036,9 +2020,8 @@ const XCHACHA20_NONCE_PREFIX_BYTES_V1: usize = 16;
 const XCHACHA20_NONCE_BYTES_V1: usize = 24;
 /// Default number of common-domain rows authenticated in one scratch record.
 ///
-/// At eight bytes per field this keeps each plaintext record at 32 KiB. The
-/// value is a power of two and therefore divides every admitted aggregate LDE
-/// domain at or above this size.
+/// At eight bytes per field this keeps each plaintext record at 32 KiB. The value is a power of two
+/// and therefore divides every admitted aggregate LDE domain at or above this size.
 pub(crate) const DEFAULT_ENCRYPTED_TRACE_SCRATCH_CHUNK_ROWS_V1: usize = 1 << 12;
 #[cfg(test)]
 fn encrypted_field_scratch_record_aad_v1(
@@ -2115,13 +2098,12 @@ fn encrypted_field_scratch_shape_v1(
 }
 /// Sequential writer for one authenticated, anonymous field-matrix scratch.
 ///
-/// Columns must be appended in their canonical commitment order. The file is
-/// anonymous from creation, every fixed-size record is independently
-/// XChaCha20-Poly1305 authenticated, and record coordinates and matrix
-/// dimensions are included in AAD. Consequently truncation, extension,
-/// substitution, reordering, and cross-matrix record reuse all fail closed.
-/// The ephemeral key is drawn independently from operating-system entropy so
-/// scratch encryption never perturbs deterministic proof-mask KATs.
+/// Columns must be appended in their canonical commitment order. The file is anonymous from
+/// creation, every fixed-size record is independently XChaCha20-Poly1305 authenticated, and record
+/// coordinates and matrix dimensions are included in AAD. Consequently truncation, extension,
+/// substitution, reordering, and cross-matrix record reuse all fail closed. The ephemeral key is
+/// drawn independently from operating-system entropy so scratch encryption never perturbs
+/// deterministic proof-mask KATs.
 #[cfg(test)]
 pub(crate) struct EncryptedFieldMatrixScratchWriterV1 {
     file: std::fs::File,
@@ -2191,8 +2173,7 @@ fn encrypted_scratch_file_creation_attempts_v1() -> usize {
 }
 #[cfg(test)]
 impl EncryptedFieldMatrixScratchWriterV1 {
-    /// Create an owner-private anonymous scratch with an independent ephemeral
-    /// encryption key.
+    /// Create an owner-private anonymous scratch with an independent ephemeral encryption key.
     pub(crate) fn new(
         rows: usize,
         width: usize,
@@ -2202,10 +2183,9 @@ impl EncryptedFieldMatrixScratchWriterV1 {
     }
     /// Create a scratch writer with injected entropy.
     ///
-    /// Shape validation and the complete key/nonce-prefix health check happen
-    /// before the anonymous backing file is created. Both secret buffers are
-    /// recursively zeroized on every early return and when the sealed scratch
-    /// is dropped.
+    /// Shape validation and the complete key/nonce-prefix health check happen before the anonymous
+    /// backing file is created. Both secret buffers are recursively zeroized on every early return
+    /// and when the sealed scratch is dropped.
     pub(crate) fn new_with_rng<R: TryRngCore>(
         rows: usize,
         width: usize,
@@ -2746,8 +2726,7 @@ where
         source,
     )
 }
-/// Low-resident-memory root-only alternative to
-/// [`commit_masked_trace_columns_v1`].
+/// Low-resident-memory root-only alternative to [`commit_masked_trace_columns_v1`].
 ///
 /// Callers that need composition or later openings must use
 /// [`commit_masked_trace_columns_retaining_encrypted_scratch_v1`] so the
@@ -2931,10 +2910,9 @@ pub(crate) fn split_composition_evaluations_v1(
 }
 /// Divide extension coefficients exactly by the trace vanishing polynomial.
 ///
-/// Synthetic division is performed by the monic polynomial `X^n - 1`. The
-/// complete remainder is checked to be zero before the quotient is returned;
-/// a numerator that is only pointwise divisible on some evaluation set is
-/// therefore rejected.
+/// Synthetic division is performed by the monic polynomial `X^n - 1`. The complete remainder is
+/// checked to be zero before the quotient is returned; a numerator that is only pointwise divisible
+/// on some evaluation set is therefore rejected.
 #[cfg(test)]
 pub(crate) fn divide_extension_polynomial_by_trace_vanishing_v1(
     numerator_coefficients: &[E],
@@ -2982,11 +2960,10 @@ pub(crate) fn divide_extension_polynomial_by_trace_vanishing_v1(
 }
 /// Divide a constraint-numerator codeword by `X^n - 1` on a quotient coset.
 ///
-/// The generator shift is checked to be disjoint from both the native trace
-/// subgroup and the quotient evaluation subgroup. Only `Q / n` denominators
-/// are materialized and batch-inverted because the vanishing values repeat
-/// with that exact period. Every pointwise division is multiplied back as an
-/// implementation invariant.
+/// The generator shift is checked to be disjoint from both the native trace subgroup and the
+/// quotient evaluation subgroup. Only `Q / n` denominators are materialized and batch-inverted
+/// because the vanishing values repeat with that exact period. Every pointwise division is
+/// multiplied back as an implementation invariant.
 #[cfg(test)]
 pub(crate) fn quotient_evaluations_from_constraint_coset_v1(
     numerator_evaluations: &[E],
@@ -3046,12 +3023,10 @@ pub(crate) fn quotient_evaluations_from_constraint_coset_v1(
 }
 /// Convert a minimal quotient-coset codeword into common-domain FRI chunks.
 ///
-/// `maximum_quotient_degree` is the relation's exact inclusive `q_max`, not
-/// the looser aggregate layout capacity. After interpolation, every
-/// coefficient above that bound must be exactly zero. The canonical
-/// coefficient chunks are then evaluated on the common commitment coset, so
-/// the resulting proof wire remains independent of the prover's smaller
-/// quotient domain.
+/// `maximum_quotient_degree` is the relation's exact inclusive `q_max`, not the looser aggregate
+/// layout capacity. After interpolation, every coefficient above that bound must be exactly zero.
+/// The canonical coefficient chunks are then evaluated on the common commitment coset, so the
+/// resulting proof wire remains independent of the prover's smaller quotient domain.
 #[cfg(test)]
 pub(crate) fn composition_chunks_from_quotient_coset_v1(
     quotient_evaluations: &[E],
@@ -3405,12 +3380,10 @@ pub(crate) fn build_materialized_deep_proof_v1(
     validate_deep_proof_shape_v1(&deep, parameters, layout)?;
     Ok(deep)
 }
-/// Batch-invert canonical nonzero Fp4 values using one extension-field
-/// inversion.
+/// Batch-invert canonical nonzero Fp4 values using one extension-field inversion.
 ///
-/// DEEP code calls this on bounded row chunks so constructing quotient
-/// codewords does not perform one expensive inversion per domain element or
-/// allocate an evaluation-domain-sized prefix buffer.
+/// DEEP code calls this on bounded row chunks so constructing quotient codewords does not perform
+/// one expensive inversion per domain element or allocate an evaluation-domain-sized prefix buffer.
 pub(crate) fn batch_invert_fp4_nonzero_v1(values: &mut [E]) -> Result<(), AggregateStarkErrorV1> {
     if values.is_empty() {
         return Err(AggregateStarkErrorV1::DeepOpening);
@@ -3498,8 +3471,7 @@ fn accumulate_base_deep_quotients_v1(
     }
     Ok(accumulator)
 }
-/// Evaluate the complete batched DEEP-ALI quotient at one authenticated query
-/// row.
+/// Evaluate the complete batched DEEP-ALI quotient at one authenticated query row.
 pub(crate) fn deep_ali_mixed_opening_v1(
     query_point: E,
     deep_point: E,
@@ -5639,12 +5611,11 @@ pub(crate) fn verify_opened_query_relations_v1<Evaluator: AggregateOpenedRowEval
 /// Verify opened AIR constraints and the complete DEEP-ALI quotient before
 /// binding every query to FRI.
 ///
-/// The relation callback still recomputes the constraint quotient from the
-/// authenticated current/next trace rows. The FRI base is no longer that raw
-/// row mix: it is the verifier-computed random linear combination of all
-/// current, next, and composition differences divided by `x - z`. Consequently
-/// every encoded out-of-domain value is tied to a committed low-degree
-/// polynomial, rather than being an unauthenticated transcript decoration.
+/// The relation callback still recomputes the constraint quotient from the authenticated
+/// current/next trace rows. The FRI base is no longer that raw row mix: it is the verifier-computed
+/// random linear combination of all current, next, and composition differences divided by `x - z`.
+/// Consequently every encoded out-of-domain value is tied to a committed low-degree polynomial,
+/// rather than being an unauthenticated transcript decoration.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_opened_query_relations_with_deep_v1<
     Evaluator: AggregateOpenedRowEvaluatorV1,
@@ -5749,8 +5720,8 @@ pub(crate) fn verify_opened_query_relations_with_deep_v1<
 mod retained_polynomial_tests;
 #[cfg(test)]
 mod tests {
-    use rand::{SeedableRng as _, rngs::StdRng};
     use super::*;
+    use rand::{SeedableRng as _, rngs::StdRng};
     const PARAMETERS: AggregateStarkParametersV1 = AggregateStarkParametersV1 {
         proof_magic: *b"AGG1",
         proof_version: 1,

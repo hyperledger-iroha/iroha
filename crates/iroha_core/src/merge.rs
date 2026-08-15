@@ -1,5 +1,4 @@
 //! Merge-ledger helpers (reduction, validation, and related utilities).
-use std::collections::BTreeMap;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
     NetworkId,
@@ -16,6 +15,7 @@ use iroha_data_model::{
 };
 use iroha_zkp_halo2::poseidon;
 use norito::codec::{Decode, Encode};
+use std::collections::BTreeMap;
 /// Domain separator applied to the merge-hint reduction payloads.
 const MERGE_REDUCE_DOMAIN_TAG: &[u8] = b"iroha:merge:reduce:v1\0";
 /// Domain separator applied to merge-committee signature payloads.
@@ -517,9 +517,9 @@ pub fn reduce_merge_hint_roots(roots: &[Hash]) -> Hash {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-    use iroha_data_model::nexus::{LaneCatalog, LaneLifecycleParameterV1};
     use super::*;
+    use iroha_data_model::nexus::{LaneCatalog, LaneLifecycleParameterV1};
+    use std::num::NonZeroU32;
     fn exact_catalog_hash(lane: LaneConfig) -> Hash {
         let catalog = LaneCatalog::new(NonZeroU32::new(1).expect("one is non-zero"), vec![lane])
             .expect("single default-id lane must form a valid catalog");

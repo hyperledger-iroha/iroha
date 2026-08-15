@@ -1,6 +1,6 @@
 //! Selectable Native AMX phase-cut qualification and replay evidence.
-use iroha_test_network::NativeAmxFaultPhase;
 use super::*;
+use iroha_test_network::NativeAmxFaultPhase;
 fn musubi_selectable_fault_localnet_builder() -> NetworkBuilder {
     let treasury = gas_account()
         .canonical_i105()

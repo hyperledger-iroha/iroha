@@ -204,7 +204,6 @@ pub mod test_alias {
     }
 }
 use core::time::Duration;
-use std::sync::Arc;
 use gossiper::TransactionGossip;
 use iroha_data_model::{events::EventBox, prelude::*};
 use iroha_primitives::unique_vec::UniqueVec;
@@ -212,19 +211,20 @@ use norito::{
     codec::{Decode, Encode},
     streaming::ControlFrame,
 };
+use std::sync::Arc;
 /// Re-export of Norito JSON derive macros for core crate internals.
 pub mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
-use iroha_data_model::{merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope};
-use iroha_torii_shared::connect as connect_proto;
-use tokio::sync::broadcast;
 use crate::{
     block_sync::message::Message as BlockSyncMessage,
     merge_sidecar::CertifiedMergeSidecarMessage,
     peers_gossiper::{PeerTrustGossip, PeersGossip},
     sumeragi::message::{BlockMessage, BlockMessageWire, ControlFlow},
 };
+use iroha_data_model::{merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope};
+use iroha_torii_shared::connect as connect_proto;
+use tokio::sync::broadcast;
 /// The interval at which sumeragi checks if there are tx in the `queue`.
 pub const TX_RETRIEVAL_INTERVAL: Duration = Duration::from_millis(100);
 /// Maximum encoded P2P frame size accepted for one lane-drain vote.
@@ -859,12 +859,12 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
 }
 pub mod role {
     //! Module with extension for [`RoleId`] to be stored inside state.
+    use super::*;
     use core::{fmt, str::FromStr};
     use derive_more::Constructor;
     use iroha_primitives::impl_as_dyn_key;
     use mv::json::JsonKeyCodec;
     use norito::json;
-    use super::*;
     /// [`RoleId`] with owner [`AccountId`] attached to it.
     #[derive(
         Debug,
@@ -949,37 +949,17 @@ pub mod role {
 pub mod prelude {
     //! Re-exports important traits and types. Meant to be glob imported when using `Iroha`.
     #[doc(inline)]
-    pub use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, PublicKey};
-    #[doc(inline)]
     pub use crate::{
         oracle::{ObservationAdmission, OracleAggregator, aggregate, validate_connector_request},
         smartcontracts::ValidSingularQuery,
         state::{StateReadOnly, StateView, World, WorldReadOnly},
         tx::AcceptedTransaction,
     };
+    #[doc(inline)]
+    pub use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, PublicKey};
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        cmp::Ordering,
-        collections::{BTreeMap, BTreeSet},
-        num::NonZeroU64,
-        sync::Arc,
-        time::Duration,
-    };
-    use iroha_crypto::{Hash, HashOf, KeyPair, Signature, SignatureOf};
-    use iroha_data_model::block::{BlockHeader, BlockSignature, builder::BlockBuilder};
-    use iroha_data_model::nexus::{DataSpaceId, LaneId};
-    use iroha_data_model::peer::PeerId;
-    use iroha_data_model::role::RoleId;
-    use iroha_data_model::transaction::TransactionBuilder;
-    use iroha_data_model::{Level, NetworkId, isi::Log};
-    use iroha_p2p::{
-        ClassifyTopic,
-        network::message::{SubscriberRoute, Topic as NetworkTopic},
-    };
-    use iroha_test_samples::gen_account_in;
-    use norito::{codec::Encode, core as ncore};
     use crate::{
         MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES, MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
         NetworkMessage, PeerTrustGossip, PeersGossip,
@@ -1012,6 +992,26 @@ mod tests {
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
+    };
+    use iroha_crypto::{Hash, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_data_model::block::{BlockHeader, BlockSignature, builder::BlockBuilder};
+    use iroha_data_model::nexus::{DataSpaceId, LaneId};
+    use iroha_data_model::peer::PeerId;
+    use iroha_data_model::role::RoleId;
+    use iroha_data_model::transaction::TransactionBuilder;
+    use iroha_data_model::{Level, NetworkId, isi::Log};
+    use iroha_p2p::{
+        ClassifyTopic,
+        network::message::{SubscriberRoute, Topic as NetworkTopic},
+    };
+    use iroha_test_samples::gen_account_in;
+    use norito::{codec::Encode, core as ncore};
+    use std::{
+        cmp::Ordering,
+        collections::{BTreeMap, BTreeSet},
+        num::NonZeroU64,
+        sync::Arc,
+        time::Duration,
     };
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1635,7 +1635,6 @@ mod tests {
     }
     #[test]
     fn certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics() {
-        use iroha_data_model::merge::MergeLedgerEntry;
         use crate::merge_sidecar::{
             CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
             CertifiedMergeSidecarCloseAckV1, CertifiedMergeSidecarCloseV1,
@@ -1643,6 +1642,7 @@ mod tests {
             CertifiedMergeSidecarRequestV1, CertifiedMergeSidecarSemanticSequenceV1,
             CertifiedMergeSidecarServiceGenerationV1, CertifiedMergeSidecarStreamEpochV1,
         };
+        use iroha_data_model::merge::MergeLedgerEntry;
         #[derive(Encode)]
         enum LegacySidecarCarrier {
             Payload(Box<CertifiedMergeSidecarMessage>),

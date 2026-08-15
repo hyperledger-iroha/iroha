@@ -1,8 +1,8 @@
 //! FFI export/getset tests: ensures getters/setters are exported and callable.
 #![allow(unsafe_code)]
-use std::mem::MaybeUninit;
 use getset::{Getters, MutGetters, Setters};
 use iroha_ffi::{FfiType, ffi_export};
+use std::mem::MaybeUninit;
 /// Wrapper type used to exercise export conversion.
 #[derive(Debug, Clone, PartialEq, Eq, FfiType)]
 pub struct Name(String);

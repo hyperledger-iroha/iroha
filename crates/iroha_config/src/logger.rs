@@ -1,13 +1,13 @@
 //! Configuration utils related to Logger specifically.
-use std::{
-    fmt::{Debug, Display},
-    str::FromStr,
-};
 pub use iroha_data_model::Level;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{self as ncore, Archived},
     json::{self, JsonDeserialize, JsonSerialize},
+};
+use std::{
+    fmt::{Debug, Display},
+    str::FromStr,
 };
 use tracing_subscriber::filter::Directive;
 /// Reflects formatters in [`mod@tracing_subscriber::fmt::format`]
@@ -157,8 +157,8 @@ fn into_tracing_level(level: Level) -> tracing::Level {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::Level;
     use crate::logger::{Directives, Format};
+    use iroha_data_model::Level;
     #[test]
     fn serialize_pretty_format_in_lowercase() {
         let value = Format::Pretty;

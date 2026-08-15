@@ -1,15 +1,15 @@
+use crate::{Error, KeyGenOption, ParseError};
 use blake2::{Blake2b, digest::consts::U32};
 use core::convert::TryFrom;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use ed25519_dalek::Signature;
-use sha2::{Digest, Sha256};
-use signature::Signer as _;
-use zeroize::{Zeroize, Zeroizing};
 #[cfg(feature = "rand")]
 use rand::rngs::OsRng;
 #[cfg(feature = "rand")]
 use rand_core::TryCryptoRng;
-use crate::{Error, KeyGenOption, ParseError};
+use sha2::{Digest, Sha256};
+use signature::Signer as _;
+use zeroize::{Zeroize, Zeroizing};
 pub type PublicKey = ed25519_dalek::VerifyingKey;
 pub type PrivateKey = ed25519_dalek::SigningKey;
 use std::{
@@ -710,13 +710,6 @@ fn validate_signature_r_for_strict_batch(signature: &[u8]) -> Result<(), Error> 
 }
 #[cfg(test)]
 mod test {
-    #[cfg(feature = "crypto-parity-tests")]
-    use openssl::{
-        pkey::{Id, PKey, Private, Public},
-        sign::{Signer, Verifier as OpenSslVerifier},
-    };
-    #[cfg(feature = "ecc-batch")]
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
     use self::Ed25519Sha512;
     use super::*;
     use crate::{
@@ -729,6 +722,13 @@ mod test {
         traits::{Identity, IsIdentity},
     };
     use ed25519_dalek::Verifier;
+    #[cfg(feature = "crypto-parity-tests")]
+    use openssl::{
+        pkey::{Id, PKey, Private, Public},
+        sign::{Signer, Verifier as OpenSslVerifier},
+    };
+    #[cfg(feature = "ecc-batch")]
+    use rand::{RngCore, SeedableRng, rngs::StdRng};
     #[cfg(feature = "rand")]
     use rand_core::TryRngCore;
     use sha2::{Digest, Sha256, Sha512};

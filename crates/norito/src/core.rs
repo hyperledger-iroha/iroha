@@ -1,8 +1,7 @@
 //! Norito core serialization library.
 //!
-//! This crate provides deterministic serialization and zero-copy deserialization
-//! for common Rust data structures including primitives, strings, vectors, maps,
-//! and simple structs.
+//! This crate provides deterministic serialization and zero-copy deserialization for common Rust
+//! data structures including primitives, strings, vectors, maps, and simple structs.
 //!
 //! The format begins with a small metadata header followed by a byte buffer
 //! containing archived values. Every value has a corresponding [`Archived`] type
@@ -50,20 +49,18 @@ pub mod gpu_zstd;
 const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
 /// Maximum number of recursively owned values reconstructed by one decoder.
 ///
-/// `Box`, `Rc`, and `Arc` make it possible for a wire value to have a
-/// data-dependent recursive depth even though its Rust type is finite. Keeping
-/// this limit in the codec prevents an untrusted archive from exhausting the
-/// native stack before the decoded value reaches its domain validator.
+/// `Box`, `Rc`, and `Arc` make it possible for a wire value to have a data-dependent recursive
+/// depth even though its Rust type is finite. Keeping this limit in the codec prevents an untrusted
+/// archive from exhausting the native stack before the decoded value reaches its domain validator.
 pub const MAX_OWNED_VALUE_DECODE_DEPTH: usize = 256;
 static MAX_ARCHIVE_LEN: AtomicU64 = AtomicU64::new(DEFAULT_MAX_ARCHIVE_LEN);
 /// Per-decode resource limits for attacker-controlled archives.
 ///
-/// Per-value sequence and field limits are enforced before allocation. The
-/// cumulative limits apply across the complete synchronous decode, including
-/// Norito-managed parallel workers and bounded streaming iterators. They are
-/// deliberately separate from the archive byte limit: a small archive can
-/// otherwise advertise large collection counts or field bodies, while a deeply
-/// nested archive can amplify modest individual allocations.
+/// Per-value sequence and field limits are enforced before allocation. The cumulative limits apply
+/// across the complete synchronous decode, including Norito-managed parallel workers and bounded
+/// streaming iterators. They are deliberately separate from the archive byte limit: a small archive
+/// can otherwise advertise large collection counts or field bodies, while a deeply nested archive
+/// can amplify modest individual allocations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DecodeLimits {
     max_sequence_elements: usize,
@@ -75,11 +72,10 @@ pub struct DecodeLimits {
 impl DecodeLimits {
     /// Construct a complete resource budget for one decode operation.
     ///
-    /// `max_sequence_elements` and `max_field_bytes` apply independently to
-    /// every decoded sequence and length-delimited field. The two total limits
-    /// are shared across nested scopes and Norito-managed worker threads.
-    /// `max_nesting_depth` counts nested length-delimited value decodes; a value
-    /// of zero permits only roots that require no nested field decoding.
+    /// `max_sequence_elements` and `max_field_bytes` apply independently to every decoded sequence
+    /// and length-delimited field. The two total limits are shared across nested scopes and
+    /// Norito-managed worker threads. `max_nesting_depth` counts nested length-delimited value
+    /// decodes; a value of zero permits only roots that require no nested field decoding.
     #[must_use]
     pub const fn new(
         max_sequence_elements: usize,
@@ -170,9 +166,8 @@ fn parse_owned_payload(bytes: &[u8]) -> Result<(&[u8], usize), Error> {
 }
 /// Override the maximum allowed Norito archive length (bytes).
 ///
-/// Hosts should call this during initialization using the configured limit. A
-/// value of `0` disables the explicit cap and falls back to the platform pointer
-/// width (`usize::MAX`).
+/// Hosts should call this during initialization using the configured limit. A value of `0` disables
+/// the explicit cap and falls back to the platform pointer width (`usize::MAX`).
 pub fn set_max_archive_len(limit: u64) {
     let resolved = if limit == 0 { u64::MAX } else { limit };
     let capped = resolved.min(usize::MAX as u64);
@@ -250,9 +245,8 @@ const STRUCTURAL_SCHEMA_HASH_DOMAIN: &[u8] = b"norito:v1:structural-schema\0";
 pub mod header_flags {
     /// Packed sequence layouts are used for variable-sized collections.
     pub const PACKED_SEQ: u8 = 0x01;
-    /// Compact varint lengths are used for per-field/element length prefixes
-    /// (including string/blob lengths). Does not affect packed-seq offsets or
-    /// the outer sequence length header.
+    /// Compact varint lengths are used for per-field/element length prefixes (including string/blob
+    /// lengths). Does not affect packed-seq offsets or the outer sequence length header.
     pub const COMPACT_LEN: u8 = 0x02;
     /// Packed struct layout (offsets + data) for derive-generated types.
     pub const PACKED_STRUCT: u8 = 0x04;
@@ -423,10 +417,9 @@ fn sanitize_layout_flags(flags: u8) -> u8 {
 }
 /// Return the default v1 encode layout flags.
 ///
-/// The v1 minor byte remains fixed at [`VERSION_MINOR`]; payloads advertise
-/// layout selections through header flags. Compact per-value lengths are the
-/// default because they reduce wire size without changing collection offsets or
-/// sequence length headers.
+/// The v1 minor byte remains fixed at [`VERSION_MINOR`]; payloads advertise layout selections
+/// through header flags. Compact per-value lengths are the default because they reduce wire size
+/// without changing collection offsets or sequence length headers.
 #[inline]
 pub const fn default_encode_flags() -> u8 {
     V1_DECODE_FLAGS | header_flags::COMPACT_LEN
@@ -625,11 +618,10 @@ impl Drop for DecodeDepthGuard {
 }
 /// Run a decode operation with limits scoped to the current thread.
 ///
-/// Nested scopes compose by taking the stricter limit, so a decoder invoked by
-/// an already-bounded decoder cannot raise the outer sequence limit. The prior
-/// scope is restored even when `decode` returns an error or unwinds. Decoding
-/// must complete before the closure returns; a lazy decoder returned from the
-/// closure does not retain the scope.
+/// Nested scopes compose by taking the stricter limit, so a decoder invoked by an already-bounded
+/// decoder cannot raise the outer sequence limit. The prior scope is restored even when `decode`
+/// returns an error or unwinds. Decoding must complete before the closure returns; a lazy decoder
+/// returned from the closure does not retain the scope.
 ///
 /// # Errors
 ///
@@ -1196,8 +1188,7 @@ fn read_len_dyn_at_ptr(ptr: *const u8) -> Result<(usize, usize), Error> {
     record_payload_access(ptr, used);
     Ok((len, used))
 }
-/// Allocate a raw buffer for `layout` without invoking the process-wide OOM
-/// handler.
+/// Allocate a raw buffer for `layout` without invoking the process-wide OOM handler.
 ///
 /// Returns a pair of `(ptr, needs_dealloc)` where `needs_dealloc` indicates whether
 /// the pointer must be passed to `dealloc` when it is no longer needed.
@@ -1522,10 +1513,9 @@ impl Drop for DecodeFlagsGuard {
 }
 /// Convenience: reset both decode flags and payload context.
 ///
-/// Useful in tests or when switching between payloads with different negotiated
-/// layouts in the same thread. This deliberately does not clear an active
-/// [`DecodeLimits`] scope; payload code must not be able to erase its caller's
-/// allocation boundary.
+/// Useful in tests or when switching between payloads with different negotiated layouts in the same
+/// thread. This deliberately does not clear an active [`DecodeLimits`] scope; payload code must not
+/// be able to erase its caller's allocation boundary.
 pub fn reset_decode_state() {
     set_decode_flags_raw(0);
     set_decode_flags_active(false);
@@ -1688,8 +1678,7 @@ impl SequenceSpan {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::LengthMismatch`] when the planned range is outside
-    /// `bytes`.
+    /// Returns [`Error::LengthMismatch`] when the planned range is outside `bytes`.
     #[doc(hidden)]
     #[inline]
     pub fn get<'a>(&self, bytes: &'a [u8]) -> Result<&'a [u8], Error> {
@@ -1752,12 +1741,10 @@ const SEQUENCE_GPU_MIN_ELEMENTS: usize = 4096;
 const PARALLEL_DECODE_MIN_BYTES: usize = 256 * 1024;
 #[cfg(feature = "parallel-decode")]
 const PARALLEL_DECODE_MIN_ELEMENTS: usize = 4096;
-/// Plan element byte spans for a Norito binary sequence without materializing
-/// values.
+/// Plan element byte spans for a Norito binary sequence without materializing values.
 ///
-/// The input starts at the sequence count header. Returned spans are byte
-/// offsets into the same input slice, and `used` is the total sequence payload
-/// length consumed from the front of `bytes`.
+/// The input starts at the sequence count header. Returned spans are byte offsets into the same
+/// input slice, and `used` is the total sequence payload length consumed from the front of `bytes`.
 #[doc(hidden)]
 pub fn plan_binary_sequence(
     bytes: &[u8],
@@ -1788,8 +1775,7 @@ fn plan_binary_sequence_with_count(
     note_payload_access(bytes, plan.used);
     Ok(plan)
 }
-/// Decode a pre-planned sequence in parallel at typed call sites that can prove
-/// `T: Send`.
+/// Decode a pre-planned sequence in parallel at typed call sites that can prove `T: Send`.
 ///
 /// Values preserve the original span order. If any element fails, this returns
 /// the first error in original sequence order after in-flight work finishes.
@@ -2430,15 +2416,13 @@ pub fn write_len_to_vec_with_flags(out: &mut Vec<u8>, value: u64, flags: u8) {
 }
 /// Count a value, then write its length prefix and serialize it directly.
 ///
-/// The historical implementation materialized every field in `buf`, whose
-/// heap spill used infallible `Vec` growth. Counting into a sink first keeps
-/// the wire length authoritative without retaining a second field-sized copy
-/// or risking an allocator abort under memory pressure.
+/// The historical implementation materialized every field in `buf`, whose heap spill used
+/// infallible `Vec` growth. Counting into a sink first keeps the wire length authoritative without
+/// retaining a second field-sized copy or risking an allocator abort under memory pressure.
 ///
-/// A stateful second-pass mismatch returns [`Error::LengthMismatch`]. The
-/// prefix and an admitted payload prefix may already have been emitted, but a
-/// payload overrun cannot grow the destination beyond the declared length.
-/// Callers must discard the incomplete destination after any error.
+/// A stateful second-pass mismatch returns [`Error::LengthMismatch`]. The prefix and an admitted
+/// payload prefix may already have been emitted, but a payload overrun cannot grow the destination
+/// beyond the declared length. Callers must discard the incomplete destination after any error.
 pub fn write_len_prefixed<W: Write, const N: usize>(
     writer: &mut W,
     value: &dyn NoritoSerialize,
@@ -2454,13 +2438,11 @@ pub fn write_len_prefixed<W: Write, const N: usize>(
 }
 /// Write a trusted exact length prefix, then serialize the value directly.
 ///
-/// This avoids materializing a temporary field buffer for hot paths whose
-/// `encoded_len_exact` implementations are covered by byte-equivalence tests.
-/// If an exact length is not available, it uses [`write_len_prefixed`]'s
-/// count-first direct writer.
-/// A mismatching exact implementation returns [`Error::LengthMismatch`]. The
-/// prefix may already have been emitted, but a payload overrun is rejected
-/// before it can grow the destination past that declared length. As with every
+/// This avoids materializing a temporary field buffer for hot paths whose `encoded_len_exact`
+/// implementations are covered by byte-equivalence tests. If an exact length is not available, it
+/// uses [`write_len_prefixed`]'s count-first direct writer. A mismatching exact implementation
+/// returns [`Error::LengthMismatch`]. The prefix may already have been emitted, but a payload
+/// overrun is rejected before it can grow the destination past that declared length. As with every
 /// serialization error, callers must discard the incomplete destination.
 pub fn write_len_prefixed_exact<W: Write, const N: usize>(
     writer: &mut W,
@@ -2818,22 +2800,18 @@ pub fn write_len_header<W: Write>(writer: &mut W, value: u64) -> std::io::Result
 }
 /// Append a length prefix honoring the `COMPACT_LEN` layout flag.
 ///
-/// Writes a compact varint when `COMPACT_LEN` is set, or an 8-byte
-/// little-endian `u64` otherwise.
+/// Writes a compact varint when `COMPACT_LEN` is set, or an 8-byte little-endian `u64` otherwise.
 pub fn write_len_header_to_vec(out: &mut Vec<u8>, value: u64) {
     write_len_to_vec(out, value);
 }
-/// Read a length prefix from a slice honoring `COMPACT_LEN`.
-/// Returns (value, bytes_consumed).
+/// Read a length prefix from a slice honoring `COMPACT_LEN`. Returns (value, bytes_consumed).
 pub fn read_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_len_from_slice_with_flags(bytes, effective_layout_flags())
 }
-/// Inspect a length prefix without charging an allocation for the referenced
-/// bytes.
+/// Inspect a length prefix without charging an allocation for the referenced bytes.
 ///
-/// This is for bounded zero-copy decoders that retain a borrowed subslice
-/// instead of materializing the declared field. The per-field byte limit is
-/// still enforced.
+/// This is for bounded zero-copy decoders that retain a borrowed subslice instead of materializing
+/// the declared field. The per-field byte limit is still enforced.
 #[doc(hidden)]
 pub fn inspect_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     let (value, used) = read_raw_len_from_slice_with_flags(bytes, effective_layout_flags())?;
@@ -2884,8 +2862,7 @@ pub fn read_len_dyn_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
 pub fn read_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_seq_len_slice_impl(bytes, true)
 }
-/// Inspect a sequence count without charging cumulative elements or an
-/// allocation.
+/// Inspect a sequence count without charging cumulative elements or an allocation.
 ///
 /// This is for bounded zero-copy decoders that borrow an already-accounted
 /// byte sequence. The per-sequence element limit is still enforced.
@@ -4290,8 +4267,7 @@ pub enum Error {
         active_flags: u8,
         active_hint: u8,
     },
-    /// The frame is not the one canonical V1 representation accepted by an
-    /// exact-encoding boundary.
+    /// The frame is not the one canonical V1 representation accepted by an exact-encoding boundary.
     #[error("non-canonical encoding")]
     NonCanonicalEncoding,
     /// Invalid UTF-8 in string-like value.
@@ -4445,9 +4421,8 @@ pub struct Header {
 impl Header {
     /// Size of the serialized header in bytes.
     ///
-    /// All fields add up to 40 bytes. We include a single padding byte at the
-    /// end so that future extensions can reuse it without shifting the payload
-    /// layout.
+    /// All fields add up to 40 bytes. We include a single padding byte at the end so that future
+    /// extensions can reuse it without shifting the payload layout.
     pub const SIZE: usize = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1;
 }
 #[inline]
@@ -4571,20 +4546,18 @@ pub trait NoritoSerialize {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error>;
     /// Optional hint: estimated encoded byte length for `self`.
     ///
-    /// Implementations should return `Some(len)` when the exact or a tight
-    /// upper-bound length is cheap to compute, otherwise return `None`.
-    /// The encoder uses this to pre-reserve buffer capacity to reduce
-    /// reallocations. Returning an underestimate may cause reallocations;
-    /// an overestimate only over-allocates the buffer.
+    /// Implementations should return `Some(len)` when the exact or a tight upper-bound length is
+    /// cheap to compute, otherwise return `None`. The encoder uses this to pre-reserve buffer
+    /// capacity to reduce reallocations. Returning an underestimate may cause reallocations; an
+    /// overestimate only over-allocates the buffer.
     fn encoded_len_hint(&self) -> Option<usize> {
         None
     }
     /// Exact encoded length for this value, if cheaply computable.
     ///
-    /// Returns the exact number of bytes that `serialize()` will write for the
-    /// archived payload (excluding the outer Norito header). Implementations
-    /// should avoid expensive work; return `None` when exact sizing is not
-    /// readily available.
+    /// Returns the exact number of bytes that `serialize()` will write for the archived payload
+    /// (excluding the outer Norito header). Implementations should avoid expensive work; return
+    /// `None` when exact sizing is not readily available.
     fn encoded_len_exact(&self) -> Option<usize> {
         None
     }
@@ -4603,12 +4576,11 @@ pub fn serialize_to_writer(
 }
 /// Serialize a value directly and reject a mismatch with its counted length.
 ///
-/// This is a codec-internal seam for packed containers that must emit offset
-/// tables before their payloads. Callers count the payloads first, then use
-/// this helper to ensure a stateful serializer cannot invalidate an emitted
-/// offset without retaining a second payload-sized buffer. A write beyond
-/// `expected_len` is rejected before it reaches `writer`; a shorter successful
-/// pass is rejected by the final equality check.
+/// This is a codec-internal seam for packed containers that must emit offset tables before their
+/// payloads. Callers count the payloads first, then use this helper to ensure a stateful serializer
+/// cannot invalidate an emitted offset without retaining a second payload-sized buffer. A write
+/// beyond `expected_len` is rejected before it reaches `writer`; a shorter successful pass is
+/// rejected by the final equality check.
 #[doc(hidden)]
 pub fn serialize_to_writer_exact<W: Write>(
     value: &dyn NoritoSerialize,
@@ -4655,11 +4627,10 @@ pub trait NoritoDeserialize<'a>: Sized {
 }
 /// Opaque address marker for the archived bytes of `T`.
 ///
-/// This type deliberately does not contain a `T`. Archived payload bytes are
-/// wire data and may not be a valid in-memory Rust value (for example, before a
-/// fallible decoder validates a niche or enum tag). Decoders use this marker's
-/// address together with the active payload context; they must not treat the
-/// marker itself as a reconstructed `T`.
+/// This type deliberately does not contain a `T`. Archived payload bytes are wire data and may not
+/// be a valid in-memory Rust value (for example, before a fallible decoder validates a niche or
+/// enum tag). Decoders use this marker's address together with the active payload context; they
+/// must not treat the marker itself as a reconstructed `T`.
 #[repr(C)]
 pub struct Archived<T: ?Sized> {
     _marker: PhantomData<T>,
@@ -4725,10 +4696,9 @@ enum ArchivedBacking<'a> {
     Borrowed(&'a [u8]),
     Owned(ArchiveSlice),
 }
-/// Owned or borrowed handle to an archived value reconstructed from a byte
-/// slice. When the input slice is misaligned for `T` the bytes are copied into
-/// an internal buffer with suitable alignment for decoders that perform
-/// aligned payload reads.
+/// Owned or borrowed handle to an archived value reconstructed from a byte slice. When the input
+/// slice is misaligned for `T` the bytes are copied into an internal buffer with suitable alignment
+/// for decoders that perform aligned payload reads.
 pub struct ArchivedRef<'a, T: ?Sized> {
     ptr: *const Archived<T>,
     backing: ArchivedBacking<'a>,
@@ -4744,9 +4714,8 @@ impl<'a, T: ?Sized> ArchivedRef<'a, T> {
     }
     /// Return the typed marker at the start of the archived payload.
     ///
-    /// The marker does not contain a `T`. Callers of
-    /// [`archived_from_slice`] must install a payload context for
-    /// [`Self::bytes`] before invoking a decoder.
+    /// The marker does not contain a `T`. Callers of [`archived_from_slice`] must install a payload
+    /// context for [`Self::bytes`] before invoking a decoder.
     #[inline]
     pub fn archived(&self) -> &Archived<T> {
         self.as_ref_impl()
@@ -4864,10 +4833,9 @@ impl<T> std::ops::Deref for ArchivedBox<T> {
 }
 /// Decode an already length-bounded archived field from owned aligned storage.
 ///
-/// This is an implementation detail shared by generated deserializers. It
-/// intentionally performs neither canonical-length validation nor legacy
-/// framing fallback: callers retain responsibility for those policies. The
-/// owned copy also keeps nested payload-context accounting isolated in the
+/// This is an implementation detail shared by generated deserializers. It intentionally performs
+/// neither canonical-length validation nor legacy framing fallback: callers retain responsibility
+/// for those policies. The owned copy also keeps nested payload-context accounting isolated in the
 /// same way as the historical derive-generated allocation path.
 #[doc(hidden)]
 #[inline(never)]
@@ -6802,10 +6770,9 @@ impl_tuple!(A a 0, B b 1, C c 2, D d 3, E e 4, F f 5, G g 6, H h 7, I i 8, J j 9
 impl_tuple!(A a 0, B b 1, C c 2, D d 3, E e 4, F f 5, G g 6, H h 7, I i 8, J j 9, K k 10, L l 11);
 /// Internal byte sink with aligned growth and incremental CRC64.
 ///
-/// ByteSink implements `Write` and is optimized for small, frequent writes by
-/// using a growth policy and typed little-endian writers. It reserves an
-/// initial headroom to make space for the Norito header and computes CRC64
-/// incrementally over the appended payload bytes.
+/// ByteSink implements `Write` and is optimized for small, frequent writes by using a growth policy
+/// and typed little-endian writers. It reserves an initial headroom to make space for the Norito
+/// header and computes CRC64 incrementally over the appended payload bytes.
 pub(crate) struct ByteSink {
     buf: Vec<u8>,
     headroom: usize,
@@ -6962,9 +6929,8 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
 /// Return the exact canonical payload length without allocating an output buffer.
 ///
 /// This deliberately counts a real serialization pass instead of trusting
-/// [`NoritoSerialize::encoded_len_exact`], because that method is only an
-/// optimization hint and an incorrect implementation must not understate a
-/// resource-admission bound.
+/// [`NoritoSerialize::encoded_len_exact`], because that method is only an optimization hint and an
+/// incorrect implementation must not understate a resource-admission bound.
 ///
 /// # Errors
 ///
@@ -7007,20 +6973,17 @@ include!("core/exact_byte_vec.rs");
 /// Serialize one canonical frame without allowing the output buffer to grow
 /// beyond a caller-provided byte limit.
 ///
-/// A real serialization pass determines the complete framed length before any
-/// output allocation. The admitted frame is then reserved once and a second
-/// pass writes through a hard-cap destination. This deliberately does not
-/// trust [`NoritoSerialize::encoded_len_exact`] or capacity hints: a serializer
-/// that emits a different length on the second pass is rejected and its
+/// A real serialization pass determines the complete framed length before any output allocation.
+/// The admitted frame is then reserved once and a second pass writes through a hard-cap
+/// destination. This deliberately does not trust [`NoritoSerialize::encoded_len_exact`] or capacity
+/// hints: a serializer that emits a different length on the second pass is rejected and its
 /// incomplete output is discarded.
 ///
 /// # Errors
 ///
-/// Returns [`BoundedEncodeError::FrameTooLarge`] before allocation when the
-/// counted frame exceeds `max_frame_bytes`,
-/// [`BoundedEncodeError::AllocationFailed`] when its one output reservation
-/// fails, or [`BoundedEncodeError::Serialization`] for codec errors and count
-/// mismatches.
+/// Returns [`BoundedEncodeError::FrameTooLarge`] before allocation when the counted frame exceeds
+/// `max_frame_bytes`, [`BoundedEncodeError::AllocationFailed`] when its one output reservation
+/// fails, or [`BoundedEncodeError::Serialization`] for codec errors and count mismatches.
 pub fn to_bytes_bounded<T: NoritoSerialize>(
     value: &T,
     max_frame_bytes: usize,
@@ -7093,10 +7056,9 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
 }
 /// Serialize an object to a new byte vector.
 ///
-/// The returned buffer begins with [`Header::SIZE`] bytes reserved for the
-/// metadata header followed by the archived payload.
-/// The header is populated after serialization so that the checksum and length
-/// fields reflect the final payload.
+/// The returned buffer begins with [`Header::SIZE`] bytes reserved for the metadata header followed
+/// by the archived payload. The header is populated after serialization so that the checksum and
+/// length fields reflect the final payload.
 pub fn to_bytes<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
     let (payload, flags) = encode_bare_with_flags(value)?;
     let len = payload.len() as u64;
@@ -7211,38 +7173,34 @@ where
 }
 /// Serialize one canonical Norito frame directly into a non-seekable writer.
 ///
-/// A first, allocation-free pass counts the payload, computes its checksum, and
-/// records the layout flags needed by the header. After writing that header and
-/// its alignment padding, a second pass writes the payload directly. The second
-/// pass is rejected if its length, checksum, or finalized flags differ from the
-/// first pass, so a stateful serializer cannot silently invalidate the emitted
-/// frame.
+/// A first, allocation-free pass counts the payload, computes its checksum, and records the layout
+/// flags needed by the header. After writing that header and its alignment padding, a second pass
+/// writes the payload directly. The second pass is rejected if its length, checksum, or finalized
+/// flags differ from the first pass, so a stateful serializer cannot silently invalidate the
+/// emitted frame.
 ///
-/// This helper does not allocate output-sized scratch, but callers still need
-/// to audit any scratch allocation performed inside `T::serialize` itself.
-/// An error after the header has been written leaves a partial frame in
-/// `writer`; callers must discard that output.
+/// This helper does not allocate output-sized scratch, but callers still need to audit any scratch
+/// allocation performed inside `T::serialize` itself. An error after the header has been written
+/// leaves a partial frame in `writer`; callers must discard that output.
 ///
 /// # Errors
 ///
-/// Returns the underlying writer or serializer error. It returns
-/// [`Error::LengthMismatch`], [`Error::ChecksumMismatch`], or
-/// [`Error::NonCanonicalEncoding`] when the second serialization pass changes
-/// its payload length, payload bytes, or layout flags, respectively.
+/// Returns the underlying writer or serializer error. It returns [`Error::LengthMismatch`],
+/// [`Error::ChecksumMismatch`], or [`Error::NonCanonicalEncoding`] when the second serialization
+/// pass changes its payload length, payload bytes, or layout flags, respectively.
 #[doc(hidden)]
 pub fn write_canonical_to_writer<T, W>(value: &T, writer: &mut W) -> Result<(), Error>
 where
     T: NoritoSerialize,
-    W: Write,
+    W: Write + ?Sized,
 {
     write_frame_to_writer_with_flags(value, writer, default_encode_flags())
 }
 /// Serialize one Norito frame directly using the active layout flags.
 ///
-/// This is the non-seekable, allocation-free-output counterpart to
-/// [`to_writer_seek`]. It preserves ambient layout selection for serializers
-/// such as nested instruction frames. Callers that require the canonical V1
-/// layout independent of ambient state must use [`write_canonical_to_writer`].
+/// This is the non-seekable, allocation-free-output counterpart to [`to_writer_seek`]. It preserves
+/// ambient layout selection for serializers such as nested instruction frames. Callers that require
+/// the canonical V1 layout independent of ambient state must use [`write_canonical_to_writer`].
 /// Serializer-internal scratch still requires source auditing.
 ///
 /// # Errors
@@ -7253,7 +7211,7 @@ where
 pub fn write_frame_to_writer<T, W>(value: &T, writer: &mut W) -> Result<(), Error>
 where
     T: NoritoSerialize,
-    W: Write,
+    W: Write + ?Sized,
 {
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     write_frame_to_writer_with_flags(value, writer, base_flags)
@@ -7265,7 +7223,7 @@ fn write_frame_to_writer_with_flags<T, W>(
 ) -> Result<(), Error>
 where
     T: NoritoSerialize,
-    W: Write,
+    W: Write + ?Sized,
 {
     validate_header_flags(base_flags)?;
     let first_guard = EncodeContextGuard::enter();
@@ -7343,12 +7301,12 @@ where
 mod write_canonical_tests {
     include!("core/write_canonical_tests.rs");
 }
-struct FramedPayloadWriter<'a, W> {
+struct FramedPayloadWriter<'a, W: ?Sized> {
     inner: &'a mut W,
     len: usize,
     digest: crc64fast::Digest,
 }
-impl<W: Write> Write for FramedPayloadWriter<'_, W> {
+impl<W: Write + ?Sized> Write for FramedPayloadWriter<'_, W> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.inner.write_all(bytes)?;
         self.len = self.len.saturating_add(bytes.len());
@@ -7361,9 +7319,8 @@ impl<W: Write> Write for FramedPayloadWriter<'_, W> {
 }
 /// Vec destination whose capacity was reserved before construction.
 ///
-/// Every write checks both the semantic frame limit and the already-reserved
-/// capacity before calling `extend_from_slice`, so that call cannot trigger a
-/// further allocation.
+/// Every write checks both the semantic frame limit and the already-reserved capacity before
+/// calling `extend_from_slice`, so that call cannot trigger a further allocation.
 struct FixedCapacityVecWriter<'a> {
     out: &'a mut Vec<u8>,
     max_len: usize,
@@ -7468,11 +7425,10 @@ pub(crate) fn frame_bare_with_default_header<T: NoritoSerialize>(
     }
     Err(Error::MissingLayoutFlags)
 }
-/// Convenience: frame the currently-decoding bare payload (from payload context)
-/// with a Norito header using the active decode flags so it can be decoded via
-/// `from_bytes`.
-/// Returns `Error::MissingPayloadContext` when no payload context is active and
-/// `Error::MissingLayoutFlags` if the decoder did not negotiate layout flags.
+/// Convenience: frame the currently-decoding bare payload (from payload context) with a Norito
+/// header using the active decode flags so it can be decoded via `from_bytes`. Returns
+/// `Error::MissingPayloadContext` when no payload context is active and `Error::MissingLayoutFlags`
+/// if the decoder did not negotiate layout flags.
 pub fn frame_current_payload_with_default_header<T: NoritoSerialize>() -> Result<Vec<u8>, Error> {
     if let Some(state) = payload_ctx_state() {
         if let Some(schema) = state.schema
@@ -7690,10 +7646,9 @@ pub fn compression_metrics_delta_json(
 /// Serialize an object and adaptively choose compression based on payload size
 /// and hardware availability.
 ///
-/// This API preserves determinism and on‑wire format stability: it only picks
-/// whether to apply zstd compression (and GPU offload when compiled and
-/// available) based on heuristics. The header encodes the chosen compression and
-/// layout flags exactly as in [`to_compressed_bytes`].
+/// This API preserves determinism and on‑wire format stability: it only picks whether to apply zstd
+/// compression (and GPU offload when compiled and available) based on heuristics. The header
+/// encodes the chosen compression and layout flags exactly as in [`to_compressed_bytes`].
 pub fn to_bytes_auto<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
     let (payload, flags) = encode_bare_with_flags(value)?;
     let checksum = crc64(&payload);
@@ -7735,9 +7690,8 @@ pub fn to_bytes_auto<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
 }
 /// Serialize an object using optional compression.
 ///
-/// When the `gpu-compression` feature is enabled, the zstd encoder is executed
-/// on the GPU (CUDA on most platforms, Metal on Apple silicon). Otherwise, the
-/// CPU implementation is used.
+/// When the `gpu-compression` feature is enabled, the zstd encoder is executed on the GPU (CUDA on
+/// most platforms, Metal on Apple silicon). Otherwise, the CPU implementation is used.
 pub fn to_compressed_bytes<T: NoritoSerialize>(
     value: &T,
     compression: Option<CompressionConfig>,
@@ -7934,11 +7888,10 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
 }
 /// A validated view over an archived payload.
 ///
-/// This contains a reference to the payload bytes (after the header) and carries
-/// the decode flags set from the header. Constructing a view is observational:
-/// it does not install payload or layout state in thread-local decode context.
-/// Decode methods scope that state to the operation and restore the caller's
-/// state on success, error, or unwind.
+/// This contains a reference to the payload bytes (after the header) and carries the decode flags
+/// set from the header. Constructing a view is observational: it does not install payload or layout
+/// state in thread-local decode context. Decode methods scope that state to the operation and
+/// restore the caller's state on success, error, or unwind.
 #[derive(Clone, Copy)]
 pub struct ArchiveView<'a> {
     bytes: &'a [u8],
@@ -8017,13 +7970,11 @@ impl<'a> ArchiveView<'a> {
             self.decode_inner(false)
         })
     }
-    /// Decode a value with a custom payload decoder while enforcing the header
-    /// schema, type-specific padding, payload-derived resource limits, and
-    /// complete payload consumption.
+    /// Decode a value with a custom payload decoder while enforcing the header schema,
+    /// type-specific padding, payload-derived resource limits, and complete payload consumption.
     ///
-    /// The view's payload context and layout flags are installed only while
-    /// `decode` runs and are restored even if the decoder returns an error or
-    /// unwinds.
+    /// The view's payload context and layout flags are installed only while `decode` runs and are
+    /// restored even if the decoder returns an error or unwinds.
     pub fn decode_exact_with<T, F>(&self, decode: F) -> Result<T, Error>
     where
         T: NoritoDeserialize<'a>,
@@ -8039,8 +7990,7 @@ impl<'a> ArchiveView<'a> {
             self.decode_with(false, decode)
         })
     }
-    /// Decode a value under payload-derived resource limits without enforcing
-    /// the schema hash.
+    /// Decode a value under payload-derived resource limits without enforcing the schema hash.
     pub fn decode_unchecked<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
         with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
             self.decode_inner(true)
@@ -8143,10 +8093,9 @@ where
 }
 /// Strict-safe slice decode with an explicit resource budget.
 ///
-/// This enters the private decoder directly, allowing a caller to select a
-/// larger, still-finite budget without inheriting the payload-derived default.
-/// Nested calls cannot relax a limit already active in the calling decode
-/// scope.
+/// This enters the private decoder directly, allowing a caller to select a larger, still-finite
+/// budget without inheriting the payload-derived default. Nested calls cannot relax a limit already
+/// active in the calling decode scope.
 ///
 /// # Errors
 ///
@@ -8369,8 +8318,7 @@ fn decode_field_erased(
 /// Decode a field payload using the canonical codec implementation without
 /// requiring a specialized `DecodeFromSlice` implementation.
 ///
-/// Returns both the decoded value and the number of bytes that were consumed
-/// from `bytes`.
+/// Returns both the decoded value and the number of bytes that were consumed from `bytes`.
 pub fn decode_field_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,

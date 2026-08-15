@@ -1,6 +1,6 @@
+use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
 use norito::codec::{Decode, Encode};
-use super::*;
 #[derive(Clone, Debug, Decode, Encode)]
 struct Dummy {
     tag: u8,

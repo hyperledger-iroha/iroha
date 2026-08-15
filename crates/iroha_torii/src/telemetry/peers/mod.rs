@@ -1,4 +1,14 @@
 mod monitor;
+use crate::{
+    explorer::ExplorerDurationDto,
+    json_macros::{JsonDeserialize, JsonSerialize},
+};
+use iroha_config::client_api::ConfigGetDTO;
+use iroha_crypto::{KeyPair, PublicKey};
+use iroha_data_model::NetworkId;
+use iroha_logger::prelude::*;
+use monitor::Metrics as PeerMetricsSnapshot;
+pub use monitor::Update;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -7,18 +17,8 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use iroha_config::client_api::ConfigGetDTO;
-use iroha_crypto::{KeyPair, PublicKey};
-use iroha_data_model::NetworkId;
-use iroha_logger::prelude::*;
-use monitor::Metrics as PeerMetricsSnapshot;
-pub use monitor::Update;
 use tokio::sync::RwLock;
 use url::Url;
-use crate::{
-    explorer::ExplorerDurationDto,
-    json_macros::{JsonDeserialize, JsonSerialize},
-};
 const PROPAGATION_HISTORY_LIMIT: usize = 64;
 const PROPAGATION_SNAPSHOT_LIMIT: usize = 32;
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]

@@ -6,11 +6,12 @@
 //! padding budget) followed by a padded payload. Control-plane envelopes
 //! describe DNS/route pushes, guard/exit selection, and metering receipts so
 //! exit gateways can emit deterministic Norito payloads for governance.
+use super::RelayId;
+use crate::{NetworkId, account::AccountId, asset::AssetDefinitionId};
+use blake3;
 use core::fmt;
 #[cfg(feature = "json")]
 use core::fmt::Write as FmtWrite;
-use std::net::{Ipv4Addr, Ipv6Addr};
-use blake3;
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
 use iroha_primitives::{
     numeric::{Numeric, NumericOperationError, Quantity, RoundingMode},
@@ -20,8 +21,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json;
-use super::RelayId;
-use crate::{NetworkId, account::AccountId, asset::AssetDefinitionId};
+use std::net::{Ipv4Addr, Ipv6Addr};
 /// Fixed-length cell size used by the VPN tunnel.
 pub const VPN_CELL_LEN: usize = 1_024;
 /// Magic prefix used by helper-authenticated VPN tickets.
@@ -1711,14 +1711,14 @@ impl fmt::Display for VpnCellError {
 impl std::error::Error for VpnCellError {}
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use super::*;
     use hex::FromHex;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use norito::{
         derive::{JsonDeserialize, JsonSerialize},
         json::{self, to_string_pretty},
     };
-    use super::*;
+    use std::{fs, path::PathBuf};
     const FIXTURE_PATH: &str = "../../IrohaSwift/Tests/IrohaSwiftTests/Fixtures/vpn_vectors.json";
     const HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET: usize =
         VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32;

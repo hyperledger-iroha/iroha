@@ -1,7 +1,7 @@
 //! Visitor helper functions for queries.
+use super::Visit;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use super::Visit;
 // Alias the `query` module for ergonomic type references within this module.
 use crate::query as query_mod;
 use crate::{
@@ -588,12 +588,12 @@ macro_rules! define_query_visitors {
 query_visitors!(define_query_visitors);
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{asset::AssetId, prelude::*, query as query_mod, query::parameters::QueryParams};
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         sync::{Mutex, OnceLock},
     };
-    use super::*;
-    use crate::{asset::AssetId, prelude::*, query as query_mod, query::parameters::QueryParams};
     fn reset_singular_query_fallback_guard() {
         SINGULAR_QUERY_FALLBACK_HIT.store(false, Ordering::Relaxed);
     }

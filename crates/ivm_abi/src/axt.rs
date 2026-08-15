@@ -5,9 +5,9 @@
 //! compatible schema so test fixtures can round-trip through the pointer-ABI
 //! TLVs exposed to the VM. As the end-to-end pipeline matures these models
 //! should converge with the canonical data-model crate.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroU64,
+use crate::{
+    codec::{decode_canonical_norito, encode_canonical_norito},
+    error::VMError,
 };
 use iroha_crypto::{Hash, Signature};
 use iroha_data_model::nexus::{
@@ -24,9 +24,9 @@ use iroha_data_model::nexus::{
 };
 use iroha_data_model::prelude::Quantity;
 use norito::codec::{Decode, Encode};
-use crate::{
-    codec::{decode_canonical_norito, encode_canonical_norito},
-    error::VMError,
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU64,
 };
 /// Alias for the Norito proof envelope used in AXT proof verification.
 pub type AxtProofEnvelope = ModelAxtProofEnvelope;

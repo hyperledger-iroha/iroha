@@ -81,7 +81,9 @@ fn ncb_view_opt_u32_bool_roundtrip() {
 }
 #[test]
 fn ncb_view_enum_roundtrip() {
-    use norito::columnar::{ColEnumRef, EnumBorrow, encode_ncb_u64_enum_bool, view_ncb_u64_enum_bool};
+    use norito::columnar::{
+        ColEnumRef, EnumBorrow, encode_ncb_u64_enum_bool, view_ncb_u64_enum_bool,
+    };
     let rows = vec![
         (5u64, EnumBorrow::Name("aaa"), true),
         (6u64, EnumBorrow::Code(42), false),

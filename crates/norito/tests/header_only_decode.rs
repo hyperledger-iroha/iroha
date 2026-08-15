@@ -1,6 +1,8 @@
 //! Header-based decoders must reject bare Norito payloads.
+use norito::{
+    Error, codec::Encode, decode_from_reader, from_bytes, stream_vec_collect_from_reader,
+};
 use std::io::Cursor;
-use norito::{Error, codec::Encode, decode_from_reader, from_bytes, stream_vec_collect_from_reader};
 #[test]
 fn headerless_payloads_are_rejected() {
     let values = vec![1u32, 2, 3];

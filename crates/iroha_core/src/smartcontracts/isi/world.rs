@@ -1,6 +1,4 @@
 //! `World`-related ISI implementations.
-use iroha_data_model::smart_contract::manifest::{ContractManifest, ManifestProvenance};
-use iroha_telemetry::metrics;
 use super::prelude::*;
 use crate::{
     prelude::*,
@@ -12,20 +10,20 @@ use crate::{
         public_lane_validator_record_matches_key,
     },
 };
+use iroha_data_model::smart_contract::manifest::{ContractManifest, ManifestProvenance};
+use iroha_telemetry::metrics;
 /// Iroha Special Instructions that have `World` as their target.
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
+    use base64::engine::Engine as _;
     use core::{
         convert::{TryFrom, TryInto},
         time::Duration,
     };
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        str::FromStr,
-    };
-    use base64::engine::Engine as _;
     use eyre::Result;
-    use iroha_crypto::{Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature, blake2::Blake2b512};
+    use iroha_crypto::{
+        Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature, blake2::Blake2b512,
+    };
     use iroha_executor_data_model::permission::{
         account::{
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
@@ -54,6 +52,10 @@ pub mod isi {
         sccp::CanProposeSccpRouteGovernance,
         smart_contract::CanRegisterSmartContractCode,
         sorafs::{CanRegisterSorafsProviderOwner, CanUnregisterSorafsProviderOwner},
+    };
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        str::FromStr,
     };
     // Governance ISIs
     use iroha_data_model::isi::confidential;
@@ -231,17 +233,6 @@ pub mod isi {
             )
         }
     }
-    #[cfg(test)]
-    use iroha_primitives::numeric::NumericSpec;
-    use iroha_primitives::{
-        json::Json,
-        numeric::{Numeric, Quantity},
-        unique_vec::PushResult,
-    };
-    #[cfg(feature = "telemetry")]
-    use iroha_telemetry::metrics::GovernanceManifestActivation;
-    use mv::storage::StorageReadOnly;
-    use sha2::Digest as _;
     use super::*;
     use crate::{
         governance::draw::{self, derive_parliament_bodies},
@@ -258,6 +249,17 @@ pub mod isi {
         sumeragi::status::PeerKeyPolicyRejectReason,
         zk::hash_vk,
     };
+    #[cfg(test)]
+    use iroha_primitives::numeric::NumericSpec;
+    use iroha_primitives::{
+        json::Json,
+        numeric::{Numeric, Quantity},
+        unique_vec::PushResult,
+    };
+    #[cfg(feature = "telemetry")]
+    use iroha_telemetry::metrics::GovernanceManifestActivation;
+    use mv::storage::StorageReadOnly;
+    use sha2::Digest as _;
     fn ensure_metadata_value(
         metadata: &mut Metadata,
         key: &Name,
@@ -11651,8 +11653,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            use iroha_data_model::events::data::proof::{
+                ProofEvent, ProofPruneOrigin, ProofPruned,
+            };
             use std::collections::BTreeSet;
-            use iroha_data_model::events::data::proof::{ProofEvent, ProofPruneOrigin, ProofPruned};
             let cap = state_transaction.zk.proof_history_cap;
             let grace = state_transaction.zk.proof_retention_grace_blocks;
             let prune_batch = state_transaction.zk.proof_prune_batch;

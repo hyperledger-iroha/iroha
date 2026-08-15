@@ -7,7 +7,6 @@
 //! This test avoids IPA math by forcing the verification flag on `CoreHost`
 //! via test-only helpers. It demonstrates the expected gating behavior when
 //! a contract enqueues a ZK ISI via the vendor bridge after a prior verify.
-use std::sync::Arc;
 use iroha_core::smartcontracts::Execute;
 use iroha_core::{
     kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
@@ -34,6 +33,7 @@ use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use ivm::{IVM, PointerType, host::IVMHost, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
+use std::sync::Arc;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());

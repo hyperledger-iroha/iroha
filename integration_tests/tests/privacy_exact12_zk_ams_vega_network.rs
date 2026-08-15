@@ -8,10 +8,6 @@
 //! recovered byte-for-byte by the restarted validator. The ZK-AMS lineage
 //! includes the two canonical eight-member admissions required for a minimum
 //! ring, successor-root account provisioning, and persisted key-image replay.
-use std::{
-    num::NonZeroU32,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -88,6 +84,10 @@ use p256::ecdsa::{
 };
 use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 use sha2::{Digest, Sha256};
+use std::{
+    num::NonZeroU32,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::time::{Instant, sleep, timeout};
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
 const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;

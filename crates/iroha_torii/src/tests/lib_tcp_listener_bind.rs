@@ -1,17 +1,17 @@
+use super::{SocketAdmission, WriteTimeoutIo, bind_torii_tcp_listener, serve_torii_http};
+use axum::{Router, routing::get};
+use iroha_config::parameters::actual::ToriiHttpTransport;
+use iroha_futures::supervisor::ShutdownSignal;
+use iroha_primitives::addr::SocketAddr;
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr, SocketAddrV4},
     num::NonZeroUsize,
     time::Duration,
 };
-use axum::{Router, routing::get};
-use iroha_config::parameters::actual::ToriiHttpTransport;
-use iroha_futures::supervisor::ShutdownSignal;
-use iroha_primitives::addr::SocketAddr;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use super::{SocketAdmission, WriteTimeoutIo, bind_torii_tcp_listener, serve_torii_http};
 #[tokio::test(flavor = "current_thread")]
 async fn torii_reusable_tcp_listener_binds_loopback() {
     let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);

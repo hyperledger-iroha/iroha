@@ -6,13 +6,8 @@
 //! encoding, and emits a manifest so hosts can hydrate cold shards lazily.
 //! Snapshots can be built incrementally from per-block diffs to avoid full WSV scans,
 //! and heavy snapshot work can be offloaded after commit to reduce block latency.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt, fs,
-    io::{BufWriter, ErrorKind, Write},
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
+use super::World;
+use crate::telemetry::StateTelemetry;
 use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
@@ -24,8 +19,13 @@ use norito::{
     json,
 };
 use sha2::{Digest as _, Sha256};
-use super::World;
-use crate::telemetry::StateTelemetry;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt, fs,
+    io::{BufWriter, ErrorKind, Write},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 const WSV_COLD_COMPONENT: &str = "wsv_cold";
 const DA_CACHE_HIT: &str = "hit";
 const DA_CACHE_MISS: &str = "miss";
@@ -2526,10 +2526,24 @@ fn compute_hot_bytes(value: &impl MeasuredBytes) -> Result<usize> {
 mod measured_bytes_impls {
     use super::MeasuredBytes;
     use crate::state::SmartContractCodeUploadDescriptor;
-    use std::{
-        collections::{BTreeMap, BTreeSet, VecDeque},
-        mem::size_of,
-        sync::Arc,
+    use crate::{
+        governance::state::ParliamentTerm,
+        privacy_state::{
+            PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantV1,
+            PrivacyRootHeadRecordV1, PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
+        },
+        smartcontracts::code::ContractSubjectBinding,
+        state::{
+            AssetDefinitionAliasBindingRecord, ConfidentialTreeProfile, ContractAliasBindingRecord,
+            DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
+            FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
+            GovernanceLocksForReferendum, GovernanceParliamentSnapshot, GovernancePipeline,
+            GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
+            GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceSlashEntry,
+            GovernanceSlashLedger, GovernanceStage, GovernanceStageApproval,
+            GovernanceStageApprovals, GovernanceStageFailure, GovernanceStageRecord, ZkAssetState,
+            ZkAssetVerifierBinding,
+        },
     };
     use iroha_crypto::{
         Hash, HashOf, LaneCommitmentId, MerkleProof, MerkleTree, PublicKey, Signature, SignatureOf,
@@ -2609,24 +2623,10 @@ mod measured_bytes_impls {
         json::Json,
         numeric::{Numeric, NumericSpec, Quantity},
     };
-    use crate::{
-        governance::state::ParliamentTerm,
-        privacy_state::{
-            PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantV1,
-            PrivacyRootHeadRecordV1, PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
-        },
-        smartcontracts::code::ContractSubjectBinding,
-        state::{
-            AssetDefinitionAliasBindingRecord, ConfidentialTreeProfile, ContractAliasBindingRecord,
-            DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
-            FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
-            GovernanceLocksForReferendum, GovernanceParliamentSnapshot, GovernancePipeline,
-            GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
-            GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceSlashEntry,
-            GovernanceSlashLedger, GovernanceStage, GovernanceStageApproval,
-            GovernanceStageApprovals, GovernanceStageFailure, GovernanceStageRecord, ZkAssetState,
-            ZkAssetVerifierBinding,
-        },
+    use std::{
+        collections::{BTreeMap, BTreeSet, VecDeque},
+        mem::size_of,
+        sync::Arc,
     };
     macro_rules! impl_measured_bytes_copy {
         ($($ty:ty),+ $(,)?) => {
@@ -4951,9 +4951,7 @@ impl TieredManifestEntry {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, num::NonZeroU32};
-    #[cfg(unix)]
-    use std::os::unix::fs::MetadataExt;
+    use super::*;
     use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -4972,8 +4970,10 @@ mod tests {
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
     };
     use nonzero_ext::nonzero;
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    use std::{fs, num::NonZeroU32};
     use tempfile::tempdir;
-    use super::*;
     fn sccp_inbound_fixture() -> (SccpInboundMessageKeyV1, SccpInboundMessageRecordV1) {
         let key = SccpInboundMessageKeyV1::new(
             SccpLaneIdV1 {

@@ -1,8 +1,8 @@
 //! Checked JSON writer code-generation helpers.
+use super::{ContainerAttr, FieldAttr, add_bound};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Generics, Path, meta::ParseNestedMeta};
-use super::{ContainerAttr, FieldAttr, add_bound};
 pub(super) fn parse_helper_path(meta: &ParseNestedMeta<'_>) -> syn::Result<Path> {
     let literal: syn::LitStr = meta.value()?.parse()?;
     syn::parse_str(&literal.value())

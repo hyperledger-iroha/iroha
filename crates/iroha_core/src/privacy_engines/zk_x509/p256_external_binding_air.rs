@@ -1,23 +1,19 @@
 //! Deterministic pointwise bindings for the complete P-256 ECDSA witness.
 //!
-//! The window, reduction, low-s, and value-bus chips commit the same 16-bit
-//! values in different traces.  This module fixes every cross-chip address and
-//! constrains the two committed cells to be equal.  Three consecutive
-//! equalities are packed into one physical row; the final row is completed by
-//! verifier-fixed zero padding.
+//! The window, reduction, low-s, and value-bus chips commit the same 16-bit values in different
+//! traces. This module fixes every cross-chip address and constrains the two committed cells to be
+//! equal. Three consecutive equalities are packed into one physical row; the final row is completed
+//! by verifier-fixed zero padding.
 //!
-//! The first-release compiler topology is intentionally exact.  All 850
-//! initial value IDs, 457 verifier-owned constants, 393 input owners, 14,828
-//! arithmetic result IDs, window table IDs, and inverse relations are
-//! regenerated here.  Constants are derived from protocol constants and the
-//! fixed generator table, never from proof-supplied metadata. Typed public-key,
-//! signature, and digest endpoints are resolved by the MAIN byte-I/O
-//! registration exposed through [`P256UnresolvedByteIoManifestV1`].
+//! The first-release compiler topology is intentionally exact. All 850 initial value IDs, 457
+//! verifier-owned constants, 393 input owners, 14,828 arithmetic result IDs, window table IDs, and
+//! inverse relations are regenerated here. Constants are derived from protocol constants and the
+//! fixed generator table, never from proof-supplied metadata. Typed public-key, signature, and
+//! digest endpoints are resolved by the MAIN byte-I/O registration exposed through
+//! [`P256UnresolvedByteIoManifestV1`].
 //!
 //! The aggregate zk-X509 STARK commits every source trace before evaluating
 //! these equalities; this AIR has no standalone activation path.
-use p256::{ProjectivePoint, Scalar, elliptic_curve::sec1::ToEncodedPoint as _};
-use thiserror::Error;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::p256_trace::{P256EcdsaTraceMaterialV1, P256ReductionSourceV1};
 use super::{
@@ -45,6 +41,8 @@ use super::{
     },
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use p256::{ProjectivePoint, Scalar, elliptic_curve::sec1::ToEncodedPoint as _};
+use thiserror::Error;
 /// Pointwise equalities packed into one physical row.
 pub(crate) const P256_EXTERNAL_BINDINGS_PER_ROW_V1: usize = 3;
 /// Canonical initial values emitted by the one-signature compiler.
@@ -134,10 +132,9 @@ const THREE_BE_V1: [u8; 32] = [
 ];
 /// Domain pinning the public dummy used by the optional third certificate.
 ///
-/// The tuple itself is deliberately independent of private witness material:
-/// it uses the standard P-256 generator as the public key and the valid
-/// `(d, k) = (1, 1)` signature of SHA-256(empty).  It is selected only when
-/// the RFC adapter's certificate-slot selector is zero.
+/// The tuple itself is deliberately independent of private witness material: it uses the standard
+/// P-256 generator as the public key and the valid `(d, k) = (1, 1)` signature of SHA-256(empty).
+/// It is selected only when the RFC adapter's certificate-slot selector is zero.
 #[cfg(test)]
 pub(crate) const ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_DOMAIN_V1: &[u8] =
     b"iroha.zk-x509.p256.optional-certificate-dummy.v1";
@@ -219,9 +216,8 @@ pub(crate) enum P256UnresolvedByteIoKindV1 {
 }
 /// Committed source of one unresolved byte word.
 ///
-/// Keeping the larger writer payload inline preserves a `Copy`, allocation-
-/// free sum type and excludes the invalid field combinations that a flattened
-/// struct would admit.
+/// Keeping the larger writer payload inline preserves a `Copy`, allocation- free sum type and
+/// excludes the invalid field combinations that a flattened struct would admit.
 #[allow(
     variant_size_differences,
     reason = "boxing a tiny verifier manifest would add allocation and lose Copy semantics"
@@ -325,15 +321,13 @@ pub(crate) enum P256ExternalBindingFixedAccessV1 {
 }
 /// Verifier-owned external endpoint paired with one binding slot.
 ///
-/// Dynamic endpoints must participate in the cross-trace product. Constant
-/// endpoints are instead constrained directly in the sink AIR against the
-/// compiler-owned value carried here.
+/// Dynamic endpoints must participate in the cross-trace product. Constant endpoints are instead
+/// constrained directly in the sink AIR against the compiler-owned value carried here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256ExternalBindingCrossExternalSourceV1 {
     /// One unique window, reduction, result-x, or low-s source cell.
     Dynamic {
-        /// Contiguous verifier-owned address in the role-specific dynamic
-        /// external-source schedule.
+        /// Contiguous verifier-owned address in the role-specific dynamic external-source schedule.
         address: u32,
     },
     /// One compiler-owned constant limb.
@@ -394,9 +388,8 @@ impl core::fmt::Debug for P256ExternalBindingTraceV1 {
 impl P256ExternalBindingTraceV1 {
     /// Recursively overwrite every private source and copied witness cell.
     ///
-    /// Fixed addresses and ownership manifests are public topology, but the
-    /// row allocation is cleared as well so no stale cells remain reachable
-    /// after an error path or ordinary drop.
+    /// Fixed addresses and ownership manifests are public topology, but the row allocation is
+    /// cleared as well so no stale cells remain reachable after an error path or ordinary drop.
     pub(crate) fn zeroize_private_v1(&mut self) {
         for row in &mut self.rows {
             row.writer_cells.fill(F::ZERO);
@@ -588,10 +581,9 @@ pub(crate) const fn p256_external_binding_dynamic_sources_v1(role: P256EcdsaRole
 }
 /// Compile the sole verifier-owned cross-source schedule for one role.
 ///
-/// The result has exactly three slots per physical binding row, including
-/// canonical `None` padding. It depends only on the first-release topology and
-/// fixed P-256 constants; no witness, value-bus row, or proof metadata is
-/// consulted.
+/// The result has exactly three slots per physical binding row, including canonical `None` padding.
+/// It depends only on the first-release topology and fixed P-256 constants; no witness, value-bus
+/// row, or proof metadata is consulted.
 pub(crate) fn compile_zk_x509_p256_external_cross_sources_v1(
     role: P256EcdsaRoleV1,
 ) -> Result<
@@ -840,8 +832,7 @@ pub(crate) fn compile_zk_x509_p256_external_cross_sources_v1(
     }
     Ok(rows)
 }
-/// Build the complete binding trace from one already validated, challenged-free
-/// execution endpoint.
+/// Build the complete binding trace from one already validated, challenged-free execution endpoint.
 ///
 /// This narrow constructor remains private so production callers cannot
 /// substitute an arbitrary endpoint for the role-bound base material.
@@ -885,8 +876,7 @@ fn build_external_binding_from_execution_endpoint_v1(
     trace.validate_v1(material, value_bus)?;
     Ok(trace)
 }
-/// Build the complete external binding from the sole validated value-bus
-/// pre-commitment capability.
+/// Build the complete external binding from the sole validated value-bus pre-commitment capability.
 ///
 /// The role check happens before projecting the execution endpoint. This is
 /// the production constructor used by MAIN; it does not rebuild the value bus
@@ -982,9 +972,8 @@ impl P256ExternalBindingTraceV1 {
         }
         Ok(())
     }
-    /// Replace the ordinary active identity selection with the sole optional
-    /// certificate relation.  The selected tuple must already be the exact
-    /// input compiled into this P-256 instance.
+    /// Replace the ordinary active identity selection with the sole optional certificate relation.
+    /// The selected tuple must already be the exact input compiled into this P-256 instance.
     pub(crate) fn bind_optional_certificate_selection_v1(
         &mut self,
         selection: P256OptionalCertificateSelectionV1,
@@ -2061,8 +2050,6 @@ fn map_writer_error_v1(error: P256ValueBusErrorV1) -> P256ExternalBindingErrorV1
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
-    use p256::ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _};
     use super::*;
     use crate::privacy_engines::zk_x509::{
         credential_pre_aux::{
@@ -2076,6 +2063,8 @@ mod tests {
             P256ValueBusBaseEndpointTraceV1, P256ValueBusEndpointV1, P256ValueBusFixedAccessV1,
         },
     };
+    use p256::ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _};
+    use std::sync::OnceLock;
     struct FixtureV1 {
         material: P256EcdsaTraceMaterialV1,
         value_bus: P256ValueBusBaseEndpointTraceV1,

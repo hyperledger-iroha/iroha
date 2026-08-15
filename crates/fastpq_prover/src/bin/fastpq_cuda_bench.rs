@@ -5,22 +5,14 @@
 //! wrapped alongside the Metal bundles already used in release evidence.
 
 #![allow(clippy::missing_panics_doc)]
-use std::{
-    collections::BTreeMap,
-    env,
-    fmt::Display,
-    fs,
-    hint::black_box,
-    path::{Path, PathBuf},
-    process::Command,
-    time::{Duration, Instant},
-};
 use clap::Parser;
 use fastpq_isi::find_by_name;
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE as POSEIDON_RATE;
 #[cfg(feature = "fastpq-gpu")]
-use fastpq_prover::trace::{PoseidonColumnBatch, hash_columns_cpu_batch_inputs, hash_columns_gpu_batch};
+use fastpq_prover::trace::{
+    PoseidonColumnBatch, hash_columns_cpu_batch_inputs, hash_columns_gpu_batch,
+};
 use fastpq_prover::{
     Bn254PoseidonBatchSlice, CudaBackendError, ExecutionMode, Planner,
     clear_execution_mode_observer, fastpq_bn254_fft, fastpq_bn254_lde, set_execution_mode_observer,
@@ -31,6 +23,16 @@ use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
 use norito::{
     derive::JsonSerialize,
     json::{self, Value},
+};
+use std::{
+    collections::BTreeMap,
+    env,
+    fmt::Display,
+    fs,
+    hint::black_box,
+    path::{Path, PathBuf},
+    process::Command,
+    time::{Duration, Instant},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;

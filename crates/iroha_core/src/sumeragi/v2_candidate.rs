@@ -11,11 +11,18 @@
 //! This module constructs only fresh successor bodies.  A reducer lock must be
 //! satisfied by loading and re-proposing the exact durable body, never by
 //! rebuilding it here.
-use std::{
-    collections::{BTreeSet, VecDeque},
-    num::{NonZeroU64, NonZeroUsize},
-};
 use super::v2_core::EventTag;
+use super::{
+    output_guard::ConsensusOutputGuard,
+    v2::LocalProposalDirective,
+    v2_chunks::{EncodedV2Payload, encode_payload},
+};
+use crate::{
+    block::BlockBuilder,
+    queue::{GlobalQueueSelectionLease, Queue, RoutingPlan, execution_context_for_routing_plan},
+    state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
+    tx::AcceptedTransaction,
+};
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     block::{
@@ -31,18 +38,11 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 use iroha_primitives::time::TimeSource;
+use std::{
+    collections::{BTreeSet, VecDeque},
+    num::{NonZeroU64, NonZeroUsize},
+};
 use thiserror::Error;
-use super::{
-    output_guard::ConsensusOutputGuard,
-    v2::LocalProposalDirective,
-    v2_chunks::{EncodedV2Payload, encode_payload},
-};
-use crate::{
-    block::BlockBuilder,
-    queue::{GlobalQueueSelectionLease, Queue, RoutingPlan, execution_context_for_routing_plan},
-    state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
-    tx::AcceptedTransaction,
-};
 /// Hard local bounds applied to one candidate-assembly attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CandidateLimits {
@@ -1403,11 +1403,14 @@ pub(crate) enum CandidateError {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        borrow::Cow,
-        num::{NonZeroU64, NonZeroUsize},
-        sync::Arc,
-        time::Duration,
+    use super::*;
+    use crate::{
+        block::ValidBlock,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::{LaneQueueReservationKeyV2, RouteLeg, RouteLegRole, RoutingDecision},
+        state::{State, World},
+        sumeragi::network_topology::Topology,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -1420,14 +1423,11 @@ mod tests {
         transaction::TransactionBuilder,
     };
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{
-        block::ValidBlock,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        queue::{LaneQueueReservationKeyV2, RouteLeg, RouteLegRole, RoutingDecision},
-        state::{State, World},
-        sumeragi::network_topology::Topology,
+    use std::{
+        borrow::Cow,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
     };
     fn nonzero(value: usize) -> NonZeroUsize {
         NonZeroUsize::new(value).expect("test value is non-zero")

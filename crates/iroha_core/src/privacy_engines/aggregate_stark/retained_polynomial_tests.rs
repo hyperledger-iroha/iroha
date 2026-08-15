@@ -1,5 +1,5 @@
-use rand::{SeedableRng as _, rngs::StdRng};
 use super::*;
+use rand::{SeedableRng as _, rngs::StdRng};
 #[test]
 fn retained_polynomial_batches_are_byte_exact_across_thread_counts() {
     let native_columns = (0_u64..17)

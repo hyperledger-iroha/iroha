@@ -10,19 +10,6 @@
 //! The reference relation is not itself a privacy proof. The purpose-built AIR
 //! proves the same predicates without exposing this private witness, while
 //! governance separately controls consensus activation.
-use iroha_data_model::privacy::{
-    IrohaZkX509StarkP256StatementV1, PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1,
-    PrivacyNullifierV1, PrivacyStatementV1, PrivacyX509CrlDerDigestV1,
-    PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
-    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
-    PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
-};
-use p256::ecdsa::{
-    Signature as P256Signature, VerifyingKey as P256VerifyingKey,
-    signature::{Verifier as _, hazmat::PrehashVerifier as _},
-};
-use thiserror::Error;
-use time::{Date, Month, PrimitiveDateTime, Time};
 use super::{
     codec::ZkX509WitnessV1,
     der::{
@@ -42,6 +29,19 @@ use super::{
         ZK_X509_UNCOMPRESSED_P256_BYTES_V1, ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1,
     },
 };
+use iroha_data_model::privacy::{
+    IrohaZkX509StarkP256StatementV1, PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1,
+    PrivacyNullifierV1, PrivacyStatementV1, PrivacyX509CrlDerDigestV1,
+    PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
+    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
+    PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
+};
+use p256::ecdsa::{
+    Signature as P256Signature, VerifyingKey as P256VerifyingKey,
+    signature::{Verifier as _, hazmat::PrehashVerifier as _},
+};
+use thiserror::Error;
+use time::{Date, Month, PrimitiveDateTime, Time};
 const OID_AUTHORITY_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1d, 0x23];
 const OID_SUBJECT_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1d, 0x0e];
 const OID_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
@@ -1348,6 +1348,12 @@ fn parse_crl_extensions_v1(
 pub(crate) mod release_fixture;
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::*;
+    use crate::privacy_engines::zk_x509::{
+        codec::ZkX509AttributeOpeningV1,
+        der_air::{ZkX509DerEkuV1, ZkX509Rfc5280StatementV1, build_zk_x509_rfc5280_trace_v1},
+        merkle::{ca_membership_path_from_complete_spkis_v1, ca_root_from_complete_spkis_v1},
+    };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -1368,12 +1374,6 @@ pub(crate) mod tests {
             signature::{Signer as _, hazmat::PrehashSigner as _},
         },
         elliptic_curve::PrimeField as _,
-    };
-    use super::*;
-    use crate::privacy_engines::zk_x509::{
-        codec::ZkX509AttributeOpeningV1,
-        der_air::{ZkX509DerEkuV1, ZkX509Rfc5280StatementV1, build_zk_x509_rfc5280_trace_v1},
-        merkle::{ca_membership_path_from_complete_spkis_v1, ca_root_from_complete_spkis_v1},
     };
     const CRL_THIS_UPDATE: u64 = 1_672_531_200; // 2023-01-01T00:00:00Z
     const CRL_NEXT_UPDATE: u64 = CRL_THIS_UPDATE + 300;

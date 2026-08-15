@@ -177,11 +177,11 @@ where
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
-    use super::*;
     #[test]
     fn owned_frame_reserve_includes_queue_producer_and_consumer() {
         assert_eq!(STREAM_FRAME_COUNT, 4);

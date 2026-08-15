@@ -1,25 +1,17 @@
 //! Durable, payload-free state machine for finalized-ledger provider ingest.
 //!
-//! The checkpoint deliberately excludes payload bytes, staging paths, source
-//! URLs, credentials, and signer material. It retains the immutable ledger
-//! binding, source-delivery crash state, and the exact signed completion
-//! transaction required for reconciliation.
-use std::{
-    collections::BTreeSet,
-    fmt,
-    fs::{self, File},
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, SyncSender, TrySendError},
-    },
-    thread,
-    time::{Duration, Instant},
+//! The checkpoint deliberately excludes payload bytes, staging paths, source URLs, credentials, and
+//! signer material. It retains the immutable ledger binding, source-delivery crash state, and the
+//! exact signed completion transaction required for reconciliation.
+use crate::provider_ingest_runtime::{
+    ProviderIngestVerifiedMusubiBundleReceiptV1, StoredProviderIngestVerifiedMusubiBundleReceiptV1,
 };
-#[cfg(unix)]
-use std::os::unix::fs::{
-    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+use crate::{
+    durable_transaction_forwarder::{
+        self as durable, DeliveryRecord, DeliveryTransitionError, FinalizedCursorV1,
+        RetryBoundOutcome, StoredDeliveryStateV1,
+    },
+    read_local_checkpoint_bounded, write_local_checkpoint_atomic_bounded,
 };
 use iroha_config::parameters::{
     defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
@@ -37,17 +29,24 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction, TransactionPayload},
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
-use crate::provider_ingest_runtime::{
-    ProviderIngestVerifiedMusubiBundleReceiptV1, StoredProviderIngestVerifiedMusubiBundleReceiptV1,
+#[cfg(unix)]
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
-use crate::{
-    durable_transaction_forwarder::{
-        self as durable, DeliveryRecord, DeliveryTransitionError, FinalizedCursorV1,
-        RetryBoundOutcome, StoredDeliveryStateV1,
+use std::{
+    collections::BTreeSet,
+    fmt,
+    fs::{self, File},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, SyncSender, TrySendError},
     },
-    read_local_checkpoint_bounded, write_local_checkpoint_atomic_bounded,
+    thread,
+    time::{Duration, Instant},
 };
+use thiserror::Error;
 // Internal persisted-layout revision. The product/wire contract remains V1,
 // while pre-release checkpoint layouts are intentionally rejected and reseeded.
 const PROVIDER_INGEST_OUTBOX_LAYOUT_VERSION_V5: u8 = 5;
@@ -65,9 +64,8 @@ const PROVIDER_INGEST_SEALED_CHECKPOINT_REVISION_DOMAIN_V1: &[u8] =
     b"sorafs.provider.ingest.sealed-checkpoint.revision.v1\0";
 /// Maximum canonical sealed-record bytes surrounding one provider-ingest checkpoint.
 ///
-/// Runtime transports use this public V1 bound in addition to the configured
-/// checkpoint limit so a maximum-sized valid record is never rejected at the
-/// deployment-provider boundary.
+/// Runtime transports use this public V1 bound in addition to the configured checkpoint limit so a
+/// maximum-sized valid record is never rejected at the deployment-provider boundary.
 pub const PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1: u64 = 1_024;
 const PROVIDER_INGEST_CHECKPOINT_REQUEST_CAPACITY_V1: usize = 1;
 const PROVIDER_INGEST_CHECKPOINT_OPERATION_TIMEOUT_MAX_MS_V1: u64 = 24 * 60 * 60 * 1_000;
@@ -563,9 +561,8 @@ impl FinalizedProviderIngestAuthorizationV1 {
     /// Construct and validate the immutable authorization captured from one
     /// exact finalized ledger view.
     ///
-    /// Callers remain responsible for obtaining these values from an
-    /// authoritative finalized query; the value itself contains no capability,
-    /// credential, or mutable authority.
+    /// Callers remain responsible for obtaining these values from an authoritative finalized query;
+    /// the value itself contains no capability, credential, or mutable authority.
     ///
     /// # Errors
     ///
@@ -607,9 +604,8 @@ impl FinalizedProviderIngestAuthorizationV1 {
     /// Construct and validate an immutable Musubi authorization captured from
     /// one exact finalized ledger view.
     ///
-    /// The supplied context becomes part of both the durable binding and the
-    /// derived job identity. A generic authorization with otherwise identical
-    /// fields is therefore a different job.
+    /// The supplied context becomes part of both the durable binding and the derived job identity.
+    /// A generic authorization with otherwise identical fields is therefore a different job.
     ///
     /// # Errors
     ///
@@ -2925,12 +2921,10 @@ impl ProviderIngestOutbox {
             next_attempt_at_ms,
         })
     }
-    /// Reconcile the finalized owner before resolving or constructing a new
-    /// Ready-state completion.
+    /// Reconcile the finalized owner before resolving or constructing a new Ready-state completion.
     ///
-    /// Policy lineages are scoped to one provider owner. A finalized owner
-    /// change therefore clears the prior floor and revocation latch atomically;
-    /// an unchanged owner is an idempotent no-op.
+    /// Policy lineages are scoped to one provider owner. A finalized owner change therefore clears
+    /// the prior floor and revocation latch atomically; an unchanged owner is an idempotent no-op.
     pub(crate) fn reconcile_ready_completion_owner(
         &self,
         job_id: [u8; 32],
@@ -3154,16 +3148,14 @@ impl ProviderIngestOutbox {
     /// Invalidate completion material prepared by a superseded provider owner
     /// or governed signer policy.
     ///
-    /// `current_provider_owner` is `None` when finalized state no longer has an
-    /// owner for the provider. `current_signer_policy` distinguishes a policy
-    /// that was not queried from a proved revocation and an exact active
-    /// policy. `observed_finalized_cursor` must be strictly newer than the
-    /// retained preparation baseline when ownership or signer policy differs
-    /// or is absent. Only signer-owned or provably unexposed signed material may
-    /// be discarded. Ambiguous, submitted, and previously exposed signed bytes
-    /// remain retained for exact-hash reconciliation. A signing-only claim
-    /// consumes one attempt here; signed states have already consumed their
-    /// current attempt. Matching authority, an exposed entry, or a ready entry
+    /// `current_provider_owner` is `None` when finalized state no longer has an owner for the
+    /// provider. `current_signer_policy` distinguishes a policy that was not queried from a proved
+    /// revocation and an exact active policy. `observed_finalized_cursor` must be strictly newer
+    /// than the retained preparation baseline when ownership or signer policy differs or is absent.
+    /// Only signer-owned or provably unexposed signed material may be discarded. Ambiguous,
+    /// submitted, and previously exposed signed bytes remain retained for exact-hash
+    /// reconciliation. A signing-only claim consumes one attempt here; signed states have already
+    /// consumed their current attempt. Matching authority, an exposed entry, or a ready entry
     /// without signing context is an idempotent no-op.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn invalidate_stale_completion_authority(
@@ -3615,9 +3607,8 @@ impl ProviderIngestOutbox {
     }
     /// Handle terminal rejection in queue preflight.
     ///
-    /// Never-exposed bytes may be discarded and re-signed. Bytes exposed by an
-    /// earlier attempt remain quarantined under their exact hash and receive
-    /// bounded backoff instead.
+    /// Never-exposed bytes may be discarded and re-signed. Bytes exposed by an earlier attempt
+    /// remain quarantined under their exact hash and receive bounded backoff instead.
     pub(crate) fn mark_completion_preflight_rejected(
         &self,
         job_id: [u8; 32],
@@ -4234,9 +4225,8 @@ impl ProviderIngestOutbox {
     /// therefore never consumes active capacity or exposes already-completed
     /// source work between admission and finalization.
     ///
-    /// The evidence cursor must exactly match a prior durable
-    /// [`Self::observe_finalized_snapshot`] observation, including when no
-    /// local job is retained.
+    /// The evidence cursor must exactly match a prior durable [`Self::observe_finalized_snapshot`]
+    /// observation, including when no local job is retained.
     pub fn reconcile_finalized_completion(
         &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
@@ -4319,9 +4309,8 @@ impl ProviderIngestOutbox {
     /// An absent job is written directly as a terminal tombstone so a crash
     /// cannot expose cancelled source work between admission and cancellation.
     ///
-    /// The evidence cursor must exactly match a prior durable
-    /// [`Self::observe_finalized_snapshot`] observation, including when no
-    /// local job is retained.
+    /// The evidence cursor must exactly match a prior durable [`Self::observe_finalized_snapshot`]
+    /// observation, including when no local job is retained.
     pub fn reconcile_finalized_cancellation(
         &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
@@ -4497,10 +4486,9 @@ impl ProviderIngestOutbox {
     }
     /// Return constant-time payload-free aggregate counts under one state lock.
     ///
-    /// Checkpoints are exhaustively validated before installation. This
-    /// accessor revalidates the installed checkpoint's constant-time
-    /// structural/count seal before returning the cached exact counts, so
-    /// daemon readiness does not need to allocate, sort, or page status rows.
+    /// Checkpoints are exhaustively validated before installation. This accessor revalidates the
+    /// installed checkpoint's constant-time structural/count seal before returning the cached exact
+    /// counts, so daemon readiness does not need to allocate, sort, or page status rows.
     pub fn aggregate_counts(
         &self,
     ) -> Result<ProviderIngestOutboxCountsV1, ProviderIngestOutboxError> {
@@ -6321,14 +6309,7 @@ impl From<ProviderIngestCheckpointExternalErrorV1> for ProviderIngestOutboxError
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests {
-    use std::{
-        fs,
-        sync::{
-            Arc, Condvar, Mutex,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-        },
-        time::{Duration, Instant},
-    };
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -6347,8 +6328,15 @@ mod tests {
         },
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
+    use std::{
+        fs,
+        sync::{
+            Arc, Condvar, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::{Duration, Instant},
+    };
     use tempfile::{TempDir, tempdir};
-    use super::*;
     fn test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,

@@ -5,12 +5,12 @@
 use core::ops::Range;
 use std::{format, string::String, vec::Vec};
 pub mod build_line;
+pub use crate::build_line::BuildLine;
 /// Re-export derive macros that assist with declaring versioned enums.
 #[cfg(feature = "derive")]
 pub use iroha_version_derive::*;
 /// Re-export Norito codec helpers required by consumers of versioned types.
 pub use norito::codec::{Decode, DecodeAll, Encode};
-pub use crate::build_line::BuildLine;
 /// JSON field name storing the version discriminator.
 pub const VERSION_FIELD_NAME: &str = "version";
 /// JSON field name storing the versioned payload.
@@ -29,11 +29,11 @@ pub mod json_helpers {
 /// Module which contains error and result for versioning
 /// Error types emitted while working with versioned containers.
 pub mod error {
-    use std::{borrow::ToOwned, boxed::Box, fmt};
-    use iroha_macro::FromVariant;
     use super::UnsupportedVersion;
     #[allow(unused_imports)] // False-positive
     use super::*;
+    use iroha_macro::FromVariant;
+    use std::{borrow::ToOwned, boxed::Box, fmt};
     /// Versioning errors
     #[derive(Debug, FromVariant, thiserror::Error)]
     pub enum Error {
@@ -181,12 +181,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RawVersioned {
 }
 /// Norito related versioned (de)serialization traits.
 pub mod codec {
+    use super::{Version, error::Result};
     use norito::{
         NoritoDeserialize,
         codec::{DecodeAll, Encode},
         core::DecodeFromSlice,
     };
-    use super::{Version, error::Result};
     /// [`norito::codec::Decode`] versioned analog.
     pub trait DecodeVersioned: DecodeAll + Version {
         /// Use this function for versioned objects instead of `decode_all`.
@@ -252,14 +252,14 @@ pub mod codec {
 /// JSON related versioned (de)serialization traits.
 #[cfg(feature = "json")]
 pub mod json {
-    use std::{
-        borrow::ToOwned,
-        string::{String, ToString},
-    };
-    use norito::json::Value;
     use super::{
         Version,
         error::{Error, Result},
+    };
+    use norito::json::Value;
+    use std::{
+        borrow::ToOwned,
+        string::{String, ToString},
     };
     /// JSON-focused versioned deserialize helper.
     pub trait DeserializeVersioned: Version {

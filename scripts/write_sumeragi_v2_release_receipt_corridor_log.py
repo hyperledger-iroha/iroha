@@ -1291,8 +1291,8 @@ def _corridor_legs(
             "native-amx-rust-fixture-check",
             "command",
             0,
-            "cargo run --locked --offline -p iroha_data_model --bin "
-            "sumeragi_v2_wire_fixtures -- --check",
+            "regenerate Native AMX Rust fixture authority twice into disjoint "
+            "private roots and byte-authenticate both outputs",
         )
     )
     legs.extend(

@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for commit certificates in permissioned and `NPoS` modes.
-use std::time::{Duration, Instant};
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::crypto::{Algorithm, KeyPair};
@@ -27,6 +26,7 @@ use iroha_test_network::{
 };
 use iroha_test_samples::ALICE_ID;
 use norito::json;
+use std::time::{Duration, Instant};
 use tokio::time::{sleep, timeout};
 use toml::Table;
 const COMMIT_CERT_TIMEOUT: Duration = Duration::from_secs(120);

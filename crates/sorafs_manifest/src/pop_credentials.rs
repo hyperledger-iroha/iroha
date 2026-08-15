@@ -1,10 +1,10 @@
 #![allow(unexpected_cfgs)]
 //! SoraFS proof-of-personhood credential payloads and deterministic validators.
 mod zk;
-use std::collections::BTreeSet;
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::collections::BTreeSet;
 use thiserror::Error;
 /// Schema version for [`PopCredentialV1`].
 pub const POP_CREDENTIAL_VERSION_V1: u8 = 1;

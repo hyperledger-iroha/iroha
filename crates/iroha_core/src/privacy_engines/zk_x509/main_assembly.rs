@@ -9,10 +9,6 @@
 //! Assembly is not proof verification. Native reference validation here is a
 //! prover-side differential invariant; the independent aggregate verifier
 //! enforces the committed numeric constraints.
-use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
-use p256::ecdsa::Signature as P256Signature;
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
 use super::{
     accumulator_air::{
         ZkX509AccumulatorAirErrorV1, ZkX509CaAccumulatorStatementV1, ZkX509CaAccumulatorTraceV1,
@@ -69,6 +65,10 @@ use super::{
     verifier_profile::rfc_statement_with_crl_number_v1,
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
+use p256::ecdsa::Signature as P256Signature;
+use sha2::{Digest as _, Sha256};
+use thiserror::Error;
 const P256_SIGNATURES_V1: usize = 5;
 const PROJECTION_SHA_CALLS_V1: usize = 7;
 const PROJECTION_SHARED_PREFIX_BASE_CHANNELS_V1: usize = 5;

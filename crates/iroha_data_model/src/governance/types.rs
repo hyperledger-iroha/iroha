@@ -6,13 +6,8 @@
 //! Notes:
 //! - Use the `SignedBlock` v1 Norito serialization for any `call_selector(inner)` and certificate hashing contexts.
 //! - Fixed-point thresholds are represented as integers; Q-format mapping is specified in docs.
-use std::{collections::BTreeMap, fmt, str::FromStr, string::String, vec::Vec};
-use iroha_crypto::{PublicKey, SignatureOf};
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
-use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
+#[cfg(test)]
+use crate::isi::bridge::SccpRouteGovernanceActionV1;
 use crate::{
     account::AccountId,
     asset::AssetId,
@@ -28,8 +23,13 @@ use crate::{
         ValidationFeeTreasuryPayoutBindingV1,
     },
 };
-#[cfg(test)]
-use crate::isi::bridge::SccpRouteGovernanceActionV1;
+use iroha_crypto::{PublicKey, SignatureOf};
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
+use std::{collections::BTreeMap, fmt, str::FromStr, string::String, vec::Vec};
 /// Errors emitted when parsing hex-encoded hashes used by governance payloads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HashParseError {
@@ -976,14 +976,14 @@ impl ProposalKind {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{AccountId, DomainId};
     use iroha_crypto::KeyPair;
     use iroha_crypto::blake2::{
         Blake2bVar,
         digest::{Update, VariableOutput},
     };
     use norito::core::DecodeFromSlice;
-    use super::*;
-    use crate::{AccountId, DomainId};
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked governance fixture keypair")
     }

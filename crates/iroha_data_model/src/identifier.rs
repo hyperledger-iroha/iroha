@@ -1,8 +1,4 @@
 //! Hidden-function-backed identifier policy and claim types.
-use std::{fmt, str::FromStr, string::String, vec::Vec};
-use iroha_crypto::{Hash, PublicKey, SignatureOf};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     account::{AccountId, OpaqueAccountId},
     name::Name,
@@ -12,6 +8,10 @@ use crate::{
         RamLfeReceiptAttestation, signature_for_public_key_algorithm,
     },
 };
+use iroha_crypto::{Hash, PublicKey, SignatureOf};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{fmt, str::FromStr, string::String, vec::Vec};
 /// Error returned while parsing [`IdentifierPolicyId`] literals.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum IdentifierPolicyIdParseError {
@@ -308,14 +308,14 @@ fn normalize_account_number(raw: &str) -> Result<String, IdentifierNormalization
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use super::*;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::{
         Algorithm, KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
         SignatureOf,
     };
     use sha2::{Digest as _, Sha256};
-    use super::*;
+    use std::str::FromStr;
     const NONCANONICAL_ED25519_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,

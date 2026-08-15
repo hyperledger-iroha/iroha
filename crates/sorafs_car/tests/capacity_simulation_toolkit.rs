@@ -1,7 +1,7 @@
 #![cfg(feature = "cli")]
-use std::{collections::HashMap, env, fs, path::PathBuf};
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
+use std::{collections::HashMap, env, fs, path::PathBuf};
 use tempfile::{Builder, TempDir};
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

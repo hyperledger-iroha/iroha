@@ -1,12 +1,12 @@
 //! Events emitted by viral incentive flows (Twitter follow rewards and escrows).
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     account::AccountId,
     nexus::UniversalAccountId,
     oracle::KeyedHash,
     social::{ViralCampaignBudget, ViralEscrowRecord, ViralRewardBudget},
 };
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Social incentive lifecycle events.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, derive_more::From,

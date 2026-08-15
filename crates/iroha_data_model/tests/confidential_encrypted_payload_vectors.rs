@@ -1,11 +1,11 @@
 //! Compliance tests for confidential encrypted payload fixtures.
-use std::path::Path;
 use hex::FromHex;
 use iroha_data_model::confidential::ConfidentialEncryptedPayload;
 use norito::{
     codec::{decode_adaptive, encode_adaptive},
     json::{self, JsonDeserialize},
 };
+use std::path::Path;
 #[derive(Debug, JsonDeserialize)]
 struct Fixture {
     format_version: u32,

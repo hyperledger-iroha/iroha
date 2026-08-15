@@ -130,9 +130,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RefundExpiredVpnLease {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_primitives::numeric::{Numeric, Quantity};
-    use norito::{codec::Encode as _, core::DecodeFromSlice};
     use super::*;
     use crate::{
         account::AccountId,
@@ -145,6 +142,9 @@ mod tests {
             derive_vpn_session_id_v1,
         },
     };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_primitives::numeric::{Numeric, Quantity};
+    use norito::{codec::Encode as _, core::DecodeFromSlice};
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked VPN fixture account keypair");

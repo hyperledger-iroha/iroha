@@ -1,12 +1,12 @@
 //! FASTPQ-specific data structures shared between the host and prover.
-use std::collections::BTreeMap;
+use crate::{account::AccountId, asset::id::AssetDefinitionId};
 use iroha_crypto::Hash;
 use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, Quantity},
 };
 use iroha_schema::IntoSchema;
-use crate::{account::AccountId, asset::id::AssetDefinitionId};
+use std::collections::BTreeMap;
 /// Metadata key storing Norito-encoded [`TransferTranscript`] collections for
 /// FASTPQ gadgets.
 pub const TRANSFER_TRANSCRIPTS_METADATA_KEY: &str = "transfer_transcripts";
@@ -301,11 +301,11 @@ pub struct TransferTranscriptBundle {
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-    use iroha_primitives::numeric::Numeric;
-    use norito::codec::{Decode, Encode};
     use super::*;
     use crate::{account::AccountId, asset::id::AssetDefinitionId, domain::DomainId, name::Name};
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode, Encode};
+    use std::str::FromStr;
     const SIGNATORY: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
     fn account(label: &str) -> AccountId {

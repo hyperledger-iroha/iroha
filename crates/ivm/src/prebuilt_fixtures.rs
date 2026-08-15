@@ -3,13 +3,13 @@
 //! Keeping these builders in the `ivm` library gives every exporter and test
 //! one host-independent implementation. In particular, serialized length
 //! prefixes are fixed-width `u64` values and never depend on `usize`.
-use iroha_data_model::ValidationFail;
-use norito::codec::Encode;
 use crate::{
     ProgramMetadata, encoding,
     kotodama::wide,
     metadata::{LITERAL_SECTION_MAGIC, LiteralKindV1, encode_literal_descriptor},
 };
+use iroha_data_model::ValidationFail;
+use norito::codec::Encode;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;

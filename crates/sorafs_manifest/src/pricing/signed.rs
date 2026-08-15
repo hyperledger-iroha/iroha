@@ -1,9 +1,9 @@
 //! Threshold-governed admission for canonical SoraFS pricing manifests.
-use std::cmp::Ordering;
+use super::{PricingManifestError, PricingManifestV1};
 use blake3::Hasher;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::cmp::Ordering;
 use thiserror::Error;
-use super::{PricingManifestError, PricingManifestV1};
 /// Schema version for [`PricingTrustedSignerV1`].
 pub const PRICING_TRUSTED_SIGNER_VERSION_V1: u8 = 1;
 /// Schema version for [`PricingTrustPolicyV1`].
@@ -977,13 +977,13 @@ pub enum GovernedPricingError {
 }
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
     use super::*;
     use crate::XorQuantity;
     use crate::pricing::{
         BondPolicyV1, CreditPolicyV1, PRICING_MANIFEST_VERSION_V1, PricingMicropaymentPolicyV1,
         PricingTierV1,
     };
+    use ed25519_dalek::{Signer, SigningKey};
     const ADMITTED_AT: u64 = 1_800_000_000;
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")

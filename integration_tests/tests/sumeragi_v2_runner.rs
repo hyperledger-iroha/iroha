@@ -1,9 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end regressions for the authoritative Sumeragi v2 production runner.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::future::try_join_all;
 use integration_tests::sandbox;
@@ -41,6 +37,10 @@ use iroha_test_network::{
     ObserverSlowReaderRelayConfig, init_instruction_registry,
 };
 use norito::json::Value;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::{Duration, Instant},
+};
 use tokio::{task, time::sleep};
 const VALIDATOR_COUNT: usize = 4;
 const LOCKED_REPROPOSAL_HEIGHT: u64 = 2;

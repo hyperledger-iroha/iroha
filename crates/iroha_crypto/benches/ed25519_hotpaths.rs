@@ -1,10 +1,10 @@
 //! Benchmarks for Ed25519 parse and verification hot paths.
-use std::hint::black_box;
 use criterion::Criterion;
 use iroha_crypto::{
     Algorithm, Ed25519BatchScratch, KeyPair, PrivateKey, Signature, ed25519_parse_public_key,
     ed25519_verify_batch_preparsed_deterministic_with_scratch,
 };
+use std::hint::black_box;
 fn seeded_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("bench Ed25519 seeded keypair should be valid")

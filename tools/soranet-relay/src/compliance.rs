@@ -3,6 +3,13 @@
 //! Logs are emitted in JSON Lines format, one event per line. Remote addresses
 //! are hashed with an optional salt so operators can correlate events without
 //! leaking raw client information.
+use crate::{
+    capability::NegotiatedCapabilities,
+    config::{ComplianceConfig, RelayMode},
+};
+use blake3::Hasher as Blake3Hasher;
+use iroha_crypto::soranet::handshake::HandshakeSuite;
+use norito::json::{self, Map, Value};
 use std::{
     fs::{self, File, OpenOptions},
     io::Write,
@@ -11,15 +18,8 @@ use std::{
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use blake3::Hasher as Blake3Hasher;
-use iroha_crypto::soranet::handshake::HandshakeSuite;
-use norito::json::{self, Map, Value};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use crate::{
-    capability::NegotiatedCapabilities,
-    config::{ComplianceConfig, RelayMode},
-};
 /// Logger that writes compliance events to a JSON Lines file.
 #[derive(Debug)]
 pub struct ComplianceLogger {
@@ -608,17 +608,17 @@ fn timestamp_string() -> String {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        net::{IpAddr, Ipv4Addr, SocketAddr},
-    };
-    use norito::json::{self, Value as JsonValue};
-    use tempfile::tempdir;
     use super::*;
     use crate::capability::{
         GreaseEntry, KemAdvertisement, KemId, NegotiatedCapabilities, SignatureAdvertisement,
         SignatureId,
     };
+    use norito::json::{self, Value as JsonValue};
+    use std::{
+        fs,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+    };
+    use tempfile::tempdir;
     fn build_logger() -> (ComplianceLogger, std::path::PathBuf, tempfile::TempDir) {
         let temp = tempdir().expect("tempdir");
         let log_path = temp.path().join("compliance.jsonl");

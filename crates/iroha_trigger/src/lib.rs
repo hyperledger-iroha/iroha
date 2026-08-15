@@ -1,7 +1,9 @@
 //! Iroha Trigger Rust SDK
 #![allow(unsafe_code)]
 pub use iroha_smart_contract as smart_contract;
-pub use iroha_smart_contract_codec::{decode_with_length_prefix_from_raw, encode_with_length_prefix};
+pub use iroha_smart_contract_codec::{
+    decode_with_length_prefix_from_raw, encode_with_length_prefix,
+};
 pub use iroha_smart_contract_utils::{DebugExpectExt, DebugUnwrapExt, dbg, dbg_panic};
 pub use iroha_trigger_derive::main;
 pub use smart_contract::{Iroha, data_model};

@@ -1,5 +1,4 @@
 //! Four-peer consensus coverage for exact SCCP route governance.
-use std::time::{Duration, Instant};
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::{
@@ -29,6 +28,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_executor_data_model::permission::sccp::CanManageSccpGovernance;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 const REGISTRY_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(120);
 const TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";

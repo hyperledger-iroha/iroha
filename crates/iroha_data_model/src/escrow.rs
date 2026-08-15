@@ -1,4 +1,5 @@
 //! Generic asset escrow records and identifiers.
+use crate::{account::AccountId, asset::AssetDefinitionId, name::Name};
 use core::num::{NonZeroU32, NonZeroU64};
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
@@ -6,7 +7,6 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
-use crate::{account::AccountId, asset::AssetDefinitionId, name::Name};
 /// Domain-separation prefix for escrow ids derived from Kotodama escrow names.
 pub const KOTODAMA_ESCROW_ID_PREFIX: &str = "kotodama-native-escrow:";
 /// Domain separator used to bind an external 32-byte conditional-escrow evidence digest.

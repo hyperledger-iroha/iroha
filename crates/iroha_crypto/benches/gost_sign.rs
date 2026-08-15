@@ -1,11 +1,11 @@
 //! Benchmarks for signature generation and verification across TC26 GOST and baseline curves.
-use std::hint::black_box;
-#[cfg(feature = "gost")]
-use std::time::Duration;
 #[cfg(feature = "gost")]
 use criterion::{BenchmarkId, Criterion};
 #[cfg(feature = "gost")]
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+use std::hint::black_box;
+#[cfg(feature = "gost")]
+use std::time::Duration;
 /// Seed + metadata for a single benchmark target.
 #[cfg(feature = "gost")]
 struct BenchTarget {

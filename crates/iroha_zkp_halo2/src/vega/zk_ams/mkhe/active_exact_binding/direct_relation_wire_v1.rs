@@ -37,9 +37,10 @@ mod rkg_one_creator_prover_v1;
 mod rkg_one_creator_response_v1;
 #[path = "direct_relation_wire_v1/statement_v1.rs"]
 pub(super) mod statement_v1;
-pub(super) use rkg_one_creator_prover_v1::{
+pub(in crate::vega::zk_ams::mkhe) use rkg_one_creator_prover_v1::{
     SealedDirectRkgOneProofOwnerV1, seal_direct_rkg_one_proof_owner_v1,
 };
+pub(super) use statement_v1::ExpectedDirectRelationStatementV1;
 #[cfg(test)]
 #[allow(
     unused_imports,
@@ -49,9 +50,9 @@ pub(super) use statement_v1::{
     AggregateH0ObjectRoleV1, AggregateH1ObjectRoleV1, GaloisBObjectRoleV1, RkgKObjectRoleV1,
     RkgNormalizationObjectRoleV1,
 };
-pub(super) use statement_v1::{
-    DirectPolynomialObjectV1, DirectRelationPublicObjectsV1, ExpectedDirectRelationStatementV1,
-    PreparedDirectRkgOneStatementCoreV1, RkgH0ObjectRoleV1, RkgH1ObjectRoleV1,
+pub(in crate::vega::zk_ams::mkhe) use statement_v1::{
+    DirectPolynomialObjectV1, DirectRelationPublicObjectsV1, PreparedDirectRkgOneStatementCoreV1,
+    RkgH0ObjectRoleV1, RkgH1ObjectRoleV1,
 };
 #[cfg(test)]
 #[path = "direct_relation_wire_v1/kats.rs"]

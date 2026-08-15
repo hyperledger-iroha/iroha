@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for GET /v1/zk/vk (list with filters).
 #![cfg(feature = "app_api")]
-use std::sync::Arc;
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -14,6 +13,7 @@ use iroha_data_model::{
     proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
+use std::sync::Arc;
 use tower::ServiceExt as _;
 #[tokio::test]
 async fn vk_list_filters_by_backend_and_status() {

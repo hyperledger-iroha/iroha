@@ -1,5 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for executing triggers directly
+use crate::triggers::get_asset_value;
 use eyre::{Result, WrapErr};
 use futures_util::StreamExt as _;
 use integration_tests::sandbox;
@@ -29,7 +30,6 @@ use tokio::{
     task::spawn_blocking,
     time::{Duration, Instant, sleep, timeout},
 };
-use crate::triggers::get_asset_value;
 const TRIGGER_NAME: &str = "mint_rose";
 fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
     let mut metadata = Metadata::default();

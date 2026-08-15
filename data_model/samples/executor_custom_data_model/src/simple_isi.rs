@@ -1,5 +1,4 @@
 //! Example wire model for one custom instruction.
-use std::{borrow::ToOwned, format, string::String, vec::Vec};
 use iroha_data_model::{
     asset::AssetDefinitionId,
     isi::{CustomInstruction, InstructionBox},
@@ -10,6 +9,7 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
+use std::{borrow::ToOwned, format, string::String, vec::Vec};
 #[derive(Debug, IntoSchema)]
 pub enum CustomInstructionBox {
     MintAssetForAllAccounts(MintAssetForAllAccounts),

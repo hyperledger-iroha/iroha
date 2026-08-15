@@ -8,14 +8,8 @@
 //! record-streamed under fixed source-byte, record, string, and retained-index
 //! budgets so malformed operator snapshots cannot scale startup memory without
 //! bound.
+use super::profiles::ReferenceDatasetRequirement;
 use core::convert::TryFrom;
-use std::{
-    collections::BTreeMap,
-    fs::{self, File},
-    io::Read,
-    path::{Path, PathBuf},
-    time::Duration,
-};
 use eyre::{self, WrapErr as _};
 use iroha_config::parameters::actual;
 use iroha_logger::{error, info, warn};
@@ -23,9 +17,15 @@ use iroha_telemetry::metrics;
 use ivm::iso20022::{self, IdentifierKind};
 use norito::json::{self, Value};
 use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File},
+    io::Read,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use super::profiles::ReferenceDatasetRequirement;
 /// Maximum encoded size of one first-release reference-data snapshot.
 const REFERENCE_DATA_MAX_DATASET_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum encoded bytes examined across one six-dataset refresh.
@@ -1857,15 +1857,15 @@ fn compute_sha256_hex(path: &Path) -> eyre::Result<String> {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use iroha_config::parameters::actual::IsoReferenceData;
+    use iroha_telemetry::metrics;
     use std::{
         fs,
         io::Write as _,
         sync::{Mutex, OnceLock},
     };
-    use iroha_config::parameters::actual::IsoReferenceData;
-    use iroha_telemetry::metrics;
     use tempfile::{NamedTempFile, TempDir};
-    use super::*;
     fn iso_reference_test_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))

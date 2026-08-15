@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! `CoreHost` ZK voting instructions require their operation-specific verify syscall.
-use std::sync::Arc;
 use iroha_core::{
     kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
 };
@@ -10,6 +9,7 @@ use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
+use std::sync::Arc;
 const VM_GAS_LIMIT: u64 = 10_000_000;
 fn with_core_host<R>(vm: &mut IVM, f: impl FnOnce(&mut CoreHost) -> R) -> R {
     CoreHost::with_host(vm, f)

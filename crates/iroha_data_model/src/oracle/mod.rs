@@ -5,6 +5,11 @@
 //! model covers feed configuration, signed observations, aggregated reports,
 //! and replay protection/gossip keys used to distribute oracle messages across
 //! validators.
+use crate::{account::AccountId, error::ParseError, name::Name, nexus::UniversalAccountId};
+use iroha_crypto::{Hash, HashOf, SignatureOf};
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
@@ -12,11 +17,6 @@ use std::{
     num::{NonZeroU64, NonZeroUsize},
     str::FromStr,
 };
-use iroha_crypto::{Hash, HashOf, SignatureOf};
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use crate::{account::AccountId, error::ParseError, name::Name, nexus::UniversalAccountId};
 /// Oracle identifier (validator-bound oracle signing key).
 pub type OracleId = AccountId;
 /// Slot index used by oracle feeds.
@@ -2410,8 +2410,8 @@ pub enum OracleModelError {
 }
 /// Reference oracle kits used by SDK/CLI examples and fixtures.
 pub mod kits {
-    use norito::json;
     use super::*;
+    use norito::json;
     /// Bundled reference assets for an oracle feed.
     #[derive(Clone, Debug, PartialEq, Eq)]
     #[cfg_attr(
@@ -2534,11 +2534,11 @@ pub mod kits {
 }
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use norito::json;
     use super::*;
     use crate::domain::DomainId;
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use norito::json;
+    use std::str::FromStr;
     fn feed_id(name: &str) -> FeedId {
         FeedId(Name::from_str(name).expect("feed name"))
     }

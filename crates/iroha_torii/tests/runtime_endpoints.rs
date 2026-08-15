@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for runtime upgrade endpoints.
 #![cfg(feature = "app_api")]
-use std::vec::Vec;
 use axum::{extract::Path as AxPath, response::IntoResponse as _};
 use iroha_data_model::runtime::{
     RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord, RuntimeUpgradeStatus,
@@ -9,6 +8,7 @@ use iroha_data_model::runtime::{
 use iroha_torii::{
     handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade, test_utils::random_authority,
 };
+use std::vec::Vec;
 struct SimpleItem {
     record: RuntimeUpgradeRecord,
 }

@@ -1,4 +1,9 @@
 //! SNS-backed ownership query and lease instruction handlers.
+use super::prelude::*;
+use crate::{
+    prelude::ValidSingularQuery,
+    sns::{LeasePayment, RegisterNameInput},
+};
 use iroha_data_model::{
     alias_setup::{
         AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
@@ -18,11 +23,6 @@ use iroha_data_model::{
     sns::{NameControllerV1, SuffixId},
 };
 use iroha_telemetry::metrics;
-use super::prelude::*;
-use crate::{
-    prelude::ValidSingularQuery,
-    sns::{LeasePayment, RegisterNameInput},
-};
 impl ValidSingularQuery for FindDataspaceNameOwnerById {
     #[metrics(+"find_dataspace_name_owner_by_id")]
     fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AccountId, QueryError> {
@@ -851,7 +851,16 @@ impl Execute for CompareAndSetPrimaryAccountAlias {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        sns::{
+            ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
+            SnsNamespace, get_name_record, policy_by_id, seed_default_namespace_policies,
+        },
+        state::{State, StateTransaction, World, WorldReadOnly},
+    };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         Registrable,
@@ -883,16 +892,7 @@ mod tests {
     };
     use iroha_primitives::numeric::Quantity;
     use mv::storage::StorageReadOnly;
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        sns::{
-            ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
-            SnsNamespace, get_name_record, policy_by_id, seed_default_namespace_policies,
-        },
-        state::{State, StateTransaction, World, WorldReadOnly},
-    };
+    use std::num::NonZeroU64;
     fn owner() -> AccountId {
         let public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()

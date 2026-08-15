@@ -1,8 +1,8 @@
-use std::fmt::Display;
-#[cfg(feature = "json")]
-use norito::json::{FastJsonWrite, JsonSerialize};
 use super::*;
 use crate::{account::NewAccount, consensus::HsmBinding, domain::NewDomain};
+#[cfg(feature = "json")]
+use norito::json::{FastJsonWrite, JsonSerialize};
+use std::fmt::Display;
 isi! {
     /// Generic instruction for a registration of an object to the identifiable destination.
     ///
@@ -547,13 +547,13 @@ impl UnregisterBox {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::peer::PeerId;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use norito::{
         codec::{Decode, Encode},
         core::DecodeFromSlice,
     };
-    use super::*;
-    use crate::peer::PeerId;
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked register/unregister fixture keypair");

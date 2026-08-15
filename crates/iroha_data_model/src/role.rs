@@ -1,20 +1,20 @@
 //! Structures, traits and impls related to `Role`s.
-use std::{collections::BTreeMap, format, string::String, vec::Vec};
-use iroha_data_model_derive::model;
 pub use self::model::*;
 use crate::{
     Identifiable, Name, Registered, Registrable,
     account::AccountId,
     permission::{Permission, Permissions},
 };
+use iroha_data_model_derive::model;
+use std::{collections::BTreeMap, format, string::String, vec::Vec};
 #[model]
 mod model {
+    use super::*;
     use derive_more::{Constructor, Display, FromStr};
     use getset::Getters;
     use iroha_data_model_derive::IdEqOrdHash;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-    use super::*;
     /// Identification of a role.
     #[derive(
         Debug,
@@ -321,9 +321,9 @@ impl Registrable for NewRole {
 }
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use iroha_primitives::json::Json;
     use super::*;
     use crate::{domain::DomainId, permission::Permission};
+    use iroha_primitives::json::Json;
     #[test]
     fn role_json_roundtrip() {
         let name: Name = "auditor".parse().expect("role name");

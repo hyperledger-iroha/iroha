@@ -5,8 +5,13 @@
 //! configuration. The router abstraction keeps the queue decoupled from the
 //! exact routing policy while allowing metrics to reflect the real
 //! assignments instead of collapsing metrics to the primary lane.
-use std::{collections::BTreeSet, str::FromStr, sync::Arc};
-use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule, Nexus};
+use crate::{
+    state::{State, StateReadOnly, StateView, WorldReadOnly},
+    tx::AcceptedTransaction,
+};
+use iroha_config::parameters::actual::{
+    LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule, Nexus,
+};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
@@ -82,10 +87,7 @@ use iroha_executor_data_model::permission::{
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
-use crate::{
-    state::{State, StateReadOnly, StateView, WorldReadOnly},
-    tx::AcceptedTransaction,
-};
+use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 use thiserror::Error;
 const AMX_POLICY_METADATA_KEY: &str = "amx_policy";
 const AMX_POLICY_REJECT_CROSS_DATASPACE: &str = "reject_cross_dataspace";

@@ -1,0 +1,54 @@
+# __SORACLOUD_SERVICE_NAME__ Webapp Template
+
+This template provides:
+
+- `frontend/` Vue3 SPA (Vite).
+- `api/server.mjs` deterministic challenge-signature auth (`/api/auth/challenge|login|logout|me`).
+- Replay protection with single-use challenges persisted under `/state/auth/challenges`.
+- Shared session handles persisted under `/state/auth/sessions` with signed `session` cookies.
+- Soracloud manifests at the parent init directory (`container_manifest.json`, `service_manifest.json`).
+
+## Local dev
+
+```bash
+npm install
+npm --prefix frontend install
+export AUTH_MODE=dev
+export SESSION_HMAC_KEY='replace-with-at-least-32-random-characters'
+export AUTH_SESSION_TTL_SECS=900
+export AUTH_CHALLENGE_TTL_SECS=120
+export AUTH_CAPABILITY_MAP_JSON='{}'
+export AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0
+export PUBLIC_BASE_URL='http://127.0.0.1:8787'
+npm run dev:api
+npm run dev:frontend
+```
+
+## Production required config
+
+- `SESSION_HMAC_KEY` must be set with at least 32 characters (`AUTH_MODE=strict` is default).
+- `AUTH_CAPABILITY_MAP_JSON` maps `public_key_hex -> capability[]` and is used at login.
+- `PUBLIC_BASE_URL` controls cookie `Secure` and origin binding.
+- `AUTH_REQUIRE_EXTERNAL_SHARED_STATE` defaults to enabled in strict/production
+  mode and fails closed unless `globalThis.__soracloudSharedStateAdapter` is
+  provided by the host runtime. Set `AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0` only
+  for local single-replica development.
+
+## Deploy API service on Soracloud
+
+```bash
+iroha soracloud service deploy \
+  --container ../container_manifest.json \
+  --service ../service_manifest.json \
+  --torii-url http://127.0.0.1:8080
+```
+
+## Publish frontend to SoraFS
+
+```bash
+npm run build
+iroha app sorafs toolkit pack ./frontend/dist \
+  --manifest-out ../sorafs/frontend_manifest.to \
+  --car-out ../sorafs/frontend_payload.car \
+  --json-out ../sorafs/frontend_pack_report.json
+```

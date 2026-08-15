@@ -1,4 +1,10 @@
 //! Deterministic terminal-handoff identity and finalized-event binding.
+use super::{
+    ACTION_DIGEST_DOMAIN_V1, HANDOFF_ID_DOMAIN_V1, MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1,
+    ModerationOrchestratorCheckpointV1, ModerationOrchestratorError,
+    ModerationTerminalHandoffKindV1, ModerationTerminalHandoffV1, domain_hash,
+    external_work_cursor_is_valid, refresh_panel_notification_outbox_digest,
+};
 use iroha_data_model::{
     NetworkId,
     events::data::sorafs::SorafsModerationLedgerEventKind,
@@ -6,12 +12,6 @@ use iroha_data_model::{
         ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1, ModerationOutcomeRecordV1,
         is_canonical_moderation_identifier_v1,
     },
-};
-use super::{
-    ACTION_DIGEST_DOMAIN_V1, HANDOFF_ID_DOMAIN_V1, MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1,
-    ModerationOrchestratorCheckpointV1, ModerationOrchestratorError,
-    ModerationTerminalHandoffKindV1, ModerationTerminalHandoffV1, domain_hash,
-    external_work_cursor_is_valid, refresh_panel_notification_outbox_digest,
 };
 impl ModerationOrchestratorCheckpointV1 {
     pub(super) fn new(network_id: &NetworkId) -> Self {

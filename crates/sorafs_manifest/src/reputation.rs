@@ -1,11 +1,11 @@
 #![allow(unexpected_cfgs)]
 //! Deterministic SoraFS provider reputation schemas, scoring, and proofs.
-use std::cmp::Ordering;
 use blake3::{Hash, Hasher};
 use norito::{
     core::Error as NoritoError,
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
 };
+use std::cmp::Ordering;
 use thiserror::Error;
 pub mod signed;
 /// Schema version for [`ReputationWeightsV1`].

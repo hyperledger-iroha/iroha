@@ -1,3 +1,13 @@
+use color_eyre::{
+    Result,
+    eyre::{Context, eyre},
+};
+use iroha::{client::Client, data_model::prelude::*};
+use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_test_network::{
+    NetworkBuilder, NetworkPeer, init_instruction_registry, submit_ensure_domain,
+};
+use norito::json::{JsonDeserialize, JsonSerialize};
 use std::{
     collections::HashSet,
     env,
@@ -8,14 +18,6 @@ use std::{
     thread,
     time::Duration,
 };
-use color_eyre::{
-    Result,
-    eyre::{Context, eyre},
-};
-use iroha::{client::Client, data_model::prelude::*};
-use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry, submit_ensure_domain};
-use norito::json::{JsonDeserialize, JsonSerialize};
 use url::Url;
 const DEFAULT_CONFIG_RELATIVE: &str = "examples/ios/NoritoDemoXcode/Configs/SampleAccounts.json";
 const DEFAULT_TELEMETRY_PROFILE: &str = "full";

@@ -1,8 +1,8 @@
-use std::io::Write as _;
+use crate::{Outcome, RunArgs, tui};
 use clap::Args as ClapArgs;
 use color_eyre::eyre::WrapErr as _;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
-use crate::{Outcome, RunArgs, tui};
+use std::io::Write as _;
 /// Produce a BLS-normal Proof-of-Possession (PoP) for a validator key.
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
@@ -87,11 +87,11 @@ impl<T: std::io::Write> RunArgs<T> for Args {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{
         io::{BufWriter, Write},
         str::FromStr,
     };
-    use super::*;
     #[test]
     fn pop_json_parses_and_verifies() {
         // Build args to emit JSON PoP using a seed

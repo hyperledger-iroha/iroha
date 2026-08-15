@@ -12,13 +12,10 @@
 //! - the same tuples feed execution/address-sorted memory products;
 //! - all twenty-three physical continuation fields are materialized.
 //!
-//! The standalone builder retains the exact logical row count. The aggregate
-//! adapter embeds its two physical `2^19` slots vertically in the common
-//! `2^20` native domain and pads every unused row algebraically. This is
-//! deliberate: byte-copy and call-bus terminals may only be joined when they
+//! The standalone builder retains the exact logical row count. The aggregate adapter embeds its two
+//! physical `2^19` slots vertically in the common `2^20` native domain and pads every unused row
+//! algebraically. This is deliberate: byte-copy and call-bus terminals may only be joined when they
 //! share the same subgroup and masking polynomial.
-use std::collections::{BTreeMap, BTreeSet};
-use thiserror::Error;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::credential_pre_aux::ZkX509CredentialPreAuxBindingV1;
 #[cfg(test)]
@@ -36,6 +33,8 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
+use std::collections::{BTreeMap, BTreeSet};
+use thiserror::Error;
 pub(crate) const SHA_WORD_BASE_WIDTH_V1: usize = 64;
 pub(crate) const SHA_WORD_COPY_LANES_V1: usize = WORD_MEMORY_PERMUTATION_LANES_V1;
 pub(crate) const SHA_WORD_LOCAL_PRODUCT_WIDTH_V1: usize = 6 * SHA_WORD_COPY_LANES_V1;
@@ -64,17 +63,15 @@ pub(crate) const SHA_WORD_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
 /// private active/final-block selectors, sorted-memory adjacency selector,
 /// per-byte message/marker masks, and the selected digest-memory address.
 pub(crate) const SHA_WORD_CAPACITY_BASE_WIDTH_V1: usize = 76;
-/// Fixed-capacity SHA call auxiliary width before the cross-adapter call bus.
-/// The three extra columns carry the private message-byte count, padding
-/// phase, and active-block count.
+/// Fixed-capacity SHA call auxiliary width before the cross-adapter call bus. The three extra
+/// columns carry the private message-byte count, padding phase, and active-block count.
 pub(crate) const SHA_WORD_CAPACITY_AUX_WIDTH_V1: usize = 54;
 /// Verifier-derived fixed width for one fixed-capacity SHA call before the
 /// call identity and physical-segment columns are appended.
 pub(crate) const SHA_WORD_CAPACITY_FIXED_WIDTH_V1: usize = 72;
-/// Capacity controls beyond the 155 raw word-AIR residues: selectors/masks
-/// (40), inactive-row folds (8), block controls (6), count/padding/digest
-/// controls (28), inactive local products (20), memory controls (47), and
-/// zeroed continuation cells (31).
+/// Capacity controls beyond the 155 raw word-AIR residues: selectors/masks (40), inactive-row folds
+/// (8), block controls (6), count/padding/digest controls (28), inactive local products (20),
+/// memory controls (47), and zeroed continuation cells (31).
 const SHA_WORD_CAPACITY_CONTROL_CONSTRAINT_COUNT_V1: usize = 180;
 /// Exact residue width of the fixed-capacity word relation.
 pub(crate) const SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1: usize =
@@ -83,11 +80,10 @@ pub(crate) const SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1: usize =
 pub(crate) const SHA_WORD_CAPACITY_CONSTRAINT_DEGREE_V1: u8 = 4;
 /// Emitted STARK-local rows reserved by one SHA-256 compression block.
 ///
-/// This is deliberately smaller than
-/// `sha256_word_air::WORD_AIR_ROWS_PER_BLOCK_V1`: the latter's conceptual
-/// circuit count includes a standalone definition for every operation output,
-/// while this STARK trace range-binds that output inside the operation row and
-/// therefore must not count the same 664 definitions twice.
+/// This is deliberately smaller than `sha256_word_air::WORD_AIR_ROWS_PER_BLOCK_V1`: the latter's
+/// conceptual circuit count includes a standalone definition for every operation output, while this
+/// STARK trace range-binds that output inside the operation row and therefore must not count the
+/// same 664 definitions twice.
 pub(crate) const SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1: usize = 1_064;
 /// Per-call local initialization rows preceding the first compression block.
 const SHA_WORD_CAPACITY_LOCAL_INITIAL_ROWS_PER_CALL_V1: usize = 8;
@@ -211,11 +207,10 @@ const FIX_CONTINUATION_PUBLIC: usize = 48;
 pub(crate) const SHA_WORD_CAPACITY_DIGEST_SELECTOR_V1: usize = FIX_DIGEST;
 /// Fixed columns omitted from the zk-X509 preprocessed SHA oracle.
 ///
-/// These six columns carry no independent information under the canonical
-/// 29-call schedule. Three are identically zero and the remaining three are
-/// exact linear combinations of retained columns. Since LDE is linear, the
-/// same reconstruction identities hold at every verifier opening, not merely
-/// on native trace rows.
+/// These six columns carry no independent information under the canonical 29-call schedule. Three
+/// are identically zero and the remaining three are exact linear combinations of retained columns.
+/// Since LDE is linear, the same reconstruction identities hold at every verifier opening, not
+/// merely on native trace rows.
 #[cfg(test)]
 pub(crate) const ZK_X509_SHA_WORD_PREPROCESSED_OMITTED_COLUMNS_V1: [usize; 6] = [
     FIX_PADDING,
@@ -329,8 +324,7 @@ pub(crate) fn reduce_zk_x509_sha_word_fixed_row_v1(
     }
     Ok(retained)
 }
-/// Reconstruct all SHA-word fixed columns from one authenticated reduced LDE
-/// opening.
+/// Reconstruct all SHA-word fixed columns from one authenticated reduced LDE opening.
 #[cfg(test)]
 pub(crate) fn expand_zk_x509_sha_word_fixed_row_v1(
     retained: &[F; ZK_X509_SHA_WORD_PREPROCESSED_FIXED_WIDTH_V1],
@@ -428,10 +422,9 @@ pub(crate) struct ZkX509ShaWordStarkBaseV1 {
 }
 /// Challenge-independent fixed-capacity SHA word material.
 ///
-/// This source owns every base and fixed row plus the private word-memory
-/// events needed to derive auxiliary products later. No challenge-dependent
-/// row exists until [`Self::bind_v1`] consumes this source with the opaque
-/// credential pre-auxiliary token.
+/// This source owns every base and fixed row plus the private word-memory events needed to derive
+/// auxiliary products later. No challenge-dependent row exists until [`Self::bind_v1`] consumes
+/// this source with the opaque credential pre-auxiliary token.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509ShaWordCapacityBaseSourceV1 {
     message_len: usize,
@@ -500,8 +493,7 @@ impl ZkX509ShaWordCapacityBaseSourceV1 {
             .get(index)
             .ok_or(ZkX509ShaWordStarkErrorV1::Resource)
     }
-    /// Consume the base phase and derive auxiliary rows from the opaque X5B1
-    /// credential token.
+    /// Consume the base phase and derive auxiliary rows from the opaque X5B1 credential token.
     pub(crate) fn bind_v1(
         self,
         binding: ZkX509CredentialPreAuxBindingV1,
@@ -575,9 +567,8 @@ pub(crate) struct ZkX509ShaWordStarkTraceV1 {
 }
 /// One verifier-fixed maximum-capacity SHA call.
 ///
-/// Only a single call is materialized at a time.  The 29-call adapter streams
-/// these call traces into its four physical segments and drops each call
-/// before constructing the next one.
+/// Only a single call is materialized at a time. The 29-call adapter streams these call traces into
+/// its four physical segments and drops each call before constructing the next one.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone)]
 pub(crate) struct ZkX509ShaWordCapacityTraceV1 {
@@ -640,10 +631,9 @@ impl Drop for ZkX509ShaWordCapacityTraceV1 {
 }
 /// Verifier-owned fixed topology for one maximum-capacity SHA call.
 ///
-/// Unlike [`ZkX509ShaWordCapacityTraceV1`], this value contains no exact
-/// message length, message byte, active-block selector, digest value, or
-/// Fiat--Shamir product.  It is therefore safe for an independent verifier to
-/// compile solely from the public call manifest and replay at arbitrary
+/// Unlike [`ZkX509ShaWordCapacityTraceV1`], this value contains no exact message length, message
+/// byte, active-block selector, digest value, or Fiat--Shamir product. It is therefore safe for an
+/// independent verifier to compile solely from the public call manifest and replay at arbitrary
 /// opened rows.
 #[derive(Clone, Debug)]
 pub(crate) struct ZkX509ShaWordCapacityFixedScheduleV1 {
@@ -871,11 +861,10 @@ pub(crate) fn compile_sha_word_capacity_fixed_schedule_v1(
 }
 /// Fiat-Shamir challenges consumed by the numeric aggregate adapter.
 ///
-/// `memory` binds local references to the execution and address-sorted word
-/// memory. `base_folding` is sampled only after the base commitment and folds
-/// the 441 base-only errors into four independent residues. It is never used
-/// to fold auxiliary constraints because the auxiliary trace is committed
-/// after these challenges are known.
+/// `memory` binds local references to the execution and address-sorted word memory. `base_folding`
+/// is sampled only after the base commitment and folds the 441 base-only errors into four
+/// independent residues. It is never used to fold auxiliary constraints because the auxiliary trace
+/// is committed after these challenges are known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ShaWordStarkChallengesV1 {
     pub(crate) memory: ZkX509WordMemoryChallengesV1,
@@ -1131,8 +1120,7 @@ fn write_continuation(
         .copy_from_slice(&local_product_end);
     Ok(())
 }
-/// Attach challenge-dependent local-reference, memory-copy, and continuation
-/// auxiliary columns.
+/// Attach challenge-dependent local-reference, memory-copy, and continuation auxiliary columns.
 #[cfg(test)]
 pub(crate) fn build_sha_word_stark_trace_v1(
     base: ZkX509ShaWordStarkBaseV1,
@@ -1227,11 +1215,10 @@ fn capacity_raw_base_row_v1(
 }
 /// Build the challenge-independent phase of one fixed-capacity SHA call.
 ///
-/// The verifier-visible shape depends only on `maximum_message_len`.  The
-/// exact message length, active-block prefix, padding transition, selected
-/// digest state, and memory activity remain committed witness columns. Word
-/// memory products are intentionally absent until the returned source binds
-/// an opaque X5B1 token.
+/// The verifier-visible shape depends only on `maximum_message_len`. The exact message length,
+/// active-block prefix, padding transition, selected digest state, and memory activity remain
+/// committed witness columns. Word memory products are intentionally absent until the returned
+/// source binds an opaque X5B1 token.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_sha_word_capacity_base_source_v1(
     message: &[u8],
@@ -2074,9 +2061,8 @@ fn aggregate_slots_v1(
         },
     ])
 }
-/// Compile the verifier-owned logical topology for the canonical aggregate
-/// SHA-word adapter. The returned schedule reconstructs any of the `2^20`
-/// fixed rows on demand.
+/// Compile the verifier-owned logical topology for the canonical aggregate SHA-word adapter. The
+/// returned schedule reconstructs any of the `2^20` fixed rows on demand.
 #[cfg(test)]
 pub(crate) fn compile_zk_x509_sha_word_stark_fixed_schedule_v1(
     statement: ZkX509ShaWordStarkStatementV1,
@@ -2523,10 +2509,9 @@ fn memory_factor_v1(
 /// continuation label, and boundary gate is verifier-preprocessed numeric
 /// material. The extension-domain evaluator never branches on a row enum.
 ///
-/// The 441 base-only errors are folded with four independent challenges
-/// sampled after the base commitment. Auxiliary constraints remain separate
-/// because the prover sees those challenges before committing the auxiliary
-/// trace.
+/// The 441 base-only errors are folded with four independent challenges sampled after the base
+/// commitment. Auxiliary constraints remain separate because the prover sees those challenges
+/// before committing the auxiliary trace.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
     current: &[F; SHA_WORD_BASE_WIDTH_V1],
@@ -3753,9 +3738,9 @@ pub(crate) fn validate_sha_word_stark_trace_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
     use super::*;
     use crate::privacy_engines::zk_x509::sha256_word_air::sha256_word_total_rows_for_message_len_v1;
+    use std::sync::OnceLock;
     fn challenges() -> ZkX509WordMemoryChallengesV1 {
         ZkX509WordMemoryChallengesV1 {
             lanes: [

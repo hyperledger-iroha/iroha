@@ -1,18 +1,6 @@
 //! Persistence helpers for DA replay cursors, receipts, and spool artifacts.
 
 #![allow(clippy::redundant_pub_crate)]
-use std::{
-    collections::BTreeMap,
-    ffi::OsStr,
-    fs::{self, File},
-    io::{ErrorKind, Read, Seek, SeekFrom, Write},
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
 use eyre::{WrapErr, eyre};
 use iroha_core::da::{LaneEpoch, ReplayFingerprint};
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
@@ -25,6 +13,18 @@ use norito::{
 };
 use parking_lot::{Mutex as NonPoisoningMutex, MutexGuard as NonPoisoningMutexGuard};
 use sorafs_manifest::pdp::{PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PdpCommitmentV1};
+use std::{
+    collections::BTreeMap,
+    ffi::OsStr,
+    fs::{self, File},
+    io::{ErrorKind, Read, Seek, SeekFrom, Write},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 const CURSOR_FILE_NAME: &str = "replay_cursors.norito.json";
 const CURSOR_JOURNAL_FILE_NAME: &str = "replay_cursors.journal";
 const CURSOR_SNAPSHOT_VERSION: u32 = 1;
@@ -1934,10 +1934,10 @@ fn remove_temp_artifact(tmp_path: &Path) -> std::io::Result<()> {
 }
 #[cfg(test)]
 mod temp_artifact_tests {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    use iroha_crypto::{Algorithm, KeyPair};
-    use tempfile::tempdir;
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use tempfile::tempdir;
     fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
     }

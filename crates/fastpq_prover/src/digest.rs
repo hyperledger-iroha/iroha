@@ -1,10 +1,10 @@
-use fastpq_isi::StarkParameterSet;
-use iroha_crypto::Hash;
 use crate::{
     Error, Result,
     batch::TransitionBatch,
     trace::{ColumnDigests, Trace, build_trace, column_hashes, merkle_root_with_first_level},
 };
+use fastpq_isi::StarkParameterSet;
+use iroha_crypto::Hash;
 /// Domain separator applied to the Stage 1 commitment payload.
 const TRACE_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:trace_commitment";
 /// Compute the deterministic commitment over a transition batch.
@@ -86,7 +86,6 @@ fn append_length_prefixed(buffer: &mut Vec<u8>, bytes: &[u8]) -> Result<(), Erro
 }
 #[cfg(test)]
 mod tests {
-    use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use super::*;
     use crate::{
         OperationKind, Planner, PublicInputs, StateTransition, TransitionBatch,
@@ -97,6 +96,7 @@ mod tests {
             hash_columns_from_coefficients,
         },
     };
+    use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use iroha_data_model::{
         DomainId,
         asset::id::AssetDefinitionId,

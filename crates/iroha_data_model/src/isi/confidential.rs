@@ -1,5 +1,7 @@
 use super::*;
-use crate::confidential::{ConfidentialParamsId, ConfidentialStatus, PedersenParams, PoseidonParams};
+use crate::confidential::{
+    ConfidentialParamsId, ConfidentialStatus, PedersenParams, PoseidonParams,
+};
 isi! {
     /// Publish a new Pedersen parameter set into the registry.
     pub struct PublishPedersenParams {

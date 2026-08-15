@@ -1,31 +1,4 @@
 //! Authenticated operator commands for the SoraFS PDP provider protocol.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::{self, OpenOptions},
-    io::Read,
-    net::IpAddr,
-    path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-#[cfg(windows)]
-use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-#[cfg(any(
-    target_os = "android",
-    target_os = "ios",
-    target_os = "linux",
-    target_os = "macos"
-))]
-use std::{
-    ffi::CString,
-    io::Write,
-    os::{
-        fd::{AsRawFd as _, FromRawFd as _},
-        unix::ffi::OsStrExt as _,
-    },
-    path::Component,
-};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
@@ -49,6 +22,33 @@ use sorafs_manifest::{
         PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
         PDP_PROOF_MAX_CANONICAL_BYTES_V1,
     },
+};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, OpenOptions},
+    io::Read,
+    net::IpAddr,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "macos"
+))]
+use std::{
+    ffi::CString,
+    io::Write,
+    os::{
+        fd::{AsRawFd as _, FromRawFd as _},
+        unix::ffi::OsStrExt as _,
+    },
+    path::Component,
 };
 use url::Url;
 const ROUTE_ENQUEUE: &str = "/v1/sorafs/pdp/challenge";

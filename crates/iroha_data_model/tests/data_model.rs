@@ -1,8 +1,8 @@
 //! Data-model smoke tests and roundtrips
-use std::str::FromStr as _;
 use iroha_crypto::KeyPair;
 use iroha_data_model::{parameter::BlockParameters, prelude::*};
 use iroha_schema::Ident;
+use std::str::FromStr as _;
 // Lightweight DSL does not track predicate depth; skip related tests.
 fn checked_random_account_id() -> AccountId {
     AccountId::new(

@@ -10,6 +10,17 @@
 //! The compiled 128-bit Fiat--Shamir certificate is work-normalized in the
 //! classical random-oracle model.  The `pq_authorization` relation name does
 //! not assert an additional quantum-random-oracle reduction for this STARK.
+#[cfg(test)]
+use super::prover_randomness::TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1;
+#[cfg(test)]
+use super::zk_ace_stark::proof_test_guard;
+use super::zk_ace_stark::{
+    AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1, COMPILED_STARK_PROFILE_DESCRIPTOR_V1, MAX_PROOF_BYTES,
+    MAX_ROM_QUERY_LOG2_V1, PROVABLE_SOUNDNESS_BITS_V1, ZkAceAirRelationInputsV1, ZkAceStarkError,
+    prove_zk_ace_stark_v1_with_rng, verify_zk_ace_stark_v1,
+};
+#[cfg(test)]
+use iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
 use iroha_data_model::{
     NetworkId,
     privacy::{
@@ -23,26 +34,15 @@ use iroha_data_model::{
     },
 };
 use rand::TryCryptoRng;
-use thiserror::Error;
-use zeroize::Zeroize;
 /// Fallible cryptographic RNG contract accepted by the native prover.
 pub use rand::TryCryptoRng as ZkAceTryCryptoRngV1;
 /// Fallible RNG core contract re-exported for deterministic/adversarial tests
 /// without forcing transaction-builder crates to depend on `rand`.
 pub use rand::TryRngCore as ZkAceTryRngCoreV1;
 #[cfg(test)]
-use iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
-#[cfg(test)]
 use sha2::{Digest as _, Sha256};
-#[cfg(test)]
-use super::prover_randomness::TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1;
-#[cfg(test)]
-use super::zk_ace_stark::proof_test_guard;
-use super::zk_ace_stark::{
-    AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1, COMPILED_STARK_PROFILE_DESCRIPTOR_V1, MAX_PROOF_BYTES,
-    MAX_ROM_QUERY_LOG2_V1, PROVABLE_SOUNDNESS_BITS_V1, ZkAceAirRelationInputsV1, ZkAceStarkError,
-    prove_zk_ace_stark_v1_with_rng, verify_zk_ace_stark_v1,
-};
+use thiserror::Error;
+use zeroize::Zeroize;
 /// Secret witness accepted by the first-release native ZK-ACE engine.
 ///
 /// It intentionally implements neither `Debug`, `Clone`, `Copy`, nor any
@@ -391,7 +391,7 @@ pub enum ZkAceNativeErrorV1 {
 }
 #[cfg(test)]
 mod tests {
-    use std::{str::FromStr as _, sync::OnceLock};
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -413,7 +413,7 @@ mod tests {
         },
     };
     use rand::{TryCryptoRng, TryRngCore};
-    use super::*;
+    use std::{str::FromStr as _, sync::OnceLock};
     #[derive(Clone, Copy)]
     enum EntropyMode {
         Constant,

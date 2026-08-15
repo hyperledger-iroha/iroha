@@ -6,6 +6,8 @@ use core::{
     },
     ops::RangeInclusive,
 };
+/// Derive schema. It will make your structure schemaable
+pub use iroha_schema_derive::*;
 use std::{
     borrow::ToOwned as _,
     boxed::Box,
@@ -16,8 +18,6 @@ use std::{
     vec,
     vec::Vec,
 };
-/// Derive schema. It will make your structure schemaable
-pub use iroha_schema_derive::*;
 /// An entry in the schema map
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MetaMapEntry {

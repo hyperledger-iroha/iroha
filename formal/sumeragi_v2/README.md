@@ -1372,7 +1372,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 855 named tests
+Before network startup, the executable wrapper inventories 856 named tests
 across 40 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -1484,7 +1484,7 @@ partitions, current-owner QC redelivery, leader crashes, bounded corrupted-chunk
 recovery, WAL-intent replay, and divergent Taira views, bringing the inventory
 to the 847-test checkpoint across 40 modules. The source-bound terminal-sweep
 partition regression brings the 848-test checkpoint. The late passive-Fetch
-completion and one-shot completed-Serve reopening regressions bring the
+completion and one-turn direct-predecessor reopening regressions bring the
 850-test checkpoint. Seven Native AMX finality-bound merge-projection
 regressions bring the 857-test checkpoint across 40 modules. Three Kura recovery
 regressions and the governance-unlock audit bring the 861-test checkpoint
@@ -1492,7 +1492,7 @@ across 41 modules. The production-adapter activation guard and two deferred-
 canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
 brings the current
-inventory to 855 tests across 40 modules.
+inventory to 856 tests across 40 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 88 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1567,7 +1567,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`a40a9d7ef0dafcad2a6e3eb710d550a7f80f905c378117ef9a52b39a86d77b1e`.
+`58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1687,8 +1687,8 @@ view-scoped. Proposal control and chunks now enter the Rust exact-output
 corridor through one aggregate capacity/FIFO plan. A rejected plan changes no
 fanout, index, or first-send state; the recovered path returns its move-only
 body-store/output-guard-bound authority for retry, while a successful plan
-installs both fanouts together. The formal checker seals this production
-ordering and its mutation regressions. For the already-WAL-ahead recovered
+installs both fanouts together. A source-fidelity contract statically binds
+this ordering and its mutation regressions. For the already-WAL-ahead recovered
 Proposal shape, that reservation now spans the exact two-child LedgerV1 fsync;
 the post-fsync tail installs Broadcast plus the independent next Sign, parks
 only Broadcast process-locally, acknowledges the worker, and commits the batch.
@@ -1699,8 +1699,12 @@ Ledger publication. The source guard also binds a frame-exact
 Proposal-to-Prepare or Prepare-to-Commit classifier and an affine cold reducer
 replay which must reproduce both children. Both cold branches splice the exact
 pair into the complete census; Proposal recovery reconstructs its chunks from
-the same body-store owner.
-The deductive model is unchanged.
+the same body-store owner. The unified lifecycle Completion-turn driver
+classifies both recovered Proposal settlement shapes, but the live production
+runner does not yet invoke that driver, so the cold Proposal path remains
+unreachable from the production loop. The deductive model is unchanged; this
+source-fidelity boundary promotes no theorem, proof-ledger row, or evidence
+gate.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence
@@ -1761,7 +1765,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and the exact
-855-test inventory, the pinned harness lock and resolved toolchain, the formal
+856-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer. The protected archived validator first publishes a no-clobber

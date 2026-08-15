@@ -4,11 +4,11 @@
 //! only issuer-attested credential and revocation-nonce commitments together
 //! with the exact signed public root and revocation-list publications needed by
 //! verifiers.
+use crate::account::AccountId;
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-use crate::account::AccountId;
 /// First-release schema version for issuer policies.
 pub const POP_ISSUER_POLICY_VERSION_V1: u16 = 1;
 /// First-release schema version for credential commitment batches.

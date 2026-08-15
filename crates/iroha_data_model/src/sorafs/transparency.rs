@@ -5,8 +5,8 @@
 pub use sorafs_manifest::transparency::*;
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
     use super::*;
+    use std::any::TypeId;
     #[test]
     fn data_model_reexport_has_exact_manifest_type_and_wire_identity() {
         assert_eq!(

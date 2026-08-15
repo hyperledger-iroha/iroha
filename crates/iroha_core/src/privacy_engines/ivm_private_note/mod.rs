@@ -29,9 +29,9 @@ mod facade;
 mod fixture;
 mod relation;
 mod stark;
-mod wallet;
 #[cfg(test)]
 mod tests;
+mod wallet;
 pub(crate) use air::IVM_PRIVATE_NOTE_AGGREGATE_AIR_DESCRIPTOR_V1;
 pub(crate) use codec::PRIVATE_PROGRAM_BYTES_V1;
 #[cfg(test)]

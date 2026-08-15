@@ -1,12 +1,12 @@
 //! BN254 Poseidon batch helpers for FASTPQ host-side transcript work.
+#[cfg(feature = "fastpq-gpu")]
+use crate::backend::{self, GpuBackend};
 use std::sync::{
     OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 #[cfg(feature = "fastpq-gpu")]
 use tracing::warn;
-#[cfg(feature = "fastpq-gpu")]
-use crate::backend::{self, GpuBackend};
 /// Offset metadata for one BN254 Poseidon word-hash input inside a flattened word buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bn254PoseidonBatchSlice {

@@ -3,8 +3,8 @@
 //! The upstream search was run only as an external oracle. Consensus never
 //! reruns its floating-point search: every prime, dimension and integer bound
 //! is compiled below.
-use iroha_data_model::privacy::IROHA_JINDO_OUTER_COMMITMENT_RANK_V1;
 use super::JINDO_MAX_BATCH_SIZE_V1;
+use iroha_data_model::privacy::IROHA_JINDO_OUTER_COMMITMENT_RANK_V1;
 /// Exact rounded-discrete-Gaussian width for ΠAgg.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum JindoGaussianWidthV1 {

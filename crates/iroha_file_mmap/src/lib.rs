@@ -5,8 +5,8 @@
 //! contained within this crate so that consumers compiled with `-D unsafe-code`
 //! can still rely on memory mapping without relaxing their lint settings.
 #![allow(unsafe_code)]
-use std::{fs::File, io};
 use memmap2::{Mmap, MmapOptions};
+use std::{fs::File, io};
 /// Read-only memory mapped view over a file.
 #[derive(Debug)]
 pub struct ReadOnlyMmap {
@@ -92,9 +92,9 @@ impl core::ops::Deref for ReadOnlyMmap {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::io::{ErrorKind, Write};
     use tempfile::NamedTempFile;
-    use super::*;
     #[test]
     fn mapping_reports_length_and_non_empty_state() {
         let mut file = NamedTempFile::new().expect("create temp file");

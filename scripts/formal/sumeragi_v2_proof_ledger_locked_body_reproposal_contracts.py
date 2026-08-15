@@ -227,6 +227,126 @@ pub(crate) struct LocalProposalDirective {
             errors,
         )
 
+        recovered_attempt_declarations = re.findall(
+            r"(?m)^[ \t]*pub[ \t]*\([ \t]*in[ \t]+crate::sumeragi[ \t]*\)"
+            r"[ \t]+struct[ \t]+RecoveredLifecycleLocalProposalAttemptV1\b",
+            directive_structural,
+        )
+        if len(recovered_attempt_declarations) != 1:
+            errors.append(
+                f"{directive_path}: require exactly one sumeragi-visible opaque "
+                "RecoveredLifecycleLocalProposalAttemptV1 declaration; found "
+                f"{len(recovered_attempt_declarations)}"
+            )
+        _require_rust_source_token_sequence(
+            directive_path,
+            directive_source,
+            """
+pub(in crate::sumeragi) struct RecoveredLifecycleLocalProposalAttemptV1 {
+    tag: reducer::EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+}
+""",
+            "recovered local-Proposal ownership must remain opaque and comparison-only",
+            errors,
+        )
+        recovered_attempt_structs = rust_struct_items(
+            directive_source, "RecoveredLifecycleLocalProposalAttemptV1"
+        )
+        if len(recovered_attempt_structs) != 1:
+            errors.append(
+                f"{directive_path}: require exactly one real "
+                "RecoveredLifecycleLocalProposalAttemptV1 struct; found "
+                f"{len(recovered_attempt_structs)}"
+            )
+        else:
+            _require_rust_item_context(
+                directive_path,
+                recovered_attempt_structs[0],
+                (),
+                "opaque recovered local-Proposal ownership type",
+                errors,
+                expected_attributes=(
+                    '#[must_use = "recovered local Proposal ownership must initialize runner proposal state"]',
+                ),
+            )
+        recovered_attempt_methods = tuple(
+            item.name
+            for item in _rust_all_function_items(directive_source)
+            if item.brace_context
+            == (("impl", "RecoveredLifecycleLocalProposalAttemptV1"),)
+        )
+        if recovered_attempt_methods != (
+            "from_control",
+            "exactly_matches_directive",
+            "for_test",
+        ):
+            errors.append(
+                f"{directive_path}: opaque recovered local-Proposal ownership "
+                "must expose only its reviewed mint, comparison oracle, and "
+                f"test fixture; found {recovered_attempt_methods!r}"
+            )
+        recovered_attempt_for_test = _require_qualified_rust_item(
+            directive_path,
+            directive_source,
+            "RecoveredLifecycleLocalProposalAttemptV1",
+            "for_test",
+            errors,
+            "test-only opaque recovered local-Proposal fixture",
+            expected_attributes=("#[cfg(test)]",),
+        )
+        _require_rust_item_token_sha256(
+            directive_path,
+            recovered_attempt_for_test,
+            _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[
+                "recovered_local_proposal_attempt_for_test"
+            ],
+            "test-only opaque recovered local-Proposal fixture",
+            errors,
+        )
+
+    prepared_path = (
+        repo_root / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
+    )
+    prepared_source = read_regular(
+        prepared_path, "affine prepared local-Proposal ownership source"
+    )
+    if prepared_source is not None:
+        _require_rust_source_token_sequence(
+            prepared_path,
+            prepared_source,
+            """
+pub(in crate::sumeragi) struct ProductionLifecyclePreparedLocalProposalStateV1 {
+    runner: super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+    context_id: wire::HeightContextId,
+    directive: super::super::v2::LocalProposalDirective,
+}
+""",
+            "prepared local-Proposal receipt must retain private affine runner, context, and directive ownership",
+            errors,
+        )
+        prepared_structs = rust_struct_items(
+            prepared_source, "ProductionLifecyclePreparedLocalProposalStateV1"
+        )
+        if len(prepared_structs) != 1:
+            errors.append(
+                f"{prepared_path}: require exactly one real "
+                "ProductionLifecyclePreparedLocalProposalStateV1 struct; found "
+                f"{len(prepared_structs)}"
+            )
+        else:
+            _require_rust_item_context(
+                prepared_path,
+                prepared_structs[0],
+                (),
+                "affine prepared local-Proposal ownership type",
+                errors,
+                expected_attributes=(
+                    '#[must_use = "prepared local-Proposal state must enter lifecycle activation"]',
+                ),
+            )
+
     production_specs = (
         (
             "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
@@ -290,6 +410,20 @@ pub(crate) struct LocalProposalDirective {
                     "local_proposal_directive",
                     "durable lock-to-runner directive projection",
                 ),
+                (
+                    "from_control",
+                    (("impl", "RecoveredLifecycleLocalProposalAttemptV1"),),
+                    (),
+                    "recovered_local_proposal_attempt_from_control",
+                    "WAL-authenticated opaque local-Proposal attempt mint",
+                ),
+                (
+                    "exactly_matches_directive",
+                    (("impl", "RecoveredLifecycleLocalProposalAttemptV1"),),
+                    (),
+                    "recovered_local_proposal_attempt_exactly_matches_directive",
+                    "opaque recovered local-Proposal directive comparison",
+                ),
             ),
         ),
         (
@@ -316,25 +450,18 @@ pub(crate) struct LocalProposalDirective {
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             (
                 (
-                    "run_inner",
+                    "bind_recovered_local_proposal",
+                    (("impl", "ProductionLifecyclePreActivationRunnerBorrowV1"),),
                     (),
-                    ("#[allow(clippy::too_many_lines)]",),
-                    "run_inner",
-                    "startup replay-owner handoff",
+                    "bind_recovered_local_proposal",
+                    "one-shot recovered Proposal bind into runner-local state",
                 ),
                 (
-                    "from_replayed_proposal",
+                    "from_recovered_lifecycle_attempt",
                     (("impl", "LocalProposalState"),),
-                    (),
-                    "from_replayed_proposal",
-                    "exact replayed-proposal lock-owner authorization kernel",
-                ),
-                (
-                    "replayed_proposal_sign",
-                    (),
-                    (),
-                    "replayed_proposal_sign",
-                    "replayed proposal tag/round/subject projection",
+                    ("#[cfg_attr(not(test), allow(dead_code))]",),
+                    "from_recovered_lifecycle_attempt",
+                    "runner-local recovered Proposal attempt initialization",
                 ),
                 (
                     "locked_body_recovery_plan",
@@ -381,14 +508,64 @@ pub(crate) struct LocalProposalDirective {
             ),
         ),
         (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
+            (
+                (
+                    "initialize_recovered_local_proposal",
+                    (("impl", "LaunchedProductionLifecycleV1"),),
+                    ("#[allow(dead_code, clippy::result_large_err)]",),
+                    "initialize_recovered_local_proposal",
+                    "closed-ingress affine recovered Proposal join",
+                ),
+            ),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            (
+                (
+                    "exactly_matches",
+                    (("impl", "ProductionLifecyclePreparedLocalProposalStateV1"),),
+                    (),
+                    "prepared_local_proposal_exactly_matches",
+                    "affine prepared Proposal context and directive receipt",
+                ),
+                (
+                    "activate_with",
+                    (("impl", "LaunchedProductionLifecycleV1"),),
+                    (),
+                    "activate_with_prepared_local_proposal",
+                    "activation revalidation of the affine Proposal receipt",
+                ),
+            ),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            (
+                (
+                    "run_non_pending_lifecycle_loop",
+                    (),
+                    ("#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",),
+                    "run_non_pending_lifecycle_loop",
+                    "lifecycle runner recovered Proposal initialization handoff",
+                ),
+                (
+                    "run_lifecycle_active_height",
+                    (),
+                    ("#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",),
+                    "run_lifecycle_active_height",
+                    "active locked-body refinement request",
+                ),
+            ),
+        ),
+        (
             "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
             (
                 (
-                    "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
+                    "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
                     (),
                     ("#[test]",),
-                    "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
-                    "exact replayed-proposal lock-owner regression",
+                    "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
+                    "opaque recovered-Proposal lock-owner regression",
                 ),
                 (
                     "locked_body_recovery_is_independent_of_reproposal_gates",
@@ -403,6 +580,18 @@ pub(crate) struct LocalProposalDirective {
                     ("#[test]",),
                     "lane_production_duty_survives_successor_global_roster_removal",
                     "successor-roster-independent lane duty regression",
+                ),
+            ),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
+            (
+                (
+                    "prepared_local_proposal_state_is_affine_and_context_directive_bound",
+                    (),
+                    ("#[test]",),
+                    "prepared_local_proposal_state_is_affine_and_context_directive_bound",
+                    "affine prepared local-Proposal receipt regression",
                 ),
             ),
         ),
@@ -443,14 +632,13 @@ pub(crate) struct LocalProposalDirective {
                 errors,
                 expected_attributes=attributes,
             )
-            if digest_key != "run_inner":
-                _require_rust_item_token_sha256(
-                    path,
-                    item,
-                    _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[digest_key],
-                    description,
-                    errors,
-                )
+            _require_rust_item_token_sha256(
+                path,
+                item,
+                _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[digest_key],
+                description,
+                errors,
+            )
             production_items[digest_key] = (path, item)
 
     def require_sequence(
@@ -551,32 +739,160 @@ Self::proposal_is_safe_for_durable_lock(&self.durable, proposal)
         "live proposal admission must invoke the same safe-value kernel as replay",
     )
     require_sequence(
-        "run_inner",
+        "recovered_local_proposal_attempt_from_control",
         """
-let replayed_proposal = replayed_proposal_sign(&startup_effects);
+let AdapterEffect::Sign {
+    tag,
+    request: SignRequest::Proposal(proposal),
+} = &control.effect
+else {
+    return None;
+};
+Some(Self {
+    tag: *tag,
+    round: proposal.round,
+    subject: proposal.subject,
+})
 """,
-        "startup must retain the replayed proposal tag, round, and subject before consuming effects",
+        "only a WAL-authenticated Proposal control Sign may mint the opaque recovered attempt",
     )
     require_sequence(
-        "run_inner",
+        "recovered_local_proposal_attempt_exactly_matches_directive",
         """
-let mut local_proposal_state =
-    LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive);
+self.tag == current.tag()
+    && self.round.height == self.tag.height()
+    && self.round.view == self.tag.view()
+    && current.decided_subject().is_none()
+    && current
+        .locked_body()
+        .is_none_or(|(locked_round, locked_subject)| {
+            self.round.context_id == locked_round.context_id
+                && self.round.height == locked_round.height
+                && self.subject == locked_subject
+        })
 """,
-        "startup must bind the retained replay identity to the exact current proposal owner",
+        "the opaque recovered attempt must bind tag, round, context, height, decision state, and locked subject",
+    )
+    require_sequence(
+        "bind_recovered_local_proposal",
+        """
+let Some(local_proposal) = self.local_proposal.as_mut() else {
+    return false;
+};
+if !local_proposal.state.is_pristine() {
+    return false;
+}
+local_proposal.state =
+    LocalProposalState::from_recovered_lifecycle_attempt(true, directive);
+true
+""",
+        "runner-local Proposal state must accept the affine recovered owner exactly once from pristine state",
+    )
+    require_sequence(
+        "from_recovered_lifecycle_attempt",
+        """
+Self {
+    attempted: already_attempted.then_some(LocalProposalOwner::from(current)),
+    ..Self::default()
+}
+""",
+        "the recovered attempt must initialize only the exact current runner owner",
+    )
+    require_sequence(
+        "initialize_recovered_local_proposal",
+        """
+let recovered = self.recovered_local_proposal_attempt.take();
+let (context_id, directive, runner) =
+    self.with_runner_setup_transaction(move |executor, _services| {
+        let directive = executor
+            .local_proposal_directive()
+            .map_err(ProductionLifecyclePreActivationErrorV1::LocalProposalDirective)?;
+        match recovered {
+            Some(recovered) if recovered.exactly_matches_directive(directive) => {
+                if !runner.bind_recovered_local_proposal(directive) {
+                    return Err(
+                        ProductionLifecyclePreActivationErrorV1::RunnerProposalStateNotPristine,
+                    );
+                }
+            }
+            Some(_) => {
+                return Err(
+                    ProductionLifecyclePreActivationErrorV1::RecoveredProposalMismatch,
+                );
+            }
+            None if !runner.local_proposal_state_is_pristine() => {
+                return Err(
+                    ProductionLifecyclePreActivationErrorV1::RunnerProposalStateNotPristine,
+                );
+            }
+            None => {}
+        }
+        Ok((executor.context().id(), directive, runner))
+    })?;
+""",
+        "preactivation must consume and compare the opaque attempt inside one closed-ingress transaction",
+    )
+    require_sequence(
+        "initialize_recovered_local_proposal",
+        """
+let prepared = super::ProductionLifecyclePreparedLocalProposalStateV1 {
+    runner,
+    context_id,
+    directive,
+};
+Ok((directive, prepared))
+""",
+        "the preactivation join must return only the reducer directive and affine prepared state",
     )
     require_order(
-        "run_inner",
+        "initialize_recovered_local_proposal",
         (
-            "let replayed_proposal = replayed_proposal_sign(&startup_effects);",
-            "executor.consume_effects(std::mem::take(&mut startup_effects), &mut services)?;",
-            "let initial_directive = reconcile_executor_locked_body(&mut executor, &mut services)?;",
-            "LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive)",
+            "self.recovered_local_proposal_attempt.take()",
+            "self.with_runner_setup_transaction(",
+            ".local_proposal_directive()",
+            "recovered.exactly_matches_directive(directive)",
+            "runner.bind_recovered_local_proposal(directive)",
+            "ProductionLifecyclePreparedLocalProposalStateV1 {",
+            "Ok((directive, prepared))",
         ),
-        "startup replay-owner handoff",
+        "closed-ingress affine recovered Proposal handoff",
     )
     require_sequence(
-        "run_inner",
+        "prepared_local_proposal_exactly_matches",
+        """
+self.context_id == context_id
+    && self.directive == directive
+    && self
+        .runner
+        .prepared_local_proposal_exactly_matches(directive)
+""",
+        "the affine prepared owner must retain its exact context, directive, and runner state",
+    )
+    require_order(
+        "activate_with_prepared_local_proposal",
+        (
+            "self.recovered_local_proposal_attempt.is_some()",
+            ".local_proposal_directive()",
+            "local_proposal.exactly_matches(self.executor.context().id(), current_directive)",
+            ".arm_live_clocks(clock_activation, now)",
+            "ActivatedProductionLifecycleV1 {",
+            "local_proposal,",
+        ),
+        "activation must reject an unconsumed attempt and revalidate the affine receipt before clocks",
+    )
+    require_order(
+        "run_non_pending_lifecycle_loop",
+        (
+            "preactivation.initialize_recovered_local_proposal(setup_runner)",
+            "preactivation.activate(height_started_at, local_proposal)",
+            "run_lifecycle_active_height(",
+            "activated,",
+            "active_runner,",
+        ),
+        "the ordinary lifecycle must initialize and consume the affine Proposal owner before live service",
+    )
+    require_sequence(
+        "run_lifecycle_active_height",
         """
 let lock_outcome = lane_work.mark_global_body_locked(locked_round, locked)?;
 if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some() {
@@ -623,37 +939,6 @@ LocalConsensusDuties {
 }
 """,
         "lane-author duty must remain independent of successor-global validator membership while locks and decisions suppress fresh work",
-    )
-    require_sequence(
-        "from_replayed_proposal",
-        """
-replayed.tag == owner.tag
-    && replayed.round.height == replayed.tag.height()
-    && replayed.round.view == replayed.tag.view()
-    && owner.decided_subject.is_none()
-    && owner
-        .locked_body
-        .is_none_or(|(locked_round, locked_subject)| {
-            replayed.round.context_id == locked_round.context_id
-                && replayed.round.height == locked_round.height
-                && replayed.subject == locked_subject
-        })
-""",
-        "runner replay authorization must bind tag, round, context, height, and locked subject",
-    )
-    require_sequence(
-        "replayed_proposal_sign",
-        """
-AdapterEffect::Sign {
-    tag,
-    request: SignRequest::Proposal(proposal),
-} => Some(ReplayedProposalSign {
-    tag: *tag,
-    round: proposal.round,
-    subject: proposal.subject,
-}),
-""",
-        "replayed proposal extraction must preserve its exact tag, round, and subject",
     )
     require_sequence(
         "wal_apply",
@@ -1032,33 +1317,99 @@ assert_eq!(
         "the lane-duty regression must prove that a terminal decision retires fresh lane work",
     )
     require_sequence(
-        "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
+        "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
         """
+let recovered =
+    super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(tag, round, subject);
+assert!(recovered.exactly_matches_directive(unlocked));
+assert_eq!(
+    LocalProposalState::from_recovered_lifecycle_attempt(true, unlocked).attempted,
+    Some(LocalProposalOwner::from(unlocked))
+);
+assert!(
+    LocalProposalState::from_recovered_lifecycle_attempt(false, unlocked)
+        .attempted
+        .is_none()
+);
+let mut setup = ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+assert!(setup.bind_recovered_local_proposal(unlocked));
+assert!(
+    !setup.bind_recovered_local_proposal(unlocked),
+    "a second bind must reject the already-owned runner state"
+);
+assert!(setup.already_attempted(unlocked));
+let exact_lock = directive(Some(subject), None);
+assert!(recovered.exactly_matches_directive(exact_lock));
+
 let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
-assert!(
-    LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
-        .attempted
-        .is_none(),
-    "an equal-tag proposal for another subject cannot reserve the current lock owner"
+assert!(!recovered.exactly_matches_directive(foreign_lock));
+let mismatched_round = super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(
+    tag,
+    wire::ConsensusRound { view: 2, ..round },
+    subject,
 );
-let mismatched_round = ReplayedProposalSign {
-    round: wire::ConsensusRound { view: 2, ..round },
-    ..replayed
-};
-assert!(
-    LocalProposalState::from_replayed_proposal(Some(mismatched_round), unlocked)
-        .attempted
-        .is_none(),
-    "the replayed proposal round must match its reducer tag"
-);
+assert!(!mismatched_round.exactly_matches_directive(unlocked));
+
 let decided = directive(Some(subject), Some(subject));
-assert!(
-    LocalProposalState::from_replayed_proposal(Some(replayed), decided)
-        .attempted
-        .is_none(),
-    "a decision retires every replayed proposal reservation"
-);
+assert!(!recovered.exactly_matches_directive(decided));
 """,
-        "the replay-owner regression must reject foreign subjects, mismatched rounds, and decided lifecycles",
+        "the recovered-attempt regression must prove exact, affine runner binding and reject foreign locks, rounds, and decisions",
+    )
+    require_sequence(
+        "prepared_local_proposal_state_is_affine_and_context_directive_bound",
+        """
+let prepared = ProductionLifecyclePreparedLocalProposalStateV1 {
+    runner,
+    context_id,
+    directive,
+};
+assert!(prepared.exactly_matches(context_id, directive));
+
+let foreign_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+    b"foreign prepared local Proposal lifecycle context",
+)));
+assert!(!prepared.exactly_matches(foreign_context, directive));
+let foreign_directive = super::super::v2::LocalProposalDirective::for_test(
+    crate::sumeragi::v2_core::EventTag::new(1, 4, crate::sumeragi::v2_core::Generation::new(5)),
+    0,
+    None,
+    None,
+    None,
+);
+assert!(!prepared.exactly_matches(context_id, foreign_directive));
+""",
+        "the affine prepared-state regression must reject foreign context and directive receipts",
     )
     return errors
+_LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
+    "on_resume_after_replay": "5110f5c231d638f1b0ec7964f2fab3b91470cfeeae5a59ec320e45a478ca64cd",
+    "durable_proposal_is_active": "dd2dd74ab7257442e5ce7017be1f4579d8716a162960a043763180a0f1016525",
+    "proposal_is_safe_for_durable_lock": "612b97156d1c4a80df60024efa73404adc5df4265464b116be5c8b11b9247619",
+    "safe_to_prepare": "9a6ac51a6cfcd6ffb4a7327372330e5754c5451fbd0a2a2cfb3218a42475c3df",
+    "wal_apply": "ace7adf6ef605c6a1e37fb087522cc91e8bb66b55b62f45a22a44b101571c3f8",
+    "wal_apply_in_place": "7473b0680ec743e30070bc5dcb5ca9d1c7934199852c861fb5e0e9796e7ab709",
+    "local_proposal_directive": "ae8489fea82bd72963f4343745cd838bdc30be67e8f95e0a5e4c1b76a003796e",
+    "local_proposal_directive_for_test": "9bb8bae3eeab780523915b4a196526ae4c45cba8f27336c093bbaa5420ae1709",
+    "recovered_local_proposal_attempt_from_control": "cd9907f75daf6fe867390c45b8a0809da7815906a879535e35eb7b172cf27a82",
+    "recovered_local_proposal_attempt_exactly_matches_directive": "132ea2423d00070c62e41af44ad2c105891427a7b1ba80132f2b9c04edeff66e",
+    "recovered_local_proposal_attempt_for_test": "a1e981b01c6ad83028ffc8f4b5bb6575f0c56058716d54a3239d04c6c93d8f02",
+    "bind_recovered_local_proposal": "890ae2dc854b552ca4ca5b4e81ce08524379c632dc63edddee296e485e4ee228",
+    "from_recovered_lifecycle_attempt": "d9d0aa23a83d8990f4db9abd9f2298b019453c3a4660c9c6c5a9baa69ec45549",
+    "initialize_recovered_local_proposal": "8295ba9249430d0f8f6c3ecc65b11b48873adc3b9f3408c313f1425f2a68ff01",
+    "prepared_local_proposal_exactly_matches": "666d62c1d4104e6f0e07548434bd2d789514d23531e598032b743ed66e2afc5a",
+    "activate_with_prepared_local_proposal": "dbfce16c82f866d3f833f0d04c490851d72ce48fad28e178e16ef059355ddadc",
+    "run_non_pending_lifecycle_loop": "02b808aad6cce3c45d31cb15b837f8509c8ffba9f2a0876c51ad62e63a76d205",
+    "run_lifecycle_active_height": "c61eee6e569f7b9537d1138a28d84fe2f59f4509c9492bfbd45fd7b6f5754f35",
+    "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner": "ad38dabcaf0b4e2464c7aa4ed4d9867949588f617feb74cad713fb78b7cb9510",
+    "prepared_local_proposal_state_is_affine_and_context_directive_bound": "e2e8af92151f3b187cdb8eca6f40bb67a5472060ed6fdc79b5fea0127d02c3b3",
+    "schedule_local_proposal": "187b6563fb36d2108658af92649719c486d1a895748e833eca35372f7318600e",
+    "locked_body_recovery_plan": "9f3f04e35b943a2bc09756833f08a782c050cccdd6c59aa2997eb1e9f0c1cf7b",
+    "local_consensus_duties": "32480f07ba6f9eed6bbdfad70fc53c07e9e6d53c79cf7f0a80ff68ced7621c8e",
+    "locked_body_recovery_is_independent_of_reproposal_gates": "e25524bcbcb9fba0308bdec85d063850b46285a00445ce49cedcca399a0ec0ec",
+    "lane_production_duty_survives_successor_global_roster_removal": "eaa18cc0026251f66f3a77a916d1b84825fe5b6453443eef8b482e544272a9b6",
+    "can_schedule_local_proposal": "d8e65dc370921393e55ef931f3513650c13f0ef60881bef50368c8e8c6aac919",
+    "submit_exact_body": "bd38de84a86fd4769bf7784324b1ff94c875072d2cab99325897d1390962128e",
+    "encode_exact_local_body": "34de57c479e25668c7e77efa06fe00df53d3602157a32fd188984565d6091a22",
+    "submit_encoded_body": "78a7d2e2d5cb1e67cfa502ee54e6d5051b1ed0e7b21b24a451742a88e820a39b",
+    "validate_request": "b341fab7be9687fd5db733999adab1a4c78cb7cdddda66e9b6bf9ca6424e6ce3",
+}

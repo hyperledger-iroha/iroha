@@ -1,10 +1,10 @@
+use crate::stream::{self, WebSocketNorito};
+use iroha_core::kura::Kura;
+use iroha_data_model::block::stream::{BlockMessageSend, BlockSubscriptionRequest};
 use std::{
     num::{NonZeroU64, NonZeroUsize},
     sync::Arc,
 };
-use iroha_core::kura::Kura;
-use iroha_data_model::block::stream::{BlockMessageSend, BlockSubscriptionRequest};
-use crate::stream::{self, WebSocketNorito};
 /// Type of error for `Consumer`
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

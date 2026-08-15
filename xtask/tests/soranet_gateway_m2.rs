@@ -1,4 +1,3 @@
-use std::{fs, path::Path};
 use assert_cmd::cargo::cargo_bin_cmd;
 use blake3::Hasher as Blake3;
 use ed25519_dalek::SigningKey;
@@ -15,6 +14,7 @@ use iroha_data_model::{
 };
 use norito::json::{self, Value};
 use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
+use std::{fs, path::Path};
 use tempfile::tempdir;
 #[test]
 fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {

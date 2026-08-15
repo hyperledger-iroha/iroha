@@ -24,6 +24,7 @@ MANIFEST_PATHS = (
     Path("crates/ivm/src/assets/manifest.json"),
     Path("crates/ivm/src/assets/text_v1/manifest.json"),
     Path("crates/fastpq_isi/src/assets/manifest.json"),
+    Path("crates/iroha_cli/src/soracloud/assets/v1/template_manifest.json"),
     Path("crates/iroha_cli/src/soracloud/templates/v1/static/manifest.json"),
     Path("crates/iroha_torii/src/sorafs/assets/evidence_viewer_v1/manifest.json"),
 )
@@ -31,6 +32,20 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 DECLARATION_HASH_SCOPE = "complete Rust constant declaration including trailing LF"
 LINE_SPAN_HASH_SCOPE = "line-count-pinned Rust extraction span including trailing LF"
+FORMAT_TEMPLATE_HASH_SCOPE = (
+    "line-count-pinned Rust format! template transformed to Soracloud symbolic asset"
+)
+SORACLOUD_FORMAT_FIELDS = {
+    b"package_name": b"__SORACLOUD_PACKAGE_NAME__",
+    b"service_name": b"__SORACLOUD_SERVICE_NAME__",
+    b"service_name:?": b"__SORACLOUD_SERVICE_NAME_DEBUG__",
+    b"app_name": b"__SORACLOUD_APP_NAME__",
+    b"app_name:?": b"__SORACLOUD_APP_NAME_DEBUG__",
+    b"bundle_name": b"__SORACLOUD_BUNDLE_NAME__",
+    b"prelude": b"__SORACLOUD_SHELL_PRELUDE__",
+    b"seiyaku_name": b"__SORACLOUD_SEIYAKU_NAME__",
+    b"dns_host": b"__SORACLOUD_DNS_HOST__",
+}
 CONST_DECLARATION_RE = re.compile(
     r"\bconst\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:"
 )
@@ -50,6 +65,7 @@ MANIFEST_FIELDS = frozenset(
         "format_version",
         "source_commit",
         "source_slice_hash_scope",
+        "asset_inventory_suffix",
         "canonical_ron",
         "assets",
     }
@@ -203,6 +219,44 @@ def rust_raw_string_payload(source_slice: bytes) -> bytes:
     return source_slice[start:end]
 
 
+def soracloud_format_template_payload(source_slice: bytes) -> bytes:
+    """Reproduce the extraction from one historical Rust ``format!`` literal."""
+
+    literal_start = source_slice.find(b'r#"')
+    format_start = source_slice.find(b"format!(")
+    if format_start < 0 or literal_start < 0 or format_start > literal_start:
+        raise AssetError("sealed Rust extraction span has no format! raw string literal")
+    payload = rust_raw_string_payload(source_slice)
+    transformed = bytearray()
+    cursor = 0
+    while cursor < len(payload):
+        if payload.startswith(b"{{", cursor):
+            transformed.append(ord("{"))
+            cursor += 2
+            continue
+        if payload.startswith(b"}}", cursor):
+            transformed.append(ord("}"))
+            cursor += 2
+            continue
+        if payload[cursor] == ord("{"):
+            end = payload.find(b"}", cursor + 1)
+            if end < 0:
+                raise AssetError("Soracloud format template has an unterminated field")
+            field = payload[cursor + 1 : end]
+            placeholder = SORACLOUD_FORMAT_FIELDS.get(field)
+            if placeholder is None:
+                label = field.decode("utf-8", errors="replace")
+                raise AssetError(f"unsupported Soracloud format field: {{{label}}}")
+            transformed.extend(placeholder)
+            cursor = end + 1
+            continue
+        if payload[cursor] == ord("}"):
+            raise AssetError("Soracloud format template has an unmatched closing brace")
+        transformed.append(payload[cursor])
+        cursor += 1
+    return bytes(transformed)
+
+
 def _git_blob(root: Path, commit: str, relative: str) -> bytes:
     try:
         return subprocess.check_output(
@@ -244,6 +298,29 @@ def _include_consumers(crate_root: Path) -> dict[Path, list[IncludeConsumer]]:
                 IncludeConsumer(source, "include_str", None)
             )
     return consumers
+
+
+def _verify_suffix_include_inventory(
+    root: Path,
+    manifest_path: Path,
+    manifest_assets: set[Path],
+    consumers: dict[Path, list[IncludeConsumer]],
+    suffix: str,
+) -> None:
+    """Require every crate include target with ``suffix`` to be manifested."""
+
+    included_assets = {
+        path for path in consumers if path.name.endswith(suffix)
+    }
+    if included_assets != manifest_assets:
+        missing = sorted(
+            path.name for path in manifest_assets.difference(included_assets)
+        )
+        extra = sorted(path.name for path in included_assets.difference(manifest_assets))
+        raise AssetError(
+            f"{manifest_path.relative_to(root)}: compile-time include inventory "
+            f"mismatch for *{suffix}; missing={missing}, extra={extra}"
+        )
 
 
 def _verify_canonical_file(
@@ -296,8 +373,25 @@ def audit_repository(root: Path) -> AuditCounts:
             manifest.get("source_slice_hash_scope"),
             f"{relative_manifest}.source_slice_hash_scope",
         )
-        if scope not in {DECLARATION_HASH_SCOPE, LINE_SPAN_HASH_SCOPE}:
+        if scope not in {
+            DECLARATION_HASH_SCOPE,
+            LINE_SPAN_HASH_SCOPE,
+            FORMAT_TEMPLATE_HASH_SCOPE,
+        }:
             raise AssetError(f"{relative_manifest}: unsupported source hash scope")
+        inventory_suffix = manifest.get("asset_inventory_suffix")
+        if inventory_suffix is not None:
+            inventory_suffix = _string(
+                inventory_suffix, f"{relative_manifest}.asset_inventory_suffix"
+            )
+            if (
+                not inventory_suffix.startswith(".")
+                or inventory_suffix == "."
+                or Path(inventory_suffix).name != inventory_suffix
+            ):
+                raise AssetError(
+                    f"{relative_manifest}.asset_inventory_suffix must be a file suffix"
+                )
         if "canonical_ron" in manifest:
             _verify_canonical_file(
                 root,
@@ -326,6 +420,10 @@ def audit_repository(root: Path) -> AuditCounts:
                 raise AssetError(f"{context}.path must name a sibling asset file")
             if asset.name in {"manifest.json", "README.md"}:
                 raise AssetError(f"{context}.path names manifest metadata, not an asset")
+            if inventory_suffix is not None and not asset.name.endswith(inventory_suffix):
+                raise AssetError(
+                    f"{context}.path must end with inventory suffix {inventory_suffix}"
+                )
             if asset in assets_seen or asset in manifest_assets:
                 raise AssetError(f"duplicate asset path: {asset.relative_to(root)}")
             if not asset.is_file() or asset.is_symlink():
@@ -431,9 +529,18 @@ def audit_repository(root: Path) -> AuditCounts:
                         historical, start_line, physical_lines
                     )
                     source_label = f":{start_line}+{physical_lines}"
-                    if rust_raw_string_payload(source_slice) != data:
+                    if scope == FORMAT_TEMPLATE_HASH_SCOPE:
+                        expected_asset = soracloud_format_template_payload(source_slice)
+                    else:
+                        expected_asset = rust_raw_string_payload(source_slice)
+                    if expected_asset != data:
+                        transformation = (
+                            " transformed format template"
+                            if scope == FORMAT_TEMPLATE_HASH_SCOPE
+                            else " raw string"
+                        )
                         raise AssetError(
-                            f"historical {relative_source}{source_label} raw string "
+                            f"historical {relative_source}{source_label}{transformation} "
                             f"does not equal {asset.relative_to(root)}"
                         )
                 observed_preimage_sha = _sha256(source_slice)
@@ -448,9 +555,20 @@ def audit_repository(root: Path) -> AuditCounts:
             assets_seen.add(asset)
             total_bytes += len(data)
 
+        if inventory_suffix is not None:
+            _verify_suffix_include_inventory(
+                root,
+                manifest_path,
+                manifest_assets,
+                consumers,
+                inventory_suffix,
+            )
+
         actual_assets: set[Path] = set()
         for path in manifest_path.parent.iterdir():
             if path.name in {"manifest.json", "README.md"}:
+                continue
+            if inventory_suffix is not None and not path.name.endswith(inventory_suffix):
                 continue
             if path.is_dir() and not path.is_symlink():
                 continue

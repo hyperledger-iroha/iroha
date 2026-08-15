@@ -7,14 +7,14 @@
 //!
 //! Traits in this module mainly exist to bridge the gap between IR and C type equivalents. User should
 //! only implement these traits if none of the predefined IR types provide an adequate mapping.
-use core::{mem::ManuallyDrop, ptr::addr_of_mut};
-use std::{boxed::Box, vec::Vec};
 use crate::{
     Extern, FfiConvert, FfiOutPtr, FfiOutPtrRead, FfiOutPtrWrite, FfiReturn, FfiType,
     FfiWrapperType, LocalRef, LocalSlice, ReprC, Result, WrapperTypeOf,
     ir::{External, Ir, Opaque, Robust, Transmute, Transparent},
     slice::{LinearSlice, OutBoxedSlice, OwnedLinearSlice, RefMutSlice, RefSlice},
 };
+use core::{mem::ManuallyDrop, ptr::addr_of_mut};
+use std::{boxed::Box, vec::Vec};
 /// A type that can be converted into a C type.
 ///
 /// If a type also implements [`Ir`], i.e. has a defined internal representation, a blanket

@@ -1,4 +1,10 @@
 //! Types for custom instructions
+use derive_more::{Constructor, From};
+use iroha_data_model::{
+    isi::{CustomInstruction, InstructionBox},
+    prelude::{Json, *},
+};
+use iroha_schema::IntoSchema;
 #[allow(unused_imports)]
 use std::eprintln;
 use std::{
@@ -7,12 +13,6 @@ use std::{
     string::{String, ToString},
     vec::Vec,
 };
-use derive_more::{Constructor, From};
-use iroha_data_model::{
-    isi::{CustomInstruction, InstructionBox},
-    prelude::{Json, *},
-};
-use iroha_schema::IntoSchema;
 macro_rules! impl_custom_instruction {
     ($box:ty, $($instruction:ty)|+) => {
         impl From<$box> for CustomInstruction {
@@ -45,16 +45,16 @@ macro_rules! impl_custom_instruction {
 }
 /// Types for multisig instructions
 pub mod multisig {
-    use core::num::{NonZeroU16, NonZeroU64};
-    #[allow(unused_imports)]
-    use std::eprintln;
-    use std::{borrow::ToOwned, collections::BTreeSet};
-    use iroha_crypto::{HashOf, KeyPair};
-    use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
     use super::*;
     use crate::json_macros::{
         JsonDeserialize as DeriveJsonDeserialize, JsonSerialize as DeriveJsonSerialize,
     };
+    use core::num::{NonZeroU16, NonZeroU64};
+    use iroha_crypto::{HashOf, KeyPair};
+    use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
+    #[allow(unused_imports)]
+    use std::eprintln;
+    use std::{borrow::ToOwned, collections::BTreeSet};
     /// Multisig-related instructions
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, From)]
     pub enum MultisigInstructionBox {
@@ -702,12 +702,12 @@ pub mod multisig {
     }
     #[cfg(test)]
     mod tests {
+        use super::*;
+        use iroha_crypto::{Algorithm, KeyPair};
         use std::{
             collections::BTreeMap,
             num::{NonZeroU16, NonZeroU64},
         };
-        use iroha_crypto::{Algorithm, KeyPair};
-        use super::*;
         fn fixture_key_pair(seed: u8) -> KeyPair {
             assert_ne!(seed, 0, "multisig fixture seeds must be nonzero");
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

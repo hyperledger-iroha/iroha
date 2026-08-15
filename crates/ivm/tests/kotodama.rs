@@ -1,5 +1,4 @@
 //! Tests for Kotodama parsing, semantics, and compilation.
-use std::convert::TryInto;
 use iroha_crypto as _;
 use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
@@ -17,6 +16,7 @@ use ivm::{
     },
     syscalls,
 };
+use std::convert::TryInto;
 mod common;
 fn parse_meta_offset(code: &[u8]) -> Result<(ProgramMetadata, usize), ivm::VMError> {
     ProgramMetadata::parse(code).map(|parsed| (parsed.metadata, parsed.code_offset))
@@ -2238,8 +2238,8 @@ fn parse_control_flow() {
 }
 #[test]
 fn parse_amm_dex() {
-    use std::path::Path;
     use ivm::kotodama::ir::{Instr, WideNumericKind};
+    use std::path::Path;
     let path = Path::new("tests/data/amm.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
@@ -2274,8 +2274,8 @@ fn parse_amm_dex() {
 }
 #[test]
 fn parse_dai_clone() {
-    use std::path::Path;
     use ivm::kotodama::ir::{Instr, WideNumericKind};
+    use std::path::Path;
     let path = Path::new("tests/data/dai.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
@@ -2455,8 +2455,8 @@ fn parse_register_asset_rejects_bare_name_literal() {
 }
 #[test]
 fn parse_mfc_example() {
-    use std::path::Path;
     use ivm::kotodama::ir::{Instr, Terminator};
+    use std::path::Path;
     let path = Path::new("tests/data/mfc.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");

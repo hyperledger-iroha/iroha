@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Asset query regression scenarios.
-use std::{thread, time::Duration};
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -9,6 +8,7 @@ use iroha::{
 };
 use iroha_test_network::submit_ensure_domain_for_network;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::{thread, time::Duration};
 const UNREGISTER_ATTEMPTS: usize = 30;
 const UNREGISTER_DELAY: Duration = Duration::from_millis(250);
 #[test]

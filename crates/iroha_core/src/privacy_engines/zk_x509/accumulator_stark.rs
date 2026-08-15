@@ -7,12 +7,9 @@
 //! to the leaf SHA input and strict-DER output consumer. Two SHA factors are
 //! advanced per hash row, keeping the maximum committed-column degree at three.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use rand::TryCryptoRng;
-#[cfg(test)]
-use rand::rngs::OsRng;
-use thiserror::Error;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::accumulator_air::{ZK_X509_CA_ACCUMULATOR_NONPADDING_ROWS_V1, ZkX509CaAccumulatorTraceV1};
+use super::accumulator_air::{
+    ZK_X509_CA_ACCUMULATOR_NONPADDING_ROWS_V1, ZkX509CaAccumulatorTraceV1,
+};
 use super::{
     accumulator_air::{
         CA_CURRENT_START, CA_DIGEST_BYTE_BITS_START, CA_DIGEST_START, CA_DIRECTION,
@@ -66,6 +63,11 @@ use crate::privacy_engines::{
         verify_grinding_nonce_v1,
     },
 };
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use rand::TryCryptoRng;
+#[cfg(test)]
+use rand::rngs::OsRng;
+use thiserror::Error;
 /// Native trace logarithm for 104 non-padding rows.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1: u8 = 7;
 /// SHA call products plus serialized SHA-source and RFC-output products.
@@ -3221,8 +3223,6 @@ pub(crate) fn ca_accumulator_proof_binding_digest_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
-    use rand::{SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
     use super::*;
     use crate::privacy_engines::zk_x509::{
         accumulator_air::{
@@ -3235,6 +3235,8 @@ mod tests {
         },
         sha_call_bus_stark::{ZkX509ShaCallBusLaneChallengesV1, ZkX509ShaCallPublicShapeV1},
     };
+    use rand::{SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
+    use std::sync::OnceLock;
     fn spki(index: u16) -> [u8; ZK_X509_CA_SPKI_DER_BYTES_V1] {
         let mut spki = [0x42; ZK_X509_CA_SPKI_DER_BYTES_V1];
         spki[..2].copy_from_slice(&index.to_be_bytes());

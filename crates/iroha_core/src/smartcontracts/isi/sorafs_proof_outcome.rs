@@ -1,6 +1,10 @@
 //! Finalized chain-authoritative SoraFS PDP and PoTR outcome handlers.
+use super::*;
+use crate::{
+    smartcontracts::ValidSingularQuery,
+    state::{StateTransaction, WorldReadOnly},
+};
 use core::convert::TryFrom;
-use std::{str::FromStr, sync::OnceLock};
 use iroha_crypto::{Algorithm, PublicKey, ed25519_parse_signature};
 use iroha_data_model::{
     account::AccountId,
@@ -42,11 +46,7 @@ use sorafs_manifest::{
     PDP_PROOF_SIGNATURE_DOMAIN_V1, PdpGovernanceArchiveV1, PdpProofV1, PdpRejectionReasonV1,
     PdpTerminalDecisionV1, PotrReceiptV1, PotrStatus,
 };
-use super::*;
-use crate::{
-    smartcontracts::ValidSingularQuery,
-    state::{StateTransaction, WorldReadOnly},
-};
+use std::{str::FromStr, sync::OnceLock};
 const POLICY_STATE_KEY_PREFIX: &str = "sorafs_proof_outcome_policy_v1_";
 const OUTCOME_STATE_KEY_PREFIX: &str = "sorafs_proof_outcome_v1_";
 const EVENT_STATE_KEY_PREFIX: &str = "sorafs_proof_outcome_event_v1_";
@@ -1689,6 +1689,12 @@ impl ValidSingularQuery for FindSorafsProofOutcomeEvents {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
         IntoKeyValue, Registrable,
@@ -1706,12 +1712,6 @@ mod tests {
         PdpHotLeafProofV1, PdpProofLeafV1, PdpProofV1, PdpRejectionReasonV1, PdpSampleV1,
         PdpTerminalDecisionV1, PotrReceiptV1, PotrStatus, ProfileId, ProofStreamTier,
         sign_potr_receipt_v1,
-    };
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
     };
     const NOW: u64 = 10_000;
     const PROVIDER_BYTES: [u8; 32] = [0x31; 32];

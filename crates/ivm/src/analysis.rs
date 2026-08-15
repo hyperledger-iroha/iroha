@@ -21,20 +21,20 @@
 //! }
 //! # }
 //! ```
-use core::convert::TryFrom as _;
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    error::Error,
-    fmt,
-    num::NonZeroUsize,
-};
-use iroha_data_model::{name::Name, state_path::StatePath};
 use crate::{
     VMError, encoding,
     instruction::wide,
     ivm_cache::{DecodedOp, IvmCache},
     metadata::ProgramMetadata,
     prepared::PreparedContract,
+};
+use core::convert::TryFrom as _;
+use iroha_data_model::{name::Name, state_path::StatePath};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    error::Error,
+    fmt,
+    num::NonZeroUsize,
 };
 /// Bytecode-proven durable-state accesses for one deployable contract scope.
 ///

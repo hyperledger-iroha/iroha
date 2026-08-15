@@ -4,16 +4,16 @@
 //! module applies the same rule to payload chunks and certified body fetches:
 //! structural wire validation, transport identity binding, and cryptographic
 //! authentication all complete before an adapter may act on the payload.
+use super::v2::{SumeragiV2Adapter, VerifiedHeightContext, verify_historical_quorum_certificate};
 use core::fmt;
-use std::collections::{BTreeMap, btree_map::Entry};
-#[cfg(test)]
-use std::collections::BTreeSet;
 use iroha_crypto::{HashOf, Signature};
 use iroha_data_model::{
     block::{consensus_v2 as wire, decode_framed_signed_block},
     peer::PeerId,
 };
-use super::v2::{SumeragiV2Adapter, VerifiedHeightContext, verify_historical_quorum_certificate};
+#[cfg(test)]
+use std::collections::BTreeSet;
+use std::collections::{BTreeMap, btree_map::Entry};
 /// Kind of signed transport payload rejected during authentication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TransportSignatureKind {
@@ -1115,13 +1115,13 @@ fn verify_signature(
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use super::*;
+    use crate::sumeragi::{v2_body_store::V2BodyStore, v2_chunks::encode_payload};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::NetworkId;
     use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
+    use std::num::NonZeroU64;
     use tempfile::TempDir;
-    use crate::sumeragi::{v2_body_store::V2BodyStore, v2_chunks::encode_payload};
-    use super::*;
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),

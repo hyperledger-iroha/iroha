@@ -331,6 +331,7 @@ def test_repository_verus_evidence_binds_the_sidecar_admission_corridor() -> Non
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
         "crates/iroha_p2p/src/network.rs",
         "crates/iroha_p2p/src/peer.rs",

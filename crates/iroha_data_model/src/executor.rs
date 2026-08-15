@@ -1,8 +1,4 @@
 //! Structures, traits and impls related to *runtime* `Executor`s.
-use std::{collections::BTreeSet, format, string::String, vec::Vec};
-use iroha_data_model_derive::model;
-use iroha_primitives::json::Json;
-use iroha_schema::Ident;
 #[cfg(any(feature = "transparent_api", feature = "ffi_import"))]
 pub use self::model::*;
 #[cfg(not(any(feature = "transparent_api", feature = "ffi_import")))]
@@ -14,16 +10,20 @@ pub use self::model::{
     VectorLengthTooLargeInfo,
 };
 use crate::transaction::executable::IvmBytecode;
+use iroha_data_model_derive::model;
+use iroha_primitives::json::Json;
+use iroha_schema::Ident;
+use std::{collections::BTreeSet, format, string::String, vec::Vec};
 #[model]
 mod model {
+    use super::*;
+    use crate::{isi, nexus::AxtRejectContext, parameter::CustomParameters, query};
     use derive_more::Constructor;
     use getset::Getters;
     use iroha_crypto::Hash;
     use iroha_macro::FromVariant;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-    use super::*;
-    use crate::{isi, nexus::AxtRejectContext, parameter::CustomParameters, query};
     /// executor that checks if an operation satisfies some conditions.
     #[derive(
         Debug,
@@ -436,12 +436,12 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn executor_data_model_json_has_closed_output_bound() {
-        use core::str::FromStr as _;
-        use std::collections::{BTreeMap, BTreeSet};
         use crate::{
             name::Name,
             parameter::{CustomParameter, CustomParameterId},
         };
+        use core::str::FromStr as _;
+        use std::collections::{BTreeMap, BTreeSet};
         let id = CustomParameterId::new(Name::from_str("bounded").expect("valid name"));
         let parameter = CustomParameter::new(id.clone(), Json::new(vec![1_u64, 2, 3]));
         let data_model = ExecutorDataModel::new(

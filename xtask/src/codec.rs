@@ -1,9 +1,4 @@
-use std::{
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
+use crate::workspace_root;
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf};
 use norito::{
     core::to_bytes,
@@ -17,8 +12,13 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use time::OffsetDateTime;
-use crate::workspace_root;
 const DEFAULT_OUTPUT_SUBDIR: &str = "artifacts/nsc";
 const DEFAULT_OUTPUT_BASENAME: &str = "rans_tables";
 const DEFAULT_PRECISION_BITS: u8 = 12;
@@ -804,9 +804,9 @@ fn default_output_base() -> PathBuf {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{fs, io::Write};
     use tempfile::{NamedTempFile, TempDir};
-    use super::*;
     fn sample_payload(seed: u64) -> RansTablesV1 {
         let body = generate_body(seed, MAX_BUNDLE_WIDTH).expect("generate deterministic body");
         let checksum = compute_checksum(&body).expect("compute checksum");

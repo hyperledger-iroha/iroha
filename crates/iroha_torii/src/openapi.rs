@@ -4,12 +4,12 @@
 //! artifact. Torii parses it once with Norito JSON, then removes only operations
 //! disabled by the compiled route catalog. This keeps every feature profile
 //! aligned with the mounted router without compiling a second schema builder.
-use std::{collections::BTreeSet, sync::LazyLock};
 use iroha_torii_shared::route_catalog::{
     CATALOGED_ROUTES, CatalogProjection, EnabledFeatures, HttpMethod as CatalogHttpMethod,
     RouteCatalog,
 };
 use norito::json::{Map, Value};
+use std::{collections::BTreeSet, sync::LazyLock};
 /// OpenAPI operation extension consumed by the MCP policy bridge.
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
 /// Package-local, release-provenance-bound mirror of `artifacts/openapi/torii.json`.
@@ -121,7 +121,8 @@ pub fn generate_spec() -> Value {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeSet, VecDeque};
+    use super::*;
+    use crate::utils;
     use iroha_torii_shared::{
         route_catalog::{ApiSurface, musubi as musubi_routes},
         sorafs_hedging_billing_api::{
@@ -136,8 +137,7 @@ mod tests {
         uri,
     };
     use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
-    use super::*;
-    use crate::utils;
+    use std::collections::{BTreeSet, VecDeque};
     const SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION: &str = "x-iroha-soracloud-hf-deploy-contract";
     const SORACLOUD_HF_DEPLOY_CONTRACT_V1: &str = "cap-bound-local-signing-v1";
     const GOVERNANCE_HASH_LITERAL_PATTERN: &str =

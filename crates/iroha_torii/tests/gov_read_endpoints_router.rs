@@ -2,7 +2,6 @@
 //! Router-level test for governance read endpoint wiring (`/v1/gov/proposals/{id}`).
 #![allow(clippy::similar_names)]
 #![cfg(feature = "app_api")]
-use std::sync::Arc;
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -13,6 +12,7 @@ use iroha_core::{
 use iroha_data_model::governance::types::{
     AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
 };
+use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
 fn checked_router_proposer_fixture() -> iroha_data_model::account::AccountId {
     iroha_data_model::account::AccountId::of(

@@ -1,6 +1,6 @@
 //! Exact conformance guard for the generated Musubi V1 instruction fixture.
-use norito::json::{self, Value};
 use super::musubi_fixture_values;
+use norito::json::{self, Value};
 const FIXTURE: &str = include_str!("../../../fixtures/musubi/instructions_v1.json");
 #[test]
 fn shared_musubi_instruction_fixture_matches_its_typed_owner() {

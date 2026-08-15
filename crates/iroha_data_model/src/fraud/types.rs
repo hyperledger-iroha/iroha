@@ -3,11 +3,11 @@
 //! These structs provide a deterministic interface between the ledger and
 //! out-of-process risk engines. They are minimal yet feature-complete enough
 //! to cover synchronous scoring, signed assessments, and governance exports.
-use std::{string::String, vec::Vec};
-use norito::codec::{Decode, Encode};
 #[cfg(feature = "governance")]
 use crate::governance::types::{GovernanceEnactment, GovernanceParameters};
 use crate::{account::AccountId, asset::AssetId};
+use norito::codec::{Decode, Encode};
+use std::{string::String, vec::Vec};
 /// Operation that triggered a fraud screening request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum RiskOperation {
@@ -159,13 +159,13 @@ pub struct DecisionAggregate {
 }
 #[cfg(all(test, feature = "governance"))]
 mod tests {
-    use iroha_crypto::KeyPair;
     use super::*;
     use crate::{
         asset::id::AssetDefinitionId,
         domain::DomainId,
         governance::types::{AtWindow, ProposalId},
     };
+    use iroha_crypto::KeyPair;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked fraud fixture keypair")
     }

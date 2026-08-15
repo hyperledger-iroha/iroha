@@ -3,6 +3,10 @@
 //! This pure reducer is the staged replacement for the distributed
 //! Serve/witness/latch scheduling state.
 use std::collections::{BTreeMap, BTreeSet};
+
+#[cfg(test)]
+use super::{v2, v2_runner};
+
 #[path = "v2_lifecycle_authority.rs"]
 mod authority;
 #[path = "v2_lifecycle_coordinator_support.rs"]
@@ -56,8 +60,8 @@ mod settlement;
 #[cfg_attr(not(test), allow(dead_code))]
 mod wal_recovery;
 /// Process-local concrete work remains outside the logical scheduler state.
-// TODO: Wire this registry only in the atomic production switch which also
-// removes the legacy runtime scheduler and ordinal allocator.
+// The lifecycle-owned non-Pending runner retains this registry beside the
+// serialized runtime and services for the complete height.
 #[path = "v2_lifecycle_work_registry.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod work_registry;
@@ -77,16 +81,19 @@ pub(in crate::sumeragi) use launch::ProductionPreparedCertifiedServeTestSettleme
 #[allow(unused_imports)]
 pub(in crate::sumeragi) use launch::{
     ActivatedProductionLifecycleV1, FinalizedProductionLifecycleRolloverV1,
-    LaunchedProductionLifecycleV1, ProductionLifecycleActivationErrorV1,
-    ProductionLifecycleCleanupReadyV1, ProductionLifecycleCompletionSelectionV1,
-    ProductionLifecycleCompletionTurnV1, ProductionLifecycleFinalizationErrorV1,
-    ProductionLifecycleFinalizationOutcomeV1, ProductionLifecycleIngressSelectionV1,
-    ProductionLifecycleIngressTurnV1, ProductionLifecycleLaunchErrorV1,
-    ProductionLifecycleLaunchInputsV1, ProductionLifecycleOutputRolloverPermitV1,
+    LaunchedProductionLifecycleV1, PendingKuraActivatedProductionLifecycleV1,
+    PendingKuraProductionLifecycleV1, PreparedPendingKuraLaneRecoveryV1,
+    ProductionLifecycleActivationErrorV1, ProductionLifecycleCleanupReadyV1,
+    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
+    ProductionLifecycleFinalizationErrorV1, ProductionLifecycleFinalizationOutcomeV1,
+    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
+    ProductionLifecycleLaunchErrorV1, ProductionLifecycleLaunchInputsV1,
+    ProductionLifecycleLiveClockActivationPermitV1, ProductionLifecycleOutputRolloverPermitV1,
     ProductionLifecyclePostOutputHandoffV1, ProductionLifecyclePreActivationErrorV1,
     ProductionLifecyclePreparedLocalProposalStateV1,
-    ProductionLifecycleServeRetirementAuthenticationPermitV1,
-    ProductionPendingKuraApplyInstallErrorV1, ProductionPreparedOrdinaryIngressTurnV1,
+    ProductionLifecycleServeRetirementAuthenticationPermitV1, ProductionLifecycleShutdownErrorV1,
+    ProductionPendingKuraApplyInstallErrorV1, ProductionPendingKuraApplyRecoveryErrorV1,
+    ProductionPendingKuraApplyRecoveryProgressV1, ProductionPreparedOrdinaryIngressTurnV1,
     ProductionRecoveredDecisionApplyCompletionErrorV1,
     ProductionRecoveredDecisionApplyCompletionV1, ProductionRecoveredDecisionApplyRetryV1,
     ProductionRecoveredDecisionFetchStoreSettlementFailureV1,
@@ -105,8 +112,10 @@ pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
 pub(crate) use ledger::WalVoteLedgerRepairTestSummary;
 pub(in crate::sumeragi) use ledger::{
     AuthenticatedCompleteTipPredecessorStorageV1, CompleteTipPredecessorStorageErrorV1,
+    LaunchedRecoveredCompleteTipSuccessorLifecycleV1, LifecycleLedgerV1,
     RetiredRecoveredCompleteTipActivationAuthorityV1, open_complete_tip_predecessor_storage,
 };
+use replay_authority::recovered_decision_body_continuation_is_exact;
 #[cfg(all(test, feature = "bls"))]
 /// Run the two release-bound CompleteTip disk-retirement regressions.
 pub(crate) fn run_complete_tip_retirement_release_regressions() {
@@ -126,6 +135,16 @@ pub(crate) fn complete_tip_restart_activation_fixture() -> (
     RetiredRecoveredCompleteTipActivationAuthorityV1,
 ) {
     ledger::tests::durable_ready_fetch_recovery::complete_tip_restart_activation_fixture()
+}
+#[cfg(all(test, feature = "bls"))]
+/// Build the exact retired H/H+1 inputs for lifecycle clean-shutdown tests.
+pub(crate) fn complete_tip_lifecycle_shutdown_fixture() -> (
+    std::sync::Arc<crate::kura::Kura>,
+    super::v2::VerifiedHeightContext,
+    iroha_crypto::KeyPair,
+    RetiredRecoveredCompleteTipActivationAuthorityV1,
+) {
+    ledger::tests::durable_ready_fetch_recovery::complete_tip_lifecycle_shutdown_fixture()
 }
 #[cfg(test)]
 pub(in crate::sumeragi) use ledger::LifecycleLedgerStoreV1;
@@ -416,9 +435,9 @@ impl LifecycleCoordinator {
     }
     /// Project and admit one exact runtime-bound production adapter effect.
     ///
-    /// This is the sealed production boundary for the forthcoming wiring
-    /// tranche; merely defining it does not route executor traffic through the
-    /// coordinator yet.
+    /// The live lifecycle runner uses its specialized typed owner paths; this
+    /// generic projection remains a closed compatibility seam for exact
+    /// runtime-effect admission checks.
     #[cfg_attr(not(test), allow(dead_code))]
     fn admit_bound_adapter_effect(
         &mut self,
@@ -433,9 +452,9 @@ impl LifecycleCoordinator {
     }
     /// Project and admit one sealed ordinal-free adapter-effect binding.
     ///
-    /// This method is intentionally inert until the executor owns the matching
-    /// concrete-work registry; exposing it now lets the production cutover
-    /// remove the legacy runtime ordinal before changing scheduler ownership.
+    /// The lifecycle stack already owns the matching concrete-work registry;
+    /// this ordinal-free form remains the internal projection used by the
+    /// generic compatibility seam above.
     #[cfg_attr(not(test), allow(dead_code))]
     fn admit_pending_adapter_effect(
         &mut self,
@@ -449,8 +468,8 @@ impl LifecycleCoordinator {
     }
     /// Project and atomically admit one post-fsync authenticated Certified-Serve request.
     ///
-    /// Runner wiring is intentionally deferred; this sealed boundary is the
-    /// only constructor path for the adjacent Serve/ProducerTurn pair.
+    /// Tests use this direct seam; production Serve admission reaches the same
+    /// adjacent Serve/ProducerTurn constructor through the sealed owner path.
     #[cfg(test)]
     pub(super) fn admit_certified_serve(
         &mut self,
@@ -1336,14 +1355,25 @@ impl LifecycleCoordinator {
             metadata.reconstruction_source != record.owner.causal_root().digest()
                 || !continuation_successors.insert(successor)
                 || rebuilt.records.get(&successor).is_none_or(|child| {
-                    child.owner != record.owner
-                        || rebuilt.durable_records[&successor].reconstruction_source
-                            != metadata.reconstruction_source
-                        || !durable_continuation_payload_is_exact(
+                    let child_metadata = &rebuilt.durable_records[&successor];
+                    let payload_and_replay_are_exact =
+                        recovered_decision_body_continuation_is_exact(
                             edge,
+                            &metadata.replay_authority,
                             metadata.payload,
-                            rebuilt.durable_records[&successor].payload,
+                            &child_metadata.replay_authority,
+                            child_metadata.payload,
                         )
+                        .unwrap_or_else(|| {
+                            durable_continuation_payload_is_exact(
+                                edge,
+                                metadata.payload,
+                                child_metadata.payload,
+                            )
+                        });
+                    child.owner != record.owner
+                        || child_metadata.reconstruction_source != metadata.reconstruction_source
+                        || !payload_and_replay_are_exact
                         || !durable_continuation_successor_is_exact(
                             edge,
                             record.work_class,
@@ -1976,6 +2006,24 @@ mod tests {
         assert_eq!(
             scheduler
                 .matches("SchedulerReadyInputs::from_authenticated(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            scheduler
+                .matches("SchedulerReadyInputs::from_authenticated_waiting_fetch(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            schema
+                .matches("pub(super) fn from_authenticated_waiting_fetch(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            selector
+                .matches("pub(super) fn matches_waiting_record(")
                 .count(),
             1
         );

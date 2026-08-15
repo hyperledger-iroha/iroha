@@ -26,16 +26,7 @@
 //! Filesystem-backed journal and staged-CAR access is qualified on Unix. Other
 //! targets fail closed with the platform's unsupported error before inspecting
 //! or creating the selected state path.
-use std::{
-    collections::BTreeMap,
-    error::Error,
-    fmt, fs,
-    fs::{File, OpenOptions},
-    io::{self, Read},
-    num::{NonZeroU32, NonZeroU64},
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use crate::atomic_io::{AtomicWriteError, AtomicWriteRoot};
 use iroha::musubi_runtime::{
     MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1, MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,
     MusubiSeedIngressCarPlanV1,
@@ -76,11 +67,20 @@ use norito::{
     codec::{Decode, Encode},
 };
 use sorafs_car::{CarBuildPlan, CarVerifier, ChunkStore};
-use crate::atomic_io::{AtomicWriteError, AtomicWriteRoot};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt as _;
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fmt, fs,
+    fs::{File, OpenOptions},
+    io::{self, Read},
+    num::{NonZeroU32, NonZeroU64},
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 const JOURNAL_SCHEMA: &str = "musubi-publication-journal";
 const JOURNAL_VERSION: u8 = 1;
 const JOURNAL_DIRECTORY: &str = "publication-v1";
@@ -4631,14 +4631,14 @@ mod tests {
 }
 #[cfg(all(test, not(unix)))]
 mod unsupported_platform_tests {
-    use iroha_data_model::{
-        musubi::{MusubiArchiveCommitmentV1, MusubiContentDigestV1},
-        sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
-    };
-    use crate::atomic_io::AtomicWriteErrorCode;
     use super::{
         PublicationCarSource, PublicationError, PublicationJournalStore, PublicationOperationIdV1,
         PublicationStagedCarSourceV1,
+    };
+    use crate::atomic_io::AtomicWriteErrorCode;
+    use iroha_data_model::{
+        musubi::{MusubiArchiveCommitmentV1, MusubiContentDigestV1},
+        sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     };
     fn minimal_valid_commitment() -> MusubiArchiveCommitmentV1 {
         let descriptor = sorafs_car::chunker_registry::default_descriptor();

@@ -1,15 +1,7 @@
 //! Snapshot query execution helpers with telemetry instrumentation.
 //!
-//! This module centralises snapshot-lane execution so that server-facing
-//! callers (Torii, pipeline harnesses, etc.) can reuse the same validation,
-//! metrics, and policy enforcement.
-use std::sync::Arc;
-#[cfg(feature = "telemetry")]
-use std::time::Instant;
-use iroha_data_model::{
-    prelude::*,
-    query::{QueryRequest, QueryResponse},
-};
+//! This module centralises snapshot-lane execution so that server-facing callers (Torii, pipeline
+//! harnesses, etc.) can reuse the same validation, metrics, and policy enforcement.
 use crate::{
     query::store::LiveQueryStoreHandle,
     smartcontracts::isi::query::{
@@ -19,6 +11,13 @@ use crate::{
     },
     state::{State, StateReadOnly},
 };
+use iroha_data_model::{
+    prelude::*,
+    query::{QueryRequest, QueryResponse},
+};
+use std::sync::Arc;
+#[cfg(feature = "telemetry")]
+use std::time::Instant;
 /// Error type for snapshot query lane execution.
 #[derive(Debug)]
 pub enum SnapshotQueryError {
@@ -95,9 +94,8 @@ fn revalidate_stored_continuation(
 /// Execute a query against a point-in-time snapshot of the state with the provided cursor mode
 /// and query limits.
 ///
-/// Captures a lightweight query snapshot, validates the query, and executes it.
-/// Stored cursor mode persists iterators inside the [`LiveQueryStore`] so
-/// subsequent `Continue` requests can resume.
+/// Captures a lightweight query snapshot, validates the query, and executes it. Stored cursor mode
+/// persists iterators inside the [`LiveQueryStore`] so subsequent `Continue` requests can resume.
 ///
 /// # Errors
 /// Returns a validation error if the request is rejected by the executor, or an execution
@@ -161,11 +159,10 @@ pub fn run_on_snapshot_with_mode(
 }
 /// Execute a query from an owning state handle.
 ///
-/// Stored cursors retain continuation data derived from the initial query view;
-/// they never reopen current state to fetch later pages. This gives both the
-/// borrowed and Arc-backed Torii paths the same snapshot-consistent result
-/// semantics. Current authorization policy is still revalidated separately on
-/// every continuation.
+/// Stored cursors retain continuation data derived from the initial query view; they never reopen
+/// current state to fetch later pages. This gives both the borrowed and Arc-backed Torii paths the
+/// same snapshot-consistent result semantics. Current authorization policy is still revalidated
+/// separately on every continuation.
 ///
 /// # Errors
 /// Returns a validation error if the request is rejected by the executor, or an execution
@@ -193,9 +190,8 @@ pub fn run_on_snapshot_with_mode_arc(
 /// Execute an Arc-backed snapshot query while carrying the validated client
 /// budget for a stored `Start` request into query projection.
 ///
-/// Unlike [`run_on_snapshot_with_mode_arc`], this entry point treats a missing
-/// budget as client input and rejects it when the configured stored-query
-/// minimum is non-zero.
+/// Unlike [`run_on_snapshot_with_mode_arc`], this entry point treats a missing budget as client
+/// input and rejects it when the configured stored-query minimum is non-zero.
 ///
 /// # Errors
 /// Returns a validation error when the supplied budget is below the configured
@@ -251,20 +247,17 @@ pub fn run_on_snapshot_ephemeral_with_budget_arc(
         Some(budget),
     )
 }
-/// Execute one ordinary Torii query under a server-owned weighted memory
-/// reservation.
+/// Execute one ordinary Torii query under a server-owned weighted memory reservation.
 ///
-/// A stored Start reservation contains execution/response headroom `P` plus a
-/// cursor-retention charge `R`. Cursor insertion atomically splits `R` into the
-/// live-query store. A Continue reservation contains only fresh headroom `P`;
-/// the store validates and retains the pre-existing `R` before this function
-/// mutates the cursor. No store guard crosses an asynchronous capacity wait:
-/// Torii obtains this reservation before entering the blocking worker.
+/// A stored Start reservation contains execution/response headroom `P` plus a cursor-retention
+/// charge `R`. Cursor insertion atomically splits `R` into the live-query store. A Continue
+/// reservation contains only fresh headroom `P`; the store validates and retains the pre-existing
+/// `R` before this function mutates the cursor. No store guard crosses an asynchronous capacity
+/// wait: Torii obtains this reservation before entering the blocking worker.
 ///
 /// # Errors
-/// Returns a validation error for cursor-mode misuse, or an execution error
-/// when admission, query execution, cursor retention, or response preflight
-/// exceeds the server-owned limits.
+/// Returns a validation error for cursor-mode misuse, or an execution error when admission, query
+/// execution, cursor retention, or response preflight exceeds the server-owned limits.
 #[allow(clippy::too_many_arguments)]
 pub fn run_on_snapshot_with_server_owned_memory_arc(
     state: &Arc<State>,
@@ -462,21 +455,6 @@ pub fn run_on_snapshot(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    };
-    use iroha_data_model::{
-        permission::Permission,
-        query::{
-            dsl::SelectorTuple,
-            parameters::{FetchSize, Pagination, QueryParams, Sorting},
-        },
-    };
-    use iroha_primitives::json::Json;
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use mv::storage::StorageReadOnly;
-    use nonzero_ext::nonzero;
     use super::*;
     use crate::{
         kura::Kura,
@@ -489,6 +467,21 @@ mod tests {
             },
         },
         state::{State, World},
+    };
+    use iroha_data_model::{
+        permission::Permission,
+        query::{
+            dsl::SelectorTuple,
+            parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        },
+    };
+    use iroha_primitives::json::Json;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use mv::storage::StorageReadOnly;
+    use nonzero_ext::nonzero;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
     };
     #[derive(Debug)]
     struct TestMemoryReservation {
@@ -1009,8 +1002,8 @@ mod tests {
     }
     #[tokio::test]
     async fn bounded_stored_arc_wrong_cursor_does_not_consume_original_cursor() {
-        use std::num::NonZeroU64;
         use crate::smartcontracts::isi::query::QueryCountMode;
+        use std::num::NonZeroU64;
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);

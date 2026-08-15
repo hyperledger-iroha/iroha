@@ -1,6 +1,5 @@
 //! `CoreHost` Norito serialization helper syscall coverage.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::convert::TryFrom;
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::*;
@@ -10,6 +9,7 @@ use ivm::{
     EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
     EmbeddedStateType, IVM, IVMHost, PointerType, ProgramMetadata, VMError, syscalls,
 };
+use std::convert::TryFrom;
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&(pty as u16).to_be_bytes());

@@ -1,8 +1,3 @@
-use std::{
-    error::Error,
-    io::{BufRead, Read, Write},
-    time::Instant,
-};
 use norito::{
     NoritoSerialize,
     codec::encode_with_header_flags,
@@ -20,6 +15,11 @@ use norito::{
 };
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use std::{
+    error::Error,
+    io::{BufRead, Read, Write},
+    time::Instant,
+};
 /// Parameters controlling the streaming entropy benchmark.
 #[derive(Clone, Debug)]
 pub struct EntropyBenchOptions {

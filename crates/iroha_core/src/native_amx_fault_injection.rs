@@ -5,21 +5,21 @@
 //! names one exact Native AMX source and phase; the hook durably acknowledges
 //! that the phase was crossed and then aborts the process. The acknowledgement
 //! makes the command one-shot across restart.
-use std::{
-    fs,
-    fs::{File, OpenOptions},
-    io::{Read, Write},
-    path::Path,
-};
+#[cfg(test)]
+use norito::json::Map;
+use norito::json::Value;
 #[cfg(feature = "test-network-native-amx-fault-injection")]
 use std::{
     env,
     path::PathBuf,
     sync::{Mutex, OnceLock},
 };
-#[cfg(test)]
-use norito::json::Map;
-use norito::json::Value;
+use std::{
+    fs,
+    fs::{File, OpenOptions},
+    io::{Read, Write},
+    path::Path,
+};
 #[cfg(feature = "test-network-native-amx-fault-injection")]
 const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const COMMAND_FILE: &str = "native-amx-fault-command.norito.json";

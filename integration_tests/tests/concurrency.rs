@@ -1,8 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Concurrency integration tests: verify that configured scheduler limits are applied.
-use std::fs;
 use integration_tests::sandbox;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use std::fs;
 #[test]
 fn config_layer_overrides_concurrency_settings() {
     let Some(network) = sandbox::build_network_or_skip(

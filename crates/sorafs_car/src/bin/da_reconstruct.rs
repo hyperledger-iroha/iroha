@@ -1,9 +1,4 @@
 #![allow(clippy::missing_panics_doc)]
-use std::{
-    fs::{self, File},
-    io::{self, BufWriter, Read, Write},
-    path::{Component, Path, PathBuf},
-};
 use clap::Parser;
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::da::manifest::DaManifestV1;
@@ -13,6 +8,11 @@ use norito::{
 };
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    fs::{self, File},
+    io::{self, BufWriter, Read, Write},
+    path::{Component, Path, PathBuf},
+};
 const DEFAULT_CHUNK_TEMPLATE: &str = "chunk_{index:05}.bin";
 const MAX_CHUNK_TEMPLATE_WIDTH: usize = 20;
 #[derive(Parser, Debug)]
@@ -505,7 +505,7 @@ fn platform_no_follow_flag() -> i32 {
 }
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use super::*;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
@@ -527,8 +527,8 @@ mod tests {
     };
     use sorafs_car::{CarBuildPlan, CarChunk, ChunkStore, build_plan_from_da_manifest};
     use sorafs_chunker::ChunkProfile;
+    use std::path::PathBuf;
     use tempfile::{TempDir, tempdir};
-    use super::*;
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");

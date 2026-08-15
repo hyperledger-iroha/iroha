@@ -3,13 +3,13 @@
 //! Builds a transaction with many `SetKeyValue` instructions and sets
 #![allow(clippy::cast_possible_truncation)]
 //! `overlay_chunk_instructions` to a tiny value to force many chunks.
-use std::{borrow::Cow, sync::Arc};
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
+use std::{borrow::Cow, sync::Arc};
 #[test]
 fn overlay_apply_respects_chunking_and_preserves_effects() {
     // Build world with one domain/account

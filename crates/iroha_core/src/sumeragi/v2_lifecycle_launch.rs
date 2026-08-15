@@ -11,6 +11,8 @@ use std::{
 };
 use thiserror::Error;
 
+#[path = "v2_lifecycle_pending_kura.rs"]
+mod pending_kura;
 #[path = "v2_lifecycle_preactivation.rs"]
 mod preactivation;
 #[path = "v2_lifecycle_turn_driver.rs"]
@@ -19,6 +21,24 @@ mod turn_driver;
 #[cfg(test)]
 #[path = "v2_lifecycle_turn_driver_tests.rs"]
 mod turn_driver_tests;
+
+pub(in crate::sumeragi) use pending_kura::{
+    PendingKuraActivatedProductionLifecycleV1, PendingKuraProductionLifecycleV1,
+    PreparedPendingKuraLaneRecoveryV1, ProductionPendingKuraApplyRecoveryErrorV1,
+    ProductionPendingKuraApplyRecoveryProgressV1,
+};
+#[cfg(test)]
+use preactivation::ProductionLifecyclePreActivationFailStopScopeV1;
+pub(in crate::sumeragi) use preactivation::{
+    ProductionLifecyclePreActivationErrorV1, ProductionPendingKuraApplyInstallErrorV1,
+};
+#[cfg(test)]
+pub(in crate::sumeragi) use turn_driver::ProductionPreparedCertifiedServeTestSettlementV1;
+pub(in crate::sumeragi) use turn_driver::{
+    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
+    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
+    ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
+};
 
 use super::{
     PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
@@ -62,18 +82,6 @@ use crate::{
             RecoveredLifecycleProposalExactOutputCaptureV1, V2CleanupSupervisor,
         },
     },
-};
-#[cfg(test)]
-use preactivation::ProductionLifecyclePreActivationFailStopScopeV1;
-pub(in crate::sumeragi) use preactivation::{
-    ProductionLifecyclePreActivationErrorV1, ProductionPendingKuraApplyInstallErrorV1,
-};
-#[cfg(test)]
-pub(in crate::sumeragi) use turn_driver::ProductionPreparedCertifiedServeTestSettlementV1;
-pub(in crate::sumeragi) use turn_driver::{
-    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
-    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
-    ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
 };
 /// All non-lifecycle dependencies consumed by one production height launch.
 ///
@@ -480,6 +488,32 @@ struct ProductionV2CompletionObserverActivationPermitSealV1;
 impl Drop for ProductionV2CompletionObserverActivationPermitSealV1 {
     fn drop(&mut self) {}
 }
+
+/// Move-only authority for crossing the ordinary live-clock boundary.
+///
+/// Only ordinary lifecycle activation can mint this permit. The dedicated
+/// PendingKura lifecycle may borrow its executor for decided-lane recovery,
+/// but it cannot manufacture the authority required to arm a pacemaker.
+#[must_use = "ordinary lifecycle activation must consume the live-clock permit"]
+pub(in crate::sumeragi) struct ProductionLifecycleLiveClockActivationPermitV1 {
+    _seal: ProductionLifecycleLiveClockActivationPermitSealV1,
+}
+
+struct ProductionLifecycleLiveClockActivationPermitSealV1;
+
+impl Drop for ProductionLifecycleLiveClockActivationPermitSealV1 {
+    fn drop(&mut self) {}
+}
+
+impl ProductionLifecycleLiveClockActivationPermitV1 {
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test() -> Self {
+        Self {
+            _seal: ProductionLifecycleLiveClockActivationPermitSealV1,
+        }
+    }
+}
+
 /// Move-only authority for refreshing the live Certified-Serve retirement cut.
 ///
 /// Only the lifecycle finalization transaction can mint this value. The
@@ -1547,6 +1581,9 @@ pub(in crate::sumeragi) enum ProductionLifecycleActivationErrorV1 {
     /// Interrupted-tip recovery must use its dedicated no-clock live state.
     #[error("pending Kura recovery cannot arm ordinary live lifecycle clocks")]
     PendingKuraApply,
+    /// The interrupted-tip replay has not completed its exact local Apply.
+    #[error("pending Kura recovery is not ready for no-clock lifecycle activation")]
+    PendingKuraApplyNotReady,
     /// A recovered Proposal Sign was not joined to runner-local proposal state.
     #[error("recovered local Proposal ownership was not initialized before activation")]
     LocalProposalReplayUninitialized,
@@ -1568,6 +1605,21 @@ pub(in crate::sumeragi) enum ProductionLifecycleActivationErrorV1 {
     /// The runner-owned ingress/status authority rejected the launched stack.
     #[error("runner lifecycle activation failed: {0}")]
     Runner(String),
+}
+
+/// Fail-stop failure while consuming a live or unpublished lifecycle height.
+#[derive(Debug, Error)]
+#[must_use = "failed lifecycle shutdown requires cold restart"]
+pub(in crate::sumeragi) enum ProductionLifecycleShutdownErrorV1 {
+    /// The process-wide output barrier was already closed.
+    #[error("canonical consensus output is closed during lifecycle shutdown")]
+    OutputClosed,
+    /// The runner readiness owner no longer names the launched ingress.
+    #[error("lifecycle shutdown runner retirement failed: {0}")]
+    Runner(String),
+    /// The jointly bound ingress gates could not retire as one height owner.
+    #[error("lifecycle shutdown ingress-gate retirement failed: {0}")]
+    Ingress(String),
 }
 
 fn lifecycle_activation_recovery_blocker(
@@ -1800,6 +1852,61 @@ impl ProductionLifecycleOwnerV1 {
 }
 
 impl LaunchedProductionLifecycleV1 {
+    fn finish_clean_shutdown(
+        mut self,
+        operation: Option<crate::sumeragi::output_guard::ConsensusFailStopOperation<'_>>,
+        runner_retirement: Result<(), super::super::v2_runner::V2RunnerError>,
+    ) -> Result<(), ProductionLifecycleShutdownErrorV1> {
+        let ingress_retirement = self.leader_wire_ingress_binding.retire();
+        if let Err(error) = runner_retirement {
+            return Err(ProductionLifecycleShutdownErrorV1::Runner(
+                error.to_string(),
+            ));
+        }
+        if let Err(error) = ingress_retirement {
+            return Err(ProductionLifecycleShutdownErrorV1::Ingress(error));
+        }
+        let Some(operation) = operation else {
+            return Err(ProductionLifecycleShutdownErrorV1::OutputClosed);
+        };
+        self.services.allow_clean_shutdown();
+        operation.complete();
+        Ok(())
+    }
+
+    /// Consume an unpublished height during an orderly operator shutdown.
+    ///
+    /// This does not claim finality or retire durable lifecycle rows. It closes
+    /// runner admission, jointly detaches both ingress gates, and permits the
+    /// worker to stop normally; any parked affine recovery owner may still
+    /// require cold replay when this stack subsequently drops.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_clean_shutdown(
+        self,
+        runner: super::super::v2_runner::ProductionLifecycleRunnerActivationV1,
+    ) -> Result<(), ProductionLifecycleShutdownErrorV1> {
+        let output_guard = self.services.lifecycle_output_guard();
+        let operation = output_guard.begin_fail_stop_operation();
+        let runner_retirement =
+            runner.retire_unpublished(&self.leader_wire_ingress_binding.ingress);
+        self.finish_clean_shutdown(operation, runner_retirement)
+    }
+
+    /// Consume a sealed CompleteTip successor without publishing H+1 status.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(super) fn into_complete_tip_clean_shutdown(
+        self,
+        runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+        retirement: super::ledger::RetiredRecoveredCompleteTipActivationAuthorityV1,
+    ) -> Result<(), ProductionLifecycleShutdownErrorV1> {
+        let output_guard = self.services.lifecycle_output_guard();
+        let operation = output_guard.begin_fail_stop_operation();
+        let runner_retirement =
+            runner.retire_unpublished(&self.leader_wire_ingress_binding.ingress);
+        drop(retirement);
+        self.finish_clean_shutdown(operation, runner_retirement)
+    }
+
     /// Cross the ordinary/current/snapshot live-height boundary exactly once.
     #[allow(dead_code)]
     pub(in crate::sumeragi) fn activate(
@@ -1860,8 +1967,11 @@ impl LaunchedProductionLifecycleV1 {
         if !local_proposal.exactly_matches(self.executor.context().id(), current_directive) {
             return Err(ProductionLifecycleActivationErrorV1::LocalProposalPreparationMismatch);
         }
+        let clock_activation = ProductionLifecycleLiveClockActivationPermitV1 {
+            _seal: ProductionLifecycleLiveClockActivationPermitSealV1,
+        };
         self.executor
-            .arm_live_clocks(now)
+            .arm_live_clocks(clock_activation, now)
             .map_err(ProductionLifecycleActivationErrorV1::RuntimeClock)?;
         let status = self
             .executor
@@ -1887,6 +1997,30 @@ impl LaunchedProductionLifecycleV1 {
 }
 
 impl ActivatedProductionLifecycleV1 {
+    /// Consume an active, possibly non-final height for orderly operator exit.
+    ///
+    /// Durable WAL, body, and lifecycle rows remain untouched for cold replay.
+    /// Runner readiness closes first, followed by the retained local Proposal
+    /// state and both durable ingress gates. This path never mints finality or
+    /// finalized-output rollover authority.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_clean_shutdown(
+        self,
+        _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> Result<(), ProductionLifecycleShutdownErrorV1> {
+        let Self {
+            launched,
+            local_proposal,
+            runner_activation,
+        } = self;
+        let output_guard = launched.services.lifecycle_output_guard();
+        let operation = output_guard.begin_fail_stop_operation();
+        let runner_retirement =
+            runner_activation.retire(&launched.leader_wire_ingress_binding.ingress);
+        drop(local_proposal);
+        launched.finish_clean_shutdown(operation, runner_retirement)
+    }
+
     /// Consume the activated height after executor and lifecycle work quiesce.
     ///
     /// Readiness closes before both ingress gates retire jointly. Only then is
@@ -2059,7 +2193,7 @@ impl ActivatedProductionLifecycleV1 {
         .map_err(|error| error.to_string())
     }
 
-    /// Borrow the live owner/runtime/service triple only from the serialized runner.
+    /// Borrow the live owner/runtime/service/local-Proposal owners only from the runner.
     ///
     /// The callback cannot outlive this borrow or move fields out of the opaque
     /// activated stack. This is the sole bridge intended for the ordinary live
@@ -2072,12 +2206,19 @@ impl ActivatedProductionLifecycleV1 {
             &mut ProductionLifecycleOwnerV1,
             &mut V2EffectExecutor<SerializedV2Runtime>,
             &mut ProductionV2Services,
+            &mut super::super::v2_runner::ProductionLifecycleLocalProposalStateV1,
         ) -> R,
     ) -> R {
+        let local_proposal = self
+            .local_proposal
+            .runner
+            .prepared_local_proposal_mut()
+            .expect("activated lifecycle retains its prepared local-Proposal owner");
         operation(
             &mut self.launched.owner,
             &mut self.launched.executor,
             &mut self.launched.services,
+            local_proposal,
         )
     }
 }
@@ -2463,6 +2604,8 @@ impl ProductionLifecycleOwnerV1 {
         })
     }
 }
+
 #[cfg(test)]
-#[path = "v2_lifecycle_launch_tests.rs"]
-mod tests;
+mod tests {
+    include!("v2_lifecycle_launch_tests.rs");
+}

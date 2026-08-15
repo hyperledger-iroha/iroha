@@ -7,12 +7,12 @@
 //! making an admission decision must still run [`crate::verifier::CarVerifier`]
 //! on the completed archive (or compare against a canonical writer) so DAG and
 //! index canonicality are enforced rather than inferred from a signed digest.
-use blake3::Hasher;
-use sorafs_manifest::ManifestV1;
 use crate::{
     BLAKE3_256_MULTIHASH_CODE, DAG_CBOR_CODEC, HEADER_LEN, PRAGMA, RAW_CODEC,
     verifier::CarVerifyError,
 };
+use blake3::Hasher;
+use sorafs_manifest::ManifestV1;
 /// Maximum CID prefix retained while waiting for a complete section CID.
 ///
 /// SoraFS v1 CIDs use two short varints, a BLAKE3 multihash prefix, and a

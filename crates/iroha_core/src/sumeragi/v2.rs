@@ -13,7 +13,8 @@ use super::v2_core as reducer;
 #[path = "v2_pending_kura_recovery.rs"]
 mod pending_kura_recovery;
 pub(in crate::sumeragi) use pending_kura_recovery::{
-    PreparedRecoveredPendingKuraApplyReplayV1, RecoveredPendingKuraApplyReplayV1,
+    InstalledPendingKuraApplyV1, PreparedRecoveredPendingKuraApplyReplayV1,
+    RecoveredPendingKuraApplyReplayV1,
 };
 
 #[cfg(test)]
@@ -53,7 +54,7 @@ use super::{
         AuthenticatedRecoveredWalValidateLifecycleRepair, CandidateAdmission,
         DurableValidateReplayEvidenceV1, ExactStoreRecoveredWalPersistError,
         ExactStoreRecoveredWalSignInstallError, InstalledRecoveredWalSignStorage,
-        InvalidBodyReportReplayEvidenceV1, LifecycleContext, LifecycleDigest,
+        InvalidBodyReportReplayEvidenceV1, LifecycleContext, LifecycleDigest, LifecycleLedgerV1,
         LifecycleWorkRegistryHolder, LiveValidateSignRegistryReservation,
         LiveValidateSignWorkProjectionPermit, OpenedRecoveredWalValidateLedger,
         PersistedRecoveredWalValidateLedger, PreparedLiveValidateSignRegistryWork,
@@ -3285,9 +3286,11 @@ impl RecoveredWalLifecycleOpenPublicationError<'_> {
     }
 }
 // RECOVERED_WAL_SIGN_STATUS_PUBLICATION_END
-// TODO: Make the serialized runner consume the owner factory above and delete
-// its independent adapter/store startup in the same cut; no dual launch may
-// coexist with this owner.
+
+// PendingKura uses its dedicated lifecycle-owned no-clock height. Every ordinary,
+// applied, snapshot, and CompleteTip height now consumes this owner factory;
+// those modes never construct the independent adapter/store stack.
+
 /// Structurally and cryptographically verified immutable context for one
 /// height.
 ///
@@ -4549,12 +4552,8 @@ struct PreparedDirectValidationSucceededApply<'a> {
     next_fence_generation: u64,
 }
 /// Opaque staged adapter state for the fixed recovered Decision body fast-forward.
-///
-/// The adapter already contains the staged BodyAvailable, BodyStored, and
-/// ValidationCompleted reducer states. Intermediate Store/Validate effects
-/// and all predecessor-derived pending bindings remain private. The same-store
-/// body module wraps this value with the original Fetch projection, body cut,
-/// and replay lineage before it can leave the preview boundary.
+/// It keeps intermediate effects and bindings private until the body module
+/// rejoins the original Fetch projection, body cut, and replay lineage.
 #[must_use = "staged recovered Decision adapter state must enter its body-owned composite"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyStagedAdapterV1 {
     adapter: SumeragiV2Adapter,
@@ -4564,11 +4563,8 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStagedAdapterV1 {
     pending: RecoveredDecisionApplyPendingLineageV1,
 }
 /// Closed staged adapter plus exact recovered-Decision logical lineage.
-///
-/// The authenticated Fetch projection remains attached to the derived body
-/// children. Ledger and registry code receive only fixed comparison oracles;
-/// adapter state and concrete authority separate only inside the final
-/// publication transaction.
+/// The authenticated Fetch stays attached; consumers receive only fixed
+/// comparison oracles until the final publication transaction.
 #[must_use = "recovered Decision storage projection must enter exact publication"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyStagedStorageV1 {
     adapter: SumeragiV2Adapter,
@@ -4579,10 +4575,7 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStagedStorageV1 {
     validated_receipt: ValidatedBodyReceipt,
 }
 /// Dedicated closed registry carrier for one recovered Decision Apply.
-///
-/// The original WAL Fetch and the complete body-backed logical lineage remain
-/// attached to the final effect binding. Generic lifecycle work cannot obtain
-/// an effect/pending pair from this type.
+/// It keeps the original WAL Fetch and body lineage inseparable from Apply.
 #[must_use = "a recovered Decision Apply carrier must remain in exact startup"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyRegistryCarrierV1 {
     context: LifecycleContext,
@@ -4593,10 +4586,7 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyRegistryCarrierV1 {
     validated_receipt: ValidatedBodyReceipt,
 }
 /// Exact recovered Apply completion projected by the installed registry carrier.
-///
-/// The worker's finality material remains bound to the original Apply tag and
-/// dispatch key. Only the adapter's fixed completion preview can consume this
-/// authority; no raw effect, pending binding, or runtime owner is exposed.
+/// Finality remains bound to the exact Apply tag and dispatch key.
 #[must_use = "recovered Apply completion authority must enter the adapter preview"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterCompletionAuthorityV1 {
     tag: reducer::EventTag,
@@ -6696,7 +6686,23 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
             && self.fetch.owns_apply_lineage(verified, &self.lineage)
             && self.exact_body_binding()
     }
-    /// Return the exact physical digest while it remains attached to the carrier.
+
+    /// Rejoin this carrier to its exact four-row ledger lineage.
+    pub(in crate::sumeragi) fn validates_in_ledger(
+        &self,
+        verified: &VerifiedHeightContext,
+        ledger: &LifecycleLedgerV1,
+        installed_apply_ordinal: u128,
+    ) -> bool {
+        self.validates(verified)
+            && ledger.exactly_matches_recovered_decision_apply_carrier(
+                &self.fetch,
+                &self.lineage,
+                installed_apply_ordinal,
+            )
+    }
+
+    /// Return the attached physical digest.
     pub(in crate::sumeragi) fn installed_digest(&self) -> LifecycleDigest {
         LifecycleDigest::new(*self.apply_pending.exact_effect_identity().as_ref())
     }
@@ -6715,11 +6721,8 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
     ) -> bool {
         self.exact_body_binding() && self.lineage.exactly_matches_apply_candidate(candidate)
     }
-    /// Project one registry-minted dispatch identity into the dedicated worker task.
-    ///
-    /// The fixed projection revalidates every retained body/effect/pending
-    /// binding and passes only the exact Apply subject, CommitQC, and validated
-    /// receipt to the worker boundary. There is no generic parts accessor.
+
+    /// Project a registry identity and exact Apply material into the worker task.
     pub(in crate::sumeragi) fn project_recovered_apply_task(
         &self,
         identity: RecoveredDecisionApplyDispatchIdentityV1,
@@ -7425,7 +7428,9 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             core::slice::from_ref(&sign_core_effect),
         );
         self.armed = false;
-        super::status::set_v2_status(committed_status);
+        if self.adapter.status_publication_enabled {
+            super::status::set_v2_status(committed_status);
+        }
     }
 }
 impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
@@ -7839,6 +7844,7 @@ impl FinalizedV2Height {
     /// A retained WAL is safe and replayable; it must be retried or reported,
     /// but it cannot turn a durably finalized height back into an unfinalized
     /// one.
+    #[cfg(test)]
     pub(crate) fn wal_retirement_warning(&self) -> Option<&str> {
         self.wal_retirement_warning.as_deref()
     }
@@ -10752,6 +10758,9 @@ pub(crate) enum AdapterError {
     /// The interrupted canonical Kura tip did not own the sole recovered Decision Fetch.
     #[error("Sumeragi v2 pending Kura tip does not match its recovered Decision Fetch")]
     RecoveredPendingKuraApplyMismatch,
+    /// No-clock activation was requested before exact pending-tip completion.
+    #[error("Sumeragi v2 pending Kura tip is not ready for no-clock activation")]
+    PendingKuraActivationNotReady,
     /// A lifecycle-owned recovered Fetch body did not produce its exact Store successor.
     #[error("Sumeragi v2 recovered Decision Fetch Store successor violated its closed contract")]
     RecoveredDecisionFetchStoreMismatch,
@@ -10952,6 +10961,13 @@ pub(crate) struct SumeragiV2Adapter {
     /// instead of re-entering an adapter-owned FIFO.
     reducer_fence_generation: u64,
     replay_complete: bool,
+    /// Whether reducer transitions may publish the current-height global status.
+    ///
+    /// Recovered startup keeps this closed until the lifecycle activation
+    /// authority snapshots the exact ordinary or PendingKura height. Reducer
+    /// recovery still computes and validates every status while publication is
+    /// deferred, so opening the live boundary cannot hide an invalid snapshot.
+    status_publication_enabled: bool,
     fail_closed: bool,
 }
 enum SafetyWalOpenTarget<'kura> {
@@ -11021,6 +11037,7 @@ impl SumeragiV2Adapter {
     /// queue larger than the standalone fixture default cannot exhaust the
     /// serviced-identity table while its legitimate lifecycles remain active.
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
     pub(crate) fn open_with_capacity_geometry(
         kura: &Kura,
         wal_authority: KuraSafetyWalDirectoryAuthority,
@@ -11114,6 +11131,7 @@ impl SumeragiV2Adapter {
         )
     }
     /// Open with deferred status publication and the validated queue geometry.
+    #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_deferred_status_with_capacity_geometry(
         kura: &Kura,
@@ -11376,6 +11394,7 @@ impl SumeragiV2Adapter {
             last_progress: None,
             reducer_fence_generation: 0,
             replay_complete: false,
+            status_publication_enabled: publish_initial_status,
             fail_closed: false,
         };
         adapter.reconcile_restored_reserved_producer_frontier()?;
@@ -16302,7 +16321,20 @@ impl SumeragiV2Adapter {
             round,
             wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
         ));
-        self.status()
+        let status = self.status()?;
+        self.status_publication_enabled = true;
+        Ok(status)
+    }
+    /// Snapshot and open status publication for an already-applied PendingKura height.
+    ///
+    /// Unlike ordinary successor activation, this boundary deliberately does
+    /// not record a successor-height marker or arm the pacemaker.
+    pub(in crate::sumeragi) fn pending_kura_activation_status(
+        &mut self,
+    ) -> Result<wire::SumeragiV2Status, AdapterError> {
+        let status = self.status()?;
+        self.status_publication_enabled = true;
+        Ok(status)
     }
     fn liveness_status(&mut self) -> Result<wire::SumeragiV2LivenessStatus, AdapterError> {
         let min_signers = u32::try_from(self.reducer.context().minimum_signer_count())
@@ -19190,7 +19222,9 @@ impl SumeragiV2Adapter {
     }
     fn publish_status(&mut self) -> Result<(), AdapterError> {
         let status = self.status()?;
-        super::status::set_v2_status(status);
+        if self.status_publication_enabled {
+            super::status::set_v2_status(status);
+        }
         Ok(())
     }
     /// Permanently close the adapter after an internal macro-step shape

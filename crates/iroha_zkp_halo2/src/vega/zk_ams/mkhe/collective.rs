@@ -85,10 +85,8 @@ pub use incremental_source::{
     encrypt_zk_ams_mkhe_collective_packed_streaming_v1,
 };
 pub(super) use party_local_rkg_ephemeral_v1::DirectRkgOneOwnerDerivedProvenanceV1;
+pub(in crate::vega::zk_ams::mkhe) use party_local_rkg_ephemeral_v1::DirectRkgOnePublicationOwnerV1;
 use party_local_rkg_ephemeral_v1::PartyLocalRkgEphemeralOpeningV1;
-pub(in crate::vega::zk_ams::mkhe) use party_local_rkg_ephemeral_v1::{
-    DirectRkgOnePublicationOwnerV1, publish_direct_rkg_one_h0_h1_v1,
-};
 use persistent_direct_opening_v1::{PersistentDirectOpeningAxesV1, PersistentDirectOpeningOwnerV1};
 pub use prepared_public_a::{
     ZkAmsMkhePreparedCollectivePublicAV1, prepare_zk_ams_mkhe_collective_public_a_v1,

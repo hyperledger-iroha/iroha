@@ -3,16 +3,16 @@
 // darling-generated code triggers these lints
 #![allow(clippy::needless_continue)]
 #![allow(clippy::option_if_let_else)]
-mod trait_bounds;
 mod emitter_ext;
 mod rename;
+mod trait_bounds;
+use crate::rename::RenameRule;
 use darling::{FromAttributes, FromDeriveInput, FromField, FromMeta, FromVariant, ast::Style};
 use emitter_ext::EmitterExt;
 use manyhow::{Emitter, Result, ToTokensError, emit, manyhow};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::parse_quote;
-use crate::rename::RenameRule;
 fn add_bounds_to_all_generic_parameters(generics: &mut syn::Generics, bound: &syn::Path) {
     let generic_type_parameters = generics
         .type_params()
@@ -889,8 +889,8 @@ fn convert_field_to_codegen(field: &IntoSchemaField) -> Option<CodegenField> {
 }
 #[cfg(test)]
 mod tests {
-    use syn::parse_quote;
     use super::*;
+    use syn::parse_quote;
     #[test]
     fn shared_container_flags_are_accepted() {
         let attrs = vec![parse_quote!(

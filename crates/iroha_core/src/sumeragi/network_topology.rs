@@ -276,8 +276,8 @@ pub fn commit_quorum_from_len(len: usize) -> usize {
 }
 #[cfg(test)]
 mod prf_collectors_tests {
-    use std::collections::BTreeSet;
     use super::*;
+    use std::collections::BTreeSet;
     #[test]
     fn topology_new_deduplicates_peers_preserving_order() {
         let peer_a = PeerId::new(checked_keypair().public_key().clone());
@@ -765,9 +765,9 @@ pub fn test_topology_with_keys<'a>(keys: impl IntoIterator<Item = &'a KeyPair>) 
 #[cfg(all(test, feature = "iroha-core-tests"))]
 mod tests {
     #![allow(unused_variables, unused_mut)]
-    use iroha_primitives::unique_vec;
     use super::*;
     use crate::block::ValidBlock;
+    use iroha_primitives::unique_vec;
     fn extract_order(topology: &Topology, initial_topology: &Topology) -> Vec<usize> {
         topology
             .0

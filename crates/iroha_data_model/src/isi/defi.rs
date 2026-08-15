@@ -1,7 +1,7 @@
 //! Native DeFi instructions.
-use iroha_primitives::numeric::{Numeric, Quantity};
 use super::*;
 use crate::rwa::RwaId;
+use iroha_primitives::numeric::{Numeric, Quantity};
 isi! {
     /// Submit a solver-fillable `DeFi` intent.
     #[cfg_attr(
@@ -396,9 +396,9 @@ impl DeFiInstructionBox {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use norito::codec::{Decode, Encode};
-    use super::*;
     #[derive(Encode)]
     struct ForgedSubmitDefiIntent {
         intent_id: Name,

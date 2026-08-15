@@ -1,4 +1,5 @@
 //! Typed X.509 native-resource capture and installed-pin enforcement.
+use super::*;
 use iroha_core::privacy_release_evidence::{
     PrivacyReleaseCaseKindV1, PrivacyReleaseZkX509ResourceCertificateV1,
     PrivacyReleaseZkX509ResourceEnvironmentV1, PrivacyReleaseZkX509ResourceObservationV1,
@@ -8,7 +9,6 @@ use iroha_core::privacy_release_evidence::{
     validate_privacy_release_zk_x509_resource_capture_v1,
 };
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
-use super::*;
 const MAX_X509_RESOURCE_NORITO_BYTES_V1: u64 = 64 * 1024;
 const MAX_X509_RESOURCE_JSON_BYTES_V1: u64 = 64 * 1024;
 const MAX_X509_HOST_METADATA_JSON_BYTES_V1: u64 = 16 * 1024;

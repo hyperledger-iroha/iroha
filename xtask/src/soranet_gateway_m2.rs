@@ -2,9 +2,9 @@
 //! Extends the M1 alpha pack with DoQ/ODoH preview configs, trustless CAR
 //! verifier wiring, PQ readiness evidence, GAR compliance rollup, and
 //! hardening baselines ahead of GA.
-use std::{
-    fs,
-    path::{Path, PathBuf},
+use crate::{
+    gar, soranet_gateway, soranet_gateway_billing, soranet_gateway_hardening, soranet_gateway_ops,
+    soranet_gateway_pq, soranet_pop,
 };
 use blake3::Hasher as Blake3;
 use eyre::{Result, WrapErr, eyre};
@@ -12,9 +12,9 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
-use crate::{
-    gar, soranet_gateway, soranet_gateway_billing, soranet_gateway_hardening, soranet_gateway_ops,
-    soranet_gateway_pq, soranet_pop,
+use std::{
+    fs,
+    path::{Path, PathBuf},
 };
 /// Command options for the M2 beta generator.
 #[derive(Debug)]

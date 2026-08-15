@@ -1,4 +1,3 @@
-use std::time::Duration;
 use iroha_config::parameters::actual::SoranetVpn;
 use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
@@ -6,6 +5,7 @@ use iroha_data_model::soranet::vpn::{
     VpnExitClassV1, VpnFlowLabelV1, VpnPaddedCellV1, VpnRouteV1, VpnSessionReceiptV1,
 };
 use iroha_primitives::numeric::Quantity;
+use std::time::Duration;
 use thiserror::Error;
 /// Errors raised when assembling VPN control-plane/receipt payloads from config.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

@@ -1,5 +1,5 @@
-use std::{fs, path::PathBuf, process::Command};
 use assert_cmd::prelude::*;
+use std::{fs, path::PathBuf, process::Command};
 use tempfile::tempdir;
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

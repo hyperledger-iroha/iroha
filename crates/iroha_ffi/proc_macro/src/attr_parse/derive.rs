@@ -1,8 +1,8 @@
 //! This module provides parsing of `#[derive(...)]` attributes
+use super::getset::GetSetDerive;
 use darling::FromAttributes;
 use quote::ToTokens;
 use syn::{Attribute, Token, punctuated::Punctuated};
-use super::getset::GetSetDerive;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RustcDerive {
     Eq,
@@ -92,10 +92,10 @@ impl FromAttributes for DeriveAttrs {
 }
 #[cfg(test)]
 mod test {
+    use super::{Derive, DeriveAttrs, GetSetDerive, RustcDerive};
     use darling::FromAttributes;
     use proc_macro2::TokenStream;
     use quote::quote;
-    use super::{Derive, DeriveAttrs, GetSetDerive, RustcDerive};
     fn parse_derives(attrs: TokenStream) -> darling::Result<DeriveAttrs> {
         let attrs = crate::parse_attributes(attrs);
         DeriveAttrs::from_attributes(&attrs)

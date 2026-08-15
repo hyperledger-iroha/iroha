@@ -1,5 +1,7 @@
 //! Chain-authoritative SoraFS reserve, rent, credit, and appeal handlers.
-use std::{str::FromStr, sync::OnceLock};
+use super::*;
+use crate::smartcontracts::ValidSingularQuery;
+use crate::state::{StateTransaction, WorldReadOnly};
 use iroha_data_model::{
     account::AccountId,
     asset::AssetId,
@@ -45,9 +47,7 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
 use sorafs_manifest::deal::XorQuantity;
-use super::*;
-use crate::smartcontracts::ValidSingularQuery;
-use crate::state::{StateTransaction, WorldReadOnly};
+use std::{str::FromStr, sync::OnceLock};
 const RESERVE_STATE_KEY: &str = "sorafs_reserve_state_v1";
 const PROVIDER_STATE_KEY_PREFIX: &str = "sorafs_reserve_provider_v1_";
 const MOVEMENT_STATE_KEY_PREFIX: &str = "sorafs_reserve_movement_v1_";

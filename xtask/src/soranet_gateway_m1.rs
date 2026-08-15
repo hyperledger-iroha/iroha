@@ -1,16 +1,16 @@
 //! SNNet-15M1 alpha bundle generator for the SoraGlobal Gateway CDN.
 //! Orchestrates PoP provisioning bundles, gateway/resolver baselines,
 //! federated ops packs, and billing dry-runs into a single evidence root.
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use crate::{soranet_gateway, soranet_gateway_billing, soranet_gateway_ops, soranet_pop};
 use eyre::{Result, WrapErr, eyre};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
-use crate::{soranet_gateway, soranet_gateway_billing, soranet_gateway_ops, soranet_pop};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 #[derive(Debug)]
 pub struct GatewayM1Options {
     pub config_path: PathBuf,

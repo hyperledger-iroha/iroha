@@ -6,15 +6,6 @@
 //! candidate record. Finalization never regenerates proof material: it binds the
 //! unchanged candidate to supplied evidence and authenticates the resulting
 //! release before publishing a distinct final directory atomically.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    env,
-    error::Error,
-    fs::{self, File},
-    io::{self, Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-    process::Command,
-};
 use iroha_core::zk::kagemusha_artifact_v4::{
     KagemushaValidatedArtifactPayloadV4, read_kagemusha_pasta_cycle_artifact_v4,
     read_kagemusha_pasta_cycle_candidate_artifact_v4,
@@ -83,6 +74,15 @@ use iroha_data_model::{
 };
 use norito::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env,
+    error::Error,
+    fs::{self, File},
+    io::{self, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    process::Command,
+};
 const HELP: &str = "\
 Generate an unsigned ABI-21 candidate, then finalize those exact bytes after approval.
 
@@ -880,8 +880,8 @@ fn open_input(path: &Path, maximum: u64, label: &str) -> Result<OpenedInput, Box
     return Err(format!("{label} opening is unsupported on this non-Unix target").into());
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt as _;
         use rustix::fs::{Mode, OFlags};
+        use std::os::unix::fs::MetadataExt as _;
         let before = fs::symlink_metadata(path)?;
         if before.file_type().is_symlink() || !before.is_file() || before.nlink() != 1 {
             return Err(format!(
@@ -3864,8 +3864,8 @@ impl PublicationDirectory {
         let mut actual = BTreeSet::new();
         #[cfg(unix)]
         {
-            use std::{ffi::OsStr, os::unix::ffi::OsStrExt as _};
             use rustix::fs::{AtFlags, Dir, FileType as RustixFileType};
+            use std::{ffi::OsStr, os::unix::ffi::OsStrExt as _};
             let mut entries = Dir::read_from(&self.file).map_err(io::Error::from)?;
             for entry in &mut entries {
                 let entry = entry.map_err(io::Error::from)?;
@@ -3943,8 +3943,8 @@ fn verify_owner_private_regular_file(file: &File) -> io::Result<()> {
 }
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{cell::Cell, os::unix::fs::PermissionsExt as _, rc::Rc};
     use super::*;
+    use std::{cell::Cell, os::unix::fs::PermissionsExt as _, rc::Rc};
     struct LivePayload {
         live: Rc<Cell<usize>>,
     }

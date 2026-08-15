@@ -1,5 +1,21 @@
 #![allow(unexpected_cfgs)]
 //! Runs the privileged Sora VPN helper and its authenticated control protocol.
+use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
+use clap::{Parser, Subcommand};
+use hex::FromHexError;
+use iroha_crypto::{
+    Algorithm, KeyPair, PublicKey, Signature,
+    soranet::{
+        certificate::{
+            leaf_certificate_spki_sha256, validate_quic_multiaddr, validate_tls_server_name,
+        },
+        handshake::{
+            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, RuntimeParams,
+            SORANET_QUIC_ALPN, SessionSecrets, build_client_hello, client_handle_relay_hello,
+        },
+        record::{RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind},
+    },
+};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
@@ -18,22 +34,6 @@ use std::{
 };
 #[cfg(target_os = "linux")]
 use std::{ffi::CStr, os::fd::FromRawFd};
-use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
-use clap::{Parser, Subcommand};
-use hex::FromHexError;
-use iroha_crypto::{
-    Algorithm, KeyPair, PublicKey, Signature,
-    soranet::{
-        certificate::{
-            leaf_certificate_spki_sha256, validate_quic_multiaddr, validate_tls_server_name,
-        },
-        handshake::{
-            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, RuntimeParams,
-            SORANET_QUIC_ALPN, SessionSecrets, build_client_hello, client_handle_relay_hello,
-        },
-        record::{RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind},
-    },
-};
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
 use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1,
@@ -2991,11 +2991,11 @@ fn verifier_for_signature_cert(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{
         prelude::{Numeric, Quantity},
         soranet::vpn::{VPN_HELPER_TICKET_MAGIC, VpnTariffV1},
     };
-    use super::*;
     const HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET: usize =
         VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32;
     const SMALL_ORDER_ED25519_POINT: [u8; 32] = [

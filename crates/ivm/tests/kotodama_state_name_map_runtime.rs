@@ -1,9 +1,9 @@
 //! Regressions for durable `StateMap<Name, int>` runtime behavior.
-use std::{collections::HashMap, str::FromStr};
 use iroha_crypto::PublicKey;
 use iroha_data_model::prelude::AccountId;
 use ivm::mock_wsv::{MockWorldStateView, WsvHost};
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
+use std::{collections::HashMap, str::FromStr};
 mod common;
 fn run_program(src: &str) -> IVM {
     let code = KotodamaCompiler::new()

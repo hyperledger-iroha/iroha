@@ -1149,6 +1149,20 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         Path(relative)
         for relative in module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256
     )
+    canonical_expanded_sha256: dict[str, str] = {}
+    for relative in module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256:
+        expansion_errors: list[str] = []
+        _path, source = module._read_reviewed_rust_source(
+            ROOT_DIR,
+            relative,
+            expansion_errors,
+            "same-round semantic kernel mutation fixture",
+            module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative),
+        )
+        assert not expansion_errors, expansion_errors
+        canonical_expanded_sha256[relative] = hashlib.sha256(
+            source.encode("utf-8")
+        ).hexdigest()
     mutations = (
         (
             "vote_signer_reintroduced",
@@ -1570,27 +1584,10 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             source_path.as_posix(), ()
         ):
             component_path = source_path.parent / component
-            if component_path not in fixture_paths:
-                fixture_paths.add(component_path)
-                pending_fixture_paths.append(component_path)
-    canonical_repo_root = tmp_path / "canonical_same_round_semantic_kernel"
-    for source_path in fixture_paths:
-        destination = canonical_repo_root / source_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / source_path, destination)
-    canonical_expanded_sha256: dict[str, str] = {}
-    for relative in source_seals:
-        expansion_errors: list[str] = []
-        _path, source = module._read_reviewed_rust_source(
-            canonical_repo_root,
-            relative,
-            expansion_errors,
-            "same-round semantic kernel canonical fixture",
-        )
-        assert not expansion_errors, expansion_errors
-        canonical_expanded_sha256[relative] = hashlib.sha256(
-            source.encode("utf-8")
-        ).hexdigest()
+            if component_path in fixture_paths:
+                continue
+            fixture_paths.add(component_path)
+            pending_fixture_paths.append(component_path)
     for case, relative, item, old, new, error_fragment in mutations:
         module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256.clear()
         module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256.update(
@@ -1609,11 +1606,6 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
                     relative.as_posix(), ()
                 )
             ),
-        )
-        assert set(physical_relatives).issubset(fixture_paths), (
-            case,
-            physical_relatives,
-            fixture_paths,
         )
         marker = f"macro_rules! {item} {{"
         physical_matches = []

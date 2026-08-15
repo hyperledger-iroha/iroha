@@ -155,5 +155,5 @@ pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn consume_completed_cre
 }
 
 #[cfg(test)]
-#[path = "creator_replay_v1_tests.rs"]
+#[path = "creator_replay_v1/creator_replay_v1_tests.rs"]
 mod tests;

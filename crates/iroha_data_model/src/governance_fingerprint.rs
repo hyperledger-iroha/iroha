@@ -31,8 +31,8 @@ pub fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
     use super::*;
+    use std::collections::BTreeSet;
     #[test]
     fn proposal_domains_are_unique() {
         let domains = [

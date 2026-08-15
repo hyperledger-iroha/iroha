@@ -457,11 +457,11 @@ fn mul_add_row_scalar(coef: u16, data_row: &[u16], out: &mut [u16]) {
     any(target_arch = "x86", target_arch = "x86_64")
 ))]
 mod avx2 {
+    use super::{gf_mul, tables_u32};
     #[cfg(target_arch = "x86")]
     use std::arch::x86 as arch;
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64 as arch;
-    use super::{gf_mul, tables_u32};
     /// AVX2 path that vectorizes the XOR accumulation and `gf_mul` table lookups.
     #[allow(unsafe_code)]
     #[allow(clippy::cast_ptr_alignment)]
@@ -525,8 +525,8 @@ mod avx2 {
 }
 #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
 mod neon {
-    use std::arch::aarch64 as arch;
     use super::gf_mul;
+    use std::arch::aarch64 as arch;
     /// NEON path that vectorizes the XOR accumulation and `gf_mul` operations.
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]

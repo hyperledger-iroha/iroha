@@ -4,15 +4,6 @@
 //! files are opened beneath an explicit artefact root without following symbolic
 //! links, verified against their signed fingerprints, decoded with hard Norito
 //! limits, and retained as immutable in-memory values before a service binds.
-use std::{
-    fs::{self, File, Metadata},
-    io::{self, Read},
-    path::{Path, PathBuf},
-};
-#[cfg(unix)]
-use std::fs::OpenOptions;
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 #[cfg(feature = "cli-orchestrator")]
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey, SignatureOf};
 use iroha_data_model::sorafs::moderation::{
@@ -29,6 +20,15 @@ use iroha_data_model::sorafs::moderation::{
     ModerationTrustPolicyV1,
 };
 use norito::core::DecodeLimits;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::{
+    fs::{self, File, Metadata},
+    io::{self, Read},
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 const MODEL_DECODE_MAX_ELEMENTS: usize =
     MODERATION_MODEL_FEATURE_COUNT_V1 + MODERATION_MODEL_MAX_CALIBRATION_KNOTS_V1 * 2 + 32;
@@ -1026,6 +1026,7 @@ const fn platform_no_follow_flag() -> i32 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{KeyPair, SignatureOf};
     use iroha_data_model::sorafs::moderation::{
         MODERATION_MODEL_ARTIFACT_VERSION_V1, MODERATION_MODEL_WORKING_MEMORY_BYTES_V1,
@@ -1036,7 +1037,6 @@ mod tests {
         moderation_model_required_operations_v1,
     };
     use tempfile::tempdir;
-    use super::*;
     fn artifact(model_id: [u8; 16], weight: i32) -> ModerationModelArtifactV1 {
         let calibration = vec![
             ModerationCalibrationKnotV1 {

@@ -1,5 +1,174 @@
 """Authenticated validation-acknowledgment implementation for the release cache helper."""
 
+def publish_validation_failure(
+    invocation_root: Path,
+    bootstrap_evidence: Path,
+    cleanup_base: Path,
+    cleanup_prefix: str,
+    source_manifest_sha256: str,
+    validator_exit_status: int,
+) -> None:
+    """Retain bounded validator diagnostics only after quiescent root cleanup."""
+
+    for path, label in (
+        (invocation_root, "release invocation root"),
+        (bootstrap_evidence, "bootstrap evidence root"),
+        (cleanup_base, "cleanup base"),
+    ):
+        _normalized_absolute(path, label)
+    if (
+        invocation_root.parent != cleanup_base
+        or not invocation_root.name.startswith(cleanup_prefix)
+        or _overlap(invocation_root, bootstrap_evidence)
+        or not re.fullmatch(r"[0-9a-f]{64}", source_manifest_sha256)
+        or type(validator_exit_status) is not int
+        or not 1 <= validator_exit_status <= 255
+    ):
+        raise CacheCopyError("receipt validation failure inputs are not exact")
+    bootstrap_fd, bootstrap_identity = _open_directory(
+        bootstrap_evidence, "bootstrap evidence root"
+    )
+    try:
+        if (
+            bootstrap_identity.st_uid != os.geteuid()
+            or stat.S_IMODE(bootstrap_identity.st_mode) != 0o700
+        ):
+            raise CacheCopyError("bootstrap evidence root is not owner-private")
+        forbidden = {
+            "BOOTSTRAP_RELEASE_COMPLETED.json", "RELEASE_COMPLETED.json",
+            "receipt-validation-ack.json", "release-retained-inventory.json",
+            "release-runner-private-provenance.json",
+            "release-runner-result.json", "sealed-identity.json",
+        }
+        if any(
+            _optional_entry_stat(bootstrap_fd, name, f"forbidden success evidence {name}")
+            is not None
+            for name in forbidden
+        ):
+            raise CacheCopyError("receipt validation failure follows published success evidence")
+    finally:
+        os.close(bootstrap_fd)
+
+    identity_path = bootstrap_evidence / "candidate-identity.json"
+    completion_path = bootstrap_evidence / "BOOTSTRAP_COMPLETED.json"
+    validator_path = bootstrap_evidence / "validate-receipt.py"
+    identity_payload, _ = _read_regular(identity_path, "candidate identity")
+    try:
+        identity = json.loads(identity_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CacheCopyError("candidate identity is malformed") from error
+    identity_keys = {
+        "schema_version", "head_commit", "head_tree", "index_tree",
+        "workspace_source_manifest_sha256", "cargo_lock_sha256",
+    }
+    if (
+        not isinstance(identity, dict)
+        or set(identity) != identity_keys
+        or type(identity.get("schema_version")) is not int
+        or identity["schema_version"] != 1
+        or any(
+            not isinstance(identity.get(name), str)
+            or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", identity[name]) is None
+            for name in ("head_commit", "head_tree", "index_tree")
+        )
+        or any(
+            not isinstance(identity.get(name), str)
+            or re.fullmatch(r"[0-9a-f]{64}", identity[name]) is None
+            for name in ("workspace_source_manifest_sha256", "cargo_lock_sha256")
+        )
+        or identity_payload != _canonical_payload(identity)
+    ):
+        raise CacheCopyError("candidate identity contract is not exact")
+    validator_sha256, _, _ = _digest_regular(
+        validator_path, "archived receipt validator"
+    )
+    completion_sha256, _, _ = _digest_regular(
+        completion_path, "bootstrap completion"
+    )
+    receipt_sha256, receipt_size = _stable_regular_digest(
+        invocation_root / "output" / "release" / "RELEASE_COMPLETED.json",
+        "unverified aggregate receipt",
+    )
+    stream_payloads: dict[str, bytes] = {}
+    stream_records: dict[str, dict[str, object]] = {}
+    for name in ("stdout", "stderr"):
+        payload, record = _validator_diagnostic_prefix(
+            invocation_root / f"receipt-validator.{name}", name
+        )
+        stream_payloads[name] = payload
+        stream_records[name] = record
+
+    publications: list[tuple[Path, tuple[os.stat_result, os.stat_result]]] = []
+    try:
+        cleanup_invocation(cleanup_base, invocation_root, cleanup_prefix)
+        base_fd, _ = _open_directory(cleanup_base, "cleanup base")
+        try:
+            if _optional_entry_stat(
+                base_fd, invocation_root.name, "cleaned release invocation"
+            ) is not None:
+                raise CacheCopyError("release invocation survived validator failure cleanup")
+        finally:
+            os.close(base_fd)
+        _revalidate_directory_path(
+            bootstrap_evidence, bootstrap_identity, "bootstrap evidence root"
+        )
+        marker = {
+            "format": VALIDATOR_FAILURE_FORMAT,
+            "schema_version": 2,
+            "result": "release-failed",
+            "stage": "protected-receipt-validation",
+            "profile": "release",
+            "bootstrap_completion_sha256": completion_sha256,
+            "candidate_identity": {
+                "sha256": hashlib.sha256(identity_payload).hexdigest(),
+                "head_commit": identity["head_commit"],
+                "head_tree": identity["head_tree"],
+            },
+            "sealed_source_manifest_sha256": source_manifest_sha256,
+            "receipt": {
+                "disclosure": "unverified-no-retention",
+                "sha256": receipt_sha256,
+                "size_bytes": receipt_size,
+            },
+            "validator": {
+                "archive_name": "validate-receipt.py",
+                "sha256": validator_sha256,
+                "exit_status": validator_exit_status,
+            },
+            "argv": {
+                "profile": "release",
+                "python_flags": ["-I", "-S"],
+                "validator": "protected:validate-receipt.py",
+                "operation": "verify-existing-and-ack",
+                "invocation_binding": "not-published-validation-failed",
+            },
+            "diagnostics": stream_records,
+            "invocation_cleanup": "complete",
+        }
+        marker_payload = _canonical_payload(marker)
+        if len(marker_payload) > VALIDATOR_FAILURE_MARKER_BYTES:
+            raise CacheCopyError("receipt validation failure marker exceeds its bound")
+        for name in ("stdout", "stderr"):
+            path = bootstrap_evidence / str(stream_records[name]["name"])
+            publications.append((path, _publish_inventory(path, stream_payloads[name])))
+        marker_path = bootstrap_evidence / "RECEIPT_VALIDATION_FAILED.json"
+        publications.append((marker_path, _publish_inventory(marker_path, marker_payload)))
+        for path, _ in publications:
+            payload, metadata = _read_regular(path, f"published {path.name}")
+            if stat.S_IMODE(metadata.st_mode) != 0o400 or metadata.st_nlink != 1:
+                raise CacheCopyError(f"published {path.name} metadata changed")
+            if path == marker_path:
+                if payload != marker_payload:
+                    raise CacheCopyError("receipt validation failure marker changed")
+            else:
+                name = "stdout" if path.name.endswith(".stdout") else "stderr"
+                if payload != stream_payloads[name]:
+                    raise CacheCopyError(f"receipt validator {name} copy changed")
+    except BaseException:
+        for path, metadata in reversed(publications):
+            _remove_published(path, metadata)
+        raise
+
 def _validation_ack(
     ack_held: dict[str, object],
     receipt_held: dict[str, object],

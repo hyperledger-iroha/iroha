@@ -319,7 +319,7 @@ impl ObservationWindow {
 pub type FeedEventRecord = iroha_data_model::events::data::oracle::FeedEventRecord;
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, str::FromStr};
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         account::AccountId,
@@ -329,7 +329,7 @@ mod tests {
             ObservationValue, OutlierPolicy, RiskClass,
         },
     };
-    use super::*;
+    use std::{num::NonZeroU64, str::FromStr};
     fn feed_id(name: &str) -> iroha_data_model::oracle::FeedId {
         iroha_data_model::oracle::FeedId(Name::from_str(name).expect("feed name"))
     }

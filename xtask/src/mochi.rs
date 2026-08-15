@@ -1,3 +1,6 @@
+use crate::workspace_root;
+use norito::json::{self, Map, Value};
+use sha2::{Digest, Sha256};
 use std::{
     env,
     error::Error,
@@ -7,10 +10,7 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
-use norito::json::{self, Map, Value};
-use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
-use crate::workspace_root;
 const MOCHI_UI_MANIFEST_REL: &str = "mochi/mochi-ui-egui/Cargo.toml";
 const MOCHI_BIN_NAME: &str = "mochi";
 const MOCHI_UI_FEATURE: &str = "gui";

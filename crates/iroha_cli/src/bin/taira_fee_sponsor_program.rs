@@ -1,8 +1,4 @@
 //! Provision one exact Taira fee sponsor program revision and isolated vault.
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
 use clap::Parser;
 use eyre::{Context, Result, bail};
 use iroha::{
@@ -26,6 +22,10 @@ use iroha::{
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_primitives::numeric::Quantity;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use toml::Value;
 use url::Url;
 #[derive(Debug, Parser)]
@@ -286,7 +286,7 @@ fn main() -> Result<()> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, num::NonZeroU64, str::FromStr};
+    use super::*;
     use iroha::{
         crypto::{Algorithm, KeyPair},
         data_model::{
@@ -299,7 +299,7 @@ mod tests {
             },
         },
     };
-    use super::*;
+    use std::{fs, num::NonZeroU64, str::FromStr};
     fn sample_revision() -> FeeSponsorProgramRevision {
         let sponsor = AccountId::new(
             KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519)

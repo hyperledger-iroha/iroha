@@ -1,5 +1,4 @@
 //! Direct asset quantity transfer helper for live operator workflows.
-use std::{path::PathBuf, str::FromStr};
 use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
@@ -14,6 +13,7 @@ use iroha::{
         transaction::FeePaymentIntent,
     },
 };
+use std::{path::PathBuf, str::FromStr};
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum FeePayer {
     Authority,

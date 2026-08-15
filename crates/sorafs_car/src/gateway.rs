@@ -5,18 +5,10 @@
 //! context together with per-provider connection details (base URL + stream
 //! token) and receive a ready-to-use set of [`FetchProvider`] definitions plus
 //! an async fetcher that issues chunk requests with the correct headers.
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    fmt,
-    future::Future,
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
-    num::NonZeroUsize,
-    pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+use crate::multi_fetch::{
+    AttemptFailure, ChunkResponse, FetchOptions, FetchOutcome, FetchProvider, FetchRequest,
+    MultiSourceError, PolicyBlockEvidence, ProviderMetadata, RangeCapability, StreamBudget,
+    TransportHint,
 };
 use base64::{
     Engine as _,
@@ -34,12 +26,20 @@ use sorafs_manifest::{
     ManifestV1, STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1,
     STREAM_TOKEN_MAX_WIRE_BYTES_V1, StreamTokenV1, decode_manifest_v1_canonical,
 };
-use thiserror::Error;
-use crate::multi_fetch::{
-    AttemptFailure, ChunkResponse, FetchOptions, FetchOutcome, FetchProvider, FetchRequest,
-    MultiSourceError, PolicyBlockEvidence, ProviderMetadata, RangeCapability, StreamBudget,
-    TransportHint,
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    fmt,
+    future::Future,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    num::NonZeroUsize,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use thiserror::Error;
 const HEADER_SORA_NONCE: &str = "x-sorafs-nonce";
 const HEADER_SORA_CHUNKER: &str = "x-sorafs-chunker";
 const HEADER_SORA_STREAM_TOKEN: &str = "x-sorafs-stream-token";
@@ -1837,14 +1837,14 @@ impl fmt::Display for GatewayFetcher {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+    use sorafs_chunker::ChunkProfile;
+    use sorafs_manifest::StreamTokenBodyV1;
     use std::{
         collections::HashMap,
         sync::{Arc, Mutex},
     };
-    use ed25519_dalek::SigningKey;
-    use sorafs_chunker::ChunkProfile;
-    use sorafs_manifest::StreamTokenBodyV1;
-    use super::*;
     #[test]
     fn request_header_value_rejects_control_characters_without_panicking() {
         assert!(header_value("valid-nonce").is_ok());

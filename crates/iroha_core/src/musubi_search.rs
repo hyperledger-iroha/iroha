@@ -3,12 +3,6 @@
 //! This index is deliberately process-local and absent from [`crate::state::World`].
 //! Consensus resolution continues to use the universal sparse resolver index; this
 //! projection serves only description, keyword, namespace, and package-name search.
-use std::{
-    borrow::Borrow,
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    ops::Bound::{Excluded, Unbounded},
-};
 use iroha_data_model::{
     events::data::musubi::MusubiEvent,
     musubi::{
@@ -19,6 +13,12 @@ use iroha_data_model::{
     },
 };
 use norito::codec::Encode as _;
+use std::{
+    borrow::Borrow,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    ops::Bound::{Excluded, Unbounded},
+};
 /// Maximum document terms retained after deterministic priority ordering.
 pub const MUSUBI_SEARCH_MAX_DOCUMENT_TERMS_V1: usize = 256;
 /// Maximum candidate package rows inspected for a multi-term page.
@@ -549,6 +549,7 @@ fn insert_term(term: String, terms: &mut BTreeSet<String>) {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -560,7 +561,6 @@ mod tests {
         },
         nexus::DataSpaceId,
     };
-    use super::*;
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives account");

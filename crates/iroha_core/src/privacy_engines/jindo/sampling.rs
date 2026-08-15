@@ -4,12 +4,6 @@
 //! Gaussian width is a closed profile identifier and every
 //! probability comparison consumes one explicitly big-endian 256-bit draw.
 //! Every rejection loop is bounded and fails closed for adversarial randomness.
-use std::sync::OnceLock;
-use p256::elliptic_curve::bigint::{Encoding as _, Limb, NonZero, U128, U256, U512, U1024};
-use rand_core_06::{CryptoRng, RngCore};
-use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
-use crate::privacy_engines::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
 #[cfg(test)]
 use super::field::JindoFieldElementV1;
 use super::{
@@ -17,6 +11,14 @@ use super::{
     parameters::JindoGaussianWidthV1,
     ring::{JINDO_INNER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1},
 };
+use crate::privacy_engines::prover_randomness::{
+    HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
+};
+use p256::elliptic_curve::bigint::{Encoding as _, Limb, NonZero, U128, U256, U512, U1024};
+use rand_core_06::{CryptoRng, RngCore};
+use std::sync::OnceLock;
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 const MAX_GAUSSIAN_ATTEMPTS_V1: usize = 4_096;
 const MAX_UNIFORM_REJECTION_ATTEMPTS_V1: usize = 4_096;
 #[cfg(test)]

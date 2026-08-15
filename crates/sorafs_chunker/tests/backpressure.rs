@@ -1,6 +1,6 @@
-use std::{fs, path::PathBuf};
 use norito::json::Value;
 use sorafs_chunker::{Chunker, fixtures::FixtureProfile};
+use std::{fs, path::PathBuf};
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")

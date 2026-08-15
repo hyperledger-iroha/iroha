@@ -1,6 +1,5 @@
 #![allow(unexpected_cfgs)]
 //! Round-trip and cross-SDK outcome coverage for committed SoraFS orderbook fixtures.
-use std::{fs, path::Path};
 use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1,
@@ -10,6 +9,7 @@ use sorafs_manifest::{
     verify_order_cancel_signature_v1, verify_order_request_signature_v1,
     verify_settlement_receipt_signature_v1,
 };
+use std::{fs, path::Path};
 use tempfile::tempdir;
 const FIXTURES_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

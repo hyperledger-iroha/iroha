@@ -1,11 +1,11 @@
 //! Allocation and escape-parity checks for owned JSON string parsing.
 #![cfg(feature = "json")]
+use norito::json::Parser;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
     sync::atomic::{AtomicUsize, Ordering},
 };
-use norito::json::Parser;
 struct CountingAllocator;
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 thread_local! {

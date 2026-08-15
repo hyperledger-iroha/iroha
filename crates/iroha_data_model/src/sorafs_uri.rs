@@ -1,15 +1,15 @@
 //! Module with [`SorafsUri`] and related impls.
-use std::{str::FromStr, string::String};
+pub use self::model::*;
+use crate::error::ParseError;
 use iroha_data_model_derive::model;
 use iroha_primitives::conststr::ConstString;
 use norito::codec::{Decode, Encode};
-pub use self::model::*;
-use crate::error::ParseError;
+use std::{str::FromStr, string::String};
 #[model]
 mod model {
+    use super::*;
     use derive_more::Display;
     use iroha_schema::IntoSchema;
-    use super::*;
     /// Strict `sorafs://...` URI literal used for logo links.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]

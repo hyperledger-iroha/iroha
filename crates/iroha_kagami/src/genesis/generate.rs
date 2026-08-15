@@ -1,6 +1,11 @@
-use std::{
-    io::{BufWriter, Write},
-    path::PathBuf,
+use crate::{
+    Outcome, RunArgs,
+    genesis::profile::{
+        GenesisProfile, PUBLIC_XOR_ALIAS, PUBLIC_XOR_DOMAIN, ProfileDefaults,
+        known_chain_discriminant_for_chain_id, parse_vrf_seed_hex, profile_defaults,
+        profile_requires_npos, resolve_public_xor_asset_definition_id, resolve_vrf_seed,
+    },
+    tui,
 };
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::WrapErr as _;
@@ -24,14 +29,9 @@ use iroha_genesis::{
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, CARPENTER_ID, gen_account_in};
 use iroha_version::BuildLine;
-use crate::{
-    Outcome, RunArgs,
-    genesis::profile::{
-        GenesisProfile, PUBLIC_XOR_ALIAS, PUBLIC_XOR_DOMAIN, ProfileDefaults,
-        known_chain_discriminant_for_chain_id, parse_vrf_seed_hex, profile_defaults,
-        profile_requires_npos, resolve_public_xor_asset_definition_id, resolve_vrf_seed,
-    },
-    tui,
+use std::{
+    io::{BufWriter, Write},
+    path::PathBuf,
 };
 /// Generate a genesis configuration and standard-output in JSON format
 #[derive(Parser, Debug, Clone)]
@@ -708,8 +708,8 @@ pub fn generate_default(
 }
 #[cfg(test)]
 mod consensus_manifest_tests {
-    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use super::*;
+    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     fn account_permission_grants(manifest: &RawGenesisTransaction) -> Vec<(AccountId, Permission)> {
         manifest
             .transactions()

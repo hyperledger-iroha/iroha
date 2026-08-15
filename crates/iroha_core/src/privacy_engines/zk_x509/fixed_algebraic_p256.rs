@@ -10,8 +10,6 @@
 //! topology.  It emits structural affine, repeated-affine, and sparse atoms;
 //! it never constructs a `2^19 * 404` native matrix, an LDE, an artifact,
 //! a Merkle tree, or proof-supplied fixed bytes.
-use std::{sync::OnceLock, vec::Vec};
-use thiserror::Error;
 #[cfg(test)]
 use super::fixed_algebraic::ZkX509FixedAlgebraicAtomV1;
 #[cfg(test)]
@@ -47,6 +45,8 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, sha256_frame_v1,
 };
+use std::{sync::OnceLock, vec::Vec};
+use thiserror::Error;
 /// Exact compact P-256 fixed-schedule semantics bound by the release profile.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] =
     b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log25:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:typed-composite-children=134,134,46,46,22,22:each-child-generic-cap65536:composite-digest-binds-profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=prefix893-local+min-local-vs13x43-phase+scalar-boundary222-local+min-local-vs63x222-phase+tail18-local:pinned-boundary-extents=1712,9984:pinned-repeated-extents=1888,10176:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
@@ -2909,10 +2909,6 @@ pub(crate) fn zk_x509_p256_fixed_algebraic_schedule_v1()
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        fmt::Write as _,
-    };
     use super::*;
     use crate::privacy_engines::{
         transparent_stark::{
@@ -2924,6 +2920,10 @@ mod tests {
             },
             p256_aggregate_adapter::P256MainVerifierFixedSourceV1,
         },
+    };
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fmt::Write as _,
     };
     // Filled from the first successful structural compilation and deliberately
     // pinned thereafter. A topology or atom-decomposition change must update

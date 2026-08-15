@@ -965,6 +965,42 @@ async fn borrowed_snapshot_wsv_hash_matches_typed_canonical_surface() {
     assert_eq!(canonical_state_snapshot_hash(&state), tree_reference);
 }
 #[tokio::test]
+async fn borrowed_snapshot_wsv_hash_canonicalizes_json_lexemes() {
+    let lexical = br#"{"\u0077orld":{"note":"\u0061","number":1e0}}"#;
+    let canonical = br#"{"world":{"note":"a","number":1.0}}"#;
+    assert_eq!(
+        canonical_snapshot_wsv_hash(lexical).expect("hash lexical snapshot spelling"),
+        Hash::new(canonical),
+    );
+
+    let lexical_set =
+        br#"{"world":{"parameters":{"sumeragi":{"key_allowed_hsm_providers":["\u0078","x"]}}}}"#;
+    let canonical_set =
+        br#"{"world":{"parameters":{"sumeragi":{"key_allowed_hsm_providers":["x"]}}}}"#;
+    assert_eq!(
+        canonical_snapshot_wsv_hash(lexical_set).expect("hash lexical set spelling"),
+        Hash::new(canonical_set),
+    );
+}
+
+#[tokio::test]
+async fn staged_snapshot_wsv_hash_injects_committed_event_buffer() {
+    let staged = br#"{"world":{"accounts":{}}}"#;
+    let committed_event_buffer = r#"{"revert":{},"blocks":[]}"#;
+    let canonical = br#"{"world":{"accounts":{},"external_event_buf":[]}}"#;
+    assert_eq!(
+        canonical_snapshot_wsv_hash_with_overrides(
+            staged,
+            CanonicalWsvOverrides {
+                committed_external_event_buf: Some(committed_event_buffer),
+            },
+        )
+        .expect("hash staged snapshot with its committed event buffer"),
+        Hash::new(canonical),
+    );
+}
+
+#[tokio::test]
 async fn canonical_wsv_hash_ignores_commit_qc_sidecars() {
     let mut state = state_factory();
     let before = canonical_state_snapshot_bytes_for_tests(&state);

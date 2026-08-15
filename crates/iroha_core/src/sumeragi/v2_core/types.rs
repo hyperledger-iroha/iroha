@@ -1,5 +1,5 @@
-use std::{error::Error, fmt};
 use super::{Quorum, QuorumError};
+use std::{error::Error, fmt};
 /// Wire protocol version implemented by this crate.
 pub const PROTOCOL_VERSION_V4: u16 = 4;
 /// Minimum Byzantine fault tolerance supported by a production committee.

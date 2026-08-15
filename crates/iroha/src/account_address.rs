@@ -101,8 +101,8 @@ pub fn parse_account_address(
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
     #[test]
     fn roundtrip_i105_encoding() {
         let key_pair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)

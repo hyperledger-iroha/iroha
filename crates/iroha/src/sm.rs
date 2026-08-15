@@ -168,10 +168,10 @@ pub enum Sm2VerifyError {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use super::*;
     use hex::FromHex;
     use norito::{derive::JsonDeserialize, json};
-    use super::*;
+    use std::{fs, path::PathBuf};
     #[derive(Debug, JsonDeserialize)]
     struct Fixture {
         algorithm: String,

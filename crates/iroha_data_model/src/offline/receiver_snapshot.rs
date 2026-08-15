@@ -1,9 +1,9 @@
 //! Portable, finality-bound active-receiver snapshot primitives.
+use super::KagemushaDevicePublicKeyV2;
+use crate::{account::AccountId, asset::AssetDefinitionId};
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use super::KagemushaDevicePublicKeyV2;
-use crate::{account::AccountId, asset::AssetDefinitionId};
 /// Current active-receiver snapshot format.
 pub const KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1: u16 = 1;
 /// Maximum active or ambiguous receiver tuples committed by one block.

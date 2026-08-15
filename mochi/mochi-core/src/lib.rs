@@ -41,14 +41,18 @@ pub use genesis::{default_manifest, sample_cabbage_definition_id, sample_rose_de
 pub use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 pub use iroha_telemetry::metrics::{Status as TelemetryStatus, TxGossipSnapshot};
 pub use logs::{LifecycleEvent, LogStreamKind, PeerLogEvent, PeerLogStream};
-pub use state::{StateCursor, StateEntry, StatePage, StateQueryError, StateQueryKind, run_state_query};
+pub use state::{
+    StateCursor, StateEntry, StatePage, StateQueryError, StateQueryKind, run_state_query,
+};
 pub use supervisor::{
     BinaryPaths, BinaryVersionInfo, CompatibilityReport, KagamiVerifyReport, PeerHandle, PeerState,
     Result as SupervisorResult, SelectedPeerStoragePaths, Supervisor, SupervisorBuilder,
     SupervisorError, SupervisorSessionInfo, resolve_selected_peer_storage_paths,
 };
 #[cfg(any(test, feature = "test"))]
-pub use supervisor::{kagami_stub_genesis_policies_from_config, sign_kagami_stub_genesis_from_config};
+pub use supervisor::{
+    kagami_stub_genesis_policies_from_config, sign_kagami_stub_genesis_from_config,
+};
 pub use torii::{
     BlockDecodeStage, BlockStream, BlockStreamDecodeError, BlockStreamEvent, BlockSummary,
     EventCategory, EventDecodeStage, EventStream, EventStreamDecodeError, EventStreamEvent,

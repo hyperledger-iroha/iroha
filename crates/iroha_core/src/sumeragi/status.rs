@@ -3,14 +3,36 @@
 //! Consensus state itself is published exclusively as the exact reducer-owned
 //! [`SumeragiV2Status`]. The remaining snapshots in this module are
 //! non-consensus Nexus economics, settlement, lane, and adapter diagnostics.
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-#[cfg(test)]
-use std::sync::Condvar;
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
-    time::{Duration, Instant},
+use super::{
+    FairV2Ingress,
+    v2_core::{
+        CanonicalIdentityProjection, ProductionAppliedSuccessorTraceProjection,
+        ProductionDurablePredecessorIdentityProjection,
+        ProductionRecoveredSuccessorTraceProjection,
+        ProductionSuccessorPredecessorBindingProjection, ProductionSuccessorSnapshotProjection,
+        ProductionSuccessorStartupLifecycleProjection, SUCCESSOR_AUTHORITY_APPLIED,
+        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
+        SUCCESSOR_LIFECYCLE_BEGIN, SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_MARKER_ACTIVATED,
+        SUCCESSOR_STAGE_COMPLETE, SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING,
+        check_production_applied_successor_transition,
+        check_production_recovered_successor_transition,
+        check_production_successor_startup_lifecycle_transition,
+    },
+    v2_effects::{EffectExecutorStatus, PendingKuraApplyRecoveryStage},
+    v2_first_release_recovery::RetiredRecoveredCompleteTipActivationAuthorityV1,
+    v2_recovery::{
+        DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
+        SnapshotSuccessorActivationAuthority, successor_context_refinement_projection,
+    },
+    v2_runtime::RuntimeQueueLaneSnapshot,
 };
+#[cfg(test)]
+use crate::commit_roster_journal::CommitRosterSnapshot;
+use crate::{
+    governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
+    queue::{BackpressureState, QueuePressureSnapshot},
+};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use iroha_crypto::{
     Hash, Hash as UntypedHash, HashOf,
     privacy::{CommitmentScheme, LanePrivacyCommitment},
@@ -48,36 +70,14 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
-use thiserror::Error;
-use super::{
-    FairV2Ingress,
-    v2_core::{
-        CanonicalIdentityProjection, ProductionAppliedSuccessorTraceProjection,
-        ProductionDurablePredecessorIdentityProjection,
-        ProductionRecoveredSuccessorTraceProjection,
-        ProductionSuccessorPredecessorBindingProjection, ProductionSuccessorSnapshotProjection,
-        ProductionSuccessorStartupLifecycleProjection, SUCCESSOR_AUTHORITY_APPLIED,
-        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
-        SUCCESSOR_LIFECYCLE_BEGIN, SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_MARKER_ACTIVATED,
-        SUCCESSOR_STAGE_COMPLETE, SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING,
-        check_production_applied_successor_transition,
-        check_production_recovered_successor_transition,
-        check_production_successor_startup_lifecycle_transition,
-    },
-    v2_effects::{EffectExecutorStatus, PendingKuraApplyRecoveryStage},
-    v2_first_release_recovery::RetiredRecoveredCompleteTipActivationAuthorityV1,
-    v2_recovery::{
-        DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
-        SnapshotSuccessorActivationAuthority, successor_context_refinement_projection,
-    },
-    v2_runtime::RuntimeQueueLaneSnapshot,
-};
 #[cfg(test)]
-use crate::commit_roster_journal::CommitRosterSnapshot;
-use crate::{
-    governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
-    queue::{BackpressureState, QueuePressureSnapshot},
+use std::sync::Condvar;
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
+    time::{Duration, Instant},
 };
+use thiserror::Error;
 static SUMERAGI_V2_STATUS: OnceLock<Mutex<Option<SumeragiV2Status>>> = OnceLock::new();
 static SUMERAGI_V2_EFFECT_STATUS: OnceLock<Mutex<Option<EffectExecutorStatus>>> = OnceLock::new();
 static SUMERAGI_V2_PROGRESS_CLOCK: OnceLock<Mutex<Option<V2ProgressClock>>> = OnceLock::new();
@@ -238,15 +238,15 @@ impl AuthenticatedCommitRoster {
 }
 #[cfg(test)]
 mod archival_status_tests {
+    use super::AuthenticatedCommitRoster;
+    use crate::commit_roster_journal::CommitRosterSnapshot;
+    use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::{BlockHeader, consensus::QcAggregate},
         consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
         peer::PeerId,
     };
-    use crate::commit_roster_journal::CommitRosterSnapshot;
-    use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase};
-    use super::AuthenticatedCommitRoster;
     fn fixture() -> CommitRosterSnapshot {
         let key_pair = KeyPair::try_from_seed(
             b"authenticated-commit-roster-status-test".to_vec(),
@@ -2218,10 +2218,20 @@ pub fn clear_v2_status() {
 }
 #[cfg(test)]
 mod v2_liveness_watchdog_tests {
-    use std::{
-        sync::{Arc, Mutex, mpsc},
-        thread,
-        time::{Duration, Instant},
+    use super::{
+        EffectExecutorStatus, PendingKuraApplyRecoveryStage, SnapshotSuccessorActivationAuthority,
+        V2IoCompletionQueueObserver, V2LivenessWatchdog, V2LivenessWatchdogTransition,
+        V2SuccessorActivationError, activate_snapshot_bootstrap_v2_height_at,
+        activate_v2_successor_height_at, begin_v2_successor_activation,
+        classify_v2_liveness_blocker, clear_v2_status, mark_v2_restart_required,
+        overlay_v2_effect_status, set_v2_effect_completion_observer, set_v2_effect_status,
+        set_v2_network_ingress, set_v2_status_at, update_v2_successor_work_stage_at, v2_status_at,
+        v2_status_with_restart_required,
+    };
+    use crate::sumeragi::{
+        BlockMessage, FairV2Ingress, InboundBlockMessage,
+        v2_recovery::{DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity},
+        v2_runtime::{RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot},
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::block::{
@@ -2239,20 +2249,10 @@ mod v2_liveness_watchdog_tests {
         },
     };
     use iroha_data_model::peer::PeerId;
-    use super::{
-        EffectExecutorStatus, PendingKuraApplyRecoveryStage, SnapshotSuccessorActivationAuthority,
-        V2IoCompletionQueueObserver, V2LivenessWatchdog, V2LivenessWatchdogTransition,
-        V2SuccessorActivationError, activate_snapshot_bootstrap_v2_height_at,
-        activate_v2_successor_height_at, begin_v2_successor_activation,
-        classify_v2_liveness_blocker, clear_v2_status, mark_v2_restart_required,
-        overlay_v2_effect_status, set_v2_effect_completion_observer, set_v2_effect_status,
-        set_v2_network_ingress, set_v2_status_at, update_v2_successor_work_stage_at, v2_status_at,
-        v2_status_with_restart_required,
-    };
-    use crate::sumeragi::{
-        BlockMessage, FairV2Ingress, InboundBlockMessage,
-        v2_recovery::{DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity},
-        v2_runtime::{RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot},
+    use std::{
+        sync::{Arc, Mutex, mpsc},
+        thread,
+        time::{Duration, Instant},
     };
     fn test_predecessor(height: u64, label: &[u8]) -> DurableV2PredecessorIdentity {
         DurableV2PredecessorIdentity::for_test(height, label)
@@ -5914,9 +5914,9 @@ pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
 }
 #[cfg(test)]
 mod telemetry_compatibility_tests {
+    use super::{PendingRbcEntrySnapshot, PendingRbcSnapshot, RbcBacklogSnapshot};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{block::BlockHeader, peer::PeerId};
-    use super::{PendingRbcEntrySnapshot, PendingRbcSnapshot, RbcBacklogSnapshot};
     #[test]
     fn phase_snapshot_tracks_current_max_ema_and_compatibility_counters() {
         let _guard = super::rbc_status_test_guard();

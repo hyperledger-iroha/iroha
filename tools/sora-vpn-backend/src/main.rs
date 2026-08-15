@@ -1,5 +1,7 @@
 #![allow(unexpected_cfgs)]
 //! Runs the privileged local backend used by the Sora VPN client.
+use clap::Parser;
+use norito::codec::{Decode, Encode};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::{
@@ -15,8 +17,6 @@ use std::{
 };
 #[cfg(target_os = "linux")]
 use std::{ffi::CStr, os::fd::FromRawFd};
-use clap::Parser;
-use norito::codec::{Decode, Encode};
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, unix::AsyncFd},
@@ -1227,8 +1227,8 @@ where
 }
 #[cfg(test)]
 mod tests {
-    use std::net::{Ipv4Addr, Ipv6Addr};
     use super::*;
+    use std::net::{Ipv4Addr, Ipv6Addr};
     #[test]
     fn parse_cidr_accepts_ipv4() {
         let parsed = parse_cidr("10.208.0.1/32").expect("cidr");

@@ -1,6 +1,6 @@
 //! Telemetry accumulation helpers for SoraFS storage providers.
-use std::cmp::min;
 use sorafs_manifest::capacity::CapacityTelemetryV1;
+use std::cmp::min;
 use thiserror::Error;
 /// Tracks per-epoch telemetry metrics before emitting a [`CapacityTelemetryV1`] payload.
 #[derive(Debug, Clone)]

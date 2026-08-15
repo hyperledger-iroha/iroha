@@ -1,10 +1,10 @@
 //! Generate sample Norito archives for account, domain, and trigger structures.
+use iroha_data_model::{Registrable, events::pipeline::BlockEventFilter, prelude::*};
+use norito::{core::NoritoSerialize, json::JsonSerialize};
 use std::{
     error::Error,
     path::{Path, PathBuf},
 };
-use iroha_data_model::{Registrable, events::pipeline::BlockEventFilter, prelude::*};
-use norito::{core::NoritoSerialize, json::JsonSerialize};
 fn main() -> Result<(), Box<dyn Error>> {
     iroha_genesis::init_instruction_registry();
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/codec");

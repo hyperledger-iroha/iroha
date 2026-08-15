@@ -4,12 +4,12 @@
 //! Build several independent transactions (no conflicts) and assert that the
 //! execution order is a stable sort by (`call_hash`, index) regardless of the
 //! input order.
-use std::{borrow::Cow, sync::Arc};
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
 };
 use iroha_data_model::prelude::*;
+use std::{borrow::Cow, sync::Arc};
 fn build_world() -> (
     iroha_core::state::State,
     NetworkId,

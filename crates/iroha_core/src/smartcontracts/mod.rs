@@ -10,13 +10,13 @@ pub mod isi;
 pub mod ivm;
 /// Helpers for size limits and similar guards.
 pub mod limits;
+use crate::state::{StateReadOnly, StateTransaction};
 use iroha_data_model::{
     isi::error::InstructionExecutionError as Error,
     prelude::*,
     query::{dsl::CompoundPredicate, error::QueryExecutionFail},
 };
 pub use isi::*;
-use crate::state::{StateReadOnly, StateTransaction};
 /// Trait implementations should provide actions to apply changes on [`StateTransaction`].
 pub trait Execute {
     /// Apply actions to `state_transaction` on behalf of `authority`.

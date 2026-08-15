@@ -1,5 +1,15 @@
 //! Deterministic complete fixtures for non-shipping tests and release evidence.
-use std::str::FromStr as _;
+use super::{
+    PQ_MASP_TREE_DEPTH_V1, PqMaspInputWitnessV1, PqMaspNotePlaintextV1, PqMaspOutputWitnessV1,
+    PqMaspWitnessV1, derive_pq_masp_authorization_key_digest_v1, derive_pq_masp_note_commitment_v1,
+    derive_pq_masp_note_encryption_keys_digest_v1, derive_pq_masp_nullifier_key_digest_v1,
+    derive_pq_masp_nullifier_v1, derive_pq_masp_recipient_id_v1, encrypt_pq_masp_note_v1_with_rng,
+    relation::{
+        accumulator_leaf_invocation_v1, accumulator_node_invocation_v1, namespace_v1,
+        validate_pq_masp_relation_v1,
+    },
+};
+use crate::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
@@ -18,18 +28,8 @@ use soranet_pq::{
     HedgedRngSeed, MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_seed,
     generate_mlkem_keypair_from_seed,
 };
+use std::str::FromStr as _;
 use zeroize::Zeroizing;
-use crate::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
-use super::{
-    PQ_MASP_TREE_DEPTH_V1, PqMaspInputWitnessV1, PqMaspNotePlaintextV1, PqMaspOutputWitnessV1,
-    PqMaspWitnessV1, derive_pq_masp_authorization_key_digest_v1, derive_pq_masp_note_commitment_v1,
-    derive_pq_masp_note_encryption_keys_digest_v1, derive_pq_masp_nullifier_key_digest_v1,
-    derive_pq_masp_nullifier_v1, derive_pq_masp_recipient_id_v1, encrypt_pq_masp_note_v1_with_rng,
-    relation::{
-        accumulator_leaf_invocation_v1, accumulator_node_invocation_v1, namespace_v1,
-        validate_pq_masp_relation_v1,
-    },
-};
 /// Complete fixture material kept behind `test` or release-evidence cfg.
 pub(crate) struct PqMaspReleaseFixtureV1 {
     pub(crate) statement: PqMaspStarkStatementV1,
@@ -415,8 +415,8 @@ pub(crate) fn pq_masp_release_successor_replay_fixture_v1(
 }
 #[cfg(test)]
 mod tests {
-    use rand::{SeedableRng as _, rngs::StdRng};
     use super::*;
+    use rand::{SeedableRng as _, rngs::StdRng};
     #[test]
     fn release_context_binds_every_compiled_profile_digest() {
         let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV0)

@@ -1,9 +1,9 @@
+use iroha_schema::IntoSchema;
+use norito::core::*;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     sync::atomic::{AtomicUsize, Ordering},
 };
-use iroha_schema::IntoSchema;
-use norito::core::*;
 struct CountingAlloc;
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 unsafe impl GlobalAlloc for CountingAlloc {

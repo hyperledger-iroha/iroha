@@ -9,13 +9,6 @@
 //! and never cross the IPC boundary. ZK-AMS and ZK-X509 remain absent until
 //! their native release paths are genuinely available, so receipt issuance
 //! remains closed.
-use std::{
-    env,
-    io::{Read as _, Write as _},
-    num::NonZeroU32,
-    process::ExitCode,
-    time::Duration,
-};
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_profiles::compiled_privacy_profile_v1,
@@ -46,6 +39,13 @@ use iroha_data_model::{
 };
 use iroha_version::codec::EncodeVersioned;
 use sha2::{Digest as _, Sha256};
+use std::{
+    env,
+    io::{Read as _, Write as _},
+    num::NonZeroU32,
+    process::ExitCode,
+    time::Duration,
+};
 use zeroize::Zeroizing;
 const REQUEST_SCHEMA: &str = "iroha.taira.privacy_action_driver_request";
 const RESPONSE_SCHEMA: &str = "iroha.taira.privacy_action_driver_response";

@@ -11,7 +11,6 @@
 //! Request account fields use the data model's canonical JSON address representation:
 //! bounded lowercase `0x` canonical bytes.  They never accept aliases, legacy
 //! `key@domain` literals, or Unicode I105 text at this ASCII JSON boundary.
-use std::num::NonZeroU32;
 use iroha_crypto::{Algorithm, PublicKey, sha256};
 use iroha_data_model::{
     NetworkId,
@@ -24,6 +23,7 @@ use iroha_data_model::{
     transaction::{Executable, FeePaymentIntent, TransactionBuilder, TransactionDomain},
 };
 use norito::json::{Map, Value};
+use std::num::NonZeroU32;
 pub(super) const PRIVACY_GOVERNANCE_PROVISIONING_BLOCKER_V1: &str =
     "MissingRetainedGenesisSignerFinalizePrivacyGenesisV1";
 pub(super) const PRIVACY_GOVERNANCE_REQUEST_SCHEMA_V1: &str =
@@ -1011,7 +1011,7 @@ fn is_zero<const N: usize>(bytes: &[u8; N]) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, time::Duration};
+    use super::*;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         block::BlockHeader,
@@ -1027,7 +1027,7 @@ mod tests {
         transaction::{ExecutableBatchItem, TransactionPayload},
     };
     use iroha_primitives::json::Json;
-    use super::*;
+    use std::{num::NonZeroU64, time::Duration};
     const TEST_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
     const FOREIGN_PUBLIC_KEY: &str =

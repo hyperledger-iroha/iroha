@@ -6,12 +6,6 @@
 //! execution payload: the immutable transfer-route contract account and the
 //! successful transaction receipt. No RPC assertion, owner-authorized generic
 //! emitter, proxy convention, or domain-only fallback is admitted.
-use alloc::{collections::BTreeSet, vec::Vec};
-use core::fmt;
-use iroha_data_model::bridge::sccp::{
-    SccpEvmSourceEmitterV1, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
-};
-use tiny_keccak::{Hasher as _, Keccak};
 use super::{
     H256, SccpPayloadV1, canonical_sccp_payload_bytes, decode_canonical_sccp_payload_bytes,
     prefixed_blake2b, sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,
@@ -25,6 +19,12 @@ use crate::ethereum_native::{
     NextSyncCommitteeBranch, Root, SYNC_COMMITTEE_BITS_BYTES, SYNC_COMMITTEE_SIZE, SyncAggregate,
     SyncCommittee,
 };
+use alloc::{collections::BTreeSet, vec::Vec};
+use core::fmt;
+use iroha_data_model::bridge::sccp::{
+    SccpEvmSourceEmitterV1, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
+};
+use tiny_keccak::{Hasher as _, Keccak};
 const ETHEREUM_NATIVE_ANCHOR_PREFIX_V1: &[u8] = b"sccp:ethereum:native-anchor:v1";
 const ETHEREUM_SOURCE_EVENT_SIGNATURE_V1: &[u8] =
     b"SccpTransfer(bytes32,bytes32,bytes32,bytes32,bytes32,bytes)";
@@ -1833,10 +1833,10 @@ pub(super) fn ethereum_native_positive_test_fixture_for_statement(
 }
 #[cfg(any(test, feature = "test-fixtures"))]
 mod test_fixtures {
-    use std::collections::BTreeMap;
-    use sha2::{Digest as _, Sha256};
     use super::*;
     use crate::sccp_source_identity_hash_v1;
+    use sha2::{Digest as _, Sha256};
+    use std::collections::BTreeMap;
     const GENERATOR_PUBLIC_KEY: [u8; 48] = [
         0x97, 0xf1, 0xd3, 0xa7, 0x31, 0x97, 0xd7, 0x94, 0x26, 0x95, 0x63, 0x8c, 0x4f, 0xa9, 0xac,
         0x0f, 0xc3, 0x68, 0x8c, 0x4f, 0x97, 0x74, 0xb9, 0x05, 0xa1, 0x4e, 0x3a, 0x3f, 0x17, 0x1b,
@@ -2164,9 +2164,9 @@ mod test_fixtures {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
     use super::test_fixtures::*;
     use super::*;
+    use std::sync::OnceLock;
     fn test_payload() -> &'static [u8] {
         static PAYLOAD: OnceLock<Vec<u8>> = OnceLock::new();
         PAYLOAD

@@ -6,13 +6,6 @@
 //! exit hedging, and cache/queue telemetry. These transport-local structures
 //! influence retrieval policy only; they never replace committed ledger or
 //! governed manifest authority.
-use std::{
-    collections::{HashMap, VecDeque},
-    hash::{Hash, Hasher},
-    num::NonZeroUsize,
-    sync::{Arc, Mutex, MutexGuard},
-    time::{Duration, Instant},
-};
 use blake3::hash as blake3_hash;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::taikai::{
@@ -25,6 +18,13 @@ use norito::{
     to_bytes,
 };
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use std::{
+    collections::{HashMap, VecDeque},
+    hash::{Hash, Hasher},
+    num::NonZeroUsize,
+    sync::{Arc, Mutex, MutexGuard},
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 fn verify_signature_for_signer(
     signature: &Signature,
@@ -2182,7 +2182,7 @@ impl CacheAdmissionTracker {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fmt, str::FromStr};
+    use super::*;
     use iroha_data_model::{
         da::types::{BlobDigest, StorageTicketId},
         name::Name,
@@ -2196,7 +2196,7 @@ mod tests {
         rand_core::{TryCryptoRng, TryRngCore},
         rngs::StdRng,
     };
-    use super::*;
+    use std::{fmt, str::FromStr};
     struct FailingCacheAdmissionNonceRng;
     #[derive(Debug)]
     struct FailingCacheAdmissionNonceRngError;

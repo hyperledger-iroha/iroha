@@ -8,18 +8,6 @@
 //! process-generation local because proposal, quorum-pool, and body-pipeline
 //! state can be volatile; restart must permit retransmission to reconstruct
 //! that state.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex},
-};
-#[cfg(test)]
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-use norito::codec::{Decode, DecodeAll, Encode};
 use super::{
     FairV2IngressLeaderWireIdentity, FairV2IngressLeaderWireSlot,
     FairV2IngressLeaderWireSourceClass, FairV2IngressLeaderWireToken,
@@ -36,14 +24,24 @@ use super::{
         check_production_leader_wire_admission_transition,
     },
 };
-// Version 3 records only restart-safe terminal retirements. Version 4 adds a
-// separate, equally bounded producer-continuation lifecycle table. Active
-// records retain identity/slot/ordinal metadata but never claim to persist the
-// command payload: restart normalizes them to selector-inert Dormant and
-// admits exact replay under the same immutable identity. Version 2 snapshots
-// contained volatile successful-service markers and must still fail closed
-// instead of suppressing reconstruction after restart.
-const FORMAT_VERSION_V3: u16 = 3;
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use norito::codec::{Decode, DecodeAll, Encode};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+};
+#[cfg(test)]
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+// Version 4 records restart-safe terminal retirements and a separate, equally
+// bounded producer-continuation lifecycle table. Active records retain
+// identity/slot/ordinal metadata but never claim to persist the command
+// payload: restart normalizes them to selector-inert Dormant and admits exact
+// replay under the same immutable identity. Every other snapshot version fails
+// closed; the first release has no persistence migration path.
 const FORMAT_VERSION: u16 = 4;
 const FRAME_MAGIC: &[u8; 8] = b"SUMVCAND";
 const HASH_BYTES: usize = 32;
@@ -197,17 +195,6 @@ struct PersistedServicedCandidate {
     key: ServicedCandidateKey,
     /// Consumer episode metadata used only for strict-view reclamation.
     service_view: wire::View,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-#[norito(deny_unknown_fields)]
-struct PersistedServicedCandidatesV3 {
-    format_version: u16,
-    context_id: wire::HeightContextId,
-    height: wire::Height,
-    owner: [u8; 32],
-    capacity: u64,
-    decision_reclaimed: bool,
-    records: Vec<PersistedServicedCandidate>,
 }
 /// Node-local index into the immutable lifecycle-stage address space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
@@ -2496,13 +2483,6 @@ fn encode_frame_v4(
 ) -> Result<Vec<u8>, String> {
     encode_payload_frame(FORMAT_VERSION, state.encode(), max_frame_bytes)
 }
-#[cfg(test)]
-fn encode_frame_v3(
-    state: &PersistedServicedCandidatesV3,
-    max_frame_bytes: u64,
-) -> Result<Vec<u8>, String> {
-    encode_payload_frame(FORMAT_VERSION_V3, state.encode(), max_frame_bytes)
-}
 fn decode_frame(bytes: &[u8], max_frame_bytes: u64) -> Result<DecodedServicedCandidates, String> {
     if bytes.len() < FRAME_HEADER_BYTES
         || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_frame_bytes
@@ -2516,7 +2496,7 @@ fn decode_frame(bytes: &[u8], max_frame_bytes: u64) -> Result<DecodedServicedCan
             .try_into()
             .map_err(|_| "serviced-candidate frame version is truncated".to_owned())?,
     );
-    if !matches!(version, FORMAT_VERSION_V3 | FORMAT_VERSION) {
+    if version != FORMAT_VERSION {
         return Err(format!(
             "serviced-candidate snapshot uses unsupported version {version}"
         ));
@@ -2538,49 +2518,22 @@ fn decode_frame(bytes: &[u8], max_frame_bytes: u64) -> Result<DecodedServicedCan
     if Hash::new(payload).as_ref() != &bytes[digest_offset..payload_offset] {
         return Err("serviced-candidate snapshot checksum mismatch".to_owned());
     }
-    match version {
-        FORMAT_VERSION_V3 => {
-            let mut cursor = payload;
-            let state =
-                PersistedServicedCandidatesV3::decode_all(&mut cursor).map_err(|error| {
-                    format!("failed to decode v3 serviced-candidate snapshot: {error}")
-                })?;
-            if state.format_version != FORMAT_VERSION_V3 || state.encode() != payload {
-                return Err("v3 serviced-candidate snapshot is not canonically encoded".to_owned());
-            }
-            Ok(DecodedServicedCandidates {
-                context_id: state.context_id,
-                height: state.height,
-                owner: state.owner,
-                serviced_capacity: state.capacity,
-                producer_continuation_capacity: state.capacity,
-                decision_reclaimed: state.decision_reclaimed,
-                records: state.records,
-                producer_continuations: Vec::new(),
-            })
-        }
-        FORMAT_VERSION => {
-            let mut cursor = payload;
-            let state =
-                PersistedServicedCandidatesV4::decode_all(&mut cursor).map_err(|error| {
-                    format!("failed to decode v4 serviced-candidate snapshot: {error}")
-                })?;
-            if state.format_version != FORMAT_VERSION || state.encode() != payload {
-                return Err("v4 serviced-candidate snapshot is not canonically encoded".to_owned());
-            }
-            Ok(DecodedServicedCandidates {
-                context_id: state.context_id,
-                height: state.height,
-                owner: state.owner,
-                serviced_capacity: state.serviced_capacity,
-                producer_continuation_capacity: state.producer_continuation_capacity,
-                decision_reclaimed: state.decision_reclaimed,
-                records: state.records,
-                producer_continuations: state.producer_continuations,
-            })
-        }
-        _ => unreachable!("unsupported versions return before payload decode"),
+    let mut cursor = payload;
+    let state = PersistedServicedCandidatesV4::decode_all(&mut cursor)
+        .map_err(|error| format!("failed to decode v4 serviced-candidate snapshot: {error}"))?;
+    if state.format_version != FORMAT_VERSION || state.encode() != payload {
+        return Err("v4 serviced-candidate snapshot is not canonically encoded".to_owned());
     }
+    Ok(DecodedServicedCandidates {
+        context_id: state.context_id,
+        height: state.height,
+        owner: state.owner,
+        serviced_capacity: state.serviced_capacity,
+        producer_continuation_capacity: state.producer_continuation_capacity,
+        decision_reclaimed: state.decision_reclaimed,
+        records: state.records,
+        producer_continuations: state.producer_continuations,
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -2760,21 +2713,6 @@ mod tests {
             decision_reclaimed,
             records,
             producer_continuations: Vec::new(),
-        }
-    }
-    fn v3_state(
-        store: &ServicedCandidateStore,
-        records: Vec<PersistedServicedCandidate>,
-        decision_reclaimed: bool,
-    ) -> PersistedServicedCandidatesV3 {
-        PersistedServicedCandidatesV3 {
-            format_version: FORMAT_VERSION_V3,
-            context_id: store.context_id,
-            height: store.height,
-            owner: store.owner,
-            capacity: u64::try_from(store.serviced_capacity).expect("test capacity fits u64"),
-            decision_reclaimed,
-            records,
         }
     }
     fn continuation_identity(
@@ -3081,7 +3019,7 @@ mod tests {
         );
     }
     #[test]
-    fn v4_roundtrips_terminal_producer_continuations_and_v3_upgrades_canonically() {
+    fn v4_roundtrips_terminal_producer_continuations() {
         let directory = TempDir::new().expect("temporary directory");
         let context = context();
         let wal = directory.path().join("continuations.wal");
@@ -3157,34 +3095,6 @@ mod tests {
             &materialized_restored.producer_continuations[&materialized.identity.address()];
         assert_eq!(reopened.status(), ProducerContinuationStatus::Reserved);
         assert!(reopened.handoff_candidates.is_empty());
-        let v3_wal = directory.path().join("v3-compatible.wal");
-        let (v3_store, _) =
-            ServicedCandidateStore::open(&v3_wal, context.id(), context.height, OWNER_A, 4)
-                .expect("derive v3-compatible snapshot path");
-        let v3 = v3_state(
-            &v3_store,
-            vec![PersistedServicedCandidate {
-                key: key(&context, 2, 7),
-                service_view: 2,
-            }],
-            false,
-        );
-        let v3_frame =
-            encode_frame_v3(&v3, v3_store.max_frame_bytes).expect("encode canonical v3 frame");
-        fs::write(v3_store.path_for_test(), v3_frame).expect("write canonical v3 frame");
-        let (v3_store, restored) =
-            ServicedCandidateStore::open(&v3_wal, context.id(), context.height, OWNER_A, 4)
-                .expect("restore exact v3 payload");
-        assert_eq!(restored.records, BTreeMap::from([(key(&context, 2, 7), 2)]));
-        assert!(restored.producer_continuations.is_empty());
-        v3_store
-            .persist(&restored.records, restored.decision_reclaimed)
-            .expect("canonically upgrade v3 payload to v4");
-        let upgraded = fs::read(v3_store.path_for_test()).expect("read upgraded frame");
-        assert_eq!(
-            &upgraded[FRAME_MAGIC.len()..FRAME_MAGIC.len() + 2],
-            &FORMAT_VERSION.to_le_bytes()
-        );
     }
     #[cfg(all(unix, not(target_os = "espidf")))]
     #[test]
@@ -4669,11 +4579,11 @@ mod tests {
         let valid = state(&store, Vec::new(), false);
         let mut frame = encode_frame_v4(&valid, store.max_frame_bytes).expect("encode valid frame");
         frame[FRAME_MAGIC.len()..FRAME_MAGIC.len() + 2]
-            .copy_from_slice(&(FORMAT_VERSION_V3 - 1).to_le_bytes());
+            .copy_from_slice(&(FORMAT_VERSION - 1).to_le_bytes());
         fs::write(store.path_for_test(), frame).expect("write old-version frame");
         assert!(
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2).is_err(),
-            "the retired v2 schema fails closed instead of being guessed"
+            "an earlier schema fails closed instead of being guessed"
         );
         for (name, records) in [
             (
@@ -4850,11 +4760,11 @@ mod tests {
         let valid = state(&store, Vec::new(), false);
         let mut frame = encode_frame_v4(&valid, store.max_frame_bytes).expect("encode v4 frame");
         frame[FRAME_MAGIC.len()..FRAME_MAGIC.len() + 2]
-            .copy_from_slice(&FORMAT_VERSION_V3.to_le_bytes());
+            .copy_from_slice(&(FORMAT_VERSION - 1).to_le_bytes());
         fs::write(store.path_for_test(), frame).expect("write mismatched version frame");
         assert!(
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1).is_err(),
-            "a v4 payload is never reinterpreted through the v3 decoder"
+            "a v4 payload is never reinterpreted through an earlier decoder"
         );
     }
     #[test]

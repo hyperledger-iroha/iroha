@@ -4,8 +4,8 @@
 //! At runtime [`field_dispatch::field_impl`] selects an implementation
 //! based on the host CPU features (SSE2, AVX2, AVX-512 or NEON).
 //! The scalar routines serve as a portable fallback.
-use halo2curves::{bn256::Fr, ff::PrimeField};
 use crate::field_dispatch::field_impl;
+use halo2curves::{bn256::Fr, ff::PrimeField};
 /// BN254 field modulus in little-endian limb form.
 pub const MODULUS: [u64; 4] = [
     0x43e1f593f0000001,
@@ -598,11 +598,11 @@ impl FieldArithmetic for NeonField {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[cfg(target_arch = "aarch64")]
     use halo2curves::bn256::Fr;
     #[cfg(target_arch = "aarch64")]
     use rand_core::{RngCore, impls::fill_bytes_via_next};
-    use super::*;
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn mul_sse2_matches_scalar() {

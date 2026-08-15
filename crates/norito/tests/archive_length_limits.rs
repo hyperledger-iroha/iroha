@@ -1,3 +1,4 @@
+use norito::{self, Error, core};
 #[cfg(target_pointer_width = "32")]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(target_pointer_width = "32")]
@@ -6,7 +7,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     io::Cursor,
 };
-use norito::{self, Error, core};
 #[cfg(target_pointer_width = "32")]
 fn with_limit<R>(limit: u64, f: impl FnOnce() -> R) -> R {
     static LIMIT_GUARD: Mutex<()> = Mutex::new(());

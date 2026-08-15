@@ -1,8 +1,8 @@
-use std::fmt::Display;
+use super::*;
 use iroha_primitives::numeric::Quantity;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
-use super::*;
+use std::fmt::Display;
 isi! {
     /// Generic instruction for a mint of an object to the identifiable destination.
     pub struct Mint<O, D: Identifiable> {
@@ -312,10 +312,10 @@ impl BurnBox {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::{Numeric, NumericOperationError};
     use norito::core::DecodeFromSlice;
-    use super::*;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked mint/burn fixture account keypair");

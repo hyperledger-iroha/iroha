@@ -9,10 +9,10 @@
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-use std::f32::consts::{PI, TAU};
 use crate::etenraku::{
     self, OrnamentMark, Ornaments, SequenceEvent, SequenceLayer, layer_intonation_cents,
 };
+use std::f32::consts::{PI, TAU};
 const MASTER_GAIN: f32 = 0.26;
 const TAIL_SECONDS: f32 = 3.5;
 const PAN_SHO: f32 = 0.0;

@@ -5,18 +5,6 @@
 //! into deterministic resolver roots, binds every public selector to a stable
 //! structural package identity, and collects one coherent finalized sparse
 //! index snapshot before invoking the pure backtracking resolver.
-use std::{
-    collections::{BTreeMap, BTreeSet, btree_map::Entry},
-    error::Error,
-    fmt,
-};
-use iroha_data_model::musubi::{
-    MUSUBI_MAX_DEPENDENCIES_V1, MUSUBI_MAX_PAGE_SIZE_V1, MusubiDependencyKindV1,
-    MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1,
-    MusubiPackageIdV1, MusubiPackageSelectorV1, MusubiPageRequestV1, MusubiRegistrySnapshotV1,
-    MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1, MusubiResolverReleaseRowV1,
-    MusubiVersionReqV1,
-};
 use crate::{
     lockfile::{LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1},
     manifest::ConcreteDependency,
@@ -28,6 +16,18 @@ use crate::{
         WorkspaceDependencyReqV1, WorkspaceRootReqV1, resolve, resolve_fresh,
     },
     workspace::{EffectiveDependency, Workspace, WorkspaceError, WorkspaceMember},
+};
+use iroha_data_model::musubi::{
+    MUSUBI_MAX_DEPENDENCIES_V1, MUSUBI_MAX_PAGE_SIZE_V1, MusubiDependencyKindV1,
+    MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1,
+    MusubiPackageIdV1, MusubiPackageSelectorV1, MusubiPageRequestV1, MusubiRegistrySnapshotV1,
+    MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1, MusubiResolverReleaseRowV1,
+    MusubiVersionReqV1,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    error::Error,
+    fmt,
 };
 /// Read-only finalized registry surface needed by dependency resolution.
 pub trait ResolverRegistrySourceV1 {
@@ -789,7 +789,8 @@ fn collect_requirement_rows<S: ResolverRegistrySourceV1>(
 }
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{fs, path::Path};
+    use super::*;
+    use crate::workspace::load_workspace;
     use iroha_data_model::{
         account::AccountId,
         musubi::{
@@ -801,9 +802,8 @@ mod tests {
         },
         prelude::{Algorithm, KeyPair},
     };
+    use std::{fs, path::Path};
     use tempfile::TempDir;
-    use super::*;
-    use crate::workspace::load_workspace;
     fn network_id() -> iroha_data_model::NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
@@ -1204,7 +1204,9 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
     }
     #[test]
     fn resolver_collection_rejects_a_repeated_cursor() {
-        use iroha_data_model::musubi::{MusubiFinalizedCursorV1, MusubiQueryHashV1, MusubiVersionReqV1};
+        use iroha_data_model::musubi::{
+            MusubiFinalizedCursorV1, MusubiQueryHashV1, MusubiVersionReqV1,
+        };
         let snapshot = MusubiRegistrySnapshotV1 {
             finalized_height: 10,
             finalized_block_hash: [8; 32],

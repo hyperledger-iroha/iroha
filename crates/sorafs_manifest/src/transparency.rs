@@ -5,13 +5,13 @@
 //! module defines the canonical V1 entry, block, and inclusion-proof payloads
 //! plus the deterministic BLAKE3 Merkle helpers needed by publishers and public
 //! verifiers.
-use std::collections::{BTreeMap, BTreeSet};
 use blake3::Hasher;
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 mod fixed_bytes {
     use norito::json::{self, JsonDeserialize as _, JsonSerialize as _, Parser};

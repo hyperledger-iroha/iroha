@@ -3,13 +3,13 @@
 //! The resolver accepts local operator files and remote Torii/SoraFS payloads.
 //! Keeping their byte, decode, collection, and retained-memory limits together
 //! makes the first-release admission contract explicit and auditable.
+use eyre::{Result, WrapErr, bail, eyre};
+use norito::{DecodeLimits, json};
 use std::{
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
 };
-use eyre::{Result, WrapErr, bail, eyre};
-use norito::{DecodeLimits, json};
 /// Maximum speculative capacity reserved before bytes have been observed (64 KiB).
 const MAX_INITIAL_READ_RESERVATION: usize = 64 * 1024;
 /// Maximum size of the resolver's Norito JSON configuration (1 MiB).
@@ -313,13 +313,13 @@ fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
-    use super::*;
     #[test]
     fn bounded_local_read_accepts_exact_limit_and_rejects_plus_one() {
         let mut exact = NamedTempFile::new().expect("temporary input");

@@ -1,6 +1,8 @@
 //! Effect-free deterministic owner for the two shared signed Musubi V1 fixtures.
 mod musubi_fixture_values;
 mod musubi_sdk_fixture_values;
+use musubi_fixture_values::MUSUBI_FIXTURE_OUTPUTS;
+use norito::json::{self, Value};
 use std::{
     collections::BTreeSet,
     env,
@@ -9,8 +11,6 @@ use std::{
     io::{self, Write as _},
     path::{Component, Path},
 };
-use musubi_fixture_values::MUSUBI_FIXTURE_OUTPUTS;
-use norito::json::{self, Value};
 const OWNER_ENVELOPE_SCHEMA_V1: &str = "iroha.musubi.signed_fixtures.owner.v1";
 type AnyError = Box<dyn Error + 'static>;
 #[derive(Debug)]

@@ -1,13 +1,6 @@
 //! Shared implementation for the SoraFS chunk-store developer CLIs.
-use std::{
-    env, fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-use norito::json::{Map, Value, to_string_pretty};
-use sorafs_chunker::ChunkProfile;
+#[cfg(feature = "cli")]
+use crate::FilePayload;
 use crate::{
     CarBuildPlan, CarChunk, ChunkStore, DirectoryChunkSinkOutput, DirectoryPublicationStatus,
     FileEntry, FilePlan, InMemoryPayload, ProfileId, chunker_registry,
@@ -16,8 +9,15 @@ use crate::{
     },
     por_json::{parse_proof_spec, proof_from_value, proof_to_value, sample_to_map, tree_to_value},
 };
-#[cfg(feature = "cli")]
-use crate::FilePayload;
+use norito::json::{Map, Value, to_string_pretty};
+use sorafs_chunker::ChunkProfile;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Flavor {
     ChunkStore,
@@ -931,10 +931,10 @@ fn require_canonical_hex_unsigned(value: &str, label: &str) -> Result<(), String
 }
 #[cfg(test)]
 mod tests {
-    use norito::json::Value;
-    use tempfile::tempdir;
     use super::*;
     use crate::PersistedChunkRecord;
+    use norito::json::Value;
+    use tempfile::tempdir;
     fn assert_write_text_creates_parent(flavor: Flavor) {
         let temp = tempdir().expect("tempdir");
         let output = temp

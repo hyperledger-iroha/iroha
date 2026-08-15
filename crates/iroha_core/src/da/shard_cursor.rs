@@ -6,12 +6,6 @@
 //! committed history even without a dedicated column family.
 //! Durable candidates are rejected before allocation when their encoded size,
 //! collection cardinality, or Norito decode budget exceeds protocol bounds.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-};
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_data_model::{
     da::commitment::{DaCommitmentBundle, DaCommitmentRecord},
@@ -22,6 +16,12 @@ use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
     decode_from_bytes_with_limits, to_bytes,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
 };
 use thiserror::Error;
 /// First-release ceiling for cursor/reset records in one durable journal.
@@ -1249,11 +1249,7 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        num::NonZeroU32,
-        path::{Path, PathBuf},
-    };
+    use super::*;
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
@@ -1267,8 +1263,12 @@ mod tests {
         },
         sorafs::pin_registry::ManifestDigest,
     };
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        num::NonZeroU32,
+        path::{Path, PathBuf},
+    };
     use tempfile::tempdir;
-    use super::*;
     fn sample_record(lane_id: u32, epoch: u64, sequence: u64) -> DaCommitmentRecord {
         let lane_byte = u8::try_from(lane_id).expect("lane fits in u8 for test record");
         let epoch_byte = u8::try_from(epoch).expect("epoch fits in u8 for test record");

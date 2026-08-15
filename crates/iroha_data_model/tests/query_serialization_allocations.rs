@@ -2,12 +2,6 @@
 // This isolated integration test is the narrow exception that needs `GlobalAlloc`
 // to observe steady-state heap traffic in the production serialization paths.
 #![allow(unsafe_code)]
-use std::{
-    alloc::{GlobalAlloc, Layout, System},
-    cell::Cell,
-    hint::black_box,
-    sync::atomic::{AtomicUsize, Ordering},
-};
 use iroha_data_model::{
     domain::Domain,
     query::{
@@ -18,6 +12,12 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use norito::core::NoritoSerialize;
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    cell::Cell,
+    hint::black_box,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 struct CountingAllocator;
 thread_local! {
     static TRACK_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };

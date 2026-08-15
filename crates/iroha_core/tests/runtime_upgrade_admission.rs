@@ -1,7 +1,6 @@
 //! Admission coverage for runtime upgrade manifests under the v1-only policy.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
-use std::{borrow::Cow, collections::BTreeSet, num::NonZeroU64, sync::Arc};
 use iroha_config::parameters::actual::RuntimeUpgradeProvenanceMode;
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
 use iroha_core::{
@@ -20,6 +19,7 @@ use iroha_primitives::json::Json;
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use std::{borrow::Cow, collections::BTreeSet, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     // Program: HALT (minimal body)
@@ -385,7 +385,9 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
 }
 #[test]
 fn activation_allows_v1_in_same_block() {
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache};
+    use iroha_core::{
+        kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
+    };
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let kp = checked_keypair();

@@ -62,9 +62,9 @@ fn registers_compact_bundle_roundtrip() {
     assert_eq!(cp2.depth(), cp.depth());
     assert_eq!(cp2.dirs(), cp.dirs());
     // The uncapped 8-level register proof has a fixed, authenticated count.
-    use std::num::NonZeroU64;
     use iroha_crypto::{Hash, HashOf, MerkleTreeCommitment};
     use sha2::Digest as _;
+    use std::num::NonZeroU64;
     let val = vm.register(3);
     let mut bytes = [0u8; 9];
     bytes[0] = 0;

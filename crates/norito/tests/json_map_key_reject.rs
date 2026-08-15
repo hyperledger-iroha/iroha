@@ -1,6 +1,6 @@
 //! Tests covering `json_from_map_key` fast-path validation and duplicate detection.
-use std::collections::HashMap;
 use norito::json::{self, JsonDeserialize};
+use std::collections::HashMap;
 #[test]
 fn json_map_key_fast_path_rejects_invalid_keys() {
     let invalid = norito::json!({ "truthy": 1 });

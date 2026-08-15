@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Time-based trigger execution paths using bounded async waits.
-use std::{
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
-};
+use crate::triggers::get_asset_value;
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::{
@@ -13,11 +10,14 @@ use iroha::{
 use iroha_primitives::json::Json;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in, load_sample_ivm};
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
-use crate::triggers::get_asset_value;
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
     let mut metadata = Metadata::default();

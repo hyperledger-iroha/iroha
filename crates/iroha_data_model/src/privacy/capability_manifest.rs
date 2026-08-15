@@ -1,8 +1,4 @@
 //! Canonical self-digesting Exact12 public capability manifest.
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use sha2::{Digest as _, Sha256};
-use thiserror::Error;
 use super::{
     PRIVACY_EXACT12_CAPABILITY_MANIFEST_DIGEST_DOMAIN_V1, PrivacyCapabilityRowV1,
     PrivacyCapabilityRowValidationErrorV1, PrivacyCapabilitySnapshotV1,
@@ -11,6 +7,10 @@ use super::{
     PrivacyExact12CapabilityManifestDigestV1, PrivacyPolicyValidationErrorV1,
     PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
 };
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use sha2::{Digest as _, Sha256};
+use thiserror::Error;
 /// Exact public Exact12 capability-manifest wire version.
 pub const PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1: u32 = 1;
 /// Canonical public operation schema selected by one retained protocol.

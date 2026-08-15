@@ -212,9 +212,6 @@ mod tests {
 }
 #[cfg(feature = "manifest")]
 mod compliance {
-    use std::sync::Arc;
-    use reqwest::StatusCode;
-    use thiserror::Error;
     use crate::{
         ChunkFetchSpec,
         gateway::{
@@ -224,6 +221,9 @@ mod compliance {
         },
         multi_fetch::FetchRequest,
     };
+    use reqwest::StatusCode;
+    use std::sync::Arc;
+    use thiserror::Error;
     /// Parsed and validated policy evidence returned by a gateway.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct PolicyEvidence {
@@ -380,17 +380,6 @@ mod compliance {
 pub use compliance::*;
 #[cfg(all(feature = "manifest", test))]
 mod compliance_tests {
-    use std::{
-        collections::HashMap,
-        sync::Arc,
-        time::{SystemTime, UNIX_EPOCH},
-    };
-    use base64::Engine as _;
-    use blake3;
-    use ed25519_dalek::SigningKey;
-    use reqwest::{StatusCode, header::HeaderMap};
-    use sorafs_chunker::ChunkProfile;
-    use sorafs_manifest::{STREAM_TOKEN_MAX_TTL_SECS_V1, StreamTokenBodyV1, StreamTokenV1};
     use super::*;
     use crate::{
         CarBuildPlan, ChunkFetchSpec,
@@ -399,6 +388,17 @@ mod compliance_tests {
             HttpEngine, HttpError, HttpFuture, HttpRequest, HttpResponse,
         },
         policy::{PolicyEvidenceValidator, run_honey_probe},
+    };
+    use base64::Engine as _;
+    use blake3;
+    use ed25519_dalek::SigningKey;
+    use reqwest::{StatusCode, header::HeaderMap};
+    use sorafs_chunker::ChunkProfile;
+    use sorafs_manifest::{STREAM_TOKEN_MAX_TTL_SECS_V1, StreamTokenBodyV1, StreamTokenV1};
+    use std::{
+        collections::HashMap,
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
     };
     const CATALOG_DIGEST_HEX: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

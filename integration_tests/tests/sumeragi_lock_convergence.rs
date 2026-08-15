@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Regression tests ensuring Sumeragi keeps `locked_qc` in sync during view changes and restarts.
-use std::time::{Duration, Instant};
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -10,6 +9,7 @@ use iroha::{
 use iroha_core::sumeragi::network_topology::Topology;
 use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
 use norito::json::Value;
+use std::time::{Duration, Instant};
 use tokio::{task, time::sleep};
 use toml::Table;
 const VIEW_CHANGE_RECOVERY_TIMEOUT: Duration = Duration::from_secs(300);

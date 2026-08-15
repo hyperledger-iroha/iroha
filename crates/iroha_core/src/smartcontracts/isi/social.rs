@@ -1,4 +1,12 @@
 //! Viral incentive instruction handlers for SOC-2 (follow rewards and escrows).
+use super::{
+    Error, Execute,
+    asset::isi::{
+        assert_numeric_spec_with, execute_social_escrow_transfer, execute_social_reward_transfer,
+        execute_social_send_transfer,
+    },
+};
+use crate::state::{StateTransaction, WorldTransaction};
 use eyre::Result;
 use iroha_config::parameters::actual::ViralIncentives;
 use iroha_crypto::Hash;
@@ -16,14 +24,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
-use super::{
-    Error, Execute,
-    asset::isi::{
-        assert_numeric_spec_with, execute_social_escrow_transfer, execute_social_reward_transfer,
-        execute_social_send_transfer,
-    },
-};
-use crate::state::{StateTransaction, WorldTransaction};
 const DAY_MS: u64 = 86_400_000;
 const REJECT_HALTED: &str = "halted";
 const REJECT_PROMO_WINDOW: &str = "promo_window";
@@ -603,16 +603,16 @@ fn validation_err(message: impl Into<String>) -> Error {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::{block::BlockHeader, prelude::*};
-    use iroha_test_samples::ALICE_ID;
-    use nonzero_ext::nonzero;
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_data_model::{block::BlockHeader, prelude::*};
+    use iroha_test_samples::ALICE_ID;
+    use nonzero_ext::nonzero;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("social fixture key generation should succeed")
     }

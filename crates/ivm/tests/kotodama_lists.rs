@@ -1,10 +1,10 @@
 //! End-to-end coverage for bounded Kotodama List lowering and execution.
-use std::collections::BTreeMap;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::json::Json;
 use ivm::{IVM, KotodamaCompiler, ProgramMetadata, host::DefaultHost, pointer_abi::PointerType};
 use ivm_abi::{list::ListLayoutV1, sum::SumLayoutV1};
+use std::collections::BTreeMap;
 mod common;
 fn run(source: &str) -> IVM {
     run_with_gas(source).0

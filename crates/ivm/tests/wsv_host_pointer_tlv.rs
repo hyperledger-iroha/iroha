@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::isi::transfer::{TransferAssetBatch, TransferAssetBatchEntry};
 use iroha_data_model::nexus::DataSpaceId;
@@ -11,6 +10,7 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
+use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {

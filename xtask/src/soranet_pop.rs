@@ -6,6 +6,14 @@
 //! The generator lets operators feed structured Norito JSON describing a PoP
 //! into `cargo xtask soranet-pop-template` and receive a deterministic FRR
 //! configuration with BFD/RPKI guards pre-wired.
+use crate::workspace_root;
+use eyre::{Result, WrapErr, eyre};
+use hex::encode as hex_encode;
+use norito::{
+    derive::{JsonDeserialize, JsonSerialize},
+    json::{self, Map, Value},
+};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt::Write,
@@ -15,15 +23,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-use eyre::{Result, WrapErr, eyre};
-use hex::encode as hex_encode;
-use norito::{
-    derive::{JsonDeserialize, JsonSerialize},
-    json::{self, Map, Value},
-};
-use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use crate::workspace_root;
 const ACTIONS_CHECKOUT_V4_COMMIT: &str = "11d5960a326750d5838078e36cf38b85af677262";
 /// Options for producing a PoP provisioning bundle.
 #[derive(Debug)]
@@ -2063,9 +2063,9 @@ impl RoaRecord {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
-    use super::*;
     #[test]
     fn renders_frr_config() {
         let json = br#"{

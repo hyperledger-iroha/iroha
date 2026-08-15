@@ -1,13 +1,13 @@
 //! Data event definitions used across the Iroha ledger.
-use std::{string::String, vec::Vec};
+pub use self::model::*;
+use super::*;
 use getset::Getters;
 use iroha_data_model_derive::{EventSet, HasOrigin, model};
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[allow(unused_imports)]
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-pub use self::model::*;
-use super::*;
+use std::{string::String, vec::Vec};
 macro_rules! data_event {
     ($(#[$meta:meta])* $vis:vis enum $name:ident { $($body:tt)* }) => {
         iroha_data_model_derive::model_single! {
@@ -192,9 +192,9 @@ where
 impl_json_via_norito_bytes!(DataEvent);
 mod asset {
     //! This module contains `AssetEvent`, `AssetDefinitionEvent` and its impls
-    use iroha_data_model_derive::model;
     pub use self::model::*;
     use super::*;
+    use iroha_data_model_derive::model;
     /// Metadata update associated with a specific asset instance.
     pub type AssetMetadataChanged = MetadataChanged<AssetId>;
     type AssetDefinitionMetadataChanged = MetadataChanged<AssetDefinitionId>;
@@ -424,9 +424,9 @@ pub mod bridge {
 }
 mod nft {
     //! This module contains `NftEvent` and its impls
-    use iroha_data_model_derive::model;
     pub use self::model::*;
     use super::*;
+    use iroha_data_model_derive::model;
     /// Metadata change captured for a specific NFT instance.
     type NftMetadataChanged = MetadataChanged<NftId>;
     data_event! {
@@ -469,9 +469,9 @@ mod nft {
 impl_json_via_norito_bytes!(NftOwnerChanged);
 mod rwa {
     //! This module contains `RwaEvent` and its impls.
-    use iroha_data_model_derive::model;
     pub use self::model::*;
     use super::*;
+    use iroha_data_model_derive::model;
     /// Metadata change captured for a specific RWA lot.
     type RwaMetadataChanged = MetadataChanged<RwaId>;
     data_event! {
@@ -619,9 +619,9 @@ mod peer {
 }
 mod role {
     //! This module contains `RoleEvent` and its impls
-    use iroha_data_model_derive::model;
     pub use self::model::*;
     use super::*;
+    use iroha_data_model_derive::model;
     data_event! {
         #[has_origin(origin = Role)]
         /// Event describing role lifecycle and permissions.
@@ -670,9 +670,9 @@ impl RolePermissionChanged {
 }
 mod account {
     //! This module contains `AccountEvent` and its impls
-    use iroha_data_model_derive::model;
     pub use self::model::*;
     use super::{repo_account::RepoAccountEvent, *};
+    use iroha_data_model_derive::model;
     /// Metadata change associated with a specific account.
     type AccountMetadataChanged = MetadataChanged<AccountId>;
     data_event! {
@@ -891,13 +891,13 @@ impl_json_via_norito_bytes!(
 );
 mod repo_account {
     //! Repo lifecycle events scoped to individual accounts.
-    use iroha_data_model_derive::model;
     pub use self::model::*;
     use super::*;
     use crate::{
         account::AccountId,
         repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg},
     };
+    use iroha_data_model_derive::model;
     data_event! {
         #[has_origin(origin = Account)]
         /// Repo agreement lifecycle event emitted for a specific account perspective.
@@ -1128,17 +1128,17 @@ mod domain {
     }
     #[model]
     mod model {
-        use iroha_crypto::Hash;
-        use norito::streaming::{
-            Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute, SoranetAccessKind,
-            SoranetChannelId, SoranetRoute, SoranetStreamTag,
-        };
         use super::*;
         use crate::{
             DataSpaceId, LaneId,
             account::AccountId,
             kaigi::{KaigiId, KaigiPrivacyMode, KaigiRelayHealthStatus},
             soranet::ticket::TicketEnvelopeV1,
+        };
+        use iroha_crypto::Hash;
+        use norito::streaming::{
+            Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute, SoranetAccessKind,
+            SoranetChannelId, SoranetRoute, SoranetStreamTag,
         };
         /// Event indicate that owner of the [`Domain`] is changed
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -2003,9 +2003,9 @@ impl_json_via_norito_bytes!(
 );
 mod trigger {
     //! This module contains `TriggerEvent` and its impls
-    use iroha_data_model_derive::model;
     pub use self::model::*;
     use super::*;
+    use iroha_data_model_derive::model;
     /// Metadata change associated with a trigger instance.
     type TriggerMetadataChanged = MetadataChanged<TriggerId>;
     data_event! {
@@ -2125,8 +2125,8 @@ impl_json_via_norito_bytes!(
     ConfigurationEvent,
 );
 mod executor {
-    use iroha_data_model_derive::model;
     pub use self::model::*;
+    use iroha_data_model_derive::model;
     // Keep super-module imports available for generated code paths.
     #[allow(unused)]
     use super::*;

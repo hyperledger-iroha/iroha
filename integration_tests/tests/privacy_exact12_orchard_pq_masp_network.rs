@@ -2,10 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Four-peer DA/RBC, lifecycle, atomicity, nullifier replay, and restart gate
 //! for the retained native Orchard and PQ-MASP production actions.
-use std::{
-    num::{NonZeroU32, NonZeroU64},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -54,6 +50,10 @@ use iroha_core::{
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::{
+    num::{NonZeroU32, NonZeroU64},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::time::{Instant, sleep, timeout};
 const ORCHARD_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::OrchardHalo2ActionsV1;
 const PQ_MASP_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::PqMaspStarkV0;

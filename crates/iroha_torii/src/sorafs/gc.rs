@@ -1,5 +1,6 @@
 //! GC scheduler runtime wiring for Torii-managed SoraFS nodes.
-use std::{sync::Arc, time::Duration};
+#[cfg(feature = "app_api")]
+use crate::sorafs::unix_now_secs;
 #[cfg(feature = "app_api")]
 use iroha_core::{smartcontracts::ValidSingularQuery, state::State};
 #[cfg(feature = "app_api")]
@@ -13,10 +14,9 @@ use iroha_futures::supervisor::ShutdownSignal;
 use sorafs_node::repair_ledger_projection::{
     RepairLedgerTaskProjectionBuilderV1, RepairLedgerTaskProjectionV1,
 };
+use std::{sync::Arc, time::Duration};
 #[cfg(feature = "app_api")]
 use tokio::time::{MissedTickBehavior, interval};
-#[cfg(feature = "app_api")]
-use crate::sorafs::unix_now_secs;
 /// Runtime that periodically invokes the GC sweeper.
 #[cfg(feature = "app_api")]
 pub struct GcSweeperRuntime {

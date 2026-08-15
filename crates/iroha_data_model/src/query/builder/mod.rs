@@ -5,9 +5,7 @@
 //! carries the concrete query, predicate, selector, and pagination components.
 mod batch_downcast;
 mod iter;
-use std::{marker::PhantomData, vec::Vec};
 pub use self::{batch_downcast::TypedBatchDowncastError, iter::QueryIterator};
-use derive_where::derive_where;
 use crate::query::{
     Query, QueryOutputBatchBoxTuple, QueryWithParams, SingularQueryBox, SingularQueryOutputBox,
     builder::batch_downcast::HasTypedBatchIter,
@@ -17,6 +15,8 @@ use crate::query::{
     },
     parameters::{FetchSize, Pagination, QueryParams, Sorting},
 };
+use derive_where::derive_where;
+use std::{marker::PhantomData, vec::Vec};
 /// A trait abstracting away concrete backend for executing queries against iroha.
 pub trait QueryExecutor {
     /// A type of cursor used in iterable queries.
@@ -323,7 +323,6 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use super::*;
     use crate::{
         domain::Domain,
@@ -332,6 +331,7 @@ mod tests {
             domain::FindDomains,
         },
     };
+    use std::cell::RefCell;
     #[derive(Default)]
     struct RecordingExecutor {
         query: RefCell<Option<QueryWithParams>>,
@@ -388,7 +388,6 @@ mod tests {
     }
     #[test]
     fn escrow_builders_emit_query_specific_discriminants() {
-        use iroha_crypto::KeyPair;
         use crate::{
             account::AccountId,
             escrow::AssetEscrowStatus,
@@ -396,6 +395,7 @@ mod tests {
                 FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
             },
         };
+        use iroha_crypto::KeyPair;
         let account = AccountId::new(
             KeyPair::try_random()
                 .expect("generate escrow query account")

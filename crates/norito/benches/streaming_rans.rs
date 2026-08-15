@@ -1,9 +1,9 @@
-use std::iter;
 use criterion::{Criterion, criterion_group, criterion_main};
 use norito::streaming::{
     BundleAcceleration, EntropyMode,
     codec::{BaselineEncoder, BaselineEncoderConfig, FrameDimensions, RawFrame},
 };
+use std::iter;
 fn bench_bundled_scalar(c: &mut Criterion) {
     let dimensions = FrameDimensions::new(32, 32);
     let frames: Vec<RawFrame> = iter::repeat_with(|| {

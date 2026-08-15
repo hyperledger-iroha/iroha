@@ -1,5 +1,4 @@
 //! Integration tests for the Norito Streaming Codec baseline pipeline.
-use std::convert::TryFrom;
 use norito::streaming::{
     CapabilityFlags, EncryptionSuite, FecScheme, ManifestV1, Multiaddr, PrivacyCapabilities,
     PrivacyRelay, PrivacyRoute, StreamMetadata,
@@ -12,6 +11,7 @@ use norito::streaming::{
         FrameDimensions, ManifestError, RawFrame, SegmentError, verify_segment,
     },
 };
+use std::convert::TryFrom;
 const SEGMENT_NUMBER: u64 = 41;
 const TIMELINE_START_NS: u64 = 1_333_000;
 const CONTENT_KEY_ID: u64 = 1_024;

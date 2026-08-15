@@ -1,12 +1,12 @@
 //! Allocation and wire-parity checks for exact-length nested serialization.
-use std::{
-    alloc::{GlobalAlloc, Layout, System},
-    cell::Cell,
-};
 use norito::core::{
     DecodeFlagsGuard, Encoder, Error, NoritoSerialize, header_flags, serialize_to_buffer,
 };
 use norito::{decode_canonical, encode_canonical, verify_exact_frame};
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    cell::Cell,
+};
 struct TrackingAllocator;
 thread_local! {
     static TRACKING: Cell<bool> = const { Cell::new(false) };

@@ -5,9 +5,6 @@
 //! These DTOs provide the on-wire and persistence representations of merge
 //! entries. See `specs/merge_ledger.md` for the normative behaviour the
 //! runtime must enforce when producing and validating these records.
-use iroha_crypto::{Hash, HashOf, MerkleTree, PublicKey};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     NetworkId,
     block::{
@@ -22,6 +19,9 @@ use crate::{
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
+use iroha_crypto::{Hash, HashOf, MerkleTree, PublicKey};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 const MERGE_LEDGER_ENTRY_HASH_DOMAIN: &[u8] = b"iroha:merge:ledger-entry:v2\0";
 const LANE_DRAIN_INTENT_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-intent:v1\0";
 const LANE_DRAIN_CERTIFICATE_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-certificate:v1\0";
@@ -778,9 +778,9 @@ impl MergeLedgerEntry {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-    use iroha_crypto::{Algorithm, KeyPair};
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use std::num::NonZeroU64;
     #[derive(Encode)]
     struct UnversionedMergeLedgerEntry {
         epoch_id: u64,

@@ -1,7 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii contract manifest endpoints: bytecode deploy wraps ISIs and GET reads the derived on-chain manifest.
-use std::time::{Duration, Instant};
-use std::{num::NonZeroU64, str::FromStr as _};
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -21,6 +19,8 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_test_network::NetworkBuilder;
 use reqwest::StatusCode;
+use std::time::{Duration, Instant};
+use std::{num::NonZeroU64, str::FromStr as _};
 fn minimal_contract_artifact() -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,

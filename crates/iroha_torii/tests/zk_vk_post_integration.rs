@@ -2,7 +2,6 @@
 //! Integration tests for POST VK registry endpoints (`app_api`).
 #![cfg(feature = "app_api")]
 #![allow(clippy::too_many_lines)]
-use std::sync::Arc;
 use axum::{Router, routing::post};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
@@ -16,6 +15,7 @@ use iroha_data_model::{account::AccountId, transaction::TransactionBuilder};
 use iroha_torii::NoritoJson;
 use nonzero_ext::nonzero;
 use norito::json;
+use std::sync::Arc;
 use tower::ServiceExt as _;
 fn checked_vk_post_authority_fixture() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()

@@ -5,9 +5,6 @@
 //! cursor ownership to the current process generation, and restores only body custody proven by
 //! the durable payload. The caller may publish the Queue startup gate only after this function
 //! returns its original combined V4/V6 receipt.
-use std::collections::{BTreeMap, BTreeSet};
-use iroha_crypto::{Hash, KeyPair, Signature};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
 use super::v2_apply::{
     LaneReservationSnapshotPlannerEvidence, recover_pending_autonomous_lifecycle_terminal_outcome,
 };
@@ -39,6 +36,9 @@ use crate::{
     },
     state::{State, consensus_lane_dataspace_at_height},
 };
+use iroha_crypto::{Hash, KeyPair, Signature};
+use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 std::thread_local! {
     static DEFERRED_TERMINAL_STAGE_PROOF_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =

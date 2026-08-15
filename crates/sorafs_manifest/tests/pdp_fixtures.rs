@@ -1,6 +1,5 @@
 //! Round-trip and cross-SDK outcome coverage for committed SoraFS PDP fixtures.
 #![allow(unexpected_cfgs)]
-use std::{fs, path::Path};
 use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     PdpChallengeV1, PdpCommitmentV1, PdpProofV1, validate_pdp_challenge_bytes,
@@ -8,6 +7,7 @@ use sorafs_manifest::{
     validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
     validate_pdp_proof_bytes,
 };
+use std::{fs, path::Path};
 use tempfile::tempdir;
 const FIXTURES_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

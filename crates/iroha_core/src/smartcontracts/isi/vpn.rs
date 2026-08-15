@@ -1,5 +1,9 @@
 //! Native SoraNet VPN lease escrow instruction handlers.
-use std::str::FromStr;
+use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
+use crate::{
+    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+};
 use eyre::Result;
 use iroha_crypto::{Algorithm, derive_non_signing_ed25519_public_key};
 #[cfg(test)]
@@ -24,11 +28,7 @@ use iroha_executor_data_model::permission::soranet::CanIssueSoranetVpnQuote;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
-use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
-use crate::{
-    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
-};
+use std::str::FromStr;
 /// Exact VPN purpose carried by a one-shot numeric movement capability.
 pub(in crate::smartcontracts::isi) enum VerifiedVpnNumericPurpose {
     Funding {
@@ -800,9 +800,9 @@ impl Execute for RefundExpiredVpnLease {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_config::parameters::actual::LaneConfig;
     use iroha_primitives::numeric::Numeric;
-    use super::*;
     fn nano_quantity(nanos: u64) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(u128::from(nanos), 9))
             .expect("test nano-XOR value is a valid quantity")

@@ -5,11 +5,15 @@
 //! existing payload-free transparency adapter output, and advances its local
 //! cursor only after the durable source index accepts the entry. Query access,
 //! committed-state access, and source storage remain explicit injected seams.
-use std::{
-    collections::BTreeSet,
-    fmt,
-    path::{Component, PathBuf},
-    sync::Arc,
+use crate::{
+    NodeHandle, TransparencyLedgerSourceEntry, decode_local_checkpoint_canonical,
+    read_local_checkpoint_bounded,
+    reputation::runtime::{
+        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1, ReputationExternalFailureV1,
+        ReputationFinalizedAnchorV1, ReputationFinalizedQueryV1,
+        ReputationRuntimeProviderQualificationV1,
+    },
+    reserve_finalized_event_source_entry, write_local_checkpoint_atomic_bounded,
 };
 use iroha_config::parameters::{
     actual::SorafsReserveTransparencyRuntime, validate_production_runtime_handle,
@@ -22,17 +26,13 @@ use iroha_data_model::{
     },
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
-use crate::{
-    NodeHandle, TransparencyLedgerSourceEntry, decode_local_checkpoint_canonical,
-    read_local_checkpoint_bounded,
-    reputation::runtime::{
-        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1, ReputationExternalFailureV1,
-        ReputationFinalizedAnchorV1, ReputationFinalizedQueryV1,
-        ReputationRuntimeProviderQualificationV1,
-    },
-    reserve_finalized_event_source_entry, write_local_checkpoint_atomic_bounded,
+use std::{
+    collections::BTreeSet,
+    fmt,
+    path::{Component, PathBuf},
+    sync::Arc,
 };
+use thiserror::Error;
 /// Version of the durable reserve-transparency scanner checkpoint.
 pub const RESERVE_TRANSPARENCY_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Fixed checkpoint filename below the configured private state directory.
@@ -670,14 +670,8 @@ fn deduplicate_anchors(anchors: Vec<ReserveFinalizedCursorV1>) -> Vec<ReserveFin
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        sync::{
-            Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
+    use super::*;
+    use crate::reputation::ReputationFinalizedIdentityV1;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         account::{AccountId, ParsedAccountId},
@@ -687,8 +681,14 @@ mod tests {
             reserve::{ReserveFinalizedEventV1, ReserveLifecycleStage},
         },
     };
-    use super::*;
-    use crate::reputation::ReputationFinalizedIdentityV1;
+    use std::{
+        collections::BTreeMap,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
     const QUERY_HANDLE: &str = "ledger.finalized.primary";
     const QUERY_POLICY_DIGEST: [u8; 32] = [0xA5; 32];
     fn test_network_id() -> NetworkId {

@@ -4,6 +4,12 @@
 //! and then provide only a normal relative path. This deliberately prevents a
 //! path read from a lockfile or registry response from becoming an arbitrary
 //! filesystem target.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::os::fd::AsRawFd as _;
+#[cfg(unix)]
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+};
 use std::{
     ffi::OsString,
     fmt,
@@ -11,12 +17,6 @@ use std::{
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
-};
-#[cfg(any(target_os = "linux", target_os = "android"))]
-use std::os::fd::AsRawFd as _;
-#[cfg(unix)]
-use std::os::unix::fs::{
-    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 const TEMP_CREATE_ATTEMPTS: u64 = 128;
 const POST_LINK_CLEANUP_ATTEMPTS: usize = 2;

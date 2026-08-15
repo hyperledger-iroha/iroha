@@ -7,13 +7,6 @@
 //! encodings and JSON models, and use `--out-dir <path>` to target a cache
 //! staging directory.
 mod native_amx_grouped;
-use std::{
-    collections::BTreeSet,
-    env,
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -38,6 +31,13 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::codec::{DecodeAll, Encode};
+use std::{
+    collections::BTreeSet,
+    env,
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 const FIXTURE_DIRECTORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/sumeragi_v2");
 const WIRE_FIXTURE_BASENAME: &str = "wire_v2.tsv";
 const CANONICAL_BODY: &[u8] = b"body";

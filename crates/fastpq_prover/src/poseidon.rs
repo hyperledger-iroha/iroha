@@ -6,12 +6,14 @@
 //! kernels mirror the exact permutation used by `fastpq_isi`, and hosts without
 //! GPU support automatically fall back to the CPU path while keeping the API
 //! stable.
-use std::sync::OnceLock;
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+use crate::metal;
 /// Goldilocks field modulus (2^64 - 2^32 + 1).
 pub use cpu::FIELD_MODULUS;
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::STATE_WIDTH;
 use fastpq_isi::poseidon::{self as cpu, PoseidonSponge as CpuPoseidonSponge};
+use std::sync::OnceLock;
 #[cfg(feature = "fastpq-gpu")]
 use {
     crate::backend::{self, GpuBackend},
@@ -19,8 +21,6 @@ use {
     std::sync::atomic::{AtomicBool, Ordering},
     tracing::warn,
 };
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-use crate::metal;
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "fastpq-gpu")]

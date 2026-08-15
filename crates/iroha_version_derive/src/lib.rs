@@ -1,9 +1,9 @@
 //! Crate containing schema related macro functionality
-use std::ops::Range;
 use darling::{Error as DarlingError, FromMeta, ast::NestedMeta};
 use manyhow::{Result, ToTokensError, bail, manyhow};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
+use std::ops::Range;
 use syn::{
     Data, DeriveInput, Error as SynError, Ident, LitInt, Path, Result as SynResult, Token,
     parse::{Parse, ParseStream},

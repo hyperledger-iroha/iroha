@@ -1,6 +1,6 @@
 //! Tests for xtask command parsing and release helpers.
-use norito::json::Value;
 use super::*;
+use norito::json::Value;
 #[test]
 fn norito_rpc_fixtures_accepts_only_the_canonical_output_root_option() {
     let args = [

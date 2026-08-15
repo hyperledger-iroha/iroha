@@ -1,13 +1,13 @@
 //! Commit-signature tally, quorum, and admission regression tests.
-use std::collections::BTreeSet;
-use iroha_crypto::{Algorithm, SignatureOf};
-use iroha_data_model::block::builder::BlockBuilder as DataBlockBuilder;
-use nonzero_ext::nonzero;
 use super::*;
 use crate::{
     block::valid::commit_signature_tally,
     sumeragi::{consensus::ValidatorIndex, network_topology::Topology},
 };
+use iroha_crypto::{Algorithm, SignatureOf};
+use iroha_data_model::block::builder::BlockBuilder as DataBlockBuilder;
+use nonzero_ext::nonzero;
+use std::collections::BTreeSet;
 fn checked_block_signature(
     private_key: &iroha_crypto::PrivateKey,
     block_hash: HashOf<BlockHeader>,

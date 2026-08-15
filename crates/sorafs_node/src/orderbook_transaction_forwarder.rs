@@ -7,10 +7,9 @@
 //! after those bytes are durable. Finalized-ledger reconcilers retain sole
 //! responsibility for deciding whether an operation committed, remained
 //! absent, or conflicted with a newer policy/book revision.
-use std::{
-    collections::BTreeSet,
-    path::Path,
-    sync::{Arc, Mutex},
+use crate::durable_transaction_forwarder::{
+    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
+    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
 use iroha_data_model::{
     NetworkId,
@@ -28,12 +27,15 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use sorafs_manifest::orderbook::{decode_settlement_receipt_v1, verify_settlement_receipt_signature_v1};
-use thiserror::Error;
-use crate::durable_transaction_forwarder::{
-    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
-    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
+use sorafs_manifest::orderbook::{
+    decode_settlement_receipt_v1, verify_settlement_receipt_signature_v1,
 };
+use std::{
+    collections::BTreeSet,
+    path::Path,
+    sync::{Arc, Mutex},
+};
+use thiserror::Error;
 /// Durable orderbook-transaction checkpoint schema version.
 pub const ORDERBOOK_TRANSACTION_FORWARDER_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Canonical orderbook-transaction checkpoint file.
@@ -2049,7 +2051,7 @@ impl From<CheckpointStoreError> for OrderbookTransactionForwarderError {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::Arc, thread, time::Duration};
+    use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -2067,8 +2069,8 @@ mod tests {
         },
         provider_advert::SignatureAlgorithm,
     };
+    use std::{fs, sync::Arc, thread, time::Duration};
     use tempfile::TempDir;
-    use super::*;
     fn policy() -> OrderbookTransactionForwarderPolicyV1 {
         OrderbookTransactionForwarderPolicyV1 {
             max_pending: 8,

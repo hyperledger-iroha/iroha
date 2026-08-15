@@ -1,10 +1,10 @@
 //! Shared helpers for resolving Torii data directory overrides.
+use iroha_config::parameters::defaults;
 use std::{
     path::{Path, PathBuf},
     sync::{Condvar, Mutex, OnceLock, RwLock},
     thread::ThreadId,
 };
-use iroha_config::parameters::defaults;
 fn override_slot() -> &'static Mutex<Option<PathBuf>> {
     static OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
     OVERRIDE.get_or_init(|| Mutex::new(None))
@@ -138,8 +138,8 @@ pub fn base_dir() -> PathBuf {
 }
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, sync::MutexGuard};
     use super::*;
+    use std::{path::Path, sync::MutexGuard};
     struct OverrideExclusiveTestGuard {
         owner: OverrideOwner,
     }

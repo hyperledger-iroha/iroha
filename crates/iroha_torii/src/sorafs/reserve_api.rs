@@ -7,7 +7,11 @@
 //! singular record.
 
 #![cfg(feature = "app_api")]
-use std::{collections::VecDeque, convert::Infallible, future::Future, time::Duration};
+use crate::{
+    JsonBody, SharedAppState,
+    routing::MaybeTelemetry,
+    utils::extractors::{ExtractAccept, JsonOrNoritoVersioned},
+};
 use axum::{
     extract::{
         Extension, Path, State,
@@ -51,11 +55,7 @@ use iroha_data_model::{
 use iroha_logger::{debug, warn};
 use norito::json;
 use sorafs_node::reserve_transaction_forwarder::RESERVE_TRANSACTION_MAX_CANONICAL_BYTES_V1;
-use crate::{
-    JsonBody, SharedAppState,
-    routing::MaybeTelemetry,
-    utils::extractors::{ExtractAccept, JsonOrNoritoVersioned},
-};
+use std::{collections::VecDeque, convert::Infallible, future::Future, time::Duration};
 /// Exact TTL used by every caller- and worker-signed reserve V1 transaction.
 const RESERVE_TRANSACTION_TTL_V1: Duration = Duration::from_secs(300);
 const RESERVE_DEFAULT_PAGE_LIMIT_V1: u32 = 100;
@@ -1657,15 +1657,7 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZeroU32,
-        pin::Pin,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
-        task::{Context, Poll},
-    };
+    use super::*;
     use futures::{Sink, channel::mpsc, task::AtomicWaker};
     use iroha_core::{smartcontracts::Execute, state::World};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -1692,7 +1684,15 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use sorafs_manifest::deal::XorQuantity;
-    use super::*;
+    use std::{
+        num::NonZeroU32,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Poll},
+    };
     #[test]
     fn reserve_auth_rejects_foreign_exact_network_before_feature_disclosure() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(

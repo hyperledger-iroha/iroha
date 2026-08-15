@@ -1,5 +1,5 @@
 //! Contains message structures for p2p communication during consensus.
-use std::{collections::BTreeMap, sync::Arc};
+use crate::block::NewBlock;
 use iroha_crypto::{Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -20,7 +20,7 @@ use norito::{
     codec::{Decode, Encode},
     core as ncore,
 };
-use crate::block::NewBlock;
+use std::{collections::BTreeMap, sync::Arc};
 #[allow(clippy::enum_variant_names, clippy::large_enum_variant)]
 /// Messages used by peers to communicate during the consensus process.
 #[derive(Debug, Clone, Decode, Encode, FromVariant)]
@@ -1126,7 +1126,8 @@ impl KuraReplicaAdvertV1 {
 }
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, sync::Arc, time::Duration};
+    use super::*;
+    use crate::{block::BlockBuilder, sumeragi::consensus, tx::AcceptedTransaction};
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
         AccountId, Level,
@@ -1143,8 +1144,7 @@ mod tests {
         transaction::TransactionBuilder,
     };
     use norito::{core as norito_core, decode_from_bytes};
-    use super::*;
-    use crate::{block::BlockBuilder, sumeragi::consensus, tx::AcceptedTransaction};
+    use std::{borrow::Cow, sync::Arc, time::Duration};
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("Sumeragi message fixture key generation should succeed")
     }

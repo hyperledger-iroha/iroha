@@ -10,15 +10,15 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+#[cfg(test)]
+use super::super::super::{BLOCK_SIZE, BlockWord, ROUNDS};
+use super::MessageScheduleConfig;
+use crate::zk::kagemusha_sha256_table16_v4::AssignedBits;
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::{Region, Value},
     plonk::Error,
 };
-#[cfg(test)]
-use super::super::super::{BLOCK_SIZE, BlockWord, ROUNDS};
-use super::MessageScheduleConfig;
-use crate::zk::kagemusha_sha256_table16_v4::AssignedBits;
 // Rows needed for each gate
 pub const DECOMPOSE_0_ROWS: usize = 2;
 pub const DECOMPOSE_1_ROWS: usize = 2;

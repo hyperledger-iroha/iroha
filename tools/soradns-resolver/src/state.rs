@@ -1,11 +1,3 @@
-use std::collections::HashMap;
-use eyre::{Result, WrapErr, bail};
-use hickory_proto::{
-    op::{Message, Query, ResponseCode},
-    rr::Record,
-};
-use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use tracing::warn;
 use crate::{
     bundle::ProofBundleV1,
     config::{FreezeMetadata, FreezeState, StaticZone},
@@ -16,6 +8,14 @@ use crate::{
     },
     rad::{ResolverAttestation, rad_retained_bytes},
 };
+use eyre::{Result, WrapErr, bail};
+use hickory_proto::{
+    op::{Message, Query, ResponseCode},
+    rr::Record,
+};
+use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use std::collections::HashMap;
+use tracing::warn;
 /// In-memory resolver state shared between tasks.
 #[derive(Debug, Default)]
 pub struct ResolverState {
@@ -487,7 +487,11 @@ pub struct ResolverStateMetrics {
 }
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
+    use super::*;
+    use crate::{
+        bundle::{DelegationProofV1, FreshnessProofV1, KskEntryV1, ProofBundleV1, ZskSignatureV1},
+        config::StaticZone,
+    };
     use hickory_proto::{
         op::{Message, MessageType, OpCode, Query},
         rr::{Name, RData, Record, RecordType, rdata::A},
@@ -501,11 +505,7 @@ mod tests {
         },
     };
     use iroha_primitives::soradns::derive_gateway_hosts;
-    use super::*;
-    use crate::{
-        bundle::{DelegationProofV1, FreshnessProofV1, KskEntryV1, ProofBundleV1, ZskSignatureV1},
-        config::StaticZone,
-    };
+    use std::net::Ipv4Addr;
     fn sample_bundle(version: u64) -> ProofBundleV1 {
         ProofBundleV1 {
             namehash: [1; 32],

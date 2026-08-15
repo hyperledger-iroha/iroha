@@ -1,12 +1,11 @@
 //! Native first-release FCMP++ primitives.
 //!
-//! This module implements the canonical Monero output tuple, strict
-//! Ed25519/Selene/Helios encodings, the alternating FCMP++ curve-tree
-//! accumulator, bounded proof-wire parser, Spend-Authorization-and-Linkability
-//! proof, canonical native dual generalized-Bulletproof membership,
-//! strict-positive `u64` Bulletproofs+ output ranges, conservation, and the
-//! authenticated fixed wallet note. Structural parsing remains a separate
-//! type and is never treated as cryptographic verification.
+//! This module implements the canonical Monero output tuple, strict Ed25519/Selene/Helios
+//! encodings, the alternating FCMP++ curve-tree accumulator, bounded proof-wire parser,
+//! Spend-Authorization-and-Linkability proof, canonical native dual generalized-Bulletproof
+//! membership, strict-positive `u64` Bulletproofs+ output ranges, conservation, and the
+//! authenticated fixed wallet note. Structural parsing remains a separate type and is never treated
+//! as cryptographic verification.
 //!
 //! The FCMP++ construction and curve constants are derived from the
 //! MIT-licensed `full-chain-membership-proofs`, `helioselene`, and
@@ -94,8 +93,7 @@ pub use self::{
         decode_fcmp_plus_plus_wire_v1, fcmp_plus_plus_wire_size_v1,
     },
 };
-/// Upstream FCMP++ revision used for the native first-release port and
-/// interoperability vectors.
+/// Upstream FCMP++ revision used for the native first-release port and interoperability vectors.
 pub const FCMP_UPSTREAM_REVISION_V1: &str = "15ef71140944b5b5d2feff0e58569b71f34c84a2";
 /// Auditable source profile for the clean-room native port.
 pub const FCMP_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:clean-room:full-chain-membership-proofs+helioselene+monero-fcmp-plus-plus:15ef71140944b5b5d2feff0e58569b71f34c84a2:v1";
@@ -121,9 +119,8 @@ pub struct FcmpRuntimeContextBindingV1<'a> {
 }
 /// Derive the sole canonical native FCMP++ runtime transcript digest.
 ///
-/// Both wallet-side proving and validator-side verification call this function,
-/// preventing either boundary from carrying a private copy of the transcript
-/// framing.
+/// Both wallet-side proving and validator-side verification call this function, preventing either
+/// boundary from carrying a private copy of the transcript framing.
 #[must_use]
 pub fn derive_fcmp_runtime_context_hash_v1(binding: &FcmpRuntimeContextBindingV1<'_>) -> [u8; 32] {
     const DOMAIN: &[u8] = b"iroha.privacy.fcmp-plus-plus.runtime-context.v1";
@@ -141,10 +138,9 @@ pub fn derive_fcmp_runtime_context_hash_v1(binding: &FcmpRuntimeContextBindingV1
 }
 /// Canonical description of every fixed first-release FCMP++ parameter family.
 ///
-/// The compiled privacy profile hashes these bytes together with the numeric
-/// wire and tree bounds below. Changing a curve, transcript, generator
-/// derivation, circuit dimension, or proof equation therefore requires an
-/// explicit manifest revision instead of silently retaining an activation
+/// The compiled privacy profile hashes these bytes together with the numeric wire and tree bounds
+/// below. Changing a curve, transcript, generator derivation, circuit dimension, or proof equation
+/// therefore requires an explicit manifest revision instead of silently retaining an activation
 /// fingerprint for different consensus code.
 pub const FCMP_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"fcmp++:ed25519-sal-blake2b512|field25519:7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed|helioselene-field:7fffffffffffffffffffffffffffffffbf7f782cb7656b586eb6d2727927c79f|helios:a=-3,b=22e8c739b0ea70b8be94a76b3ebb7b3b043f6f384113bf3522b49ee1edd73ad4|selene:a=-3,b=70127713695876c17f51bba595ffe279f3944bdf06ae900e68de0983cb5a4558|curve-tree:selene38-helios18-alternating-zero-pad|hash:keccak256-monero-domains|rng:rand-core06-try-fill-fail-closed+shared-fixed64-reservoir-health-check-zeroize-poison-on-error-or-unwind|sal:nonzero-prover-scalars-retry128+full-proof-retry128-on-point-or-challenge|membership-bp:blake2b512-tagged-transcript-nonzero-challenge-retry128-bounded-canonical-rng128-selene4096-helios2048|dlog:ed253-cycle255-divisor-backed-point-lift-retry128-exceptional-tuple-retry128|membership-restart:full-proof-retry128-on-transcript-or-dlog-exhaustion+hidden-pole+generalized-bulletproof-commitment-identity+inner-product-identity|membership:dual-generalized-bulletproofs+root-blind-pok|range:monero-bulletproofs-plus-64bit-ordered-C-and-C-minus-H-strict-positive-u64-outputs-max4+range-commitments-max8-keccak-transcript-context-output-order-bound+nonzero-prover-scalar-retry128+full-proof-retry128-on-point-or-challenge|witness:caller-explicit-rerandomization+full-input-output-path-scalar-vector-divisor-zeroize-on-drop+redacted-debug|balance:sum-pseudo-out-equals-sum-new-output-C-nonidentity|producer:deterministic-preflight-before-entropy+full-transaction-self-verify|wallet:IFCE-fixed280-x25519-sha256-kdf-xchacha20poly1305-authenticated-amount-u64le-commitment-mask-pool-recipient-ephemeral-output-tuple-aad+secret-key-shared-secret-plaintext-zeroize-on-drop|wire:IFC1-u8-inputs-u8-layers-u8-outputs-reserved0-membership-range-strict-exact|first-release:no-legacy:v1";
 /// SHA-256 digest of the deterministic complete one-layer native IFC1
@@ -170,8 +166,7 @@ pub const FCMP_MAX_TREE_LAYERS_V1: u8 = 32;
 pub const FCMP_POINT_BYTES_V1: usize = 32;
 /// Exact O/I/C output-tuple width.
 pub const FCMP_OUTPUT_TUPLE_BYTES_V1: usize = 3 * FCMP_POINT_BYTES_V1;
-/// Maximum newly created output count accepted by the complete native
-/// transaction verifier.
+/// Maximum newly created output count accepted by the complete native transaction verifier.
 pub const FCMP_MAX_OUTPUTS_NATIVE_V1: usize = 4;
 fn health_checked_fcmp_rng_v1<R>(
     rng: &mut R,
@@ -185,8 +180,7 @@ where
     })
 }
 const OUTPUT_ID_DOMAIN_V1: &[u8] = b"iroha.privacy.monero-fcmp-plus-plus.output-id.v1";
-/// Digest the exact native implementation profile used by governance
-/// fingerprints.
+/// Digest the exact native implementation profile used by governance fingerprints.
 #[must_use]
 pub fn fcmp_compiled_profile_digest_v1() -> [u8; 32] {
     const DOMAIN: &[u8] = b"iroha.privacy.fcmp-plus-plus.compiled-profile.v1";
@@ -233,9 +227,8 @@ pub fn fcmp_compiled_profile_digest_v1() -> [u8; 32] {
 }
 /// Validate one canonical, torsion-free, non-identity FCMP++ Edwards point.
 ///
-/// This is the shared validation boundary for O/I/C output components and the
-/// public O~/I~/R/C~/L relation. It rejects identity, small-order,
-/// non-canonical, and off-curve encodings.
+/// This is the shared validation boundary for O/I/C output components and the public O~/I~/R/C~/L
+/// relation. It rejects identity, small-order, non-canonical, and off-curve encodings.
 pub fn validate_fcmp_edwards_point_v1(
     point: [u8; FCMP_POINT_BYTES_V1],
 ) -> Result<(), FcmpNativeErrorV1> {
@@ -375,8 +368,7 @@ impl FcmpOutputTupleV1 {
     /// Derive the namespace-independent tuple identifier used only for ledger
     /// indexing and duplicate detection.
     ///
-    /// This digest is not substituted for the tuple in the curve tree or
-    /// membership relation.
+    /// This digest is not substituted for the tuple in the curve tree or membership relation.
     pub fn output_id(self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(OUTPUT_ID_DOMAIN_V1);
@@ -384,8 +376,7 @@ impl FcmpOutputTupleV1 {
         hasher.finalize().into()
     }
 }
-/// Canonical FCMP++ tree root with its cryptographically significant layer
-/// count.
+/// Canonical FCMP++ tree root with its cryptographically significant layer count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FcmpTreeRootV1 {
     layers: u8,
@@ -441,8 +432,7 @@ pub enum FcmpNativeErrorV1 {
         /// Required byte length.
         expected: usize,
     },
-    /// A compressed Ed25519 point was non-canonical, off-curve, or not in the
-    /// prime-order subgroup.
+    /// A compressed Ed25519 point was non-canonical, off-curve, or not in the prime-order subgroup.
     #[error("FCMP++ Ed25519 point encoding is invalid")]
     EdwardsPointEncoding,
     /// A public Ed25519 tuple component was the identity.
@@ -451,8 +441,7 @@ pub enum FcmpNativeErrorV1 {
     /// A compressed Selene/Helios point was non-canonical or off-curve.
     #[error("FCMP++ Selene/Helios point encoding is invalid")]
     CyclePointEncoding,
-    /// A Selene/Helios point used a forbidden identity or negative-zero
-    /// encoding.
+    /// A Selene/Helios point used a forbidden identity or negative-zero encoding.
     #[error("FCMP++ Selene/Helios point must be non-identity")]
     CyclePointIdentity,
     /// A scalar was not reduced modulo its exact curve field.
@@ -465,8 +454,7 @@ pub enum FcmpNativeErrorV1 {
     /// the fixed retry bound.
     #[error("FCMP++ prover randomness exhausted its fixed retry bound")]
     ProverRandomnessExhausted,
-    /// The caller-supplied cryptographic RNG reported that entropy was
-    /// unavailable.
+    /// The caller-supplied cryptographic RNG reported that entropy was unavailable.
     #[error("FCMP++ cryptographic randomness is unavailable")]
     RandomnessUnavailable,
     /// The caller-supplied cryptographic RNG repeated a catastrophic
@@ -489,19 +477,16 @@ pub enum FcmpNativeErrorV1 {
     /// complete membership prover retries this event with fresh commitments.
     #[error("FCMP++ dlog challenge hit a hidden witness denominator pole")]
     DlogWitnessPole,
-    /// A randomized generalized-Bulletproof commitment was the identity. The
-    /// complete membership prover retries this negligible honest abort with
-    /// fresh commitments.
+    /// A randomized generalized-Bulletproof commitment was the identity. The complete membership
+    /// prover retries this negligible honest abort with fresh commitments.
     #[error("FCMP++ generalized-Bulletproof prover commitment was the identity")]
     CircuitProverCommitmentIdentity,
-    /// An inner-product prover round produced an identity commitment. The
-    /// complete membership prover retries this negligible honest abort with
-    /// fresh commitments.
+    /// An inner-product prover round produced an identity commitment. The complete membership
+    /// prover retries this negligible honest abort with fresh commitments.
     #[error("FCMP++ inner-product prover round produced an identity commitment")]
     InnerProductRoundIdentity,
-    /// Every bounded complete membership-proof attempt hit a retryable
-    /// transcript/dlog exhaustion, hidden denominator pole, or inner-product
-    /// identity.
+    /// Every bounded complete membership-proof attempt hit a retryable transcript/dlog exhaustion,
+    /// hidden denominator pole, or inner-product identity.
     #[error("FCMP++ membership prover exhausted its fixed restart bound")]
     MembershipProverRestartExhausted,
     /// A branch was empty or exceeded its compiled curve width.
@@ -602,8 +587,7 @@ pub enum FcmpNativeErrorV1 {
     /// by the proved Pedersen blind.
     #[error("FCMP++ root-blind proof of knowledge is invalid")]
     RootBlindEquation,
-    /// One of the two generalized Bulletproof arithmetic-circuit equations
-    /// failed.
+    /// One of the two generalized Bulletproof arithmetic-circuit equations failed.
     #[error("FCMP++ generalized Bulletproof arithmetic circuit is invalid")]
     CircuitEquation,
     /// A proof transcript did not consume exactly the canonical proof body.

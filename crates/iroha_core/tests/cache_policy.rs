@@ -5,8 +5,8 @@
 //! - Insert/hit/eviction behavior under bounded capacity
 //! - Header version keying (minor/major version invalidation)
 //! - Capacity clamp when configured to zero (must behave as capacity = 1)
-use std::sync::{Arc, LazyLock, Mutex};
 use ivm::{ProgramMetadata, encoding, instruction, ivm_cache};
+use std::sync::{Arc, LazyLock, Mutex};
 static CACHE_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 fn meta(vmaj: u8, vmin: u8) -> ProgramMetadata {
     ProgramMetadata {

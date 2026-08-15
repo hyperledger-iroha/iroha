@@ -352,9 +352,9 @@ impl RelayPerformanceAccumulator {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{account::AccountId, metadata::Metadata};
-    use super::*;
     const RELAY: RelayId = [7_u8; 32];
     fn sample_account(seed: u8) -> AccountId {
         let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

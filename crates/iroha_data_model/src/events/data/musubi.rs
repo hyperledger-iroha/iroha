@@ -1,7 +1,7 @@
 //! Bounded Musubi V1 registry and storage lifecycle events.
-use iroha_data_model_derive::model;
 pub use self::model::*;
 use super::*;
+use iroha_data_model_derive::model;
 #[model]
 mod model {
     use super::*;
@@ -307,8 +307,8 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use norito::codec::{DecodeAll as _, Encode as _};
     use super::*;
+    use norito::codec::{DecodeAll as _, Encode as _};
     #[test]
     fn provider_attestation_registration_event_is_compact_and_archive_routable() {
         let archive_id = crate::musubi::ArchiveId::new([0x31; 32]);

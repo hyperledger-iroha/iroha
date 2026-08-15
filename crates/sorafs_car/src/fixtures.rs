@@ -5,12 +5,12 @@
 //! payload, the derived [`CarBuildPlan`], provider metadata, and telemetry
 //! snapshots so integration tests can exercise end-to-end fetch flows without
 //! standing up real storage nodes.
-use sorafs_chunker::{ChunkProfile, fixtures::FixtureProfile};
 use crate::{
     CarBuildPlan, CarPlanError,
     multi_fetch::{ProviderMetadata, RangeCapability, StreamBudget, TransportHint},
     scoreboard::{ProviderTelemetry, TelemetrySnapshot},
 };
+use sorafs_chunker::{ChunkProfile, fixtures::FixtureProfile};
 const MAX_FIXTURE_PROVIDERS: usize = 1_024;
 /// Errors returned while constructing deterministic multi-peer fixtures.
 #[derive(Debug, thiserror::Error)]

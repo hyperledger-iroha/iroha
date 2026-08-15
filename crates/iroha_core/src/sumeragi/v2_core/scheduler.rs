@@ -4,7 +4,9 @@
 //! and queue state to three booleans, then execute the selected work. This is
 //! the authoritative branch relation shared by production and formal
 //! refinement.
-use super::refinement::{ProductionSchedulerTraceProjection, check_production_scheduler_transition};
+use super::refinement::{
+    ProductionSchedulerTraceProjection, check_production_scheduler_transition,
+};
 // Constructor expressions are arguments because the ordinary Rust and Verus
 // instantiations use different result types. Keeping the branch conditions in
 // one macro prevents either side from silently changing timer/FIFO priority.

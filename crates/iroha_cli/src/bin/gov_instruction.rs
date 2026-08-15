@@ -1,9 +1,4 @@
 //! Encode governance instructions and submit consensus-governed helper transactions.
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
 use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
@@ -28,6 +23,11 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_sccp::{
     SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpPayloadV1, TransferPayloadV1,
     canonical_sccp_payload_bytes, hub_commitment_from_sccp_payload, verify_sccp_payload_structure,
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 #[derive(Parser, Debug)]
 struct Args {
@@ -638,7 +638,6 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::Cell, time::Duration};
     use iroha::data_model::{ChainId, account::AccountId};
     use iroha_config::parameters::{
         actual::SorafsRolloutPhase,
@@ -650,6 +649,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use sorafs_orchestrator::AnonymityPolicy;
+    use std::{cell::Cell, time::Duration};
     use url::Url;
     fn default_alias_cache_policy() -> AliasCachePolicy {
         AliasCachePolicy::new(

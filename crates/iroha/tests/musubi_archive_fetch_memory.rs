@@ -9,14 +9,14 @@
 // This integration test is the narrow exception that needs `GlobalAlloc` in order to
 // measure the production stream bridge in an isolated child process.
 #![allow(unsafe_code)]
+use iroha_data_model::musubi::{MUSUBI_MAX_FILES_V1, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1};
+use sorafs_car::{CarBuildPlan, CarChunk, CarStreamingWriter, FilePlan};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     io::{self, Read},
     process::Command,
     sync::atomic::{AtomicUsize, Ordering},
 };
-use iroha_data_model::musubi::{MUSUBI_MAX_FILES_V1, MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1};
-use sorafs_car::{CarBuildPlan, CarChunk, CarStreamingWriter, FilePlan};
 #[path = "../src/musubi_archive_fetch/bounded_stream.rs"]
 mod bounded_stream;
 const CHILD_MODE_ENV: &str = "IROHA_MUSUBI_FETCH_MEMORY_CHILD_V1";

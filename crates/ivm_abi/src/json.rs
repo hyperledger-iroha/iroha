@@ -5,12 +5,12 @@
 //! aggregate-state schema for the corresponding flattened VM words. This lets
 //! the host recursively convert bounded Lists and active-only Options without
 //! guessing runtime types or serializing an intermediate projection.
-use std::collections::BTreeSet;
-use norito::{Decode, Encode};
 use crate::state_value::{
     MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS, StateValueKindV1,
     StateValueNodeV1, StateValueSchemaV1,
 };
+use norito::{Decode, Encode};
+use std::collections::BTreeSet;
 /// Maximum number of construction nodes accepted by the V1 JSON builder.
 pub const MAX_JSON_CONSTRUCTION_NODES_V1: usize = 256;
 /// Maximum number of statically declared fields or elements in one JSON node.
@@ -189,8 +189,8 @@ pub fn json_value_schema_is_supported(schema: &StateValueSchemaV1) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use norito::{decode_from_bytes, to_bytes};
     use super::*;
+    use norito::{decode_from_bytes, to_bytes};
     fn leaf(kind: StateValueKindV1) -> StateValueSchemaV1 {
         StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::Leaf(kind)],

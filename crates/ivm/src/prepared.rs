@@ -1,17 +1,17 @@
 //! Immutable, validated contract programs prepared for repeated IVM execution.
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fmt,
-    sync::Arc,
-};
-use iroha_crypto::Hash;
-use iroha_data_model::smart_contract::manifest::ContractManifest;
 use crate::{
     ProgramMetadata, VMError,
     instruction::wide,
     ivm::{DecodedLiteralTable, PreparedProgram},
     ivm_cache::DecodedOp,
     metadata::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor},
+};
+use iroha_crypto::Hash;
+use iroha_data_model::smart_contract::manifest::ContractManifest;
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt,
+    sync::Arc,
 };
 #[derive(Clone, Copy, Debug)]
 struct PreparedEntrypointIndex {

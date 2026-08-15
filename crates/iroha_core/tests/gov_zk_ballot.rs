@@ -4,9 +4,8 @@
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 //! Governance ZK ballot basic test (requires explicit election creation).
 mod zk_testkit;
-use core::num::NonZeroU64;
-use std::time::Duration;
 use base64::Engine as _;
+use core::num::NonZeroU64;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -34,6 +33,7 @@ use iroha_executor_data_model::permission::governance::{
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
+use std::time::Duration;
 fn derive_ballot_nullifier(
     domain_tag: &str,
     network_id: &iroha_data_model::NetworkId,

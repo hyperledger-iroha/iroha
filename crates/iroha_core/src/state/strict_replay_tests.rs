@@ -1,12 +1,18 @@
 //! Production-path tests for strict Sumeragi-v2 Kura replay.
-use std::{
-    collections::BTreeSet,
-    num::{NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World, WorldReadOnly};
 use crate::sumeragi::v2_core::{EventTag, Generation};
+use crate::{
+    governance::manifest::LaneManifestRegistry,
+    kura::{CommitManifest, CommitManifestBindingState, Kura},
+    query::store::LiveQueryStore,
+    queue::Queue,
+    sumeragi::{
+        v2_apply::V2ApplyService,
+        v2_body_store::{BlockSignaturePolicy, V2BodyStore},
+        v2_chunks::encode_payload,
+        v2_effects::ApplyTask,
+    },
+};
 use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
@@ -25,18 +31,12 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
-use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World, WorldReadOnly};
-use crate::{
-    governance::manifest::LaneManifestRegistry,
-    kura::{CommitManifest, CommitManifestBindingState, Kura},
-    query::store::LiveQueryStore,
-    queue::Queue,
-    sumeragi::{
-        v2_apply::V2ApplyService,
-        v2_body_store::{BlockSignaturePolicy, V2BodyStore},
-        v2_chunks::encode_payload,
-        v2_effects::ApplyTask,
-    },
+use std::{
+    collections::BTreeSet,
+    num::{NonZeroU64, NonZeroUsize},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
 };
 const HEIGHT: u64 = 1;
 /// Test-only mirror of Kura's private retained SCCP message layout.

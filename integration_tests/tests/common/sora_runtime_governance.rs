@@ -1,8 +1,4 @@
 //! Shared runtime-governance fixture and round helpers used by SORA integration tests.
-use std::{
-    collections::BTreeSet,
-    time::{Duration, Instant},
-};
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::{sandbox, sync};
 use iroha::client::Client;
@@ -32,6 +28,10 @@ use iroha_executor_data_model::permission::governance::{
 };
 use iroha_test_network::{NetworkBuilder, ensure_domain_setup_for_network};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 const CITIZEN_COUNT: usize = 20;
 const CITIZEN_FUND: u128 = 15_000;
 const CITIZEN_BOND: u128 = 10_000;

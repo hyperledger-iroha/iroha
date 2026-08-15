@@ -1,35 +1,4 @@
 //! Crash-atomic Kura lane-geometry transitions.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{ErrorKind, Read, Write},
-    num::NonZeroUsize,
-    path::{Component, Path, PathBuf},
-    sync::Arc,
-};
-use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{
-    block::{
-        BlockHeader, SignedBlock,
-        consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
-        execution_context::{ExternalExecutionContext, ExternalExecutionRouteRole},
-    },
-    merge::{LaneDrainFrontierV1, MergeLedgerEntry},
-    nexus::{DataSpaceId, LaneId},
-    state_path::StatePath,
-    transaction::signed::TransactionEntrypoint,
-};
-use norito::codec::{Decode, DecodeAll, Encode};
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
-use rustix::fs::{AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, openat, statat, unlinkat};
-#[cfg(any(
-    target_vendor = "apple",
-    target_os = "linux",
-    target_os = "android",
-    target_os = "redox"
-))]
-use rustix::fs::{RenameFlags, renameat_with};
 use super::{
     AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES, AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
     AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX, AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE,
@@ -68,6 +37,39 @@ use super::{
     NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS, OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
     OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE, SidecarIndexEntry,
     V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
+};
+use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{
+    block::{
+        BlockHeader, SignedBlock,
+        consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
+        execution_context::{ExternalExecutionContext, ExternalExecutionRouteRole},
+    },
+    merge::{LaneDrainFrontierV1, MergeLedgerEntry},
+    nexus::{DataSpaceId, LaneId},
+    state_path::StatePath,
+    transaction::signed::TransactionEntrypoint,
+};
+use norito::codec::{Decode, DecodeAll, Encode};
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+use rustix::fs::{
+    AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, openat, statat, unlinkat,
+};
+#[cfg(any(
+    target_vendor = "apple",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "redox"
+))]
+use rustix::fs::{RenameFlags, renameat_with};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::{ErrorKind, Read, Write},
+    num::NonZeroUsize,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 const JOURNAL_VERSION: u8 = 6;
 const MARKER_VERSION: u8 = 3;

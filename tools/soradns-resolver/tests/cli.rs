@@ -1,7 +1,3 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
 use assert_cmd::Command;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
@@ -21,6 +17,10 @@ use soradns_resolver::{
     canonical::{canonicalize_json_bytes, sha256_digest},
     directory::signing_payload_bytes,
     rad::compute_rad_digest,
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
 };
 use tempfile::TempDir;
 #[test]

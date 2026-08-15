@@ -1,11 +1,11 @@
 //! This module contains implementations of smart-contract traits and
 //! instructions for triggers in Iroha.
-use std::sync::OnceLock;
 use iroha_data_model::{
     ValidationFail, isi::error::MathError, prelude::*, query::error::FindError,
     transaction::error::prelude::TransactionRejectionReason,
 };
 use iroha_telemetry::metrics;
+use std::sync::OnceLock;
 pub mod set;
 pub mod specialized;
 /// Trigger metadata key toggled by `set_trigger_enabled` syscalls/ISIs.
@@ -39,13 +39,13 @@ pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
 /// - adjusting trigger metadata to reflect registration height and block time
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
+    use super::{super::prelude::*, *};
     use iroha_data_model::{
         events::EventFilter,
         isi::error::{InvalidParameterError, RepetitionError},
         name::Name,
         trigger::prelude::*,
     };
-    use super::{super::prelude::*, *};
     const RESERVED_TRIGGER_METADATA_KEYS: [&str; 2] =
         ["__registered_block_height", "__registered_at_ms"];
     pub(super) fn ensure_metadata_key_is_not_reserved(key: &Name) -> Result<(), Error> {
@@ -858,7 +858,12 @@ pub mod isi {
 }
 pub mod query {
     //! Queries associated to triggers.
-    use std::collections::BTreeSet;
+    use super::*;
+    use crate::{
+        prelude::*,
+        smartcontracts::{ValidQuery, ValidSingularQuery, triggers::set::SetReadOnly},
+        state::StateReadOnly,
+    };
     use iroha_data_model::{
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
@@ -870,12 +875,7 @@ pub mod query {
     };
     use mv::storage::StorageReadOnly;
     use norito::json::Value;
-    use super::*;
-    use crate::{
-        prelude::*,
-        smartcontracts::{ValidQuery, ValidSingularQuery, triggers::set::SetReadOnly},
-        state::StateReadOnly,
-    };
+    use std::collections::BTreeSet;
     fn trigger_id_from_value(value: &Value) -> Option<TriggerId> {
         norito::json::from_value(value.clone()).ok()
     }
@@ -1202,8 +1202,16 @@ pub mod query {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        block::ValidBlock,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::{Error, Execute, ValidQuery, isi::triggers::set::SetReadOnly},
+        state::{State, World},
+        sumeragi::network_topology::Topology,
+    };
     use core::num::NonZeroU64;
-    use std::{str::FromStr, time::Duration};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
@@ -1217,15 +1225,7 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
-    use super::*;
-    use crate::{
-        block::ValidBlock,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::{Error, Execute, ValidQuery, isi::triggers::set::SetReadOnly},
-        state::{State, World},
-        sumeragi::network_topology::Topology,
-    };
+    use std::{str::FromStr, time::Duration};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger fixture key generation should succeed")
     }

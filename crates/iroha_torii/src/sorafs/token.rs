@@ -1,12 +1,4 @@
 //! Stream token issuance helpers for Torii chunk-range gateways.
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use base64::Engine as _;
 use ed25519_dalek::VerifyingKey;
 use iroha_config::parameters::{actual, validate_production_runtime_handle};
@@ -18,6 +10,14 @@ use rand::{
 use sorafs_manifest::{
     STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1, STREAM_TOKEN_MAX_WIRE_BYTES_V1,
     StreamTokenBodyV1, StreamTokenError, StreamTokenV1,
+};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 /// Fixed rolling window applied to authenticated-subject issuance quotas.
@@ -808,8 +808,8 @@ pub fn decode_token_base64(value: &str) -> Result<StreamTokenV1, StreamTokenHead
 }
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
     struct FailingTryRng;
     #[derive(Debug)]
     struct FailingTryRngError;

@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry integration tests covering Kaigi relay endpoints.
 #![cfg(feature = "telemetry")]
-use std::{str::FromStr, sync::Arc};
 use axum::{
     body::Body,
     http::{HeaderValue, Request, StatusCode, header::CONTENT_TYPE},
@@ -23,6 +22,7 @@ use iroha_data_model::{
     prelude::{AccountId, DomainId, Name},
 };
 use iroha_primitives::{json::Json, time::TimeSource};
+use std::{str::FromStr, sync::Arc};
 use tower::ServiceExt;
 #[path = "fixtures.rs"]
 mod fixtures;

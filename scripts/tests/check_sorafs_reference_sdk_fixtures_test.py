@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -34,6 +35,10 @@ CANCEL_FIXTURE_GENERATOR = (
 REFERENCE_INVENTORY_GENERATOR = (
     REPO_ROOT
     / "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs"
+)
+REFERENCE_INVENTORY_SPECS = (
+    REPO_ROOT
+    / "crates/sorafs_manifest/src/bin/generate_por_fixtures/inventory_specs_v1.tsv"
 )
 
 
@@ -197,7 +202,16 @@ def test_cancel_asset_lock_fixture_generator_is_atomic_and_fail_closed() -> None
 
     support = CANCEL_FIXTURE_SUPPORT.read_text(encoding="utf-8")
     command = CANCEL_FIXTURE_GENERATOR.read_text(encoding="utf-8")
-    inventory = REFERENCE_INVENTORY_GENERATOR.read_text(encoding="utf-8")
+    inventory_generator = REFERENCE_INVENTORY_GENERATOR.read_text(encoding="utf-8")
+    inventory_specs_bytes = REFERENCE_INVENTORY_SPECS.read_bytes()
+    inventory_specs = inventory_specs_bytes.decode("utf-8")
+    inventory_specs_include = (
+        'include_str!("generate_por_fixtures/inventory_specs_v1.tsv")'
+    )
+    inventory_specs_sha256 = hashlib.sha256(inventory_specs_bytes).hexdigest()
+
+    assert inventory_generator.count(inventory_specs_include) == 1
+    assert inventory_generator.count(f'"{inventory_specs_sha256}"') == 1
 
     for marker in (
         "OpenOptions::new().write(true).create_new(true)",
@@ -224,7 +238,8 @@ def test_cancel_asset_lock_fixture_generator_is_atomic_and_fail_closed() -> None
         "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.json",
         "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
     ):
-        assert relative in inventory
+        assert inventory_specs.count(f"\t{relative}\t") == 1
+        assert relative not in inventory_generator
         assert relative in MODULE.EXPECTED_PAYLOADS
 
 

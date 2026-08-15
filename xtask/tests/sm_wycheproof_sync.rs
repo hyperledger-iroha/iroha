@@ -1,11 +1,11 @@
 #![allow(clippy::unwrap_used)]
+use assert_cmd::cargo::cargo_bin_cmd;
+use norito::json::{self, Value};
 use std::{
     io::{ErrorKind, Read, Write},
     net::TcpListener,
     thread,
 };
-use assert_cmd::cargo::cargo_bin_cmd;
-use norito::json::{self, Value};
 use tempfile::TempDir;
 fn sample_wycheproof() -> String {
     let key = format!("04{}{}", "11".repeat(32), "22".repeat(32));

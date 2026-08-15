@@ -1,12 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Cross-lane manifest and relay proof tests (NX-11).
-use std::{
-    collections::BTreeMap,
-    fs,
-    num::{NonZeroU32, NonZeroU64},
-    path::{Path, PathBuf},
-    time::Duration,
-};
 use eyre::{Result, WrapErr};
 use iroha::nexus;
 use iroha_config::parameters::actual::{GovernanceCatalog, GovernanceModule, LaneRegistry};
@@ -23,6 +16,13 @@ use iroha_data_model::{
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{core as norito_core, json};
+use std::{
+    collections::BTreeMap,
+    fs,
+    num::{NonZeroU32, NonZeroU64},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tempfile::tempdir;
 #[test]
 fn commitment_only_lane_without_privacy_commitments_is_gated() -> Result<()> {

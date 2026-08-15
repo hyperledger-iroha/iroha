@@ -4,6 +4,12 @@
 //! and completed replication orders. This module deliberately accepts only an
 //! immutable finalized-state source: provider adverts can add current
 //! connectivity details later, but cannot grant content authority.
+use iroha_data_model::sorafs::pin_registry::{
+    ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderId,
+    ReplicationOrderRecord, ReplicationOrderStatus,
+};
+use norito::{core::DecodeLimits, derive::NoritoSerialize};
+use sorafs_manifest::capacity::{MAX_CAPACITY_METADATA_VALUE_BYTES, ReplicationOrderV1};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
@@ -12,12 +18,6 @@ use std::{
         atomic::{AtomicU64, Ordering as AtomicOrdering},
     },
 };
-use iroha_data_model::sorafs::pin_registry::{
-    ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderId,
-    ReplicationOrderRecord, ReplicationOrderStatus,
-};
-use norito::{core::DecodeLimits, derive::NoritoSerialize};
-use sorafs_manifest::capacity::{MAX_CAPACITY_METADATA_VALUE_BYTES, ReplicationOrderV1};
 use thiserror::Error;
 /// Canonical projection envelope version for the first-release SFM-1 join.
 pub const ROUTING_AUTHORITY_PROJECTION_VERSION_V1: u8 = 1;
@@ -487,13 +487,7 @@ fn decode_canonical_order(
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering as AtomicUsizeOrdering},
-        },
-        time::Duration,
-    };
+    use super::*;
     use iroha_data_model::{
         account::AccountId,
         metadata::Metadata,
@@ -509,7 +503,13 @@ mod tests {
     use sorafs_manifest::capacity::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
     };
-    use super::*;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering as AtomicUsizeOrdering},
+        },
+        time::Duration,
+    };
     const NOW: u64 = 1_700_000_100;
     fn finalized_identity(height: u64, seed: u8) -> FinalizedStateIdentityV1 {
         let mut hash = [seed.max(1); 32];

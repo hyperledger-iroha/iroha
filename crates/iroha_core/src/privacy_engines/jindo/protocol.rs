@@ -3,15 +3,6 @@
 //! This is a clean-room native-Rust implementation of the current paper's
 //! univariate coefficient-encoding specialization. The transcript and wire
 //! are Iroha-specific and intentionally have no legacy decoder.
-use iroha_data_model::privacy::{
-    IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
-    IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1, IrohaJindoPolynomialCommitmentStatementV1,
-    PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyStatementV1,
-};
-use rand_core_06::{CryptoRng, RngCore};
-use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
-use crate::privacy_engines::p256::TranscriptBindingV1;
 use super::{
     JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1,
     JINDO_MAX_BATCH_SIZE_V1, JINDO_MAX_COEFFICIENTS_V1, JINDO_RING_DEGREE_V1,
@@ -41,6 +32,15 @@ use super::{
     transcript::{JindoShortChallengeV1, JindoTranscriptErrorV1, JindoTranscriptV1},
     validate_canonical_polynomial_v1,
 };
+use crate::privacy_engines::p256::TranscriptBindingV1;
+use iroha_data_model::privacy::{
+    IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
+    IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1, IrohaJindoPolynomialCommitmentStatementV1,
+    PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyStatementV1,
+};
+use rand_core_06::{CryptoRng, RngCore};
+use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 /// Exact byte length of a canonical native Jindo proof.
 pub const JINDO_NATIVE_PROOF_BYTES_V1: usize = JINDO_PROOF_BYTES_V1;
 /// Reviewed source and parameter profile implemented by this protocol version.

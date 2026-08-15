@@ -1,6 +1,6 @@
-use std::fs;
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
+use std::fs;
 use tempfile::tempdir;
 #[test]
 fn soranet_chaos_kit_and_report_round_trip() {

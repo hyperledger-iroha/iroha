@@ -35,7 +35,7 @@ fn provisional_challenge_coordinates_match_the_frozen_four_coordinate_frame() {
     let helper = bounded_source_section(
         source,
         "fn provisional_challenges(",
-        "fn reconstruct_commitment_first_messages<",
+        "fn reconstruct_commitment_first_messages(",
     );
     assert_eq!(helper.matches("u32::from_be_bytes(").count(), 1);
     assert_eq!(helper.matches("keccak256(&frame)").count(), 1);
@@ -231,6 +231,14 @@ fn exact_work_provider_and_narrow_live_payload_ledgers_are_checked() {
     assert_eq!(GALOIS_TYPED_B_REPLAY_LIVE_BYTES_V1, 4_202_496);
     assert_eq!(GALOIS_FORCED_ROW_LIVE_BYTES_V1, 2_097_152);
     assert_eq!(GALOIS_RNS_LIVE_PAYLOAD_CEILING_BYTES_V1, 6_291_456);
+    assert_eq!(
+        super::super::BORROWED_MEMBERSHIP_PROOF_ALLOCATIONS_ELIDED_V1,
+        48
+    );
+    assert_eq!(
+        super::super::BORROWED_MEMBERSHIP_PROOF_LOGICAL_BYTES_ELIDED_V1,
+        71_568
+    );
 
     let arithmetic = include_str!("../../../../mkhe.rs");
     let multiply =
@@ -268,12 +276,16 @@ fn memberships_and_all_response_points_precede_any_provider_access() {
         "fn verify_predecoded_direct_galois_semantic_candidate_v1<P>(",
         "fn provisional_challenges(",
     );
-    let one = verifier
-        .find("for evidence in &proof.bound_one_membership")
+    let destructure = verifier
+        .find("let PredecodedDirectRelationProofV1 {")
         .unwrap();
-    let two = verifier
-        .find("for evidence in &proof.bound_two_membership")
+    let membership = verifier
+        .find("membership_frames.verify_replayable()?")
         .unwrap();
+    let copy = verifier
+        .find("membership_frames.copied_commitments()")
+        .unwrap();
+    let frame_drop = verifier.find("drop(membership_frames);").unwrap();
     let commitments = verifier
         .find("reconstruct_commitment_first_messages(")
         .unwrap();
@@ -282,16 +294,20 @@ fn memberships_and_all_response_points_precede_any_provider_access() {
         .find("DirectGaloisBStatementReplayV1::begin")
         .unwrap();
     let replay = verifier.find("replay_galois_row_zero(").unwrap();
-    assert!(one < two && two < commitments && commitments < target && target < provider);
+    assert!(destructure < membership && membership < copy && copy < frame_drop);
+    assert!(frame_drop < commitments && commitments < target && target < provider);
     assert!(provider < replay);
-    assert_eq!(
-        verifier.matches("evidence\n            .verify()").count(),
-        2
-    );
+    for forbidden in [
+        ".materialize()",
+        ".to_vec()",
+        "ExactEightChunkMembershipEvidenceV1",
+    ] {
+        assert!(!verifier.contains(forbidden));
+    }
     let reconstruction = bounded_source_section(
         source,
-        "fn reconstruct_commitment_first_messages<",
-        "trait MembershipCommitmentsV1",
+        "fn reconstruct_commitment_first_messages(",
+        "fn decode_response_chunk(",
     );
     assert_eq!(
         reconstruction
@@ -311,6 +327,31 @@ fn memberships_and_all_response_points_precede_any_provider_access() {
             .count(),
         1
     );
+    let rkg = include_str!("rkg_one_semantic_verifier_v1.rs");
+    for shared in [
+        "let PredecodedDirectRelationProofV1 {",
+        "membership_frames.verify_replayable()?",
+        "membership_frames.copied_commitments()",
+        "drop(membership_frames);",
+        "super::validate_reconstructed_challenge(",
+    ] {
+        assert_eq!(source.matches(shared).count(), 1);
+        assert_eq!(rkg.matches(shared).count(), 1);
+    }
+    let predecode_source = include_str!("../predecode_v1.rs");
+    let production_predecode = bounded_source_section(
+        predecode_source,
+        "pub(in super::super) fn predecode_direct_relation_proof_v1<'a>(",
+        "pub(super) fn validate_header(",
+    );
+    assert!(production_predecode.contains("membership_frames: preflighted"));
+    for forbidden in [
+        ".materialize()",
+        ".to_vec()",
+        "ExactEightChunkMembershipEvidenceV1",
+    ] {
+        assert!(!production_predecode.contains(forbidden));
+    }
 }
 
 #[test]
@@ -325,9 +366,9 @@ fn both_poisoned_completions_live_through_final_challenge_equality() {
         verifier,
         &[
             "let completed_replays = (target_a.finish()?, public_b.finish(provider)?);",
-            "reconstruct_forced_zero_rows(proof.responses, &mut hashers)?;",
+            "reconstruct_forced_zero_rows(responses, &mut hashers)?;",
             "let rns_digests = finish_rns_hashers(&mut hashers)?;",
-            "proof.validate_reconstructed_challenge(first_messages)?;",
+            "super::validate_reconstructed_challenge(",
             "if reconstructed_challenges != challenges",
             "drop(completed_replays);",
         ],

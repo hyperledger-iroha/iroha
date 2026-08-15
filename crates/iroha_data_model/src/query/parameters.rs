@@ -2,14 +2,14 @@
 //!
 //! They are used together with [`QueryBox`](crate::query::QueryBox) to
 //! configure execution of trait-object queries.
-use std::{borrow::ToOwned, format, num::NonZeroU64, string::String, vec::Vec};
+use crate::name::Name;
 use derive_more::Constructor;
 use getset::Getters;
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use iroha_version::{Decode, Encode};
 use nonzero_ext::nonzero;
-use crate::name::Name;
+use std::{borrow::ToOwned, format, num::NonZeroU64, string::String, vec::Vec};
 /// Default value for `fetch_size` parameter in queries.
 pub const DEFAULT_FETCH_SIZE: NonZeroU64 = nonzero!(100_u64);
 /// Max value for `fetch_size` parameter in queries.
@@ -216,9 +216,9 @@ pub mod prelude {
 }
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use std::str::FromStr;
-    use norito::json;
     use super::*;
+    use norito::json;
+    use std::str::FromStr;
     #[test]
     fn sorting_defaults_order() {
         let mut value = json::to_value(&Sorting::by_metadata_key(Name::from_str("key").unwrap()))

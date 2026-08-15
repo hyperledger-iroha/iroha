@@ -1,10 +1,4 @@
 //! Production prover facade for the first-release IVM private-note STARK.
-use iroha_data_model::privacy::{
-    IrohaIvmPrivateNoteStarkStatementV1, PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1,
-    PrivacyNativeConsensusBindingValidationErrorV1,
-};
-use rand::{TryCryptoRng, rngs::OsRng};
-use thiserror::Error;
 use super::{
     relation::{
         IvmPrivateNoteRelationErrorV1, IvmPrivateNoteWitnessV1, validate_private_note_relation_v1,
@@ -16,6 +10,12 @@ use crate::privacy_engines::{
     proof_managed_note_stark::ProofManagedNoteStarkErrorV1,
     prover_randomness::{HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1},
 };
+use iroha_data_model::privacy::{
+    IrohaIvmPrivateNoteStarkStatementV1, PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1,
+    PrivacyNativeConsensusBindingValidationErrorV1,
+};
+use rand::{TryCryptoRng, rngs::OsRng};
+use thiserror::Error;
 /// Failure constructing or checking a complete IVM private-note proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum IvmPrivateNoteProofErrorV1 {
@@ -175,11 +175,6 @@ pub fn verify_ivm_private_note_v1(
 }
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::privacy::{
-        PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
-    };
-    use rand::{TryCryptoRng, TryRngCore};
     use super::*;
     use crate::privacy_engines::ivm_private_note::{
         IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteWitnessV1,
@@ -187,6 +182,11 @@ mod tests {
         PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PrivateInstructionV1, PrivateNotePlaintextV1,
         PrivateOpcodeV1, PrivateProgramV1, derive_note_authority_v1,
     };
+    use iroha_data_model::privacy::{
+        PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+    };
+    use rand::{TryCryptoRng, TryRngCore};
     #[derive(Debug)]
     struct InjectedEntropyError;
     impl core::fmt::Display for InjectedEntropyError {

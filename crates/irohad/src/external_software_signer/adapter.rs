@@ -1,5 +1,8 @@
 //! Adapters from the external-signer protocol to existing Torii provider traits.
-use std::sync::Arc;
+use super::{
+    protocol::{SoftwareSignerPublicBindingV1, SoftwareSignerRoleV1, digest_parts},
+    unix::{ExternalSoftwareSignerClientErrorV1, SoftwareSignerClientV1},
+};
 use iroha_crypto::{PublicKey, Signature};
 use iroha_data_model::{
     account::AccountId,
@@ -14,10 +17,7 @@ use iroha_torii::{
     SorafsNativeTransactionSignerProviderV1, SorafsNativeTransactionSignerQualificationV1,
     SorafsNativeTransactionSignerRoleV1,
 };
-use super::{
-    protocol::{SoftwareSignerPublicBindingV1, SoftwareSignerRoleV1, digest_parts},
-    unix::{ExternalSoftwareSignerClientErrorV1, SoftwareSignerClientV1},
-};
+use std::sync::Arc;
 const NATIVE_OPERATION_ID_DOMAIN_V1: &[u8] =
     b"iroha.external-signer.native-transaction.operation.v1";
 /// One exact-role external software signer implementing Torii's provider API.

@@ -1,5 +1,4 @@
 //! Exact-current positive and forbidden-syscall admission vectors.
-use std::ops::Range;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::{
@@ -10,6 +9,7 @@ use ivm_abi::{
     pointer_abi::{PointerType, validate_tlv_bytes},
 };
 use ivm_artifact_admission::{verify_contract_artifact, verify_contract_artifact_json};
+use std::ops::Range;
 const CURRENT_FIXTURE: &str =
     include_str!("../../../javascript/iroha_js/test/fixtures/current_rust_contract_artifact.json");
 const INTEGER_FIXTURE: &[u8] =

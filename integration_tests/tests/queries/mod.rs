@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests covering Torii query APIs.
-use std::time::Duration;
 use integration_tests::sandbox;
 use iroha::{
     client::{Client, QueryError},
@@ -10,6 +9,7 @@ use iroha::{
     },
 };
 use iroha_test_network::*;
+use std::time::Duration;
 const QUERY_TX_STATUS_TIMEOUT: Duration = Duration::from_secs(120);
 fn query_network_builder() -> NetworkBuilder {
     NetworkBuilder::new().with_block_cadence(std::time::Duration::from_secs(2))

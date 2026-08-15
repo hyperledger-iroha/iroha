@@ -1,9 +1,9 @@
 //! Purpose-separated signing payloads for non-transaction runtime roles.
-use norito::codec::{Decode, Encode};
 use super::protocol::{
     SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1, SIGNER_PROTOCOL_VERSION_V1, SoftwareSignerPublicBindingV1,
     SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1,
 };
+use norito::codec::{Decode, Encode};
 const TYPED_PAYLOAD_MAGIC_V1: [u8; 8] = *b"IRSGTP01";
 /// Exact purpose carried by one non-transaction external-signer request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]

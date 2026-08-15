@@ -1,6 +1,5 @@
 //! Admission-time rejection when on-chain manifest `abi_hash` mismatches node policy.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
 use iroha_core::{
     governance::manifest::LaneManifestRegistry, prelude::World,
@@ -14,6 +13,7 @@ use iroha_data_model::{
 };
 use ivm::{ProgramMetadata, encoding};
 use nonzero_ext::nonzero;
+use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 fn checked_random_ivm_manifest_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked IVM manifest keypair")

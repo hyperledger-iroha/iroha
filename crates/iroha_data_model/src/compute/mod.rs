@@ -4,14 +4,14 @@
 //! lane along with manifest metadata, sandbox guards, and metering helpers.
 //! All types derive Norito serialization so manifests, calls, and receipts can
 //! be persisted on-chain or shipped between Torii and SDKs deterministically.
+use crate::{name::Name, nexus::UniversalAccountId};
+use iroha_crypto::{Hash, HashOf};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
 };
-use iroha_crypto::{Hash, HashOf};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use crate::{name::Name, nexus::UniversalAccountId};
 /// Payload codec expected by a compute route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1216,13 +1216,13 @@ fn delta_bps(current: NonZeroU64, updated: NonZeroU64) -> u16 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::nexus::UniversalAccountId;
+    use norito::json;
     use std::{
         num::{NonZeroU16, NonZeroU64},
         str::FromStr,
     };
-    use norito::json;
-    use super::*;
-    use crate::nexus::UniversalAccountId;
     fn name(value: &str) -> Name {
         Name::from_str(value).expect("name")
     }

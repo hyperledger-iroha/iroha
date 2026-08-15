@@ -1,13 +1,13 @@
 //! Asset values and entries.
+pub use self::model::*;
+use super::id::AssetId;
+use crate::{Identifiable, IntoKeyValue, Registered};
 use derive_more::Display;
 use getset::Getters;
 use iroha_data_model_derive::{IdEqOrdHash, model};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-pub use self::model::*;
-use super::id::AssetId;
-use crate::{Identifiable, IntoKeyValue, Registered};
 #[model]
 mod model {
     use super::*;
@@ -57,9 +57,9 @@ impl IntoKeyValue for Asset {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
-    use super::*;
     #[test]
     fn negative_numeric_payload_cannot_decode_as_stored_asset_value() {
         let forged = Owned::new(Numeric::new(-1_i32, 0));

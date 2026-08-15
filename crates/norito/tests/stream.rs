@@ -1,5 +1,4 @@
 #![allow(clippy::manual_div_ceil)]
-use std::collections::{BTreeMap, HashMap};
 use norito::{
     Compression, Error,
     core::{NoritoDeserialize, NoritoSerialize},
@@ -8,6 +7,7 @@ use norito::{
     stream_linkedlist_collect_from_reader, stream_vec_collect_from_reader,
     stream_vec_fold_from_reader, stream_vecdeque_collect_from_reader,
 };
+use std::collections::{BTreeMap, HashMap};
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
 struct BigData(Vec<u8>);
 #[repr(align(64))]

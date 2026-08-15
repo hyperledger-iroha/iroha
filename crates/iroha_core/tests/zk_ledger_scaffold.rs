@@ -1,7 +1,6 @@
 //! Scaffold tests for ZK asset registration and authenticated commitment-tree state.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
-use std::{num::NonZeroU64, str::FromStr};
 use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
@@ -24,6 +23,7 @@ use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use std::{num::NonZeroU64, str::FromStr};
 const HALO2_IPA_BACKEND: &str = "halo2/ipa";
 fn set_confidential_policy_mode(
     state_transaction: &mut StateTransaction<'_, '_>,

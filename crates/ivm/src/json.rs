@@ -3,6 +3,9 @@
 //! Integers use canonical JSON number tokens across the complete `i64`/`u64`
 //! domain. Exact decimals and quantities use canonical strings so they never
 //! pass through floating-point conversion.
+use crate::{
+    IVM, PointerType, VMError, host::preflight_reserved_syscall_gas, pointer_abi, syscalls,
+};
 use core::{fmt::Write as _, str::FromStr};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -29,7 +32,6 @@ use ivm_abi::{
 #[cfg(test)]
 use norito::{decode_from_bytes, to_bytes};
 use norito::{json as njson, json::native::Number as JsonNumber};
-use crate::{IVM, PointerType, VMError, host::preflight_reserved_syscall_gas, pointer_abi, syscalls};
 /// Base gas for a schema-bound native JSON construction.
 pub const JSON_BUILD_GAS_BASE: u64 = 32;
 /// Base gas for one typed JSON getter.
@@ -939,13 +941,13 @@ pub fn typed_getter(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{core_host::CoreHost, memory::Memory};
     use iroha_crypto::{Algorithm, KeyPair};
     use ivm_abi::{
         json::{JsonConstructionNodeV1, JsonConstructionSchemaV1},
         state_value::{StateValueKindV1, StateValueNodeV1, StateValueSchemaV1},
     };
-    use super::*;
-    use crate::{core_host::CoreHost, memory::Memory};
     fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
         bytes.extend_from_slice(&(pointer_type as u16).to_be_bytes());

@@ -4,13 +4,6 @@
     clippy::doc_link_with_quotes,
     clippy::assertions_on_constants
 )]
-use std::{
-    collections::BTreeMap,
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::PathBuf,
-    str::FromStr,
-    time::Duration,
-};
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::{AccountId, curve::CurveId},
@@ -20,6 +13,13 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use nonzero_ext::nonzero;
+use std::{
+    collections::BTreeMap,
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    path::PathBuf,
+    str::FromStr,
+    time::Duration,
+};
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
     let domain_id =
         DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
@@ -287,7 +287,7 @@ pub mod transaction {
 }
 /// Compute lane defaults.
 pub mod compute {
-    use std::str::FromStr;
+    use super::*;
     use iroha_config_base::util::Bytes;
     use iroha_data_model::{
         compute::{
@@ -298,7 +298,7 @@ pub mod compute {
         },
         name::Name,
     };
-    use super::*;
+    use std::str::FromStr;
     /// Whether the compute lane is enabled by default.
     pub const ENABLED: bool = false;
     /// Default TTL (slots) applied to compute calls.
@@ -527,8 +527,8 @@ pub mod content {
 }
 /// Oracle pipeline defaults.
 pub mod oracle {
-    use iroha_data_model::prelude::Name;
     use super::*;
+    use iroha_data_model::prelude::Name;
     /// Public-only custody identity for the oracle reward pool.
     ///
     /// The compressed point is the first canonical prime-order Ed25519 point
@@ -688,10 +688,10 @@ pub mod oracle {
 }
 /// Kura block-store defaults.
 pub mod kura {
-    use std::{num::NonZeroUsize, time::Duration};
-    use nonzero_ext::nonzero;
-    use iroha_config_base::util::Bytes;
     use crate::{kura::FsyncMode, parameters::actual::KuraReplicaAdvertPolicy};
+    use iroha_config_base::util::Bytes;
+    use nonzero_ext::nonzero;
+    use std::{num::NonZeroUsize, time::Duration};
     /// Directory for Kura storage relative to the node working directory.
     pub const STORE_DIR: &str = "./storage";
     /// Number of blocks cached in memory to accelerate lookups.
@@ -1100,8 +1100,8 @@ pub mod streaming {
 pub mod sorafs {
     /// Defaults governing the embedded SoraFS storage worker.
     pub mod storage {
-        use std::path::PathBuf;
         use iroha_config_base::util::Bytes;
+        use std::path::PathBuf;
         /// Feature toggle for the embedded SoraFS storage worker.
         pub const ENABLED: bool = false;
         /// Default root directory for pinned chunks and manifest metadata.
@@ -1158,8 +1158,8 @@ pub mod sorafs {
         }
         /// Finalized-chain moderation orchestrator defaults.
         pub mod moderation_orchestrator {
-            use std::path::PathBuf;
             use iroha_config_base::util::Bytes;
+            use std::path::PathBuf;
             /// Native moderation orchestration is disabled until every
             /// runtime-only signer, reader, and terminal sink is injected.
             pub const ENABLED: bool = false;
@@ -1220,8 +1220,8 @@ pub mod sorafs {
         }
         /// Finalized-ledger reputation projector and external publication defaults.
         pub mod reputation_runtime {
-            use std::path::PathBuf;
             use iroha_config_base::util::Bytes;
+            use std::path::PathBuf;
             /// The committed projector is opt-in until every runtime-only
             /// finalized-query, sealed journal-checkpoint, threshold-signer,
             /// Governance DAG, and native journal-transaction dependency is
@@ -1280,8 +1280,8 @@ pub mod sorafs {
         }
         /// Finalized reserve-event transparency scanner defaults.
         pub mod reserve_transparency_runtime {
-            use std::path::PathBuf;
             use iroha_config_base::util::Bytes;
+            use std::path::PathBuf;
             /// The scanner is opt-in with the committed reputation archive.
             pub const ENABLED: bool = false;
             /// Normal exact-anchor scan cadence.
@@ -1614,8 +1614,8 @@ pub mod sorafs {
         }
         /// Always-on Governance DAG public publisher defaults.
         pub mod governance_dag_service {
-            use std::path::PathBuf;
             use iroha_config_base::util::Bytes;
+            use std::path::PathBuf;
             /// The public publisher is opt-in until endpoints and secret paths are configured.
             pub const ENABLED: bool = false;
             /// Head publication mode (`signed_http` or `ipns`).
@@ -1663,9 +1663,9 @@ pub mod sorafs {
         }
         /// Durable native orderbook transaction worker defaults.
         pub mod orderbook_worker {
-            use std::num::{NonZeroU32, NonZeroU64};
             use iroha_config_base::util::Bytes;
             use nonzero_ext::nonzero;
+            use std::num::{NonZeroU32, NonZeroU64};
             /// New work generation is opt-in; storage enablement still activates durable drain.
             pub const ENABLED: bool = false;
             /// Finalized-state scan cadence.
@@ -1703,9 +1703,9 @@ pub mod sorafs {
         }
         /// Durable native reserve/rent transaction worker defaults.
         pub mod reserve_worker {
-            use std::num::{NonZeroU32, NonZeroU64};
             use iroha_config_base::util::Bytes;
             use nonzero_ext::nonzero;
+            use std::num::{NonZeroU32, NonZeroU64};
             /// New work generation is opt-in; storage enablement still activates durable drain.
             pub const ENABLED: bool = false;
             /// Finalized-state scan cadence.
@@ -1798,8 +1798,8 @@ pub mod sorafs {
         }
         /// Production SFM-4b3 evidence-viewer defaults.
         pub mod evidence_viewer {
-            use std::path::PathBuf;
             use iroha_config_base::util::Bytes;
+            use std::path::PathBuf;
             /// Evidence viewing is disabled until every runtime security
             /// boundary and governed identity is injected.
             pub const ENABLED: bool = false;
@@ -1971,9 +1971,9 @@ pub mod sorafs {
         pub const REDIRECT_HTML_ONLY: bool = true;
         /// Static-site host binding file defaults.
         pub mod site_bindings {
-            use std::{num::NonZeroUsize, path::PathBuf};
             use iroha_config_base::util::Bytes;
             use nonzero_ext::nonzero;
+            use std::{num::NonZeroUsize, path::PathBuf};
             /// Optional JSON binding document loaded and validated when Torii starts.
             #[must_use]
             pub fn path() -> Option<PathBuf> {
@@ -2062,8 +2062,8 @@ pub mod sorafs {
         }
         /// Governed compliance-controller defaults.
         pub mod compliance {
-            use std::time::Duration;
             use iroha_config_base::util::Bytes;
+            use std::time::Duration;
             /// Keep the signed compliance controller disabled until governance
             /// identities, feeds, storage, and a runtime transport are provisioned.
             pub const ENABLED: bool = false;
@@ -2092,12 +2092,6 @@ pub mod sorafs {
 }
 /// Torii API defaults (HTTP + query service).
 pub mod torii {
-    use std::{
-        num::{NonZeroU32, NonZeroUsize},
-        path::PathBuf,
-        time::Duration,
-        vec::Vec,
-    };
     use iroha_config_base::util::Bytes;
     use iroha_data_model::{
         da::types::{BlobClass, GovernanceTag, RetentionPolicy},
@@ -2105,6 +2099,12 @@ pub mod torii {
     };
     use iroha_primitives::numeric::XorQuantity;
     use nonzero_ext::nonzero;
+    use std::{
+        num::{NonZeroU32, NonZeroUsize},
+        path::PathBuf,
+        time::Duration,
+        vec::Vec,
+    };
     /// Maximum inner body carried by the first-release Torii proxy protocol.
     pub const TORII_PROXY_MAX_INNER_BODY_BYTES_V1: u64 = 64_000_000;
     /// Maximum request payload size accepted by Torii (bytes).
@@ -2249,8 +2249,8 @@ pub mod torii {
     }
     /// Native Bootle/Lantern blind-issuance service defaults.
     pub mod privacy_bootle_lantern_issuer {
-        use std::path::PathBuf;
         use iroha_config_base::util::Bytes;
+        use std::path::PathBuf;
         /// Issuance is opt-in and fails closed without its runtime provider registry.
         pub const ENABLED: bool = false;
         /// Default durable one-shot authorization store directory.
@@ -2934,9 +2934,9 @@ pub mod torii {
         512 * 1024 * 1024;
     /// Canonical first-release appeal-finance asset and policy defaults.
     pub mod sorafs_appeal_finance {
-        use std::str::FromStr;
         use iroha_data_model::asset::prelude::AssetDefinitionId;
         use iroha_primitives::numeric::{Numeric, XOR_QUANTITY_SCALE, XorQuantity};
+        use std::str::FromStr;
         /// Canonical first-release asset scale for XOR-denominated appeal finance.
         pub const ASSET_SCALE: u32 = XOR_QUANTITY_SCALE;
         /// Version shared by the baseline pricing and settlement policies.
@@ -3238,9 +3238,9 @@ pub mod nexus {
     }
     /// Public-lane staking defaults.
     pub mod staking {
-        use std::time::Duration;
-        use nonzero_ext::nonzero;
         use super::super::{NonZeroU32, Quantity};
+        use nonzero_ext::nonzero;
+        use std::time::Duration;
         /// Minimum bonded stake required to register a validator (asset base units).
         pub fn min_validator_stake() -> Quantity {
             Quantity::from(1_u64)
@@ -3486,8 +3486,8 @@ pub mod time {
 }
 /// Execution pipeline defaults (scheduler, overlay, batching).
 pub mod pipeline {
-    use std::num::NonZeroU64;
     use nonzero_ext::nonzero;
+    use std::num::NonZeroU64;
     /// Enable dynamic prepass (IVM read-only run to derive access sets).
     pub const DYNAMIC_PREPASS: bool = true;
     /// Cache derived access sets by code hash/entrypoint for diagnostics.
@@ -3636,8 +3636,8 @@ pub mod zk {
     pub const SCCP_LAUNCH_MODE: &str = "ethereum_mainnet_lane";
     /// SCCP proof-admission and deterministic verifier-work defaults.
     pub mod sccp {
-        use std::num::{NonZeroU32, NonZeroU64};
         use nonzero_ext::nonzero;
+        use std::num::{NonZeroU32, NonZeroU64};
         /// Maximum closed SCCP proofs in one transaction.
         pub const MAX_PROOFS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
         /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
@@ -3696,9 +3696,9 @@ pub mod zk {
     }
     /// FASTPQ prover defaults.
     pub mod fastpq {
-        use std::num::NonZeroUsize;
         use iroha_config_base::util::Bytes;
         use nonzero_ext::nonzero;
+        use std::num::NonZeroUsize;
         /// Default execution mode for the FASTPQ prover (`cpu` or `gpu`).
         pub const EXECUTION_MODE: &str = "cpu";
         /// Default Poseidon pipeline mode (`cpu` or `gpu`).
@@ -3802,15 +3802,15 @@ pub mod zk {
 }
 /// Sumeragi (consensus) defaults
 pub mod sumeragi {
-    use std::{
-        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-        time::Duration,
-    };
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT, merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
     };
     use nonzero_ext::nonzero;
+    use std::{
+        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+        time::Duration,
+    };
     /// Consensus wire/state-machine protocol version required by this release.
     pub const PROTOCOL_VERSION: u32 = 4;
     /// Fresh-network target block cadence selected by genesis.
@@ -4267,12 +4267,12 @@ pub mod governance {
     }
     /// Default citizen service discipline parameters.
     pub mod citizen_service {
-        use std::collections::BTreeMap;
         use crate::parameters::defaults::governance::{
             CITIZEN_DECLINE_SLASH_BPS, CITIZEN_FREE_DECLINES_PER_EPOCH,
             CITIZEN_MAX_SEATS_PER_EPOCH, CITIZEN_MISCONDUCT_SLASH_BPS, CITIZEN_NO_SHOW_SLASH_BPS,
             CITIZEN_SEAT_COOLDOWN_BLOCKS,
         };
+        use std::collections::BTreeMap;
         /// Default service cooldown (blocks) after accepting a seat.
         pub const SEAT_COOLDOWN_BLOCKS: u64 = CITIZEN_SEAT_COOLDOWN_BLOCKS;
         /// Default maximum seats a citizen may hold per epoch.

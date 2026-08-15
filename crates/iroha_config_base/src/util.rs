@@ -1,5 +1,4 @@
 //! Various utilities
-use std::{path::PathBuf, time::Duration};
 use derive_more::Display;
 use drop_bomb::DropBomb;
 use error_stack::Report;
@@ -8,6 +7,7 @@ use norito::{
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use num_traits::{FromPrimitive, ToPrimitive};
+use std::{path::PathBuf, time::Duration};
 use thiserror::Error;
 use toml::Value as TomlValue;
 const U64_BYTES: usize = core::mem::size_of::<u64>();

@@ -1,5 +1,4 @@
 //! Exact Sumeragi-v2 bridge finality proof construction and verification tests.
-use std::{num::NonZeroU64, sync::Arc};
 use iroha_core::bridge::{
     BridgeFinalityError, BridgeStateReadOnly, FinalityProofVerificationConfig,
     VerifiedV2FinalityArtifact, build_finality_proof, verify_finality_proof,
@@ -17,6 +16,7 @@ use iroha_data_model::{
     },
     peer::PeerId,
 };
+use std::{num::NonZeroU64, sync::Arc};
 struct Fixture {
     network_id: NetworkId,
     block: Arc<SignedBlock>,

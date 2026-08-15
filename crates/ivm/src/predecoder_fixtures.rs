@@ -1,12 +1,12 @@
 //! Helpers to generate predecoder golden fixtures (JSON/bin) for tests and tools.
 //!
 //! Exposed so unit tests can generate fixtures on demand without shelling out to Cargo.
+use crate::{ProgramMetadata, encoding, instruction, ivm_cache::IvmCache, kotodama::wide as kwide};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use sha2::{Digest, Sha256};
-use crate::{ProgramMetadata, encoding, instruction, ivm_cache::IvmCache, kotodama::wide as kwide};
 fn build_mixed_code() -> Vec<u8> {
     let mut code = Vec::new();
     // 1) Wide ADD r3 = r1 + r2

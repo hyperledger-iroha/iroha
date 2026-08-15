@@ -3,6 +3,7 @@
 //! The data-model types deliberately expose a closed profile inventory. This
 //! module gives those profiles an explicit canonical byte layout so protocol
 //! hashes never depend on Rust discriminants, JSON spelling, or a platform ABI.
+use crate::H256;
 pub use iroha_data_model::bridge::{
     SccpEvmSourceEmitterV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
     SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpSolanaSourceEmitterV1,
@@ -13,7 +14,6 @@ pub use iroha_data_model::bridge::{
     sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
 };
 use tiny_keccak::{Hasher as _, Keccak};
-use crate::H256;
 /// Keccak-256 source-event domain separator used by every native route contract.
 pub const SCCP_SOURCE_EVENT_DIGEST_PREFIX_V1: &[u8] = b"sccp:source:event:v1";
 fn keccak256(prefix: &[u8], payload: &[u8]) -> H256 {
@@ -84,8 +84,8 @@ pub fn sccp_lane_source_event_digest_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
     use super::*;
+    use std::collections::BTreeSet;
     const NETWORKS: [SccpNetworkV1; 9] = [
         SccpNetworkV1::SoraTaira,
         SccpNetworkV1::EthereumMainnet,

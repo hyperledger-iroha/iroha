@@ -1,5 +1,4 @@
 //! Build and sign a Taira localnet genesis overlay that seeds Kaigi relay metadata.
-use std::{fs, io::Read as _, path::PathBuf, str::FromStr};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{ArgGroup, Parser};
 use color_eyre::{
@@ -27,6 +26,7 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_genesis::RawGenesisTransaction;
 use iroha_primitives::{json::Json, numeric::Quantity};
+use std::{fs, io::Read as _, path::PathBuf, str::FromStr};
 use zeroize::Zeroizing;
 const LOCALNET_GENESIS_SEED_SUFFIX: &[u8] = b"genesis";
 #[derive(Parser, Debug)]
@@ -353,8 +353,8 @@ fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> Result<KeyPair> 
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
 ))]
 fn load_genesis_private_key_file(path: &std::path::Path) -> Result<KeyPair> {
-    use std::{fs::File, os::unix::fs::MetadataExt as _};
     use rustix::fs::{Mode, OFlags, open};
+    use std::{fs::File, os::unix::fs::MetadataExt as _};
     let fd = open(
         path,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,

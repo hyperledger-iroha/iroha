@@ -16,6 +16,7 @@
     clippy::clone_on_copy
 )]
 mod bounded_manifest;
+use base64::Engine as _;
 pub use bounded_manifest::{
     GENESIS_IVM_BYTECODE_MAX_BYTES_V1, GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1,
     GENESIS_MANIFEST_JSON_MAX_BYTES_V1, GENESIS_MANIFEST_JSON_MAX_DEPTH_V1,
@@ -25,16 +26,6 @@ pub use bounded_manifest::{
     validate_genesis_manifest_json,
 };
 use core::num::NonZeroU64;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    convert::TryFrom,
-    fmt::Debug,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::LazyLock,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-use base64::Engine as _;
 use derive_more::Constructor;
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::{
@@ -79,6 +70,15 @@ use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::TryFrom,
+    fmt::Debug,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::LazyLock,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 const CONSENSUS_PROTOCOL_VERSION: u32 =
     iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
 #[cfg(test)]
@@ -96,9 +96,8 @@ pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> =
 /// Construct an [`InstructionRegistry`] with all built-in Iroha instructions and
 /// set it as the global registry.
 ///
-/// The genesis tooling relies on dynamic instruction (de)serialization. Without
-/// initializing the registry attempts to decode [`InstructionBox`] values will
-/// fail at runtime.
+/// The genesis tooling relies on dynamic instruction (de)serialization. Without initializing the
+/// registry attempts to decode [`InstructionBox`] values will fail at runtime.
 pub fn init_instruction_registry() {
     set_instruction_registry(default_instruction_registry());
 }
@@ -398,26 +397,23 @@ fn validate_signed_manifest_binding(
     }
     Ok(())
 }
-/// Genesis block, represented as a thin wrapper around the signed block emitted
-/// by the builder.
+/// Genesis block, represented as a thin wrapper around the signed block emitted by the builder.
 ///
-/// If an executor upgrade is specified (see [`RawGenesisTransaction::executor`]),
-/// the first transaction must contain a single [`Upgrade`] instruction to set
-/// the executor. Otherwise, the executor upgrade is omitted and the first
-/// transaction may be parameters or other instructions. Subsequent
-/// transactions can contain parameter settings, instructions, topology change,
-/// and IVM triggers. Callers can access the wrapped [`SignedBlock`] via tuple
-/// struct syntax (`GenesisBlock.0`).
+/// If an executor upgrade is specified (see [`RawGenesisTransaction::executor`]), the first
+/// transaction must contain a single [`Upgrade`] instruction to set the executor. Otherwise, the
+/// executor upgrade is omitted and the first transaction may be parameters or other instructions.
+/// Subsequent transactions can contain parameter settings, instructions, topology change, and IVM
+/// triggers. Callers can access the wrapped [`SignedBlock`] via tuple struct syntax
+/// (`GenesisBlock.0`).
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct GenesisBlock(pub SignedBlock);
 /// Format of `genesis.json` user file that tooling consumes before producing
 /// the canonical [`GenesisBlock`].
 ///
-/// It should be signed, converted to a [`GenesisBlock`],
-/// and serialized in Norito format before supplying to an Iroha peer.
-/// See `kagami genesis sign`. Only the canonical Norito form is supported. The structure
-/// mirrors the user-facing manifest consumed by `kagami genesis`.
+/// It should be signed, converted to a [`GenesisBlock`], and serialized in Norito format before
+/// supplying to an Iroha peer. See `kagami genesis sign`. Only the canonical Norito form is
+/// supported. The structure mirrors the user-facing manifest consumed by `kagami genesis`.
 #[derive(Debug, Clone, JsonSerialize, IntoSchema, Encode, Decode)]
 pub struct RawGenesisTransaction {
     /// Unique chain identifier of the blockchain instance.
@@ -436,9 +432,8 @@ pub struct RawGenesisTransaction {
     /// instructions, update topology, or configure triggers.
     #[norito(default)]
     transactions: Vec<RawGenesisTx>,
-    /// Consensus mode selected and signed by genesis.
-    /// Fresh Sumeragi v2 startup consumes the corresponding signed handshake
-    /// metadata and freezes this mode into the height-one context.
+    /// Consensus mode selected and signed by genesis. Fresh Sumeragi v2 startup consumes the
+    /// corresponding signed handshake metadata and freezes this mode into the height-one context.
     consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
     /// First-release consensus wire protocol version.
     wire_protocol_version: u32,
@@ -447,9 +442,8 @@ pub struct RawGenesisTransaction {
     consensus_fingerprint: Option<ConsensusFingerprint>,
     /// Genesis-selected Sumeragi v2 context parameters.
     ///
-    /// JSON manifests must provide this explicitly. Programmatic builders put
-    /// their selected profile here before signing; live nodes never infer it
-    /// from local configuration.
+    /// JSON manifests must provide this explicitly. Programmatic builders put their selected
+    /// profile here before signing; live nodes never infer it from local configuration.
     sumeragi_v2: SumeragiV2GenesisContextParameters,
     /// Cryptography configuration snapshot advertised alongside the manifest.
     #[norito(default)]
@@ -797,7 +791,7 @@ impl GenesisVkRegistry {
 }
 /// Norito-compatible JSON helpers for serializing and deserializing genesis instruction lists.
 pub mod genesis_instructions_json {
-    use std::{collections::BTreeMap, str::FromStr};
+    use super::*;
     use iroha_data_model::{
         account::{NewAccount, OpaqueAccountId},
         asset::definition::NewAssetDefinition,
@@ -824,7 +818,7 @@ pub mod genesis_instructions_json {
     };
     use iroha_primitives::numeric::Numeric;
     use norito::json::{self, Number, Parser, SeqVisitor, Value};
-    use super::*;
+    use std::{collections::BTreeMap, str::FromStr};
     /// Render a slice of instructions into a JSON array suitable for the genesis manifest.
     pub fn serialize(instructions: &[InstructionBox], out: &mut String) {
         out.push('[');
@@ -1898,7 +1892,7 @@ pub mod genesis_instructions_json {
     }
     #[cfg(test)]
     mod tests {
-        use std::{collections::BTreeSet, num::NonZeroU64, path::PathBuf};
+        use super::*;
         #[allow(unused_imports)]
         use iroha_data_model::{
             asset::AssetDefinitionAlias,
@@ -1934,7 +1928,7 @@ pub mod genesis_instructions_json {
         };
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
-        use super::*;
+        use std::{collections::BTreeSet, num::NonZeroU64, path::PathBuf};
         #[test]
         fn instructions_to_value_keeps_structure() {
             let domain =
@@ -2523,9 +2517,8 @@ pub mod genesis_instructions_json {
         }
     }
 }
-/// Individual genesis transaction as represented in JSON. A transaction may
-/// set parameters, execute instructions, schedule IVM triggers, or set the
-/// initial topology.
+/// Individual genesis transaction as represented in JSON. A transaction may set parameters, execute
+/// instructions, schedule IVM triggers, or set the initial topology.
 #[derive(Debug, Clone, JsonDeserialize, IntoSchema, Encode, Decode, Default)]
 pub struct RawGenesisTx {
     /// Parameter updates applied at genesis.
@@ -2537,9 +2530,8 @@ pub struct RawGenesisTx {
     #[norito(default)]
     #[norito(with = "crate::genesis_instructions_json")]
     instructions: Vec<InstructionBox>,
-    /// Triggers whose executable is IVM bytecode, not instructions.
-    /// Retained as a dedicated collection until the trigger subsystem unifies
-    /// instruction-backed and IVM-backed variants.
+    /// Triggers whose executable is IVM bytecode, not instructions. Retained as a dedicated
+    /// collection until the trigger subsystem unifies instruction-backed and IVM-backed variants.
     #[norito(default)]
     ivm_triggers: Vec<GenesisIvmTrigger>,
     /// Initial topology (list of peers) to bootstrap the network.
@@ -3250,13 +3242,11 @@ impl RawGenesisTransaction {
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
     }
-    /// Replace one instruction-only raw transaction with one or more
-    /// instruction-only transactions.
+    /// Replace one instruction-only raw transaction with one or more instruction-only transactions.
     ///
-    /// This deliberately refuses to rewrite a transaction that also carries
-    /// parameters, IVM triggers, or topology. Callers can therefore perform a
-    /// narrow transaction-boundary migration without silently moving any
-    /// other genesis semantics.
+    /// This deliberately refuses to rewrite a transaction that also carries parameters, IVM
+    /// triggers, or topology. Callers can therefore perform a narrow transaction-boundary migration
+    /// without silently moving any other genesis semantics.
     pub fn replace_instruction_only_transaction(
         &mut self,
         index: usize,
@@ -3351,8 +3341,7 @@ impl RawGenesisTransaction {
             .iter()
             .flat_map(|tx| tx.instructions.iter())
     }
-    /// Return the exact Sumeragi v2 context parameters selected by this
-    /// manifest.
+    /// Return the exact Sumeragi v2 context parameters selected by this manifest.
     #[must_use]
     pub const fn sumeragi_v2_context_parameters(&self) -> SumeragiV2GenesisContextParameters {
         self.sumeragi_v2
@@ -4260,9 +4249,8 @@ fn load_genesis_ivm_bytecode(value: IvmPath, total: &mut usize) -> Result<IvmByt
     Ok(IvmBytecode::from_compiled(blob))
 }
 impl IvmPath {
-    /// Resolve `self` to `here/self`,
-    /// assuming `self` is an unresolved relative path to `here`.
-    /// In case `self` is absolute, it replaces `here` i.e. this method mutates nothing.
+    /// Resolve `self` to `here/self`, assuming `self` is an unresolved relative path to `here`. In
+    /// case `self` is absolute, it replaces `here` i.e. this method mutates nothing.
     fn resolve(&mut self, here: impl AsRef<Path>) {
         self.0 = here.as_ref().join(&self.0)
     }
@@ -4290,8 +4278,7 @@ pub struct GenesisIvmTrigger {
     /// Action describing executable, repeats, authority and filter.
     action: GenesisIvmAction,
 }
-/// Human-readable alternative to [`Action`] which contains IVM bytecode as the
-/// executable payload.
+/// Human-readable alternative to [`Action`] which contains IVM bytecode as the executable payload.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode)]
 pub struct GenesisIvmAction {
     /// Path to the compiled IVM bytecode (`.to`) file.
@@ -4383,6 +4370,7 @@ impl TryFrom<GenesisIvmAction> for Action {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use eyre::Result;
     use iroha_data_model::{
         block::SignedBlock,
@@ -4397,7 +4385,6 @@ mod tests {
     use iroha_test_samples::{ALICE_KEYPAIR, BOB_KEYPAIR};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use tempfile::TempDir;
-    use super::*;
     #[test]
     fn aggregate_genesis_ivm_bytecode_budget_accepts_exact_limit() {
         assert_eq!(

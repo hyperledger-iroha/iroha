@@ -4,6 +4,7 @@
 //! return the corresponding typed finalized result. Instruction endpoints are
 //! pre-signing helpers: they return deterministic Norito-framed instructions
 //! and never accept or load signing material.
+use crate::{Error, JsonBody, NoritoJson, Result, SharedAppState};
 use axum::extract::State;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_core::{
@@ -39,7 +40,6 @@ use iroha_data_model::{
     query::{SingularQuery, error::QueryExecutionFail, musubi::prelude::*},
 };
 use norito::json::{self, JsonSerialize, Map, Value};
-use crate::{Error, JsonBody, NoritoJson, Result, SharedAppState};
 /// Schema name for deterministic unsigned Musubi instruction envelopes.
 pub const MUSUBI_INSTRUCTION_ENVELOPE_SCHEMA_V1: &str = "musubi-instruction-envelope";
 /// First and only supported instruction-envelope version.
@@ -454,6 +454,7 @@ where
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::{
         isi::musubi::SetMusubiReleaseYankV1,
         musubi::{
@@ -462,7 +463,6 @@ mod tests {
         },
         nexus::DataSpaceId,
     };
-    use super::*;
     fn release() -> MusubiReleaseIdV1 {
         MusubiReleaseIdV1::new(
             MusubiPackageIdV1::new(

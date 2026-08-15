@@ -3,16 +3,16 @@
 //! These types define the canonical Norito encoding for JDG attestations,
 //! including their scope, signer sets, optional proofs, and the domain-tagged
 //! hash used for signing.
+use crate::{nexus::DataSpaceId, proof::ProofBox};
+use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     str::FromStr,
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use thiserror::Error;
-use crate::{nexus::DataSpaceId, proof::ProofBox};
 /// Maximum supported length (bytes) for a jurisdiction identifier.
 pub const JDG_MAX_JURISDICTION_ID_LEN: usize = 64;
 /// Explicit attestation format version (v1).

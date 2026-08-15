@@ -1,5 +1,11 @@
 //! Native asset escrow instruction handlers.
-use std::collections::{BTreeMap, BTreeSet};
+use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
+use crate::{
+    prelude::ValidSingularQuery,
+    smartcontracts::ValidQuery,
+    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
+    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+};
 use eyre::Result;
 use iroha_crypto::derive_non_signing_ed25519_public_key;
 #[cfg(test)]
@@ -43,13 +49,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::json::Value;
-use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
-use crate::{
-    prelude::ValidSingularQuery,
-    smartcontracts::ValidQuery,
-    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
-};
+use std::collections::{BTreeMap, BTreeSet};
 /// Exact native-escrow purpose carried by a one-shot balance movement capability.
 pub(in crate::smartcontracts::isi) enum VerifiedNativeEscrowPurpose {
     Funding {

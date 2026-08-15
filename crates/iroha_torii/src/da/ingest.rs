@@ -1,12 +1,21 @@
 //! Data availability ingest handlers for Torii.
 
 #![allow(clippy::redundant_pub_crate)]
-use std::{
-    borrow::{Cow, ToOwned},
-    io::{ErrorKind, Read},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+use super::persistence::{ReceiptInsertOutcome, receipt_signature_placeholder};
+use super::rs16::{
+    MAX_CANONICAL_PAYLOAD_BYTES, MAX_CHUNK_SIZE_BYTES, MAX_DATA_CHUNKS, MAX_DATA_SHARDS,
+    MAX_PARITY_SHARDS, MAX_ROW_PARITY_SOURCE_STRIPES, MAX_ROW_PARITY_STRIPES, MIN_CHUNK_SIZE_BYTES,
+    build_chunk_commitments, validate_erasure_work_budget,
+};
+use super::{
+    DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, persistence,
+    storage_class_label, taikai, taikai::taikai_ingest,
+};
+use crate::{
+    NoritoQuery, SharedAppState,
+    routing::MaybeTelemetry,
+    sorafs::api::ResponseError,
+    utils::{self, ResponseFormat},
 };
 use axum::{
     extract::{Extension, Path as AxumPath, State},
@@ -49,29 +58,22 @@ use norito::{
     json::{self, JsonSerialize, Map, Value},
     to_bytes,
 };
-use sorafs_car::{ChunkStore, build_plan_from_da_manifest, fetch_plan::try_chunk_fetch_plan_to_json};
+use sorafs_car::{
+    ChunkStore, build_plan_from_da_manifest, fetch_plan::try_chunk_fetch_plan_to_json,
+};
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1,
     pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
 };
+use std::{
+    borrow::{Cow, ToOwned},
+    io::{ErrorKind, Read},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use zstd::stream::read::Decoder as ZstdDecoder;
-use super::persistence::{ReceiptInsertOutcome, receipt_signature_placeholder};
-use super::rs16::{
-    MAX_CANONICAL_PAYLOAD_BYTES, MAX_CHUNK_SIZE_BYTES, MAX_DATA_CHUNKS, MAX_DATA_SHARDS,
-    MAX_PARITY_SHARDS, MAX_ROW_PARITY_SOURCE_STRIPES, MAX_ROW_PARITY_STRIPES, MIN_CHUNK_SIZE_BYTES,
-    build_chunk_commitments, validate_erasure_work_budget,
-};
-use super::{
-    DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, persistence,
-    storage_class_label, taikai, taikai::taikai_ingest,
-};
-use crate::{
-    NoritoQuery, SharedAppState,
-    routing::MaybeTelemetry,
-    sorafs::api::ResponseError,
-    utils::{self, ResponseFormat},
-};
 const HEADER_SORA_PDP_COMMITMENT: &str = "sora-pdp-commitment";
 const META_DA_REGISTRY_ALIAS: &str = "da.registry.alias";
 const META_DA_REGISTRY_OWNER: &str = "da.registry.owner";

@@ -1,7 +1,7 @@
 //! Ministry agenda submission handlers.
+use super::prelude::*;
 use iroha_data_model::isi::error::{InstructionExecutionError as Error, InvalidParameterError};
 use iroha_telemetry::metrics;
-use super::prelude::*;
 /// Execution handlers for Ministry ISIs.
 pub mod isi {
     use super::*;
@@ -55,6 +55,12 @@ pub mod isi {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
@@ -68,12 +74,6 @@ mod tests {
         transaction::SignedTransaction,
     };
     use nonzero_ext::nonzero;
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
     fn sample_proposal(proposal_id: &str) -> AgendaProposalV1 {
         AgendaProposalV1 {
             version: AGENDA_PROPOSAL_VERSION_V1,

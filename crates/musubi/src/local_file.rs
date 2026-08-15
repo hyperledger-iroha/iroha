@@ -5,7 +5,6 @@
 //! identity after the bounded read. Other targets fail closed before reading.
 //! Callers remain responsible for ancestor confinement: these pathname-based
 //! opens do not claim to close a deliberately timed ancestor-directory ABA.
-use std::{io, path::Path};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 #[cfg(unix)]
@@ -13,6 +12,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Read as _,
 };
+use std::{io, path::Path};
 /// Read one exact, bounded, singly linked regular final component.
 ///
 /// The returned bytes come from one descriptor whose type, size, link count,
@@ -279,11 +279,11 @@ const fn platform_nonblocking_flag() -> i32 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::fs;
     #[cfg(unix)]
     use std::{fs::File, process::Command};
     use tempfile::tempdir;
-    use super::*;
     #[cfg(unix)]
     #[test]
     fn reads_exact_regular_bytes_and_rejects_oversize_files() {

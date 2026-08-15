@@ -179,9 +179,6 @@ impl CompareAndSetPrimaryAccountAlias {
 impl crate::seal::Instruction for CompareAndSetPrimaryAccountAlias {}
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_primitives::numeric::{Numeric, Quantity};
-    use norito::core::DecodeFromSlice;
     use super::*;
     use crate::{
         alias_setup::{
@@ -193,6 +190,9 @@ mod tests {
         domain::DomainId,
         nexus::DataSpaceId,
     };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::{Numeric, Quantity};
+    use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked alias ISI fixture keypair");

@@ -6,11 +6,6 @@
     clippy::ignored_unit_patterns,
     clippy::unused_async
 )]
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::Arc,
-    time::Duration,
-};
 use bytes::Bytes;
 use norito::{
     deserialize_from,
@@ -29,6 +24,11 @@ use quinn::{
     },
 };
 use rustls::{client::danger::ServerCertVerifier, pki_types::PrivatePkcs8KeyDer};
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const CONTROL_STREAM_PREFACE: &[u8; 5] = b"NSC/1";
@@ -801,7 +801,7 @@ fn build_transport_config(settings: TransportConfigSettings) -> Result<Arc<Trans
 }
 #[cfg(all(test, feature = "quic"))]
 mod tests {
-    use std::future::Future;
+    use super::*;
     use iroha_crypto::streaming::StreamingSession;
     use norito::streaming::{
         AudioCapability, CapabilityAck, CapabilityFlags, CapabilityReport, CapabilityRole,
@@ -809,8 +809,8 @@ mod tests {
         ManifestAnnounceFrame, ManifestV1, ProfileId, ReceiverReport, Resolution, StreamMetadata,
         TransportCapabilities,
     };
+    use std::future::Future;
     use tokio::time::{Duration as TokioDuration, sleep, timeout};
-    use super::*;
     const TEST_TIMEOUT: TokioDuration = TokioDuration::from_secs(10);
     async fn within<T>(label: &'static str, fut: impl Future<Output = T>) -> T {
         timeout(TEST_TIMEOUT, fut)

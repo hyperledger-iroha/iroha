@@ -401,5 +401,5 @@ fn map_exact_membership_error_v1(error: ExactEightChunkMembershipErrorV1) -> ZkA
 }
 
 #[cfg(test)]
-#[path = "direct_rkg_one_candidate_v1_tests.rs"]
+#[path = "direct_rkg_one_candidate_v1/direct_rkg_one_candidate_v1_tests.rs"]
 mod tests;

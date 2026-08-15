@@ -77,6 +77,7 @@ fn is_zero_manifest(digest: &ManifestDigest) -> bool {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
@@ -89,7 +90,6 @@ mod tests {
         },
         sorafs::pin_registry::ManifestDigest,
     };
-    use super::*;
     fn lane_config(confidential: bool, key_version: Option<u32>) -> ConfigLaneConfig {
         let mut metadata = std::collections::BTreeMap::new();
         if confidential {

@@ -1,11 +1,13 @@
 //! Benchmarks the production Kotodama prepared-contract and warm-runtime cache path.
-use std::collections::BTreeMap;
 use criterion::Criterion;
 use iroha_core::smartcontracts::ivm::cache::IvmCache;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::{json::Json, numeric_abi::IntValueV1};
-use ivm::{ProgramMetadata, host::DefaultHost, kotodama::compiler::Compiler, pointer_abi::PointerType};
+use ivm::{
+    ProgramMetadata, host::DefaultHost, kotodama::compiler::Compiler, pointer_abi::PointerType,
+};
+use std::collections::BTreeMap;
 // Timing the cache path must not be coupled to the evolving deterministic
 // instruction/syscall schedule; gas behavior has separate golden tests.
 const GAS_LIMIT: u64 = u64::MAX;

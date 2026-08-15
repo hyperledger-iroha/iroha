@@ -3,12 +3,6 @@
 //! Textual names in this module are catalog-free.  Resolution pins the canonical
 //! text to the numeric dataspace identifier that consensus must revalidate when
 //! executing an alias instruction.
-use core::{fmt, str::FromStr};
-use std::{string::String, vec::Vec};
-use iroha_crypto::{Hash, HashOf};
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
 use crate::{
     NetworkId,
     account::{
@@ -21,6 +15,12 @@ use crate::{
     name::{self, Name},
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
+use core::{fmt, str::FromStr};
+use iroha_crypto::{Hash, HashOf};
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{string::String, vec::Vec};
 /// Domain separator for [`AliasTransactionPlanBodyV1`] commitments.
 pub const ALIAS_TRANSACTION_PLAN_HASH_DOMAIN_V1: &[u8] = b"iroha:alias-transaction-plan-body:v1\0";
 /// Domain separator for [`AliasLifecycleTransactionPlanBodyV1`] commitments.
@@ -1139,10 +1139,10 @@ impl AliasLifecycleTransactionPlanV1 {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_primitives::numeric::Numeric;
     use super::*;
     use crate::nexus::DataSpaceMetadata;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_primitives::numeric::Numeric;
     fn plan_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
             Hash::new([seed]),

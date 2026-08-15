@@ -1,11 +1,4 @@
 //! Consensus-related data model DTOs for on-chain persistence.
-use std::str::FromStr;
-use iroha_crypto::{Hash, PublicKey};
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::{Ident, IntoSchema};
-#[cfg(feature = "json")]
-use mv::json::JsonKeyCodec;
-use norito::codec::{Decode, Encode};
 pub use crate::block::consensus::{
     CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiBlockSyncRosterStatus,
     SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
@@ -19,6 +12,13 @@ pub use crate::block::consensus::{
 /// Canonical Sumeragi v2 wire types.
 pub use crate::block::consensus_v2 as v2;
 use crate::prelude::*;
+use iroha_crypto::{Hash, PublicKey};
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::{Ident, IntoSchema};
+#[cfg(feature = "json")]
+use mv::json::JsonKeyCodec;
+use norito::codec::{Decode, Encode};
+use std::str::FromStr;
 /// Hash-version constant for validator set checkpoints.
 pub const VALIDATOR_SET_HASH_VERSION_V1: u16 = 1;
 /// Hard upper bound for one autonomous lane consensus committee.
@@ -722,9 +722,9 @@ pub struct VrfEpochRecord {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
-    use super::*;
     #[derive(Encode)]
     struct ForgedCommitStakeSnapshotEntry {
         peer_id: crate::peer::PeerId,

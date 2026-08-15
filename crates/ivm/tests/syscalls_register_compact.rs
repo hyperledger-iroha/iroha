@@ -3,11 +3,11 @@ mod common;
 use common::assemble_syscalls;
 #[test]
 fn register_compact_proof_decodes_and_verifies() {
-    use std::num::NonZeroU64;
     use iroha_crypto::{
         CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
     };
     use sha2::{Digest, Sha256};
+    use std::num::NonZeroU64;
     let mut vm = IVM::new(u64::MAX);
     // Modify a few registers (including tag) to create nontrivial tree
     vm.set_register(5, 123456789);

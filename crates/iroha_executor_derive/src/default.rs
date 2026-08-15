@@ -1,9 +1,9 @@
+use crate::emitter_ext::EmitterExt;
 use darling::{FromDeriveInput, FromMeta, ast::NestedMeta};
 use manyhow::{Emitter, ToTokensError, emit};
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{ToTokens, quote};
 use syn::{Ident, parse_quote};
-use crate::emitter_ext::EmitterExt;
 type ExecutorData = darling::ast::Data<darling::util::Ignored, syn::Field>;
 #[derive(Debug)]
 struct DarlingErrorWrapper(darling::Error);
@@ -374,9 +374,9 @@ fn custom_field_idents(ast: &ExecutorData) -> Vec<&Ident> {
 }
 #[cfg(test)]
 mod tests {
-    use manyhow::Emitter;
     use super::*;
     use crate::emitter_ext::EmitterExt;
+    use manyhow::Emitter;
     #[test]
     fn darling_result_integrates_with_emitter() {
         let mut emitter = Emitter::new();

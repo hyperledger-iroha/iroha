@@ -1,12 +1,12 @@
 //! Generic hidden-program RAM-LFE policy and receipt types.
-use std::{fmt, str::FromStr, string::String, vec::Vec};
+use crate::{account::AccountId, name::Name, proof::ProofBox};
 use iroha_crypto::{
     Algorithm, Hash, PolicyCommitment, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
     SignatureOf,
 };
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use crate::{account::AccountId, name::Name, proof::ProofBox};
+use std::{fmt, str::FromStr, string::String, vec::Vec};
 pub(crate) fn signature_for_public_key_algorithm(
     public_key: &PublicKey,
     signature: &Signature,
@@ -299,8 +299,8 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair, RamLfeBackend, RamLfeVerificationMode};
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair, RamLfeBackend, RamLfeVerificationMode};
     const NONCANONICAL_ED25519_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,

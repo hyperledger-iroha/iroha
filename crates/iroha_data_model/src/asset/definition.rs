@@ -1,4 +1,10 @@
 //! Asset definitions and builders.
+pub use self::model::*;
+use super::{alias::AssetDefinitionAlias, id::AssetDefinitionId};
+use crate::{
+    HasMetadata, Identifiable, Registered, Registrable, account::prelude::*, domain::DomainId,
+    isi::error::MintabilityError, metadata::Metadata, sorafs_uri::SorafsUri,
+};
 use core::fmt;
 use derive_more::Display;
 use getset::{CopyGetters, Getters};
@@ -9,12 +15,6 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::Value;
-pub use self::model::*;
-use super::{alias::AssetDefinitionAlias, id::AssetDefinitionId};
-use crate::{
-    HasMetadata, Identifiable, Registered, Registrable, account::prelude::*, domain::DomainId,
-    isi::error::MintabilityError, metadata::Metadata, sorafs_uri::SorafsUri,
-};
 /// Maximum accepted asset human-name length.
 pub const MAX_ASSET_NAME_LEN: usize = 128;
 /// Maximum accepted asset description length.
@@ -919,11 +919,11 @@ impl HasMetadata for NewAssetDefinition {
 }
 #[cfg(test)]
 mod validation_tests {
+    use super::*;
+    use crate::domain::DomainId;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode as _, DecodeAll as _, Encode as _};
-    use super::*;
-    use crate::domain::DomainId;
     #[derive(Encode)]
     struct ForgedAssetDefinition {
         id: AssetDefinitionId,
@@ -1201,10 +1201,10 @@ mod validation_tests {
 }
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
-    use std::str::FromStr;
-    use norito::json::{Arena, FastFromJson, TapeWalker};
     use super::*;
     use crate::{Name, domain::DomainId, metadata::Metadata};
+    use norito::json::{Arena, FastFromJson, TapeWalker};
+    use std::str::FromStr;
     #[test]
     fn new_asset_definition_json_roundtrip_omits_confidential_policy() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");

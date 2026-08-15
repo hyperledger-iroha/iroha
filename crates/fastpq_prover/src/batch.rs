@@ -1,8 +1,8 @@
 use core::cmp::Ordering;
-use std::collections::BTreeMap;
 #[allow(unused_imports)]
 use norito::json::{JsonDeserialize, JsonSerialize};
 use norito::{NoritoDeserialize, NoritoSerialize};
+use std::collections::BTreeMap;
 /// Stable nominal Norito schema identity for [`TransitionBatch`].
 ///
 /// This intentionally preserves the type-name hash carried by the existing

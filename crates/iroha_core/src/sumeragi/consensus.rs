@@ -36,9 +36,9 @@ pub type Phase = CertPhase;
 pub type Vote = QcVote;
 /// Reference to a QC header carried in hints.
 pub type QcHeaderRef = QcRef;
+use crate::state::{StateView, WorldReadOnly};
 use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;
-use crate::state::{StateView, WorldReadOnly};
 /// Count the number of validators encoded into a QC signer bitmap.
 pub fn qc_signer_count(qc: &Qc) -> usize {
     qc.aggregate

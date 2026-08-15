@@ -1,7 +1,7 @@
 //! FFI import of opaque types tests.
 #![allow(unsafe_code)]
-use std::collections::BTreeMap;
 use iroha_ffi::{decl_ffi_fns, ffi, ffi_import, ir::External};
+use std::collections::BTreeMap;
 iroha_ffi::handles! {OpaqueStruct, Value}
 decl_ffi_fns! {Drop, Clone, Eq}
 mod types {
@@ -115,10 +115,10 @@ fn compare_opaque_eq<T, U: PartialEq + core::fmt::Debug>(opaque1: &T, opaque2: &
     }
 }
 mod ffi {
-    use std::collections::BTreeMap;
     use iroha_ffi::{
         FfiConvert, FfiOutPtr, FfiOutPtrWrite, FfiReturn, FfiType, def_ffi_fns, slice::RefMutSlice,
     };
+    use std::collections::BTreeMap;
     iroha_ffi::handles! {ExternOpaqueStruct, ExternValue}
     def_ffi_fns! {
         Drop: { ExternValue, ExternOpaqueStruct },

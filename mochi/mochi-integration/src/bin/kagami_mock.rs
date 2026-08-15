@@ -1,10 +1,10 @@
 //! Minimal stand-in for the `kagami` binary used by the MOCHI supervisor integration tests.
-use std::{env, fs, path::PathBuf, process};
 use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
 use mochi_core::sign_kagami_stub_genesis_from_config;
 use mochi_integration::kagami_default_manifest_json;
+use std::{env, fs, path::PathBuf, process};
 const DEFAULT_CHAIN_ID: &str = "mochi-mock-chain";
 const VERSION_OUTPUT: &str = "kagami_mock iroha3 test-stub";
 fn main() {

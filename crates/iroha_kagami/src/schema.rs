@@ -1,8 +1,8 @@
-use std::{collections::HashSet, fs::File, path::PathBuf};
-use iroha_genesis::RawGenesisTransaction;
-use iroha_schema::{IntoSchema, MetaMap, Metadata};
 use super::*;
 use crate::tui;
+use iroha_genesis::RawGenesisTransaction;
+use iroha_schema::{IntoSchema, MetaMap, Metadata};
+use std::{collections::HashSet, fs::File, path::PathBuf};
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
     /// Optional path to output genesis schema

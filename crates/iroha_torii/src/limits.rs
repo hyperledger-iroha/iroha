@@ -5,6 +5,9 @@
 //! introducing gas/fees on read endpoints.
 
 #![allow(clippy::redundant_pub_crate)]
+use axum::http::HeaderMap;
+use dashmap::{DashMap, mapref::entry::Entry};
+use parking_lot::Mutex;
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, VecDeque, hash_map::DefaultHasher},
@@ -18,9 +21,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use axum::http::HeaderMap;
-use dashmap::{DashMap, mapref::entry::Entry};
-use parking_lot::Mutex;
 /// Shared, cheap-to-clone limiter.
 #[derive(Clone)]
 pub struct RateLimiter {

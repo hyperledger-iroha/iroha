@@ -1,11 +1,5 @@
-use std::{
-    collections::{BTreeSet, VecDeque},
-    future::Future,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
+use super::{GeoLocation, GeoLookupConfig, PeerConfigSnapshot, ToriiUrl};
+use crate::operator_signatures;
 use eyre::{Report, eyre};
 use http::StatusCode;
 use iroha_config::client_api::ConfigGetDTO;
@@ -15,6 +9,14 @@ use iroha_logger::prelude::*;
 use iroha_telemetry::metrics::Status;
 use norito::json::{self, Value};
 use reqwest::{Client, redirect::Policy};
+use std::{
+    collections::{BTreeSet, VecDeque},
+    future::Future,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinSet,
@@ -22,8 +24,6 @@ use tokio::{
 };
 use tracing::{Instrument, info_span};
 use url::Url;
-use super::{GeoLocation, GeoLookupConfig, PeerConfigSnapshot, ToriiUrl};
-use crate::operator_signatures;
 const GEO_QUERY_FIELDS: &str = "status,message,lat,lon,country,city";
 #[cfg(test)]
 const GET_STATUS_INTERVAL: Duration = Duration::from_millis(200);

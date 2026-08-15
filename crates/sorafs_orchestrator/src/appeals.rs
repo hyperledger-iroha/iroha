@@ -5,13 +5,13 @@
 //! `specs/sorafs_appeal_pricing_plan.md`. The settlement helpers wire in
 //! the initial escrow/payout policy so treasury dashboards, CLI tools, and SDKs
 //! can deterministically compute refund/slash amounts and panel rewards.
-use std::{collections::BTreeMap, fmt, str::FromStr};
 use iroha_data_model::account::AccountId;
 use iroha_primitives::numeric::{
     DecimalProductError, Numeric, NumericOperationError, Quantity, RoundingMode,
     XOR_QUANTITY_SCALE, XorQuantity, XorQuantityError,
 };
 use norito::json::{Map as JsonMap, Value};
+use std::{collections::BTreeMap, fmt, str::FromStr};
 use thiserror::Error;
 const APPEAL_CALCULATION_SCALE: u32 = 28;
 /// Supported appeal classes.
@@ -1303,10 +1303,10 @@ pub fn parse_appeal_quantity_literal(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::domain::DomainId;
-    use super::*;
     fn make_account(label: u8, _domain: &DomainId) -> AccountId {
         let seed = [label; ed25519_dalek::SECRET_KEY_LENGTH];
         let signer = SigningKey::from_bytes(&seed);

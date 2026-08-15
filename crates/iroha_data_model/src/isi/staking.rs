@@ -1,6 +1,3 @@
-use std::string::String;
-use iroha_crypto::Hash;
-use iroha_primitives::numeric::Quantity;
 use super::*;
 use crate::{
     account::AccountId,
@@ -10,6 +7,9 @@ use crate::{
     nexus::{LaneId, PublicLaneRewardShare},
     peer::PeerId,
 };
+use iroha_crypto::Hash;
+use iroha_primitives::numeric::Quantity;
+use std::string::String;
 isi! {
     /// Activate a pending validator for a public Nexus lane.
     #[cfg_attr(
@@ -432,12 +432,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelConsensusEvidencePenalty {
 }
 #[cfg(test)]
 mod slice_tests {
+    use super::*;
+    use crate::block::consensus::{EvidenceKind, EvidencePayload};
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::Decode;
     use norito::core::{DecodeFlagsGuard, DecodeFromSlice, header_flags, read_len_dyn_slice};
-    use super::*;
-    use crate::block::consensus::{EvidenceKind, EvidencePayload};
     #[derive(norito::codec::Encode)]
     struct ForgedRegisterPublicLaneValidator {
         lane_id: LaneId,
@@ -708,7 +708,9 @@ mod json_tests {
     use super::{
         ActivatePublicLaneValidator, RebindPublicLaneValidatorPeer, RegisterPublicLaneValidator,
     };
-    use crate::{account::AccountId, domain::DomainId, metadata::Metadata, nexus::LaneId, peer::PeerId};
+    use crate::{
+        account::AccountId, domain::DomainId, metadata::Metadata, nexus::LaneId, peer::PeerId,
+    };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Quantity;
     use norito::json::value::{from_value, to_value};

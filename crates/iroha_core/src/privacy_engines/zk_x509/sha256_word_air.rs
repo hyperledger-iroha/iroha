@@ -13,13 +13,15 @@
 //! proof must still bind input/output words to the DER, accumulator, and
 //! projection segments and commit the main trace before deriving the copy
 //! challenges.
-use thiserror::Error;
 use super::air::{U32RangeAirRowV1, ZkX509AirErrorV1};
 #[cfg(test)]
-use super::io_air::{ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1};
+use super::io_air::{
+    ZkX509IoChallengesV1, ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1, ZkX509IoTraceV1,
+};
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
+use thiserror::Error;
 /// Manifest descriptor for the resource-bounded local SHA-256 chip.
 pub(crate) const ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1: &[u8] = b"sha256-word-air-v1-incompatible:u32-range-row=packed-plus32bits:sigma-degree3:choose-degree2:majority-degree3:add-up-to5-plus-u32-constant:carry-3bits:local-rows-per-block=1728:local-initial-rows=8:word-copy=four-independent-transcript-challenged-address-value-write-grand-products:sorted-address-step-0-or1:exactly-one-write-per-address:read-value-equals-write:memory-rows-per-block=2136:memory-fixed-rows=16:fixed-canonical-topology:physical-segment-offset-and-copy-product-continuations:shared-sha-call-bus-binding-required";
 /// Native rows in each verifier-fixed SHA batch segment.
@@ -1352,7 +1354,6 @@ fn sha256_padding_v1(message: &[u8]) -> Result<Vec<u8>, ZkX509Sha256WordAirError
 }
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest as _, Sha256};
     use super::*;
     use crate::privacy_engines::zk_x509::io_air::{
         ZkX509IoAirErrorV1, ZkX509IoChannelDeclarationV1, ZkX509IoChannelWitnessV1,
@@ -1361,6 +1362,7 @@ mod tests {
     use crate::privacy_engines::zk_x509::profile::{
         ZK_X509_MAX_CRL_BYTES_V1, ZK_X509_TARGET_SOUNDNESS_BITS_V1,
     };
+    use sha2::{Digest as _, Sha256};
     fn word_memory_challenges() -> ZkX509WordMemoryChallengesV1 {
         ZkX509WordMemoryChallengesV1 {
             lanes: [

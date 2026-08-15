@@ -14,7 +14,6 @@
 //!
 //! Use `--check` to reject drift or `--output <path>` to write a synchronized
 //! Android/iOS copy.
-use std::{env, error::Error, fs, io, path::Path};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
@@ -55,8 +54,11 @@ use norito::{
     json::{self, Value},
     to_bytes,
 };
-use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey, signature::Signer as _};
+use p256::ecdsa::{
+    Signature as P256Signature, SigningKey as P256SigningKey, signature::Signer as _,
+};
 use sha2::{Digest, Sha256};
+use std::{env, error::Error, fs, io, path::Path};
 const FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/offline/cbsi_interop_contract.json"

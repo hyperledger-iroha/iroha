@@ -611,7 +611,9 @@ async fn public_query_route_rejects_version_only_body_without_decode_panic() {
 async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_transaction_ingress()
 {
     use iroha::{client::Client, config::Config};
-    use iroha_data_model::{ChainId, account::AccountId, isi::Log, transaction::TransactionBuilder};
+    use iroha_data_model::{
+        ChainId, account::AccountId, isi::Log, transaction::TransactionBuilder,
+    };
     use iroha_logger::Level;
     use tokio::net::TcpListener;
     let harness = NoritoRpcHarness::new(|cfg| {

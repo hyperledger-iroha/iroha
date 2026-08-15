@@ -4,6 +4,11 @@
 //! Council. Requests can then reference manifests using a BLAKE3 digest derived
 //! from the salt and canonical CID instead of exposing the raw identifier on
 //! the wire.
+use dashmap::DashMap;
+use hex::FromHex;
+use iroha_crypto::soranet::blinding::canonical_cache_key;
+use norito::json::Value as JsonValue;
+use sorafs_node::store::StoredManifest;
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -12,11 +17,6 @@ use std::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
-use dashmap::DashMap;
-use hex::FromHex;
-use iroha_crypto::soranet::blinding::canonical_cache_key;
-use norito::json::Value as JsonValue;
-use sorafs_node::store::StoredManifest;
 use thiserror::Error;
 /// Width of the blinded CID digest (BLAKE3-256).
 pub const BLINDED_CID_LEN: usize = 32;
@@ -325,10 +325,10 @@ impl EpochBloom {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
     use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
     use sorafs_node::{config::StorageConfig, store::StorageBackend};
-    use super::*;
     fn storage_backend(temp_dir: &tempfile::TempDir) -> StorageBackend {
         StorageBackend::new(
             StorageConfig::builder()

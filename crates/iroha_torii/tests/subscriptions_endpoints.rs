@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for Torii subscription endpoints.
 #![cfg(feature = "app_api")]
-use std::{net::SocketAddr, num::NonZeroU64, str::FromStr as _, sync::Arc};
 use axum::{
     body::Body,
     extract::connect_info::ConnectInfo,
@@ -47,6 +46,7 @@ use iroha_primitives::{
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, json_entry, json_object};
 use mv::storage::StorageReadOnly;
+use std::{net::SocketAddr, num::NonZeroU64, str::FromStr as _, sync::Arc};
 use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;

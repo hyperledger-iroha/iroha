@@ -4,20 +4,6 @@
 //! accepts an exact finalized native task, verifies the current native lease
 //! before any storage I/O, and durably enqueues one deterministic native
 //! terminal action. It never mutates the process-local repair scheduler.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
-use iroha_data_model::{
-    NetworkId,
-    account::AccountId,
-    isi::sorafs::{
-        ApplySorafsRepairTaskAction, SorafsRepairCompleteV1, SorafsRepairFailV1,
-        SorafsRepairTaskActionV1,
-    },
-    sorafs::moderation_ledger::{RepairFinalizedCursorV1, RepairFinalizedTaskV1},
-};
-use thiserror::Error;
 use crate::{
     NodeHandle, RepairChunkPayload, RepairOrchestrator, RepairOrchestratorError,
     native_repair_singleflight::NativeRepairSingleflightErrorV1,
@@ -28,6 +14,20 @@ use crate::{
     },
     store::{ChunkFileRecord, StorageBackend, StoredManifest},
 };
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    isi::sorafs::{
+        ApplySorafsRepairTaskAction, SorafsRepairCompleteV1, SorafsRepairFailV1,
+        SorafsRepairTaskActionV1,
+    },
+    sorafs::moderation_ledger::{RepairFinalizedCursorV1, RepairFinalizedTaskV1},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
+use thiserror::Error;
 /// Maximum chunks inspected for one native repair execution.
 pub const NATIVE_REPAIR_MAX_CHUNKS_V1: usize = 65_536;
 /// Maximum source chunk records inspected for one native repair execution.
@@ -634,9 +634,9 @@ fn hash_u64(hasher: &mut blake3::Hasher, value: u64) {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[cfg(unix)]
     use std::{fs, os::unix::fs::symlink};
-    use super::*;
     fn evidence_context(network_seed: u8) -> NativeRepairExecutionContextV1 {
         let genesis_hash =
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(

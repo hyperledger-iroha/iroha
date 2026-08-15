@@ -1,10 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry and metrics surface integration tests.
-use std::collections::{HashMap, HashSet};
 use eyre::ensure;
 use iroha_core::sumeragi::consensus::NPOS_TAG;
 use iroha_data_model::{Level, isi::Log, peer::Peer};
 use iroha_test_network::NetworkBuilder;
+use std::collections::{HashMap, HashSet};
 use tokio::runtime::Runtime;
 const TELEMETRY_REQUIRED_KEYS: &[&str] = &[
     "accounts{domain=\"garden_of_live_flowers\"}",

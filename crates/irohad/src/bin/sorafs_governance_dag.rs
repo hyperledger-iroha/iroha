@@ -4,13 +4,13 @@
 //! policy, expected identities, stable provider handles, revisions, bounds,
 //! and policy digests. Runtime credentials and private keys remain behind the
 //! platform-fixed local provider broker.
-use std::{path::PathBuf, process, sync::Arc};
 use clap::Parser;
 use iroha_data_model::{ChainId, NetworkId};
 use irohad::StockGovernanceDagServiceRuntimeProviderRegistryV1;
 use sorafs_node::{
     GovernanceDagServiceRuntimeProviderRegistryV1, run_governance_dag_service_with_runtime_registry,
 };
+use std::{path::PathBuf, process, sync::Arc};
 #[derive(Debug, Parser)]
 #[command(
     author,

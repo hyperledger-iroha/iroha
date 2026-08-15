@@ -3,14 +3,14 @@
 //! This adapter will evolve to bridge a TUN-like source into SoraNet cells. For now it
 //! accepts opaque ingress/egress byte counts so the metrics and billing hooks can be
 //! tested without a full tunnel implementation.
-use blake3::Hasher;
-use iroha_data_model::soranet::vpn::{VpnCellClassV1, VpnCellFlagsV1, VpnCellV1, VpnFlowLabelV1};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::vpn::{
     CoverFrameMeta, PaddedCell, VpnFrameBuildError, VpnFrameIoError, VpnOverlay, VpnSession,
     read_frame as read_padded_frame, schedule_frames, send_scheduled_frames_with_adapter,
     write_frame as write_padded_frame,
 };
+use blake3::Hasher;
+use iroha_data_model::soranet::vpn::{VpnCellClassV1, VpnCellFlagsV1, VpnCellV1, VpnFlowLabelV1};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// Batch parameters for building data-class VPN frames.
 #[derive(Debug, Clone)]
 pub struct VpnDataFrameBatch<'a> {
@@ -389,10 +389,10 @@ impl VpnBridge {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use iroha_data_model::soranet::vpn::VpnCellHeaderV1;
     use super::*;
     use crate::metrics::Metrics;
+    use iroha_data_model::soranet::vpn::VpnCellHeaderV1;
+    use std::sync::Arc;
     #[test]
     fn bridge_derives_default_cover_seed() {
         let metrics = Arc::new(Metrics::new());

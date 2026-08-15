@@ -5,17 +5,10 @@
 //! connect to SoraNet-enabled Torii gateways without handling certificates or
 //! guard cache keys directly.
 #![allow(unexpected_cfgs)]
+use crate::soranet::{GuardCacheKey, GuardCacheKeyError};
 #[cfg(feature = "local-quic-proxy")]
-use std::net::IpAddr;
-#[cfg(all(feature = "local-quic-proxy", unix))]
-use std::os::unix::fs::MetadataExt;
-#[cfg(feature = "local-quic-proxy")]
-use std::path::{Component, Path, PathBuf};
-use std::{net::SocketAddr, str::FromStr, sync::Arc};
-#[cfg(feature = "local-quic-proxy")]
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
+use crate::{
+    OutboundNetworkPolicy, is_public_ip, resolve_and_validate_host, validate_public_dns_name,
 };
 use hex::ToHex;
 #[cfg(feature = "local-quic-proxy")]
@@ -38,6 +31,18 @@ use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use rcgen::generate_simple_self_signed;
 #[cfg(feature = "local-quic-proxy")]
 use sha2::{Digest, Sha256};
+#[cfg(feature = "local-quic-proxy")]
+use std::net::IpAddr;
+#[cfg(all(feature = "local-quic-proxy", unix))]
+use std::os::unix::fs::MetadataExt;
+#[cfg(feature = "local-quic-proxy")]
+use std::path::{Component, Path, PathBuf};
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
+#[cfg(feature = "local-quic-proxy")]
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 use thiserror::Error;
 #[cfg(feature = "local-quic-proxy")]
 use tokio::{
@@ -50,9 +55,6 @@ use tokio::{
 };
 #[cfg(feature = "local-quic-proxy")]
 use url::{Host, Url};
-use crate::soranet::{GuardCacheKey, GuardCacheKeyError};
-#[cfg(feature = "local-quic-proxy")]
-use crate::{OutboundNetworkPolicy, is_public_ip, resolve_and_validate_host, validate_public_dns_name};
 #[cfg(feature = "local-quic-proxy")]
 const PROXY_HANDSHAKE_VERSION: u8 = 1;
 #[cfg(feature = "local-quic-proxy")]
@@ -2602,11 +2604,11 @@ impl ProxyStreamService {
 }
 #[cfg(all(test, feature = "local-quic-proxy"))]
 mod tests {
+    use super::*;
+    use rand::rand_core::TryRngCore;
     use std::{net::SocketAddr, sync::Arc, time::Duration};
     use tempfile::TempDir;
     use tokio::{io::AsyncWriteExt, task::JoinHandle};
-    use super::*;
-    use rand::rand_core::TryRngCore;
     const TEST_GUARD_KEY: &str = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
     #[derive(Debug)]
     struct FailingProxyRng;

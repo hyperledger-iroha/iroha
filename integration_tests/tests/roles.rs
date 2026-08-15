@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for role registration and assignment flows.
-use std::time::{Duration, Instant};
 use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
 use futures_util::future::join_all;
@@ -12,6 +11,7 @@ use iroha::{
 use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
+use std::time::{Duration, Instant};
 use tokio::{fs, runtime::Runtime, time::timeout};
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()

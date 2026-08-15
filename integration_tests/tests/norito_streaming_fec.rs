@@ -1,8 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Parity/recovery scenarios for the Norito Streaming integration harness.
-use std::convert::TryFrom;
 use crate::streaming::{self, baseline_test_vector_with_frames, bundled_test_vector_with_frames};
 use norito::streaming::chunk::{chunk_commitments, chunk_leaf_hash};
+use std::convert::TryFrom;
 const GF_PRIMITIVE: u8 = 0x02;
 const GF_REDUCTION: u8 = 0x1d; // 0x11d without the leading bit used for modular reduction
 fn gf_mul(mut a: u8, mut b: u8) -> u8 {

@@ -1,12 +1,8 @@
 //! Structures traits and impls related to `Trigger`s.
 // If editing this file, consider updating `iroha_core/src/smartcontracts/isi/triggers/specialized.rs`
 // It mirrors structures from this file.
-use std::{
-    cmp, format,
-    num::{NonZeroU32, NonZeroU64},
-    string::String,
-    vec::Vec,
-};
+pub use self::model::*;
+use crate::{Identifiable, Name, Registered, metadata::Metadata, transaction::Executable};
 #[cfg(feature = "json")]
 use base64::Engine as _;
 #[cfg(feature = "json")]
@@ -19,8 +15,12 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-pub use self::model::*;
-use crate::{Identifiable, Name, Registered, metadata::Metadata, transaction::Executable};
+use std::{
+    cmp, format,
+    num::{NonZeroU32, NonZeroU64},
+    string::String,
+    vec::Vec,
+};
 #[model]
 mod model {
     use super::*;
@@ -154,7 +154,6 @@ mod candidate {
     }
     #[cfg(test)]
     mod tests {
-        use iroha_crypto::{Algorithm, KeyPair};
         use super::*;
         use crate::{
             account::AccountId,
@@ -162,6 +161,7 @@ mod candidate {
             transaction::IvmBytecode,
             trigger::action::Repeats,
         };
+        use iroha_crypto::{Algorithm, KeyPair};
         fn trigger_fixture() -> Trigger {
             let key_pair = KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519)
                 .expect("fixed trigger key seed is valid");
@@ -248,7 +248,6 @@ impl JsonDeserialize for Trigger {
 }
 pub mod action {
     //! Contains trigger action and common trait for all actions
-    use iroha_data_model_derive::model;
     pub use self::model::*;
     use super::*;
     use crate::{
@@ -258,6 +257,7 @@ pub mod action {
             pipeline::PipelineEventFilterBox, time::TimeEventFilter,
         },
     };
+    use iroha_data_model_derive::model;
     /// Failure to construct or decode a trigger action that violates its invariants.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
     pub enum ActionValidationError {
@@ -468,7 +468,6 @@ pub mod action {
     }
     #[cfg(test)]
     mod tests {
-        use iroha_crypto::KeyPair;
         use super::*;
         use crate::{
             account::AccountId,
@@ -480,6 +479,7 @@ pub mod action {
             transaction::{Executable, IvmBytecode},
             trigger::TriggerId,
         };
+        use iroha_crypto::KeyPair;
         fn sample_executable() -> Executable {
             Executable::Ivm(IvmBytecode::from_compiled(Vec::new()))
         }
@@ -1088,12 +1088,12 @@ pub mod action {
         }
         #[cfg(test)]
         mod tests {
-            use iroha_crypto::{Algorithm, KeyPair};
             use super::*;
             use crate::{
                 events::time::{ExecutionTime, Schedule, TimeEventFilter},
                 transaction::IvmBytecode,
             };
+            use iroha_crypto::{Algorithm, KeyPair};
             #[test]
             fn borrowed_candidate_preserves_owned_action_payload() {
                 let key_pair = KeyPair::try_from_seed(vec![11; 32], Algorithm::Ed25519)
