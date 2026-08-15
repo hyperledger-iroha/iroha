@@ -4,7 +4,7 @@
 //! opt-in Kagemusha candidate-build feature additionally requires and verifies
 //! an independently pinned reviewed clean signed source closure supplied by the
 //! dedicated build helper.
-use std::{env, ffi::OsStr, path::Path, process::Command};
+use std::{env, ffi::OsStr, process::Command};
 
 const SEALED_FEATURE_ENV: &str = "CARGO_FEATURE_KAGEMUSHA_CANDIDATE_SOURCE_SEAL";
 const AUTHORIZED_PARENT_COMMIT: &str = "5d41c784787ed496ccbd46379ee236cc992d9c65";
@@ -13,8 +13,7 @@ const AUTHORIZED_PARENT_EPOCH: u64 = 1_786_749_503;
 const PROJECTION_SCHEMA: &str = "iroha.kagemusha.authenticated_source_seal_projection.v1";
 const OBSERVED_SCHEMA: &str = "iroha.kagemusha.source_seal_build_script_observed.v1";
 const OUTER_POLICY_SCHEMA: &str = "iroha.kagemusha.cprime_source_seal_outer_policy.v1";
-const UNIT_GRAPH_NORMALIZATION: &str =
-    "cargo-unit-graph-v1-package-root-relative-src-path-source-cache-placeholders-sorted-compact-lf-v1";
+const UNIT_GRAPH_NORMALIZATION: &str = "cargo-unit-graph-v1-package-root-relative-src-path-source-cache-placeholders-sorted-compact-lf-v1";
 const EXPECTED_FEATURE_ENVS: &[&str] = &[
     "CARGO_FEATURE_BLS",
     "CARGO_FEATURE_CIRCUIT_PARAMS",
@@ -75,37 +74,27 @@ fn embed_exact_kagemusha_source_seal() {
     let parent_commit = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_PARENT_COMMIT", 40);
     let parent_tree = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_PARENT_TREE", 40);
     if parent_commit != AUTHORIZED_PARENT_COMMIT || parent_tree != AUTHORIZED_PARENT_TREE {
-        panic!("sealed Kagemusha source lineage does not descend from the authorized optimizations authority");
+        panic!(
+            "sealed Kagemusha source lineage does not descend from the authorized optimizations authority"
+        );
     }
     let commit_object_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_COMMIT_OBJECT_SHA256", 64);
-    let commit_object_size = required_decimal_env(
-        "KAGEMUSHA_BUILD_SOURCE_COMMIT_OBJECT_SIZE",
-        1,
-        4096,
-    );
-    let ssh_signer_principal = required_portable_identifier_env(
-        "KAGEMUSHA_BUILD_SOURCE_SSH_SIGNER_PRINCIPAL",
-        1,
-        128,
-    );
+    let commit_object_size =
+        required_decimal_env("KAGEMUSHA_BUILD_SOURCE_COMMIT_OBJECT_SIZE", 1, 4096);
+    let ssh_signer_principal =
+        required_portable_identifier_env("KAGEMUSHA_BUILD_SOURCE_SSH_SIGNER_PRINCIPAL", 1, 128);
     let ssh_public_key_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_SSH_PUBLIC_KEY_SHA256", 64);
-    let ssh_allowed_signers_sha256 = required_lower_hex_env(
-        "KAGEMUSHA_BUILD_SOURCE_SSH_ALLOWED_SIGNERS_SHA256",
-        64,
-    );
+    let ssh_allowed_signers_sha256 =
+        required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_SSH_ALLOWED_SIGNERS_SHA256", 64);
     let ssh_revocation_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_SSH_REVOCATION_SHA256", 64);
-    let source_tree_sha256 =
-        required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256", 64);
+    let source_tree_sha256 = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256", 64);
     let closure_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256", 64);
-    let closure_hex = required_lower_hex_env_bounded(
-        "KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_HEX",
-        2,
-        8192,
-    );
+    let closure_hex =
+        required_lower_hex_env_bounded("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_HEX", 2, 8192);
     let closure = decode_hex(&closure_hex, "reviewed source closure");
     validate_one_line_canonical_ascii(&closure, 4096, "reviewed source closure");
     if sha256_hex(&closure) != closure_sha256 {
@@ -122,16 +111,11 @@ fn embed_exact_kagemusha_source_seal() {
     }
     let execution_policy_sha256 =
         required_lower_hex_env("KAGEMUSHA_BUILD_EXECUTION_POLICY_SHA256", 64);
-    let unit_graph_sha256 =
-        required_lower_hex_env("KAGEMUSHA_BUILD_UNIT_GRAPH_SHA256", 64);
-    let unit_graph_size = required_decimal_env(
-        "KAGEMUSHA_BUILD_UNIT_GRAPH_SIZE_BYTES",
-        1,
-        16 * 1024 * 1024,
-    );
+    let unit_graph_sha256 = required_lower_hex_env("KAGEMUSHA_BUILD_UNIT_GRAPH_SHA256", 64);
+    let unit_graph_size =
+        required_decimal_env("KAGEMUSHA_BUILD_UNIT_GRAPH_SIZE_BYTES", 1, 16 * 1024 * 1024);
     let unit_count = required_decimal_env("KAGEMUSHA_BUILD_UNIT_GRAPH_UNITS", 1, 100_000);
-    let package_count =
-        required_decimal_env("KAGEMUSHA_BUILD_UNIT_GRAPH_PACKAGES", 1, 100_000);
+    let package_count = required_decimal_env("KAGEMUSHA_BUILD_UNIT_GRAPH_PACKAGES", 1, 100_000);
     let custom_build_units = required_decimal_env(
         "KAGEMUSHA_BUILD_UNIT_GRAPH_CUSTOM_BUILD_UNITS",
         0,
@@ -142,11 +126,8 @@ fn embed_exact_kagemusha_source_seal() {
         0,
         package_count,
     );
-    let iroha_core_units = required_decimal_env(
-        "KAGEMUSHA_BUILD_UNIT_GRAPH_IROHA_CORE_UNITS",
-        1,
-        unit_count,
-    );
+    let iroha_core_units =
+        required_decimal_env("KAGEMUSHA_BUILD_UNIT_GRAPH_IROHA_CORE_UNITS", 1, unit_count);
     let projection = format!(
         concat!(
             "{{\"build_script_observed\":{{\"debug_assertions\":false,",
@@ -181,7 +162,36 @@ fn embed_exact_kagemusha_source_seal() {
             "\"signature_namespace\":\"git\"}}}},",
             "\"source_commit\":\"{source_commit}\",\"source_date_epoch\":{source_date_epoch},",
             "\"source_repo_dirty\":false,\"source_tree_sha256\":\"{source_tree_sha256}\"}}\n"
-        )
+        ),
+        RESOLVED_FEATURES_JSON = RESOLVED_FEATURES_JSON,
+        OBSERVED_SCHEMA = OBSERVED_SCHEMA,
+        EXPLICIT_FEATURES_JSON = EXPLICIT_FEATURES_JSON,
+        SEMANTIC_ARGV_JSON = SEMANTIC_ARGV_JSON,
+        custom_build_packages = custom_build_packages,
+        custom_build_units = custom_build_units,
+        iroha_core_units = iroha_core_units,
+        UNIT_GRAPH_NORMALIZATION = UNIT_GRAPH_NORMALIZATION,
+        package_count = package_count,
+        unit_graph_sha256 = unit_graph_sha256,
+        unit_graph_size = unit_graph_size,
+        unit_count = unit_count,
+        execution_policy_sha256 = execution_policy_sha256,
+        OUTER_POLICY_SCHEMA = OUTER_POLICY_SCHEMA,
+        closure_hex = closure_hex,
+        closure_sha256 = closure_sha256,
+        PROJECTION_SCHEMA = PROJECTION_SCHEMA,
+        source_commit = source_commit,
+        commit_object_sha256 = commit_object_sha256,
+        commit_object_size = commit_object_size,
+        source_date_epoch = source_date_epoch,
+        source_git_tree = source_git_tree,
+        parent_commit = parent_commit,
+        parent_tree = parent_tree,
+        ssh_allowed_signers_sha256 = ssh_allowed_signers_sha256,
+        ssh_signer_principal = ssh_signer_principal,
+        ssh_public_key_sha256 = ssh_public_key_sha256,
+        ssh_revocation_sha256 = ssh_revocation_sha256,
+        source_tree_sha256 = source_tree_sha256,
     );
     let projection_hex = required_lower_hex_env_bounded(
         "KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX",
@@ -247,7 +257,9 @@ fn validate_exact_sealed_build_context() {
             .iter()
             .all(|expected| observed.iter().any(|actual| actual == expected))
     {
-        panic!("CARGO_FEATURE_* environment differs from the exact sealed candidate feature closure");
+        panic!(
+            "CARGO_FEATURE_* environment differs from the exact sealed candidate feature closure"
+        );
     }
 }
 
@@ -258,9 +270,10 @@ fn cargo_feature_env_name(name: &OsStr) -> Option<&str> {
     if !bytes.starts_with(b"CARGO_FEATURE_") {
         return None;
     }
-    Some(std::str::from_utf8(bytes).unwrap_or_else(|_| {
-        panic!("non-UTF-8 CARGO_FEATURE_* environment name is forbidden")
-    }))
+    Some(
+        std::str::from_utf8(bytes)
+            .unwrap_or_else(|_| panic!("non-UTF-8 CARGO_FEATURE_* environment name is forbidden")),
+    )
 }
 
 #[cfg(not(unix))]
@@ -382,17 +395,16 @@ fn sha256_hex(value: &[u8]) -> String {
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
     const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
-        0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
-        0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
-        0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
-        0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
     ];
     for block in padded.chunks_exact(64) {
         let mut words = [0_u32; 64];
@@ -442,23 +454,6 @@ fn sha256_hex(value: &[u8]) -> String {
         write!(&mut out, "{byte:02x}").unwrap();
     }
     out
-}
-fn command_text(command: &mut Command, description: &str) -> String {
-    let output = command
-        .output()
-        .unwrap_or_else(|error| panic!("failed to run {description}: {error}"));
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        panic!("{description} failed: {detail}");
-    }
-    let value = String::from_utf8(output.stdout)
-        .unwrap_or_else(|_| panic!("{description} output is not UTF-8"));
-    let trimmed = value.trim_end_matches(['\r', '\n']);
-    assert!(
-        !(trimmed.is_empty() || trimmed.contains(char::is_whitespace)),
-        "{description} output is not one canonical value"
-    );
-    trimmed.to_owned()
 }
 fn env_commit_hash() -> Option<String> {
     let commit = env::var("IROHA_GIT_COMMIT_HASH").ok()?;

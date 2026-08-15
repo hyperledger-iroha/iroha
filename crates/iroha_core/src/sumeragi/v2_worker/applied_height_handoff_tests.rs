@@ -336,7 +336,10 @@ fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
     let error = pending
         .handoff_applied_height_to_durable_reconstruction(&artifact, Some(&missing), None)
         .expect_err("a winning lane output requires its durable session witness");
-    assert!(error.contains("lacks its exact durable session witness"));
+    assert!(
+        error.contains("lacks its exact rollover session witness"),
+        "unexpected missing-witness error: {error}"
+    );
     assert_eq!(pending.fanouts.len(), 2, "handoff must be all-or-nothing");
     let mut wrong_qc = lane_qc.clone();
     wrong_qc.bls_aggregate_signature.push(2);
@@ -345,7 +348,10 @@ fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
     let error = pending
         .handoff_applied_height_to_durable_reconstruction(&artifact, Some(&wrong), None)
         .expect_err("a wrong exact lane witness cannot clear retained output");
-    assert!(error.contains("does not match its exact durable session witness"));
+    assert!(
+        error.contains("does not match its exact rollover session witness"),
+        "unexpected mismatched-witness error: {error}"
+    );
     assert_eq!(pending.fanouts.len(), 2, "handoff must be all-or-nothing");
     let live_peer = service.context.roster[1].validator.clone();
     let live_message = non_retireable_lane_transport_messages(live_peer.clone())
@@ -385,6 +391,242 @@ fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
     assert_eq!(live.ownership_units, 1);
     assert_eq!(live.shared_ownership_units, 1);
 }
+
+fn autonomous_retirement_handoff_fixture(
+    attempt: &crate::kura::tests::AutonomousLaneAttemptFixture,
+    base_context: &wire::HeightContext,
+    validators: &[KeyPair],
+) -> (
+    ProductionV2Services,
+    wire::finality::V2FinalityArtifact,
+    DurableLaneRolloverAuthority,
+) {
+    let mut context = base_context.clone();
+    context.network_id = attempt.payload.network_id;
+    context.epoch = attempt.payload.epoch;
+    context.height = attempt.payload.origin_proposal.descriptor.proposal_height;
+    context.parent_commit_qc = None;
+    context
+        .validate()
+        .expect("retired autonomous handoff context is valid");
+    let service = service_for_history_context(
+        crate::kura::Kura::blank_kura_for_testing(),
+        context.clone(),
+        validators,
+    );
+    let block = crate::block::ValidBlock::new_dummy_and_modify_header(
+        validators[0].private_key(),
+        |header| {
+            header.set_height(
+                NonZeroU64::new(context.height).expect("autonomous fixture height is non-zero"),
+            );
+            header.set_prev_block_hash(None);
+        },
+    )
+    .commit_unchecked()
+    .unpack(|_| {});
+    let header = block.as_ref().header();
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: block.as_ref().hash(),
+        payload_hash: Hash::new(b"control-only canonical autonomous carrier"),
+    };
+    attempt
+        .kura
+        .store_block(block)
+        .expect("persist control-only canonical carrier");
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: header.view_change_index(),
+    };
+    let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"autonomous handoff parent state"),
+        Hash::new(b"autonomous handoff post state"),
+        Hash::new(b"autonomous handoff ordinary writes"),
+        1,
+        Hash::new(b"autonomous handoff executed block wire"),
+    );
+    let preimage = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let signature_shares = validators[..3]
+        .iter()
+        .map(|key| {
+            Signature::new(key.private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let signature_refs = signature_shares
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let certificate = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signers: vec![0, 1, 2],
+        aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+            .expect("aggregate autonomous handoff CommitQC"),
+    };
+    let artifact = wire::finality::V2FinalityArtifact::new(
+        context,
+        subject,
+        certificate,
+        validators
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("autonomous handoff validator PoP")
+            })
+            .collect(),
+    );
+    artifact
+        .validate()
+        .expect("valid autonomous handoff finality artifact");
+    artifact
+        .validate_for_header(&header)
+        .expect("autonomous handoff artifact matches its canonical carrier");
+    artifact
+        .verify()
+        .expect("verify autonomous handoff finality proof");
+    let authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
+        &artifact,
+        Hash::new(b"different canonical autonomous carrier proposal"),
+    );
+    (service, artifact, authority)
+}
+
+fn pending_autonomous_lane_output(
+    service: &ProductionV2Services,
+    messages: impl IntoIterator<Item = BlockMessage>,
+) -> PendingExactOutput {
+    let messages = messages.into_iter().collect::<Vec<_>>();
+    let mut pending = PendingExactOutput::new(messages.len(), 1, 1, &[])
+        .expect("bounded autonomous handoff corridor");
+    let target = service.context.roster[1].validator.clone();
+    for message in messages {
+        let wire = BlockMessageWire::try_preencoded(Arc::new(message))
+            .expect("encode autonomous handoff output");
+        pending
+            .enqueue(
+                PendingExactFanout::claimed(
+                    vec![NetworkMessage::SumeragiBlock(Arc::new(wire))],
+                    vec![target.clone()],
+                    ExactOutputRolloverClaim::AutonomousLane {
+                        scope: service.exact_output_scope(),
+                        local_peer: service.local_peer.clone(),
+                        proposal_height: service.context.height,
+                    },
+                )
+                .expect("valid autonomous handoff claim")
+                .expect("one autonomous handoff fanout"),
+            )
+            .expect("retain autonomous handoff fanout");
+    }
+    pending
+}
+
+#[test]
+fn applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only() {
+    let (base_service, validators) = fixture();
+    let retired = crate::kura::tests::retired_autonomous_lane_attempt_fixture(&validators[0]);
+    let (service, artifact, authority) =
+        autonomous_retirement_handoff_fixture(&retired, &base_service.context, &validators);
+    for output in [
+        BlockMessage::LaneExecutablePayload(retired.payload.clone()),
+        BlockMessage::LaneBlockNewViewVote(retired.new_view_vote.clone()),
+        BlockMessage::LaneBlockNewViewCertificate(retired.new_view_certificate.clone()),
+    ] {
+        assert!(autonomous_lane_output_matches_payload_identity(
+            &output,
+            &retired.payload,
+        ));
+    }
+    let mut pending = pending_autonomous_lane_output(
+        &service,
+        [
+            BlockMessage::LaneExecutablePayload(retired.payload.clone()),
+            BlockMessage::LaneBlockNewViewVote(retired.new_view_vote.clone()),
+            BlockMessage::LaneBlockNewViewCertificate(retired.new_view_certificate.clone()),
+        ],
+    );
+    assert_eq!(
+        pending
+            .handoff_applied_height_to_durable_reconstruction(
+                &artifact,
+                Some(&authority),
+                Some(retired.kura.as_ref()),
+            )
+            .expect("exact retired attempt supersedes all autonomous output variants"),
+        3
+    );
+    assert!(!pending.is_pending());
+
+    let (_, unrelated_artifact) = durable_finality_fixture(&base_service, &validators);
+    let unrelated_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
+        &unrelated_artifact,
+        Hash::new(b"unrelated autonomous handoff authority"),
+    );
+    let mut unbound = pending_autonomous_lane_output(
+        &service,
+        [BlockMessage::LaneExecutablePayload(retired.payload.clone())],
+    );
+    let error = unbound
+        .handoff_applied_height_to_durable_reconstruction(
+            &artifact,
+            Some(&unrelated_authority),
+            Some(retired.kura.as_ref()),
+        )
+        .expect_err("another finality artifact cannot lend rollover authority");
+    assert!(error.contains("not bound to a nonwinning finalized carrier"));
+    assert!(unbound.is_pending(), "failed handoff remains atomic");
+
+    let mut mutated_payload = retired.payload.clone();
+    mutated_payload.payload_hash = Hash::new(b"mutated retired autonomous output");
+    let mut mutated = pending_autonomous_lane_output(
+        &service,
+        [BlockMessage::LaneExecutablePayload(mutated_payload)],
+    );
+    mutated
+        .handoff_applied_height_to_durable_reconstruction(
+            &artifact,
+            Some(&authority),
+            Some(retired.kura.as_ref()),
+        )
+        .expect_err("mutated output cannot borrow the exact retirement");
+    assert!(mutated.is_pending(), "failed handoff remains atomic");
+
+    let unretired = crate::kura::tests::unretired_autonomous_lane_attempt_fixture(&validators[0]);
+    let (unretired_service, unretired_artifact, unretired_authority) =
+        autonomous_retirement_handoff_fixture(&unretired, &base_service.context, &validators);
+    let mut missing = pending_autonomous_lane_output(
+        &unretired_service,
+        [BlockMessage::LaneExecutablePayload(
+            unretired.payload.clone(),
+        )],
+    );
+    let error = missing
+        .handoff_applied_height_to_durable_reconstruction(
+            &unretired_artifact,
+            Some(&unretired_authority),
+            Some(unretired.kura.as_ref()),
+        )
+        .expect_err("a live attempt has no terminal handoff authority");
+    assert!(error.contains("no exact durable slot retirement"));
+    assert!(missing.is_pending(), "failed handoff remains atomic");
+}
+
 #[test]
 fn applied_height_handoff_rejects_wrong_height_global_output() {
     let (service, keys) = fixture();
