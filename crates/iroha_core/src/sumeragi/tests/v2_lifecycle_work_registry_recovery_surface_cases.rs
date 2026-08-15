@@ -828,7 +828,7 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         );
     }
     for caller_source in [
-        include_str!("../v2.rs"),
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
         include_str!("../v2_lifecycle_selector.rs"),
         include_str!("../v2_lifecycle_coordinator.rs"),
         include_str!("../v2_effects.rs"),
@@ -928,7 +928,7 @@ fn certified_fetch_dequeue_commit_requires_the_durable_token() {
 #[test]
 fn recovered_decision_apply_scheduler_attestation_stays_closed_and_io_bounded() {
     let registry = reviewed_lifecycle_work_registry_source_for_test();
-    let adapter = include_str!("../v2.rs");
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let recovery =
         include_str!("../v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
     let boundary = include_str!("../v2_lifecycle_concrete_admission.rs");
@@ -1081,8 +1081,8 @@ fn recovered_decision_apply_scheduler_attestation_stays_closed_and_io_bounded() 
 #[test]
 fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallible() {
     let registry = include_str!("../v2_lifecycle_work_registry_validate_recovery.rs");
-    let adapter = include_str!("../v2.rs");
-    let runtime = include_str!("../v2_runtime.rs");
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
+    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let executor = include_str!("../v2_effects.rs");
     let launch = include_str!("../v2_lifecycle_launch.rs");
     let lane = include_str!("../v2_lane_work.rs");

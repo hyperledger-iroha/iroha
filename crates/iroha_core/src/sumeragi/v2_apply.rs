@@ -4557,7 +4557,7 @@ impl V2ApplyService {
             self.inject_test_crash(tests::CrashPoint::ReputationArchiveCapture)?;
         }
         #[cfg(feature = "test-network-native-amx-fault-injection")]
-        if let Some(execution_context) = committed_block.execution_context() {
+        if let Some(execution_context) = committed_block.as_ref().execution_context() {
             for external in &execution_context.external {
                 if let Some(receipt) = &external.native_amx_receipt {
                     crate::native_amx_fault_injection::maybe_abort(

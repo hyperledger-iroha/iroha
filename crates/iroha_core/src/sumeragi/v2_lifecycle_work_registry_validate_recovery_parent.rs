@@ -7,7 +7,7 @@
 /// remains the only concrete-registry owner and returns only the existing
 /// opaque authenticated repair plus its exact opened ledger wrapper.
 #[cfg_attr(not(test), allow(dead_code))]
-#[allow(clippy::result_large_err, clippy::too_many_lines)]
+#[allow(clippy::result_large_err)]
 pub(super) fn reconstruct_recovered_wal_validate_parent<'registry, 'body>(
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     verified: &VerifiedHeightContext,
@@ -21,15 +21,58 @@ pub(super) fn reconstruct_recovered_wal_validate_parent<'registry, 'body>(
     ),
     RecoveredWalParentFactoryError<'body>,
 > {
+    let prepared = prepare_recovered_wal_validate_parent(
+        registry,
+        verified,
+        body_store,
+        ledger_root,
+        recovered,
+    )?;
+    let authenticated = prepared.authenticate(verified)?;
+    authenticated.finish()
+}
+
+/// Heap-owned exact parent state retained while runtime vote authentication runs.
+#[must_use = "a prepared recovered WAL parent must be authenticated or restored"]
+struct PreparedRecoveredWalValidateParentAuthentication<'registry, 'body> {
+    registry: &'registry mut ConcreteLifecycleWorkRegistry,
+    ledger: OpenedRecoveredWalValidateLedger,
+    body: RecoveredValidatedBodyCut<'body>,
+    parent: super::ledger::AuthenticatedRecoveredWalValidateLedgerParent,
+    successor: Option<crate::sumeragi::v2_runtime::RecoveredWalVoteSuccessor>,
+}
+
+/// Heap-owned authenticated parent state awaiting exact registry assembly.
+#[must_use = "an authenticated recovered WAL parent must complete registry assembly"]
+struct AuthenticatedRecoveredWalValidateParent<'registry, 'body> {
+    registry: &'registry mut ConcreteLifecycleWorkRegistry,
+    ledger: OpenedRecoveredWalValidateLedger,
+    body: RecoveredValidatedBodyCut<'body>,
+    parent: super::ledger::AuthenticatedRecoveredWalValidateLedgerParent,
+    repair: AuthenticatedWalVoteLifecycleRepair,
+}
+
+#[allow(clippy::result_large_err, clippy::too_many_lines)]
+#[inline(never)]
+fn prepare_recovered_wal_validate_parent<'registry, 'body>(
+    registry: &'registry mut ConcreteLifecycleWorkRegistry,
+    verified: &VerifiedHeightContext,
+    body_store: &'body mut V2BodyStore,
+    ledger_root: &Path,
+    recovered: RecoveredWalVoteSign,
+) -> Result<
+    Box<PreparedRecoveredWalValidateParentAuthentication<'registry, 'body>>,
+    RecoveredWalParentFactoryError<'body>,
+> {
     let context = projection::lifecycle_context(verified.context());
     let (store, opened) = match super::ledger::LifecycleLedgerStoreV1::open(ledger_root, context) {
         Ok(opened) => opened,
         Err(error) => {
             return Err(RecoveredWalParentFactoryError {
-                failure: RecoveredWalParentFactoryFailure::LedgerOpen {
+                failure: Box::new(RecoveredWalParentFactoryFailure::LedgerOpen {
                     _error: error,
                     _recovered: recovered,
-                },
+                }),
             });
         }
     };
@@ -38,21 +81,21 @@ pub(super) fn reconstruct_recovered_wal_validate_parent<'registry, 'body>(
         Ok(body) => body,
         Err(error) => {
             return Err(RecoveredWalParentFactoryError {
-                failure: RecoveredWalParentFactoryFailure::BodyMarker {
+                failure: Box::new(RecoveredWalParentFactoryFailure::BodyMarker {
                     _error: error,
                     _ledger: ledger,
                     _recovered: recovered,
-                },
+                }),
             });
         }
     };
     if !body.exactly_matches_vote(&recovered) {
         return Err(RecoveredWalParentFactoryError {
-            failure: RecoveredWalParentFactoryFailure::LedgerParent {
+            failure: Box::new(RecoveredWalParentFactoryFailure::LedgerParent {
                 _ledger: ledger,
                 _body: body,
                 _recovered: recovered,
-            },
+            }),
         });
     }
     let Some(parent) = ledger
@@ -65,126 +108,198 @@ pub(super) fn reconstruct_recovered_wal_validate_parent<'registry, 'body>(
         })
     else {
         return Err(RecoveredWalParentFactoryError {
-            failure: RecoveredWalParentFactoryFailure::LedgerParent {
+            failure: Box::new(RecoveredWalParentFactoryFailure::LedgerParent {
                 _ledger: ledger,
                 _body: body,
                 _recovered: recovered,
-            },
+            }),
         });
     };
     if !body.exactly_matches_ledger_parent(context, &parent) {
         return Err(RecoveredWalParentFactoryError {
-            failure: RecoveredWalParentFactoryFailure::LedgerParent {
+            failure: Box::new(RecoveredWalParentFactoryFailure::LedgerParent {
                 _ledger: ledger,
                 _body: body,
                 _recovered: recovered,
-            },
+            }),
         });
     }
     let successor = match reconstruct_recovered_wal_vote_successor(&parent, recovered) {
         Ok(successor) => successor,
         Err(recovered) => {
             return Err(RecoveredWalParentFactoryError {
-                failure: RecoveredWalParentFactoryFailure::RuntimeParent {
+                failure: Box::new(RecoveredWalParentFactoryFailure::RuntimeParent {
                     _ledger: ledger,
                     _body: body,
                     _recovered: recovered,
-                },
+                }),
             });
         }
     };
-    let repair = match authenticate_recovered_wal_vote_lifecycle_from_ledger_parent(
-        verified, &parent, successor,
-    ) {
-        Ok(repair) => repair,
-        Err(error) => {
-            return Err(RecoveredWalParentFactoryError {
-                failure: RecoveredWalParentFactoryFailure::Lifecycle {
+    Ok(Box::new(PreparedRecoveredWalValidateParentAuthentication {
+        registry,
+        ledger,
+        body,
+        parent,
+        successor: Some(successor),
+    }))
+}
+
+impl<'registry, 'body> PreparedRecoveredWalValidateParentAuthentication<'registry, 'body> {
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn authenticate(
+        mut self: Box<Self>,
+        verified: &VerifiedHeightContext,
+    ) -> Result<
+        Box<AuthenticatedRecoveredWalValidateParent<'registry, 'body>>,
+        RecoveredWalParentFactoryError<'body>,
+    > {
+        let successor = self
+            .successor
+            .take()
+            .expect("prepared recovered WAL parent retains one runtime successor");
+        let authenticated = authenticate_recovered_wal_vote_lifecycle_from_ledger_parent(
+            verified,
+            &self.parent,
+            successor,
+        );
+        let Self {
+            registry,
+            ledger,
+            body,
+            parent,
+            successor,
+        } = *self;
+        debug_assert!(successor.is_none());
+        match authenticated {
+            Ok(repair) => Ok(Box::new(AuthenticatedRecoveredWalValidateParent {
+                registry,
+                ledger,
+                body,
+                parent,
+                repair,
+            })),
+            Err(error) => Err(RecoveredWalParentFactoryError {
+                failure: Box::new(RecoveredWalParentFactoryFailure::Lifecycle {
                     _ledger: ledger,
                     _body: body,
                     _error: error,
-                },
-            });
+                }),
+            }),
         }
-    };
-    let registry_preflight = (|| {
-        if !parent.matches_candidate(repair.parent())
-            || (ledger
-                .opened
-                .stage_authenticated_wal_vote_repair(&repair)
-                .is_err()
-                && ledger
-                    .opened
-                    .recovered_phase_signed_broadcast_ordinals(&repair)
-                    .is_none())
-        {
-            return None;
-        }
-        let (physical, universe, consumed) = repair.parent().physical_geometry.normalized().ok()?;
-        if physical.len() != 1 || universe.len() != 1 || consumed != universe {
-            return None;
-        }
-        let (&slot, &incumbent_digest) = physical.first_key_value()?;
-        if slot != PhysicalSlotId::for_capacity(CapacityClass::Effect, 0) {
-            return None;
-        }
-        let address = ConcreteWorkAddress::new(parent.owner(), parent.ordinal(), slot)?;
-        registry
-            .entries
-            .keys()
-            .all(|installed| installed.owner != parent.owner())
-            .then_some((address, incumbent_digest))
-    })();
-    let Some((address, incumbent_digest)) = registry_preflight else {
-        return Err(RecoveredWalParentFactoryError {
-            failure: RecoveredWalParentFactoryFailure::RegistryParent {
-                _ledger: ledger,
-                _repair: repair,
-                _body: body,
-            },
-        });
-    };
-    // All fallible parent, ledger, body, and registry checks precede this
-    // transfer. From here the detached marker moves directly into the sealed
-    // completion and no pre-join error can discard it.
-    let outcome = body.into_validation_outcome();
-    let validated = outcome
-        .validated_receipt()
-        .expect("a recovered validated-body cut transfers one success outcome");
-    let durable_receipt = validated.durable().clone();
-    // Restart recovery obtains this hash from the semantically revalidated
-    // marker reopened by this exact body-store instance. Unlike the live
-    // transport path, there is no independently in-flight manifest carrier;
-    // the checksummed receipt and store manifest were already compared before
-    // the marker entered the validated recovery catalog.
-    let expected_manifest_hash = durable_receipt.manifest_hash();
-    let recovered_body_marker = durable_receipt.clone();
-    let installed_digest =
-        durable_validate_completion_digest(incumbent_digest, expected_manifest_hash, &outcome)
-            .expect("a validated recovered parent has one completion digest");
-    let validation = DetachedRecoveredValidateCompletion {
-        address,
-        installed_digest,
-        incumbent_address: address,
-        incumbent_digest,
-        durable_receipt,
-        expected_manifest_hash,
-        replay_evidence: DetachedValidateReplayEvidenceV1::RecoveredBodyMarker(
-            recovered_body_marker,
+    }
+}
+
+impl<'registry, 'body> AuthenticatedRecoveredWalValidateParent<'registry, 'body> {
+    #[allow(clippy::result_large_err, clippy::too_many_lines)]
+    #[inline(never)]
+    fn finish(
+        self: Box<Self>,
+    ) -> Result<
+        (
+            OpenedRecoveredWalValidateLedger,
+            AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
         ),
-        outcome,
-    };
-    let authority = AuthenticatedRecoveredWalValidateLifecycleRepair {
-        repair,
-        validation,
-        reservation: RecoveredWalValidateRegistryReservation {
+        RecoveredWalParentFactoryError<'body>,
+    > {
+        let registry_preflight = (|| {
+            if !self.parent.matches_candidate(self.repair.parent())
+                || (self
+                    .ledger
+                    .opened
+                    .stage_authenticated_wal_vote_repair(&self.repair)
+                    .is_err()
+                    && self
+                        .ledger
+                        .opened
+                        .recovered_phase_signed_broadcast_ordinals(&self.repair)
+                        .is_none())
+            {
+                return None;
+            }
+            let (physical, universe, consumed) =
+                self.repair.parent().physical_geometry.normalized().ok()?;
+            if physical.len() != 1 || universe.len() != 1 || consumed != universe {
+                return None;
+            }
+            let (&slot, &incumbent_digest) = physical.first_key_value()?;
+            if slot != PhysicalSlotId::for_capacity(CapacityClass::Effect, 0) {
+                return None;
+            }
+            let address =
+                ConcreteWorkAddress::new(self.parent.owner(), self.parent.ordinal(), slot)?;
+            self.registry
+                .entries
+                .keys()
+                .all(|installed| installed.owner != self.parent.owner())
+                .then_some((address, incumbent_digest))
+        })();
+        let Some((address, incumbent_digest)) = registry_preflight else {
+            let Self {
+                registry: _,
+                ledger,
+                body,
+                parent: _,
+                repair,
+            } = *self;
+            return Err(RecoveredWalParentFactoryError {
+                failure: Box::new(RecoveredWalParentFactoryFailure::RegistryParent {
+                    _ledger: ledger,
+                    _repair: repair,
+                    _body: body,
+                }),
+            });
+        };
+        let Self {
             registry,
-            parent_address: address,
-            child: None,
-        },
-    };
-    debug_assert!(authority.concrete_pair_and_validation_are_exact());
-    Ok((ledger, authority))
+            ledger,
+            body,
+            parent: _,
+            repair,
+        } = *self;
+        // All fallible parent, ledger, body, and registry checks precede this
+        // transfer. From here the detached marker moves directly into the sealed
+        // completion and no pre-join error can discard it.
+        let outcome = body.into_validation_outcome();
+        let validated = outcome
+            .validated_receipt()
+            .expect("a recovered validated-body cut transfers one success outcome");
+        let durable_receipt = validated.durable().clone();
+        // Restart recovery obtains this hash from the semantically revalidated
+        // marker reopened by this exact body-store instance. Unlike the live
+        // transport path, there is no independently in-flight manifest carrier;
+        // the checksummed receipt and store manifest were already compared before
+        // the marker entered the validated recovery catalog.
+        let expected_manifest_hash = durable_receipt.manifest_hash();
+        let recovered_body_marker = durable_receipt.clone();
+        let installed_digest =
+            durable_validate_completion_digest(incumbent_digest, expected_manifest_hash, &outcome)
+                .expect("a validated recovered parent has one completion digest");
+        let validation = DetachedRecoveredValidateCompletion {
+            address,
+            installed_digest,
+            incumbent_address: address,
+            incumbent_digest,
+            durable_receipt,
+            expected_manifest_hash,
+            replay_evidence: DetachedValidateReplayEvidenceV1::RecoveredBodyMarker(
+                recovered_body_marker,
+            ),
+            outcome,
+        };
+        let authority = AuthenticatedRecoveredWalValidateLifecycleRepair {
+            repair,
+            validation,
+            reservation: RecoveredWalValidateRegistryReservation {
+                registry,
+                parent_address: address,
+                child: None,
+            },
+        };
+        debug_assert!(authority.concrete_pair_and_validation_are_exact());
+        Ok((ledger, authority))
+    }
 }
 #[cfg(test)]
 fn recovered_next_vote_projection_for_scheduler_fixture(

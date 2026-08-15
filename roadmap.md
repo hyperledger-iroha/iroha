@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-15
+Last updated: 2026-08-16
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -8,8 +8,8 @@ Completed history lives in [`status.md`](./status.md).
 ## Workspace review closure
 
 - Freeze the resolved, uncommitted merge with `HEAD`
-  `c46d08e7467ead46728a75eaff75021ec047ce57` and `MERGE_HEAD`
-  `9910c20d5eb68efce4dce7f2ef224178fceab639`, then complete the remaining
+  `5fcbfe2d1e403e4e52b9384a4d056b61c151cd39` and `MERGE_HEAD`
+  `a3fc23c50920a5acac74d0a65c8305be6b1c00e6`, then complete the remaining
   authoritative formal and workspace-wide validation before preparing a signed
   descendant. The conflict-free staged index and historical mutable-tree
   snapshots are not release receipts for the current source tree.
@@ -63,9 +63,10 @@ Completed history lives in [`status.md`](./status.md).
 
 - Preserve the immutable 5,067,263-line first-party Rust baseline, the
   5,014,603-line active ratchet, and the 4,560,536-line ten-percent objective.
-  The resolved staged merge-tree audit counts 5,014,506 Rust lines, which is 97
-  lines below the active ratchet and 453,970 lines above the objective. Remove
-  at least 453 more lines to restore the required 550 lines of ratchet headroom;
+  The reconciled mutable-worktree audit counts 5,013,943 Rust lines, which is
+  660 lines below the active ratchet and 453,407 lines above the objective.
+  This restores the required 550 lines of ratchet headroom with 110 lines of
+  reserve, but is not an immutable-candidate receipt;
   do not redefine the baseline, count moved test code as a physical reduction,
   or weaken required runtime, security, consensus, SDK, or release-evidence
   behavior to close it. Keep deterministic oversized-file exceptions as exact
@@ -105,6 +106,15 @@ old label-only layout. The coordinated release lane must also run focused Rust
 and four-peer cross-genesis tests and regenerate the affected OpenAPI/schema
 artifacts.
 
+The Kagemusha reset genesis-signing identity cycle is closed in source:
+generation-zero lane incarnations use the network-independent `static:v2`
+domain, final `NetworkId` remains the exact signed-genesis hash, and Kagami
+re-stages the signed block under that final identity before publication. Keep
+the production gate open until the real external signer, final two-pass render,
+and selected installed `iroha3d --check-config` reproduce the same Nexus/AMX
+and execution-policy commitments; focused source regressions and regenerated
+profiles are not operator release receipts.
+
 ## MCP gateway and Torii content release closeout
 
 - Regenerate the OpenAPI provenance manifests from the final source seal and
@@ -125,9 +135,9 @@ library compilation, profile-tool compilation, Swarm/Kagami prepared-bundle
 regressions, deterministic Swarm/Kagami profile-bundle regeneration, exact
 profile-config admission, and public consensus wire roundtrips are complete.
 The five checked-in OpenAPI artifacts remain stale and require deterministic
-regeneration from a clean exact candidate; the dirty unsigned development
-checkout is not release provenance. The outstanding revision-4 work is limited
-to:
+regeneration from a clean exact candidate; the dirty development checkout
+without the required release-authorized SSH signature is not release
+provenance. The outstanding revision-4 work is limited to:
 
 - Execute the focused Rust coverage for the source-implemented Kura-root WAL
   handoff. Kura now retains the exact opened locked root; the lifecycle runner mints
@@ -439,8 +449,8 @@ to:
   disjoint-roster historical lane signing/recovery, exact-predecessor sidecar
   reservation under outsider pressure, DA resource-cap boundaries, volatile
   shard reacquisition followed by one durable canonical-body boundary, restart
-  hydration, fresh generated four-peer genesis startup, and nonblocking cleanup
-  saturation.
+  hydration, live/replay timeout-fenced PrepareQC-to-lock fallthrough, fresh
+  generated four-peer genesis startup, and nonblocking cleanup saturation.
 - Run unskipped chaos on representative networks of at least four validators,
   covering faulty/withholding leaders and proxy tails, Set A and Set B loss,
   asymmetric partitions, RS16 reconstruction, restart, and catch-up.
@@ -987,10 +997,17 @@ dense sources, which exceeded k17 as one 313,659-row trace. It is now split in
 stable source order across three disjoint accumulator lanes with terminal-to-
 start equality links and a final ring closure; the longest lane is 104,667
 rows and the ring preserves exactly the original identity relation. The
-`[220]` advice / `[25, 0, 0]` lookup-advice k17 profile remains the candidate,
-but a fresh guarded final-source probe must
-qualify it; neither the earlier probe hashes nor any existing artifact release
-attests this change.
+`[220]` advice / `[25, 0, 0]` lookup-advice k17 profile remains the candidate.
+The packed-cell/word-encoding run reached the internal monitor at
+68,730,140,736 bytes, still 10,664,000 bytes above the unchanged 64 GiB limit;
+the lower outer 250 ms sample is not qualification evidence. Replacing the
+per-advice word with a one-bit zero mask and sparse rational positions preserves
+exact variants, but its exact detached run still reached 69,079,106,448
+internal bytes, 359,629,712 bytes over, during later StepEq reciprocal-Poseidon
+range construction. Constant-equality interning is the next deterministic
+source-reviewed reduction. The `[176]` / `[20, 0, 0]` diagnostic is not a
+promotable profile. Do not qualify generation or bind release hashes until an
+exact detached run completes below the unchanged limit.
 
 Remaining work stays ordered and fail-closed:
 
@@ -1000,10 +1017,19 @@ Remaining work stays ordered and fail-closed:
   V6 audit equality, tamper rejection, and early capacity diagnostics. Then run
   the fresh guarded k17 shape probe and bind its exact result; this probe and
   authentic generation have not passed yet.
-- Seal the final reviewed source closure over the next trusted SSH-signed,
-  clean `optimizations` anchor. The current
-  `d81ab6c1bab217c84e6c38f078da7a909ec7b740` checkout is unsigned and has
-  tracked plus untracked changes, so it cannot be a production source seal.
+- Keep the focused-tested V4 provenance structural-schema hashes frozen and
+  complete the remaining promotion-evidence corridor. Require the
+  authenticated source projection plus actual reviewed Cargo/rustc digests to
+  match across the manifest,
+  qualification, review, attestation, and promotion records; no source-only
+  fixture or placeholder hash is release evidence.
+- Seal the final reviewed source closure over the next clean `optimizations`
+  anchor carrying the release-authorized SSH signature. Current `HEAD`
+  `5fcbfe2d1e403e4e52b9384a4d056b61c151cd39` has a valid PGP signature, but
+  not the required release-authorized SSH signature; its parent
+  `d81ab6c1bab217c84e6c38f078da7a909ec7b740` is not the authorized release
+  parent, and the index/worktree contain tracked and untracked changes. It
+  therefore cannot be a production source seal.
   Require an empty tracked diff, zero untracked files, present-empty gitlink
   directories, and the exact separately bound root `Cargo.lock`. Build and
   hash the candidate

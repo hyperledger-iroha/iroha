@@ -14,7 +14,8 @@ use crate::{
     utils::halo2::{raw_assign_advice_discarding_value, raw_constrain_equal},
     utils::ScalarField,
     virtual_region::copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
-    Context, ContextCell,
+    Context, ContextCell, FIRST_PHASE_CELL_TYPE_ID, SECOND_PHASE_CELL_TYPE_ID,
+    THIRD_PHASE_CELL_TYPE_ID,
 };
 use crate::{
     halo2_proofs::circuit::{Region, Value},
@@ -120,9 +121,9 @@ impl<F: ScalarField> SinglePhaseCoreManager<F> {
     /// A distinct tag for this particular type of virtual manager, which is different for each phase.
     pub fn type_of(&self) -> &'static str {
         match self.phase {
-            0 => "halo2-base:SinglePhaseCoreManager:FirstPhase",
-            1 => "halo2-base:SinglePhaseCoreManager:SecondPhase",
-            2 => "halo2-base:SinglePhaseCoreManager:ThirdPhase",
+            0 => FIRST_PHASE_CELL_TYPE_ID,
+            1 => SECOND_PHASE_CELL_TYPE_ID,
+            2 => THIRD_PHASE_CELL_TYPE_ID,
             _ => panic!("Unsupported phase"),
         }
     }
@@ -150,7 +151,7 @@ impl<F: ScalarField> SinglePhaseCoreManager<F> {
     pub fn total_advice(&self) -> usize {
         self.threads
             .iter()
-            .map(|ctx| ctx.advice.len())
+            .map(Context::advice_len)
             .sum::<usize>()
     }
 }
@@ -218,15 +219,15 @@ pub fn assign_with_constraints<F: ScalarField, const ROTATIONS: usize>(
     let mut gate_index = 0;
     let mut row_offset = 0;
     for ctx in threads {
-        if ctx.advice.is_empty() {
+        if ctx.advice_len() == 0 {
             continue;
         }
         let mut basic_gate = basic_gates
                         .get(gate_index)
                         .unwrap_or_else(|| panic!("NOT ENOUGH ADVICE COLUMNS. Perhaps blinding factors were not taken into account. The max non-poisoned rows is {max_rows}"));
-        assert_eq!(ctx.selector.len(), ctx.advice.len());
+        assert_eq!(ctx.selector.len(), ctx.advice_len());
 
-        for (i, (advice, &q)) in ctx.advice.iter().zip(ctx.selector.iter()).enumerate() {
+        for (i, (advice, &q)) in ctx.advice_values().zip(ctx.selector.iter()).enumerate() {
             let column = basic_gate.value;
             let value = if use_unknown {
                 Value::unknown()
@@ -237,7 +238,7 @@ pub fn assign_with_constraints<F: ScalarField, const ROTATIONS: usize>(
             let cell = region.assign_advice(column, row_offset, value).cell();
             #[cfg(not(feature = "halo2-axiom"))]
             let cell = region
-                .assign_advice(|| "", column, row_offset, || value.map(|v| *v))
+                .assign_advice(|| "", column, row_offset, || value)
                 .unwrap()
                 .cell();
             if let Some(old_cell) = copy_manager
@@ -275,7 +276,7 @@ pub fn assign_with_constraints<F: ScalarField, const ROTATIONS: usize>(
                 let ncell = region.assign_advice(column, row_offset, value);
                 #[cfg(not(feature = "halo2-axiom"))]
                 let ncell = region
-                    .assign_advice(|| "", column, row_offset, || value.map(|v| *v))
+                    .assign_advice(|| "", column, row_offset, || value)
                     .unwrap();
                 raw_constrain_equal(region, ncell.cell(), cell);
             }
@@ -310,7 +311,7 @@ pub fn assign_witnesses<F: ScalarField>(
 ) {
     if basic_gates.is_empty() {
         assert_eq!(
-            threads.iter().map(|ctx| ctx.advice.len()).sum::<usize>(),
+            threads.iter().map(Context::advice_len).sum::<usize>(),
             0,
             "Trying to assign threads in a phase with no columns"
         );
@@ -327,7 +328,7 @@ pub fn assign_witnesses<F: ScalarField>(
 
     for ctx in threads {
         // Assign advice values to the advice columns in each [Context]
-        for (offset, advice) in ctx.advice.iter().enumerate() {
+        for (offset, advice) in ctx.advice_values().enumerate() {
             #[cfg(feature = "halo2-axiom")]
             let cell = {
                 // The Axiom backend exposes physical coordinates directly, so
@@ -381,7 +382,7 @@ mod physical_mapping_tests {
     use super::*;
     use crate::{
         gates::circuit::{builder::BaseCircuitBuilder, BaseCircuitParams},
-        halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr},
+        halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr, plonk::Assigned},
         QuantumCell,
     };
 
@@ -421,16 +422,16 @@ mod physical_mapping_tests {
     #[test]
     fn witness_only_context_retains_identity_without_collecting_constraints() {
         let copy_manager = SharedCopyConstraintManager::<Fr>::default();
-        let mut ctx = Context::new(true, 0, "halo2-base:test:witness-identity", 7, copy_manager);
+        let mut ctx = Context::new(true, 0, FIRST_PHASE_CELL_TYPE_ID, 7, copy_manager);
 
         let assigned = ctx.assign_witnesses([Fr::from(3), Fr::from(5)]);
         assert_eq!(
             assigned[0].cell,
-            Some(ContextCell::new("halo2-base:test:witness-identity", 7, 0))
+            Some(ContextCell::new(FIRST_PHASE_CELL_TYPE_ID, 7, 0))
         );
         assert_eq!(
             assigned[1].cell,
-            Some(ContextCell::new("halo2-base:test:witness-identity", 7, 1))
+            Some(ContextCell::new(FIRST_PHASE_CELL_TYPE_ID, 7, 1))
         );
         assert_eq!(ctx.get(0).cell, assigned[0].cell);
         assert_eq!(ctx.get(-1).cell, assigned[1].cell);
@@ -451,6 +452,148 @@ mod physical_mapping_tests {
         );
     }
 
+    fn compact_advice_assignment_circuit(
+        include_zero_denominator: bool,
+    ) -> BaseCircuitBuilder<Fr> {
+        let mut assignment_params = params();
+        assignment_params.num_fixed = 1;
+        let mut circuit = BaseCircuitBuilder::<Fr>::new(false).use_params(assignment_params);
+        let ctx = circuit.main(0);
+        let cases = [
+            (Assigned::Zero, Fr::from(0)),
+            (Assigned::Trivial(Fr::from(3)), Fr::from(3)),
+            (Assigned::Rational(Fr::from(6), Fr::from(2)), Fr::from(3)),
+            (Assigned::Trivial(Fr::from(5)), Fr::from(5)),
+            (Assigned::Zero, Fr::from(0)),
+            (Assigned::Trivial(Fr::from(7)), Fr::from(7)),
+            (Assigned::Rational(Fr::from(8), Fr::from(4)), Fr::from(2)),
+            (Assigned::Zero, Fr::from(0)),
+            (Assigned::Trivial(Fr::from(9)), Fr::from(9)),
+        ];
+        for (value, expected) in cases {
+            ctx.assign_cell(QuantumCell::WitnessFraction(value));
+            let value_cell = ctx.last().expect("assigned compact advice value");
+            let expected_cell = ctx.load_constant(expected);
+            ctx.constrain_equal(&value_cell, &expected_cell);
+        }
+        if include_zero_denominator {
+            ctx.assign_cell(QuantumCell::WitnessFraction(Assigned::Rational(
+                Fr::from(11),
+                Fr::from(0),
+            )));
+            let value_cell = ctx.last().expect("assigned zero-denominator rational");
+            let expected_cell = ctx.load_constant(Fr::from(0));
+            ctx.constrain_equal(&value_cell, &expected_cell);
+        }
+        circuit
+    }
+
+    fn assert_bucketed_constant_inventory(
+        circuit: &BaseCircuitBuilder<Fr>,
+        expected_equalities: usize,
+    ) {
+        let manager = circuit
+            .core()
+            .copy_manager
+            .lock()
+            .expect("copy manager");
+        assert_eq!(manager.constant_equalities.len(), expected_equalities);
+        assert_eq!(manager.constant_equalities.distinct_len(), 6);
+        assert!(
+            manager
+                .constant_equalities
+                .checked_cell_capacity()
+                .expect("constant cell capacity")
+                >= expected_equalities
+        );
+    }
+
+    #[test]
+    fn compact_advice_mock_assignment_preserves_nonzero_fraction_variants() {
+        let circuit = compact_advice_assignment_circuit(false);
+        assert_bucketed_constant_inventory(&circuit, 9);
+        MockProver::run(K, &circuit, vec![])
+            .expect("compact advice physical assignment")
+            .assert_satisfied();
+    }
+
+    #[cfg(all(feature = "halo2-axiom", feature = "test-utils"))]
+    #[test]
+    fn compact_advice_real_proof_preserves_zero_denominator_semantics() {
+        use crate::{
+            halo2_proofs::{
+                plonk::{keygen_pk, keygen_vk},
+                poly::kzg::commitment::ParamsKZG,
+            },
+            utils::testing::{check_proof, gen_proof},
+        };
+        use rand::rngs::OsRng;
+
+        let circuit = compact_advice_assignment_circuit(true);
+        assert_bucketed_constant_inventory(&circuit, 10);
+        let params = ParamsKZG::setup(K, OsRng);
+        let vk = keygen_vk(&params, &circuit).expect("compact advice verifying key");
+        let pk = keygen_pk(&params, vk, &circuit).expect("compact advice proving key");
+        let proof = gen_proof(&params, &pk, circuit);
+        check_proof(&params, pk.get_vk(), &proof, true);
+    }
+
+    #[cfg(all(feature = "halo2-axiom", feature = "test-utils"))]
+    fn bucketed_constant_schedule_circuit(reverse: bool) -> BaseCircuitBuilder<Fr> {
+        let mut assignment_params = params();
+        assignment_params.num_fixed = 1;
+        let mut circuit = BaseCircuitBuilder::<Fr>::new(false).use_params(assignment_params);
+        let values = [3_u64, 7, 3, 11, 7, 3];
+        let cells = circuit
+            .main(0)
+            .assign_witnesses(values.map(Fr::from));
+        let mut equalities = values
+            .into_iter()
+            .zip(cells)
+            .map(|(value, cell)| (Fr::from(value), cell.cell.expect("virtual cell")))
+            .collect::<Vec<_>>();
+        if reverse {
+            equalities.reverse();
+        }
+        let mut copy_manager = circuit
+            .core()
+            .copy_manager
+            .lock()
+            .expect("copy manager");
+        for equality in equalities {
+            copy_manager.constant_equalities.push(equality);
+        }
+        drop(copy_manager);
+        circuit
+    }
+
+    #[cfg(all(feature = "halo2-axiom", feature = "test-utils"))]
+    #[test]
+    fn bucketed_constant_schedule_preserves_vk_and_real_proof() {
+        use crate::{
+            halo2_proofs::{
+                plonk::{keygen_pk, keygen_vk},
+                poly::kzg::commitment::ParamsKZG,
+            },
+            utils::testing::{check_proof, gen_proof},
+        };
+        use rand::rngs::OsRng;
+
+        let forward = bucketed_constant_schedule_circuit(false);
+        let reversed = bucketed_constant_schedule_circuit(true);
+        let params = ParamsKZG::setup(K, OsRng);
+        let forward_vk = keygen_vk(&params, &forward).expect("forward verifying key");
+        let reversed_vk = keygen_vk(&params, &reversed).expect("reversed verifying key");
+        assert_eq!(
+            format!("{:?}", forward_vk.pinned()),
+            format!("{:?}", reversed_vk.pinned()),
+            "constant-equality insertion order must not change the verifying key"
+        );
+        let pk = keygen_pk(&params, forward_vk, &forward).expect("forward proving key");
+        let proof = gen_proof(&params, &pk, forward);
+        check_proof(&params, pk.get_vk(), &proof, true);
+    }
+
     #[test]
     fn witness_assignment_maps_every_virtual_cell_stably_across_breakpoints() {
         let break_points = pinned_break_points();
@@ -461,6 +604,10 @@ mod physical_mapping_tests {
             .into_iter()
             .map(|value| value.cell.expect("witness identity"))
             .collect::<Vec<_>>();
+        for (offset, cell) in virtual_cells.iter().enumerate() {
+            assert_eq!(cell.context_id(), 0);
+            assert_eq!(cell.offset(), offset);
+        }
 
         MockProver::run(K, &circuit, vec![])
             .expect("first witness synthesis")

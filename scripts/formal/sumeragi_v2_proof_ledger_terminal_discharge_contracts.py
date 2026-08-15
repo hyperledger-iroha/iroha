@@ -964,7 +964,7 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "aa06911b636a9c048ea61d0819271bc15f111eefa5d90c553280fb8a030c0caa"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "b305ebd20382b369ef39c805e56f6ccbe78b4a77a68241b0dc4f1f3b8e2c3d30"
+        "bebb2f085812b8b1dcdc3699b0df63ca013bc4710e4abdaf485d2f80c4086efc"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "0f614047f766802dd95ffb30e73a748c9cc0520f077527959b1ea99648f52197"
@@ -979,7 +979,7 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "3baec4153ff10b1f5ec64208f7e3ca82a3b301ea044847ee8b0bc81cdb8f7955"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "6edee399b579feab5cb8347425285286d12f9cf2073611904708c2f7810259c2"
+        "1aab46de9ecf1c2db2d235455229a137d783339721e2630fc8e67e9a456a41d8"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "2097b08c8f2d4989b8426985ecaa4544d5f43b9bf31f6bac8cfefc5a25ad3f1f"
@@ -1310,6 +1310,33 @@ if let Some(existing) = self.durable.highest_prepare() {
 let reference = certificate.reference();
 """,
                 "PrepareQC admission must reject durable-high conflicts and stale views before mutating volatile caches",
+            ),
+            (
+                """
+if current
+    && !view_closed
+    && self.body_state(certificate.round(), certificate.subject()) == BodyState::Missing
+    && self.local_certified_candidate_body_eligible()
+{
+    effects.push(self.ensure_body_fetch(&certificate));
+}
+""",
+                "a closed PrepareQC must not reacquire certified body ownership",
+            ),
+            (
+                """
+let current_round = Round::new(self.context.height(), current_view);
+let current_view_open = self.durable.timeout_intent(current_round).is_none();
+""",
+                "retransmission must derive the exact current-round open-view predicate",
+            ),
+            (
+                ".find(|certificate| current_view_open && certificate.round() == current_round)",
+                "pending PrepareQC body work must remain open-current-view only",
+            ),
+            (
+                "if current_view_open && let Some(proposal) = self.candidate.clone()",
+                "local candidate body work must remain open-current-view only",
             ),
             (
                 """

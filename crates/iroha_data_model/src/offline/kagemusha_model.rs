@@ -721,7 +721,7 @@ mod model {
         pub source_commit: String,
         /// Derived dirty state; first release requires `false`.
         pub source_repo_dirty: bool,
-        /// Producer full-tree SHA-256 of tracked, untracked, and `Cargo.lock` bytes.
+        /// Producer full-tree SHA-256 of the tracked tree, including `Cargo.lock`.
         #[cfg_attr(
             feature = "json",
             norito(json = "crate::json_helpers::fixed_bytes_hex")
@@ -744,9 +744,13 @@ mod model {
             norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
         pub untracked_path_mode_blob_oid_manifest_sha256: [u8; 32],
-        /// Exact ignored root `Cargo.lock` byte length.
+        /// Exact tracked root `Cargo.lock` byte length.
+        ///
+        /// The field name is retained for V1 wire compatibility.
         pub ignored_cargo_lock_size_bytes: u64,
-        /// SHA-256 of the exact ignored root `Cargo.lock` bytes.
+        /// SHA-256 of the exact tracked root `Cargo.lock` bytes.
+        ///
+        /// The field name is retained for V1 wire compatibility.
         #[cfg_attr(
             feature = "json",
             norito(json = "crate::json_helpers::fixed_bytes_hex")
@@ -859,6 +863,15 @@ mod model {
         /// SHA-256 of the exact canonical descriptor JSON bytes.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
+        /// SHA-256 of the canonical authenticated source-seal projection embedded by the build.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub authenticated_source_seal_projection_sha256: [u8; 32],
+        /// SHA-256 of the reviewed Cargo binary that built the sealed candidate executable.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_cargo_binary_sha256: [u8; 32],
+        /// SHA-256 of the reviewed rustc binary that built the sealed candidate executable.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_rustc_binary_sha256: [u8; 32],
         /// Exact network for which the release was built.
         pub network_id: NetworkId,
         /// Asset definition for which the release was built.
@@ -898,9 +911,10 @@ mod model {
     /// Immutable ABI-21 candidate captured before external review and device evidence exist.
     ///
     /// The embedded manifest commits the independently reviewed clean source
-    /// closure, network parameters, inline circuit configuration, exact eight
-    /// recursive artifacts, and finality roster. Its benchmark, review, and
-    /// qualification and external-evidence digest slots must all be zero.
+    /// closure, authenticated source-seal projection, reviewed Cargo/rustc
+    /// binaries, network parameters, inline circuit configuration, exact eight
+    /// recursive artifacts, and finality roster. Its benchmark, review,
+    /// qualification, and external-evidence digest slots must all be zero.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
@@ -1017,6 +1031,15 @@ mod model {
         /// SHA-256 of the candidate's exact canonical unsigned manifest.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub(super) manifest_sha256: [u8; 32],
+        /// Authenticated source-seal projection digest copied from the candidate manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub(super) authenticated_source_seal_projection_sha256: [u8; 32],
+        /// Reviewed Cargo binary digest copied from the candidate manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub(super) reviewed_cargo_binary_sha256: [u8; 32],
+        /// Reviewed rustc binary digest copied from the candidate manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub(super) reviewed_rustc_binary_sha256: [u8; 32],
         /// Exact in-process physical-memory ceiling committed by the candidate.
         pub(super) generation_memory_limit_bytes: u64,
         /// Exact mandatory in-process memory enforcement profile.
@@ -1059,6 +1082,15 @@ mod model {
         /// Exact independently pinned closure descriptor digest copied from the candidate.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
+        /// Exact authenticated source-seal projection digest copied from the candidate.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub authenticated_source_seal_projection_sha256: [u8; 32],
+        /// Exact reviewed Cargo binary digest copied from the candidate.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_cargo_binary_sha256: [u8; 32],
+        /// Exact reviewed rustc binary digest copied from the candidate.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_rustc_binary_sha256: [u8; 32],
         /// Exact network for which the reviewed candidate was built.
         pub network_id: NetworkId,
         /// Asset definition for which the reviewed candidate was built.
@@ -1197,6 +1229,15 @@ mod model {
         /// Exact independently pinned closure descriptor digest copied from the manifest.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
+        /// Exact authenticated source-seal projection digest copied from the manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub authenticated_source_seal_projection_sha256: [u8; 32],
+        /// Exact reviewed Cargo binary digest copied from the manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_cargo_binary_sha256: [u8; 32],
+        /// Exact reviewed rustc binary digest copied from the manifest.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_rustc_binary_sha256: [u8; 32],
         /// Digest of the signed physical-device evidence file.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub benchmark_evidence_sha256: [u8; 32],
@@ -1282,6 +1323,15 @@ mod model {
         pub version: u16,
         /// Authenticated V4 release generation.
         pub generation: String,
+        /// Authenticated source-seal projection selected by the promoted release.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub authenticated_source_seal_projection_sha256: [u8; 32],
+        /// Reviewed Cargo binary selected by the promoted release.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_cargo_binary_sha256: [u8; 32],
+        /// Reviewed rustc binary selected by the promoted release.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub reviewed_rustc_binary_sha256: [u8; 32],
         /// SHA-256 of the immutable pre-evidence candidate record.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub candidate_sha256: [u8; 32],

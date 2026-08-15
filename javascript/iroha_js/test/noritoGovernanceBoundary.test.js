@@ -63,6 +63,14 @@ test("strict governance JSON rejects duplicate keys and malformed scalars", () =
       ),
     /unpaired high surrogate/u,
   );
+  assert.throws(
+    () =>
+      parseStrictGovernanceInstructionJson(
+        `{"CastZkBallot":"${String.fromCharCode(0xd800)}`,
+        "governance instruction",
+      ),
+    /unpaired high surrogate/u,
+  );
   for (const token of ["-0", "1.0", "1e0", "01"]) {
     assert.throws(
       () =>

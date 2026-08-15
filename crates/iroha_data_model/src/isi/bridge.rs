@@ -1,11 +1,10 @@
 //! Bridge proof ingestion instructions.
 use super::*;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 /// Activation update for one exact governed SCCP route.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SccpSetRouteActivationV1 {
     /// Exact route to update.
@@ -20,10 +19,7 @@ pub struct SccpSetRouteActivationV1 {
 }
 /// Append-only native trust-anchor update for one exact governed SCCP lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SccpAdvanceLaneTrustAnchorV1 {
     /// Exact lane whose current checkpoint advances.
@@ -35,10 +31,7 @@ pub struct SccpAdvanceLaneTrustAnchorV1 {
 }
 /// First native trust-anchor installation for one exact governed SCCP lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SccpInitializeLaneTrustAnchorV1 {
     /// Exact lane whose absent checkpoint is initialized.
@@ -50,10 +43,7 @@ pub struct SccpInitializeLaneTrustAnchorV1 {
 }
 /// Atomic registration input for one exact staged route.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SccpRegisterRouteV1 {
     /// Complete immutable route, necessarily staged at registration.
@@ -63,10 +53,7 @@ pub struct SccpRegisterRouteV1 {
 }
 /// Atomic cutover from one immutable route revision to its staged successor.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SccpSwitchRouteRevisionV1 {
     /// Currently selected immutable revision.
@@ -85,10 +72,7 @@ pub struct SccpSwitchRouteRevisionV1 {
 }
 /// Closed atomic SCCP route-governance action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "action", content = "route")]
 #[expect(
@@ -121,10 +105,7 @@ pub enum SccpRouteGovernanceActionV1 {
 /// preimage, so an approval cannot be replayed on a network with the same
 /// display label or rebound to a different registry action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]

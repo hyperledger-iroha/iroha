@@ -17,7 +17,7 @@ use crate::{
         SnapshotBootstrapAnchor, ValidatorPower, finality::FinalizedNextEpochSnapshot,
     },
     confidential::ConfidentialStatus,
-    proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -255,7 +255,7 @@ pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V2: &str =
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1: usize = 0;
 /// Maximum untracked regular-file entries in a tracked-lock source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V2: usize = 0;
-/// Maximum ignored root `Cargo.lock` bytes admitted by the reviewed closure.
+/// Maximum tracked root `Cargo.lock` bytes admitted by the legacy V1 lock fields.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V1: u64 = 16 * 1024 * 1024;
 /// Maximum tracked root `Cargo.lock` bytes admitted by the reviewed closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V2: u64 = 16 * 1024 * 1024;
@@ -280,25 +280,16 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4: usize = 13
 /// Exact `u32` limbs used by the eight-limb encoding of every operation element.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_LIMBS_V4: usize =
     KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4 * 8;
-/// Minimum number of `u32` values in the ABI-21/V4 single-column Step ABI.
-///
-/// This is the exact layout at the authenticated compact degree (`k = 17`).
+/// Minimum `u32` length at the authenticated compact degree (`k = 17`).
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MIN_PUBLIC_INPUT_LIMBS_V4: usize = 66;
-/// Maximum number of `u32` values in the ABI-21/V4 single-column Step ABI.
-///
-/// This is the exact layout at the authenticated compact degree (`k = 17`).
+/// Maximum `u32` length at the authenticated compact degree (`k = 17`).
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MAX_PUBLIC_INPUT_LIMBS_V4: usize = 66;
 /// Canonical ABI-21/V4 field-neutral public inputs for the EqAffine/Vesta step circuit.
-///
-/// The embedded `operation_protocol_v2` label versions the subordinate, field-neutral
-/// operation-vector layout. It is not a release or chain-wire version and cannot select
-/// a V2/V3 executor. The operation row remains V2, while the compact V5 recursive-state
-/// layout deliberately changes the V4 circuit identity and invalidates earlier candidates.
+/// Its `operation_protocol_v2` label versions only the subordinate operation-vector layout; it
+/// cannot select a V2/V3 executor. Compact V5 state changes V4 circuit identity and invalidates earlier candidates.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_compact_v5","layout":"single_column_field","elements":66,"ipa_round_count":17,"semantic_authority":"step_eq","semantic_header":{"elements":20,"encoding":"canonical_u128_chunks","fields":["compact_profile_version","parent_count","proof_step_count","public_statement_digest[2]","operation_poseidon_fp[2]","parent_state_poseidon_fp[2][2]","result_state_poseidon_fp[2]","manifest_sha256[2]","step_eq_protocol_sha256[2]","step_ep_protocol_sha256[2]","live_selector"]},"ipa_accumulator":{"wire_version":5,"elements":38,"formula":"2*ipa_round_count+4","encoding":"canonical_u128_chunks"},"reciprocal_audits":{"hash":"sha256","digests":4,"elements_per_digest":2},"private_witness":{"state_layout_version":5,"state_limbs":138,"parent_slots":2,"operation_field_elements":135,"operation_limbs":1080}}"#;
 /// Canonical ABI-21/V4 field-neutral public inputs for the EpAffine/Pallas step circuit.
-///
-/// As with the Eq schema, `operation_protocol_v2` is the subordinate operation-vector
-/// ABI version, not permission to enter a historical Kagemusha execution path.
+/// As with Eq, `operation_protocol_v2` versions the operation vector, not the execution path.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_compact_v5","layout":"single_column_field","elements":66,"ipa_round_count":17,"semantic_authority":"step_eq","role":"lineage_and_reciprocal_wrapper","semantic_header":{"elements":20,"encoding":"canonical_u128_chunks","fields":["compact_profile_version","parent_count","proof_step_count","public_statement_digest[2]","operation_poseidon_fp[2]","parent_state_poseidon_fp[2][2]","result_state_poseidon_fp[2]","manifest_sha256[2]","step_eq_protocol_sha256[2]","step_ep_protocol_sha256[2]","live_selector"]},"ipa_accumulator":{"wire_version":5,"elements":38,"formula":"2*ipa_round_count+4","encoding":"canonical_u128_chunks"},"reciprocal_audits":{"hash":"sha256","digests":4,"elements_per_digest":2}}"#;
 /// Version of the compact canonical cross-field state boundary.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5: u16 = 5;
@@ -440,9 +431,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V5: &str =
     "cryptographic-review-v5.norito";
 /// Version of the canonical authenticated V4 circuit configuration.
 pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4: u16 = 5;
-/// Lowest degree admitted for the complete fixed-shape V4 Step circuit.
-///
-/// This is the authenticated fixed degree of the compact V5 profile.
+/// Authenticated fixed degree of the complete compact V5 Step circuit.
 pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4: u32 = 17;
 /// Highest degree whose serialized Pasta parameters fit the release artifact
 /// corridor with a conservative margin.
@@ -450,22 +439,15 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4: u32 = 17;
 /// Minimum unusable-row reservation required by the Halo2 base circuit.
 pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
 /// Exact supported advice challenge-phase vector length.
-///
-/// The compact V5 Kagemusha profile has no challenge-dependent witness work. Admitting empty
-/// second/third advice phases makes Halo2 re-synthesise the phase-zero circuit
-/// and retains otherwise unused domain-sized polynomials during proving.
-/// Circuit parameters therefore authenticate the one phase that is actually
-/// constrained instead of reserving speculative future phases.
+/// Compact V5 has no challenge-dependent witness work; empty later phases make Halo2 repeat
+/// phase-zero synthesis and retain unused polynomials, so parameters authenticate only phase zero.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 1;
 /// Maximum configured columns of any one class in a phase.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 220;
 /// Reviewed first-release advice-column profile for compact degree-17 generation.
-///
 pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [220];
 /// Reviewed first-release lookup-column profile for compact degree-17 generation.
-///
-/// `BaseCircuitBuilder` reports the two unused challenge phases explicitly as zero-width suffixes
-/// even though the authenticated advice profile has only the populated phase-zero entry.
+/// `BaseCircuitBuilder` reports unused challenge phases as explicit zero-width suffixes.
 pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 3] = [25, 0, 0];
 /// Domain separator for canonical V4 circuit-parameter identities.
 pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_SHA256_DOMAIN_V4: &[u8] =
@@ -484,29 +466,19 @@ pub const KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4: u32 = 0;
 /// Public selector required by every ordinary live V4 Step proof.
 pub const KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4: u32 = 1;
 /// Absolute defensive ceiling for one measured V4 Step proof transcript.
-///
-/// The reviewed compact composite profile is exactly 93,120 bytes. The 192 KiB bound leaves
-/// explicit evolution headroom while still rejecting unbounded or profile-incompatible proof
-/// payloads. Release promotion separately pins the candidate's exact transcript size.
+/// The 192 KiB bound leaves headroom above 93,120 bytes; promotion pins the exact transcript size.
 pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 192 * 1024;
 /// Exact transcript bytes for one Step proof in the reviewed release profile.
 pub const KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4: u32 = 93_120;
 /// Absolute defensive ceiling for one canonical V4 Eq/Ep proof-pair payload.
-///
-/// A recursive pair carries two Step transcripts, two parent lineages, and two
-/// fixed accumulation transcripts. The 384 KiB bound admits the reviewed
-/// 191,862-byte recursive shape; release promotion pins its exact canonical
-/// maximum rather than the smaller initialization-pair measurement.
+/// The 384 KiB bound admits the 191,862-byte recursive shape; promotion pins its exact maximum.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 384 * 1024;
 /// Exact initialization-pair bytes for the reviewed release profile.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4: u32 = 186_852;
 /// Exact maximum recursive-pair bytes for the reviewed release profile.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4: u32 = 191_862;
 /// Maximum processed proving-key payload admitted by the compact V5 profile.
-///
-/// The first-release circuit includes five authenticated Table16 SHA lanes.
-/// Its processed key is intentionally file-backed and is bounded independently
-/// from the much smaller decoded verifier-resident budget.
+/// Its five-Table16-SHA processed key is file-backed and bounded apart from verifier memory.
 pub const KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5: u64 = 5 * 1024 * 1024 * 1024;
 /// Maximum serialized `ParamsIPA` payload admitted by the compact V5 profile.
 pub const KAGEMUSHA_COMPACT_PARAMS_IPA_MAX_BYTES_V5: u64 = 9 * 1024 * 1024;
@@ -515,9 +487,7 @@ pub const KAGEMUSHA_COMPACT_PROFILE_VERSION_V5: u32 = 5;
 /// Maximum canonical recipient-only ABI-21 peer-payment archive.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4: usize = 32 * 1024 * 1024;
 /// Maximum canonical provenance archive carried by one ABI-21 spendable branch.
-///
-/// This admits one maximum roster plus exactly two bounded anchors and finality
-/// proofs, with fixed Norito framing headroom. Inventories remain capped at two.
+/// It admits one maximum roster and two bounded anchor/finality pairs plus framing headroom.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4: usize =
     KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_USIZE_V2
         + KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
@@ -525,9 +495,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4: usize =
                 + KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_USIZE_V2)
         + 64 * 1024;
 /// Maximum canonical ABI-21 online-to-offline chain request.
-///
-/// This covers the 192 KiB shield-proof ceiling, the 16 KiB optional device
-/// attestation, and bounded authorization/note/release metadata with headroom.
+/// It covers shield proof, optional device attestation, and bounded metadata with headroom.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4: usize = 512 * 1024;
 /// Number of canonical Pallas-field elements in one ABI-21 public operation row.
 pub const KAGEMUSHA_RECURSIVE_SPEND_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
@@ -578,9 +546,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4: &str =
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4: &str =
     "step-ep.bootstrap-witness.krv4";
 /// Exact ordered cryptographic artifact roles required by an ABI-21 release.
-///
-/// The order is part of the capability contract and follows the canonical
-/// Eq-then-Ep profile order and the four-artifact order within each profile.
+/// Capability order is Eq then Ep, with the four canonical artifact roles inside each profile.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4: [&str; 8] = [
     "step_eq_params_ipa",
     "step_eq_proving_key",
@@ -602,18 +568,13 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2: &str =
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito";
 /// Canonical V4 release name for the unchanged typed finality roster payload.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4: &str = "topup-finality-roster-v4.norito";
-/// Maximum canonical roster artifact size; one full 31-validator window is
-/// pinned below this bound by an exact maximum wire-shape test.
+/// Maximum roster size, pinned above one full 31-validator window by an exact wire-shape test.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Native-width mirror of [`KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2`].
 const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_USIZE_V2: usize = 2 * 1024 * 1024;
 /// Production-promotion gate for the ABI-21/V4 paired recursive backend.
-///
-/// This is false in default and candidate builds. It becomes true only when the non-default
-/// `kagemusha-production-enabled` Cargo feature is selected by an explicitly promoted bridge build.
-/// Runtime readiness additionally requires an installed, authenticated V4 release with the exact
-/// verifier and prover inventory; this compile-time gate never substitutes for release
-/// authentication.
+/// Only explicitly promoted builds enable it; runtime still requires an authenticated V4 release
+/// with the exact verifier/prover inventory, so this gate never substitutes for authentication.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE: bool =
     cfg!(feature = "kagemusha-production-enabled");
 /// Canonical verifier-record namespace for Kagemusha proof admission.
@@ -796,9 +757,7 @@ impl core::fmt::Display for KagemushaReleaseVerificationError {
 }
 impl std::error::Error for KagemushaReleaseVerificationError {}
 /// Runtime proof that a V4 manifest, evidence set, and role thresholds were authenticated.
-///
-/// Its private fields prevent unsigned release material from entering the
-/// configured ABI-21 catalog without authentication.
+/// Private fields keep unsigned material out of the configured ABI-21 catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KagemushaAuthenticatedReleaseV4 {
     manifest: KagemushaRecursiveSpendArtifactManifestV4,
@@ -808,9 +767,7 @@ pub struct KagemushaAuthenticatedReleaseV4 {
     approved_signers: Vec<KagemushaRecursiveSpendApprovedSignerV1>,
 }
 /// Runtime proof that a V5 manifest, evidence set, and role thresholds were authenticated.
-///
-/// Private fields prevent V4 or unsigned material from being relabelled as a
-/// tracked-lock-bound V5 release.
+/// Private fields prevent V4 or unsigned material from becoming a tracked-lock-bound V5 release.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KagemushaAuthenticatedReleaseV5 {
     manifest: KagemushaRecursiveSpendArtifactManifestV5,
@@ -894,42 +851,15 @@ mod offline_escrow_account_tests {
     }
 }
 include!("kagemusha_model.rs");
-/// Return the release-qualified verifier-key registry identifier for one ABI-21 parity.
-///
-/// The manifest digest suffix keeps verifier records for overlapping retained releases distinct
-/// while preserving the fixed Eq/Ep circuit identity inside each [`VerifyingKeyRecord`].
-#[must_use]
-pub fn kagemusha_recursive_spend_verifier_key_id_v4(
-    parity: KagemushaPastaCycleParityV1,
-    manifest_sha256: [u8; 32],
-) -> VerifyingKeyId {
-    let circuit_id = match parity {
-        KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-        KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-    };
-    VerifyingKeyId::new(
-        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-        format!("{circuit_id}-{}", hex::encode(manifest_sha256)),
-    )
-}
-/// Return the release-qualified verifier-key registry identifier for one V5 release parity.
-///
-/// V5 retains the ABI-22 circuit ids but feeds a disjoint V5 manifest digest,
-/// so V4 and V5 release records cannot select the same qualified registry id.
-#[must_use]
-pub fn kagemusha_recursive_spend_verifier_key_id_v5(
-    parity: KagemushaPastaCycleParityV1,
-    manifest_sha256: [u8; 32],
-) -> VerifyingKeyId {
-    let circuit_id = match parity {
-        KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-        KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-    };
-    VerifyingKeyId::new(
-        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-        format!("{circuit_id}-{}", hex::encode(manifest_sha256)),
-    )
-}
+mod kagemusha_release_verifier;
+use kagemusha_release_verifier::verifying_key_commitment_v1;
+pub use kagemusha_release_verifier::{
+    kagemusha_recursive_spend_verifier_key_id_v4, kagemusha_recursive_spend_verifier_key_id_v5,
+    kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
+    kagemusha_recursive_spend_verifier_owner_manifest_id_v5,
+    kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4,
+    kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v5,
+};
 /// On-chain platform-attested registration for a Kagemusha device key.
 ///
 /// This is the device-bound trust anchor used by top-up and redemption authorization. The report
@@ -3813,6 +3743,9 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || self.source_tree_sha256 == [0; 32]
             || self.source_repo_dirty
             || !reviewed_source_closure_valid
+            || self.authenticated_source_seal_projection_sha256 == [0; 32]
+            || self.reviewed_cargo_binary_sha256 == [0; 32]
+            || self.reviewed_rustc_binary_sha256 == [0; 32]
             || !is_kagemusha_network_id(&self.network_id)
             || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
             || self.activation_height == 0
@@ -3953,6 +3886,10 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             source_repo_dirty: self.source_repo_dirty,
             reviewed_source_closure_descriptor_sha256: self
                 .reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256: self
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: self.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: self.reviewed_rustc_binary_sha256,
             benchmark_evidence_sha256: self.benchmark_evidence_sha256,
             cryptographic_review_sha256: self.cryptographic_review_sha256,
         })
@@ -4078,6 +4015,11 @@ impl KagemushaRecursiveSpendCandidateV4 {
             reviewed_source_closure_descriptor_sha256: self
                 .manifest
                 .reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256: self
+                .manifest
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: self.manifest.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: self.manifest.reviewed_rustc_binary_sha256,
             network_id: self.manifest.network_id,
             asset: self.manifest.asset.clone(),
             bridge_abi_version: self.manifest.bridge_abi_version,
@@ -4115,6 +4057,11 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_VERSION_V4,
             candidate_sha256,
             manifest_sha256,
+            authenticated_source_seal_projection_sha256: candidate
+                .manifest
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: candidate.manifest.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: candidate.manifest.reviewed_rustc_binary_sha256,
             generation_memory_limit_bytes: candidate.manifest.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: candidate
                 .manifest
@@ -4187,6 +4134,12 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_VERSION_V4
             || self.candidate_sha256 != candidate_sha256
             || self.manifest_sha256 != manifest_sha256
+            || self.authenticated_source_seal_projection_sha256
+                != candidate
+                    .manifest
+                    .authenticated_source_seal_projection_sha256
+            || self.reviewed_cargo_binary_sha256 != candidate.manifest.reviewed_cargo_binary_sha256
+            || self.reviewed_rustc_binary_sha256 != candidate.manifest.reviewed_rustc_binary_sha256
             || self.generation_memory_limit_bytes
                 != candidate.manifest.generation_memory_limit_bytes
             || self.generation_memory_enforcement_profile
@@ -4609,6 +4562,7 @@ impl KagemushaRecursiveSpendReleasePolicyV1 {
             return Err(KagemushaReleaseVerificationError::InvalidPolicy);
         }
         let mut all_signers = std::collections::BTreeSet::new();
+        let mut required_approvals = 0_usize;
         for (role_policy, expected_role) in self.roles.iter().zip(expected_roles) {
             let signer_count = role_policy.authorized_signers.len();
             if role_policy.role != expected_role
@@ -4627,6 +4581,10 @@ impl KagemushaRecursiveSpendReleasePolicyV1 {
             {
                 return Err(KagemushaReleaseVerificationError::InvalidPolicy);
             }
+            required_approvals += usize::from(role_policy.threshold);
+        }
+        if required_approvals > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1 {
+            return Err(KagemushaReleaseVerificationError::InvalidPolicy);
         }
         Ok(())
     }
@@ -5298,6 +5256,9 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4
             || !is_kagemusha_portable_identifier(&self.generation)
+            || self.authenticated_source_seal_projection_sha256 == [0; 32]
+            || self.reviewed_cargo_binary_sha256 == [0; 32]
+            || self.reviewed_rustc_binary_sha256 == [0; 32]
             || !digests_are_distinct_and_nonzero
             || !signers_are_canonical
             || represented_roles
@@ -5332,6 +5293,12 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
             || self.qualification_receipt_sha256 != release.manifest().qualification_receipt_sha256
             || self.qualified_candidate_sha256 != release.manifest().qualified_candidate_sha256
             || self.generation != release.manifest().generation
+            || self.authenticated_source_seal_projection_sha256
+                != release
+                    .manifest()
+                    .authenticated_source_seal_projection_sha256
+            || self.reviewed_cargo_binary_sha256 != release.manifest().reviewed_cargo_binary_sha256
+            || self.reviewed_rustc_binary_sha256 != release.manifest().reviewed_rustc_binary_sha256
             || self.manifest_sha256 != release.manifest_sha256()
             || self.release_attestation_sha256 != release.release_attestation_sha256()
             || self.release_policy_sha256 != release.release_policy_sha256()
@@ -5370,6 +5337,16 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
                 != release.manifest().reviewed_source_closure
             || candidate.manifest.reviewed_source_closure_descriptor_sha256
                 != release.manifest().reviewed_source_closure_descriptor_sha256
+            || candidate
+                .manifest
+                .authenticated_source_seal_projection_sha256
+                != release
+                    .manifest()
+                    .authenticated_source_seal_projection_sha256
+            || candidate.manifest.reviewed_cargo_binary_sha256
+                != release.manifest().reviewed_cargo_binary_sha256
+            || candidate.manifest.reviewed_rustc_binary_sha256
+                != release.manifest().reviewed_rustc_binary_sha256
             || candidate.manifest.network_id != release.manifest().network_id
             || candidate.manifest.asset != release.manifest().asset
             || candidate.manifest.asset_scale != release.manifest().asset_scale
@@ -5569,6 +5546,14 @@ impl KagemushaRecursiveSpendReleaseRecordV4 {
         )?;
         if attestation_sha256 != self.manifest.release_attestation_sha256
             || self.promotion_record.generation != self.manifest.generation
+            || self
+                .promotion_record
+                .authenticated_source_seal_projection_sha256
+                != self.manifest.authenticated_source_seal_projection_sha256
+            || self.promotion_record.reviewed_cargo_binary_sha256
+                != self.manifest.reviewed_cargo_binary_sha256
+            || self.promotion_record.reviewed_rustc_binary_sha256
+                != self.manifest.reviewed_rustc_binary_sha256
             || self.promotion_record.qualification_receipt_sha256
                 != self.manifest.qualification_receipt_sha256
             || self.promotion_record.qualified_candidate_sha256
@@ -5692,190 +5677,116 @@ impl KagemushaRecursiveSpendReleaseRecordV5 {
         Ok(release)
     }
 }
-impl KagemushaRecursiveSpendReleaseActivationV4 {
-    /// Validate the release-bound Eq/Ep registry shape before consensus admission.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaReleaseVerificationError`] when a required structure, bound, authorization, or contextual binding is invalid.
-    pub fn validate_structure(&self) -> Result<(), KagemushaReleaseVerificationError> {
-        self.release_record.validate_structure()?;
-        let manifest_sha256 = self
-            .release_record
-            .manifest
-            .canonical_sha256()
-            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
-        let expected_vesta_verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
-            KagemushaPastaCycleParityV1::StepEq,
-            manifest_sha256,
-        );
-        let expected_pallas_verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
-            KagemushaPastaCycleParityV1::StepEp,
-            manifest_sha256,
-        );
-        if self.configured_policy_sha256 == [0; 32]
-            || self.configured_policy_sha256
-                != self.release_record.promotion_record.release_policy_sha256
-            || self.step_eq_verifier_key_id != expected_vesta_verifier_key_id
-            || self.step_ep_verifier_key_id != expected_pallas_verifier_key_id
-            || !self.step_eq_verifier_key_id.is_portable_registry_id()
-            || !self.step_ep_verifier_key_id.is_portable_registry_id()
-            || self.step_eq_verifier_record.version == 0
-            || self.step_eq_verifier_record.version != self.step_ep_verifier_record.version
-        {
-            return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
+macro_rules! impl_kagemusha_recursive_spend_release_activation {
+    ($activation:ident, $key_id:ident, $owner_id:ident, $schema_hash:ident) => {
+        impl $activation {
+            /// Validate the release-bound Eq/Ep registry shape before consensus admission.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`KagemushaReleaseVerificationError`] when release or verifier bindings differ.
+            pub fn validate_structure(&self) -> Result<(), KagemushaReleaseVerificationError> {
+                self.release_record.validate_structure()?;
+                let manifest_sha256 = self
+                    .release_record
+                    .manifest
+                    .canonical_sha256()
+                    .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+                let expected_vesta_verifier_key_id =
+                    $key_id(KagemushaPastaCycleParityV1::StepEq, manifest_sha256);
+                let expected_pallas_verifier_key_id =
+                    $key_id(KagemushaPastaCycleParityV1::StepEp, manifest_sha256);
+                if self.configured_policy_sha256 == [0; 32]
+                    || self.configured_policy_sha256
+                        != self.release_record.promotion_record.release_policy_sha256
+                    || self.step_eq_verifier_key_id != expected_vesta_verifier_key_id
+                    || self.step_ep_verifier_key_id != expected_pallas_verifier_key_id
+                    || !self.step_eq_verifier_key_id.is_portable_registry_id()
+                    || !self.step_ep_verifier_key_id.is_portable_registry_id()
+                    || self.step_eq_verifier_record.version == 0
+                    || self.step_eq_verifier_record.version != self.step_ep_verifier_record.version
+                {
+                    return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
+                }
+                self.validate_verifier_record(
+                    &self.step_eq_verifier_record,
+                    KagemushaPastaCycleParityV1::StepEq,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
+                )?;
+                self.validate_verifier_record(
+                    &self.step_ep_verifier_record,
+                    KagemushaPastaCycleParityV1::StepEp,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
+                )?;
+                Ok(())
+            }
+            fn validate_verifier_record(
+                &self,
+                record: &VerifyingKeyRecord,
+                parity: KagemushaPastaCycleParityV1,
+                expected_curve: &str,
+            ) -> Result<(), KagemushaReleaseVerificationError> {
+                let manifest = &self.release_record.manifest;
+                let profile = manifest
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.parity == parity)
+                    .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
+                let descriptor = profile
+                    .artifacts
+                    .get(2)
+                    .filter(|artifact| {
+                        artifact.kind == KagemushaPastaCycleArtifactKindV4::VerifyingKey
+                    })
+                    .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
+                let key = record
+                    .key
+                    .as_ref()
+                    .ok_or(KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
+                let key_len = u64::try_from(key.bytes.len())
+                    .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
+                let manifest_sha256 = manifest
+                    .canonical_sha256()
+                    .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+                let expected_owner = $owner_id(manifest_sha256);
+                let expected_schema_hash = $schema_hash(manifest, parity)
+                    .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
+                let expected_commitment = verifying_key_commitment_v1(key)?;
+                if record.circuit_id != profile.circuit_id
+                    || record.owner_manifest_id.as_deref() != Some(expected_owner.as_str())
+                    || record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE
+                    || record.backend != BackendTag::Halo2IpaPasta
+                    || record.curve != expected_curve
+                    || record.public_inputs_schema_hash != expected_schema_hash
+                    || record.commitment != expected_commitment
+                    || u64::from(record.vk_len) != key_len
+                    || record.max_proof_bytes != manifest.max_proof_bytes
+                    || record.activation_height != Some(manifest.activation_height)
+                    || record.withdraw_height.is_some()
+                    || record.status != ConfidentialStatus::Active
+                    || key.backend.as_str() != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+                    || key_len != descriptor.payload_size_bytes
+                    || <[u8; 32]>::from(Sha256::digest(&key.bytes)) != descriptor.payload_sha256
+                {
+                    return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
+                }
+                Ok(())
+            }
         }
-        self.validate_verifier_record(
-            &self.step_eq_verifier_record,
-            KagemushaPastaCycleParityV1::StepEq,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
-        )?;
-        self.validate_verifier_record(
-            &self.step_ep_verifier_record,
-            KagemushaPastaCycleParityV1::StepEp,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
-        )?;
-        Ok(())
-    }
-    fn validate_verifier_record(
-        &self,
-        record: &VerifyingKeyRecord,
-        parity: KagemushaPastaCycleParityV1,
-        expected_curve: &str,
-    ) -> Result<(), KagemushaReleaseVerificationError> {
-        let manifest = &self.release_record.manifest;
-        let profile = manifest
-            .profiles
-            .iter()
-            .find(|profile| profile.parity == parity)
-            .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
-        let descriptor = profile
-            .artifacts
-            .get(2)
-            .filter(|artifact| artifact.kind == KagemushaPastaCycleArtifactKindV4::VerifyingKey)
-            .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
-        let key = record
-            .key
-            .as_ref()
-            .ok_or(KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
-        let key_len = u64::try_from(key.bytes.len())
-            .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
-        if record.circuit_id != profile.circuit_id
-            || record
-                .owner_manifest_id
-                .as_deref()
-                .is_none_or(str::is_empty)
-            || record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE
-            || record.backend != BackendTag::Halo2IpaPasta
-            || record.curve != expected_curve
-            || record.public_inputs_schema_hash == [0; 32]
-            || record.commitment == [0; 32]
-            || u64::from(record.vk_len) != key_len
-            || record.max_proof_bytes != manifest.max_proof_bytes
-            || record.activation_height != Some(manifest.activation_height)
-            || record.withdraw_height.is_some()
-            || record.status != ConfidentialStatus::Active
-            || key.backend.as_str() != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
-            || key_len != descriptor.payload_size_bytes
-            || <[u8; 32]>::from(Sha256::digest(&key.bytes)) != descriptor.payload_sha256
-        {
-            return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
-        }
-        Ok(())
-    }
+    };
 }
-impl KagemushaRecursiveSpendReleaseActivationV5 {
-    /// Validate the V5 release-bound Eq/Ep registry shape before consensus admission.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaReleaseVerificationError`] when release or verifier bindings differ.
-    pub fn validate_structure(&self) -> Result<(), KagemushaReleaseVerificationError> {
-        self.release_record.validate_structure()?;
-        let manifest_sha256 = self
-            .release_record
-            .manifest
-            .canonical_sha256()
-            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
-        let expected_vesta_verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v5(
-            KagemushaPastaCycleParityV1::StepEq,
-            manifest_sha256,
-        );
-        let expected_pallas_verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v5(
-            KagemushaPastaCycleParityV1::StepEp,
-            manifest_sha256,
-        );
-        if self.configured_policy_sha256 == [0; 32]
-            || self.configured_policy_sha256
-                != self.release_record.promotion_record.release_policy_sha256
-            || self.step_eq_verifier_key_id != expected_vesta_verifier_key_id
-            || self.step_ep_verifier_key_id != expected_pallas_verifier_key_id
-            || !self.step_eq_verifier_key_id.is_portable_registry_id()
-            || !self.step_ep_verifier_key_id.is_portable_registry_id()
-            || self.step_eq_verifier_record.version == 0
-            || self.step_eq_verifier_record.version != self.step_ep_verifier_record.version
-        {
-            return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
-        }
-        self.validate_verifier_record(
-            &self.step_eq_verifier_record,
-            KagemushaPastaCycleParityV1::StepEq,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
-        )?;
-        self.validate_verifier_record(
-            &self.step_ep_verifier_record,
-            KagemushaPastaCycleParityV1::StepEp,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
-        )?;
-        Ok(())
-    }
-    fn validate_verifier_record(
-        &self,
-        record: &VerifyingKeyRecord,
-        parity: KagemushaPastaCycleParityV1,
-        expected_curve: &str,
-    ) -> Result<(), KagemushaReleaseVerificationError> {
-        let manifest = &self.release_record.manifest;
-        let profile = manifest
-            .profiles
-            .iter()
-            .find(|profile| profile.parity == parity)
-            .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
-        let descriptor = profile
-            .artifacts
-            .get(2)
-            .filter(|artifact| artifact.kind == KagemushaPastaCycleArtifactKindV4::VerifyingKey)
-            .ok_or(KagemushaReleaseVerificationError::InvalidManifest)?;
-        let key = record
-            .key
-            .as_ref()
-            .ok_or(KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
-        let key_len = u64::try_from(key.bytes.len())
-            .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
-        if record.circuit_id != profile.circuit_id
-            || record
-                .owner_manifest_id
-                .as_deref()
-                .is_none_or(str::is_empty)
-            || record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE
-            || record.backend != BackendTag::Halo2IpaPasta
-            || record.curve != expected_curve
-            || record.public_inputs_schema_hash == [0; 32]
-            || record.commitment == [0; 32]
-            || u64::from(record.vk_len) != key_len
-            || record.max_proof_bytes != manifest.max_proof_bytes
-            || record.activation_height != Some(manifest.activation_height)
-            || record.withdraw_height.is_some()
-            || record.status != ConfidentialStatus::Active
-            || key.backend.as_str() != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
-            || key_len != descriptor.payload_size_bytes
-            || <[u8; 32]>::from(Sha256::digest(&key.bytes)) != descriptor.payload_sha256
-        {
-            return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
-        }
-        Ok(())
-    }
-}
+impl_kagemusha_recursive_spend_release_activation!(
+    KagemushaRecursiveSpendReleaseActivationV4,
+    kagemusha_recursive_spend_verifier_key_id_v4,
+    kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
+    kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4
+);
+impl_kagemusha_recursive_spend_release_activation!(
+    KagemushaRecursiveSpendReleaseActivationV5,
+    kagemusha_recursive_spend_verifier_key_id_v5,
+    kagemusha_recursive_spend_verifier_owner_manifest_id_v5,
+    kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v5
+);
 impl KagemushaRecursiveSpendArtifactBindingV4 {
     /// Validate a complete authenticated V4 manifest identity.
     ///
@@ -5905,8 +5816,12 @@ impl KagemushaRecursiveSpendArtifactBindingV4 {
     ) -> Result<(), KagemushaValidationError> {
         self.validate()?;
         manifest.validate()?;
-        let digest: [u8; 32] = Sha256::digest(canonical_manifest_bytes).into();
-        if self.generation != manifest.generation || self.manifest_sha256 != digest {
+        let expected_manifest_bytes = norito::encode_canonical(manifest)?;
+        let digest: [u8; 32] = Sha256::digest(&expected_manifest_bytes).into();
+        if canonical_manifest_bytes != expected_manifest_bytes.as_slice()
+            || self.generation != manifest.generation
+            || self.manifest_sha256 != digest
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "artifact_binding.v4.manifest",
             });
@@ -6369,8 +6284,7 @@ impl KagemushaTopUpFinalityProofV2 {
     }
 }
 impl KagemushaTopUpFinalityRosterWindowV2 {
-    /// Validate the exact ordered roster, powers, and activation window without
-    /// performing proof-of-possession pairings.
+    /// Validate the ordered unit-power roster and activation window without proof-of-possession pairings.
     ///
     /// # Errors
     ///
@@ -6393,14 +6307,12 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
             .collect::<std::collections::BTreeSet<_>>();
         if unique.len() != self.validator_set.len()
             || self.validator_set.iter().any(|entry| {
-                entry.power == 0
+                entry.power != 1
                     || !matches!(
                         entry.validator.public_key().try_algorithm(),
                         Ok(Algorithm::BlsNormal)
                     )
             })
-            || (self.consensus_mode == ConsensusMode::Permissioned
-                && self.validator_set.iter().any(|entry| entry.power != 1))
             || DualQuorum::from_roster(&self.validator_set).is_err()
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -6409,8 +6321,7 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
         }
         Ok(())
     }
-    /// Validate the complete roster window, including every BLS proof of possession. Callers
-    /// handling repeated proofs should cache success by the authenticated roster-archive digest.
+    /// Validate the complete roster and BLS proofs; cache by authenticated roster-archive digest.
     ///
     /// # Errors
     ///
@@ -7188,6 +7099,9 @@ mod kagemusha_v4_artifact_contract_tests {
             source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256: digest(b"v4 source projection"),
+            reviewed_cargo_binary_sha256: digest(b"v4 reviewed cargo"),
+            reviewed_rustc_binary_sha256: digest(b"v4 reviewed rustc"),
             network_id: kagemusha_test_network_id("v4-artifact-test-network"),
             asset: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("test domain"),
@@ -7467,6 +7381,27 @@ mod kagemusha_v4_artifact_contract_tests {
                 .validate_against_candidate(&candidate)
                 .is_err()
         );
+        let mut substituted_projection = receipt.clone();
+        substituted_projection.authenticated_source_seal_projection_sha256[0] ^= 1;
+        assert!(
+            substituted_projection
+                .validate_against_candidate(&candidate)
+                .is_err()
+        );
+        let mut substituted_cargo = receipt.clone();
+        substituted_cargo.reviewed_cargo_binary_sha256[0] ^= 1;
+        assert!(
+            substituted_cargo
+                .validate_against_candidate(&candidate)
+                .is_err()
+        );
+        let mut substituted_rustc = receipt.clone();
+        substituted_rustc.reviewed_rustc_binary_sha256[0] ^= 1;
+        assert!(
+            substituted_rustc
+                .validate_against_candidate(&candidate)
+                .is_err()
+        );
         let mut other_candidate = candidate.clone();
         other_candidate.manifest.network_id =
             kagemusha_test_network_id("other-v4-artifact-test-network");
@@ -7563,6 +7498,10 @@ mod kagemusha_v4_artifact_contract_tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: "v4-artifact-test-release".to_owned(),
+            authenticated_source_seal_projection_sha256: finalized_manifest
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: finalized_manifest.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: finalized_manifest.reviewed_rustc_binary_sha256,
             candidate_sha256,
             qualification_receipt_sha256: finalized_manifest.qualification_receipt_sha256,
             qualified_candidate_sha256: finalized_manifest.qualified_candidate_sha256,
@@ -7717,90 +7656,6 @@ mod kagemusha_v4_artifact_contract_tests {
             request_id: digest(b"zero-network recipient output request"),
         };
         assert!(request.validate().is_err());
-    }
-    #[test]
-    fn v4_promotion_record_is_distinct_and_fail_closed() {
-        let record = promoted_release();
-        record.validate().expect("valid V4 promotion record");
-        let mut tampered = record.clone();
-        tampered.schema = "retired-promoted-release".to_owned();
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        tampered.version = KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1;
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        tampered.generation = "not portable/".to_owned();
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        tampered.manifest_sha256 = [0; 32];
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        tampered.release_policy_sha256 = tampered.release_attestation_sha256;
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        tampered.approved_signers.swap(0, 1);
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        tampered.approved_signers.pop();
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        let duplicate_signer = tampered.approved_signers[0].clone();
-        tampered.approved_signers.insert(1, duplicate_signer);
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        tampered.artifact_inventory_verified = false;
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        tampered.bridge_abi_version = KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4 - 1;
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        tampered.artifact_roles.swap(0, 1);
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record.clone();
-        tampered.max_proof_bytes = 0;
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
-        let mut tampered = record;
-        tampered.max_proof_bytes = KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 + 1;
-        assert_eq!(
-            tampered.validate(),
-            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
-        );
     }
     #[test]
     fn v4_release_generation_profile_is_exact_compact_geometry() {
@@ -8015,6 +7870,7 @@ mod kagemusha_v4_artifact_contract_tests {
         reordered.profiles[0].artifacts.swap(1, 2);
         assert!(reordered.validate().is_err());
     }
+    include!("kagemusha_release_validation_inline_tests.rs");
     #[test]
     fn v4_artifact_contract_source_guard_is_exhaustive() {
         fn canonical_index(kind: KagemushaPastaCycleArtifactKindV4) -> usize {
@@ -8039,7 +7895,11 @@ mod kagemusha_v4_artifact_contract_tests {
                 .iter()
                 .all(|profile| profile.artifacts.len() == 4)
         );
-        let source = concat!(include_str!("mod.rs"), include_str!("kagemusha_model.rs"));
+        let source = concat!(
+            include_str!("mod.rs"),
+            include_str!("kagemusha_model.rs"),
+            include_str!("kagemusha_release_verifier.rs")
+        );
         assert!(source.contains("KagemushaPastaCycleFramedArtifactHeaderV4"));
         for forbidden in [
             concat!("Circuit", "Params,"),
@@ -8051,20 +7911,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 "rejected V4 artifact contract marker is present: {forbidden}"
             );
         }
-    }
-    #[test]
-    fn compact_recursive_state_boundary_has_a_distinct_v5_protocol() {
-        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5, 5);
-        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5, 5);
-        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5, 138);
-        assert_eq!(
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V5,
-            b"iroha:kagemusha:recursive-state-boundary:v5"
-        );
-        assert_eq!(
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V5,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V5
-        );
     }
     #[test]
     fn v4_envelope_uses_verifying_key_role_at_canonical_index() {
@@ -8140,6 +7986,18 @@ mod kagemusha_v4_artifact_contract_tests {
             .release_attestation_subject()
             .expect("second V4 attestation subject");
         assert_eq!(first_subject, second_subject);
+        assert_eq!(
+            second_subject.authenticated_source_seal_projection_sha256,
+            manifest.authenticated_source_seal_projection_sha256
+        );
+        assert_eq!(
+            second_subject.reviewed_cargo_binary_sha256,
+            manifest.reviewed_cargo_binary_sha256
+        );
+        assert_eq!(
+            second_subject.reviewed_rustc_binary_sha256,
+            manifest.reviewed_rustc_binary_sha256
+        );
         let assert_subject_changes = |tampered: &mut _| {
             let candidate = unsigned_candidate(tampered);
             tampered.qualified_candidate_sha256 =
@@ -8153,13 +8011,21 @@ mod kagemusha_v4_artifact_contract_tests {
             assert_ne!(second_subject, subject);
         };
         let mut params_tamper = manifest.clone();
-        params_tamper.profiles[0]
-            .circuit_params
-            .minimum_unusable_rows += 1;
+        let params = &mut params_tamper.profiles[0].circuit_params;
+        params.minimum_unusable_rows += 1;
         assert_subject_changes(&mut params_tamper);
         let mut bootstrap_tamper = manifest.clone();
         bootstrap_tamper.profiles[0].artifacts[3].payload_sha256[0] ^= 1;
         assert_subject_changes(&mut bootstrap_tamper);
+        let mut projection_tamper = manifest.clone();
+        projection_tamper.authenticated_source_seal_projection_sha256[0] ^= 1;
+        assert_subject_changes(&mut projection_tamper);
+        let mut cargo_tamper = manifest.clone();
+        cargo_tamper.reviewed_cargo_binary_sha256[0] ^= 1;
+        assert_subject_changes(&mut cargo_tamper);
+        let mut rustc_tamper = manifest.clone();
+        rustc_tamper.reviewed_rustc_binary_sha256[0] ^= 1;
+        assert_subject_changes(&mut rustc_tamper);
         let policy = KagemushaRecursiveSpendReleasePolicyV1 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
@@ -8249,9 +8115,9 @@ mod kagemusha_v4_artifact_contract_tests {
             Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
         let mut signed_params_tamper = manifest.clone();
-        signed_params_tamper.profiles[0]
-            .circuit_params
-            .minimum_unusable_rows += 1;
+        let params = &mut signed_params_tamper.profiles[0].circuit_params;
+        params.minimum_unusable_rows += 1;
+        assert_subject_changes(&mut signed_params_tamper);
         assert_eq!(
             KagemushaAuthenticatedReleaseV4::verify(
                 &signed_params_tamper,
@@ -8264,6 +8130,7 @@ mod kagemusha_v4_artifact_contract_tests {
         );
         let mut signed_bootstrap_tamper = manifest;
         signed_bootstrap_tamper.profiles[0].artifacts[3].payload_sha256[0] ^= 1;
+        assert_subject_changes(&mut signed_bootstrap_tamper);
         assert_eq!(
             KagemushaAuthenticatedReleaseV4::verify(
                 &signed_bootstrap_tamper,
@@ -8286,6 +8153,23 @@ mod kagemusha_v4_artifact_contract_tests {
         let qualified_candidate_sha256 = kagemusha_recursive_spend_qualified_candidate_sha256_v4(
             candidate.sha256().expect("test candidate identity"),
             qualification_receipt_sha256,
+        );
+        let review_subject = candidate
+            .cryptographic_review_subject(qualification_receipt_sha256, qualified_candidate_sha256)
+            .expect("candidate-bound review subject");
+        assert_eq!(
+            review_subject.authenticated_source_seal_projection_sha256,
+            candidate
+                .manifest
+                .authenticated_source_seal_projection_sha256
+        );
+        assert_eq!(
+            review_subject.reviewed_cargo_binary_sha256,
+            candidate.manifest.reviewed_cargo_binary_sha256
+        );
+        assert_eq!(
+            review_subject.reviewed_rustc_binary_sha256,
+            candidate.manifest.reviewed_rustc_binary_sha256
         );
         let reviewer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
         let review_bytes = signed_review_bytes(&candidate, &[&reviewer]);
@@ -8459,6 +8343,17 @@ mod kagemusha_v4_artifact_contract_tests {
         };
         candidate.validate().expect("valid candidate record");
         assert_ne!(candidate.sha256().expect("candidate digest"), [0; 32]);
+        let mut missing_projection = candidate.clone();
+        missing_projection
+            .manifest
+            .authenticated_source_seal_projection_sha256 = [0; 32];
+        assert!(missing_projection.validate().is_err());
+        let mut missing_cargo = candidate.clone();
+        missing_cargo.manifest.reviewed_cargo_binary_sha256 = [0; 32];
+        assert!(missing_cargo.validate().is_err());
+        let mut missing_rustc = candidate.clone();
+        missing_rustc.manifest.reviewed_rustc_binary_sha256 = [0; 32];
+        assert!(missing_rustc.validate().is_err());
         let mut unreviewed = candidate;
         unreviewed
             .manifest
@@ -9150,6 +9045,11 @@ impl KagemushaRecursiveSpendInitRequestV4 {
                 field: "init_request.v4",
             });
         }
+        let height = self.topup_anchor.finalized_height;
+        let window = self.topup_finality_roster_artifact.window_at(height)?;
+        self.topup_finality_proof
+            .commit_qc
+            .validate_for_roster_window(window)?;
         Ok(())
     }
 }
@@ -10254,7 +10154,6 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
         Ok(transition)
     }
     /// Return the canonical split operation identifier.
-    ///
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when the source value is invalid or the requested canonical result cannot be derived.
@@ -10262,7 +10161,6 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
         Ok(self.recipient_split_transition()?.operation_id)
     }
     /// Return the receiver-request digest bound by the recipient transition.
-    ///
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when the source value is invalid or the requested canonical result cannot be derived.
@@ -10270,7 +10168,6 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
         Ok(self.recipient_split_transition()?.recipient_request_digest)
     }
     /// Validate the recipient branch, membership state, and ABI-21 peer-size ceiling.
-    ///
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when a required structure, bound, authorization, or contextual binding is invalid.
@@ -10297,7 +10194,6 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
 }
 impl KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
     /// Validate one bounded finalized V4 origin and its exact compact reference.
-    ///
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when a required structure, bound, authorization, or contextual binding is invalid.
@@ -10388,11 +10284,13 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
         let mut anchored_total = 0_u128;
         for evidence in &self.topup_finality_evidence {
             let anchor = &evidence.topup_anchor;
-            let height_context = &evidence.topup_finality_proof.commit_qc.height_context;
+            let commit_qc = &evidence.topup_finality_proof.commit_qc;
+            let height_context = &commit_qc.height_context;
             let finality_height_matches_anchor = height_context.height == anchor.finalized_height;
             let window = self
                 .topup_finality_roster_artifact
                 .window_at(anchor.finalized_height)?;
+            commit_qc.validate_for_roster_window(window)?;
             if anchor.network_id != statement.network_id
                 || anchor.asset.definition() != &statement.asset
                 || anchor.asset_scale != statement.asset_scale

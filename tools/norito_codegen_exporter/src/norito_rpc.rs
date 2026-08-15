@@ -277,11 +277,8 @@ fn validate_alias_setup_fixture_bytes(bytes: &[u8]) -> Result<()> {
         .get("network_id")
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("alias-setup fixture onboarding body requires network_id"))?;
-    let network_id = parse_network_id(network_literal)
+    parse_network_id(network_literal)
         .context("alias-setup fixture onboarding network_id is not canonical")?;
-    if network_id.to_string() != network_literal {
-        bail!("alias-setup fixture onboarding network_id must use its canonical literal");
-    }
     Ok(())
 }
 fn reject_alias_setup_secret_and_retired_keys(value: &Value, context: &str) -> Result<()> {
@@ -873,10 +870,7 @@ impl RawPayloadFixture {
             payload_bytes,
             signed_bytes,
             summary: PayloadSummary {
-                network_id: payload_value
-                    .network_id()
-                    .expect("ordinary fixture transaction has an exact network identity")
-                    .to_string(),
+                network_id: self.payload.network_id.clone(),
                 authority: payload_value.authority().to_string(),
                 creation_time_ms: self.payload.creation_time_ms,
                 ttl_ms: actual_ttl_ms,

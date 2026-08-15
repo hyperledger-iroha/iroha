@@ -1244,9 +1244,12 @@ fn periodic_delay_is_bounded_and_absolute_timeout_has_priority() {
     assert!(runtime.driver.delivered.is_empty());
     assert_eq!(runtime.driver.retransmits, vec![initial]);
     assert!(runtime.driver.timeouts.is_empty());
-    runtime
+    let fifo_step = runtime
         .step(start + Duration::from_secs(2))
         .expect("FIFO debt runs immediately after the periodic turn");
+    let RuntimeStep::Advanced(fifo_effects) = fifo_step else {
+        panic!("FIFO debt unexpectedly idled")
+    };
     assert_eq!(
         runtime
             .take_last_scheduler_ownership()
@@ -1254,6 +1257,9 @@ fn periodic_delay_is_bounded_and_absolute_timeout_has_priority() {
             .selected,
         RuntimeSelectedOwnerKind::Fifo
     );
+    runtime
+        .take_effect_ownership(fifo_effects.len())
+        .expect("the FIFO executor consumes its exact effect ownership");
     assert_eq!(runtime.driver.delivered, vec![(initial, 7)]);
     assert_eq!(runtime.driver.retransmits, vec![initial]);
     assert!(runtime.driver.timeouts.is_empty());
@@ -1641,20 +1647,14 @@ fn only_enter_view_effect_restarts_both_clocks() {
         FakeCommand::enter_view(next),
     )
     .unwrap();
-    // Periodic retransmission may delay ready FIFO once. The scheduler
-    // records FIFO debt, so the TC-like Progress command runs on the next
-    // turn and EnterView resets both clocks.
-    assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9)),
-        Ok(RuntimeStep::Advanced(_))
-    ));
-    assert_eq!(runtime.round_tag(), initial);
-    assert_eq!(runtime.driver.retransmits, vec![initial]);
+    // The TC-like Progress owner predates the retransmit frozen by this turn,
+    // so EnterView runs first and resets both clocks.
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9)),
         Ok(RuntimeStep::Advanced(_))
     ));
     assert_eq!(runtime.round_tag(), next);
+    assert!(runtime.driver.retransmits.is_empty());
     runtime
         .reconcile_active_view_producer(next, false)
         .expect("the nonleader test peer retires the positional view producer");
@@ -1669,7 +1669,7 @@ fn only_enter_view_effect_restarts_both_clocks() {
         Ok(RuntimeStep::Idle)
     ));
     let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(11));
-    assert_eq!(runtime.driver.retransmits, vec![initial, next]);
+    assert_eq!(runtime.driver.retransmits, vec![next]);
     let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(19));
     assert!(runtime.driver.timeouts.is_empty());
     let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(29));

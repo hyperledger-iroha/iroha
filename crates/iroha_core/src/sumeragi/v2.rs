@@ -686,16 +686,6 @@ enum RecoveredWalStartupAuthorityV1 {
     ControlSign(RecoveredWalControlSign),
     DecisionFetch(RecoveredWalDecisionFetch),
 }
-#[allow(variant_size_differences)]
-enum PreparedRecoveredWalStartupAuthorityV1 {
-    None,
-    PhaseVote(RecoveredWalVoteSign),
-    ControlSign {
-        projection: AuthenticatedRecoveredWalControlProjection,
-        local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>,
-    },
-    DecisionFetch(AuthenticatedRecoveredWalDecisionFetchProjection),
-}
 
 /// Opaque recovered ownership of one already-attempted local Proposal.
 ///
@@ -1816,6 +1806,17 @@ struct PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     effects: Vec<AdapterEffect>,
     persisted: PersistedRecoveredWalValidateLedger<'registry>,
 }
+/// Cold adapter replay completed before the repaired Sign is installed.
+///
+/// Keeping this as a separate consuming stage prevents the large cold-replay
+/// result and the mutually exclusive registry-install result from sharing one
+/// startup stack frame.
+#[must_use = "the cold-prepared recovered startup must install its exact Sign"]
+struct ColdPreparedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
+    adapter_startup: ProductionLifecycleAdapterStartupV1,
+    verified: VerifiedHeightContext,
+    persisted: PersistedRecoveredWalValidateLedger<'registry>,
+}
 /// Exact-store startup after Sign installation and before final recovery open.
 #[must_use = "the installed recovered startup must enter its production owner"]
 struct InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
@@ -1831,17 +1832,8 @@ struct StorageRecoveredWalPersistError<'registry> {
 }
 #[must_use = "failed exact-store Sign installation requires process restart"]
 struct StorageRecoveredWalSignInstallError<'registry> {
-    failure: StorageRecoveredWalSignInstallFailure<'registry>,
-}
-#[allow(variant_size_differences)]
-enum StorageRecoveredWalSignInstallFailure<'registry> {
-    Adapter {
-        reason: &'static str,
-    },
-    Install {
-        _startup: ProductionLifecycleAdapterStartupV1,
-        error: ExactStoreRecoveredWalSignInstallError<'registry>,
-    },
+    _startup: ProductionLifecycleAdapterStartupV1,
+    error: ExactStoreRecoveredWalSignInstallError<'registry>,
 }
 #[must_use = "failed exact-store lifecycle open requires process restart"]
 struct StorageRecoveredWalOpenError<'registry> {
@@ -1865,10 +1857,7 @@ impl StorageRecoveredWalPersistError<'_> {
 }
 impl StorageRecoveredWalSignInstallError<'_> {
     fn reason(&self) -> &'static str {
-        match &self.failure {
-            StorageRecoveredWalSignInstallFailure::Adapter { reason, .. } => reason,
-            StorageRecoveredWalSignInstallFailure::Install { error, .. } => error.reason(),
-        }
+        self.error.reason()
     }
 }
 impl StorageRecoveredWalOpenError<'_> {
@@ -1928,7 +1917,7 @@ enum RecoveredWalLifecycleStartupFailure<'registry> {
 #[allow(dead_code)]
 #[must_use = "failed WAL lifecycle startup still owns all recovery authority"]
 struct RecoveredWalLifecycleStartupError<'registry> {
-    failure: RecoveredWalLifecycleStartupFailure<'registry>,
+    failure: Box<RecoveredWalLifecycleStartupFailure<'registry>>,
 }
 /// Fail-stop recovered-startup persistence error retaining every sealed input.
 ///
@@ -1971,7 +1960,7 @@ impl RecoveredWalLifecycleSignInstallError<'_> {
 impl RecoveredWalLifecycleStartupError<'_> {
     /// Return a stable failure classification without exposing retained authority.
     fn reason(&self) -> &'static str {
-        match &self.failure {
+        match self.failure.as_ref() {
             RecoveredWalLifecycleStartupFailure::MissingVote { .. } => {
                 "recovered startup has no phase-vote continuation"
             }
@@ -2062,882 +2051,7 @@ impl RecoveredAdapterStartup {
         })
     }
 }
-impl AuthenticatedRecoveredAdapterStartup {
-    /// Borrow the exact marker frontier derived before the startup effect was sealed.
-    ///
-    /// The authority remains a bounded comparison capability. Neither the
-    /// replay batch nor the adapter crosses this boundary.
-    #[cfg(test)]
-    const fn recovered_validation_authority(&self) -> &RecoveredValidationAuthority {
-        &self.validation_authority
-    }
-    /// Largest producer ordinal authenticated by the replayed adjacent store.
-    #[cfg(test)]
-    const fn restored_producer_continuation_ordinal_high_watermark(&self) -> Option<u128> {
-        self.adapter
-            .restored_producer_continuation_ordinal_high_watermark()
-    }
-    /// Reconstruct the exact generic leader-wire recovery boundary.
-    #[cfg(test)]
-    fn leader_wire_recovery_authority(&self) -> Result<LeaderWireRecoveryAuthority, AdapterError> {
-        self.adapter.leader_wire_recovery_authority()
-    }
-    /// Clone only typed durable producer terminals needed by the adjacent gate.
-    #[cfg(test)]
-    fn durable_producer_terminal_tokens(&self) -> Vec<ProducerContinuationTerminalToken> {
-        self.adapter.durable_producer_terminal_tokens()
-    }
-    /// Consume recovered storage into one exact lifecycle execution-input seal.
-    ///
-    /// The State must own the supplied Kura Arc and the recovered adapter's
-    /// network. The private runner permit supplies both the local signer and
-    /// the cadence authenticated by signed-genesis or snapshot recovery. Fresh
-    /// height-one startup must not derive cadence from the uncommitted State
-    /// placeholder.
-    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
-    pub(in crate::sumeragi) fn bind_production_lifecycle_owner_factory_inputs_v1(
-        &self,
-        permit: super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1,
-        storage: RecoveredLifecycleStorageAuthorityV1,
-        state: Arc<crate::state::State>,
-        queue: Arc<crate::queue::Queue>,
-        kura: Arc<Kura>,
-        provider_ingest_finalized_archive: Option<
-            Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
-        >,
-        reputation_finalized_archive: Option<
-            Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
-        >,
-        events_sender: crate::EventsSender,
-    ) -> Result<RecoveredLifecycleOwnerFactoryInputsV1, ProductionLifecycleOwnerStartupErrorV1>
-    {
-        if !storage.kura_identity.matches(kura.as_ref())
-            || !state.matches_kura_instance(&kura)
-            || state.network_id_ref() != &self.adapter.wire_context.network_id
-        {
-            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::ExecutionIdentity,
-            ));
-        }
-        let (local_signer, block_cadence) = permit.into_factory_dependencies();
-        Ok(RecoveredLifecycleOwnerFactoryInputsV1 {
-            adapter_owner: Arc::clone(&self.factory_owner),
-            storage,
-            state,
-            queue,
-            kura,
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
-            block_cadence,
-            events_sender,
-            local_signer,
-        })
-    }
-    /// Consume all recovered adapter and storage authority into one V1 owner.
-    ///
-    /// The no-authority, phase-vote, control-Sign, and Decision-Fetch cases are
-    /// private branches over this type's sealed authority enum. The lifecycle
-    /// Ledger and Serve stores are derived internally from the exact Kura owner
-    /// and frozen context; callers cannot substitute raw publication roots.
-    /// The fresh quarantined body store must belong to that same Kura layout
-    /// and the exact recovery-authenticated signature policy. Its sole
-    /// consuming replay transition applies the finality and WAL marker filters,
-    /// replays semantic validation with the exact service retained for live
-    /// Apply, and only then seals the store so lifecycle storage may open. No
-    /// body root, recovery snapshot, callback, effect, pending binding, ordinal,
-    /// or branch selector crosses this boundary.
-    #[allow(
-        clippy::result_large_err,
-        clippy::too_many_arguments,
-        clippy::too_many_lines
-    )]
-    pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(
-        self,
-        config: &iroha_config::parameters::actual::SumeragiV2Config,
-        reply_route_source_capacity: usize,
-        factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1,
-        body_store: super::v2_body_store::QuarantinedV2BodyStore,
-    ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
-        if !self.effects.is_empty() {
-            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::ResidualEffects,
-            ));
-        }
-        let RecoveredLifecycleOwnerFactoryInputsV1 {
-            adapter_owner,
-            storage,
-            state,
-            queue,
-            kura,
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
-            block_cadence,
-            events_sender,
-            local_signer,
-        } = factory_inputs;
-        let context = self.adapter.wire_context.clone();
-        if !Arc::ptr_eq(&adapter_owner, &self.factory_owner) {
-            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::ExecutionIdentity,
-            ));
-        }
-        if storage.context_id != context.id()
-            || storage.height != context.height
-            || !body_store.matches_lifecycle_storage_root(
-                &storage.body_store_root,
-                &context,
-                &storage.signature_policy,
-            )
-        {
-            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(
-                    super::v2_body_store::V2BodyStoreError::StoreRootMismatch,
-                ),
-            ));
-        }
-        if !self.adapter.wal.matches_path(&storage.wal_path) {
-            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::StorageLayout,
-            ));
-        }
-        let validator_set_pops = self.adapter.proofs_of_possession.clone();
-        let validation_authority = self.validation_authority.clone();
-        let apply_service = super::v2_apply::V2ApplyService::new(
-            Arc::clone(&state),
-            queue,
-            Arc::clone(&kura),
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
-            block_cadence,
-            storage.genesis_account.clone(),
-            events_sender,
-            validator_set_pops.clone(),
-        );
-        if !apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops) {
-            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::ExecutionIdentity,
-            ));
-        }
-        let body_store = body_store
-            .into_revalidated_lifecycle_startup(&apply_service, &context, validation_authority)
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::MarkerReplay(error),
-                )
-            })?;
-        let RecoveredLifecycleStorageAuthorityV1 {
-            kura_identity,
-            wal_path,
-            chunk_root,
-            lifecycle_root,
-            ..
-        } = storage;
-        let owner = self.open_production_lifecycle_owner_v1_at_authenticated_roots(
-            config,
-            reply_route_source_capacity,
-            &lifecycle_root,
-            &lifecycle_root,
-            body_store,
-            &local_signer,
-        )?;
-        let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 {
-            kura_identity,
-            wal_path,
-            chunk_root,
-            local_signer: Some(local_signer.public_key().clone()),
-        };
-        Ok(owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service))
-    }
-    /// Shared implementation after production or a test-only fixture has
-    /// authenticated the complete lifecycle storage target.
-    #[allow(
-        clippy::result_large_err,
-        clippy::too_many_arguments,
-        clippy::too_many_lines
-    )]
-    fn open_production_lifecycle_owner_v1_at_authenticated_roots(
-        self,
-        config: &iroha_config::parameters::actual::SumeragiV2Config,
-        reply_route_source_capacity: usize,
-        ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
-        mut body_store: super::v2_body_store::RevalidatedV2BodyStore,
-        local_signer: &KeyPair,
-    ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
-        if !self.effects.is_empty() {
-            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::ResidualEffects,
-            ));
-        }
-        let Self {
-            adapter,
-            effects,
-            authority,
-            validation_authority,
-            factory_owner,
-        } = self;
-        let verified = VerifiedHeightContext {
-            context: adapter.wire_context.clone(),
-            proofs_of_possession: adapter.proofs_of_possession.clone(),
-            parent_verification: adapter.parent_verification.clone(),
-        };
-        // Standalone WAL authority is projected before the already-revalidated
-        // body cut is unsealed and before Serve/Ledger open. A malformed token
-        // therefore cannot mutate or observe any newly opened storage owner.
-        let authority = match authority {
-            RecoveredWalStartupAuthorityV1::None => PreparedRecoveredWalStartupAuthorityV1::None,
-            RecoveredWalStartupAuthorityV1::PhaseVote(vote) => {
-                PreparedRecoveredWalStartupAuthorityV1::PhaseVote(vote)
-            }
-            RecoveredWalStartupAuthorityV1::ControlSign(control) => {
-                let local_proposal_attempt =
-                    RecoveredLifecycleLocalProposalAttemptV1::from_control(&control);
-                let projected = crate::sumeragi::v2_runtime::project_recovered_wal_control_sign(
-                    &verified, control,
-                )
-                .map_err(|_control| {
-                    ProductionLifecycleOwnerStartupErrorV1::new(
-                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredControl(
-                            "recovered control Sign projection is inconsistent",
-                        ),
-                    )
-                })?;
-                PreparedRecoveredWalStartupAuthorityV1::ControlSign {
-                    projection: projected,
-                    local_proposal_attempt,
-                }
-            }
-            RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) => {
-                let projected = crate::sumeragi::v2_runtime::project_recovered_wal_decision_fetch(
-                    &verified, fetch,
-                )
-                .map_err(|_fetch| {
-                    ProductionLifecycleOwnerStartupErrorV1::new(
-                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionFetch(
-                            "recovered Decision Fetch projection is inconsistent",
-                        ),
-                    )
-                })?;
-                PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(projected)
-            }
-        };
-        if !body_store.matches_context(verified.context()) {
-            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(
-                    super::v2_body_store::V2BodyStoreError::ContextMismatch,
-                ),
-            ));
-        }
-        let authority = match authority {
-            PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch) => {
-                if body_store.has_rejected_recovered_decision_body(&fetch) {
-                    return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionBody(
-                            super::v2_body_store::RecoveredDecisionApplyBodyCutError::DeterministicRejection,
-                        ),
-                    ));
-                }
-                if !body_store.has_exact_recovered_decision_fetch_parent(&fetch) {
-                    PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch)
-                } else {
-                    // Establish marker presence before taking the move-only body
-                    // cut so the cut's borrow ends before the store is consumed.
-                    let body = body_store
-                        .detach_recovered_decision_apply_body(&fetch)
-                        .map_err(|error| {
-                            ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionBody(
-                                    error,
-                                ),
-                            )
-                        })?;
-                    if !body.exactly_matches_decision(&fetch) {
-                        return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                "detached Decision body lost its exact same-store binding",
-                            ),
-                        ));
-                    }
-                    let lineage =
-                        body.prepare_replay_lineage(&verified, &fetch)
-                            .ok_or_else(|| {
-                                ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                    "Decision body replay lineage is inconsistent",
-                                ),
-                            )
-                            })?;
-                    let preview = body
-                        .into_adapter_preview(adapter, &verified, fetch, lineage)
-                        .map_err(|error| {
-                            let _ = error.reason();
-                            ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                    "Decision body reducer fast-forward is inconsistent",
-                                ),
-                            )
-                        })?;
-                    let storage = preview.into_storage_preview(&verified).map_err(|_error| {
-                        ProductionLifecycleOwnerStartupErrorV1::new(
-                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                "Decision body storage lineage is inconsistent",
-                            ),
-                        )
-                    })?;
-                    if !storage.validates(&verified) {
-                        return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                "Decision body storage projection lost its same-store binding",
-                            ),
-                        ));
-                    }
-                    let restored = storage.restore_body();
-                    debug_assert!(restored.staged().validates(&verified));
-                    let staged = restored.into_staged();
-                    let body_store = body_store
-                        .into_lifecycle_owner_store(verified.context())
-                        .map_err(|error| {
-                            ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
-                            )
-                        })?;
-                    let (payload_store, recovered_payloads) =
-                        super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
-                                serve_payload_root,
-                                verified.context(),
-                            )
-                        .map_err(|error| {
-                            ProductionLifecycleOwnerStartupErrorV1::new(
-                                    ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
-                                )
-                        })?;
-                    let serve_payloads = recovered_payloads
-                        .authenticate(&verified, local_signer, &body_store)
-                        .map_err(|error| {
-                            ProductionLifecycleOwnerStartupErrorV1::new(
-                                ProductionLifecycleOwnerStartupErrorKindV1::ServeRecovery(error),
-                            )
-                        })?;
-                    let owner = ProductionLifecycleOwnerV1::open_recovered_decision_apply_startup(
-                        verified,
-                        staged,
-                        effects,
-                        ledger_root,
-                        body_store,
-                        config,
-                        reply_route_source_capacity,
-                        payload_store,
-                        serve_payloads,
-                    )
-                    .map_err(|error| {
-                        ProductionLifecycleOwnerStartupErrorV1::new(
-                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
-                                error.reason(),
-                            ),
-                        )
-                    })?;
-                    return Ok(owner);
-                }
-            }
-            authority => authority,
-        };
-        let mut body_store = body_store
-            .into_lifecycle_owner_store(verified.context())
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
-                )
-            })?;
-        let (mut payload_store, recovered_payloads) =
-            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
-                serve_payload_root,
-                verified.context(),
-            )
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
-                )
-            })?;
-        let serve_payloads = recovered_payloads
-            .authenticate(&verified, local_signer, &body_store)
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::ServeRecovery(error),
-                )
-            })?;
-        let vote = match authority {
-            PreparedRecoveredWalStartupAuthorityV1::None => {
-                let owner = ProductionLifecycleOwnerV1::open_storage_only_recovered_startup(
-                    verified,
-                    ledger_root,
-                    body_store,
-                    config,
-                    reply_route_source_capacity,
-                    payload_store,
-                    serve_payloads,
-                    ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
-                )
-                .map_err(|error| {
-                    ProductionLifecycleOwnerStartupErrorV1::new(
-                        ProductionLifecycleOwnerStartupErrorKindV1::StorageOnly(error),
-                    )
-                })?;
-                return Ok(owner);
-            }
-            PreparedRecoveredWalStartupAuthorityV1::ControlSign {
-                projection: control,
-                local_proposal_attempt,
-            } => {
-                let owner = ProductionLifecycleOwnerV1::open_recovered_control_startup(
-                    verified,
-                    control,
-                    ledger_root,
-                    body_store,
-                    config,
-                    reply_route_source_capacity,
-                    payload_store,
-                    serve_payloads,
-                    ProductionLifecycleAdapterStartupV1::recovered_with_local_proposal_attempt(
-                        adapter,
-                        effects,
-                        local_proposal_attempt,
-                    ),
-                )
-                .map_err(|error| {
-                    ProductionLifecycleOwnerStartupErrorV1::new(
-                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredControl(
-                            error.reason(),
-                        ),
-                    )
-                })?;
-                return Ok(owner);
-            }
-            PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch) => {
-                let owner = ProductionLifecycleOwnerV1::open_recovered_decision_fetch_startup(
-                    verified,
-                    fetch,
-                    ledger_root,
-                    body_store,
-                    config,
-                    reply_route_source_capacity,
-                    payload_store,
-                    serve_payloads,
-                    ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
-                )
-                .map_err(|error| {
-                    ProductionLifecycleOwnerStartupErrorV1::new(
-                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionFetch(
-                            error.reason(),
-                        ),
-                    )
-                })?;
-                return Ok(owner);
-            }
-            PreparedRecoveredWalStartupAuthorityV1::PhaseVote(vote) => vote,
-        };
-        let phase_startup = AuthenticatedRecoveredAdapterStartup {
-            adapter,
-            effects,
-            authority: RecoveredWalStartupAuthorityV1::PhaseVote(vote),
-            validation_authority,
-            factory_owner,
-        };
-        let mut registry = LifecycleWorkRegistryHolder::empty();
-        let authenticated = phase_startup
-            .authenticate_recovered_parent_from_storage(&mut registry, &mut body_store, ledger_root)
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::RecoveredParent(error.reason()),
-                )
-            })?;
-        let persisted = authenticated.persist_repair().map_err(|error| {
-            ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::Persist(error.reason()),
-            )
-        })?;
-        let installed = persisted
-            .install_recovered_sign(&body_store)
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::SignInstall(error.reason()),
-                )
-            })?;
-        let paired = installed
-            .open_production_owner_seals(
-                config,
-                reply_route_source_capacity,
-                &mut body_store,
-                &mut payload_store,
-                serve_payloads,
-            )
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::RecoveredOpen(error.reason()),
-                )
-            })?;
-        let owner = paired
-            .into_owner(registry, payload_store, body_store)
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::RecoveredOwner(error),
-                )
-            })?;
-        Ok(owner)
-    }
-    /// Open an empty-marker test body store and enter the exact production handoff.
-    ///
-    /// Production has no root-reopen counterpart. Fixtures which persist a
-    /// terminal marker must explicitly replay it and pass the resulting sealed
-    /// store to [`Self::open_production_lifecycle_owner_v1`].
-    #[cfg(test)]
-    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
-    fn open_production_lifecycle_owner_v1_from_roots_for_test(
-        self,
-        config: &iroha_config::parameters::actual::SumeragiV2Config,
-        reply_route_source_capacity: usize,
-        ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
-        body_root: &std::path::Path,
-        body_signature_policy: super::v2_body_store::BlockSignaturePolicy,
-        local_signer: &KeyPair,
-    ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
-        if !self.effects.is_empty() {
-            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::ResidualEffects,
-            ));
-        }
-        let mut body_store = super::v2_body_store::V2BodyStore::open_with_policy(
-            body_root,
-            self.adapter.wire_context.clone(),
-            body_signature_policy,
-        )
-        .map_err(|error| {
-            ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
-            )
-        })?;
-        body_store
-            .ensure_recovered_markers_revalidated()
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
-                )
-            })?;
-        body_store
-            .revalidate_recovered_markers(|_| -> Result<wire::ExecutionCommitment, String> {
-                unreachable!("the root-only fixture admits no recovered markers")
-            })
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
-                )
-            })?;
-        let body_store = body_store.into_revalidated_startup().map_err(|error| {
-            ProductionLifecycleOwnerStartupErrorV1::new(
-                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
-            )
-        })?;
-        self.open_production_lifecycle_owner_v1_at_authenticated_roots(
-            config,
-            reply_route_source_capacity,
-            ledger_root,
-            serve_payload_root,
-            body_store,
-            local_signer,
-        )
-    }
-    /// Enter the shared owner implementation with an already-revalidated test store.
-    #[cfg(test)]
-    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
-    fn open_production_lifecycle_owner_v1_with_store_for_test(
-        self,
-        config: &iroha_config::parameters::actual::SumeragiV2Config,
-        reply_route_source_capacity: usize,
-        ledger_root: &std::path::Path,
-        serve_payload_root: &std::path::Path,
-        body_store: super::v2_body_store::RevalidatedV2BodyStore,
-        local_signer: &KeyPair,
-    ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
-        self.open_production_lifecycle_owner_v1_at_authenticated_roots(
-            config,
-            reply_route_source_capacity,
-            ledger_root,
-            serve_payload_root,
-            body_store,
-            local_signer,
-        )
-    }
-    #[cfg(test)]
-    fn recovered_phase_vote_for_test(&self) -> Option<&RecoveredWalVoteSign> {
-        match &self.authority {
-            RecoveredWalStartupAuthorityV1::PhaseVote(vote) => Some(vote),
-            RecoveredWalStartupAuthorityV1::None
-            | RecoveredWalStartupAuthorityV1::ControlSign(_)
-            | RecoveredWalStartupAuthorityV1::DecisionFetch(_) => None,
-        }
-    }
-    #[cfg(test)]
-    fn has_no_recovered_wal_authority_for_test(&self) -> bool {
-        matches!(self.authority, RecoveredWalStartupAuthorityV1::None)
-    }
-    #[cfg(test)]
-    fn has_recovered_control_sign_for_test(&self) -> bool {
-        matches!(
-            self.authority,
-            RecoveredWalStartupAuthorityV1::ControlSign(_)
-        )
-    }
-    /// Finish a startup whose current reducer state owns no WAL continuation.
-    ///
-    /// This extraction is retained only for focused adapter tests. Production
-    /// startup always consumes the wrapper through
-    /// [`Self::open_production_lifecycle_owner_v1`], including the no-vote case.
-    #[cfg(test)]
-    #[allow(clippy::result_large_err)]
-    fn finish_without_wal_vote(
-        mut self,
-    ) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), (AdapterError, Self)> {
-        if !matches!(self.authority, RecoveredWalStartupAuthorityV1::None) {
-            return Err((AdapterError::RecoveredVoteSignMismatch, self));
-        }
-        if let Err(error) = self.adapter.publish_status() {
-            return Err((error, self));
-        }
-        Ok((self.adapter, self.effects))
-    }
-    /// Reconstruct the recovered Validate parent from exact durable storage.
-    ///
-    /// This production factory consumes no scheduler lease, runtime ordinal
-    /// source, or caller-minted effect/pending pair. Success retains the
-    /// authenticated WAL repair and exact opened LedgerV1 store/frame beside
-    /// the adapter. The repair keeps its registry borrow exclusive. Every
-    /// failure returns one opaque owner of the complete remaining startup
-    /// authority.
-    #[allow(dead_code)]
-    #[allow(clippy::result_large_err)]
-    fn authenticate_recovered_parent_from_storage<'registry, 'body>(
-        mut self,
-        registry: &'registry mut LifecycleWorkRegistryHolder,
-        body_store: &'body mut super::v2_body_store::V2BodyStore,
-        ledger_root: &std::path::Path,
-    ) -> Result<
-        StorageAuthenticatedRecoveredWalLifecycleStartup<'registry>,
-        StorageAuthenticatedRecoveredWalLifecycleStartupError<'body>,
-    > {
-        let verified = VerifiedHeightContext {
-            context: self.adapter.wire_context.clone(),
-            proofs_of_possession: self.adapter.proofs_of_possession.clone(),
-            parent_verification: self.adapter.parent_verification.clone(),
-        };
-        if !matches!(self.authority, RecoveredWalStartupAuthorityV1::PhaseVote(_)) {
-            return Err(StorageAuthenticatedRecoveredWalLifecycleStartupError {
-                failure: StorageAuthenticatedRecoveredWalLifecycleStartupFailure::MissingVote {
-                    _startup: self,
-                },
-            });
-        }
-        let RecoveredWalStartupAuthorityV1::PhaseVote(recovered) =
-            core::mem::replace(&mut self.authority, RecoveredWalStartupAuthorityV1::None)
-        else {
-            unreachable!("phase-vote shape checked before replacement")
-        };
-        match registry.reconstruct_recovered_wal_validate_parent(
-            &verified,
-            body_store,
-            ledger_root,
-            recovered,
-        ) {
-            Ok((ledger, repair)) => Ok(StorageAuthenticatedRecoveredWalLifecycleStartup {
-                adapter: self.adapter,
-                effects: self.effects,
-                ledger,
-                repair,
-            }),
-            Err(error) => Err(StorageAuthenticatedRecoveredWalLifecycleStartupError {
-                failure: StorageAuthenticatedRecoveredWalLifecycleStartupFailure::Factory {
-                    _adapter: self.adapter,
-                    _effects: self.effects,
-                    _error: error,
-                },
-            }),
-        }
-    }
-    /// Join the recovered phase vote to one opaque exact-Validate registry cut.
-    ///
-    /// The cut owns the closed validated completion; no raw effect or pending
-    /// binding crosses this boundary. Success keeps the adapter, remaining
-    /// startup batch, and authenticated lifecycle repair in one non-clone
-    /// wrapper. Every failure owns all inputs and exposes diagnostics only.
-    #[cfg(test)]
-    #[allow(clippy::result_large_err)]
-    fn authenticate_recovered_validate<'registry>(
-        mut self,
-        validate: RecoveredWalValidateRegistryCut<'registry>,
-    ) -> Result<
-        AuthenticatedRecoveredWalLifecycleStartup<'registry>,
-        RecoveredWalLifecycleStartupError<'registry>,
-    > {
-        let verified = VerifiedHeightContext {
-            context: self.adapter.wire_context.clone(),
-            proofs_of_possession: self.adapter.proofs_of_possession.clone(),
-            parent_verification: self.adapter.parent_verification.clone(),
-        };
-        if !matches!(self.authority, RecoveredWalStartupAuthorityV1::PhaseVote(_)) {
-            return Err(RecoveredWalLifecycleStartupError {
-                failure: RecoveredWalLifecycleStartupFailure::MissingVote {
-                    startup: self,
-                    validate,
-                },
-            });
-        }
-        let RecoveredWalStartupAuthorityV1::PhaseVote(recovered_vote) =
-            core::mem::replace(&mut self.authority, RecoveredWalStartupAuthorityV1::None)
-        else {
-            unreachable!("phase-vote shape checked before replacement")
-        };
-        match validate.join_recovered_vote(&verified, recovered_vote) {
-            Ok(repair) => Ok(AuthenticatedRecoveredWalLifecycleStartup {
-                adapter: self.adapter,
-                effects: self.effects,
-                repair,
-            }),
-            Err(error) => Err(RecoveredWalLifecycleStartupError {
-                failure: RecoveredWalLifecycleStartupFailure::RegistryJoin {
-                    adapter: self.adapter,
-                    effects: self.effects,
-                    error,
-                },
-            }),
-        }
-    }
-}
-impl<'registry> StorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
-    /// Fsync the repaired frame against the store retained since reconstruction.
-    #[allow(clippy::result_large_err)]
-    fn persist_repair(
-        self,
-    ) -> Result<
-        PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>,
-        StorageRecoveredWalPersistError<'registry>,
-    > {
-        let Self {
-            adapter,
-            effects,
-            ledger,
-            repair,
-        } = self;
-        let verified = VerifiedHeightContext {
-            context: adapter.wire_context.clone(),
-            proofs_of_possession: adapter.proofs_of_possession.clone(),
-            parent_verification: adapter.parent_verification.clone(),
-        };
-        match ledger.persist_recovered_wal_repair(&verified, repair) {
-            Ok(persisted) => Ok(PersistedStorageAuthenticatedRecoveredWalLifecycleStartup {
-                adapter,
-                effects,
-                persisted,
-            }),
-            Err(error) => Err(StorageRecoveredWalPersistError {
-                _adapter: adapter,
-                _effects: effects,
-                error,
-            }),
-        }
-    }
-}
-impl<'registry> PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
-    /// Install the repaired Sign while retaining the exact post-fsync store.
-    #[allow(clippy::result_large_err)]
-    fn install_recovered_sign(
-        self,
-        body_store: &super::v2_body_store::V2BodyStore,
-    ) -> Result<
-        InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>,
-        StorageRecoveredWalSignInstallError<'registry>,
-    > {
-        let Self {
-            adapter,
-            effects,
-            persisted,
-        } = self;
-        let verified = VerifiedHeightContext {
-            context: adapter.wire_context.clone(),
-            proofs_of_possession: adapter.proofs_of_possession.clone(),
-            parent_verification: adapter.parent_verification.clone(),
-        };
-        let adapter_startup = ProductionLifecycleAdapterStartupV1::recovered(adapter, effects);
-        let (adapter_startup, persisted) = persisted
-            .prepare_cold_adapter_startup(&verified, adapter_startup, body_store)
-            .map_err(|reason| StorageRecoveredWalSignInstallError {
-                failure: StorageRecoveredWalSignInstallFailure::Adapter { reason },
-            })?;
-        match persisted.install_recovered_wal_sign() {
-            Ok(installed) => Ok(InstalledStorageAuthenticatedRecoveredWalLifecycleStartup {
-                adapter_startup,
-                verified,
-                installed,
-            }),
-            Err(error) => Err(StorageRecoveredWalSignInstallError {
-                failure: StorageRecoveredWalSignInstallFailure::Install {
-                    _startup: adapter_startup,
-                    error,
-                },
-            }),
-        }
-    }
-}
-impl<'registry> InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
-    /// Complete final-frame recovery and release only no-lifetime owner seals.
-    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
-    fn open_production_owner_seals(
-        self,
-        config: &iroha_config::parameters::actual::SumeragiV2Config,
-        reply_route_source_capacity: usize,
-        body_store: &mut super::v2_body_store::V2BodyStore,
-        payload_store: &mut super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
-        serve_payloads: super::v2_certified_serve_payload_store::AuthenticatedCertifiedServePayloadRecoveryCut,
-    ) -> Result<ProductionRecoveredLifecycleOwnerStartupV1, StorageRecoveredWalOpenError<'registry>>
-    {
-        let Self {
-            adapter_startup,
-            verified,
-            installed,
-        } = self;
-        let opened = match installed.open_production_lifecycle(
-            &verified,
-            config,
-            reply_route_source_capacity,
-            body_store,
-            payload_store,
-            serve_payloads,
-        ) {
-            Ok(opened) => opened,
-            Err(error) => {
-                return Err(StorageRecoveredWalOpenError {
-                    failure: StorageRecoveredWalOpenFailure::Storage {
-                        _adapter_startup: adapter_startup,
-                        error,
-                    },
-                });
-            }
-        };
-        let opened = match opened.into_production_owner_open() {
-            Ok(opened) => opened,
-            Err(opened) => {
-                return Err(StorageRecoveredWalOpenError {
-                    failure: StorageRecoveredWalOpenFailure::OwnerSeal {
-                        _adapter_startup: adapter_startup,
-                        _opened: opened,
-                    },
-                });
-            }
-        };
-        Ok(ProductionRecoveredLifecycleOwnerStartupV1 {
-            adapter_startup,
-            opened,
-        })
-    }
-}
+include!("v2_authenticated_recovered_adapter_startup_impl.rs");
 #[cfg(test)]
 impl<'registry> AuthenticatedRecoveredWalLifecycleStartup<'registry> {
     /// Consume the entire sealed startup through the focused LedgerV1 fsync
@@ -3177,6 +2291,7 @@ impl<'registry> InstalledRecoveredWalLifecycleStartup<'registry> {
         // This is deliberately the sole externally visible publication and
         // runs only after recovery splice, prepared exact join, both fsyncs,
         // and the post-commit registry/coordinator/store revalidation.
+        adapter.status_publication_enabled = true;
         if let Err(error) = adapter.publish_status() {
             return Err(RecoveredWalLifecycleOpenPublicationError {
                 failure: RecoveredWalLifecycleOpenPublicationFailure::Status {
@@ -4573,6 +3688,16 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStagedStorageV1 {
     apply_effect: AdapterEffect,
     apply_pending: PendingRuntimeEffectBinding,
     validated_receipt: ValidatedBodyReceipt,
+}
+/// Heap-retained handoff from recovered Decision replay to durable owner open.
+///
+/// The adapter fast-forward and the later ledger/registry admission are kept in
+/// separate stack frames while this seal preserves the exact staged projection
+/// and its already-revalidated body store.
+#[must_use = "prepared recovered Decision Apply startup must open its exact owner"]
+struct PreparedRecoveredDecisionApplyOwnerOpenV1 {
+    staged: Box<RecoveredDecisionApplyStagedStorageV1>,
+    body_store: super::v2_body_store::RevalidatedV2BodyStore,
 }
 /// Dedicated closed registry carrier for one recovered Decision Apply.
 /// It keeps the original WAL Fetch and body lineage inseparable from Apply.
@@ -6528,8 +5653,10 @@ impl RecoveredDecisionApplyStagedAdapterV1 {
         replay: super::v2_lifecycle_coordinator::RecoveredDecisionApplyReplayLineageV1,
         durable: &DurableBodyReceipt,
         validated_receipt: &ValidatedBodyReceipt,
-    ) -> Result<RecoveredDecisionApplyStagedStorageV1, RecoveredDecisionApplyStorageProjectionErrorV1>
-    {
+    ) -> Result<
+        Box<RecoveredDecisionApplyStagedStorageV1>,
+        RecoveredDecisionApplyStorageProjectionErrorV1,
+    > {
         if !self.validates() || validated_receipt.durable() != durable {
             return Err(RecoveredDecisionApplyStorageProjectionErrorV1 {
                 _staged: self,
@@ -6576,14 +5703,14 @@ impl RecoveredDecisionApplyStagedAdapterV1 {
         drop(store_effect);
         drop(validate_effect);
         drop(replay);
-        Ok(RecoveredDecisionApplyStagedStorageV1 {
+        Ok(Box::new(RecoveredDecisionApplyStagedStorageV1 {
             adapter,
             fetch,
             lineage,
             apply_effect,
             apply_pending,
             validated_receipt: validated_receipt.clone(),
-        })
+        }))
     }
 }
 impl RecoveredDecisionApplyStagedStorageV1 {
@@ -6623,16 +5750,16 @@ impl RecoveredDecisionApplyStagedStorageV1 {
     /// returns the complete staged value and exposes no constituent authority.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn into_registry_carrier(
-        self,
+        self: Box<Self>,
         _permit: RecoveredDecisionApplyRegistryProjectionPermit,
         verified: &VerifiedHeightContext,
         effects: Vec<AdapterEffect>,
     ) -> Result<
-        (
+        Box<(
             ProductionLifecycleAdapterStartupV1,
             RecoveredDecisionApplyRegistryCarrierV1,
-        ),
-        (Self, Vec<AdapterEffect>),
+        )>,
+        (Box<Self>, Vec<AdapterEffect>),
     > {
         if !self.validates(verified) || !effects.is_empty() {
             return Err((self, effects));
@@ -6644,10 +5771,10 @@ impl RecoveredDecisionApplyStagedStorageV1 {
             apply_effect,
             apply_pending,
             validated_receipt,
-        } = self;
+        } = *self;
         let mut context = [0_u8; 32];
         context.copy_from_slice(verified.context().id().0.as_ref());
-        Ok((
+        Ok(Box::new((
             ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
             RecoveredDecisionApplyRegistryCarrierV1 {
                 context: LifecycleContext::new(
@@ -6660,7 +5787,7 @@ impl RecoveredDecisionApplyStagedStorageV1 {
                 apply_pending,
                 validated_receipt,
             },
-        ))
+        )))
     }
 }
 impl RecoveredDecisionApplyRegistryCarrierV1 {

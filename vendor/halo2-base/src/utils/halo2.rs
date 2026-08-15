@@ -122,7 +122,7 @@ pub fn constrain_virtual_equals_external<F: Field + Ord>(
         }
         Entry::Vacant(assigned) => {
             // The virtual cell **must** be an external cell
-            assert_eq!(ctx_cell.type_id, EXTERNAL_CELL_TYPE_ID);
+            assert_eq!(ctx_cell.type_id(), EXTERNAL_CELL_TYPE_ID);
             // We map the virtual cell to point to the raw external cell in `copy_manager`
             assigned.insert(external_cell);
         }

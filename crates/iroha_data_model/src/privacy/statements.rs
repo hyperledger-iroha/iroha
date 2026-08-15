@@ -2,10 +2,7 @@
 ///
 /// Indices use the paper's closed order: `0=C`, `1=O`, `2=OU`, `3=CN`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkX509DisclosedAttributeV1 {
     /// Closed attribute index.
@@ -15,10 +12,7 @@ pub struct PrivacyZkX509DisclosedAttributeV1 {
 }
 /// Native X.509 credential-predicate STARK statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaZkX509StarkP256StatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -75,10 +69,7 @@ pub struct IrohaZkX509StarkP256StatementV1 {
 /// The compiled modulus is `3611623616^8 + 1`. Fixed width at the type boundary
 /// eliminates ambiguous byte order, truncation, and alternate field regimes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PrivacyJindoFieldElementV1 {
     /// Exact canonical little-endian residue.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -101,10 +92,7 @@ impl PrivacyJindoFieldElementV1 {
 /// The byte string contains 3 × 1024 signed little-endian `i32` coefficients. Native verification
 /// additionally enforces the compiled rounded-coefficient bound.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PrivacyJindoLatticeCommitmentV1 {
     /// Exact governed lattice-commitment encoding.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -124,10 +112,7 @@ impl PrivacyJindoLatticeCommitmentV1 {
 }
 /// Native Jindo batched univariate lattice polynomial-opening statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaJindoPolynomialCommitmentStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -145,10 +130,7 @@ pub struct IrohaJindoPolynomialCommitmentStatementV1 {
 /// of exactly one application-ring polynomial. This is deliberately not an
 /// arbitrary byte string or a digest-preimage claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct BootleLanternAttributeValueV1(
     /// Exact little-endian 64-bit attribute encoding.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -168,10 +150,7 @@ impl BootleLanternAttributeValueV1 {
 }
 /// One polynomial in `Z_12289[X]/(X^64 + 1)`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternPolynomialV1 {
     /// Exactly 64 canonical coefficients, each strictly below 12,289.
@@ -179,10 +158,7 @@ pub struct BootleLanternPolynomialV1 {
 }
 /// Canonical issuer verification matrix `B` in the application ring.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternIssuerPublicMatrixV1 {
     /// Exactly 64 polynomials in row-major 8-by-8 order.
@@ -404,10 +380,7 @@ impl BootleLanternIssuerPublicMatrixV1 {
 }
 /// Governed allowed values for one required public attribute.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternAllowedAttributeValuesV1 {
     /// Strictly increasing values; empty means any disclosed value is allowed.
@@ -415,10 +388,7 @@ pub struct BootleLanternAllowedAttributeValuesV1 {
 }
 /// Forward-only lifecycle of one authoritative Bootle/Lantern issuer policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "state", content = "value", deny_unknown_fields)
@@ -436,10 +406,7 @@ pub enum BootleLanternIssuerPolicyLifecycleV1 {
 /// The proof submitter supplies only the record identity and digest in the
 /// statement. Core resolves this complete record from committed state.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternIssuerPolicyV1 {
     /// Credential issuer governed by this record.
@@ -903,10 +870,7 @@ pub enum BootleLanternIssuerPolicyValidationErrorV1 {
 }
 /// One canonical Bootle/Lantern selective-disclosure entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternDisclosedAttributeV1 {
     /// Zero-based index in the fixed eight-attribute credential.
@@ -916,10 +880,7 @@ pub struct BootleLanternDisclosedAttributeV1 {
 }
 /// Native Bootle Lantern/LNP22 module-lattice anonymous-credential statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaBootleLanternAnoncredStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -941,10 +902,7 @@ pub struct IrohaBootleLanternAnoncredStatementV1 {
 }
 /// Direction of a public value balance relative to a private pool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "direction", content = "value", deny_unknown_fields)
@@ -959,10 +917,7 @@ pub enum PrivacyValueBalanceDirectionV1 {
 }
 /// Signed public value balance represented without JSON-ambiguous `i128`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyValueBalanceV1 {
     /// Direction relative to the private pool.
@@ -1002,10 +957,7 @@ impl PrivacyValueBalanceV1 {
 }
 /// Exact public data for one Orchard V3 action.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyOrchardActionV1 {
     /// Canonical Pallas-base nullifier encoding.
@@ -1032,10 +984,7 @@ pub struct PrivacyOrchardActionV1 {
 }
 /// Orchard Halo2 private action-bundle statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct OrchardHalo2ActionsStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -1063,10 +1012,7 @@ pub struct OrchardHalo2ActionsStatementV1 {
 }
 /// Monero FCMP++ full-chain-membership transfer statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MoneroFcmpPlusPlusStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -1091,10 +1037,7 @@ pub struct MoneroFcmpPlusPlusStatementV1 {
 }
 /// Native IVM private-note execution statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -1151,10 +1094,7 @@ impl IrohaIvmPrivateNoteStarkStatementV1 {
 }
 /// Post-quantum authorization profile required by PQ-MASP v0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "authorization", content = "value", deny_unknown_fields)
@@ -1165,10 +1105,7 @@ pub enum PrivacyPqAuthorizationProfileV1 {
 }
 /// Post-quantum note-encryption profile required by PQ-MASP v0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "encryption", content = "value", deny_unknown_fields)
@@ -1179,10 +1116,7 @@ pub enum PrivacyPqNoteEncryptionProfileV1 {
 }
 /// Post-quantum MASP STARK transfer statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PqMaspStarkStatementV1 {
     /// Shared chain and governed-artifact binding.
@@ -1220,10 +1154,7 @@ pub struct PqMaspStarkStatementV1 {
 /// Protocol-typed canonical privacy statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.statement.v1")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "protocol", content = "statement", deny_unknown_fields)

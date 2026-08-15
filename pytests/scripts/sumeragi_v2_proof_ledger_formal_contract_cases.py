@@ -250,6 +250,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('status/test_guards.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2.rs'): (
+        Path('v2_authenticated_recovered_adapter_startup_impl.rs'),
         Path('tests/v2_adapter_main_00.rs'),
         Path('tests/v2_adapter_main_01.rs'),
         Path('tests/v2_adapter_main_02.rs'),
@@ -300,7 +301,12 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lifecycle_work_registry_recovery_surface_cases.rs'),
         Path('tests/v2_lifecycle_work_registry_replay_evidence_cases.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs'): (
+        Path('v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/v2_runtime.rs'): (
+        Path('v2_runtime_effect_ownership_core_impl.rs'),
+        Path('v2_runtime_effect_ownership_rebind_impl.rs'),
         Path('tests/v2_runtime_pending_binding_cases.rs'),
         Path('tests/v2_runtime_main_00.rs'),
         Path('tests/v2_runtime_main_01.rs'),
@@ -452,6 +458,10 @@ REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"): (
         Path(
             "crates/iroha_core/src/sumeragi/"
+            "v2_lifecycle_work_registry_recovered_wal.rs"
+        ),
+        Path(
+            "crates/iroha_core/src/sumeragi/"
             "v2_lifecycle_work_registry_validate_recovery.rs"
         ),
     ),
@@ -466,9 +476,9 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 49
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 5
-assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 5
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 50
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 6
+assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 6
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 44
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS

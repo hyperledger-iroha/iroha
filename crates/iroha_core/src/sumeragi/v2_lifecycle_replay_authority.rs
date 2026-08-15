@@ -1781,7 +1781,10 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
         {
             return None;
         }
-        match coordinator.admit(super::AdmissionRequest::Candidate(self.candidate.clone())) {
+        // Scheduler fixtures must not publish synthetic WAL identities into an
+        // attached production ledger. Keep this admission process-local so a
+        // cold reopen sees only authorities backed by the real recovered WAL.
+        match coordinator.reduce_admit(super::AdmissionRequest::Candidate(self.candidate.clone())) {
             super::AdmissionDecision::Admitted {
                 owner,
                 ordinal,

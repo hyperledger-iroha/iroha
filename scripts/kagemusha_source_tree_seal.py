@@ -3,10 +3,11 @@
 
 First-release candidate generation requires one SSH signature trusted by the
 reviewer's user-level allowed-signers policy on the exact checked-out commit,
-an index identical to HEAD, no untracked files, the separately bound ignored
-root ``Cargo.lock``, and a full source-tree identity
-matching one independently pinned canonical descriptor.  ``descriptor`` emits
-the clean observation that must be reviewed and pinned.  Gitlinks bind their
+an index identical to HEAD, no untracked or ignored files, one tracked mode
+``100644`` root ``Cargo.lock`` that is also bound separately, and a full
+source-tree identity matching one independently pinned canonical descriptor.
+``descriptor`` emits the clean observation that must be reviewed and pinned.
+Gitlinks bind their
 exact index commit and must be represented by an empty, non-symlink directory.
 ``identity`` and ``fingerprint`` never accept an unpinned observation.
 
@@ -14,12 +15,16 @@ Repository-local Git signature configuration is untrusted.  The verifier pins
 ``/usr/bin/ssh-keygen``, reads only the user-level allowed-signers/revocation
 paths, snapshots those owner-controlled policies, and overrides every Git
 signature-format, trust, policy, and executable setting for verification.
+The in-process identity also carries the raw HEAD object's tree, ordered
+parents, committer epoch, object digest/size, and the sole verified SSH
+principal/key/policy digests so build projections cannot supply those facts.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import hashlib
 import json
 import os
@@ -48,7 +53,7 @@ MAX_UNTRACKED_FILE_BYTES = 16 * 1024 * 1024
 MAX_UNTRACKED_FILES = 0
 MAX_ALLOWED_SIGNERS_BYTES = 64 * 1024
 MAX_REVOCATION_BYTES = 16 * 1024 * 1024
-REQUIRED_IGNORED_BUILD_INPUT = b"Cargo.lock"
+REQUIRED_TRACKED_BUILD_INPUT = b"Cargo.lock"
 GIT = pathlib.Path("/usr/bin/git")
 SSH_KEYGEN = pathlib.Path("/usr/bin/ssh-keygen")
 GIT_ARGUMENT_PREFIX = (
@@ -126,6 +131,31 @@ class SignaturePolicy:
 
     allowed_signers: bytes
     revocation: bytes
+    signer: "VerifiedSshSignature | None" = None
+
+
+@dataclass(frozen=True)
+class VerifiedSshSignature:
+    """The sole SSH signer admitted by the exact verified trust policy."""
+
+    principal: str
+    public_key_sha256: str
+    allowed_signers_sha256: str
+    revocation_sha256: str
+
+
+@dataclass(frozen=True)
+class SourceAuthority:
+    """Facts derived from the verified raw HEAD commit and its exact parents."""
+
+    commit: str
+    commit_object_sha256: str
+    commit_object_size: int
+    committer_epoch: int
+    git_tree: str
+    ordered_parents: tuple[str, ...]
+    ordered_parent_trees: tuple[str, ...]
+    signature: VerifiedSshSignature
 
 
 @dataclass(frozen=True)
@@ -135,6 +165,7 @@ class SourceIdentity:
     source_repo_dirty: bool
     reviewed_source_closure: dict[str, Any]
     reviewed_source_closure_descriptor_sha256: str
+    source_authority: SourceAuthority
 
 
 def _git_environment() -> dict[str, str]:
@@ -356,7 +387,9 @@ def _read_signature_policy_file(
     )
 
 
-def _validate_allowed_signers(payload: bytes) -> None:
+def _validate_allowed_signers(payload: bytes) -> tuple[str, str]:
+    """Return the sole portable principal and SHA-256 of its SSH key blob."""
+
     try:
         text = payload.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -376,6 +409,46 @@ def _validate_allowed_signers(payload: bytes) -> None:
         raise SourceSealError(
             "SSH allowed-signers policy forbids certificates and time-dependent keys"
         )
+    fields = active[0].split()
+    if len(fields) < 3:
+        raise SourceSealError("SSH allowed-signers policy entry is incomplete")
+    principal, key_type, encoded_key = fields[:3]
+    if (
+        not principal
+        or len(principal) > 128
+        or any(
+            not (character.isascii() and (character.isalnum() or character in "._@+-"))
+            for character in principal
+        )
+    ):
+        raise SourceSealError(
+            "SSH allowed-signers policy must name exactly one portable principal"
+        )
+    if (
+        not key_type.isascii()
+        or not key_type
+        or "-cert-" in key_type
+        or any(not (character.isalnum() or character in "@._+-") for character in key_type)
+    ):
+        raise SourceSealError("SSH allowed-signers policy key type is malformed")
+    try:
+        key_blob = base64.b64decode(encoded_key, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise SourceSealError("SSH allowed-signers public key is not canonical base64") from exc
+    if base64.b64encode(key_blob).decode("ascii") != encoded_key or len(key_blob) < 4:
+        raise SourceSealError("SSH allowed-signers public key is not canonical")
+    type_size = int.from_bytes(key_blob[:4], "big")
+    if type_size == 0 or 4 + type_size > len(key_blob):
+        raise SourceSealError("SSH allowed-signers public key blob is malformed")
+    try:
+        blob_key_type = key_blob[4 : 4 + type_size].decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise SourceSealError("SSH allowed-signers public key type is not ASCII") from exc
+    if blob_key_type != key_type:
+        raise SourceSealError(
+            "SSH allowed-signers public key type differs from its key blob"
+        )
+    return principal, hashlib.sha256(key_blob).hexdigest()
 
 
 def _load_signature_policy() -> SignaturePolicy:
@@ -392,7 +465,7 @@ def _load_signature_policy() -> SignaturePolicy:
         MAX_ALLOWED_SIGNERS_BYTES,
         allow_empty=False,
     )
-    _validate_allowed_signers(allowed)
+    principal, public_key_sha256 = _validate_allowed_signers(allowed)
     revocation = (
         b""
         if revocation_path is None
@@ -403,7 +476,16 @@ def _load_signature_policy() -> SignaturePolicy:
             allow_empty=True,
         )
     )
-    return SignaturePolicy(allowed_signers=allowed, revocation=revocation)
+    return SignaturePolicy(
+        allowed_signers=allowed,
+        revocation=revocation,
+        signer=VerifiedSshSignature(
+            principal=principal,
+            public_key_sha256=public_key_sha256,
+            allowed_signers_sha256=hashlib.sha256(allowed).hexdigest(),
+            revocation_sha256=hashlib.sha256(revocation).hexdigest(),
+        ),
+    )
 
 
 def _require_one_ssh_signature(raw_commit: bytes) -> None:
@@ -438,6 +520,88 @@ def _require_one_ssh_signature(raw_commit: bytes) -> None:
         raise SourceSealError("source commit signature must be exactly one SSH signature")
 
 
+def _commit_tree_and_parents(raw_commit: bytes) -> tuple[str, tuple[str, ...]]:
+    """Extract the exact tree and ordered parent list from a raw commit payload."""
+
+    headers, separator, _ = raw_commit.partition(b"\n\n")
+    if not separator:
+        raise SourceSealError("source commit object has no canonical header boundary")
+    lines = headers.split(b"\n")
+    trees = [line[5:] for line in lines if line.startswith(b"tree ")]
+    parents = [line[7:] for line in lines if line.startswith(b"parent ")]
+    if len(trees) != 1 or lines[0] != b"tree " + trees[0]:
+        raise SourceSealError("source commit must contain exactly one leading Git tree")
+
+    def commit_id(value: bytes, label: str) -> str:
+        if (
+            len(value) != 40
+            or value == b"0" * 40
+            or any(byte not in b"0123456789abcdef" for byte in value)
+        ):
+            raise SourceSealError(f"source commit {label} is not canonical SHA-1")
+        return value.decode("ascii")
+
+    return commit_id(trees[0], "tree"), tuple(
+        commit_id(parent, "parent") for parent in parents
+    )
+
+
+def _commit_epoch(raw_commit: bytes) -> int:
+    """Extract the exact committer epoch from a raw Git commit payload."""
+
+    headers = raw_commit.partition(b"\n\n")[0]
+    committers = [
+        line for line in headers.split(b"\n") if line.startswith(b"committer ")
+    ]
+    if len(committers) != 1:
+        raise SourceSealError("source commit must contain exactly one committer header")
+    matched = re.fullmatch(
+        rb"committer .+ ([0-9]+) ([+-](?:0[0-9]|1[0-4])[0-5][0-9])",
+        committers[0],
+    )
+    if matched is None:
+        raise SourceSealError("source commit committer header is malformed")
+    epoch_text = matched.group(1)
+    if len(epoch_text) > 1 and epoch_text.startswith(b"0"):
+        raise SourceSealError("source commit committer epoch is not canonical")
+    epoch = int(epoch_text)
+    if not 1 <= epoch <= (2**63 - 1):
+        raise SourceSealError("source commit committer epoch is outside its bound")
+    return epoch
+
+
+def _source_authority_from_verified_commit(
+    root: pathlib.Path,
+    commit: str,
+    raw_commit: bytes,
+    signature: VerifiedSshSignature,
+) -> SourceAuthority:
+    """Derive source authority solely from a verified raw commit and its parents."""
+
+    if (
+        len(commit) != 40
+        or commit == "0" * 40
+        or any(character not in "0123456789abcdef" for character in commit)
+    ):
+        raise SourceSealError("verified source commit id is malformed")
+    git_tree, ordered_parents = _commit_tree_and_parents(raw_commit)
+    ordered_parent_trees: list[str] = []
+    for parent in ordered_parents:
+        parent_payload = _git(root, "cat-file", "commit", parent)
+        parent_tree, _ = _commit_tree_and_parents(parent_payload)
+        ordered_parent_trees.append(parent_tree)
+    return SourceAuthority(
+        commit=commit,
+        commit_object_sha256=hashlib.sha256(raw_commit).hexdigest(),
+        commit_object_size=len(raw_commit),
+        committer_epoch=_commit_epoch(raw_commit),
+        git_tree=git_tree,
+        ordered_parents=ordered_parents,
+        ordered_parent_trees=tuple(ordered_parent_trees),
+        signature=signature,
+    )
+
+
 def _write_private_policy_snapshot(
     directory: pathlib.Path, name: str, payload: bytes
 ) -> pathlib.Path:
@@ -463,7 +627,7 @@ def _write_private_policy_snapshot(
     return path
 
 
-def _verify_signed_commit(root: pathlib.Path, commit: bytes) -> None:
+def _verify_signed_commit(root: pathlib.Path, commit: bytes) -> SourceAuthority:
     try:
         commit_text = commit.decode("ascii")
     except UnicodeDecodeError as exc:
@@ -523,6 +687,26 @@ def _verify_signed_commit(root: pathlib.Path, commit: bytes) -> None:
         raise SourceSealError(
             "source commit must carry a locally verifiable signature"
         )
+    raw_commit_after = _git(root, "cat-file", "commit", commit_text)
+    if raw_commit_after != raw_commit:
+        raise SourceSealError("source commit object changed while its signature was verified")
+    signer = policy.signer
+    if signer is None:
+        principal, public_key_sha256 = _validate_allowed_signers(
+            policy.allowed_signers
+        )
+        signer = VerifiedSshSignature(
+            principal=principal,
+            public_key_sha256=public_key_sha256,
+            allowed_signers_sha256=hashlib.sha256(policy.allowed_signers).hexdigest(),
+            revocation_sha256=hashlib.sha256(policy.revocation).hexdigest(),
+        )
+    return _source_authority_from_verified_commit(
+        root,
+        commit_text,
+        raw_commit,
+        signer,
+    )
 
 
 def _repository_root(root: pathlib.Path) -> pathlib.Path:
@@ -566,7 +750,7 @@ def _safe_relative_path(path: bytes, *, allow_cargo_lock: bool = False) -> None:
         or b"\0" in path
         or any(component in (b"", b".", b"..") for component in path.split(b"/"))
         or path.split(b"/", 1)[0] == b".git"
-        or (not allow_cargo_lock and path == REQUIRED_IGNORED_BUILD_INPUT)
+        or (not allow_cargo_lock and path == REQUIRED_TRACKED_BUILD_INPUT)
     ):
         raise SourceSealError("Git returned an unsafe source path")
 
@@ -947,11 +1131,17 @@ def _capture_observed_descriptor(root: pathlib.Path) -> dict[str, Any]:
                 "and have no untracked files"
             )
         ignored_before = _ignored_paths(root)
-        if ignored_before != [REQUIRED_IGNORED_BUILD_INPUT]:
-            raise SourceSealError(
-                "ignored source set must contain exactly the separately bound root Cargo.lock"
-            )
+        if ignored_before:
+            raise SourceSealError("ignored source set must be empty")
         entries = _index_entries(root)
+        cargo_lock_entries = [
+            entry for entry in entries if entry.path == REQUIRED_TRACKED_BUILD_INPUT
+        ]
+        if len(cargo_lock_entries) != 1 or cargo_lock_entries[0].mode != b"100644":
+            raise SourceSealError(
+                "source index must contain exactly one stage-0 tracked mode 100644 root Cargo.lock"
+            )
+        cargo_lock_entry = cargo_lock_entries[0]
         source_hasher = hashlib.sha256(SOURCE_TREE_DOMAIN)
 
         for entry in entries:
@@ -1000,29 +1190,38 @@ def _capture_observed_descriptor(root: pathlib.Path) -> dict[str, Any]:
                 f"untracked source is forbidden: {os.fsdecode(path)}"
             )
 
+        # Preserve the V1 domain and descriptor field names for existing
+        # JSON/Norito consumers even though Cargo.lock is now an ordinary
+        # tracked source entry as well as this redundant separate binding.
         _field(source_hasher, b"required-ignored-build-input-v1")
-        _field(source_hasher, REQUIRED_IGNORED_BUILD_INPUT)
+        _field(source_hasher, REQUIRED_TRACKED_BUILD_INPUT)
         _field(source_hasher, b"100644")
-        cargo_lock_size, cargo_lock_sha256, _ = _hash_regular_file_at(
+        cargo_lock_size, cargo_lock_sha256, cargo_lock_blob_oid = _hash_regular_file_at(
             root_descriptor,
-            REQUIRED_IGNORED_BUILD_INPUT,
+            REQUIRED_TRACKED_BUILD_INPUT,
             source_hasher,
             maximum_bytes=MAX_CARGO_LOCK_BYTES,
             require_nonempty=True,
             expected_git_mode=b"100644",
         )
+        if cargo_lock_blob_oid.encode("ascii") != cargo_lock_entry.object_id:
+            raise SourceSealError(
+                "tracked root Cargo.lock blob differs from the signed index"
+            )
 
         head_after = _head(root)
         diff_after = _git(root, *TRACKED_DIFF_ARGUMENTS)
         untracked_after = _untracked_paths(root)
         ignored_after = _ignored_paths(root)
-        cargo_recheck_size, cargo_recheck_sha256, _ = _hash_regular_file_at(
-            root_descriptor,
-            REQUIRED_IGNORED_BUILD_INPUT,
-            hashlib.sha256(),
-            maximum_bytes=MAX_CARGO_LOCK_BYTES,
-            require_nonempty=True,
-            expected_git_mode=b"100644",
+        cargo_recheck_size, cargo_recheck_sha256, cargo_recheck_blob_oid = (
+            _hash_regular_file_at(
+                root_descriptor,
+                REQUIRED_TRACKED_BUILD_INPUT,
+                hashlib.sha256(),
+                maximum_bytes=MAX_CARGO_LOCK_BYTES,
+                require_nonempty=True,
+                expected_git_mode=b"100644",
+            )
         )
         _verify_root_directory(root_bytes, root_descriptor, root_identity)
         if (
@@ -1032,6 +1231,7 @@ def _capture_observed_descriptor(root: pathlib.Path) -> dict[str, Any]:
             or ignored_after != ignored_before
             or cargo_recheck_size != cargo_lock_size
             or cargo_recheck_sha256 != cargo_lock_sha256
+            or cargo_recheck_blob_oid != cargo_lock_blob_oid
         ):
             raise SourceSealError("Kagemusha source HEAD or closure changed while sealing")
     finally:
@@ -1202,7 +1402,8 @@ def _validate_descriptor(value: Any, required_commit: str) -> dict[str, Any]:
         raise SourceSealError("source_repo_dirty must be false for a clean source closure")
     if derived_dirty:
         raise SourceSealError(
-            "reviewed Kagemusha source closure must have an empty tracked diff and no untracked files"
+            "reviewed Kagemusha source closure must have an empty tracked diff and no "
+            "untracked files"
         )
     return value
 
@@ -1267,12 +1468,21 @@ def compute_identity(
         raise SourceSealError(
             "current source closure differs from the independently pinned descriptor"
         )
+    source_authority = _verify_signed_commit(root, required_commit.encode("ascii"))
+    if (
+        source_authority.commit != required_commit
+        or _head(root).decode("ascii") != required_commit
+    ):
+        raise SourceSealError(
+            "source HEAD changed while its authenticated authority was derived"
+        )
     return SourceIdentity(
         source_commit=descriptor["source_commit"],
         source_tree_sha256=descriptor["source_tree_sha256"],
         source_repo_dirty=descriptor["source_repo_dirty"],
         reviewed_source_closure=descriptor,
         reviewed_source_closure_descriptor_sha256=descriptor_sha256,
+        source_authority=source_authority,
     )
 
 

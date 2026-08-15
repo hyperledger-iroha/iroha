@@ -181,6 +181,9 @@ pub(super) fn encode_proof_v2(
 ) -> Result<(), ZkAmsMkheErrorV1> {
     validate_published_axes_v2(published)?;
     validate_proof_axes_v2(proof)?;
+    if proof.publication_identity != published.publication_identity {
+        return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+    }
     encode_base_v2(scope, id, PROOF_PUBLISHED_UNVERIFIED_TAG_V2, record)?;
     write_published_axes_v2(published, record);
     record[PROOF_PUBLICATION_IDENTITY_RANGE_V2].copy_from_slice(&proof.publication_identity);

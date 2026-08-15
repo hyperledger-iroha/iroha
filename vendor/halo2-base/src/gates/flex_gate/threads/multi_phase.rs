@@ -1,5 +1,4 @@
 use getset::CopyGetters;
-use itertools::Itertools;
 
 use crate::{
     gates::{circuit::CircuitBuilderStage, flex_gate::FlexGateConfigParams},
@@ -110,16 +109,7 @@ impl<F: ScalarField> MultiPhaseCoreManager<F> {
         let total_advice_per_phase =
             self.phase_manager.iter().map(|pm| pm.total_advice()).collect::<Vec<_>>();
 
-        let total_fixed: usize = self
-            .copy_manager
-            .lock()
-            .unwrap()
-            .constant_equalities
-            .iter()
-            .map(|(c, _)| *c)
-            .sorted()
-            .dedup()
-            .count();
+        let total_fixed = self.copy_manager.lock().unwrap().num_distinct_constants();
 
         GateStatistics { total_advice_per_phase, total_fixed }
     }
@@ -159,4 +149,44 @@ pub struct GateStatistics {
     pub total_advice_per_phase: Vec<usize>,
     /// Total distinct constants used
     pub total_fixed: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::halo2_proofs::halo2curves::bn256::Fr;
+
+    #[test]
+    fn statistics_counts_distinct_constants_without_mutating_the_graph() {
+        let mut manager = MultiPhaseCoreManager::<Fr>::new(false);
+        let ctx = manager.main(0);
+        ctx.load_constant(Fr::from(7));
+        ctx.load_constant(Fr::from(3));
+        ctx.load_constant(Fr::from(7));
+        let before = manager
+            .copy_manager
+            .lock()
+            .unwrap()
+            .constant_equalities
+            .iter()
+            .map(|(constant, cell)| (*constant, *cell))
+            .collect::<Vec<_>>();
+
+        let statistics = manager.statistics();
+        assert_eq!(statistics.total_advice_per_phase, [3]);
+        assert_eq!(statistics.total_fixed, 2);
+        assert_eq!(
+            manager
+                .copy_manager
+                .lock()
+                .unwrap()
+                .constant_equalities
+                .iter()
+                .map(|(constant, cell)| (*constant, *cell))
+                .collect::<Vec<_>>(),
+            before
+        );
+
+        manager.clear();
+    }
 }

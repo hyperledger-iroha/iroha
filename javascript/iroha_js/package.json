@@ -68,6 +68,11 @@
       "browser": "./dist/toriiBrowserClient.js",
       "types": "./index.d.ts"
     },
+    "./sumeragi-typed": {
+      "browser": "./dist/sumeragiTyped.js",
+      "import": "./dist/sumeragiTyped.js",
+      "types": "./sumeragi-typed.d.ts"
+    },
     "./norito": {
       "import": "./dist/norito.js",
       "types": "./index.d.ts"
@@ -142,6 +147,9 @@
       ],
       "torii-browser": [
         "./index.d.ts"
+      ],
+      "sumeragi-typed": [
+        "./sumeragi-typed.d.ts"
       ],
       "norito": [
         "./index.d.ts"
@@ -224,6 +232,7 @@
     "ivm-artifact.d.ts",
     "transaction-codec.d.ts",
     "smart-contract-deployment.d.ts",
+    "sumeragi-typed.d.ts",
     "connect.browser.d.ts",
     "nexus-app.d.ts",
     "kotodama-compiler.d.ts",

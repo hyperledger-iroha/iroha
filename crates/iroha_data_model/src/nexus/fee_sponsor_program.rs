@@ -1,4 +1,6 @@
 //! On-chain Nexus fee sponsor program model.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::{AccountId, ParsedAccountId},
     asset::AssetDefinitionId,
@@ -25,10 +27,7 @@ pub enum FeeSponsorProgramIdParseError {
 }
 /// Stable on-chain identifier for one fee sponsor program.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorProgramId {
     /// Sponsor account that owns the program.
@@ -71,10 +70,7 @@ impl FromStr for FeeSponsorProgramId {
 }
 /// Primary key for one immutable sponsor-program revision.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorProgramRevisionKey {
     /// Program owning the immutable revision.
@@ -94,10 +90,7 @@ impl FeeSponsorProgramRevisionKey {
 }
 /// Consensus-visible lifecycle of a fee sponsor program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "state", content = "value", rename_all = "snake_case")]
 pub enum FeeSponsorProgramLifecycle {
     /// Program is being provisioned and has never sponsored transactions.
@@ -113,10 +106,7 @@ pub enum FeeSponsorProgramLifecycle {
 }
 /// Accounts eligible to use a fee sponsor program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "mode", content = "value", rename_all = "snake_case")]
 pub enum FeeSponsorEligibility {
     /// Only explicitly enrolled accounts may use the program.
@@ -126,10 +116,7 @@ pub enum FeeSponsorEligibility {
 }
 /// Effect of a sponsor rule when it matches a signed operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "effect", content = "value", rename_all = "snake_case")]
 pub enum FeeSponsorRuleEffect {
     /// Permit the matched operation unless a deny rule also matches it.
@@ -139,10 +126,7 @@ pub enum FeeSponsorRuleEffect {
 }
 /// Exact selector payload for one native instruction.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorNativeInstructionSelector {
     /// Exact registered instruction wire ID.
@@ -154,10 +138,7 @@ pub struct FeeSponsorNativeInstructionSelector {
 }
 /// Multisig operation that a sponsor rule may authorize.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "operation", content = "value", rename_all = "snake_case")]
 pub enum FeeSponsorMultisigOperation {
     /// Propose a transaction for an existing multisig account.
@@ -171,10 +152,7 @@ pub enum FeeSponsorMultisigOperation {
 }
 /// Exact selector for explicitly enumerated multisig operations and target accounts.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorMultisigSelector {
     /// Non-empty, strictly ordered set of explicitly allowed operations.
@@ -184,10 +162,7 @@ pub struct FeeSponsorMultisigSelector {
 }
 /// Exact selector payload for one deployed contract and code version.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorContractSelector {
     /// Exact target address.
@@ -200,10 +175,7 @@ pub struct FeeSponsorContractSelector {
 }
 /// Exact selector payload for one IVM bytecode hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorIvmSelector {
     /// Hash of the signed IVM bytecode.
@@ -211,10 +183,7 @@ pub struct FeeSponsorIvmSelector {
 }
 /// Exact selector for one class of signed transaction operation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(
     tag = "kind",
     content = "value",
@@ -235,10 +204,7 @@ pub enum FeeSponsorRuleSelector {
 }
 /// One stable, ordered sponsor-program rule.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorRule {
     /// Revision-local stable rule identifier used in diagnostics.
@@ -261,10 +227,7 @@ impl FeeSponsorRule {
 }
 /// Deterministic spending limits for one fee asset.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorAssetBudget {
     /// Canonical fee asset governed by these limits.
@@ -284,10 +247,7 @@ pub struct FeeSponsorAssetBudget {
 }
 /// Immutable rules and budgets for one sponsor-program revision.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorProgramRevision {
     /// Program owning this revision.
@@ -542,10 +502,7 @@ impl FeeSponsorProgramRevision {
 }
 /// Persisted delayed activation of one immutable sponsor-program revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorProgramActivation {
     /// Revision that will become active.
@@ -557,10 +514,7 @@ pub struct FeeSponsorProgramActivation {
 }
 /// Sponsor-owned lifecycle record for a fee sponsor program.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorProgram {
     /// Stable program identifier.
@@ -598,10 +552,7 @@ impl FeeSponsorProgram {
 }
 /// Primary key for an enrolled sponsor-program beneficiary.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorEnrollmentKey {
     /// Program granting eligibility.
@@ -611,10 +562,7 @@ pub struct FeeSponsorEnrollmentKey {
 }
 /// Persisted sponsor-program enrollment.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorEnrollment {
     /// Enrollment primary key.
@@ -624,10 +572,7 @@ pub struct FeeSponsorEnrollment {
 }
 /// Primary key for one program-isolated fee-asset vault allocation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorVaultKey {
     /// Program owning the allocation.
@@ -637,10 +582,7 @@ pub struct FeeSponsorVaultKey {
 }
 /// Persisted program-isolated vault allocation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorVault {
     /// Vault primary key.
@@ -650,10 +592,7 @@ pub struct FeeSponsorVault {
 }
 /// Block-scoped sponsor budget window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorBlockBudgetWindow {
     /// Consensus block height.
@@ -661,10 +600,7 @@ pub struct FeeSponsorBlockBudgetWindow {
 }
 /// Program-wide epoch sponsor budget window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorProgramEpochBudgetWindow {
     /// Height-derived epoch number.
@@ -672,10 +608,7 @@ pub struct FeeSponsorProgramEpochBudgetWindow {
 }
 /// Beneficiary-scoped epoch sponsor budget window.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorBeneficiaryEpochBudgetWindow {
     /// Height-derived epoch number.
@@ -685,10 +618,7 @@ pub struct FeeSponsorBeneficiaryEpochBudgetWindow {
 }
 /// Deterministic accounting window for a sponsor budget counter.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(
     tag = "kind",
     content = "value",
@@ -705,10 +635,7 @@ pub enum FeeSponsorBudgetWindow {
 }
 /// Key for a durable program budget counter.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorBudgetCounterKey {
     /// Program whose capacity was consumed.
@@ -720,10 +647,7 @@ pub struct FeeSponsorBudgetCounterKey {
 }
 /// Durable amount charged against one sponsor budget counter.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct FeeSponsorBudgetCounter {
     /// Counter primary key.
@@ -733,10 +657,7 @@ pub struct FeeSponsorBudgetCounter {
 }
 /// Funding source recorded by fee receipts and settlement records.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(
     tag = "kind",
     content = "value",
@@ -751,10 +672,7 @@ pub enum FeeDebitSource {
 }
 /// Stable machine-readable reason why sponsor-program admission failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "code", content = "value", rename_all = "snake_case")]
 pub enum FeeRejectionCode {
     /// Signed fee intent is absent or malformed.

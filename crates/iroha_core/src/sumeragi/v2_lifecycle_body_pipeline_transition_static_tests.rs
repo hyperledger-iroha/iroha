@@ -377,7 +377,8 @@ mod static_tests {
     #[test]
     fn combined_recovered_sign_staging_is_two_child_affine_and_inert() {
         let source = include_str!("v2_lifecycle_body_pipeline_transition.rs");
-        let adapter_source = include_str!("v2.rs");
+        let adapter_source =
+            crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
         let registry_source = reviewed_lifecycle_work_registry_source_for_test();
         let registry_recovery_source =
             include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
@@ -866,11 +867,11 @@ mod static_tests {
             );
         }
         for caller_source in [
-            include_str!("v2.rs"),
+            crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
             include_str!("v2_effects.rs"),
             include_str!("v2_runner.rs"),
             include_str!("v2_worker.rs"),
-            include_str!("v2_runtime.rs"),
+            crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test(),
             include_str!("v2_lifecycle_coordinator.rs"),
         ] {
             for unwired in [
@@ -921,11 +922,11 @@ mod static_tests {
             .matches(".persist_exact_staged_successor(")
             .count()
             + [
-                include_str!("v2.rs"),
+                crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
                 include_str!("v2_effects.rs"),
                 include_str!("v2_runner.rs"),
                 include_str!("v2_worker.rs"),
-                include_str!("v2_runtime.rs"),
+                crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test(),
                 include_str!("v2_lifecycle_concrete_admission.rs"),
                 reviewed_lifecycle_work_registry_source_for_test(),
             ]

@@ -310,6 +310,9 @@ impl<'a> DirectRkgOneProverSessionV1<'a> {
         retained
     }
 }
+fn take_ephemeral_owner_v1<T>(slot: &mut Option<T>) -> Result<T, ZkAmsMkheErrorV1> {
+    slot.take().ok_or(ZkAmsMkheErrorV1::ReleaseUnavailable)
+}
 pub(super) fn take_ready_direct_rkg_one_prover_session_v1<'a, R>(
     state: &'a mut ZkAmsMkheCollectivePartyStateV1,
     wrapper: StateOwnedDirectRkgEphemeralMembershipPrecursorV1,
@@ -338,13 +341,11 @@ where
     if binding_identity != bindings.identity_digests()[party_index] {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
-    let ephemeral_owner = state
-        .party_local_rkg_ephemeral_opening
-        .take()
-        .ok_or(ZkAmsMkheErrorV1::ReleaseUnavailable)?;
+    let ephemeral_owner = take_ephemeral_owner_v1(&mut state.party_local_rkg_ephemeral_opening)?;
+    let ephemeral_commitments = ephemeral_owner_commitments_v1(&ephemeral_owner)?;
     if ephemeral_owner.context != expected_context
         || wrapper.membership.context() != expected_context
-        || wrapper.membership.commitments() != ephemeral_owner_commitments_v1(&ephemeral_owner)?
+        || wrapper.membership.commitments() != ephemeral_commitments
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
@@ -368,7 +369,6 @@ where
         (&state.party_local_rkg_ephemeral_creation_mask, digit_bit),
     )?;
     let persistent_commitments = *persistent_guard.checked_commitments_v1()?;
-    let ephemeral_commitments = ephemeral_owner_commitments_v1(&ephemeral_owner)?;
     Ok(DirectRkgOneProverSessionV1 {
         persistent_guard,
         ephemeral_owner,

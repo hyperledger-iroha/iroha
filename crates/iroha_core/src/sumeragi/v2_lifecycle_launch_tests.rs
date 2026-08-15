@@ -322,10 +322,11 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         include_str!("v2_lifecycle_launch.rs"),
         include_str!("v2_lifecycle_preactivation.rs")
     );
-    let adapter_source = concat!(
-        include_str!("v2.rs"),
-        include_str!("v2_pending_kura_recovery.rs")
-    );
+    let adapter_source = [
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
+        include_str!("v2_pending_kura_recovery.rs"),
+    ]
+    .concat();
     let safety_wal_source = include_str!("safety_wal.rs");
     let kura_source = concat!(
         include_str!("../kura.rs"),
@@ -334,7 +335,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let adjacent_store_source = include_str!("serviced_candidate_store.rs");
     let worker_source = include_str!("v2_worker.rs");
     let effects_source = include_str!("v2_effects.rs");
-    let runtime_source = include_str!("v2_runtime.rs");
+    let runtime_source =
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let runner_source = include_str!("v2_runner.rs");
     let lifecycle_run_inner_source = include_str!("v2_runner/lifecycle_run_inner.rs");
     let runner_authority_source = concat!(

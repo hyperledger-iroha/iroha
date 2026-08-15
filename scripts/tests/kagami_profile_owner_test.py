@@ -93,9 +93,9 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
         "--cargo-target-dir",
         str(target),
         "--cargo-lock-size",
-        "321032",
+        "315333",
         "--cargo-lock-sha256",
-        "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79",
+        "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222",
     ]
 
 
@@ -272,10 +272,12 @@ def test_post_manifest_has_two_disjoint_owners_and_no_nexus_registration() -> No
     assert dev.isdisjoint(taira)
     assert all("iroha3-nexus" not in output for output in dev | taira)
     for owner in owners.values():
-        assert "Cargo.lock" not in owner["inputs"]
+        assert "Cargo.lock" in owner["inputs"]
         assert "kagami_profile_owner.py" in owner["generator"]
         assert "--write" in owner["generator"]
         assert "--check" in owner["check"]
         assert "--stage-a" in owner["check"] and "--stage-b" in owner["check"]
-        assert "--cargo-lock-size 321032" in owner["generator"]
-        assert "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" in owner["generator"]
+        assert "--cargo-lock-size 315333" in owner["generator"]
+        assert "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222" in owner["generator"]
+        assert "--cargo-lock-size 315333" in owner["check"]
+        assert "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222" in owner["check"]

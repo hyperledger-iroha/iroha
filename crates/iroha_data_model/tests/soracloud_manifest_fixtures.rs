@@ -311,6 +311,7 @@ fn expected_deployment_bundle() -> SoraDeploymentBundleV1 {
 fn expected_inrou_http_deployment_bundle() -> SoraDeploymentBundleV1 {
     let mut container = expected_container_manifest();
     container.runtime = SoraContainerRuntimeV1::Inrou;
+    container.entrypoint = "/app/bin/service".to_string();
     container.inrou = Some(
         json::from_str::<SoraInrouManifestV1>(
             r#"{
@@ -892,6 +893,10 @@ fn container_manifest_fixture_rejects_inrou_runtime_without_metadata() {
     assert!(
         object.insert("runtime".to_string(), runtime).is_some(),
         "fixture should declare `runtime` before the runtime policy check"
+    );
+    object.insert(
+        "entrypoint".to_string(),
+        json::Value::String("/app/bin/service".to_string()),
     );
     let decoded: SoraContainerManifestV1 =
         json::from_value(value).expect("Inrou container fixture without metadata must decode");

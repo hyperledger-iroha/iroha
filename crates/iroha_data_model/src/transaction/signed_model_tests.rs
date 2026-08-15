@@ -642,15 +642,23 @@ fn assert_canonical_privacy_intent_kat(
     let mut normalized = payload.clone();
     normalized.instructions = normalize_privacy_executable_for_intent_v1(&normalized.instructions)
         .expect("canonical normalized executable");
-    let normalized_bytes = norito::to_bytes(&normalized).expect("canonical normalized payload");
+    let normalized_bytes =
+        norito::encode_canonical(&normalized).expect("canonical normalized payload");
+    assert_eq!(
+        normalized_bytes,
+        payload
+            .privacy_transaction_intent_projection_bytes_v1()
+            .expect("production canonical projection"),
+        "manual normalization must match the production canonical projection"
+    );
     assert_eq!(
         normalized_bytes.len(),
-        14_187,
+        50_201,
         "the canonical fixture wire length is part of the cross-SDK KAT"
     );
     assert_eq!(
         hex::encode(expected.as_bytes()),
-        "76fe315dd9a739d4a9b18f92959a258bbcaa2f420997972680416f7edb123552",
+        "72e54af5346fdba4d311f23bfcf6318b13a6d39a21e8bae5e8da661f1b31a170",
         "canonical privacy transaction-intent V1 digest"
     );
 }
@@ -953,7 +961,7 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
         .expect("derive Vega draft intent");
     assert_eq!(
         hex::encode(expected.as_bytes()),
-        "88a32ad2633e7740cdc680972dc738ce8d94a60f774cc4e8a4286f5a99f4fc66",
+        "6d058852d1270fccfea6fc72fcdf588043f563e9bb98a54fdd97df2374933384",
         "canonical Vega two-phase transaction-intent projection KAT"
     );
     let mut changed_hdev = payload.clone();

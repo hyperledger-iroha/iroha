@@ -40,7 +40,7 @@ use norito::{
     json,
 };
 use norito_codegen_exporter::AliasSetupFixtureBytes;
-const PLAN_NETWORK_ID_V1_JSON: &str =
+const PLAN_ID_JSON: &str =
     r#""hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0""#;
 const FIXTURE_PAYMENT_ASSET: &str = "4rPeAP6jAjiLVZThZYwwPRBuQagt";
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -168,7 +168,7 @@ fn build_fixture() -> Result<AliasSetupFixtureV1> {
         CompareAndSetPrimaryAccountAlias::new(first.clone(), None, Some(resolved_alias.clone()))
             .into(),
     )?;
-    let network_id = json::from_str::<NetworkId>(PLAN_NETWORK_ID_V1_JSON)
+    let network_id = json::from_str::<NetworkId>(PLAN_ID_JSON)
         .wrap_err("parse canonical alias-plan NetworkId")?;
     let setup_plan = AliasTransactionPlanV1::new(AliasTransactionPlanBodyV1 {
         version: AliasTransactionPlanBodyV1::VERSION,
@@ -437,7 +437,7 @@ fn validate_fixture(fixture: &AliasSetupFixtureV1) -> Result<()> {
             "setup_account_alias_create" => {
                 let decoded = AliasTransactionPlanBodyV1::decode(&mut body_slice)
                     .wrap_err("decode alias setup plan body")?;
-                if decoded.network_id.to_string() != PLAN_NETWORK_ID_V1 || decoded.encode() != body
+                if json::to_string(&decoded.network_id)? != PLAN_ID_JSON || decoded.encode() != body
                 {
                     bail!("alias setup plan body is not canonical");
                 }
@@ -445,7 +445,7 @@ fn validate_fixture(fixture: &AliasSetupFixtureV1) -> Result<()> {
             "renew_account_alias" => {
                 let decoded = AliasLifecycleTransactionPlanBodyV1::decode(&mut body_slice)
                     .wrap_err("decode alias lifecycle plan body")?;
-                if decoded.network_id.to_string() != PLAN_NETWORK_ID_V1 || decoded.encode() != body
+                if json::to_string(&decoded.network_id)? != PLAN_ID_JSON || decoded.encode() != body
                 {
                     bail!("alias lifecycle plan body is not canonical");
                 }

@@ -1259,7 +1259,7 @@ impl ConcreteLifecycleWorkRegistry {
         &'registry mut self,
         verified: &VerifiedHeightContext,
         ledger: &super::ledger::LifecycleLedgerV1,
-        projection: RecoveredDecisionApplyStagedStorageV1,
+        projection: Box<RecoveredDecisionApplyStagedStorageV1>,
         effects: Vec<AdapterEffect>,
     ) -> Result<
         (
@@ -1275,17 +1275,17 @@ impl ConcreteLifecycleWorkRegistry {
                 effects,
             ));
         }
-        let (restaged, apply_ordinal, _) = match ledger.stage_recovered_decision_apply(&projection)
-        {
-            Ok(staged) => staged,
-            Err(_) => {
-                return Err(RecoveredDecisionApplyInstallError::projection(
-                    "recovered Decision Apply ledger lineage is not exact",
-                    projection,
-                    effects,
-                ));
-            }
-        };
+        let (restaged, apply_ordinal, _) =
+            match ledger.stage_recovered_decision_apply(projection.as_ref()) {
+                Ok(staged) => staged,
+                Err(_) => {
+                    return Err(RecoveredDecisionApplyInstallError::projection(
+                        "recovered Decision Apply ledger lineage is not exact",
+                        projection,
+                        effects,
+                    ));
+                }
+            };
         if restaged != *ledger {
             return Err(RecoveredDecisionApplyInstallError::projection(
                 "recovered Decision Apply prospective ledger is incomplete",
@@ -1312,7 +1312,7 @@ impl ConcreteLifecycleWorkRegistry {
                 effects,
             ));
         };
-        let (adapter, carrier) = match projection.into_registry_carrier(
+        let authority = match projection.into_registry_carrier(
             RecoveredDecisionApplyRegistryProjectionPermit::new(),
             verified,
             effects,
@@ -1326,14 +1326,48 @@ impl ConcreteLifecycleWorkRegistry {
                 ));
             }
         };
-        let digest = carrier.installed_digest();
-        if !carrier.validates(verified) || self.entries.contains_key(&address) {
+        self.validate_recovered_decision_apply_carrier(verified, address, authority)
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn validate_recovered_decision_apply_carrier<'registry>(
+        &'registry mut self,
+        verified: &VerifiedHeightContext,
+        address: ConcreteWorkAddress,
+        authority: Box<(
+            ProductionLifecycleAdapterStartupV1,
+            RecoveredDecisionApplyRegistryCarrierV1,
+        )>,
+    ) -> Result<
+        (
+            ProductionLifecycleAdapterStartupV1,
+            InstalledRecoveredDecisionApplyRegistryCut<'registry>,
+        ),
+        RecoveredDecisionApplyInstallError,
+    > {
+        let digest = authority.1.installed_digest();
+        if !authority.1.validates(verified) || self.entries.contains_key(&address) {
             return Err(RecoveredDecisionApplyInstallError::carrier(
                 "recovered Decision Apply carrier disagrees with durable lineage",
-                adapter,
-                carrier,
+                authority,
             ));
         }
+        Ok(self.commit_recovered_decision_apply_carrier(address, digest, authority))
+    }
+    #[inline(never)]
+    fn commit_recovered_decision_apply_carrier<'registry>(
+        &'registry mut self,
+        address: ConcreteWorkAddress,
+        digest: LifecycleDigest,
+        authority: Box<(
+            ProductionLifecycleAdapterStartupV1,
+            RecoveredDecisionApplyRegistryCarrierV1,
+        )>,
+    ) -> (
+        ProductionLifecycleAdapterStartupV1,
+        InstalledRecoveredDecisionApplyRegistryCut<'registry>,
+    ) {
+        let (adapter, carrier) = *authority;
         let work = ConcreteLifecycleWork {
             digest,
             kind: ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(
@@ -1347,14 +1381,14 @@ impl ConcreteLifecycleWorkRegistry {
         debug_assert!(work.validates_at(address));
         let previous = self.entries.insert(address, work);
         debug_assert!(previous.is_none());
-        Ok((
+        (
             adapter,
             InstalledRecoveredDecisionApplyRegistryCut {
                 registry: self,
                 address,
                 digest,
             },
-        ))
+        )
     }
     /// Install the startup Serve/Producer batch only after proving the exact
     /// prospective Fetch/(optional Sign)/Serve/Producer census. Rejection is

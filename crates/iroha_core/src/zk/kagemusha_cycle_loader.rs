@@ -1449,6 +1449,18 @@ where
         )],
         constant: Inner<C>,
     ) -> Self::AssignedInteger {
+        // `Halo2Loader` lowers one assigned-by-assigned scalar multiplication to this exact
+        // shape. `FpChip::mul` already returns a proper-limb `ProperCrtUint` with the same residue
+        // invariant as the old trailing carry operations, so multiplying that result by one and
+        // adding zero only rematerializes it into new cells. Removing those identity operations
+        // intentionally changes the circuit/VK shape; every authenticated Kagemusha artifact must
+        // be regenerated when this branch changes.
+        if let [(coefficient, lhs, rhs)] = values
+            && *coefficient == Inner::<C>::ONE
+            && constant == Inner::<C>::ZERO
+        {
+            return self.mul(ctx.main(), lhs.deref().clone(), rhs.deref().clone());
+        }
         let ctx = ctx.main();
         let mut sum = self.field.load_constant(ctx, constant);
         for (coefficient, lhs, rhs) in values {
@@ -2314,6 +2326,340 @@ mod tests {
         builder.calculate_params(Some(9));
         builder
     }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum ScalarProductImplementation {
+        Instructions,
+        DirectMul,
+        Legacy,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct ScalarProductInventory {
+        advice_cells: usize,
+        selectors: usize,
+        lookup_rows: usize,
+        advice_equalities: usize,
+        constant_equalities: usize,
+    }
+
+    impl ScalarProductInventory {
+        fn checked_delta(self, before: Self) -> Self {
+            Self {
+                advice_cells: self
+                    .advice_cells
+                    .checked_sub(before.advice_cells)
+                    .expect("advice inventory is monotonic"),
+                selectors: self
+                    .selectors
+                    .checked_sub(before.selectors)
+                    .expect("selector inventory is monotonic"),
+                lookup_rows: self
+                    .lookup_rows
+                    .checked_sub(before.lookup_rows)
+                    .expect("lookup inventory is monotonic"),
+                advice_equalities: self
+                    .advice_equalities
+                    .checked_sub(before.advice_equalities)
+                    .expect("advice equality inventory is monotonic"),
+                constant_equalities: self
+                    .constant_equalities
+                    .checked_sub(before.constant_equalities)
+                    .expect("constant equality inventory is monotonic"),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct ScalarProductTrace<F> {
+        operation_inventory: ScalarProductInventory,
+        value: BigUint,
+        limb_values: Vec<F>,
+        native_value: F,
+        limb_cells: Vec<Option<halo2_base::ContextCell>>,
+        native_cell: Option<halo2_base::ContextCell>,
+    }
+
+    fn scalar_product_inventory<F: BigPrimeField>(
+        builder: &BaseCircuitBuilder<F>,
+        ctx: &SinglePhaseCoreManager<F>,
+    ) -> ScalarProductInventory {
+        let copy_manager = builder
+            .core()
+            .copy_manager
+            .lock()
+            .expect("scalar product copy manager");
+        ScalarProductInventory {
+            advice_cells: ctx.threads.iter().map(|thread| thread.advice_len()).sum(),
+            selectors: ctx
+                .threads
+                .iter()
+                .map(|thread| thread.selector.iter().filter(|selected| **selected).count())
+                .sum(),
+            lookup_rows: builder
+                .lookup_manager()
+                .iter()
+                .map(|manager| manager.total_rows())
+                .sum(),
+            advice_equalities: copy_manager.advice_equalities.len(),
+            constant_equalities: copy_manager.constant_equalities.len(),
+        }
+    }
+
+    fn scalar_product_builder<C>(
+        implementation: ScalarProductImplementation,
+        terms: &[(Inner<C>, u64, u64)],
+        constant: Inner<C>,
+        expected_adjustment: Inner<C>,
+    ) -> (BaseCircuitBuilder<Outer<C>>, ScalarProductTrace<Outer<C>>)
+    where
+        C: CurveAffineExt,
+        Outer<C>: BigPrimeField,
+        Inner<C>: BigPrimeField,
+    {
+        let mut builder = BaseCircuitBuilder::<Outer<C>>::new(false)
+            .use_k(TEST_K)
+            .use_lookup_bits(TEST_K - 1);
+        let range = builder.range_chip();
+        let field = FpChip::<Outer<C>, Inner<C>>::new(&range, LIMB_BITS, LIMBS);
+        let chip = PastaCycleScalarChip::<C>::new(&field);
+        let mut ctx = mem::take(builder.pool(0));
+        let assigned_terms = terms
+            .iter()
+            .map(|(coefficient, lhs, rhs)| {
+                (
+                    *coefficient,
+                    chip.assign_integer(&mut ctx, Inner::<C>::from(*lhs)),
+                    chip.assign_integer(&mut ctx, Inner::<C>::from(*rhs)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let assigned_terms = assigned_terms
+            .iter()
+            .map(|(coefficient, lhs, rhs)| (*coefficient, lhs, rhs))
+            .collect::<Vec<_>>();
+        let before = scalar_product_inventory(&builder, &ctx);
+        let result = match implementation {
+            ScalarProductImplementation::Instructions => {
+                chip.sum_products_with_coeff_and_const(&mut ctx, &assigned_terms, constant)
+            }
+            ScalarProductImplementation::DirectMul => {
+                let [(_, lhs, rhs)] = assigned_terms.as_slice() else {
+                    panic!("direct multiplication fixture requires exactly one term");
+                };
+                chip.mul(ctx.main(), (*lhs).clone(), (*rhs).clone())
+            }
+            ScalarProductImplementation::Legacy => {
+                let ctx = ctx.main();
+                let mut sum = chip.field.load_constant(ctx, constant);
+                for (coefficient, lhs, rhs) in &assigned_terms {
+                    let product = chip.mul(ctx, (*lhs).clone(), (*rhs).clone());
+                    let coefficient = chip.field.load_constant(ctx, *coefficient);
+                    let term = chip.mul(ctx, product, coefficient);
+                    sum = chip.add(ctx, sum, term);
+                }
+                sum
+            }
+        };
+        let after = scalar_product_inventory(&builder, &ctx);
+        let value = result.value();
+        let limb_values = result
+            .limbs()
+            .iter()
+            .map(|limb| *limb.value())
+            .collect::<Vec<_>>();
+        let native_value = *result.native().value();
+        let trace = ScalarProductTrace {
+            operation_inventory: after.checked_delta(before),
+            value: value.clone(),
+            limb_values: limb_values.clone(),
+            native_value,
+            limb_cells: result.limbs().iter().map(|limb| limb.cell).collect(),
+            native_cell: result.native().cell,
+        };
+        let expected = terms.iter().fold(constant, |sum, (coefficient, lhs, rhs)| {
+            sum + *coefficient * Inner::<C>::from(*lhs) * Inner::<C>::from(*rhs)
+        });
+        assert_eq!(value, fe_to_biguint(&expected));
+        assert_eq!(limb_values, decompose_biguint(&value, LIMBS, LIMB_BITS));
+        let reduced_native = &value % modulus::<Outer<C>>();
+        assert_eq!(native_value, biguint_to_fe::<Outer<C>>(&reduced_native));
+        let expected = chip.assign_constant(&mut ctx, expected + expected_adjustment);
+        chip.assert_equal(&mut ctx, &result, &expected);
+        *builder.pool(0) = ctx;
+        builder.calculate_params(Some(9));
+        (builder, trace)
+    }
+
+    #[test]
+    fn one_product_identity_specialization_is_exactly_one_proper_crt_mul() {
+        fn check<C>()
+        where
+            C: CurveAffineExt,
+            Outer<C>: BigPrimeField,
+            Inner<C>: BigPrimeField,
+        {
+            let terms = [(Inner::<C>::ONE, 7, 9)];
+            let (specialized, specialized_trace) = scalar_product_builder::<C>(
+                ScalarProductImplementation::Instructions,
+                &terms,
+                Inner::<C>::ZERO,
+                Inner::<C>::ZERO,
+            );
+            let (_, direct_trace) = scalar_product_builder::<C>(
+                ScalarProductImplementation::DirectMul,
+                &terms,
+                Inner::<C>::ZERO,
+                Inner::<C>::ZERO,
+            );
+            let (_, legacy_trace) = scalar_product_builder::<C>(
+                ScalarProductImplementation::Legacy,
+                &terms,
+                Inner::<C>::ZERO,
+                Inner::<C>::ZERO,
+            );
+            assert_eq!(
+                specialized_trace, direct_trace,
+                "the identity specialization must produce the exact direct-mul cells and ProperCrt representation"
+            );
+            assert_eq!(
+                legacy_trace.operation_inventory.advice_cells
+                    - specialized_trace.operation_inventory.advice_cells,
+                569
+            );
+            assert_eq!(
+                legacy_trace.operation_inventory.selectors
+                    - specialized_trace.operation_inventory.selectors,
+                165
+            );
+            assert_eq!(
+                legacy_trace.operation_inventory.constant_equalities
+                    - specialized_trace.operation_inventory.constant_equalities,
+                202
+            );
+            assert_eq!(
+                legacy_trace.operation_inventory.advice_equalities
+                    - specialized_trace.operation_inventory.advice_equalities,
+                102
+            );
+            assert_eq!(
+                legacy_trace.operation_inventory.lookup_rows
+                    - specialized_trace.operation_inventory.lookup_rows,
+                120
+            );
+            MockProver::run(specialized.config_params.k as u32, &specialized, vec![])
+                .expect("specialized scalar-product mock prover")
+                .assert_satisfied();
+        }
+        check::<EqAffine>();
+        check::<EpAffine>();
+    }
+
+    #[test]
+    fn scalar_product_nonidentity_shapes_retain_the_legacy_path() {
+        fn check<C>()
+        where
+            C: CurveAffineExt,
+            Outer<C>: BigPrimeField,
+            Inner<C>: BigPrimeField,
+        {
+            let cases = [
+                (Vec::new(), Inner::<C>::ZERO),
+                (Vec::new(), Inner::<C>::from(5)),
+                (vec![(Inner::<C>::ZERO, 7, 9)], Inner::<C>::ZERO),
+                (vec![(Inner::<C>::from(2), 7, 9)], Inner::<C>::ZERO),
+                (vec![(Inner::<C>::ONE, 7, 9)], Inner::<C>::from(5)),
+                (
+                    vec![(Inner::<C>::ONE, 7, 9), (Inner::<C>::from(3), 11, 13)],
+                    Inner::<C>::ZERO,
+                ),
+            ];
+            for (terms, constant) in cases {
+                let (instructions, instructions_trace) = scalar_product_builder::<C>(
+                    ScalarProductImplementation::Instructions,
+                    &terms,
+                    constant,
+                    Inner::<C>::ZERO,
+                );
+                let (legacy, legacy_trace) = scalar_product_builder::<C>(
+                    ScalarProductImplementation::Legacy,
+                    &terms,
+                    constant,
+                    Inner::<C>::ZERO,
+                );
+                assert_eq!(instructions_trace, legacy_trace);
+                assert_eq!(instructions.config_params.k, legacy.config_params.k);
+                assert_eq!(
+                    instructions.config_params.num_advice_per_phase,
+                    legacy.config_params.num_advice_per_phase
+                );
+                assert_eq!(
+                    instructions.config_params.num_fixed,
+                    legacy.config_params.num_fixed
+                );
+                assert_eq!(
+                    instructions.config_params.num_lookup_advice_per_phase,
+                    legacy.config_params.num_lookup_advice_per_phase
+                );
+                assert_eq!(
+                    instructions.config_params.lookup_bits,
+                    legacy.config_params.lookup_bits
+                );
+                assert_eq!(
+                    instructions.config_params.num_instance_columns,
+                    legacy.config_params.num_instance_columns
+                );
+            }
+        }
+        check::<EqAffine>();
+        check::<EpAffine>();
+    }
+
+    #[test]
+    fn one_product_identity_specialization_rejects_a_wrong_claimed_result() {
+        let terms = [(Fp::ONE, 7, 9)];
+        let (invalid, _) = scalar_product_builder::<EqAffine>(
+            ScalarProductImplementation::Instructions,
+            &terms,
+            Fp::ZERO,
+            Fp::ONE,
+        );
+        assert!(
+            MockProver::run(invalid.config_params.k as u32, &invalid, vec![])
+                .expect("well-formed but false specialized scalar-product circuit")
+                .verify()
+                .is_err(),
+            "the direct product must remain equality-constrained to its claimed result"
+        );
+    }
+
+    #[test]
+    fn one_product_identity_specialization_has_a_valid_real_ipa_proof() {
+        let terms = [(Fq::ONE, 7, 9)];
+        let (circuit, _) = scalar_product_builder::<EpAffine>(
+            ScalarProductImplementation::Instructions,
+            &terms,
+            Fq::ZERO,
+            Fq::ZERO,
+        );
+        let proof_circuit = circuit.deep_clone();
+        let params = crate::zk::halo2_backend::params_new(circuit.config_params.k as u32);
+        let vk = crate::zk::halo2_backend::keygen_vk(&params, &circuit)
+            .expect("specialized scalar-product verifier key");
+        let pk = crate::zk::halo2_backend::keygen_pk(&params, vk, &circuit)
+            .expect("specialized scalar-product proving key");
+        let no_instances: [&[Fp]; 0] = [];
+        let proof = crate::zk::halo2_backend::create_ipa_proof(
+            &params,
+            &pk,
+            &[proof_circuit],
+            &[&no_instances],
+        )
+        .expect("specialized scalar-product proof");
+        crate::zk::halo2_backend::verify_ipa_proof_no_instances(&params, pk.get_vk(), &proof)
+            .expect("specialized scalar-product proof verifies");
+    }
+
     #[test]
     fn reciprocal_residual_is_gated_only_by_the_assigned_selector() {
         let generator = EqAffine::generator();
@@ -2757,7 +3103,7 @@ mod tests {
                 .is_none(),
             "encoding one source must not materialize an equal-shaped neighbor"
         );
-        let cells_after_first = ctx.main().advice.len();
+        let cells_after_first = ctx.main().advice_len();
         let repeated = chip
             .assign_derived_encoding(&mut ctx, &generator)
             .expect("cached generator transcript encoding");
@@ -2767,7 +3113,7 @@ mod tests {
             "the cache must return the original constrained residue cells"
         );
         assert_eq!(
-            ctx.main().advice.len(),
+            ctx.main().advice_len(),
             cells_after_first,
             "re-encoding one source index must assign no additional cells"
         );

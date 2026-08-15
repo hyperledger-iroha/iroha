@@ -5,7 +5,10 @@
 //! governance state transitions (publish → activate → deprecate → withdraw) and advertise the
 //! hashes that wallets and validators must verify before accepting an upgrade.
 #[cfg(feature = "json")]
-use crate::json_helpers::fixed_bytes;
+use crate::{
+    DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
+    DeriveJsonSerialize as DeriveJsonSer, json_helpers::fixed_bytes,
+};
 use core::fmt::{self, Display, Formatter};
 use iroha_crypto::kex::{KeyExchangeScheme as _, X25519Sha256};
 use iroha_schema::IntoSchema;
@@ -346,14 +349,7 @@ impl norito::json::JsonDeserialize for ConfidentialStatus {
 /// Digest advertising the active confidential feature set (verifier keys, parameters, and policy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize,
-        crate::DeriveFastJson
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct ConfidentialFeatureDigest {
@@ -422,14 +418,7 @@ pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
     );
 /// Identifier for confidential parameter registries (Pedersen/Poseidon).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize,
-        crate::DeriveFastJson
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct ConfidentialParamsId {
     value: u32,
@@ -464,14 +453,7 @@ impl Display for ConfidentialParamsId {
 /// Descriptor for a Pedersen parameter set tracked on-ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize,
-        crate::DeriveFastJson
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct PedersenParams {
     /// Identifier referenced by shielded assets and proofs.
@@ -510,14 +492,7 @@ impl PedersenParams {
 /// Descriptor for a Poseidon parameter set tracked on-ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize,
-        crate::DeriveFastJson
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct PoseidonParams {
     /// Identifier referenced by shielded assets and proofs.

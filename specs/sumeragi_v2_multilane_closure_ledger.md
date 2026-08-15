@@ -50,9 +50,11 @@ statements in this document describe the mutable development checkout. They are
 inventories and source-consistency observations, not immutable-candidate
 execution or release receipts.
 
-## 2026-08-15 current merge audit
+## 2026-08-15 historical merge-audit snapshot
 
-- The checkout is an uncommitted merge with `HEAD`
+- This dated snapshot is retained as historical evidence; it is not the current
+  workspace identity or budget receipt. The checkout was an uncommitted merge
+  with `HEAD`
   `69f5e617e9cef11cb45d519396d89b22a7317ae0` and `MERGE_HEAD`
   `51deea83409635f99ce2fcbb6a983b7cca18b99b`, not a signed immutable
   candidate. Historical snapshots below are not current receipts.
@@ -1740,14 +1742,14 @@ The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The staged recursive closure contains exactly
 1,397 grouped and 1,397 diagnostics records. Its grouped and diagnostics
 suite-source SHA-256 values are
-`a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
+`3328f7d22e18ebe586f2d4f356a1dd1766d342f88bea91e5b136b42ecd155899`
 and
-`45bac77032e3661bfd065ba287a6794587c0ce7bf2b62376ab7828713c00d849`.
+`7c7e37624cb716684f20e4b185b686a7cf8e2870ea5c050229aa1e5cbe6d5a27`.
 The checked-in grouped fixture has SHA-256
-`af4b7092da0f0763c7e8d1bc16c5c084f49fbb096496b2dd9291c07e36bf6883`.
+`65187ba2cb0ce05d13fa59bd83062e9b2c1d026d7bcbf986de9464cfd6cc1bb3`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
-`aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
+`79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The source-bound corridor now requires two disjoint Rust fixture generations,
 and both JavaScript SDK harnesses require two byte-identical complete
 distribution builds. Exact-five OpenAPI replay is source- and receipt-bound to
@@ -1799,7 +1801,7 @@ the positive `quorum_certificate_merge_carrier` row and negative
 `execution_commitment_missing_merge_carrier_field` rows. The checked-in
 `fixtures/sumeragi_v2/wire_v2.tsv` is currently a 48-line
 mutable-development artifact containing 44 data rows with SHA-256
-`aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
+`79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The static release binding directly seals its header and all three row keys,
 the Rust generator output seam, the Rust `include_str!` consumer and its two
 positive/negative test names, the Swift/Kotlin/Java wire consumer suites, the
@@ -2037,13 +2039,13 @@ grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The staged
 closure contains exactly 1,397 records for each suite, with grouped and
 diagnostics suite-source SHA-256 values
-`a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
+`3328f7d22e18ebe586f2d4f356a1dd1766d342f88bea91e5b136b42ecd155899`
 and
-`45bac77032e3661bfd065ba287a6794587c0ce7bf2b62376ab7828713c00d849`.
+`7c7e37624cb716684f20e4b185b686a7cf8e2870ea5c050229aa1e5cbe6d5a27`.
 The current grouped JSON and wire TSV SHA-256 values are
-`af4b7092da0f0763c7e8d1bc16c5c084f49fbb096496b2dd9291c07e36bf6883`
+`65187ba2cb0ce05d13fa59bd83062e9b2c1d026d7bcbf986de9464cfd6cc1bb3`
 and
-`aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
+`79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 Those are development fixture inventories, not SDK results. The changed
 JavaScript production roots require fresh deterministic source/distribution
 regeneration from a clean exact candidate, as do the five OpenAPI artifacts.

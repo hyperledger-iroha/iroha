@@ -2873,13 +2873,11 @@ pub(crate) fn decode_packed_instruction_payload<T>(
     bytes: &[u8],
 ) -> Result<(T, usize), norito::core::Error>
 where
-    T: norito::codec::Decode,
+    T: norito::codec::Decode + norito::core::NoritoSerialize,
 {
-    let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-    let mut cursor = std::io::Cursor::new(bytes);
-    let decoded = <T as norito::codec::Decode>::decode(&mut cursor)?;
-    let used =
-        usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
+    // The headerless `Decode` entry point resets layout flags to the V1 defaults. Packed
+    // instruction payloads must instead retain the flags advertised by their enclosing frame.
+    let (decoded, used) = norito::core::decode_field_canonical::<T>(bytes)?;
     if used != bytes.len() {
         return Err(norito::core::Error::LengthMismatch);
     }

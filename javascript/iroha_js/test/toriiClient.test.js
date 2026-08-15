@@ -19,8 +19,8 @@ import {
   buildSorafsOrderbookEventsWebSocketUrl,
   statusLivenessElapsedMs,
   isStatusQueueStalled,
-  __sumeragiNativeAmxTestHelpers,
 } from "../src/toriiClient.js";
+import { __sumeragiNativeAmxTestHelpers } from "../src/sumeragiTyped.js";
 import { ToriiClient as DistToriiClient } from "../dist/toriiClient.js";
 import {
   resolveToriiClientConfig,

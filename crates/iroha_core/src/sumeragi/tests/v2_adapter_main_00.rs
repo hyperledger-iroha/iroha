@@ -591,6 +591,7 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         view: 0,
     };
     let mut proposal_subject = subject(0x72);
+    proposal_subject.parent_block_hash = Some(parent_subject.block_hash);
     let proposal_body = b"parent-auth-body".to_vec();
     proposal_subject.payload_hash = Hash::new(&proposal_body);
     let manifest = encode_payload(&successor, proposal_round, proposal_subject, &proposal_body)
@@ -618,7 +619,7 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
     let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("successor-safety.wal"),
         verified_successor.clone(),
-        None,
+        Some(proposer),
         reducer::Generation::new(2),
         [0x62; 32],
         fingerprints(),

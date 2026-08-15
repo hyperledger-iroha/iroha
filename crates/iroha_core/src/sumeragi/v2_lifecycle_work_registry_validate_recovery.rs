@@ -1677,6 +1677,12 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
 // RECOVERED_WAL_VALIDATE_REGISTRY_DETACH_END
 include!("v2_lifecycle_work_registry_validate_recovery_parent.rs");
 // RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_BEGIN
+#[must_use = "a prepared recovered WAL Validate join still owns its detached authority"]
+struct PreparedRecoveredWalValidateRegistryJoin<'registry> {
+    cut: RecoveredWalValidateRegistryCut<'registry>,
+    completion: DetachedRecoveredValidateCompletion,
+    successor: Option<crate::sumeragi::v2_runtime::RecoveredWalVoteSuccessor>,
+}
 impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
     /// Convert the existing restorable recovery cut into the sole fail-stop
     /// live parent/child reservation after WAL fsync.
@@ -1723,11 +1729,23 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
     /// failure retains every move-only input and requires restart.
     #[allow(clippy::result_large_err)]
     pub(crate) fn join_recovered_vote(
-        mut self,
+        self,
         verified: &VerifiedHeightContext,
         recovered: RecoveredWalVoteSign,
     ) -> Result<
         AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+        RecoveredWalValidateRegistryJoinError<'registry>,
+    > {
+        let prepared = self.prepare_recovered_vote_join(recovered)?;
+        prepared.authenticate(verified)
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn prepare_recovered_vote_join(
+        mut self,
+        recovered: RecoveredWalVoteSign,
+    ) -> Result<
+        Box<PreparedRecoveredWalValidateRegistryJoin<'registry>>,
         RecoveredWalValidateRegistryJoinError<'registry>,
     > {
         let recovered_commitment = recovered.vote().execution_commitment;
@@ -1746,10 +1764,10 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
         });
         if !valid {
             return Err(RecoveredWalValidateRegistryJoinError {
-                failure: RecoveredWalValidateRegistryJoinFailure::InvalidCarrier {
+                failure: Box::new(RecoveredWalValidateRegistryJoinFailure::InvalidCarrier {
                     _cut: self,
                     _recovered: recovered,
-                },
+                }),
             });
         }
         let work = self
@@ -1792,26 +1810,54 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
             Err((pending, recovered)) => {
                 self.work = Some(completion.restore(effect, pending));
                 return Err(RecoveredWalValidateRegistryJoinError {
-                    failure: RecoveredWalValidateRegistryJoinFailure::Projection {
+                    failure: Box::new(RecoveredWalValidateRegistryJoinFailure::Projection {
                         _cut: self,
                         _recovered: recovered,
-                    },
+                    }),
                 });
             }
         };
+        Ok(Box::new(PreparedRecoveredWalValidateRegistryJoin {
+            cut: self,
+            completion,
+            successor: Some(successor),
+        }))
+    }
+}
+impl<'registry> PreparedRecoveredWalValidateRegistryJoin<'registry> {
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn authenticate(
+        mut self: Box<Self>,
+        verified: &VerifiedHeightContext,
+    ) -> Result<
+        AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+        RecoveredWalValidateRegistryJoinError<'registry>,
+    > {
+        let successor = self
+            .successor
+            .take()
+            .expect("prepared recovered WAL join retains one successor");
         let DetachedValidateReplayEvidenceV1::Retained(replay_evidence) =
-            &completion.replay_evidence
+            &self.completion.replay_evidence
         else {
             unreachable!("a live detached Validate completion retains its replay origin")
         };
-        match authenticate_recovered_wal_vote_lifecycle_from_durable_body(
+        let authenticated = authenticate_recovered_wal_vote_lifecycle_from_durable_body(
             verified,
-            &completion.durable_receipt,
+            &self.completion.durable_receipt,
             replay_evidence,
             successor,
-        ) {
+        );
+        let Self {
+            mut cut,
+            completion,
+            successor,
+        } = *self;
+        debug_assert!(successor.is_none());
+        match authenticated {
             Ok(repair) => {
-                let registry = self.registry.take();
+                let registry = cut.registry.take();
                 let registry =
                     registry.expect("recovered WAL join retains its exclusive registry borrow");
                 Ok(AuthenticatedRecoveredWalValidateLifecycleRepair {
@@ -1819,17 +1865,17 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
                     validation: completion,
                     reservation: RecoveredWalValidateRegistryReservation {
                         registry,
-                        parent_address: self.address,
+                        parent_address: cut.address,
                         child: None,
                     },
                 })
             }
             Err(error) => Err(RecoveredWalValidateRegistryJoinError {
-                failure: RecoveredWalValidateRegistryJoinFailure::Lifecycle {
-                    _cut: self,
+                failure: Box::new(RecoveredWalValidateRegistryJoinFailure::Lifecycle {
+                    _cut: cut,
                     _error: error,
                     _completion: completion,
-                },
+                }),
             }),
         }
     }

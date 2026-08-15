@@ -10088,39 +10088,27 @@ def test_effect_capacity_runtime_candidate_fidelity_rejects_mutants(
 ) -> None:
     module = load_checker()
     repo_root, _formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
-    runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
-    source = runtime_path.read_text(encoding="utf-8")
-    items = tuple(
-        item
-        for item in module.rust_items(source, item_name)
-        if item.brace_context == context
-    )
-    assert len(items) == 1
-    item = items[0]
+    providers = []
+    runtime_dir = repo_root / "crates/iroha_core/src/sumeragi"
+    for name in ("v2_runtime.rs", "v2_runtime_effect_ownership_core_impl.rs", "v2_runtime_effect_ownership_rebind_impl.rs"):
+        path = runtime_dir / name
+        source = path.read_text(encoding="utf-8")
+        providers.extend((path, source, item) for item in module.rust_items(source, item_name) if item.brace_context == context and old in item.source)
+    assert len(providers) == 1, (item_name, context, old)
+    runtime_path, source, item = providers[0]
     assert item.source.count(old) == 1, (item_name, old)
     item_start = source.index(item.source)
     item_end = item_start + len(item.source)
     runtime_path.write_text(
-        source[:item_start]
-        + item.source.replace(old, new, 1)
-        + source[item_end:],
+        source[:item_start] + item.source.replace(old, new, 1) + source[item_end:],
         encoding="utf-8",
     )
 
     rebound_seal_items = {
         ("projection_parts", _RUNTIME_BINDING_IMPL),
-        (
-            "resolve_body_pipeline_completion_owner",
-            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
-        ),
-        (
-            "plan_body_pipeline_candidate_terminal",
-            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
-        ),
-        (
-            "commit_body_pipeline_candidate_terminals",
-            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
-        ),
+        ("resolve_body_pipeline_completion_owner", _RUNTIME_PRODUCTION_SERIALIZED_IMPL),
+        ("plan_body_pipeline_candidate_terminal", _RUNTIME_PRODUCTION_SERIALIZED_IMPL),
+        ("commit_body_pipeline_candidate_terminals", _RUNTIME_PRODUCTION_SERIALIZED_IMPL),
     }
     if (item_name, context) in rebound_seal_items:
         mutated_source = runtime_path.read_text(encoding="utf-8")
@@ -21498,6 +21486,18 @@ def test_runtime_clock_reservation_semantics_survive_digest_refresh(
             "timeout_vote_owner_universe: BTreeSet::new(),",
             "freeze_due_clock_owners",
             "freeze_due_clock_owners",
+            "freezing an absolute timeout must atomically bind its physical cut",
+        ),
+        (
+            "freeze_due_clock_owners", "if retransmit.lifecycle_ordinal() > owner.lifecycle_ordinal()", "if retransmit.lifecycle_ordinal() < owner.lifecycle_ordinal()", "freeze_due_clock_owners",
+            "freeze_due_clock_owners", "freezing an absolute timeout must atomically bind its physical cut",
+        ),
+        (
+            "freeze_due_clock_owners", "|| self.dormant_fresh_lifecycle_owners.get(&cache_key) != Some(retransmit)", "|| false", "freeze_due_clock_owners", "freeze_due_clock_owners",
+            "freezing an absolute timeout must atomically bind its physical cut",
+        ),
+        (
+            "freeze_due_clock_owners", "self.retransmit_owner = None;", "let _ = &self.retransmit_owner;", "freeze_due_clock_owners", "freeze_due_clock_owners",
             "freezing an absolute timeout must atomically bind its physical cut",
         ),
         (

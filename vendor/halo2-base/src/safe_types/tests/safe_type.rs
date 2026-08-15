@@ -1,6 +1,6 @@
 use crate::{
     gates::circuit::{builder::RangeCircuitBuilder, CircuitBuilderStage},
-    halo2_proofs::plonk::{keygen_pk, keygen_vk, Assigned},
+    halo2_proofs::plonk::{keygen_pk, keygen_vk},
     halo2_proofs::{halo2curves::bn256::Fr, poly::kzg::commitment::ParamsKZG},
     safe_types::*,
     utils::testing::{check_proof, gen_proof},
@@ -42,7 +42,7 @@ fn test_raw_bytes_to_gen<const BYTES_PER_ELE: usize, const TOTAL_BITS: usize>(
         safe_type_chip.raw_bytes_to::<BYTES_PER_ELE, TOTAL_BITS>(builder.main(0), dummy_raw_bytes);
     // get the offsets of the safe value cells for later 'pranking'
     let safe_value_offsets =
-        safe_value.value().iter().map(|v| v.cell.unwrap().offset).collect::<Vec<_>>();
+        safe_value.value().iter().map(|v| v.cell.unwrap().offset()).collect::<Vec<_>>();
 
     let config_params = builder.calculate_params(Some(9));
     let params = ParamsKZG::setup(k, OsRng);
@@ -64,7 +64,9 @@ fn test_raw_bytes_to_gen<const BYTES_PER_ELE: usize, const TOTAL_BITS: usize>(
             .raw_bytes_to::<BYTES_PER_ELE, TOTAL_BITS>(builder.main(0), assigned_raw_bytes);
         // prank the safe value cells
         for (offset, witness) in safe_value_offsets.iter().zip_eq(outputs) {
-            builder.main(0).advice[*offset] = Assigned::<Fr>::Trivial(*witness);
+            builder
+                .main(0)
+                .replace_advice_with_trivial(*offset, *witness);
         }
         gen_proof(&params, &pk, builder)
     };

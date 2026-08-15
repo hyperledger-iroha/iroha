@@ -99,6 +99,12 @@ MAX_SOURCE_BUNDLE_FILES = 16_384
 MAX_SOURCE_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024
 SOURCE_BUNDLE_DIGEST_SCHEMA = "iroha.taira.private-reset-source.inventory.v1"
 GENESIS_PUBLIC_KEY_RE = re.compile(r"ed0120[0-9A-F]{64}")
+KAGEMUSHA_IMMUTABLE_ACTIVATION_PERMISSIONS = frozenset(
+    {
+        "CanActivateKagemushaRecursiveReleaseV4",
+        "CanManageOfflineDeviceAttestationPolicy",
+    }
+)
 
 
 def fail(message: str) -> NoReturn:
@@ -107,6 +113,89 @@ def fail(message: str) -> NoReturn:
 
 def sha256(path: Path) -> str:
     return stable_hash_path(path).sha256
+
+
+def _require_kagemusha_activation_authority_permissions(
+    genesis_payload: bytes,
+    authority: str | None,
+) -> str:
+    """Require both immutable Kagemusha grants on one explicit genesis authority."""
+
+    if (
+        not isinstance(authority, str)
+        or authority.strip() != authority
+        or not authority
+        or len(authority.encode("utf-8")) > 1024
+        or any(ord(character) < 0x20 for character in authority)
+    ):
+        fail(
+            "--kagemusha-activation-authority must be the exact nonempty canonical "
+            "genesis account id"
+        )
+    genesis = _strict_json(genesis_payload, "authenticated privacy genesis")
+    transactions = genesis.get("transactions")
+    if not isinstance(transactions, list) or not transactions:
+        fail("authenticated privacy genesis has no transaction instruction stream")
+    effective_permissions: set[str] = set()
+    for transaction in transactions:
+        if not isinstance(transaction, dict):
+            fail("authenticated privacy genesis contains a malformed transaction")
+        instructions = transaction.get("instructions")
+        if not isinstance(instructions, list):
+            fail("authenticated privacy genesis contains a malformed instruction stream")
+        for instruction in instructions:
+            if not isinstance(instruction, dict) or len(instruction) != 1:
+                continue
+            operation, body = next(iter(instruction.items()))
+            if operation not in {"Grant", "Revoke"} or not isinstance(body, dict):
+                continue
+            permission = body.get("Permission")
+            if not isinstance(permission, dict) or permission.get("destination") != authority:
+                continue
+            permission_object = permission.get("object")
+            if not isinstance(permission_object, dict):
+                continue
+            name = permission_object.get("name")
+            if (
+                name not in KAGEMUSHA_IMMUTABLE_ACTIVATION_PERMISSIONS
+                or permission_object.get("payload") is not None
+            ):
+                continue
+            if operation == "Grant":
+                effective_permissions.add(name)
+            else:
+                effective_permissions.discard(name)
+    missing = sorted(
+        KAGEMUSHA_IMMUTABLE_ACTIVATION_PERMISSIONS - effective_permissions
+    )
+    if missing:
+        fail(
+            "authenticated privacy genesis does not grant the explicit Kagemusha "
+            f"activation authority `{authority}` both immutable permissions; missing: "
+            + ", ".join(missing)
+        )
+    return authority
+
+
+def _kagemusha_release_policy_sha256(release_root: Path) -> str:
+    artifact_dir = release_root / renderer.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+    qualification_seal = (
+        release_root / renderer.KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
+    )
+    if artifact_dir.exists() or artifact_dir.is_symlink():
+        fail(
+            "Kagemusha artifact directory must not exist before exact-network release generation"
+        )
+    if qualification_seal.exists() or qualification_seal.is_symlink():
+        fail("Kagemusha qualification seal must not exist before genesis signing")
+    policy = release_root / renderer.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    try:
+        return stable_hash_path(policy, max_size=MAX_CONFIG_BYTES).sha256
+    except (OSError, ReleaseArtifactError) as error:
+        raise RuntimeError(
+            "configured Kagemusha release policy must exist as one stable canonical file "
+            "before genesis signing"
+        ) from error
 
 
 def require_minimum_free_space(path: Path, minimum_free_bytes: int) -> int:
@@ -847,6 +936,22 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             workspace_source_manifest_sha256=workspace_source_manifest_sha256,
         )
     )
+    kagemusha_activation_authority: str | None = None
+    kagemusha_release_policy_sha256: str | None = None
+    if args.kagemusha_release_root is not None:
+        kagemusha_activation_authority = (
+            _require_kagemusha_activation_authority_permissions(
+                privacy_payloads["genesis.json"],
+                args.kagemusha_activation_authority,
+            )
+        )
+        kagemusha_release_policy_sha256 = _kagemusha_release_policy_sha256(
+            args.kagemusha_release_root
+        )
+    elif args.kagemusha_activation_authority is not None:
+        fail(
+            "--kagemusha-activation-authority requires --kagemusha-release-root"
+        )
 
     source_snapshot_cleanup = tempfile.TemporaryDirectory(
         prefix="taira-authenticated-source-reset-", dir=output.parent
@@ -899,9 +1004,11 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 rendered,
                 secrets_path=source / "validator-secrets.toml",
                 base_genesis_path=genesis_template,
+                genesis_expected_hash=renderer.GENESIS_EXPECTED_HASH_PLACEHOLDER,
                 bundle_root=output,
                 onboarding_token_hash_tool=token_hash_tool_snapshot,
                 kagemusha_release_root=args.kagemusha_release_root,
+                include_kagemusha_qualification_seal=False,
             )
             if [path.parent.name for path in written] != list(SLUGS):
                 fail(
@@ -954,9 +1061,19 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 signed_genesis=output / "genesis.signed.nrt",
                 temporary_root=temporary,
             )
+            if args.kagemusha_release_root is not None and (
+                _kagemusha_release_policy_sha256(args.kagemusha_release_root)
+                != kagemusha_release_policy_sha256
+            ):
+                fail("Kagemusha release policy changed during genesis signing")
             bound_genesis = read_private_file(
                 rendered / "genesis.json", 64 * 1024 * 1024
             )
+            if kagemusha_activation_authority is not None:
+                _require_kagemusha_activation_authority_permissions(
+                    bound_genesis,
+                    kagemusha_activation_authority,
+                )
             write_private_file(output / "genesis.json", bound_genesis)
 
             written = renderer.render_bundle(
@@ -969,6 +1086,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 bundle_root=output,
                 onboarding_token_hash_tool=token_hash_tool_snapshot,
                 kagemusha_release_root=args.kagemusha_release_root,
+                include_kagemusha_qualification_seal=True,
             )
             if [path.parent.name for path in written] != list(SLUGS):
                 fail("post-signing renderer changed the exact four-validator roster")
@@ -1080,6 +1198,12 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         )
         if args.kagemusha_release_root is not None:
             manifest["kagemusha_release_root"] = str(args.kagemusha_release_root)
+            manifest["kagemusha_release_policy_sha256"] = (
+                kagemusha_release_policy_sha256
+            )
+            manifest["kagemusha_activation_authority"] = (
+                kagemusha_activation_authority
+            )
         atomic_write_json(output / "reset-manifest.json", manifest)
         _chmod_private_tree(output)
         _require_exact_names(output, OUTPUT_TOP_LEVEL_NAMES, "fresh signed reset")
@@ -1107,6 +1231,12 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         }
         if args.kagemusha_release_root is not None:
             result["kagemusha_release_root"] = str(args.kagemusha_release_root)
+            result["kagemusha_release_policy_sha256"] = (
+                kagemusha_release_policy_sha256
+            )
+            result["kagemusha_activation_authority"] = (
+                kagemusha_activation_authority
+            )
         return result
     except BaseException:
         shutil.rmtree(output)
@@ -1129,6 +1259,14 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "absolute root-controlled Kagemusha policy/catalog/seal root, disjoint "
             "from the validator reset bundle"
+        ),
+    )
+    parser.add_argument(
+        "--kagemusha-activation-authority",
+        help=(
+            "exact account id that will execute Kagemusha activation; with a release "
+            "root, the authenticated genesis must directly grant this account both "
+            "immutable activation permissions"
         ),
     )
     parser.add_argument("--output-bundle", type=Path, required=True)

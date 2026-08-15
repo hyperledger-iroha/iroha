@@ -895,6 +895,7 @@ def _production_liveness_release_inventory_errors(
                     successor_test,
                     """
                     let mut proposal_subject = subject(0x72);
+                    proposal_subject.parent_block_hash = Some(parent_subject.block_hash);
                     let proposal_body = b"parent-auth-body".to_vec();
                     proposal_subject.payload_hash = Hash::new(&proposal_body);
                     let manifest = encode_payload(
@@ -950,6 +951,22 @@ def _production_liveness_release_inventory_errors(
                     """,
                     "embedded-certificate conflict authentication must bind "
                     "the later-view canonical payload fixture",
+                    errors,
+                )
+                _require_rust_token_sequence(
+                    successor_adapter_path,
+                    successor_test,
+                    """
+                    let mut unbound_qc_b = wire::QuorumCertificate {
+                        round: timeout_round,
+                        proposal_round: timeout_round,
+                        execution_commitment: execution_commitment(0x86),
+                        ..unbound_qc_a.clone()
+                    };
+                    authenticate_qc(&mut unbound_qc_b, &keys);
+                    """,
+                    "timeout-group commitment conflicts must use a structurally "
+                    "valid timeout-round certificate",
                     errors,
                 )
             if successor_test is not None:

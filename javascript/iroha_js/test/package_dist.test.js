@@ -388,6 +388,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./sccp",
     "./smart-contract-deployment",
     "./sorafs",
+    "./sumeragi-typed",
     "./torii",
     "./torii-browser",
     "./transaction-codec",

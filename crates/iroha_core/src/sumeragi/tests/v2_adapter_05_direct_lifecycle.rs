@@ -118,7 +118,7 @@ fn direct_certified_body_preview_is_inert_and_commits_one_store_successor() {
 }
 #[test]
 fn recovered_broadcast_and_sign_projection_remains_affine_and_phase_body_bound() {
-    let adapter = include_str!("../v2.rs");
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let authority = adapter
         .split_once("struct RecoveredLifecycleSignBroadcastAndSignAuthorityV1")
         .expect("locate combined recovered successor authority")
@@ -190,7 +190,7 @@ fn recovered_broadcast_and_sign_projection_remains_affine_and_phase_body_bound()
         .0;
     for required in [
         "self.recovered_lifecycle_next_vote_body_executor_permit(executor)?",
-        "executor.prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)",
+        ".prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)",
     ] {
         assert!(
             service_mint.contains(required),
@@ -271,7 +271,7 @@ fn recovered_broadcast_and_sign_projection_remains_affine_and_phase_body_bound()
         .find("adapter.reducer.awaiting_signature()")
         .expect("rejoin the historical reducer Sign fence");
     let replay = cold_confirm
-        .find("next_reducer.step(event.clone())")
+        .find(".step(event.clone())")
         .expect("replay the historical signature on cloned state");
     let children = cold_confirm
         .find("replayed_broadcast != broadcast")
@@ -1019,13 +1019,25 @@ fn ready_validate_commit_sign_uses_only_registered_prepare_capability() {
     else {
         unreachable!("concurrent PrepareQC stages LockAndCommit")
     };
+    let substituted_commitment = execution_commitment(0xBC);
+    assert_ne!(substituted_commitment, prepare.execution_commitment);
     substituted
         .next_registry
         .certificates
         .get_mut(&registered_prepare.reference())
         .expect("staged registry retains its registered PrepareQC")
-        .execution_commitment = execution_commitment(0xBC);
-    assert!(substituted.preflight_publication().is_err());
+        .execution_commitment = substituted_commitment;
+    let canonicalized = substituted
+        .preflight_publication()
+        .expect("preflight reconstructs the registered PrepareQC from reducer authority");
+    assert_eq!(
+        canonicalized
+            .registered_prepare
+            .as_ref()
+            .map(|capability| &capability.prepare),
+        Some(&prepare)
+    );
+    drop(canonicalized);
     assert_eq!(adapter.wal.recovered_records().len(), wal_records_before);
     assert!(adapter.pending_persistence_id.is_none());
     assert_eq!(
@@ -1229,8 +1241,70 @@ fn direct_validation_inactive_retains_ignored_state_change_and_commitment() {
     )
     .expect("open observer adapter");
     assert!(startup.is_empty());
-    let (tag, manifest, _durable, validated) =
-        advance_direct_validation_fixture_to_durable(&mut adapter, 0xB3);
+    let proposer = adapter.status().expect("observer status").leader;
+    let proposal_message = proposal(&adapter.wire_context, proposer, subject(0xB3));
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = &proposal_message.payload else {
+        unreachable!("observer fixture starts from one Proposal")
+    };
+    let manifest = proposal.manifest.clone();
+    assert!(
+        adapter
+            .receive_verified(proposal_message)
+            .expect("accept observer proposal")
+            .effects()
+            .is_empty(),
+        "an observer does not fetch an uncertified proposal body"
+    );
+    let commitment = execution_commitment(0xB3);
+    let prepare = wire::QuorumCertificate {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: manifest.subject,
+        execution_commitment: commitment,
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0xB3; 96],
+    };
+    let fetch = adapter
+        .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                prepare,
+            )),
+        ))
+        .expect("accept observer PrepareQC")
+        .into_effects();
+    let tag = match fetch.as_slice() {
+        [
+            AdapterEffect::FetchBody {
+                tag,
+                manifest: Some(fetched),
+                ..
+            },
+        ] if fetched == &manifest => *tag,
+        effects => panic!("unexpected observer certified-Fetch effects: {effects:?}"),
+    };
+    let DirectCertifiedBodyAvailablePreparation::Applied(available) = adapter
+        .prepare_direct_certified_body_available(tag, &manifest)
+        .expect("prepare observer BodyAvailable transition")
+    else {
+        panic!("certified observer body must prepare one Store successor")
+    };
+    assert!(matches!(
+        available.commit(),
+        AdapterEffect::StoreBody { .. }
+    ));
+    let durable = durable_body_receipt(&adapter, manifest.round, manifest.subject);
+    let DirectBodyStoredPreparation::Applied(stored) = adapter
+        .prepare_direct_body_stored(tag, manifest.round, manifest.subject, &durable)
+        .expect("prepare observer BodyStored transition")
+    else {
+        panic!("stored observer body must prepare one Validate successor")
+    };
+    assert!(matches!(
+        stored.commit(),
+        AdapterEffect::ValidateBody { .. }
+    ));
+    let validated = ValidatedBodyReceipt::for_test_with_commitment(durable, commitment);
     let core_round = reducer::Round::new(manifest.round.height, manifest.round.view);
     let core_subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
     let reducer_before = adapter.reducer.clone();
@@ -1470,7 +1544,7 @@ fn direct_validation_rejects_foreign_receipts_and_commitments_without_mutation()
 }
 #[test]
 fn direct_validation_preview_surface_is_closed_move_only_and_unwired() {
-    let source = include_str!("../v2.rs");
+    let source = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let (production, _) = source
         .split_once("\n#[cfg(test)]\nmod tests {")
         .expect("locate unconditional production/test boundary");
@@ -1478,22 +1552,62 @@ fn direct_validation_preview_surface_is_closed_move_only_and_unwired() {
         production
             .matches("prepare_direct_validation_succeeded(")
             .count(),
-        2,
-        "only the private definition and sealed Ready-carrier bridge may name the preview"
+        3,
+        "only the private definition, recovered-Decision fast-forward, and sealed Ready bridge may name the preview"
+    );
+    let recovered_fast_forward = production
+        .split_once("fn prepare_recovered_decision_apply_fast_forward(")
+        .expect("locate recovered-Decision fast-forward")
+        .1
+        .split_once("/// Preview a certified Fetch completion directly")
+        .expect("locate end of recovered-Decision fast-forward")
+        .0;
+    assert_eq!(
+        recovered_fast_forward
+            .matches("prepare_direct_validation_succeeded(")
+            .count(),
+        1,
+        "the third preview call stays sealed inside recovered-Decision replay"
     );
     let token_start = production
         .find("enum DirectValidationSucceededStutter")
         .expect("locate direct-validation token inventory");
-    let token_end = production[token_start..]
-        .find("// READY_DURABLE_VALIDATE_ADAPTER_PREVIEW_BEGIN")
+    let token_front_end = production[token_start..]
+        .find("/// Opaque staged adapter state for the fixed recovered Decision body fast-forward.")
         .map(|offset| token_start + offset)
+        .expect("locate end of the first direct-validation token group");
+    let token_tail_start = production
+        .find("impl PreparedDirectValidationSucceededApply<'_>")
+        .expect("locate final direct-validation token group");
+    let token_end = production[token_tail_start..]
+        .find("// READY_DURABLE_VALIDATE_ADAPTER_PREVIEW_BEGIN")
+        .map(|offset| token_tail_start + offset)
         .expect("locate end of direct-validation token inventory");
-    let tokens = &production[token_start..token_end];
-    assert_eq!(
-        tokens.matches("next_registry: WireRegistry").count(),
-        5,
-        "Busy, inactive, no-effect, Apply, and Persist must each retain the staged registry"
+    let tokens = format!(
+        "{}\n{}",
+        &production[token_start..token_front_end],
+        &production[token_tail_start..token_end]
     );
+    for token in [
+        "struct PreparedDirectValidationSucceededBusy<'a>",
+        "struct PreparedDirectValidationSucceededInactive<'a>",
+        "struct PreparedDirectValidationSucceededNoEffect<'a>",
+        "struct PreparedDirectValidationSucceededApply<'a>",
+        "struct PreparedDirectValidationSucceededPersist<'a>",
+    ] {
+        let fields = tokens
+            .split_once(token)
+            .unwrap_or_else(|| panic!("missing direct-validation token {token}"))
+            .1
+            .split_once('}')
+            .expect("direct-validation token has a closed field list")
+            .0;
+        assert_eq!(
+            fields.matches("next_registry: WireRegistry").count(),
+            1,
+            "{token} must retain exactly one staged registry"
+        );
+    }
     for outcome in [
         "Busy(PreparedDirectValidationSucceededBusy<'a>)",
         "Inactive(PreparedDirectValidationSucceededInactive<'a>)",
@@ -1736,7 +1850,13 @@ fn direct_validation_failed_report_carries_exact_registered_prepare_qc() {
     };
     let ordinary_store_pending = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(&store_effect),
-        vec![RuntimeEffectOwnership::fresh_for_test(tag, 0xC2_01)],
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                tag,
+                0xC2_01,
+                b"ordinary validation report",
+            ),
+        ],
     )
     .expect("bind one ordinary Store owner")
     .pop()
@@ -1778,7 +1898,13 @@ fn direct_validation_failed_report_carries_exact_registered_prepare_qc() {
     };
     let certified_fetch_pending = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(&certified_fetch_effect),
-        vec![RuntimeEffectOwnership::fresh_for_test(tag, 0xC2_02)],
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                tag,
+                0xC2_02,
+                b"certified validation report",
+            ),
+        ],
     )
     .expect("bind one Prepare-certified Fetch owner")
     .pop()
@@ -2010,7 +2136,7 @@ fn direct_validation_failed_rejects_foreign_receipts_without_mutation() {
 }
 #[test]
 fn direct_validation_failed_surface_is_closed_move_only_and_unwired() {
-    let source = include_str!("../v2.rs");
+    let source = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let (production, _) = source
         .split_once("\n#[cfg(test)]\nmod tests {")
         .expect("locate unconditional production/test boundary");
@@ -2099,7 +2225,7 @@ fn direct_validation_failed_surface_is_closed_move_only_and_unwired() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
-    let source = include_str!("../v2.rs");
+    let source = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let (production, _) = source
         .split_once("\n#[cfg(test)]\nmod tests {")
         .expect("locate unconditional production/test boundary");

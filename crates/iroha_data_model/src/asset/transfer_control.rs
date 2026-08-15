@@ -1,5 +1,7 @@
 //! Asset transfer control records used for account-scoped on-chain asset policy.
 use crate::asset::AssetDefinitionId;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -50,10 +52,7 @@ pub fn validate_asset_transfer_availability_reason(
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "state", content = "value")]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub enum AssetTransferAvailability {
@@ -72,10 +71,7 @@ impl AssetTransferAvailability {
 }
 /// Calendar window used for outbound transfer caps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "window", content = "value")]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub enum AssetTransferControlWindow {
@@ -117,10 +113,7 @@ impl core::fmt::Display for AssetTransferControlWindow {
 }
 /// Configured cap for a specific calendar window.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct AssetTransferLimit {
     /// Controlled window.
@@ -131,10 +124,7 @@ pub struct AssetTransferLimit {
 }
 /// Usage bucket tracking actual spent amount in a UTC calendar window.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct AssetTransferUsageBucket {
     /// Controlled window.
@@ -146,10 +136,7 @@ pub struct AssetTransferUsageBucket {
 }
 /// Control state for one `(account_id, asset_definition_id)` pair.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct AssetTransferControlRecord {
     /// Controlled asset definition.
@@ -271,10 +258,7 @@ mod availability_tests {
 }
 /// Account-scoped store of asset-transfer control entries.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct AssetTransferControlStoreV1 {
     /// Controlled asset records for the account.

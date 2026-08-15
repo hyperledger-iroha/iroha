@@ -1553,9 +1553,7 @@ pub(in crate::zk) mod secure_relation_v3 {
     fn wipe_builder(builder: &mut BaseCircuitBuilder<Scalar>) {
         for phase in &mut builder.core_mut().phase_manager {
             for context in &mut phase.threads {
-                for value in &mut context.advice {
-                    *value = Assigned::Trivial(Scalar::ZERO);
-                }
+                context.wipe_advice();
             }
         }
         for column in &mut builder.assigned_instances {

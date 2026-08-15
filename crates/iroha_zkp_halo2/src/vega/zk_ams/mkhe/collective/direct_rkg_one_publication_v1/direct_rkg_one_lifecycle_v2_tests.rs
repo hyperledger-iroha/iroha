@@ -388,3 +388,94 @@ fn exact_cas_replay_conflict_mutation_error_and_false_winner_mint_nothing() {
             if found == axes && proof_found == fixture_proof_axes_v2()
     ));
 }
+
+#[test]
+fn every_committed_lifecycle_state_roundtrips() {
+    let scope = fixture_scope_v2();
+    let key = record_v2::stable_storage_key_v2(scope).expect("stable key");
+    let mut record = [0; RECORD_BYTES_V2];
+    record_v2::encode_fresh_v2(scope, key, &mut record).expect("fresh record");
+    assert!(matches!(
+        record_v2::decode_record_v2(scope, key, &record),
+        Ok(DecodedStateV2::Fresh)
+    ));
+
+    let published = fixture_published_axes_v2();
+    record_v2::encode_published_v2(scope, key, published, &mut record).expect("published record");
+    assert!(matches!(
+        record_v2::decode_record_v2(scope, key, &record),
+        Ok(DecodedStateV2::PublishedUnbound(found)) if found == published
+    ));
+
+    let proof = fixture_proof_axes_v2();
+    record_v2::encode_proof_v2(scope, key, published, proof, &mut record).expect("proof record");
+    assert!(matches!(
+        record_v2::decode_record_v2(scope, key, &record),
+        Ok(DecodedStateV2::ProofPublishedUnverified(found, found_proof))
+            if found == published && found_proof == proof
+    ));
+}
+
+#[test]
+fn lifecycle_records_reject_corruption_reserved_state_and_cross_identity_proofs() {
+    let scope = fixture_scope_v2();
+    let key = record_v2::stable_storage_key_v2(scope).expect("stable key");
+    let published = fixture_published_axes_v2();
+    let proof = fixture_proof_axes_v2();
+    let mut record = [0; RECORD_BYTES_V2];
+    record_v2::encode_proof_v2(scope, key, published, proof, &mut record).expect("proof record");
+    for offset in [0, 4, 5, 6, 7, 16, 48, 80, 81, 82, 114, 607, 608, 639] {
+        let mut corrupted = record;
+        corrupted[offset] ^= 1;
+        assert!(
+            record_v2::decode_record_v2(scope, key, &corrupted).is_err(),
+            "accepted corruption at byte {offset}"
+        );
+    }
+
+    record_v2::encode_reserved_verified_for_test_v2(
+        scope,
+        key,
+        published,
+        proof,
+        [0xbb; 32],
+        [0xcc; 32],
+        &mut record,
+    );
+    assert!(record_v2::decode_record_v2(scope, key, &record).is_err());
+
+    let mismatched = record_v2::ProofAxesV2 {
+        publication_identity: [0xdd; 32],
+        ..proof
+    };
+    assert!(record_v2::encode_proof_v2(scope, key, published, mismatched, &mut record).is_err());
+}
+
+#[test]
+fn lifecycle_store_outcomes_remain_distinct() {
+    fn assert_distinct<T>(values: &[T]) {
+        for (index, value) in values.iter().enumerate() {
+            for other in &values[index + 1..] {
+                assert_ne!(
+                    core::mem::discriminant(value),
+                    core::mem::discriminant(other)
+                );
+            }
+        }
+    }
+
+    assert_distinct(&[
+        ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Absent,
+        ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Legacy334,
+        ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Lifecycle640,
+    ]);
+    assert_distinct(&[
+        ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2::InsertedByThisCall,
+        ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2::AlreadyPresent,
+    ]);
+    assert_distinct(&[
+        ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::ExchangedByThisCall,
+        ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::ExactReplay,
+        ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::Conflict,
+    ]);
+}

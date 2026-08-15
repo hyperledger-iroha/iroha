@@ -731,6 +731,146 @@ qualified catalog before it starts. The default Taira render omits those paths,
 so unpublished artifacts cannot break ordinary startup, `/health`, or
 `/readyz`.
 
+For a fresh production reset, the ordering is strict. Install the reviewed
+canonical release policy first, but do not generate or install a release and
+do not create a qualification seal yet. The authenticated genesis must
+directly grant the account that will execute activation both
+`CanActivateKagemushaRecursiveReleaseV4` and
+`CanManageOfflineDeviceAttestationPolicy`. Compose and sign the final genesis
+with that explicit account and the policy-only staging context; the composer
+rejects a missing grant, a later revoke, or a policy change during signing.
+Only the resulting signed-genesis hash is the release `NetworkId`. Generate
+the exact-network release after that hash exists, install it on all four
+validators, qualify it with each validator's exact installed `iroha3d`, and
+only then start any validator process. Starting from a config without the
+same policy digest or starting before qualification is unsupported.
+
+The release root and policy file must already exist at the canonical paths
+below. The catalog and qualification seal must both be absent at this stage;
+an empty or stale catalog is rejected rather than silently ignored. Run the
+composer only through the installed release controller. Every other external
+input path in this command must be the exact path pre-authorized by the
+root-owned runner trust record; the controller separately accepts the
+Kagemusha release root only when that absolute canonical directory and every
+ancestor are root-owned and not group- or world-writable:
+
+```bash
+ACTIVATION_AUTHORITY="${ACTIVATION_AUTHORITY:?set the genesis-authorized executing account}"
+TAIRA_CONTROLLER_COMMAND=/usr/local/libexec/iroha-taira-release-controller-v1
+TAIRA_CONTROLLER_ROOT=/usr/local/libexec/iroha-taira-release-controller-v1.d
+EXPECTED_LAUNCHER_SHA256="${EXPECTED_LAUNCHER_SHA256:?set the installed launcher digest}"
+EXPECTED_CONTROLLER_DIGEST="${EXPECTED_CONTROLLER_DIGEST:?set the installed closure digest}"
+EXPECTED_CONTROLLER_VERSION="${EXPECTED_CONTROLLER_VERSION:?set the installed controller version}"
+EXPECTED_HOST_ID="${EXPECTED_HOST_ID:?set the attested qualification host ID}"
+EXPECTED_INSTALLATION_ID="${EXPECTED_INSTALLATION_ID:?set the attested installation ID}"
+SOURCE_COMMIT="${SOURCE_COMMIT:?set the exact release source commit}"
+
+test "$(shasum -a 256 "${TAIRA_CONTROLLER_COMMAND}" | awk '{print $1}')" = \
+  "${EXPECTED_LAUNCHER_SHA256}"
+CONTROLLER_COMMON=(
+  --expected-launcher-sha256 "${EXPECTED_LAUNCHER_SHA256}"
+  --expected-controller-digest "${EXPECTED_CONTROLLER_DIGEST}"
+  --expected-version "${EXPECTED_CONTROLLER_VERSION}"
+  --expected-host-id "${EXPECTED_HOST_ID}"
+  --expected-installation-id "${EXPECTED_INSTALLATION_ID}"
+  --expected-uid 0
+  --source-commit "${SOURCE_COMMIT}"
+  --platform macos
+  --role macos-qualification
+)
+CONTROLLER_ATTESTATION="$(sudo -n "${TAIRA_CONTROLLER_COMMAND}" \
+  attest "${CONTROLLER_COMMON[@]}")"
+CONTROLLER_RUNTIME_ROOT="$(/usr/bin/python3 -I -S -c \
+  'import json,sys; print(json.load(sys.stdin)["runtime_root"])' \
+  <<<"${CONTROLLER_ATTESTATION}")"
+RESET_BUNDLE="${CONTROLLER_RUNTIME_ROOT}/taira-reset-kagemusha-v4-r1"
+test ! -e "${RESET_BUNDLE}"
+
+sudo -n "${TAIRA_CONTROLLER_COMMAND}" run "${CONTROLLER_COMMON[@]}" \
+  prepare-reset -- \
+  --source-bundle /absolute/private/path/admitted-source-reset \
+  --source-bundle-sha256 "${SOURCE_BUNDLE_SHA256}" \
+  --privacy-release-dir /absolute/private/path/authenticated-privacy-release \
+  --genesis-external-signer /absolute/reviewed/path/genesis-external-signer \
+  --trusted-genesis-external-signer-sha256 "${GENESIS_SIGNER_SHA256}" \
+  --onboarding-token-hash-tool /absolute/reviewed/path/onboarding-token-hash-tool \
+  --kagemusha-release-root /srv/iroha-kagemusha/taira-v4-r1 \
+  --kagemusha-activation-authority "${ACTIVATION_AUTHORITY}" \
+  --irohad-sha256 "${IROHAD_SHA256}" \
+  --source-commit "${SOURCE_COMMIT}" \
+  --dpn-validator-release-commit "${DPN_VALIDATOR_RELEASE_COMMIT}" \
+  --cargo-lock-sha256 "${CARGO_LOCK_SHA256}" \
+  --workspace-source-manifest-sha256 "${WORKSPACE_SOURCE_MANIFEST_SHA256}" \
+  --controller-manifest \
+    "${TAIRA_CONTROLLER_ROOT}/authority-controller-v1.json" \
+  --controller-digest "${EXPECTED_CONTROLLER_DIGEST}" \
+  --output-bundle "${RESET_BUNDLE}"
+
+GENESIS_EXPECTED_HASH="$(jq -er '.genesis_expected_hash' \
+  "${RESET_BUNDLE}/reset-manifest.json")"
+test -n "${GENESIS_EXPECTED_HASH}"
+```
+
+The first private renderer pass contains the policy and artifact paths but no
+seal path, and uses only a canonical marker-bearing staging hash while the
+external signer computes the final hash. The signer authenticates the policy
+without opening the not-yet-generated artifact directory. The second pass
+embeds the final genesis hash and adds the future seal path. Both passes bind
+the same policy digest, recorded as `kagemusha_release_policy_sha256` in the
+reset manifest; changing the policy after signing makes the reset fail.
+
+Select and validate the release heights before producing the roster or any
+candidate bytes. A fresh reset starts with height-one genesis committed, but
+height 2 leaves no safe interval in which to start four validators, collect
+evidence, and execute threshold approval. Pick an explicit operational margin
+and fail unless activation is beyond that margin. For an already-running
+chain, replace `RESET_COMMITTED_HEIGHT=1` with the maximum
+`.last_committed_height` captured from all four validators. The activation and
+withdrawal heights are authenticated release inputs; never edit or reuse the
+roster or generated release after either value becomes stale.
+
+```bash
+RESET_COMMITTED_HEIGHT=1
+ACTIVATION_SUBMISSION_MARGIN_BLOCKS="${ACTIVATION_SUBMISSION_MARGIN_BLOCKS:?set a reviewed positive submission margin}"
+ACTIVATION_HEIGHT="${ACTIVATION_HEIGHT:?set a reviewed activation height}"
+WITHDRAWAL_HEIGHT="${WITHDRAWAL_HEIGHT:?set a reviewed withdrawal height}"
+
+/usr/bin/python3 -I -S - \
+  "${RESET_COMMITTED_HEIGHT}" \
+  "${ACTIVATION_SUBMISSION_MARGIN_BLOCKS}" \
+  "${ACTIVATION_HEIGHT}" \
+  "${WITHDRAWAL_HEIGHT}" <<'PY'
+import sys
+
+labels = (
+    "reset committed height",
+    "activation submission margin",
+    "activation height",
+    "withdrawal height",
+)
+try:
+    current, margin, activation, withdrawal = map(int, sys.argv[1:])
+except ValueError as error:
+    raise SystemExit(f"release height is not an integer: {error}")
+if any(
+    value < 0 or value > 2**64 - 1
+    for value in (current, margin, activation, withdrawal)
+):
+    raise SystemExit("release height is outside the u64 range")
+if margin == 0:
+    raise SystemExit("activation submission margin must be positive")
+if activation <= current + margin:
+    raise SystemExit(
+        f"activation height {activation} is not beyond committed height "
+        f"{current} plus the {margin}-block submission margin"
+    )
+if withdrawal <= activation:
+    raise SystemExit("withdrawal height must be greater than activation height")
+values = (current, margin, activation, withdrawal)
+print(", ".join(f"{label}={value}" for label, value in zip(labels, values)))
+PY
+```
+
 First seal the rendered public validator keys and PoPs into the release-bound
 top-up roster. The input config may contain runtime secrets, but the command
 reads only `trusted_peers_pop` and emits only the public canonical roster:
@@ -739,7 +879,8 @@ reads only `trusted_peers_pop` and emits only the public canonical roster:
 cargo run -p iroha_kagami --bin kagami -- \
   kagemusha prepare-taira-release-roster-v4 \
   --validator-config /absolute/path/to/rendered-validator/config.toml \
-  --network-id "$(cat /absolute/path/to/genesis.expected_hash)" \
+  --network-id "${GENESIS_EXPECTED_HASH}" \
+  --withdrawal-height "${WITHDRAWAL_HEIGHT}" \
   --output /absolute/private/path/taira-release-roster.norito
 
 mkdir -m 700 /absolute/private/path/kagemusha-release-inputs
@@ -775,24 +916,24 @@ Retain the helper's canonical JSON report. The reviewed source closure and its
 digest are release inputs; the report's `source_commit` must equal the verified
 `HEAD`, `source_repo_dirty` must be `false`, and any working-tree change fails
 closed with no dirty-closure compatibility path.
-
-Set the release heights before generation. `ACTIVATION_HEIGHT=2` is valid only
-for a fresh reset whose height-one genesis contains the Kagemusha prerequisites.
-For an already-running chain, first read the committed height from every
-validator, choose an activation height strictly greater than all of them, and
-generate a new release with that value. The activation and withdrawal heights
-are authenticated release inputs; never edit or reuse the generated release
-after either value becomes stale.
+Pass direct Cargo and rustc toolchain binaries, not the `~/.cargo/bin` rustup
+proxies, and bind both to independently reviewed SHA-256 pins. The selected
+Cargo home is cache-only, must contain no `config` or `config.toml`, and the
+sealed build runs offline with a fixed `HOME` and `PATH`.
 
 ```bash
-ACTIVATION_HEIGHT="${ACTIVATION_HEIGHT:?set a reviewed activation height}"
-WITHDRAWAL_HEIGHT="${WITHDRAWAL_HEIGHT:?set a reviewed withdrawal height}"
-
 python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
   --root "$PWD" \
+  --cargo /absolute/direct/toolchain/bin/cargo \
+  --cargo-sha256 '<reviewed-64-lowercase-hex>' \
+  --rustc /absolute/direct/toolchain/bin/rustc \
+  --rustc-sha256 '<reviewed-64-lowercase-hex>' \
+  --cargo-home /absolute/owner-controlled/cache-only-cargo-home \
   --target-dir /absolute/private/path/kagemusha-sealed-target \
   --reviewed-source-closure /absolute/private/path/reviewed-source-closure.json \
   --reviewed-source-closure-sha256 '<64-lowercase-hex>' \
+  --authenticated-source-seal-projection /absolute/private/path/authenticated-source-seal-projection.json \
+  --authenticated-source-seal-projection-sha256 '<64-lowercase-hex>' \
   > /absolute/private/path/sealed-kagemusha-candidate-build.json
 
 python3 scripts/run_kagemusha_v4_generation.py \
@@ -801,7 +942,7 @@ python3 scripts/run_kagemusha_v4_generation.py \
   /absolute/path/from/sealed-build-report/kagemusha_recursive_spend_v4_bundle \
   generate-candidate \
   --out-dir /absolute/private/path/taira-release-candidate \
-  --network-id "$(cat /absolute/path/to/genesis.expected_hash)" \
+  --network-id "${GENESIS_EXPECTED_HASH}" \
   --asset-definition-id 7ZepsJTHCVLKsrFFNZGSRGZgvBhv \
   --asset-scale 2 \
   --generation production-gate-real-artifacts-v4 \
@@ -818,10 +959,43 @@ python3 scripts/run_kagemusha_v4_generation.py \
   finalize-release \
   --candidate-dir /absolute/private/path/taira-release-candidate \
   --out-dir /absolute/private/path/taira-final-release \
-  --release-policy /absolute/private/path/release-policy-v1.norito \
+  --release-policy /srv/iroha-kagemusha/taira-v4-r1/policy/release-policy-v1.norito \
   --release-attestation /absolute/private/path/release-attestation-v4.norito \
   --benchmark-evidence /absolute/private/path/benchmark-evidence-v1.json \
   --cryptographic-review /absolute/private/path/cryptographic-review-v4.norito
+```
+
+Before accepting the finalized release, a separately authenticated controller
+must install the exact reviewed checkout under a root-owned,
+non-group/world-writable path and verify the readiness-gate digest before
+execution. Pre-create `/var/lib/iroha/kagemusha-readiness-v1` as root mode
+`0700` (macOS controllers use
+`/private/var/db/iroha-kagemusha-readiness-v1`). The allowed-signers and
+revocation files below are the exact policies bound by the authenticated
+source-seal projection. Both are mandatory and digest pinned; use an explicitly
+pinned empty revocation file when the reviewed policy has no revoked keys.
+Promotion does not consult the invoking account's Git configuration:
+
+```bash
+KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256='<reviewed-gate-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
+KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami \
+KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>' \
+KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
+KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256='<reviewed-projection-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH=/absolute/root-custodied/allowed-signers \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256='<reviewed-allowed-signers-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH=/absolute/root-custodied/revocation \
+KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_SHA256='<reviewed-revocation-64-lowercase-hex>' \
+KAGEMUSHA_V4_RELEASE_POLICY_PATH=/srv/iroha-kagemusha/taira-v4-r1/policy/release-policy-v1.norito \
+KAGEMUSHA_V4_ARTIFACT_ROOT=/srv/iroha-kagemusha/taira-v4-r1/catalog \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT=/absolute/root-custodied/ios-device-evidence \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID='<reviewed-key-id>' \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY=/absolute/root-custodied/ios-evidence-ed25519.pub.pem \
+  /absolute/root-custodied/reviewed-iroha/ci/check_kagemusha_production_readiness.sh promotion
 ```
 
 `generate-candidate` is the only command accepted by the guarded runner; do not
@@ -851,8 +1025,11 @@ that the manifest-digest sidecar equals the release directory name. These are
 public release bytes, not runtime secrets. Never recursively `chown` this tree
 to the validator user.
 
-Only after the immutable bytes exist on every validator, opt newly rendered
-configs into the production catalog:
+For a standalone render outside the reset composer, wait until the immutable
+bytes exist on every validator before opting newly rendered configs into the
+production catalog. The fresh reset flow above already emitted the equivalent
+final configs; retain those exact files so their signed policy identity does
+not drift:
 
 ```bash
 python3 scripts/render_taira_validator_bundle.py \
@@ -870,61 +1047,61 @@ bytes:
 - `/srv/iroha-kagemusha/taira-v4-r1/catalog`
 - `/srv/iroha-kagemusha/taira-v4-r1/seals/catalog-qualification-v1.norito`
 
-These settings participate in `execution_policy_hash`. Consequently, a config
-rendered with the production catalog must not be started against chain state
-created without the same execution-policy context. The supported source-side
-path is a fresh compatible reset, unless governance has separately approved
-and implemented an explicit consensus-context migration. This is not an
-in-place config rollout.
-
-Thread the same external root through reset composition so both renderer
-passes retain the catalog settings. All digest and input paths below are
-operator-reviewed runtime values; do not replace them with private keys or
-signing material:
-
-```bash
-python3 scripts/prepare_taira_empty_reset_bundle.py \
-  --source-bundle /absolute/private/path/admitted-source-reset \
-  --source-bundle-sha256 "${SOURCE_BUNDLE_SHA256}" \
-  --privacy-release-dir /absolute/private/path/authenticated-privacy-release \
-  --genesis-external-signer /absolute/reviewed/path/genesis-external-signer \
-  --trusted-genesis-external-signer-sha256 "${GENESIS_SIGNER_SHA256}" \
-  --onboarding-token-hash-tool /absolute/reviewed/path/onboarding-token-hash-tool \
-  --kagemusha-release-root /srv/iroha-kagemusha/taira-v4-r1 \
-  --output-bundle /absolute/private/path/taira-reset-kagemusha-v4-r1 \
-  --irohad-sha256 "${IROHAD_SHA256}" \
-  --source-commit "${SOURCE_COMMIT}" \
-  --dpn-validator-release-commit "${DPN_VALIDATOR_RELEASE_COMMIT}" \
-  --cargo-lock-sha256 "${CARGO_LOCK_SHA256}" \
-  --workspace-source-manifest-sha256 "${WORKSPACE_SOURCE_MANIFEST_SHA256}" \
-  --controller-manifest /absolute/reviewed/path/controller-manifest.json \
-  --controller-digest "${CONTROLLER_DIGEST}"
-```
+The authenticated policy digest, rather than the mutable presence of a cache
+path or seal file, participates in `execution_policy_hash`. Consequently, a
+config rendered with the production catalog must not be started against chain
+state signed without that exact policy identity. The supported source-side
+path is the fresh compatible reset composed above, unless governance has
+separately approved and implemented an explicit consensus-context migration.
+This is not an in-place config rollout.
 
 Install the policy and manifest-digest release directory at the first two
 paths. Keep the qualification-seal directory separate from the policy parent,
 artifact directory, and executable directory. On each validator, use the
-exact installed executable and the same config, signed genesis, genesis
-manifest, and expected-hash file used by the service. The expected-hash file
-must already exist and match the signed genesis. Run the full one-time
-qualification as root; the configured seal destination must not already exist:
+exact canonical installed executable selected by that validator's service and
+the config, signed genesis, and bound genesis manifest emitted by the same
+reset bundle. Verify all four byte identities against `reset-manifest.json`
+before executing the binary. The final reset config carries the expected hash
+inline; the composer does not emit or require a separate
+`genesis.expected_hash` file. Run the full one-time qualification as root; the
+configured seal destination must not already exist:
 
 ```bash
-sudo test -s /run/iroha/genesis.expected_hash
-sudo test ! -e \
-  /srv/iroha-kagemusha/taira-v4-r1/seals/catalog-qualification-v1.norito
+RESET_MANIFEST="${RESET_BUNDLE}/reset-manifest.json"
+VALIDATOR_SLUG="${VALIDATOR_SLUG:?set taira-validator-1 through taira-validator-4}"
+VALIDATOR_CONFIG="${RESET_BUNDLE}/rendered/${VALIDATOR_SLUG}/config.toml"
+SIGNED_GENESIS="${RESET_BUNDLE}/genesis.signed.nrt"
+BOUND_GENESIS_MANIFEST="${RESET_BUNDLE}/genesis.json"
+IROHAD_BIN="${IROHAD_BIN:?set the exact canonical executable used by this validator service}"
+RELEASE_ROOT=/srv/iroha-kagemusha/taira-v4-r1
+QUALIFICATION_SEAL="${RELEASE_ROOT}/seals/catalog-qualification-v1.norito"
 
-sudo env GENESIS=/absolute/path/genesis.signed.nrt \
-  /usr/local/bin/iroha3d \
+test "${IROHAD_BIN}" = "$(/usr/bin/python3 -I -S -c \
+  'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+  "${IROHAD_BIN}")"
+test -x "${IROHAD_BIN}"
+test "$(shasum -a 256 "${IROHAD_BIN}" | awk '{print $1}')" = \
+  "$(jq -er '.irohad_sha256' "${RESET_MANIFEST}")"
+test "$(shasum -a 256 "${VALIDATOR_CONFIG}" | awk '{print $1}')" = \
+  "$(jq -er --arg slug "${VALIDATOR_SLUG}" '.configs[$slug]' \
+    "${RESET_MANIFEST}")"
+test "$(shasum -a 256 "${SIGNED_GENESIS}" | awk '{print $1}')" = \
+  "$(jq -er '.signed_genesis_sha256' "${RESET_MANIFEST}")"
+test "$(shasum -a 256 "${BOUND_GENESIS_MANIFEST}" | awk '{print $1}')" = \
+  "$(jq -er '.bound_genesis_manifest_sha256' "${RESET_MANIFEST}")"
+test "$(jq -er '.kagemusha_release_root' "${RESET_MANIFEST}")" = \
+  "${RELEASE_ROOT}"
+sudo test ! -e "${QUALIFICATION_SEAL}"
+
+sudo env GENESIS="${SIGNED_GENESIS}" \
+  "${IROHAD_BIN}" \
   --sora \
-  --config /etc/iroha/taira-validator/config.toml \
-  --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json \
+  --config "${VALIDATOR_CONFIG}" \
+  --genesis-manifest-json "${BOUND_GENESIS_MANIFEST}" \
   --check-config \
-  --write-kagemusha-catalog-qualification-seal \
-    /srv/iroha-kagemusha/taira-v4-r1/seals/catalog-qualification-v1.norito
+  --write-kagemusha-catalog-qualification-seal "${QUALIFICATION_SEAL}"
 
-sudo chmod 0444 \
-  /srv/iroha-kagemusha/taira-v4-r1/seals/catalog-qualification-v1.norito
+sudo chmod 0444 "${QUALIFICATION_SEAL}"
 ```
 
 The Kagemusha release root must be outside `/etc/iroha/taira-validator` and
@@ -934,9 +1111,9 @@ to the validator user. Never include the release root in that recursive
 canonical, symlink-free, root-owned, and not group- or world-writable. On
 macOS, use an equivalent root-controlled path such as
 `/Library/SORA/Taira/kagemusha-v4-r1`. The seal authenticates the canonical
-`/usr/local/bin/iroha3d` identity/build as well as the qualified catalog; a
-binary replacement requires a new qualification and must never overwrite the
-old seal.
+`${IROHAD_BIN}` identity/build as well as the qualified catalog; a binary
+replacement requires a new qualification and must never overwrite the old
+seal.
 
 Retain concrete qualification evidence from every node: the successful
 `--check-config` output, `stat` output proving the root ownership and modes,
@@ -1031,6 +1208,82 @@ cargo run --locked -p iroha_kagami --bin kagami -- \
 INSTRUCTIONS_HASH="$(tail -n 1 "${PREPARE_REPORT}" | jq -er \
   'select(.status == "prepared") | .instructions_hash')"
 test -n "${INSTRUCTIONS_HASH}"
+```
+
+Immediately before proposing—and again before the quorum-crossing
+approval—capture the committed height from every validator and repeat the
+future-height check. Stop if the checked margin has been consumed; do not
+submit a stale release or edit its authenticated heights. Generate, finalize,
+install, and qualify a new release instead.
+
+```bash
+VALIDATOR_READ_CFGS=(
+  /absolute/runtime-only/validator-1-read-client.toml
+  /absolute/runtime-only/validator-2-read-client.toml
+  /absolute/runtime-only/validator-3-read-client.toml
+  /absolute/runtime-only/validator-4-read-client.toml
+)
+VALIDATOR_OPERATOR_KEY_FILES=(
+  /absolute/runtime-only/validator-1-operator.key
+  /absolute/runtime-only/validator-2-operator.key
+  /absolute/runtime-only/validator-3-operator.key
+  /absolute/runtime-only/validator-4-operator.key
+)
+HEIGHT_EVIDENCE_DIR="${HEIGHT_EVIDENCE_DIR:?set a fresh evidence directory for this check}"
+test "${#VALIDATOR_READ_CFGS[@]}" -eq 4
+test "${#VALIDATOR_OPERATOR_KEY_FILES[@]}" -eq 4
+test ! -e "${HEIGHT_EVIDENCE_DIR}"
+mkdir -m 700 "${HEIGHT_EVIDENCE_DIR}"
+
+for index in "${!VALIDATOR_READ_CFGS[@]}"; do
+  iroha --machine --config "${VALIDATOR_READ_CFGS[$index]}" \
+    --operator-private-key-file "${VALIDATOR_OPERATOR_KEY_FILES[$index]}" \
+    --output-format json ops sumeragi status \
+    | tee "${HEIGHT_EVIDENCE_DIR}/validator-$((index + 1)).json" >/dev/null
+done
+
+MAX_COMMITTED_HEIGHT="$(
+  /usr/bin/python3 -I -S - \
+    "${HEIGHT_EVIDENCE_DIR}"/validator-{1,2,3,4}.json <<'PY'
+import json
+import sys
+
+heights = []
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as source:
+        height = json.load(source).get("last_committed_height")
+    if (
+        not isinstance(height, int)
+        or isinstance(height, bool)
+        or not 0 < height <= 2**64 - 1
+    ):
+        raise SystemExit(f"invalid last_committed_height in {path}: {height!r}")
+    heights.append(height)
+print(max(heights))
+PY
+)"
+
+/usr/bin/python3 -I -S - \
+  "${MAX_COMMITTED_HEIGHT}" \
+  "${ACTIVATION_SUBMISSION_MARGIN_BLOCKS}" \
+  "${ACTIVATION_HEIGHT}" <<'PY'
+import sys
+
+current, margin, activation = map(int, sys.argv[1:])
+if not 0 < margin <= 2**64 - 1:
+    raise SystemExit("activation submission margin is outside the positive u64 range")
+if not 0 < current <= 2**64 - 1 or not 0 < activation <= 2**64 - 1:
+    raise SystemExit("committed or activation height is outside the positive u64 range")
+if activation <= current + margin:
+    raise SystemExit(
+        f"stale release: activation height {activation} is not beyond fleet height "
+        f"{current} plus the {margin}-block submission margin"
+    )
+print(
+    f"checked activation window: fleet={current}, "
+    f"activation={activation}, margin={margin}"
+)
+PY
 ```
 
 Submit the immutable instruction file through the authorized multisig. The

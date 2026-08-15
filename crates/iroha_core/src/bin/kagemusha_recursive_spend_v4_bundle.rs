@@ -221,6 +221,10 @@ const BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX: Option<&str> =
     option_env!("KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX");
 const BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256: Option<&str> =
     option_env!("KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256");
+const BUILD_REVIEWED_CARGO_BINARY_SHA256: Option<&str> =
+    option_env!("KAGEMUSHA_BUILD_REVIEWED_CARGO_BINARY_SHA256");
+const BUILD_REVIEWED_RUSTC_BINARY_SHA256: Option<&str> =
+    option_env!("KAGEMUSHA_BUILD_REVIEWED_RUSTC_BINARY_SHA256");
 const AUTHORIZED_SOURCE_PARENT_COMMIT: &str = "5d41c784787ed496ccbd46379ee236cc992d9c65";
 const AUTHORIZED_SOURCE_PARENT_TREE: &str = "f20ab04ddd65c2b7da71250e77e2cc1006aa38f2";
 const AUTHORIZED_SOURCE_PARENT_EPOCH: u64 = 1_786_749_503;
@@ -484,6 +488,9 @@ struct BundleMetadata {
     source_tree_sha256: [u8; 32],
     reviewed_source_closure: KagemushaReviewedSourceClosureV1,
     reviewed_source_closure_descriptor_sha256: [u8; 32],
+    authenticated_source_seal_projection_sha256: [u8; 32],
+    reviewed_cargo_binary_sha256: [u8; 32],
+    reviewed_rustc_binary_sha256: [u8; 32],
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
     activation_height: u64,
@@ -628,6 +635,9 @@ struct CandidateValidationReportV2 {
     source_tree_sha256: String,
     source_repo_dirty: bool,
     reviewed_source_closure_descriptor_sha256: String,
+    authenticated_source_seal_projection_sha256: String,
+    reviewed_cargo_binary_sha256: String,
+    reviewed_rustc_binary_sha256: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
     generation: String,
@@ -647,6 +657,9 @@ struct FullSourceTreeIdentityV1 {
     source_tree_sha256: String,
     reviewed_source_closure: KagemushaReviewedSourceClosureV1,
     reviewed_source_closure_descriptor_sha256: String,
+    authenticated_source_seal_projection_sha256: String,
+    reviewed_cargo_binary_sha256: String,
+    reviewed_rustc_binary_sha256: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
@@ -1149,6 +1162,21 @@ fn prepare_bundle_metadata(
         &source_identity.reviewed_source_closure_descriptor_sha256,
         &mut reviewed_source_closure_descriptor_sha256,
     )?;
+    let mut authenticated_source_seal_projection_sha256 = [0_u8; 32];
+    hex::decode_to_slice(
+        &source_identity.authenticated_source_seal_projection_sha256,
+        &mut authenticated_source_seal_projection_sha256,
+    )?;
+    let mut reviewed_cargo_binary_sha256 = [0_u8; 32];
+    hex::decode_to_slice(
+        &source_identity.reviewed_cargo_binary_sha256,
+        &mut reviewed_cargo_binary_sha256,
+    )?;
+    let mut reviewed_rustc_binary_sha256 = [0_u8; 32];
+    hex::decode_to_slice(
+        &source_identity.reviewed_rustc_binary_sha256,
+        &mut reviewed_rustc_binary_sha256,
+    )?;
     let activation_height = parse_u64(options, "activation-height")?;
     let withdrawal_height = parse_u64(options, "withdrawal-height")?;
     if activation_height == 0 || withdrawal_height <= activation_height {
@@ -1278,6 +1306,9 @@ fn prepare_bundle_metadata(
             source_tree_sha256: parse_digest(options, "source-tree-sha256")?,
             reviewed_source_closure: source_identity.reviewed_source_closure.clone(),
             reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256,
             generation_memory_limit_bytes,
             generation_memory_enforcement_profile,
             activation_height,
@@ -1574,16 +1605,33 @@ fn portable_source_identifier(value: &str, maximum_len: usize) -> bool {
 fn decode_embedded_source_seal(
     projection_hex: Option<&str>,
     projection_sha256: Option<&str>,
+    reviewed_cargo_binary_sha256: Option<&str>,
+    reviewed_rustc_binary_sha256: Option<&str>,
     embedded_commit: Option<&str>,
     embedded_tree_sha256: Option<&str>,
     embedded_source_date_epoch: Option<&str>,
 ) -> Result<EmbeddedSourceSealV1, String> {
     let projection_hex = projection_hex
-        .filter(|value| is_lower_hex(value, value.len()) && value.len() >= 2 && value.len() <= 32_768 && value.len().is_multiple_of(2))
-        .ok_or_else(|| "embedded authenticated source-seal projection hex is malformed".to_owned())?;
+        .filter(|value| {
+            is_lower_hex(value, value.len())
+                && value.len() >= 2
+                && value.len() <= 32_768
+                && value.len().is_multiple_of(2)
+        })
+        .ok_or_else(|| {
+            "embedded authenticated source-seal projection hex is malformed".to_owned()
+        })?;
     let projection_sha256 = projection_sha256
         .filter(|value| is_nonzero_lower_hex(value, 64))
-        .ok_or_else(|| "embedded authenticated source-seal projection SHA-256 is malformed".to_owned())?;
+        .ok_or_else(|| {
+            "embedded authenticated source-seal projection SHA-256 is malformed".to_owned()
+        })?;
+    let reviewed_cargo_binary_sha256 = reviewed_cargo_binary_sha256
+        .filter(|value| is_nonzero_lower_hex(value, 64))
+        .ok_or_else(|| "embedded reviewed Cargo binary SHA-256 is malformed".to_owned())?;
+    let reviewed_rustc_binary_sha256 = reviewed_rustc_binary_sha256
+        .filter(|value| is_nonzero_lower_hex(value, 64))
+        .ok_or_else(|| "embedded reviewed rustc binary SHA-256 is malformed".to_owned())?;
     let projection_bytes = hex::decode(projection_hex)
         .map_err(|error| format!("embedded source-seal projection hex is invalid: {error}"))?;
     if projection_bytes.len() > 16_384
@@ -1592,13 +1640,17 @@ fn decode_embedded_source_seal(
         return Err("embedded authenticated source-seal projection digest differs".to_owned());
     }
     let projection: AuthenticatedSourceSealProjectionV1 =
-        norito::json::from_slice(&projection_bytes)
-            .map_err(|error| format!("embedded source-seal projection is not strict JSON: {error}"))?;
-    let mut canonical_projection = norito::json::to_json(&projection)
-        .map_err(|error| format!("could not canonicalize embedded source-seal projection: {error}"))?;
+        norito::json::from_slice(&projection_bytes).map_err(|error| {
+            format!("embedded source-seal projection is not strict JSON: {error}")
+        })?;
+    let mut canonical_projection = norito::json::to_json(&projection).map_err(|error| {
+        format!("could not canonicalize embedded source-seal projection: {error}")
+    })?;
     canonical_projection.push('\n');
     if canonical_projection.as_bytes() != projection_bytes {
-        return Err("embedded authenticated source-seal projection is not canonical JSON".to_owned());
+        return Err(
+            "embedded authenticated source-seal projection is not canonical JSON".to_owned(),
+        );
     }
 
     let commit = embedded_commit
@@ -1694,9 +1746,7 @@ fn decode_embedded_source_seal(
     }
     let closure_bytes = hex::decode(closure_hex)
         .map_err(|error| format!("embedded reviewed source-closure hex is invalid: {error}"))?;
-    if hex::encode(Sha256::digest(&closure_bytes))
-        != projection.reviewed_source_closure_sha256
-    {
+    if hex::encode(Sha256::digest(&closure_bytes)) != projection.reviewed_source_closure_sha256 {
         return Err("embedded reviewed source-closure digest differs".to_owned());
     }
     let closure: KagemushaReviewedSourceClosureV1 = norito::json::from_slice(&closure_bytes)
@@ -1724,6 +1774,9 @@ fn decode_embedded_source_seal(
             reviewed_source_closure_descriptor_sha256: projection
                 .reviewed_source_closure_sha256
                 .clone(),
+            authenticated_source_seal_projection_sha256: projection_sha256.to_owned(),
+            reviewed_cargo_binary_sha256: reviewed_cargo_binary_sha256.to_owned(),
+            reviewed_rustc_binary_sha256: reviewed_rustc_binary_sha256.to_owned(),
         },
     })
 }
@@ -1733,6 +1786,8 @@ fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error
             decode_embedded_source_seal(
                 BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX,
                 BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256,
+                BUILD_REVIEWED_CARGO_BINARY_SHA256,
+                BUILD_REVIEWED_RUSTC_BINARY_SHA256,
                 BUILD_SOURCE_COMMIT,
                 BUILD_SOURCE_TREE_SHA256,
                 BUILD_SOURCE_DATE_EPOCH,
@@ -1765,6 +1820,12 @@ fn validate_current_manifest_source(
         || manifest.reviewed_source_closure != current.reviewed_source_closure
         || hex::encode(manifest.reviewed_source_closure_descriptor_sha256)
             != current.reviewed_source_closure_descriptor_sha256
+        || hex::encode(manifest.authenticated_source_seal_projection_sha256)
+            != current.authenticated_source_seal_projection_sha256
+        || hex::encode(manifest.reviewed_cargo_binary_sha256)
+            != current.reviewed_cargo_binary_sha256
+        || hex::encode(manifest.reviewed_rustc_binary_sha256)
+            != current.reviewed_rustc_binary_sha256
     {
         return Err(
             "candidate manifest does not bind the exact embedded reviewed source closure".into(),
@@ -2147,6 +2208,12 @@ fn verify_staged_candidate_for_publication(
         || manifest.reviewed_source_closure != current_source.reviewed_source_closure
         || hex::encode(manifest.reviewed_source_closure_descriptor_sha256)
             != current_source.reviewed_source_closure_descriptor_sha256
+        || hex::encode(manifest.authenticated_source_seal_projection_sha256)
+            != current_source.authenticated_source_seal_projection_sha256
+        || hex::encode(manifest.reviewed_cargo_binary_sha256)
+            != current_source.reviewed_cargo_binary_sha256
+        || hex::encode(manifest.reviewed_rustc_binary_sha256)
+            != current_source.reviewed_rustc_binary_sha256
     {
         return Err("staged V4 candidate source identity changed before publication".into());
     }
@@ -2658,6 +2725,11 @@ fn validate_candidate(
             reviewed_source_closure_descriptor_sha256: hex::encode(
                 manifest.reviewed_source_closure_descriptor_sha256,
             ),
+            authenticated_source_seal_projection_sha256: hex::encode(
+                manifest.authenticated_source_seal_projection_sha256,
+            ),
+            reviewed_cargo_binary_sha256: hex::encode(manifest.reviewed_cargo_binary_sha256),
+            reviewed_rustc_binary_sha256: hex::encode(manifest.reviewed_rustc_binary_sha256),
             generation_memory_limit_bytes: manifest.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: manifest
                 .generation_memory_enforcement_profile
@@ -3138,6 +3210,10 @@ fn finalize_release(
             schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: manifest.generation.clone(),
+            authenticated_source_seal_projection_sha256: manifest
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
             candidate_sha256: candidate_record
                 .sha256()
                 .map_err(|error| format!("failed to identify immutable V4 candidate: {error}"))?,
@@ -3329,6 +3405,10 @@ fn write_candidate(
         reviewed_source_closure: metadata.reviewed_source_closure,
         reviewed_source_closure_descriptor_sha256: metadata
             .reviewed_source_closure_descriptor_sha256,
+        authenticated_source_seal_projection_sha256: metadata
+            .authenticated_source_seal_projection_sha256,
+        reviewed_cargo_binary_sha256: metadata.reviewed_cargo_binary_sha256,
+        reviewed_rustc_binary_sha256: metadata.reviewed_rustc_binary_sha256,
         generation_memory_limit_bytes: metadata.generation_memory_limit_bytes,
         generation_memory_enforcement_profile: metadata.generation_memory_enforcement_profile,
         network_id: metadata.network_id,
@@ -4292,21 +4372,27 @@ mod tests {
         );
     }
     #[test]
-    fn source_validation_uses_fixed_tools_and_a_sanitized_path() {
+    fn source_validation_uses_only_the_embedded_authenticated_projection() {
         let source = include_str!("kagemusha_recursive_spend_v4_bundle.rs");
         let validation = source
-            .split_once("fn trusted_source_command(")
-            .expect("trusted source command helper exists")
+            .split_once("fn decode_embedded_source_seal(")
+            .expect("embedded projection decoder exists")
             .1
             .split_once("fn build_candidate(")
             .expect("source-validation boundary exists")
             .0;
-        assert!(validation.contains("command.env_clear()"));
-        assert!(validation.contains("TRUSTED_GIT_EXECUTABLE"));
-        assert!(validation.contains("TRUSTED_PYTHON_EXECUTABLE"));
-        assert!(!validation.contains("Command::new(\"git\")"));
-        assert!(!validation.contains("KAGEMUSHA_SOURCE_SEAL_PYTHON"));
+        assert!(validation.contains("BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX"));
+        assert!(validation.contains("reviewed_source_closure_hex"));
+        for forbidden in [
+            "kagemusha_source_tree_seal.py",
+            "Command::new",
+            "TRUSTED_GIT_EXECUTABLE",
+            "TRUSTED_PYTHON_EXECUTABLE",
+        ] {
+            assert!(!validation.contains(forbidden), "{forbidden}");
+        }
     }
+    include!("kagemusha_recursive_spend_v4_bundle/authenticated_source_projection_test.rs");
     #[test]
     fn generated_candidate_metadata_revalidates_both_release_profiles() {
         let source = include_str!("kagemusha_recursive_spend_v4_bundle.rs");
@@ -4658,7 +4744,9 @@ mod tests {
     }
     #[test]
     fn candidate_source_must_match_the_signed_checkout_head() {
-        assert!(validate_base_source_head("0000000000000000000000000000000000000000").is_err());
+        assert!(
+            validate_current_source("0000000000000000000000000000000000000000", [0; 32]).is_err()
+        );
     }
     #[test]
     fn krv4_framing_is_canonical_and_payload_bound() {

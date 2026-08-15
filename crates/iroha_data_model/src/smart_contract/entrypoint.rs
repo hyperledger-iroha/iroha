@@ -3,6 +3,11 @@
 //! JSON is accepted only at client-facing boundaries. The compiler embeds these
 //! schemas in the signed contract interface so hosts can bind argument records
 //! and return registers to one canonical, recursively typed ABI description.
+#[cfg(feature = "json")]
+use crate::{
+    DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
+    DeriveJsonSerialize as DeriveJsonSer,
+};
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
 use norito::{Decode, Encode, NoritoDeserialize};
@@ -77,14 +82,7 @@ pub const DECODED_ARGUMENT_TABLE_OFFSET: i16 = 8;
 pub const DECODED_ARGUMENT_WORD_BYTES: i16 = 8;
 /// Leaf representation used at a public Kotodama boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveFastJson,
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum EntrypointValueKindV1 {
@@ -126,14 +124,7 @@ impl EntrypointValueKindV1 {
 }
 /// Named product metadata carried by a [`EntrypointValueTypeNodeV1::Struct`] node.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveFastJson,
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointStructTypeNodeV1 {
@@ -148,14 +139,7 @@ pub struct EntrypointStructTypeNodeV1 {
 /// every aggregate in one flat tape makes decoding, validation, cloning, comparison, and
 /// destruction bounded by the explicit V1 node budget rather than the native call stack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveFastJson,
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointListTypeNodeV1 {
@@ -164,14 +148,7 @@ pub struct EntrypointListTypeNodeV1 {
 }
 /// One preorder node in an exact public boundary type.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveFastJson,
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum EntrypointValueTypeNodeV1 {
@@ -774,14 +751,7 @@ pub struct EntrypointReturnRecordV1 {
 }
 /// One named field in a public entrypoint argument record.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveFastJson,
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointArgumentFieldV1 {
@@ -792,14 +762,7 @@ pub struct EntrypointArgumentFieldV1 {
 }
 /// Compiler-emitted schema for one public entrypoint invocation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveFastJson,
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize
-    )
-)]
+#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointArgumentSchemaV1 {

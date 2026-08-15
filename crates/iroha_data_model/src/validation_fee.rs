@@ -1,4 +1,6 @@
 //! Validation-fee policy data shared by validators and clients.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     Level, NetworkId,
     account::AccountId,
@@ -341,10 +343,7 @@ impl core::fmt::Display for ValidationFeePolicyRegistryError {
 impl std::error::Error for ValidationFeePolicyRegistryError {}
 /// Validation-fee charging mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(
     tag = "charging_mode",
     content = "value",
@@ -358,10 +357,7 @@ pub enum ValidationFeeChargingMode {
 }
 /// Voting mode retained with validation-fee referendum finalization evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(
     tag = "voting_mode",
     content = "value",
@@ -375,10 +371,7 @@ pub enum ValidationFeeGovernanceVotingModeV1 {
 }
 /// Closed first-release eligibility rule for validation-fee PLAIN referenda.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(
@@ -400,10 +393,7 @@ pub enum ValidationFeePlainElectorateEligibilityRuleV1 {
 /// enacted registry entries. Validators must therefore verify historical
 /// authorization from this immutable payload rather than mutable live config.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ValidationFeePlainElectorateRulesV1 {
     /// Asset definition whose locked balance supplies PLAIN ballot weight.
@@ -479,10 +469,7 @@ impl ValidationFeePlainElectorateRulesV1 {
 }
 /// One citizen frozen into a validation-fee PLAIN electorate snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ValidationFeePlainElectorateMemberV1 {
     /// Canonical citizen account.
@@ -504,10 +491,7 @@ struct ValidationFeePlainElectorateSnapshotRootPayloadV1 {
 }
 /// Canonical citizen roster frozen immediately before the referendum's inclusive start block.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ValidationFeePlainElectorateSnapshotV1 {
     /// Native proposal identifier whose retained rules govern this roster.
@@ -684,10 +668,7 @@ impl ValidationFeePlainElectorateSnapshotV1 {
 }
 /// Exact inclusive referendum window authorized for a validation-fee proposal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidationFeeGovernanceWindowV1 {
     /// First height in the authorized window.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
@@ -698,10 +679,7 @@ pub struct ValidationFeeGovernanceWindowV1 {
 }
 /// Typed deterministic referendum result retained in the validation-fee registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidationFeeFinalizationEvidenceV1 {
     /// Referendum identifier, equal to the native proposal identifier.
     pub referendum_id: [u8; 32],
@@ -760,10 +738,7 @@ impl ValidationFeeFinalizationEvidenceV1 {
 }
 /// Typed Parliament and referendum authorization for one enacted policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidationFeeParliamentAuthorizationV1 {
     /// Native proposal identifier.
     pub proposal_id: [u8; 32],
@@ -866,10 +841,7 @@ impl ValidationFeeParliamentAuthorizationV1 {
 }
 /// Exact enacted payout-lifecycle proposal referenced by a validation-fee policy.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidationFeePayoutLifecycleReferenceV1 {
     /// Non-zero lifecycle seal bound into the proposal fingerprint.
     pub lifecycle_seal: [u8; 32],
@@ -898,10 +870,7 @@ impl ValidationFeePayoutLifecycleReferenceV1 {
 }
 /// One entry in the registered validation-fee policy hash chain.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidationFeePolicyRegistryEntryV1 {
     /// Complete governed policy, retained so scheduled policies do not hide
     /// the policy that is effective at the current height.
@@ -940,10 +909,7 @@ impl ValidationFeePolicyRegistryEntryV1 {
 /// On-ledger validation-fee policy registry used to reject rollback and
 /// skipped-version policy changes while retaining scheduled policy history.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidationFeePolicyRegistryV1 {
     /// Registered policy chain in ascending, contiguous version order.
     pub registered_policies: Vec<ValidationFeePolicyRegistryEntryV1>,
@@ -1118,10 +1084,7 @@ impl ValidationFeePolicyRegistryV1 {
 }
 /// Valid registry facts bound into each block's synthetic witness write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct ValidationFeePolicySnapshotAvailableV1 {
     /// Hash of the canonical complete registry.
@@ -1155,10 +1118,7 @@ pub enum ValidationFeePolicySnapshotStatusV1 {
 }
 /// Canonical validation-fee registry commitment written into every block witness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct ValidationFeePolicySnapshotCommitmentV1 {
     /// Snapshot format version.
@@ -1235,10 +1195,7 @@ impl ValidationFeePolicySnapshotCommitmentV1 {
 }
 /// Sparse-SMT proof that the validation-fee snapshot is an ordinary write.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct ValidationFeePolicyWitnessProofV1 {
     /// Fixed raw execution-witness key.
@@ -1478,10 +1435,7 @@ fn validation_fee_authorization_matches_plain_rules(
 }
 /// One exact recipient and share in the atomic treasury-payout effect plan.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidationFeeTreasuryPayoutRecipientV1 {
     /// Validator account receiving XOR.
     pub account_id: AccountId,
@@ -1494,10 +1448,7 @@ pub struct ValidationFeeTreasuryPayoutRecipientV1 {
 /// six-transfer effect plan. It is part of policy hashing, authorization, registry
 /// validation, and Norito/JSON serialization.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ValidationFeeTreasuryPayoutBindingV1 {
     /// Immutable deployed pool contract address.
     pub contract_address: ContractAddress,
@@ -1600,10 +1551,7 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
 }
 /// Exact-network validation-fee policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ValidationFeePolicyV1 {
     /// Policy schema version.

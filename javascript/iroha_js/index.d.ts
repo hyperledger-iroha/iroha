@@ -3882,7 +3882,6 @@ type ToriiRuntimeNamespaceExport =
   | "ToriiHttpError"
   | "TransactionStatusError"
   | "TransactionTimeoutError"
-  | "__sumeragiNativeAmxTestHelpers"
   | "buildConnectWebSocketUrl"
   | "buildIdentifierRequestForPolicy"
   | "buildSorafsOrderbookEventsWebSocketUrl"
@@ -5360,13 +5359,6 @@ export function isStatusQueueStalled(
   status: ToriiStatusPayload | Record<string, unknown>,
   stallThresholdMs: number | string | bigint,
 ): boolean;
-
-export const __sumeragiNativeAmxTestHelpers: Readonly<{
-  computeDescriptorHash(value: unknown): string;
-  computeParticipantSettlementHash(value: unknown): string;
-  computeProposalHash(value: unknown): string;
-  computeValidatorSetHash(value: unknown): string;
-}>;
 
 export interface ToriiNetworkTimeNow {
   timestampMs: number;

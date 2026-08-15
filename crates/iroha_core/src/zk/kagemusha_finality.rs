@@ -800,6 +800,9 @@ mod tests {
             source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256: [0x53; 32],
+            reviewed_cargo_binary_sha256: [0x54; 32],
+            reviewed_rustc_binary_sha256: [0x55; 32],
             network_id,
             asset: asset.clone(),
             asset_scale: 2,
@@ -1418,7 +1421,7 @@ mod tests {
                     changed_power.manifest_digest,
                 )
                 .unwrap_err(),
-            KagemushaTopUpFinalityVerifyError::RosterContextMismatch
+            KagemushaTopUpFinalityVerifyError::InvalidStructure
         );
         assert_eq!(
             verifier.roster_crypto_verification_count(),

@@ -48059,25 +48059,25 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
             observed_runtime_items.get("freeze_due_clock_owners"),
             (
                 "if raw_timeout_due && self.timeout_owner.is_none()",
-                "self.timeout_owner_physical_cut.is_some() "
-                "|| self.timeout_recovery_episode.is_some()",
-                """
+                "self.timeout_owner_physical_cut.is_some() || self.timeout_recovery_episode.is_some()", """
 let owner = self.mint_fresh_lifecycle_owner(
     self.round_tag,
     CommandClass::Progress,
     RuntimeFreshRootKind::Timeout,
     b"begin-timeout",
 )?;
-""",
-                "let pre_frozen_retransmit = match (",
-                "let episode = RuntimeTimeoutRecoveryEpisode",
+""", "let (pre_frozen_retransmit, superseded_newer_retransmit) = match (",
+                "if retransmit.lifecycle_ordinal() < owner.lifecycle_ordinal()", "(Some((retransmit, cut)), None)",
+                "if retransmit.lifecycle_ordinal() > owner.lifecycle_ordinal()", "(None, Some((retransmit, cut)))",
+                "(Some(_), Some(_)) => return Err(EnqueueError::FailClosed)", "let episode = RuntimeTimeoutRecoveryEpisode",
                 "timeout_owner: owner.clone()",
-                "physical_cut: self.ingress_physical_cut",
-                "pre_frozen_retransmit,",
-                "timeout_vote_owner_universe: "
-                "self.driver.timeout_vote_owner_universe()",
-                "admitted_timeout_vote_owners: BTreeMap::new()",
-                "if !episode.validate_exact()",
+                "physical_cut: self.ingress_physical_cut, pre_frozen_retransmit,",
+                "timeout_vote_owner_universe: " "self.driver.timeout_vote_owner_universe()", "admitted_timeout_vote_owners: BTreeMap::new()",
+                "if !episode.validate_exact()", "let superseded_newer_retransmit_cache_key =", "\nif self.retransmit_owner.as_ref() != Some(retransmit)\n"
+                "    || self.retransmit_owner_physical_cut != Some(*cut)\n"
+                "    || self.dormant_fresh_lifecycle_owners.get(&cache_key) != Some(retransmit)\n",
+                "if let Some(cache_key) = superseded_newer_retransmit_cache_key", "self.dormant_fresh_lifecycle_owners.remove(&cache_key)",
+                "self.retransmit_owner = None", "self.retransmit_owner_physical_cut = None",
                 "self.timeout_owner_physical_cut = Some(self.ingress_physical_cut)",
                 "self.timeout_owner = Some(owner)",
                 "self.timeout_recovery_episode = Some(episode)",

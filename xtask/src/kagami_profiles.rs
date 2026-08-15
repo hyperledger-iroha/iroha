@@ -472,8 +472,14 @@ fn write_profile_bundle(
         PrivateKeyRendering::InlineStaging,
     )?;
     let config_path = bundle_root.join(peer_config_file_name(0));
-    let staged_genesis =
-        bind_staged_context(spec, kagami_bin, &genesis_path, &config_path, &genesis_key)?;
+    let staged_genesis = bind_staged_context(
+        spec,
+        kagami_bin,
+        &genesis_path,
+        &config_path,
+        &genesis_key,
+        patched_genesis,
+    )?;
     write_json(&genesis_path, &staged_genesis.manifest)?;
     fs::write(
         bundle_root.join("genesis.signed.nrt"),
@@ -649,6 +655,7 @@ fn bind_staged_context(
     genesis_path: &Path,
     config_path: &Path,
     genesis_key: &KeyPair,
+    portable_manifest: RawGenesisTransaction,
 ) -> AnyResult<StagedGenesis> {
     let workdir = genesis_path
         .parent()
@@ -857,11 +864,93 @@ fn bind_staged_context(
     }
     iroha_core::validate_genesis_block(&block, &genesis_account)
         .map_err(|err| format!("staged {} genesis failed full validation: {err}", spec.slug))?;
+    let portable_manifest =
+        portable_bound_profile_manifest(portable_manifest, &bound_manifest, workdir)?;
     Ok(StagedGenesis {
-        manifest: bound_manifest,
+        manifest: portable_manifest,
         signed_wire,
         expected_hash: block.hash().to_string(),
     })
+}
+fn portable_bound_profile_manifest(
+    generated_manifest: RawGenesisTransaction,
+    resolved_bound_manifest: &RawGenesisTransaction,
+    staging_dir: &Path,
+) -> AnyResult<RawGenesisTransaction> {
+    // `kagami genesis sign` resolves relative IVM paths before returning the bound manifest.
+    // Keep the exact bound transactions (including deterministic NPoS bootstrap injection), but
+    // restore the generated portable IVM base before publishing the prepared profile.
+    if generated_manifest.chain_id() != resolved_bound_manifest.chain_id()
+        || generated_manifest.chain_discriminant() != resolved_bound_manifest.chain_discriminant()
+    {
+        return Err(
+            "generated and signer-bound profile manifests identify different chains".into(),
+        );
+    }
+    let _chain_discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        resolved_bound_manifest.chain_discriminant(),
+    );
+    let generated_value = json::to_value(&generated_manifest)?;
+    let generated_ivm_dir = generated_value
+        .as_object()
+        .and_then(|manifest| manifest.get("ivm_dir"))
+        .and_then(json::Value::as_str);
+    if generated_ivm_dir != Some(".") {
+        return Err("generated profile manifest must use the portable `ivm_dir` value `.`".into());
+    }
+    let expected_fingerprint = generated_manifest
+        .with_sumeragi_v2_context_parameters(
+            resolved_bound_manifest.sumeragi_v2_context_parameters(),
+        )
+        .with_consensus_meta()
+        .consensus_fingerprint();
+    if expected_fingerprint != resolved_bound_manifest.consensus_fingerprint() {
+        return Err(
+            "portable profile manifest fingerprint differs from the signed bound manifest".into(),
+        );
+    }
+    let mut portable_value = json::to_value(resolved_bound_manifest)?;
+    let json::Value::Object(fields) = &mut portable_value else {
+        return Err("bound profile manifest must serialize as a JSON object".into());
+    };
+    fields.insert("ivm_dir".to_owned(), json::Value::String(".".to_owned()));
+    let portable_manifest: RawGenesisTransaction = json::value::from_value(portable_value)?;
+    let portable_transactions = portable_manifest.transactions();
+    let resolved_transactions = resolved_bound_manifest.transactions();
+    if portable_transactions.len() != resolved_transactions.len()
+        || portable_transactions
+            .iter()
+            .zip(resolved_transactions)
+            .any(|(portable, resolved)| {
+                iroha_data_model::Encode::encode(portable)
+                    != iroha_data_model::Encode::encode(resolved)
+            })
+    {
+        return Err(
+            "portable profile manifest transactions differ from the signed bound manifest".into(),
+        );
+    }
+    let portable_value = json::to_value(&portable_manifest)?;
+    if json_value_references_path(&portable_value, staging_dir) {
+        return Err(format!(
+            "portable profile manifest still references ephemeral staging directory {}",
+            staging_dir.display()
+        )
+        .into());
+    }
+    Ok(portable_manifest)
+}
+fn json_value_references_path(value: &json::Value, directory: &Path) -> bool {
+    match value {
+        json::Value::String(candidate) => Path::new(candidate).starts_with(directory),
+        json::Value::Array(values) => values
+            .iter()
+            .any(|value| json_value_references_path(value, directory)),
+        json::Value::Object(fields) => fields
+            .values()
+            .any(|value| json_value_references_path(value, directory)),
+        _ => false,
+    }
 }
 fn run_verify(
     spec: &ProfileSpec,
@@ -1116,6 +1205,11 @@ allow_tool_prefixes = ["iroha."]
     let max_payload_bytes =
         iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get();
     let nexus_topology = rendered_nexus_topology(spec);
+    let genesis_section_spacing = if spec.chain_discriminant.is_some() {
+        "\n\n"
+    } else {
+        "\n"
+    };
     let authenticated_non_validator_sources =
         iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
             .get();
@@ -1194,9 +1288,7 @@ identity_public_key = "{stream_pub}"
 
 {nexus_topology}
 {taira_nexus_overrides}
-{governance_overrides}
-
-[genesis]
+{governance_overrides}{genesis_section_spacing}[genesis]
 public_key = "{genesis_pk}"
 file = "genesis.signed.nrt"
 {genesis_identity_source}
@@ -1225,6 +1317,7 @@ file = "genesis.signed.nrt"
         taira_nexus_overrides = taira_nexus_overrides,
         taira_mcp_overrides = taira_mcp_overrides,
         governance_overrides = governance_overrides,
+        genesis_section_spacing = genesis_section_spacing,
         genesis_pk = genesis_public_key,
         genesis_identity_source = genesis_identity_source,
         stream_pub = node.streaming_public_key,
@@ -1376,13 +1469,13 @@ fn render_readme(
     let runtime_key_note = if published_private_key_rendering(spec)
         == PrivateKeyRendering::RuntimeFiles
     {
-        "\nRuntime keys:\n- Validator, SoraNet transport, and streaming signing keys are not embedded. Provision the per-peer files named by each config under `/run/secrets/iroha` before starting a validator. The compose file mounts that host directory read-only and startup fails closed when a required file is absent.\n"
+        "\nRuntime keys:\n- Validator, SoraNet transport, and streaming signing keys are not embedded. Provision the per-peer files named by each config under `/run/secrets/iroha` before starting a validator. The compose file mounts that host directory read-only and startup fails closed when a required file is absent.\n\n\n"
     } else {
-        ""
+        "\n"
     };
     let topology_note = match spec.slug {
         "iroha3-taira" => {
-            "- topology: 7 logical lanes over 5 physical dataspaces (`universal`, `dpn`, `is`, `is2`, `cbsi`); governance and zk are lanes in `universal`, not dataspaces\n- physical-deployment limit: this deterministic sample uses one 7-peer harness to validate config/genesis binding; it does not provision five disjoint server cohorts or per-dataspace manifests and is not evidence of a deployable physical topology\n"
+            "- topology: 7 logical lanes over 5 physical dataspaces (`universal`, `dpn`, `is`, `is2`, `cbsi`); governance and zk are lanes in `universal`, not dataspaces\n- physical-deployment limit: this deterministic sample uses one 7-peer harness to validate config/genesis binding; it does not provision five disjoint server cohorts or per-dataspace manifests and is not evidence of a deployable physical topology\n\n"
         }
         "iroha3-nexus" => {
             "- topology: 3 logical lanes (`core`, `governance`, `zk`) in the single physical `universal` dataspace\n"
@@ -1398,8 +1491,7 @@ fn render_readme(
 - {vrf_line}
 - deterministic genesis creation-time base (ms): {creation_time_ms}
 - genesis public key: {genesis_pk}
-{topology_note}
-- peers:
+{topology_note}- peers:
 {peer_rows}
 
 Files:
@@ -1411,9 +1503,7 @@ Files:
 - config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 {site_bindings_file}- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
-{runtime_key_note}
-
-Regenerate:
+{runtime_key_note}Regenerate:
 - cargo xtask kagami-profiles --profile {profile}{nexus_regeneration_arg}
 "#,
         slug = spec.slug,
@@ -1634,6 +1724,70 @@ mod tests {
             ".",
         )
         .build_raw()
+    }
+    #[test]
+    fn portable_bound_profile_manifest_does_not_publish_the_staging_path() {
+        let staging = tempdir().expect("profile staging directory");
+        let resolved_bound_manifest = iroha_genesis::GenesisBuilder::new_without_executor(
+            iroha_data_model::ChainId::from("stub"),
+            staging.path(),
+        )
+        .build_raw()
+        .with_consensus_meta();
+        let portable = portable_bound_profile_manifest(
+            stub_genesis(),
+            &resolved_bound_manifest,
+            staging.path(),
+        )
+        .expect("transfer signed context to portable manifest");
+        let resolved_json = json::to_json_pretty(&resolved_bound_manifest)
+            .expect("serialize resolved bound manifest");
+        let portable_json =
+            json::to_json_pretty(&portable).expect("serialize portable bound manifest");
+        assert!(resolved_json.contains(&staging.path().display().to_string()));
+        assert!(portable_json.contains(r#""ivm_dir": ".""#));
+        assert!(!portable_json.contains(&staging.path().display().to_string()));
+        let error = portable_bound_profile_manifest(
+            resolved_bound_manifest.clone(),
+            &resolved_bound_manifest,
+            staging.path(),
+        )
+        .expect_err("absolute staging path must fail closed");
+        assert!(error.to_string().contains("portable `ivm_dir` value `.`"));
+        let leaking_bound_manifest = iroha_genesis::GenesisBuilder::new(
+            iroha_data_model::ChainId::from("stub"),
+            staging.path().join("executor.to"),
+            staging.path(),
+        )
+        .build_raw()
+        .with_consensus_meta();
+        let error = portable_bound_profile_manifest(
+            stub_genesis(),
+            &leaking_bound_manifest,
+            staging.path(),
+        )
+        .expect_err("any remaining staging path must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("still references ephemeral staging directory")
+        );
+
+        let non_default_discriminant = 369;
+        let generated_manifest = stub_genesis().with_chain_discriminant(non_default_discriminant);
+        let resolved_bound_manifest = iroha_genesis::GenesisBuilder::new_without_executor(
+            iroha_data_model::ChainId::from("stub"),
+            staging.path(),
+        )
+        .build_raw()
+        .with_chain_discriminant(non_default_discriminant)
+        .with_consensus_meta();
+        portable_bound_profile_manifest(
+            generated_manifest,
+            &resolved_bound_manifest,
+            staging.path(),
+        )
+        .expect("non-default chain discriminant must survive the portable projection");
     }
     #[test]
     fn peers_are_deterministic_and_populated() {
@@ -2115,6 +2269,58 @@ mod tests {
         assert!(readme.contains("peer0.toml through peerN.toml"));
         assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-dev\n"));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
+    }
+    #[test]
+    fn rendered_dev_and_taira_text_preserves_canonical_spacing() {
+        let genesis_key = deterministic_keypair("canonical-spacing-genesis", Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
+        let dev_peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
+        let dev_readme = render_readme(
+            &PROFILES[0],
+            &dev_peers,
+            genesis_key.public_key(),
+            None,
+            None,
+        );
+        assert!(dev_readme.contains(&format!(
+            "- genesis public key: {}\n- peers:\n",
+            genesis_key.public_key()
+        )));
+        assert!(dev_readme.contains(
+            "- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs\n\nRegenerate:"
+        ));
+        let dev_config = render_config(
+            &PROFILES[0],
+            &dev_peers,
+            genesis_key.public_key(),
+            GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        );
+        assert!(dev_config.contains("lane_count = 3\n\n\n\n[genesis]"));
+        assert!(!dev_config.contains("lane_count = 3\n\n\n\n\n[genesis]"));
+
+        let taira_peers = build_peers(&PROFILES[1]).expect("build deterministic Taira peers");
+        let taira_readme = render_readme(
+            &PROFILES[1],
+            &taira_peers,
+            genesis_key.public_key(),
+            Some("ABCD"),
+            None,
+        );
+        assert!(
+            taira_readme.contains("is not evidence of a deployable physical topology\n\n- peers:")
+        );
+        assert!(
+            taira_readme
+                .contains("startup fails closed when a required file is absent.\n\n\nRegenerate:")
+        );
+        let taira_config = render_config(
+            &PROFILES[1],
+            &taira_peers,
+            genesis_key.public_key(),
+            GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        );
+        assert!(taira_config.contains("submitters = []\n\n\n[genesis]"));
+        assert!(!taira_config.contains("submitters = []\n\n\n\n[genesis]"));
     }
     #[test]
     fn taira_readme_mentions_chain_discriminant() {
@@ -2665,6 +2871,12 @@ mod tests {
                 .count(),
             peers.len()
         );
+        assert_eq!(
+            rendered.matches(r#"command: ["iroha3d", "--sora""#).count(),
+            peers.len(),
+            "every prepared profile service must launch the canonical iroha3d binary"
+        );
+        assert!(!rendered.contains(r#"command: ["irohad""#));
         assert_eq!(
             rendered.matches("ipv4_address: 172.28.0.").count(),
             peers.len()

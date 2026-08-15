@@ -1,7 +1,67 @@
 #!/bin/bash
 set -euo pipefail
 
-ROOT_DIR="${KAGEMUSHA_PRODUCTION_READINESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+SCRIPT_SOURCE_ORIGINAL="${BASH_SOURCE[0]}"
+if [[ -z "${SCRIPT_SOURCE_ORIGINAL}" || -L "${SCRIPT_SOURCE_ORIGINAL}" ]]; then
+  echo "Kagemusha readiness rejects missing or symlinked script invocation" >&2
+  exit 2
+fi
+SCRIPT_SOURCE_NORMALIZED="${SCRIPT_SOURCE_ORIGINAL}"
+while [[ "${SCRIPT_SOURCE_NORMALIZED}" == ./* ]]; do
+  SCRIPT_SOURCE_NORMALIZED="${SCRIPT_SOURCE_NORMALIZED#./}"
+done
+if [[ -z "${SCRIPT_SOURCE_NORMALIZED}" ]]; then
+  echo "Kagemusha readiness script invocation path is empty" >&2
+  exit 2
+fi
+
+path_has_noncanonical_component() {
+  local path_text="${1}"
+  local remainder="${path_text#/}"
+  local component
+  while [[ -n "${remainder}" ]]; do
+    if [[ "${remainder}" == */* ]]; then
+      component="${remainder%%/*}"
+      remainder="${remainder#*/}"
+    else
+      component="${remainder}"
+      remainder=""
+    fi
+    if [[ -z "${component}" || "${component}" == "." || "${component}" == ".." ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if path_has_noncanonical_component "${SCRIPT_SOURCE_NORMALIZED}"; then
+  echo "Kagemusha readiness script invocation path is not canonical" >&2
+  exit 2
+fi
+if [[ "${SCRIPT_SOURCE_NORMALIZED}" == /* ]]; then
+  SCRIPT_PATH_LEXICAL="${SCRIPT_SOURCE_NORMALIZED}"
+else
+  SCRIPT_PATH_LEXICAL="$(builtin pwd -P)/${SCRIPT_SOURCE_NORMALIZED}"
+fi
+SCRIPT_BASENAME="${SCRIPT_PATH_LEXICAL##*/}"
+SCRIPT_DIRECTORY_LEXICAL="${SCRIPT_PATH_LEXICAL%/*}"
+SCRIPT_DIRECTORY_PHYSICAL="$(
+  builtin cd -P -- "${SCRIPT_DIRECTORY_LEXICAL}" && builtin pwd -P
+)"
+if [[ "${SCRIPT_DIRECTORY_PHYSICAL}" != "${SCRIPT_DIRECTORY_LEXICAL}" \
+  || "${SCRIPT_BASENAME}" != "check_kagemusha_production_readiness.sh" \
+  || "${SCRIPT_DIRECTORY_PHYSICAL##*/}" != "ci" ]]; then
+  echo "Kagemusha readiness rejects moved or symlink-traversing script invocation" >&2
+  exit 2
+fi
+SCRIPT_PATH="${SCRIPT_DIRECTORY_PHYSICAL}/${SCRIPT_BASENAME}"
+if [[ ! -f "${SCRIPT_PATH}" || -L "${SCRIPT_PATH}" \
+  || ! "${SCRIPT_SOURCE_ORIGINAL}" -ef "${SCRIPT_PATH}" ]]; then
+  echo "Kagemusha readiness script path changed during root derivation" >&2
+  exit 2
+fi
+DERIVED_ROOT_DIR="${SCRIPT_DIRECTORY_PHYSICAL%/*}"
+ROOT_DIR="${KAGEMUSHA_PRODUCTION_READINESS_ROOT:-${DERIVED_ROOT_DIR}}"
 MODE="candidate"
 SELF_TEST="false"
 
@@ -17,32 +77,174 @@ for argument in "$@"; do
 done
 
 PYTHON_BIN="python3"
+PYTHON_SHA256=""
+PYTHON_PIN_FD="-1"
+PYTHON_PATH_FINGERPRINT=""
+GATE_SHA256=""
+GATE_PIN_FD="-1"
+GATE_PATH_FINGERPRINT=""
+
+promotion_stat_fingerprint() {
+  local target="${1}"
+  local observed
+  if observed="$(/usr/bin/stat -f '%u %Lp %d %i %l %z %m %c' -- "${target}" 2>/dev/null)"; then
+    :
+  elif observed="$(/usr/bin/stat -c '%u %a %d %i %h %s %Y %Z' -- "${target}" 2>/dev/null)"; then
+    :
+  else
+    return 1
+  fi
+  printf '%s\n' "${observed}"
+}
+
+promotion_assert_root_custody() {
+  local target="${1}"
+  local label="${2}"
+  local remainder="${target#/}"
+  local component
+  local current="/"
+  local fingerprint
+  local owner_uid
+  local mode_text
+  local ignored
+  local mode_value
+  if [[ "${target}" != /* || "${target}" == "/" ]] \
+    || path_has_noncanonical_component "${target}"; then
+    echo "${label} must be one canonical absolute non-root path" >&2
+    return 1
+  fi
+  fingerprint="$(promotion_stat_fingerprint "/")" || {
+    echo "${label} root metadata is unavailable" >&2
+    return 1
+  }
+  read -r owner_uid mode_text ignored <<<"${fingerprint}"
+  if [[ "${owner_uid}" != "0" || ! "${mode_text}" =~ ^[0-7]{3,4}$ ]]; then
+    echo "${label} filesystem root is not root-owned with a canonical mode" >&2
+    return 1
+  fi
+  mode_value=$((8#${mode_text}))
+  if (( mode_value & 0022 )); then
+    echo "${label} filesystem root is group/world writable" >&2
+    return 1
+  fi
+  while [[ -n "${remainder}" ]]; do
+    if [[ "${remainder}" == */* ]]; then
+      component="${remainder%%/*}"
+      remainder="${remainder#*/}"
+    else
+      component="${remainder}"
+      remainder=""
+    fi
+    current="${current%/}/${component}"
+    if [[ -L "${current}" || ! -e "${current}" ]]; then
+      echo "${label} traverses a missing or symlinked path component" >&2
+      return 1
+    fi
+    fingerprint="$(promotion_stat_fingerprint "${current}")" || {
+      echo "${label} metadata is unavailable" >&2
+      return 1
+    }
+    read -r owner_uid mode_text ignored <<<"${fingerprint}"
+    if [[ "${owner_uid}" != "0" || ! "${mode_text}" =~ ^[0-7]{3,4}$ ]]; then
+      echo "${label} path component is not root-owned with a canonical mode" >&2
+      return 1
+    fi
+    mode_value=$((8#${mode_text}))
+    if (( mode_value & 0022 )); then
+      echo "${label} path component is group/world writable" >&2
+      return 1
+    fi
+  done
+}
+
 if [[ "${MODE}" == "promotion" ]]; then
   if [[ -n "${KAGEMUSHA_PRODUCTION_READINESS_ROOT+x}" ]]; then
     echo "promotion rejects KAGEMUSHA_PRODUCTION_READINESS_ROOT; run the checked-in gate in place" >&2
     exit 2
   fi
+  # Bootstrap contract: an independently authenticated controller must install
+  # the reviewed checkout below this root-owned, non-group/world-writable path
+  # and verify the reviewed gate digest before invoking this exact path.  The
+  # digest environment value repeats that launcher's decision; it cannot replace
+  # the external pre-exec check because a substituted script could omit its own
+  # checks or simply exit zero.
+  promotion_assert_root_custody "${DERIVED_ROOT_DIR}" "promotion readiness checkout" || exit 2
+  promotion_assert_root_custody "${SCRIPT_PATH}" "promotion readiness gate" || exit 2
+  if (( EUID != 0 )); then
+    echo "production promotion must enter the digest-pinned interpreter as root" >&2
+    exit 2
+  fi
+  GATE_SHA256="${KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256:-}"
+  if [[ ! "${GATE_SHA256}" =~ ^[0-9a-f]{64}$ || "${GATE_SHA256}" == "$(printf '0%.0s' {1..64})" ]]; then
+    echo "promotion requires KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256 from an independently authenticated launcher/controller" >&2
+    exit 2
+  fi
+  GATE_PATH_FINGERPRINT="$(promotion_stat_fingerprint "${SCRIPT_PATH}")" || {
+    echo "promotion readiness gate metadata is unavailable" >&2
+    exit 2
+  }
+  exec 8<"${SCRIPT_PATH}"
+  GATE_PIN_FD="8"
+  if [[ -x /usr/bin/shasum ]]; then
+    OBSERVED_GATE_SHA256="$(/usr/bin/shasum -a 256 -- "/dev/fd/${GATE_PIN_FD}")"
+  elif [[ -x /usr/bin/sha256sum ]]; then
+    OBSERVED_GATE_SHA256="$(/usr/bin/sha256sum -- "/dev/fd/${GATE_PIN_FD}")"
+  else
+    echo "promotion requires root-installed /usr/bin/shasum or /usr/bin/sha256sum" >&2
+    exit 2
+  fi
+  OBSERVED_GATE_SHA256="${OBSERVED_GATE_SHA256%% *}"
+  if [[ "${OBSERVED_GATE_SHA256}" != "${GATE_SHA256}" ]]; then
+    echo "promotion readiness gate differs from its independently reviewed SHA-256" >&2
+    exit 2
+  fi
+  if [[ "$(promotion_stat_fingerprint "${SCRIPT_PATH}")" != "${GATE_PATH_FINGERPRINT}" ]]; then
+    echo "promotion readiness gate changed during bootstrap" >&2
+    exit 2
+  fi
+  promotion_assert_root_custody "${SCRIPT_PATH}" "promotion readiness gate" || exit 2
   PYTHON_BIN="${KAGEMUSHA_PRODUCTION_READINESS_PYTHON:-}"
   PYTHON_SHA256="${KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256:-}"
   if [[ "${PYTHON_BIN}" != /* || ! -f "${PYTHON_BIN}" || -L "${PYTHON_BIN}" || ! -x "${PYTHON_BIN}" || ! "${PYTHON_SHA256}" =~ ^[0-9a-f]{64}$ || "${PYTHON_SHA256}" == "$(printf '0%.0s' {1..64})" ]]; then
     echo "promotion requires a canonical absolute digest-pinned Python interpreter" >&2
     exit 2
   fi
+  promotion_assert_root_custody "${PYTHON_BIN}" "promotion Python interpreter" || exit 2
+  PYTHON_PATH_FINGERPRINT="$(promotion_stat_fingerprint "${PYTHON_BIN}")" || {
+    echo "promotion Python interpreter metadata is unavailable" >&2
+    exit 2
+  }
+  exec 9<"${PYTHON_BIN}"
+  PYTHON_PIN_FD="9"
   if [[ -x /usr/bin/shasum ]]; then
-    OBSERVED_PYTHON_SHA256="$(/usr/bin/shasum -a 256 -- "${PYTHON_BIN}" | /usr/bin/awk '{print $1}')"
+    OBSERVED_PYTHON_SHA256="$(/usr/bin/shasum -a 256 -- "/dev/fd/${PYTHON_PIN_FD}")"
   elif [[ -x /usr/bin/sha256sum ]]; then
-    OBSERVED_PYTHON_SHA256="$(/usr/bin/sha256sum -- "${PYTHON_BIN}" | /usr/bin/awk '{print $1}')"
+    OBSERVED_PYTHON_SHA256="$(/usr/bin/sha256sum -- "/dev/fd/${PYTHON_PIN_FD}")"
   else
     echo "promotion requires root-installed /usr/bin/shasum or /usr/bin/sha256sum" >&2
     exit 2
   fi
+  OBSERVED_PYTHON_SHA256="${OBSERVED_PYTHON_SHA256%% *}"
   if [[ "${OBSERVED_PYTHON_SHA256}" != "${PYTHON_SHA256}" ]]; then
     echo "promotion Python interpreter differs from its trusted SHA-256" >&2
     exit 2
   fi
+  if [[ "$(promotion_stat_fingerprint "${PYTHON_BIN}")" != "${PYTHON_PATH_FINGERPRINT}" ]]; then
+    echo "promotion Python interpreter changed before execution" >&2
+    exit 2
+  fi
+  promotion_assert_root_custody "${PYTHON_BIN}" "promotion Python interpreter" || exit 2
 fi
 
-"${PYTHON_BIN}" -I - "${ROOT_DIR}" "${MODE}" "${SELF_TEST}" <<'PY'
+# Portable Bash still enters Python by pathname.  At this point every path
+# component and the file are root-owned and non-writable by group/other, so no
+# principal outside the documented root trust boundary can win the remaining
+# execve lookup.  Inherited fd 8 binds the gate to the controller's reviewed
+# digest, and inherited fd 9 binds the running image back to the exact pre-exec
+# bytes and metadata before any promotion decision is made.
+"${PYTHON_BIN}" -I - "${ROOT_DIR}" "${MODE}" "${SELF_TEST}" "${PYTHON_SHA256}" \
+  "${PYTHON_PIN_FD}" "${PYTHON_PATH_FINGERPRINT}" "${GATE_SHA256}" \
+  "${GATE_PIN_FD}" "${GATE_PATH_FINGERPRINT}" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -60,16 +262,32 @@ from pathlib import Path
 root = Path(sys.argv[1])
 mode = sys.argv[2]
 self_test = sys.argv[3] == "true"
+trusted_python_sha256 = sys.argv[4]
+try:
+    trusted_python_fd = int(sys.argv[5])
+except ValueError:
+    trusted_python_fd = -2
+trusted_python_path_fingerprint = sys.argv[6]
+trusted_gate_sha256 = sys.argv[7]
+try:
+    trusted_gate_fd = int(sys.argv[8])
+except ValueError:
+    trusted_gate_fd = -2
+trusted_gate_path_fingerprint = sys.argv[9]
 
 READINESS = "ci/check_kagemusha_production_readiness.sh"
 MODEL = "crates/iroha_data_model/src/offline/mod.rs"
 MODEL_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_model.rs"
 MODEL_INCLUDE = 'include!("kagemusha_model.rs");'
+MODEL_VERIFIER_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_release_verifier.rs"
+MODEL_VERIFIER_MODULE = "mod kagemusha_release_verifier;"
 PRIVACY = "crates/iroha_data_model/src/privacy.rs"
 PRIVACY_PROTOCOL = "crates/iroha_data_model/src/privacy/protocol.rs"
 BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
 HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 CATALOG = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4.rs"
+CATALOG_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4_release_catalog_impl.rs"
+CATALOG_INCLUDE = 'include!("kagemusha_terminal_registry_v4_release_catalog_impl.rs");\n'
 CORE = "crates/iroha_core/src/smartcontracts/isi/offline.rs"
 STEP_TRANSITION = "crates/iroha_core/src/zk/kagemusha_step_transition.rs"
 RECURSIVE_BACKEND = "crates/iroha_core/src/zk/kagemusha_v2.rs"
@@ -83,6 +301,29 @@ BUNDLE = "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs"
 ROUTES = "crates/iroha_torii_shared/src/route_catalog.rs"
 WORKFLOW = ".github/workflows/pr_kagemusha_payload_bench.yml"
 IOS_EVIDENCE_MODULE = "scripts/kagemusha_candidate_ios_evidence.py"
+SOURCE_TREE_SEAL = "scripts/kagemusha_source_tree_seal.py"
+SOURCE_GIT = Path("/usr/bin/git")
+SOURCE_ALLOWED_SIGNERS_PATH_ENV = (
+    "KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH"
+)
+SOURCE_ALLOWED_SIGNERS_SHA256_ENV = (
+    "KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256"
+)
+SOURCE_REVOCATION_PATH_ENV = "KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH"
+SOURCE_REVOCATION_SHA256_ENV = (
+    "KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_SHA256"
+)
+SOURCE_SEAL_PROJECTION_PATH_ENV = (
+    "KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION"
+)
+SOURCE_SEAL_PROJECTION_SHA256_ENV = (
+    "KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256"
+)
+PROMOTION_STAGING_PARENT = Path(
+    "/private/var/db/iroha-kagemusha-readiness-v1"
+    if sys.platform == "darwin"
+    else "/var/lib/iroha/kagemusha-readiness-v1"
+)
 
 ARTIFACTS = (
     "step-eq.params-ipa.krv4",
@@ -125,6 +366,12 @@ MAX_CRYPTOGRAPHIC_REVIEW_BYTES = 1024 * 1024
 MAX_QUALIFICATION_RECEIPT_BYTES = 2 * 384 * 1024 + 16 * 1024
 MAX_PROMOTION_RECORD_BYTES = 1024 * 1024
 MAX_KAGAMI_VERIFIER_BYTES = 512 * 1024 * 1024
+MAX_READINESS_GATE_BYTES = 8 * 1024 * 1024
+MAX_REVIEWED_SOURCE_CLOSURE_BYTES = 16 * 1024 * 1024
+MAX_REVIEWED_HELPER_BYTES = 4 * 1024 * 1024
+MAX_SOURCE_ALLOWED_SIGNERS_BYTES = 64 * 1024
+MAX_SOURCE_REVOCATION_BYTES = 16 * 1024 * 1024
+MAX_SOURCE_SEAL_PROJECTION_BYTES = 16 * 1024 * 1024
 MAX_DECLARED_ARTIFACT_FILE_BYTES = 5 * 1024 * 1024 * 1024
 MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES = 10 * 1024 * 1024 * 1024
 MAX_CATALOG_AGGREGATE_BYTES = 12 * 1024 * 1024 * 1024
@@ -139,8 +386,63 @@ SANITIZED_VERIFIER_ENV = {
     "LANG": "C",
     "LC_ALL": "C",
     "PATH": "/usr/bin:/bin",
+    "TMPDIR": str(PROMOTION_STAGING_PARENT),
 }
 READ_CHUNK_BYTES = 1024 * 1024
+
+# Promotion trust boundary: the controller-authenticated, root-installed gate,
+# its digest-pinned Python interpreter, and the independently reviewed source
+# closure are trusted code.
+# Every operator-supplied production input is required to live below a
+# symlink-free, root-owned path chain that is not writable by group or other.
+# Root itself remains the production trust principal; this gate does not try to
+# defend against a malicious caller that can replace the gate while it runs.
+PRODUCTION_TRUSTED_UID = 0
+REVIEWED_SOURCE_CLOSURE_KEYS = {
+    "schema",
+    "base_commit",
+    "source_commit",
+    "source_repo_dirty",
+    "source_tree_sha256",
+    "tracked_binary_diff_sha256",
+    "untracked_file_count",
+    "untracked_path_mode_blob_oid_manifest",
+    "untracked_path_mode_blob_oid_manifest_sha256",
+    "ignored_cargo_lock_size_bytes",
+    "ignored_cargo_lock_sha256",
+    "combined_source_fingerprint_sha256",
+}
+SOURCE_SEAL_PROJECTION_KEYS = {
+    "build_script_observed",
+    "outer_policy",
+    "reviewed_source_closure_hex",
+    "reviewed_source_closure_sha256",
+    "schema",
+    "source_authority",
+    "source_commit",
+    "source_date_epoch",
+    "source_repo_dirty",
+    "source_tree_sha256",
+}
+SOURCE_AUTHORITY_KEYS = {
+    "commit",
+    "commit_object_sha256",
+    "commit_object_size",
+    "committer_epoch",
+    "git_tree",
+    "ordered_parents",
+    "parent_commit",
+    "parent_tree",
+    "signature",
+}
+SOURCE_SIGNATURE_KEYS = {
+    "allowed_signers_sha256",
+    "mechanism",
+    "principal",
+    "public_key_sha256",
+    "revocation_sha256",
+    "signature_namespace",
+}
 ROUTE_LITERALS = (
     "/v1/offline/readiness",
     "/v1/offline/top-up",
@@ -234,7 +536,7 @@ def read(relative: str, errors: list[str]) -> str:
 
 
 def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
-    """Read the parent and its authenticated model component as one source."""
+    """Read the parent and both authenticated model components as one source."""
 
     # Preserve the existing negative-test API: a MODEL override is already a
     # complete logical source, while MODEL_COMPONENT can exercise the split.
@@ -246,107 +548,82 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
         if MODEL_COMPONENT in overrides
         else read(MODEL_COMPONENT, errors)
     )
+    verifier = (
+        overrides[MODEL_VERIFIER_COMPONENT]
+        if MODEL_VERIFIER_COMPONENT in overrides
+        else read(MODEL_VERIFIER_COMPONENT, errors)
+    )
     if parent.count(MODEL_INCLUDE) != 1:
         errors.append(
             f"{MODEL}: expected exactly one reviewed {Path(MODEL_COMPONENT).name} include"
         )
         return parent
-    return parent.replace(MODEL_INCLUDE, component, 1)
+    parent = parent.replace(MODEL_INCLUDE, component, 1)
+    if parent.count(MODEL_VERIFIER_MODULE) != 1:
+        errors.append(
+            f"{MODEL}: expected exactly one reviewed {Path(MODEL_VERIFIER_COMPONENT).name} module"
+        )
+        return parent
+    for marker in (
+        "const VERIFIER_IDENTITY_SCHEMA_V4",
+        "pub fn kagemusha_recursive_spend_verifier_key_id_v4",
+    ):
+        if verifier.count(marker) != 1:
+            errors.append(
+                f"{MODEL_VERIFIER_COMPONENT}: expected exactly one {marker!r}"
+            )
+    return parent.replace(
+        MODEL_VERIFIER_MODULE,
+        "mod kagemusha_release_verifier {\n" + verifier + "\n}",
+        1,
+    )
 
 
-def read_regular_bounded(path: Path, maximum_bytes: int, label: str) -> bytes:
-    """Read one pinned regular file without trusting path metadata as an allocation size."""
+def read_reviewed_catalog(errors: list[str], overrides: dict[str, str]) -> str:
+    """Read the terminal registry and release-catalog implementation as one source."""
 
-    before = path.lstat()
-    if path.is_symlink() or not path.is_file() or before.st_nlink != 1:
-        raise ValueError(f"{label} must be a singly-linked non-symlink regular file")
-    if before.st_size <= 0 or before.st_size > maximum_bytes:
-        raise ValueError(f"{label} violates its {maximum_bytes}-byte size limit")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
-    chunks: list[bytes] = []
-    try:
-        opened = os.fstat(descriptor)
-        identity = (before.st_dev, before.st_ino)
-        if (
-            not os.path.samestat(before, opened)
-            or opened.st_nlink != 1
-            or opened.st_size != before.st_size
-        ):
-            raise ValueError(f"{label} changed while it was opened")
-        size = 0
-        while True:
-            chunk = os.read(descriptor, min(READ_CHUNK_BYTES, maximum_bytes + 1 - size))
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > maximum_bytes:
-                raise ValueError(f"{label} exceeds its size limit")
-            chunks.append(chunk)
-        after_open = os.fstat(descriptor)
-        after_path = path.lstat()
-        if (
-            (after_path.st_dev, after_path.st_ino) != identity
-            or not os.path.samestat(before, after_open)
-            or size != before.st_size
-            or after_path.st_size != size
-            or after_path.st_mtime_ns != before.st_mtime_ns
-            or after_path.st_ctime_ns != before.st_ctime_ns
-        ):
-            raise ValueError(f"{label} changed while it was read")
-    finally:
-        os.close(descriptor)
-    return b"".join(chunks)
+    if CATALOG in overrides:
+        return overrides[CATALOG]
+    parent = read(CATALOG, errors)
+    component = (
+        overrides[CATALOG_COMPONENT]
+        if CATALOG_COMPONENT in overrides
+        else read(CATALOG_COMPONENT, errors)
+    )
+    if parent.count(CATALOG_INCLUDE) != 1:
+        errors.append(
+            f"{CATALOG}: expected exactly one reviewed {Path(CATALOG_COMPONENT).name} include"
+        )
+        return parent
+    return parent.replace(CATALOG_INCLUDE, component, 1)
 
 
-def inspect_regular_prefix(
+def pin_regular_metadata(
     path: Path,
-    expected_bytes: int,
-    maximum_bytes: int,
-    prefix_bytes: int,
     label: str,
-) -> bytes:
-    """Inspect only a bounded prefix while pinning the complete file's identity and size."""
+    *,
+    require_single_link: bool = True,
+    allow_empty: bool = False,
+) -> tuple[int, tuple[int, ...]]:
+    """Open and retain one exact regular-file metadata identity.
 
-    before = path.lstat()
-    if path.is_symlink() or not path.is_file() or before.st_nlink != 1:
-        raise ValueError(f"{label} must be a singly-linked non-symlink regular file")
-    if expected_bytes <= 0 or expected_bytes > maximum_bytes or before.st_size != expected_bytes:
-        raise ValueError(f"{label} does not match its bounded declared size")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
-    try:
-        opened = os.fstat(descriptor)
-        if not os.path.samestat(before, opened) or opened.st_nlink != 1:
-            raise ValueError(f"{label} changed while it was opened")
-        prefix = os.read(descriptor, prefix_bytes)
-        after_open = os.fstat(descriptor)
-        after_path = path.lstat()
-        if (
-            len(prefix) != prefix_bytes
-            or not os.path.samestat(before, after_open)
-            or not os.path.samestat(before, after_path)
-            or after_path.st_size != before.st_size
-            or after_path.st_mtime_ns != before.st_mtime_ns
-            or after_path.st_ctime_ns != before.st_ctime_ns
-        ):
-            raise ValueError(f"{label} changed while it was inspected")
-        return prefix
-    finally:
-        os.close(descriptor)
-
-
-def pin_regular_metadata(path: Path, label: str) -> tuple[int, tuple[int, ...]]:
-    """Open and retain one exact regular-file metadata identity."""
+    Operator-controlled release inputs must be singly linked.  Fixed system
+    executables may have several links on sealed operating-system volumes; for
+    those callers the root-owned, non-writable path chain is the custody
+    boundary and every observed link-count change remains part of the pin.
+    """
 
     before = path.lstat()
     if (
         stat.S_ISLNK(before.st_mode)
         or not stat.S_ISREG(before.st_mode)
-        or before.st_nlink != 1
-        or before.st_size <= 0
+        or (require_single_link and before.st_nlink != 1)
+        or before.st_size < 0
+        or (not allow_empty and before.st_size == 0)
     ):
-        raise ValueError(f"{label} must be a nonempty singly-linked regular file")
+        qualification = "singly-linked " if require_single_link else ""
+        content = "" if allow_empty else "nonempty "
+        raise ValueError(f"{label} must be a {content}{qualification}regular file")
     flags = (
         os.O_RDONLY
         | getattr(os, "O_CLOEXEC", 0)
@@ -363,6 +640,8 @@ def pin_regular_metadata(path: Path, label: str) -> tuple[int, tuple[int, ...]]:
             before.st_size,
             before.st_mtime_ns,
             before.st_ctime_ns,
+            before.st_uid,
+            before.st_gid,
         )
         if not os.path.samestat(before, opened) or fingerprint != (
             opened.st_dev,
@@ -372,6 +651,8 @@ def pin_regular_metadata(path: Path, label: str) -> tuple[int, tuple[int, ...]]:
             opened.st_size,
             opened.st_mtime_ns,
             opened.st_ctime_ns,
+            opened.st_uid,
+            opened.st_gid,
         ):
             raise ValueError(f"{label} changed while it was pinned")
         return descriptor, fingerprint
@@ -403,6 +684,8 @@ def pin_directory_metadata(path: Path, label: str) -> tuple[int, tuple[int, ...]
             before.st_size,
             before.st_mtime_ns,
             before.st_ctime_ns,
+            before.st_uid,
+            before.st_gid,
         )
         if not os.path.samestat(before, opened) or fingerprint != (
             opened.st_dev,
@@ -412,6 +695,8 @@ def pin_directory_metadata(path: Path, label: str) -> tuple[int, tuple[int, ...]
             opened.st_size,
             opened.st_mtime_ns,
             opened.st_ctime_ns,
+            opened.st_uid,
+            opened.st_gid,
         ):
             raise ValueError(f"{label} changed while it was pinned")
         return descriptor, fingerprint
@@ -450,6 +735,8 @@ def revalidate_pinned_metadata(
         opened.st_size,
         opened.st_mtime_ns,
         opened.st_ctime_ns,
+        opened.st_uid,
+        opened.st_gid,
     )
     observed_path = (
         after_path.st_dev,
@@ -459,6 +746,8 @@ def revalidate_pinned_metadata(
         after_path.st_size,
         after_path.st_mtime_ns,
         after_path.st_ctime_ns,
+        after_path.st_uid,
+        after_path.st_gid,
     )
     if observed_open != fingerprint or observed_path != fingerprint:
         raise ValueError(f"{label} changed during authenticated catalog verification")
@@ -488,16 +777,138 @@ def hash_pinned_descriptor(
     return digest.hexdigest()
 
 
+def validate_inherited_promotion_python() -> None:
+    """Bind the running interpreter to the descriptor opened before shell exec."""
+
+    if trusted_python_fd != 9:
+        raise ValueError("promotion Python descriptor handoff is missing")
+    try:
+        opened = os.fstat(trusted_python_fd)
+    except OSError as error:
+        raise ValueError("promotion Python descriptor handoff is closed") from error
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or opened.st_uid != PRODUCTION_TRUSTED_UID
+        or stat.S_IMODE(opened.st_mode) & 0o022
+        or opened.st_nlink < 1
+        or not stat.S_IMODE(opened.st_mode) & 0o111
+        or opened.st_size <= 0
+        or opened.st_size > MAX_KAGAMI_VERIFIER_BYTES
+    ):
+        raise ValueError("promotion Python descriptor does not have production custody")
+    observed_fingerprint = " ".join(
+        (
+            str(opened.st_uid),
+            format(stat.S_IMODE(opened.st_mode), "o"),
+            str(opened.st_dev),
+            str(opened.st_ino),
+            str(opened.st_nlink),
+            str(opened.st_size),
+            str(int(opened.st_mtime)),
+            str(int(opened.st_ctime)),
+        )
+    )
+    if observed_fingerprint != trusted_python_path_fingerprint:
+        raise ValueError("promotion Python descriptor differs from its pre-exec path pin")
+    descriptor_fingerprint = (
+        opened.st_dev,
+        opened.st_ino,
+        opened.st_nlink,
+        opened.st_mode,
+        opened.st_size,
+        opened.st_mtime_ns,
+        opened.st_ctime_ns,
+        opened.st_uid,
+        opened.st_gid,
+    )
+    if (
+        hash_pinned_descriptor(
+            trusted_python_fd,
+            descriptor_fingerprint,
+            MAX_KAGAMI_VERIFIER_BYTES,
+            "inherited promotion Python",
+        )
+        != trusted_python_sha256
+    ):
+        raise ValueError("inherited promotion Python differs from its trusted SHA-256")
+    runtime = Path(sys.executable)
+    runtime_metadata = runtime.lstat()
+    if runtime.is_symlink() or not os.path.samestat(opened, runtime_metadata):
+        raise ValueError("running promotion Python differs from its inherited descriptor")
+
+
+def validate_inherited_promotion_gate() -> None:
+    """Bind this gate to the independently reviewed launcher digest and path."""
+
+    if trusted_gate_fd != 8:
+        raise ValueError("promotion gate descriptor handoff is missing")
+    try:
+        opened = os.fstat(trusted_gate_fd)
+    except OSError as error:
+        raise ValueError("promotion gate descriptor handoff is closed") from error
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or opened.st_uid != PRODUCTION_TRUSTED_UID
+        or stat.S_IMODE(opened.st_mode) & 0o022
+        or opened.st_nlink != 1
+        or not stat.S_IMODE(opened.st_mode) & 0o111
+        or opened.st_size <= 0
+        or opened.st_size > MAX_READINESS_GATE_BYTES
+    ):
+        raise ValueError("promotion gate descriptor does not have production custody")
+    observed_fingerprint = " ".join(
+        (
+            str(opened.st_uid),
+            format(stat.S_IMODE(opened.st_mode), "o"),
+            str(opened.st_dev),
+            str(opened.st_ino),
+            str(opened.st_nlink),
+            str(opened.st_size),
+            str(int(opened.st_mtime)),
+            str(int(opened.st_ctime)),
+        )
+    )
+    if observed_fingerprint != trusted_gate_path_fingerprint:
+        raise ValueError("promotion gate differs from its pre-exec path pin")
+    descriptor_fingerprint = (
+        opened.st_dev,
+        opened.st_ino,
+        opened.st_nlink,
+        opened.st_mode,
+        opened.st_size,
+        opened.st_mtime_ns,
+        opened.st_ctime_ns,
+        opened.st_uid,
+        opened.st_gid,
+    )
+    if (
+        hash_pinned_descriptor(
+            trusted_gate_fd,
+            descriptor_fingerprint,
+            MAX_READINESS_GATE_BYTES,
+            "inherited promotion gate",
+        )
+        != trusted_gate_sha256
+    ):
+        raise ValueError("inherited promotion gate differs from its reviewed SHA-256")
+    gate_path = root / READINESS
+    gate_metadata = gate_path.lstat()
+    if gate_path.is_symlink() or not os.path.samestat(opened, gate_metadata):
+        raise ValueError("running promotion gate differs from its inherited descriptor")
+
+
 def read_pinned_descriptor(
     descriptor: int,
     fingerprint: tuple[int, ...],
     maximum_bytes: int,
     label: str,
+    *,
+    allow_empty: bool = False,
 ) -> bytes:
     """Read exact bounded bytes through a retained descriptor."""
 
     size = fingerprint[4]
-    if size <= 0 or size > maximum_bytes:
+    if size < 0 or (not allow_empty and size == 0) or size > maximum_bytes:
         raise ValueError(f"{label} violates its {maximum_bytes}-byte size limit")
     chunks: list[bytes] = []
     offset = 0
@@ -512,14 +923,148 @@ def read_pinned_descriptor(
     return b"".join(chunks)
 
 
+def inspect_pinned_prefix(
+    descriptor: int,
+    fingerprint: tuple[int, ...],
+    expected_bytes: int,
+    maximum_bytes: int,
+    prefix_bytes: int,
+    label: str,
+) -> bytes:
+    """Inspect a prefix through the descriptor retained for the whole decision."""
+
+    if (
+        expected_bytes <= 0
+        or expected_bytes > maximum_bytes
+        or fingerprint[4] != expected_bytes
+        or prefix_bytes <= 0
+        or prefix_bytes > expected_bytes
+    ):
+        raise ValueError(f"{label} does not match its bounded declared size")
+    prefix = os.pread(descriptor, prefix_bytes, 0)
+    if len(prefix) != prefix_bytes or os.fstat(descriptor).st_size != expected_bytes:
+        raise ValueError(f"{label} changed while it was inspected")
+    return prefix
+
+
+def require_production_root_custody(descriptor: int, label: str) -> None:
+    """Mirror runtime root ownership and group/world write rejection."""
+
+    metadata = os.fstat(descriptor)
+    if metadata.st_uid != PRODUCTION_TRUSTED_UID:
+        raise ValueError(f"{label} must be owned by root")
+    if stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise ValueError(f"{label} must not be group/world writable")
+
+
+def snapshot_private_bytes(
+    payload: bytes,
+    file_name: str,
+    label: str,
+    staging_parent: Path,
+    *,
+    allow_empty: bool = False,
+) -> tuple[tempfile.TemporaryDirectory[str], Path]:
+    """Put already-pinned bounded bytes in one owner-private validation slot."""
+
+    if not payload and not allow_empty:
+        raise ValueError(f"{label} snapshot payload is empty")
+    temporary = tempfile.TemporaryDirectory(
+        prefix="kagemusha-pinned-input-", dir=staging_parent
+    )
+    temporary_path = Path(temporary.name).resolve(strict=True)
+    os.chmod(temporary_path, 0o700)
+    temporary_metadata = temporary_path.lstat()
+    if (
+        not stat.S_ISDIR(temporary_metadata.st_mode)
+        or temporary_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(temporary_metadata.st_mode) != 0o700
+    ):
+        temporary.cleanup()
+        raise ValueError(f"{label} snapshot directory is not owner-private")
+    target = temporary_path / file_name
+    descriptor = os.open(
+        target,
+        os.O_RDWR
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError(f"could not snapshot {label}")
+            view = view[written:]
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        observed = bytearray()
+        offset = 0
+        while offset < len(payload):
+            chunk = os.pread(
+                descriptor, min(READ_CHUNK_BYTES, len(payload) - offset), offset
+            )
+            if not chunk:
+                raise ValueError(f"{label} snapshot became truncated")
+            observed.extend(chunk)
+            offset += len(chunk)
+        opened = os.fstat(descriptor)
+        path_metadata = target.lstat()
+        if (
+            bytes(observed) != payload
+            or opened.st_size != len(payload)
+            or not os.path.samestat(opened, path_metadata)
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) != 0o600
+        ):
+            raise ValueError(f"{label} snapshot bytes changed")
+    except BaseException:
+        os.close(descriptor)
+        temporary.cleanup()
+        raise
+    os.close(descriptor)
+    return temporary, target
+
+
+def evidence_bytes_are_non_placeholder(payload: bytes) -> bool:
+    """Reject bounded signed-evidence slots containing placeholder markers."""
+
+    if len(payload) < 64 or len(payload) > MAX_BENCHMARK_EVIDENCE_BYTES:
+        return False
+    return (
+        re.search(
+            rb"(?:placeholder|synthetic|dummy|todo|not[ -]?reviewed)",
+            payload,
+            flags=re.IGNORECASE,
+        )
+        is None
+    )
+
+
 def snapshot_pinned_executable(
-    descriptor: int, fingerprint: tuple[int, ...], label: str
+    descriptor: int,
+    fingerprint: tuple[int, ...],
+    label: str,
+    staging_parent: Path,
 ) -> tuple[tempfile.TemporaryDirectory[str], Path]:
     """Materialize exact already-hashed executable bytes in an owner-private directory."""
 
-    temporary = tempfile.TemporaryDirectory(prefix="kagemusha-kagami-verifier-")
+    temporary = tempfile.TemporaryDirectory(
+        prefix="kagemusha-kagami-verifier-", dir=staging_parent
+    )
     temporary_path = Path(temporary.name).resolve(strict=True)
     os.chmod(temporary_path, 0o700)
+    temporary_metadata = temporary_path.lstat()
+    if (
+        not stat.S_ISDIR(temporary_metadata.st_mode)
+        or temporary_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(temporary_metadata.st_mode) != 0o700
+    ):
+        temporary.cleanup()
+        raise ValueError(f"{label} snapshot directory is not owner-private")
     target = temporary_path / "kagami"
     target_descriptor = os.open(
         target,
@@ -551,9 +1096,15 @@ def snapshot_pinned_executable(
         temporary.cleanup()
         raise
     os.close(target_descriptor)
-    if target.lstat().st_size != fingerprint[4]:
+    target_metadata = target.lstat()
+    if (
+        not stat.S_ISREG(target_metadata.st_mode)
+        or target_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(target_metadata.st_mode) != 0o500
+        or target_metadata.st_size != fingerprint[4]
+    ):
         temporary.cleanup()
-        raise ValueError(f"{label} snapshot has the wrong size")
+        raise ValueError(f"{label} snapshot does not have exact private metadata")
     return temporary, target
 
 
@@ -603,50 +1154,6 @@ def checked_catalog_aggregate_total(current: int, release_bytes: int) -> int:
     return total
 
 
-def evidence_is_non_placeholder(path: Path, maximum_bytes: int, label: str) -> bool:
-    """Scan bounded evidence without retaining the complete file in memory."""
-
-    before = path.lstat()
-    if path.is_symlink() or not path.is_file() or before.st_nlink != 1:
-        raise ValueError(f"{label} must be a singly-linked non-symlink regular file")
-    if before.st_size < 64 or before.st_size > maximum_bytes:
-        return False
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
-    placeholder = re.compile(rb"(?:placeholder|synthetic|dummy|todo|not[ -]?reviewed)", re.I)
-    tail = b""
-    size = 0
-    found = False
-    try:
-        opened = os.fstat(descriptor)
-        if not os.path.samestat(before, opened) or opened.st_nlink != 1:
-            raise ValueError(f"{label} changed while it was opened")
-        while True:
-            chunk = os.read(descriptor, min(READ_CHUNK_BYTES, maximum_bytes + 1 - size))
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > maximum_bytes:
-                return False
-            scan = tail + chunk
-            found = found or placeholder.search(scan) is not None
-            tail = scan[-64:]
-        after_open = os.fstat(descriptor)
-        after_path = path.lstat()
-        if (
-            not os.path.samestat(before, after_open)
-            or not os.path.samestat(before, after_path)
-            or size != before.st_size
-            or after_path.st_size != size
-            or after_path.st_mtime_ns != before.st_mtime_ns
-            or after_path.st_ctime_ns != before.st_ctime_ns
-        ):
-            raise ValueError(f"{label} changed while it was scanned")
-    finally:
-        os.close(descriptor)
-    return not found
-
-
 def require(text: str, relative: str, errors: list[str], *needles: str) -> None:
     for needle in needles:
         if needle not in text:
@@ -681,7 +1188,6 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             PRIVACY_PROTOCOL,
             BRIDGE,
             HEADER,
-            CATALOG,
             CORE,
             STEP_TRANSITION,
             RECURSIVE_BACKEND,
@@ -697,6 +1203,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         )
     }
     texts[MODEL] = read_reviewed_model(errors, overrides)
+    texts[CATALOG] = read_reviewed_catalog(errors, overrides)
     model = texts[MODEL]
     require(
         model,
@@ -706,6 +1213,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         '"kagemusha.offline.recursive_spend.artifact_manifest.v4"',
         '"iroha.reviewed-source-closure.v1"',
         "reviewed_source_closure_descriptor_sha256",
+        "authenticated_source_seal_projection_sha256",
+        "reviewed_cargo_binary_sha256",
+        "reviewed_rustc_binary_sha256",
         "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4: [&str; 8]",
         "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4",
         "pub enum KagemushaPastaCycleArtifactKindV4",
@@ -963,6 +1473,83 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "promotion requires signed physical-iOS raw evidence",
         "def load_ios_evidence_validator(",
         "read_pinned_descriptor(",
+        "PRODUCTION_TRUSTED_UID = 0",
+        "def require_production_root_custody(",
+        "production promotion must run as root",
+        "def snapshot_private_bytes(",
+        "evidence_bytes_are_non_placeholder(",
+        "trusted_python_sha256 = sys.argv[4]",
+        "running promotion Python differs from its trusted SHA-256",
+        "def validate_inherited_promotion_python(",
+        "inherited promotion Python differs from its trusted SHA-256",
+        "def validate_inherited_promotion_gate(",
+        "inherited promotion gate differs from its reviewed SHA-256",
+        'KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256',
+        "PROMOTION_STAGING_PARENT = Path(",
+        "authenticate_reviewed_source_file(",
+        "validate_source_trust_projection(",
+        "isolated_source_trust_git_config(",
+        "SOURCE_ALLOWED_SIGNERS_PATH_ENV",
+        "SOURCE_REVOCATION_PATH_ENV",
+        "SOURCE_SEAL_PROJECTION_PATH_ENV",
+        "trusted_source_helper_snapshot",
+        "trusted_ios_validator_snapshot",
+    )
+    shell_bootstrap = texts[READINESS].split("<<'PY'", 1)[0]
+    require(
+        shell_bootstrap,
+        "promotion shell bootstrap",
+        errors,
+        'SCRIPT_SOURCE_ORIGINAL="${BASH_SOURCE[0]}"',
+        "builtin pwd -P",
+        "promotion_assert_root_custody",
+        'promotion_assert_root_custody "${DERIVED_ROOT_DIR}" "promotion readiness checkout"',
+        'promotion_assert_root_custody "${SCRIPT_PATH}" "promotion readiness gate"',
+        'exec 8<"${SCRIPT_PATH}"',
+        '"/dev/fd/${GATE_PIN_FD}"',
+        'exec 9<"${PYTHON_BIN}"',
+        '"/dev/fd/${PYTHON_PIN_FD}"',
+        '"${PYTHON_PIN_FD}" "${PYTHON_PATH_FINGERPRINT}"',
+        "promotion Python interpreter changed before execution",
+        "rejects missing or symlinked script invocation",
+        "from an independently authenticated launcher/controller",
+    )
+    forbid(
+        shell_bootstrap,
+        "promotion shell bootstrap",
+        errors,
+        "$(dirname ",
+        "`dirname ",
+        "readlink ",
+    )
+    require_pattern(
+        shell_bootstrap,
+        "promotion shell bootstrap",
+        errors,
+        (
+            r"promotion_assert_root_custody \"\$\{PYTHON_BIN\}\""
+            r".*?PYTHON_PATH_FINGERPRINT=.*?exec 9<\"\$\{PYTHON_BIN\}\""
+            r".*?/dev/fd/\$\{PYTHON_PIN_FD\}.*?"
+            r"promotion Python interpreter changed before execution.*?"
+            r"promotion_assert_root_custody \"\$\{PYTHON_BIN\}\""
+        ),
+        "pre-exec Python descriptor custody",
+    )
+    require_pattern(
+        shell_bootstrap,
+        "promotion shell bootstrap",
+        errors,
+        (
+            r"promotion_assert_root_custody \"\$\{DERIVED_ROOT_DIR\}\""
+            r".*?promotion_assert_root_custody \"\$\{SCRIPT_PATH\}\""
+            r".*?KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256"
+            r".*?exec 8<\"\$\{SCRIPT_PATH\}\""
+            r".*?/dev/fd/\$\{GATE_PIN_FD\}.*?OBSERVED_GATE_SHA256"
+            r".*?!=.*?GATE_SHA256.*?"
+            r"differs from its independently reviewed SHA-256.*?"
+            r"promotion_assert_root_custody \"\$\{SCRIPT_PATH\}\""
+        ),
+        "independently pinned root-custodied gate bootstrap",
     )
     forbid(
         verifier_function,
@@ -974,6 +1561,17 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     ios_validator_function = texts[READINESS].rsplit(
         "def verify_ios_evidence(", 1
     )[-1].split("def promotion_errors(", 1)[0]
+    require_pattern(
+        ios_validator_function,
+        "physical-iOS evidence verification",
+        errors,
+        (
+            r"validation_errors\s*=\s*validator\(\s*evidence_snapshot_path,"
+            r".*?trusted_public_key_snapshot,\s*\).*?"
+            r"evidence\s*=\s*strict_json_bytes\(\s*evidence_bytes,"
+        ),
+        "same pinned evidence bytes and trusted key snapshot for validation and digest binding",
+    )
     forbid(
         ios_validator_function,
         "physical-iOS evidence verification",
@@ -981,6 +1579,123 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "subprocess.run",
         "sys.executable",
         "check_kagemusha_candidate_ios_evidence.py",
+        "validator(evidence_path",
+    )
+    promotion_function = texts[READINESS].rsplit("def promotion_errors(", 1)[-1].split(
+        "errors = static_errors()", 1
+    )[0]
+    if promotion_function.count("require_production_root_custody(") < 15:
+        errors.append(
+            f"{READINESS}: promotion does not root-custody every production trust class"
+        )
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"production_roots\s*=\s*\[.*?PROMOTION_STAGING_PARENT.*?\]"
+            r".*?snapshot_pinned_executable\(.*?PROMOTION_STAGING_PARENT"
+        ),
+        "fixed pinned production staging parent",
+    )
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"production_roots\s*=\s*\[\s*root,\s*source_helper_path\.parent,"
+            r"\s*ios_validator_path\.parent,.*?"
+            r"reviewed promotion readiness gate.*?"
+            r"require_production_root_custody\(descriptor, label\).*?"
+            r"MAX_READINESS_GATE_BYTES.*?trusted_gate_sha256"
+        ),
+        "retained root-custodied reviewed gate and checkout",
+    )
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"authenticate_reviewed_source_file\(\s*SOURCE_TREE_SEAL,"
+            r".*?snapshot_private_bytes\(\s*source_helper_bytes,"
+            r".*?str\(trusted_source_helper_snapshot\)"
+        ),
+        "source-closure-authenticated source-tree helper snapshot",
+    )
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"source SSH allowed-signers policy.*?"
+            r"require_production_root_custody\(descriptor, label\).*?"
+            r"allowed_signers_sha256.*?snapshot_private_bytes\(.*?"
+            r"source SSH revocation policy.*?allow_empty=True.*?"
+            r"revocation_sha256.*?snapshot_private_bytes\(.*?"
+            r"authenticated source-seal projection.*?"
+            r"source_projection_sha256.*?validate_source_trust_projection\(.*?"
+            r"isolated_source_trust_git_config\(.*?\.gitconfig.*?"
+            r'"HOME": str\(trusted_source_trust_home\)'
+        ),
+        "closure-bound snapshotted source SSH trust policies",
+    )
+    forbid(
+        promotion_function,
+        "promotion source SSH trust bootstrap",
+        errors,
+        '"HOME": "/var/empty"',
+    )
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"authenticate_reviewed_source_file\(\s*IOS_EVIDENCE_MODULE,"
+            r".*?snapshot_private_bytes\(\s*validator_bytes,"
+            r".*?load_ios_evidence_validator\(\s*validator_bytes,"
+            r"\s*trusted_ios_validator_snapshot"
+        ),
+        "source-closure-authenticated iOS validator snapshot",
+    )
+    snapshot_functions = texts[READINESS].split(
+        "def snapshot_private_bytes(", 1
+    )[-1].split("def canonical_nonzero_sha256(", 1)[0]
+    if snapshot_functions.count("dir=staging_parent") != 2:
+        errors.append(
+            f"{READINESS}: promotion snapshots do not use only their explicit staging parent"
+        )
+    verifier_environment = texts[READINESS].split(
+        "SANITIZED_VERIFIER_ENV = {", 1
+    )[-1].split("READ_CHUNK_BYTES =", 1)[0]
+    if (
+        verifier_environment.count('"TMPDIR": str(PROMOTION_STAGING_PARENT),')
+        != 1
+        or promotion_function.count(
+            '"TMPDIR": str(PROMOTION_STAGING_PARENT),'
+        )
+        != 1
+    ):
+        errors.append(
+            f"{READINESS}: promotion subprocesses do not use only the fixed staging parent"
+        )
+    forbid(
+        promotion_function,
+        "promotion catalog byte custody",
+        errors,
+        "read_regular_bounded(",
+        "inspect_regular_prefix(",
+        "strict_json(",
+        ".read_bytes()",
+    )
+    require_pattern(
+        promotion_function,
+        READINESS,
+        errors,
+        (
+            r"promotion Python runtime.*?hash_pinned_descriptor\(.*?\)"
+            r"\s*!=\s*trusted_python_sha256"
+        ),
+        "running promotion interpreter digest revalidation",
     )
     require(
         texts[CONFIG] + texts[NODE] + texts[CORE],
@@ -1050,13 +1765,6 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     return errors
 
 
-def strict_json(path: Path) -> dict[str, object]:
-    return strict_json_bytes(
-        read_regular_bounded(path, MAX_MANIFEST_BYTES, "manifest JSON"),
-        "manifest JSON",
-    )
-
-
 def strict_json_bytes(payload: bytes, label: str) -> dict[str, object]:
     def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}
@@ -1076,6 +1784,177 @@ def strict_json_bytes(payload: bytes, label: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be an object")
     return value
+
+
+def reviewed_source_commit_from_closure(payload: bytes) -> tuple[dict[str, object], str]:
+    """Parse the independently pinned closure enough to authenticate its helpers."""
+
+    closure = strict_json_bytes(payload, "reviewed source closure")
+    if set(closure) != REVIEWED_SOURCE_CLOSURE_KEYS:
+        raise ValueError("reviewed source closure fields are not exact")
+    if (
+        closure.get("schema") != "iroha.reviewed-source-closure.v1"
+        or closure.get("source_repo_dirty") is not False
+    ):
+        raise ValueError("reviewed source closure is not one clean V1 closure")
+    source_commit = closure.get("source_commit")
+    if (
+        not isinstance(source_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
+        or source_commit == "0" * 40
+    ):
+        raise ValueError("reviewed source closure commit is not canonical")
+    return closure, source_commit
+
+
+def validate_source_trust_projection(
+    payload: bytes,
+    reviewed_closure_bytes: bytes,
+    reviewed_closure_sha256: str,
+    source_commit: str,
+    allowed_signers_sha256: str,
+    revocation_sha256: str,
+) -> None:
+    """Bind the exact promotion SSH policies to the reviewed source closure."""
+
+    projection = strict_json_bytes(payload, "authenticated source-seal projection")
+    if set(projection) != SOURCE_SEAL_PROJECTION_KEYS:
+        raise ValueError("authenticated source-seal projection fields are not exact")
+    if (
+        projection.get("schema")
+        != "iroha.kagemusha.authenticated_source_seal_projection.v1"
+        or projection.get("source_repo_dirty") is not False
+        or projection.get("source_commit") != source_commit
+        or projection.get("reviewed_source_closure_sha256")
+        != reviewed_closure_sha256
+        or projection.get("reviewed_source_closure_hex")
+        != reviewed_closure_bytes.hex()
+    ):
+        raise ValueError(
+            "authenticated source-seal projection differs from the reviewed closure"
+        )
+    reviewed_closure, _ = reviewed_source_commit_from_closure(
+        reviewed_closure_bytes
+    )
+    if projection.get("source_tree_sha256") != reviewed_closure.get(
+        "source_tree_sha256"
+    ):
+        raise ValueError(
+            "authenticated source-seal projection tree differs from the reviewed closure"
+        )
+    authority = projection.get("source_authority")
+    if not isinstance(authority, dict) or set(authority) != SOURCE_AUTHORITY_KEYS:
+        raise ValueError("authenticated source authority fields are not exact")
+    signature = authority.get("signature")
+    if not isinstance(signature, dict) or set(signature) != SOURCE_SIGNATURE_KEYS:
+        raise ValueError("authenticated source signature fields are not exact")
+    if (
+        authority.get("commit") != source_commit
+        or signature.get("mechanism") != "git-commit-ssh-signature-v1"
+        or signature.get("signature_namespace") != "git"
+        or signature.get("allowed_signers_sha256") != allowed_signers_sha256
+        or signature.get("revocation_sha256") != revocation_sha256
+    ):
+        raise ValueError(
+            "promotion SSH trust-policy digests differ from the reviewed source closure projection"
+        )
+    canonical_nonzero_sha256(
+        signature.get("public_key_sha256"),
+        "authenticated source SSH public key",
+    )
+
+
+def isolated_source_trust_git_config(
+    allowed_signers: Path, revocation: Path
+) -> bytes:
+    """Create the sole global Git config visible to the reviewed source helper."""
+
+    for path, label in (
+        (allowed_signers, "allowed-signers snapshot"),
+        (revocation, "revocation snapshot"),
+    ):
+        path_text = str(path)
+        if (
+            not path.is_absolute()
+            or path.resolve(strict=False) != path
+            or re.fullmatch(r"/[A-Za-z0-9._/-]+", path_text) is None
+        ):
+            raise ValueError(f"{label} path is not safe for isolated Git config")
+    return (
+        '[gpg "ssh"]\n'
+        f"\tallowedSignersFile = {allowed_signers}\n"
+        f"\trevocationFile = {revocation}\n"
+    ).encode("utf-8")
+
+
+def source_git_environment() -> dict[str, str]:
+    """Return the fixed environment for closure-commit blob authentication."""
+
+    return {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_LITERAL_PATHSPECS": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_PAGER": "cat",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": "/var/empty",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PAGER": "cat",
+        "PATH": "/usr/bin:/bin",
+        "TZ": "UTC",
+    }
+
+
+def authenticate_reviewed_source_file(
+    relative: str,
+    observed_bytes: bytes,
+    source_commit: str,
+    maximum_bytes: int,
+) -> None:
+    """Match one pinned worktree helper to its exact closure-commit blob."""
+
+    if (
+        not relative
+        or relative.startswith("/")
+        or "\\" in relative
+        or any(component in {"", ".", ".."} for component in relative.split("/"))
+    ):
+        raise ValueError("reviewed helper path is not canonical")
+    authenticated = subprocess.run(
+        [
+            str(SOURCE_GIT),
+            "-c",
+            "core.attributesFile=/dev/null",
+            "-c",
+            "core.excludesFile=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+            "-C",
+            str(root),
+            "cat-file",
+            "blob",
+            f"{source_commit}:{relative}",
+        ],
+        cwd=Path("/"),
+        env=source_git_environment(),
+        stdin=subprocess.DEVNULL,
+        check=False,
+        capture_output=True,
+        close_fds=True,
+    )
+    if (
+        authenticated.returncode != 0
+        or authenticated.stderr
+        or not authenticated.stdout
+        or len(authenticated.stdout) > maximum_bytes
+    ):
+        raise ValueError(f"could not authenticate reviewed helper {relative}")
+    if authenticated.stdout != observed_bytes:
+        raise ValueError(f"reviewed helper {relative} differs from the source closure")
 
 
 def release_verifier_command(verifier: Path, directory: Path, policy: Path) -> list[str]:
@@ -1114,6 +1993,9 @@ def validate_kagami_verification_report(
         "candidate_sha256",
         "qualification_receipt_sha256",
         "qualified_candidate_sha256",
+        "authenticated_source_seal_projection_sha256",
+        "reviewed_cargo_binary_sha256",
+        "reviewed_rustc_binary_sha256",
         "promotion_record_sha256",
         "release_policy_sha256",
         "generation",
@@ -1147,6 +2029,9 @@ def validate_kagami_verification_report(
         "candidate_sha256",
         "qualification_receipt_sha256",
         "qualified_candidate_sha256",
+        "authenticated_source_seal_projection_sha256",
+        "reviewed_cargo_binary_sha256",
+        "reviewed_rustc_binary_sha256",
         "promotion_record_sha256",
         "release_policy_sha256",
         "recursive_step_verifier_commitment",
@@ -1156,6 +2041,9 @@ def validate_kagami_verification_report(
         "generation",
         "generation_memory_limit_bytes",
         "generation_memory_enforcement_profile",
+        "authenticated_source_seal_projection_sha256",
+        "reviewed_cargo_binary_sha256",
+        "reviewed_rustc_binary_sha256",
         "network_id",
         "asset_scale",
     )
@@ -1283,10 +2171,14 @@ def verify_ios_evidence(
     directory: Path,
     ios_configuration: tuple[Path, str, Path],
     validator: Callable[[Path, Path, str, Path], list[str]],
+    evidence_bytes: bytes,
+    trusted_public_key_snapshot: Path,
+    directory_pins: list[tuple[Path, int, tuple[int, ...], str]],
+    staging_parent: Path,
 ) -> tuple[str | None, str | None]:
-    """Verify one signed raw physical-iOS slot and return its candidate digest."""
+    """Verify one signed raw slot from the exact bytes used for its candidate digest."""
 
-    ios_root, key_id, public_key = ios_configuration
+    ios_root, key_id, _ = ios_configuration
     release_root = ios_root / directory.name
     raw_root = release_root / "raw"
     if (
@@ -1299,20 +2191,44 @@ def verify_ios_evidence(
             f"{directory.name}: physical-iOS evidence must use "
             f"{ios_root}/<manifest-sha256>/raw"
         )
-    evidence_path = directory / "physical-device-benchmark.evidence"
-    validation_errors = validator(evidence_path, raw_root, key_id, public_key)
-    if validation_errors:
-        return None, (
-            f"{directory.name}: physical-iOS evidence verification failed: "
-            f"{validation_errors[-1]}"
-        )
     try:
+        # Retain the externally named roots through the whole promotion.  The
+        # reviewed validator snapshots every exact raw file, validates it, and
+        # performs a full identity/content rescan before returning.  Root-only
+        # custody then protects that authenticated inventory after the rescan.
+        for path, label in (
+            (release_root, f"physical-iOS release directory {release_root}"),
+            (raw_root, f"physical-iOS raw directory {raw_root}"),
+        ):
+            descriptor, fingerprint = pin_directory_metadata(path, label)
+            try:
+                require_production_root_custody(descriptor, label)
+            except BaseException:
+                os.close(descriptor)
+                raise
+            directory_pins.append((path, descriptor, fingerprint, label))
+        evidence_snapshot, evidence_snapshot_path = snapshot_private_bytes(
+            evidence_bytes,
+            "physical-device-benchmark.evidence",
+            "signed physical-iOS evidence",
+            staging_parent,
+        )
+        try:
+            validation_errors = validator(
+                evidence_snapshot_path,
+                raw_root,
+                key_id,
+                trusted_public_key_snapshot,
+            )
+        finally:
+            evidence_snapshot.cleanup()
+        if validation_errors:
+            return None, (
+                f"{directory.name}: physical-iOS evidence verification failed: "
+                f"{validation_errors[-1]}"
+            )
         evidence = strict_json_bytes(
-            read_regular_bounded(
-                evidence_path,
-                MAX_BENCHMARK_EVIDENCE_BYTES,
-                "signed physical-iOS evidence",
-            ),
+            evidence_bytes,
             "signed physical-iOS evidence",
         )
         artifact_digests = evidence.get("artifact_digests")
@@ -1335,6 +2251,18 @@ def verify_ios_evidence(
 
 def promotion_errors() -> list[str]:
     errors: list[str] = []
+    if os.geteuid() != PRODUCTION_TRUSTED_UID:
+        return [
+            "production promotion must run as root so its custody policy matches the runtime"
+        ]
+    try:
+        validate_inherited_promotion_gate()
+    except (OSError, ValueError) as error:
+        return [f"promotion gate bootstrap custody failed: {error}"]
+    try:
+        validate_inherited_promotion_python()
+    except (OSError, ValueError) as error:
+        return [f"promotion Python pre-exec custody failed: {error}"]
     policy_text = os.environ.get("KAGEMUSHA_V4_RELEASE_POLICY_PATH", "")
     artifact_text = os.environ.get("KAGEMUSHA_V4_ARTIFACT_ROOT", "")
     if not policy_text or not artifact_text:
@@ -1386,76 +2314,172 @@ def promotion_errors() -> list[str]:
     reviewed_closure_sha256 = os.environ.get(
         "KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256", ""
     )
+    reviewed_closure = Path(reviewed_closure_text) if reviewed_closure_text else None
     if (
         not reviewed_closure_text
+        or reviewed_closure is None
+        or not reviewed_closure.is_absolute()
+        or reviewed_closure.resolve(strict=False) != reviewed_closure
+        or not reviewed_closure.is_file()
+        or reviewed_closure.is_symlink()
         or re.fullmatch(r"[0-9a-f]{64}", reviewed_closure_sha256) is None
         or reviewed_closure_sha256 == "0" * 64
     ):
         errors.append(
-            "promotion requires the independently pinned reviewed source-closure path and SHA-256"
+            "promotion requires a canonical absolute independently pinned reviewed "
+            "source-closure path and SHA-256"
         )
-    else:
-        source_identity_result = subprocess.run(
-            [
-                sys.executable,
-                "-I",
-                str(root / "scripts/kagemusha_source_tree_seal.py"),
-                "identity",
-                "--root",
-                str(root),
-                "--reviewed-source-closure",
-                reviewed_closure_text,
-                "--reviewed-source-closure-sha256",
-                reviewed_closure_sha256,
-            ],
-            cwd=root,
-            check=False,
-            capture_output=True,
+    allowed_signers_text = os.environ.get(SOURCE_ALLOWED_SIGNERS_PATH_ENV, "")
+    allowed_signers_sha256 = os.environ.get(SOURCE_ALLOWED_SIGNERS_SHA256_ENV, "")
+    revocation_text = os.environ.get(SOURCE_REVOCATION_PATH_ENV, "")
+    revocation_sha256 = os.environ.get(SOURCE_REVOCATION_SHA256_ENV, "")
+    source_projection_text = os.environ.get(SOURCE_SEAL_PROJECTION_PATH_ENV, "")
+    source_projection_sha256 = os.environ.get(
+        SOURCE_SEAL_PROJECTION_SHA256_ENV, ""
+    )
+    allowed_signers = Path(allowed_signers_text) if allowed_signers_text else None
+    revocation = Path(revocation_text) if revocation_text else None
+    source_projection = (
+        Path(source_projection_text) if source_projection_text else None
+    )
+    if (
+        allowed_signers is None
+        or not allowed_signers.is_absolute()
+        or allowed_signers.resolve(strict=False) != allowed_signers
+        or not allowed_signers.is_file()
+        or allowed_signers.is_symlink()
+        or re.fullmatch(r"[0-9a-f]{64}", allowed_signers_sha256) is None
+        or allowed_signers_sha256 == "0" * 64
+    ):
+        errors.append(
+            "promotion requires one canonical root-custodied digest-pinned SSH allowed-signers policy"
         )
-        if source_identity_result.returncode != 0:
-            errors.append(
-                "promotion source differs from the independently pinned reviewed closure"
-            )
-        else:
-            try:
-                parsed_identity = json.loads(source_identity_result.stdout)
-                if (
-                    not isinstance(parsed_identity, dict)
-                    or parsed_identity.get("schema")
-                    != "iroha.kagemusha.reviewed_source_tree_identity.v1"
-                    or parsed_identity.get("source_repo_dirty") is not False
-                    or parsed_identity.get(
-                        "reviewed_source_closure_descriptor_sha256"
-                    )
-                    != reviewed_closure_sha256
-                    or not isinstance(
-                        parsed_identity.get("reviewed_source_closure"), dict
-                    )
-                ):
-                    raise ValueError("reviewed source identity is not exact")
-                source_identity = parsed_identity
-            except (UnicodeError, ValueError, json.JSONDecodeError):
-                errors.append("promotion reviewed source identity is malformed")
-    authenticated_verification_allowed = not errors
+    if (
+        revocation is None
+        or not revocation.is_absolute()
+        or revocation.resolve(strict=False) != revocation
+        or not revocation.is_file()
+        or revocation.is_symlink()
+        or re.fullmatch(r"[0-9a-f]{64}", revocation_sha256) is None
+        or revocation_sha256 == "0" * 64
+    ):
+        errors.append(
+            "promotion requires one canonical root-custodied digest-pinned SSH revocation policy (an explicitly pinned empty file means no revocations)"
+        )
+    if (
+        source_projection is None
+        or not source_projection.is_absolute()
+        or source_projection.resolve(strict=False) != source_projection
+        or not source_projection.is_file()
+        or source_projection.is_symlink()
+        or re.fullmatch(r"[0-9a-f]{64}", source_projection_sha256) is None
+        or source_projection_sha256 == "0" * 64
+    ):
+        errors.append(
+            "promotion requires the canonical independently digest-pinned authenticated source-seal projection"
+        )
 
     catalog_directory_pins: list[tuple[Path, int, tuple[int, ...], str]] = []
     trusted_file_pins: list[tuple[Path, int, tuple[int, ...], str]] = []
     policy_sha256 = ""
     ios_validator: Callable[[Path, Path, str, Path], list[str]] | None = None
     ios_validator_path = root / IOS_EVIDENCE_MODULE
+    source_helper_path = root / SOURCE_TREE_SEAL
     verifier_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    public_key_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    closure_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    source_projection_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    allowed_signers_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    revocation_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    source_trust_config_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    source_helper_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    ios_validator_snapshot: tempfile.TemporaryDirectory[str] | None = None
+    trusted_public_key_snapshot: Path | None = None
+    trusted_closure_snapshot: Path | None = None
+    trusted_allowed_signers_snapshot: Path | None = None
+    trusted_revocation_snapshot: Path | None = None
+    trusted_source_trust_home: Path | None = None
+    trusted_source_helper_snapshot: Path | None = None
     verifier_exec = verifier
+
+    def cleanup_private_snapshots() -> None:
+        if ios_validator_snapshot is not None:
+            ios_validator_snapshot.cleanup()
+        if source_helper_snapshot is not None:
+            source_helper_snapshot.cleanup()
+        if source_trust_config_snapshot is not None:
+            source_trust_config_snapshot.cleanup()
+        if revocation_snapshot is not None:
+            revocation_snapshot.cleanup()
+        if allowed_signers_snapshot is not None:
+            allowed_signers_snapshot.cleanup()
+        if source_projection_snapshot is not None:
+            source_projection_snapshot.cleanup()
+        if closure_snapshot is not None:
+            closure_snapshot.cleanup()
+        if public_key_snapshot is not None:
+            public_key_snapshot.cleanup()
+        if verifier_snapshot is not None:
+            verifier_snapshot.cleanup()
+
     try:
+        python_runtime = Path(sys.executable)
+        if (
+            not python_runtime.is_absolute()
+            or python_runtime.resolve(strict=False) != python_runtime
+            or not python_runtime.is_file()
+            or python_runtime.is_symlink()
+        ):
+            raise ValueError("promotion Python runtime path is not canonical")
+        if (
+            not PROMOTION_STAGING_PARENT.is_absolute()
+            or PROMOTION_STAGING_PARENT.resolve(strict=False)
+            != PROMOTION_STAGING_PARENT
+            or not PROMOTION_STAGING_PARENT.is_dir()
+            or PROMOTION_STAGING_PARENT.is_symlink()
+        ):
+            raise ValueError(
+                f"fixed promotion staging parent is unavailable: {PROMOTION_STAGING_PARENT}"
+            )
+        if not SOURCE_GIT.is_file() or SOURCE_GIT.is_symlink():
+            raise ValueError("fixed source-authentication Git is unavailable")
         seen_directories: set[Path] = set()
-        trusted_roots = [artifact_root, policy.parent, verifier.parent]
+        production_roots = [
+            root,
+            source_helper_path.parent,
+            ios_validator_path.parent,
+            artifact_root,
+            policy.parent,
+            verifier.parent,
+            python_runtime.parent,
+            PROMOTION_STAGING_PARENT,
+            SOURCE_GIT.parent,
+        ]
+        if reviewed_closure is not None:
+            production_roots.append(reviewed_closure.parent)
+        if source_projection is not None:
+            production_roots.append(source_projection.parent)
+        if allowed_signers is not None:
+            production_roots.append(allowed_signers.parent)
+        if revocation is not None:
+            production_roots.append(revocation.parent)
         if ios_configuration is not None:
-            trusted_roots.extend(
+            production_roots.extend(
                 [
                     ios_configuration[0],
                     ios_configuration[2].parent,
-                    ios_validator_path.parent,
                 ]
             )
+        production_directory_paths = {
+            path
+            for trusted_root in production_roots
+            for path in absolute_directory_chain(trusted_root)
+        }
+        trusted_roots = [
+            *production_roots,
+            source_helper_path.parent,
+            ios_validator_path.parent,
+        ]
         for trusted_root in trusted_roots:
             for path in absolute_directory_chain(trusted_root):
                 if path in seen_directories:
@@ -1463,15 +2487,48 @@ def promotion_errors() -> list[str]:
                 seen_directories.add(path)
                 label = f"trusted release path component {path}"
                 descriptor, fingerprint = pin_directory_metadata(path, label)
+                if path in production_directory_paths:
+                    try:
+                        require_production_root_custody(descriptor, label)
+                    except BaseException:
+                        os.close(descriptor)
+                        raise
                 catalog_directory_pins.append((path, descriptor, fingerprint, label))
+        gate_path = root / READINESS
+        label = f"reviewed promotion readiness gate {gate_path}"
+        descriptor, fingerprint = pin_regular_metadata(gate_path, label)
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        if (
+            hash_pinned_descriptor(
+                descriptor, fingerprint, MAX_READINESS_GATE_BYTES, label
+            )
+            != trusted_gate_sha256
+        ):
+            os.close(descriptor)
+            raise ValueError("promotion gate differs from its reviewed SHA-256")
+        trusted_file_pins.append((gate_path, descriptor, fingerprint, label))
         label = f"release policy {policy}"
         descriptor, fingerprint = pin_regular_metadata(policy, label)
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
         trusted_file_pins.append((policy, descriptor, fingerprint, label))
         policy_sha256 = hash_pinned_descriptor(
             descriptor, fingerprint, 64 * 1024, label
         )
         label = f"Kagami release verifier {verifier}"
         descriptor, fingerprint = pin_regular_metadata(verifier, label)
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
         if fingerprint[4] > MAX_KAGAMI_VERIFIER_BYTES or not fingerprint[3] & 0o111:
             os.close(descriptor)
             raise ValueError(
@@ -1487,7 +2544,7 @@ def promotion_errors() -> list[str]:
             raise ValueError("Kagami release verifier differs from its trusted SHA-256")
         trusted_file_pins.append((verifier, descriptor, fingerprint, label))
         verifier_snapshot, verifier_exec = snapshot_pinned_executable(
-            descriptor, fingerprint, label
+            descriptor, fingerprint, label, PROMOTION_STAGING_PARENT
         )
         snapshot_root = verifier_exec.parent
         snapshot_label = f"private Kagami verifier snapshot directory {snapshot_root}"
@@ -1525,35 +2582,331 @@ def promotion_errors() -> list[str]:
                 snapshot_label,
             )
         )
+        label = f"promotion Python runtime {python_runtime}"
+        descriptor, fingerprint = pin_regular_metadata(
+            python_runtime, label, require_single_link=False
+        )
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        if (
+            hash_pinned_descriptor(
+                descriptor, fingerprint, MAX_KAGAMI_VERIFIER_BYTES, label
+            )
+            != trusted_python_sha256
+        ):
+            os.close(descriptor)
+            raise ValueError(
+                "running promotion Python differs from its trusted SHA-256"
+            )
+        trusted_file_pins.append((python_runtime, descriptor, fingerprint, label))
+        label = f"source-authentication Git {SOURCE_GIT}"
+        descriptor, fingerprint = pin_regular_metadata(
+            SOURCE_GIT, label, require_single_link=False
+        )
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        if not fingerprint[3] & 0o111:
+            os.close(descriptor)
+            raise ValueError("source-authentication Git is not executable")
+        trusted_file_pins.append((SOURCE_GIT, descriptor, fingerprint, label))
+        reviewed_closure_bytes: bytes | None = None
+        reviewed_source_commit: str | None = None
+        if reviewed_closure is not None:
+            label = f"reviewed source closure {reviewed_closure}"
+            descriptor, fingerprint = pin_regular_metadata(reviewed_closure, label)
+            try:
+                require_production_root_custody(descriptor, label)
+            except BaseException:
+                os.close(descriptor)
+                raise
+            reviewed_closure_bytes = read_pinned_descriptor(
+                descriptor,
+                fingerprint,
+                MAX_REVIEWED_SOURCE_CLOSURE_BYTES,
+                label,
+            )
+            if hashlib.sha256(reviewed_closure_bytes).hexdigest() != reviewed_closure_sha256:
+                os.close(descriptor)
+                raise ValueError("reviewed source closure differs from its trusted SHA-256")
+            trusted_file_pins.append(
+                (reviewed_closure, descriptor, fingerprint, label)
+            )
+            _, reviewed_source_commit = reviewed_source_commit_from_closure(
+                reviewed_closure_bytes
+            )
+            closure_snapshot, trusted_closure_snapshot = snapshot_private_bytes(
+                reviewed_closure_bytes,
+                "reviewed-source-closure.json",
+                "reviewed source closure",
+                PROMOTION_STAGING_PARENT,
+            )
+        if (
+            reviewed_closure_bytes is None
+            or reviewed_source_commit is None
+            or allowed_signers is None
+            or revocation is None
+            or source_projection is None
+        ):
+            raise ValueError("reviewed source trust inputs are incomplete")
+        label = f"source SSH allowed-signers policy {allowed_signers}"
+        descriptor, fingerprint = pin_regular_metadata(allowed_signers, label)
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        allowed_signers_bytes = read_pinned_descriptor(
+            descriptor,
+            fingerprint,
+            MAX_SOURCE_ALLOWED_SIGNERS_BYTES,
+            label,
+        )
+        if hashlib.sha256(allowed_signers_bytes).hexdigest() != allowed_signers_sha256:
+            os.close(descriptor)
+            raise ValueError("SSH allowed-signers policy differs from its trusted SHA-256")
+        trusted_file_pins.append((allowed_signers, descriptor, fingerprint, label))
+        allowed_signers_snapshot, trusted_allowed_signers_snapshot = (
+            snapshot_private_bytes(
+                allowed_signers_bytes,
+                "allowed-signers",
+                "source SSH allowed-signers policy",
+                PROMOTION_STAGING_PARENT,
+            )
+        )
+        label = f"source SSH revocation policy {revocation}"
+        descriptor, fingerprint = pin_regular_metadata(
+            revocation, label, allow_empty=True
+        )
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        revocation_bytes = read_pinned_descriptor(
+            descriptor,
+            fingerprint,
+            MAX_SOURCE_REVOCATION_BYTES,
+            label,
+            allow_empty=True,
+        )
+        if hashlib.sha256(revocation_bytes).hexdigest() != revocation_sha256:
+            os.close(descriptor)
+            raise ValueError("SSH revocation policy differs from its trusted SHA-256")
+        trusted_file_pins.append((revocation, descriptor, fingerprint, label))
+        revocation_snapshot, trusted_revocation_snapshot = snapshot_private_bytes(
+            revocation_bytes,
+            "revocation",
+            "source SSH revocation policy",
+            PROMOTION_STAGING_PARENT,
+            allow_empty=True,
+        )
+        label = f"authenticated source-seal projection {source_projection}"
+        descriptor, fingerprint = pin_regular_metadata(source_projection, label)
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        source_projection_bytes = read_pinned_descriptor(
+            descriptor,
+            fingerprint,
+            MAX_SOURCE_SEAL_PROJECTION_BYTES,
+            label,
+        )
+        if hashlib.sha256(source_projection_bytes).hexdigest() != source_projection_sha256:
+            os.close(descriptor)
+            raise ValueError(
+                "authenticated source-seal projection differs from its trusted SHA-256"
+            )
+        trusted_file_pins.append((source_projection, descriptor, fingerprint, label))
+        source_projection_snapshot, _ = snapshot_private_bytes(
+            source_projection_bytes,
+            "authenticated-source-seal-projection.json",
+            "authenticated source-seal projection",
+            PROMOTION_STAGING_PARENT,
+        )
+        validate_source_trust_projection(
+            source_projection_bytes,
+            reviewed_closure_bytes,
+            reviewed_closure_sha256,
+            reviewed_source_commit,
+            allowed_signers_sha256,
+            revocation_sha256,
+        )
+        if (
+            trusted_allowed_signers_snapshot is None
+            or trusted_revocation_snapshot is None
+        ):
+            raise ValueError("source SSH trust-policy snapshots are incomplete")
+        source_trust_config = isolated_source_trust_git_config(
+            trusted_allowed_signers_snapshot,
+            trusted_revocation_snapshot,
+        )
+        source_trust_config_snapshot, trusted_source_trust_config = (
+            snapshot_private_bytes(
+                source_trust_config,
+                ".gitconfig",
+                "isolated source SSH trust Git config",
+                PROMOTION_STAGING_PARENT,
+            )
+        )
+        trusted_source_trust_home = trusted_source_trust_config.parent
+        label = f"reviewed source-tree seal helper {source_helper_path}"
+        descriptor, fingerprint = pin_regular_metadata(source_helper_path, label)
+        try:
+            require_production_root_custody(descriptor, label)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        source_helper_bytes = read_pinned_descriptor(
+            descriptor, fingerprint, MAX_REVIEWED_HELPER_BYTES, label
+        )
+        trusted_file_pins.append((source_helper_path, descriptor, fingerprint, label))
+        if reviewed_source_commit is None:
+            raise ValueError("reviewed source closure cannot authenticate its helper")
+        authenticate_reviewed_source_file(
+            SOURCE_TREE_SEAL,
+            source_helper_bytes,
+            reviewed_source_commit,
+            MAX_REVIEWED_HELPER_BYTES,
+        )
+        source_helper_snapshot, trusted_source_helper_snapshot = snapshot_private_bytes(
+            source_helper_bytes,
+            "kagemusha_source_tree_seal.py",
+            "reviewed source-tree seal helper",
+            PROMOTION_STAGING_PARENT,
+        )
+        if (
+            trusted_closure_snapshot is None
+            or trusted_source_helper_snapshot is None
+            or trusted_source_trust_home is None
+        ):
+            raise ValueError("reviewed source helper snapshots are incomplete")
+        source_identity_result = subprocess.run(
+            [
+                str(python_runtime),
+                "-I",
+                str(trusted_source_helper_snapshot),
+                "identity",
+                "--root",
+                str(root),
+                "--reviewed-source-closure",
+                str(trusted_closure_snapshot),
+                "--reviewed-source-closure-sha256",
+                reviewed_closure_sha256,
+            ],
+            cwd=Path("/"),
+            env={
+                "HOME": str(trusted_source_trust_home),
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": "/usr/bin:/bin",
+                "TMPDIR": str(PROMOTION_STAGING_PARENT),
+                "TZ": "UTC",
+            },
+            stdin=subprocess.DEVNULL,
+            check=False,
+            capture_output=True,
+            close_fds=True,
+        )
+        if source_identity_result.returncode != 0:
+            raise ValueError(
+                "promotion source differs from the independently pinned reviewed closure"
+            )
+        parsed_identity = strict_json_bytes(
+            source_identity_result.stdout, "promotion reviewed source identity"
+        )
+        if (
+            set(parsed_identity)
+            != {
+                "reviewed_source_closure",
+                "reviewed_source_closure_descriptor_sha256",
+                "schema",
+                "source_commit",
+                "source_repo_dirty",
+                "source_tree_sha256",
+            }
+            or parsed_identity.get("schema")
+            != "iroha.kagemusha.reviewed_source_tree_identity.v1"
+            or parsed_identity.get("source_repo_dirty") is not False
+            or parsed_identity.get("source_commit") != reviewed_source_commit
+            or parsed_identity.get("reviewed_source_closure_descriptor_sha256")
+            != reviewed_closure_sha256
+            or parsed_identity.get("reviewed_source_closure")
+            != strict_json_bytes(
+                reviewed_closure_bytes, "reviewed source closure"
+            )
+        ):
+            raise ValueError("promotion reviewed source identity is not exact")
+        source_identity = parsed_identity
         if ios_configuration is not None:
             public_key = ios_configuration[2]
             label = f"physical-iOS trusted public key {public_key}"
             descriptor, fingerprint = pin_regular_metadata(public_key, label)
+            try:
+                require_production_root_custody(descriptor, label)
+            except BaseException:
+                os.close(descriptor)
+                raise
             if fingerprint[4] > 64 * 1024:
                 os.close(descriptor)
                 raise ValueError("physical-iOS trusted public key is oversized")
+            public_key_bytes = read_pinned_descriptor(
+                descriptor, fingerprint, 64 * 1024, label
+            )
             trusted_file_pins.append((public_key, descriptor, fingerprint, label))
+            public_key_snapshot, trusted_public_key_snapshot = snapshot_private_bytes(
+                public_key_bytes,
+                "trusted-physical-ios-public-key.pem",
+                "physical-iOS trusted public key",
+                PROMOTION_STAGING_PARENT,
+            )
             label = f"reviewed physical-iOS evidence validator {ios_validator_path}"
             descriptor, fingerprint = pin_regular_metadata(ios_validator_path, label)
+            try:
+                require_production_root_custody(descriptor, label)
+            except BaseException:
+                os.close(descriptor)
+                raise
             validator_bytes = read_pinned_descriptor(
                 descriptor, fingerprint, 4 * 1024 * 1024, label
             )
             trusted_file_pins.append(
                 (ios_validator_path, descriptor, fingerprint, label)
             )
+            authenticate_reviewed_source_file(
+                IOS_EVIDENCE_MODULE,
+                validator_bytes,
+                reviewed_source_commit,
+                MAX_REVIEWED_HELPER_BYTES,
+            )
+            ios_validator_snapshot, trusted_ios_validator_snapshot = (
+                snapshot_private_bytes(
+                    validator_bytes,
+                    "kagemusha_candidate_ios_evidence.py",
+                    "reviewed physical-iOS evidence validator",
+                    PROMOTION_STAGING_PARENT,
+                )
+            )
             ios_validator = load_ios_evidence_validator(
-                validator_bytes, ios_validator_path
+                validator_bytes, trusted_ios_validator_snapshot
             )
     except Exception as error:
         for _, descriptor, _, _ in trusted_file_pins:
             os.close(descriptor)
         for _, descriptor, _, _ in catalog_directory_pins:
             os.close(descriptor)
-        if verifier_snapshot is not None:
-            verifier_snapshot.cleanup()
+        cleanup_private_snapshots()
         errors.append(f"promotion release trust path is not pinned: {error}")
         return errors
 
+    authenticated_verification_allowed = not errors
     directories = []
     for path in artifact_root.iterdir():
         directories.append(path)
@@ -1565,8 +2918,7 @@ def promotion_errors() -> list[str]:
                 os.close(descriptor)
             for _, descriptor, _, _ in trusted_file_pins:
                 os.close(descriptor)
-            if verifier_snapshot is not None:
-                verifier_snapshot.cleanup()
+            cleanup_private_snapshots()
             return errors
     directories.sort()
     if not directories:
@@ -1575,8 +2927,7 @@ def promotion_errors() -> list[str]:
             os.close(descriptor)
         for _, descriptor, _, _ in trusted_file_pins:
             os.close(descriptor)
-        if verifier_snapshot is not None:
-            verifier_snapshot.cleanup()
+        cleanup_private_snapshots()
         return errors
     if ios_configuration is not None:
         ios_root = ios_configuration[0]
@@ -1592,8 +2943,7 @@ def promotion_errors() -> list[str]:
                     os.close(descriptor)
                 for _, descriptor, _, _ in trusted_file_pins:
                     os.close(descriptor)
-                if verifier_snapshot is not None:
-                    verifier_snapshot.cleanup()
+                cleanup_private_snapshots()
                 return errors
         if {path.name for path in ios_directories} != {
             path.name for path in directories
@@ -1606,8 +2956,7 @@ def promotion_errors() -> list[str]:
                 os.close(descriptor)
             for _, descriptor, _, _ in trusted_file_pins:
                 os.close(descriptor)
-            if verifier_snapshot is not None:
-                verifier_snapshot.cleanup()
+            cleanup_private_snapshots()
             return errors
     expected_inventory = set(ARTIFACTS + FINAL_METADATA)
     catalog_aggregate_bytes = 0
@@ -1623,6 +2972,11 @@ def promotion_errors() -> list[str]:
         try:
             label = f"release directory {directory}"
             descriptor, fingerprint = pin_directory_metadata(directory, label)
+            try:
+                require_production_root_custody(descriptor, label)
+            except BaseException:
+                os.close(descriptor)
+                raise
             catalog_directory_pins.append((directory, descriptor, fingerprint, label))
         except (OSError, ValueError) as error:
             errors.append(f"{directory.name}: release directory is not pinned: {error}")
@@ -1637,13 +2991,20 @@ def promotion_errors() -> list[str]:
             errors.append(f"{directory.name}: final release inventory is not exact")
             continue
         new_pins: list[tuple[Path, int, tuple[int, ...], str]] = []
+        release_pins: dict[str, tuple[int, tuple[int, ...], str]] = {}
         try:
             release_bytes = 0
             for name in expected_inventory:
                 path = directory / name
                 label = f"{directory.name}/{name}"
                 descriptor, fingerprint = pin_regular_metadata(path, label)
+                try:
+                    require_production_root_custody(descriptor, label)
+                except BaseException:
+                    os.close(descriptor)
+                    raise
                 new_pins.append((path, descriptor, fingerprint, label))
+                release_pins[name] = (descriptor, fingerprint, label)
                 release_bytes += fingerprint[4]
             catalog_aggregate_bytes = checked_catalog_aggregate_total(
                 catalog_aggregate_bytes, release_bytes
@@ -1655,8 +3016,9 @@ def promotion_errors() -> list[str]:
             continue
         catalog_pins.extend(new_pins)
         try:
-            manifest_bytes = read_regular_bounded(
-                directory / "manifest.norito", MAX_MANIFEST_BYTES, "manifest.norito"
+            descriptor, fingerprint, label = release_pins["manifest.norito"]
+            manifest_bytes = read_pinned_descriptor(
+                descriptor, fingerprint, MAX_MANIFEST_BYTES, label
             )
         except (OSError, ValueError) as error:
             errors.append(f"{directory.name}: invalid manifest.norito: {error}")
@@ -1665,17 +3027,27 @@ def promotion_errors() -> list[str]:
         if digest != directory.name:
             errors.append(f"{directory.name}: directory does not equal manifest SHA-256")
         try:
-            sidecar = read_regular_bounded(
-                directory / "manifest.norito.sha256",
+            descriptor, fingerprint, label = release_pins[
+                "manifest.norito.sha256"
+            ]
+            sidecar = read_pinned_descriptor(
+                descriptor,
+                fingerprint,
                 MAX_DIGEST_SIDECAR_BYTES,
-                "manifest digest sidecar",
+                label,
             )
             if sidecar != f"{digest}\n".encode("ascii"):
                 errors.append(f"{directory.name}: manifest digest sidecar is not canonical")
         except (OSError, ValueError) as error:
             errors.append(f"{directory.name}: invalid manifest digest sidecar: {error}")
         try:
-            manifest = strict_json(directory / "manifest.json")
+            descriptor, fingerprint, label = release_pins["manifest.json"]
+            manifest = strict_json_bytes(
+                read_pinned_descriptor(
+                    descriptor, fingerprint, MAX_MANIFEST_BYTES, label
+                ),
+                label,
+            )
         except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
             errors.append(f"{directory.name}: invalid manifest JSON: {error}")
             continue
@@ -1683,6 +3055,24 @@ def promotion_errors() -> list[str]:
             errors.append(f"{directory.name}: manifest schema is not V4")
         if manifest.get("bridge_abi_version") != 22 or manifest.get("source_repo_dirty") is not False:
             errors.append(f"{directory.name}: ABI/source-tree promotion binding is invalid")
+        for field in (
+            "authenticated_source_seal_projection_sha256",
+            "reviewed_cargo_binary_sha256",
+            "reviewed_rustc_binary_sha256",
+        ):
+            try:
+                canonical_nonzero_sha256(
+                    manifest.get(field), f"{directory.name} manifest {field}"
+                )
+            except ValueError as error:
+                errors.append(str(error))
+        if source_identity is not None and (
+            manifest.get("authenticated_source_seal_projection_sha256")
+            != source_projection_sha256
+        ):
+            errors.append(
+                f"{directory.name}: manifest differs from the authenticated source-seal projection"
+            )
         if source_identity is not None and (
             manifest.get("source_commit") != source_identity.get("source_commit")
             or manifest.get("source_tree_sha256")
@@ -1721,12 +3111,14 @@ def promotion_errors() -> list[str]:
             else:
                 for name in ARTIFACTS:
                     try:
-                        prefix = inspect_regular_prefix(
-                            directory / name,
+                        descriptor, fingerprint, label = release_pins[name]
+                        prefix = inspect_pinned_prefix(
+                            descriptor,
+                            fingerprint,
                             declared_artifacts[name],
                             MAX_DECLARED_ARTIFACT_FILE_BYTES,
                             8,
-                            f"artifact {name}",
+                            label,
                         )
                         if prefix != b"KRV4KEY\0":
                             errors.append(f"{directory.name}/{name}: invalid KRV4 framing")
@@ -1734,17 +3126,26 @@ def promotion_errors() -> list[str]:
                         errors.append(f"{directory.name}/{name}: invalid artifact: {error}")
         for name, maximum in BOUNDED_AUTHENTICATED_METADATA:
             try:
-                payload = read_regular_bounded(directory / name, maximum, name)
+                descriptor, fingerprint, label = release_pins[name]
+                payload = read_pinned_descriptor(
+                    descriptor, fingerprint, maximum, label
+                )
                 if name == "promotion-record-v4.norito":
                     promotion_record_sha256 = hashlib.sha256(payload).hexdigest()
             except (OSError, ValueError) as error:
                 errors.append(f"{directory.name}/{name}: invalid evidence: {error}")
+        evidence_bytes: bytes | None = None
         try:
-            if not evidence_is_non_placeholder(
-                directory / "physical-device-benchmark.evidence",
+            descriptor, fingerprint, label = release_pins[
+                "physical-device-benchmark.evidence"
+            ]
+            evidence_bytes = read_pinned_descriptor(
+                descriptor,
+                fingerprint,
                 MAX_BENCHMARK_EVIDENCE_BYTES,
-                "physical-device-benchmark.evidence",
-            ):
+                label,
+            )
+            if not evidence_bytes_are_non_placeholder(evidence_bytes):
                 errors.append(
                     f"{directory.name}/physical-device-benchmark.evidence: "
                     "missing non-placeholder evidence bytes"
@@ -1757,10 +3158,14 @@ def promotion_errors() -> list[str]:
         try:
             # This is opaque proof-bearing Norito, not human-authored evidence.
             # Bound and pin it here; Kagami performs canonical authentication.
-            receipt = read_regular_bounded(
-                directory / "recursive-step-two-qualification-v4.norito",
+            descriptor, fingerprint, label = release_pins[
+                "recursive-step-two-qualification-v4.norito"
+            ]
+            receipt = read_pinned_descriptor(
+                descriptor,
+                fingerprint,
                 MAX_QUALIFICATION_RECEIPT_BYTES,
-                "recursive qualification receipt",
+                label,
             )
             qualification_receipt_sha256 = hashlib.sha256(receipt).hexdigest()
         except (OSError, ValueError) as error:
@@ -1771,10 +3176,18 @@ def promotion_errors() -> list[str]:
         if (
             ios_configuration is not None
             and ios_validator is not None
+            and evidence_bytes is not None
+            and trusted_public_key_snapshot is not None
             and len(errors) == directory_error_count
         ):
             ios_candidate_sha256, ios_error = verify_ios_evidence(
-                directory, ios_configuration, ios_validator
+                directory,
+                ios_configuration,
+                ios_validator,
+                evidence_bytes,
+                trusted_public_key_snapshot,
+                catalog_directory_pins,
+                PROMOTION_STAGING_PARENT,
             )
             if ios_error is not None:
                 errors.append(ios_error)
@@ -1838,8 +3251,7 @@ def promotion_errors() -> list[str]:
             errors.append(f"invalid catalog directory inventory: {error}")
         finally:
             os.close(descriptor)
-    if verifier_snapshot is not None:
-        verifier_snapshot.cleanup()
+    cleanup_private_snapshots()
     return errors
 
 
@@ -1848,6 +3260,204 @@ if mode == "promotion":
     errors.extend(promotion_errors())
 
 if self_test:
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="kagemusha-symlink-invocation-self-test-"
+        ) as temporary:
+            invocation = Path(temporary) / "readiness-symlink"
+            invocation.symlink_to(root / READINESS)
+            rejected = subprocess.run(
+                ["/bin/bash", str(invocation), "candidate"],
+                cwd=Path("/"),
+                env={"LANG": "C", "LC_ALL": "C", "PATH": "/untrusted/bin"},
+                stdin=subprocess.DEVNULL,
+                check=False,
+                capture_output=True,
+                text=True,
+                close_fds=True,
+            )
+            if (
+                rejected.returncode != 2
+                or "rejects missing or symlinked script invocation"
+                not in rejected.stderr
+            ):
+                errors.append("self-test failed to reject symlinked gate invocation")
+    except OSError as error:
+        errors.append(f"symlink invocation self-test failed unexpectedly: {error}")
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="kagemusha-untrusted-gate-self-test-"
+        ) as temporary:
+            untrusted_checkout = (
+                Path(temporary).resolve(strict=True) / "untrusted-checkout"
+            )
+            untrusted_ci = untrusted_checkout / "ci"
+            untrusted_ci.mkdir(parents=True)
+            untrusted_gate = untrusted_ci / Path(READINESS).name
+            untrusted_gate.write_bytes((root / READINESS).read_bytes())
+            untrusted_gate.chmod(0o700)
+            untrusted_ci.chmod(0o700)
+            # This stays invalid even when the self-test itself runs as root.
+            untrusted_checkout.chmod(0o770)
+            rejected = subprocess.run(
+                ["/bin/bash", str(untrusted_gate), "promotion"],
+                cwd=Path("/"),
+                env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+                stdin=subprocess.DEVNULL,
+                check=False,
+                capture_output=True,
+                text=True,
+                close_fds=True,
+            )
+            if (
+                rejected.returncode != 2
+                or "promotion readiness checkout" not in rejected.stderr
+                or not any(
+                    marker in rejected.stderr
+                    for marker in ("not root-owned", "group/world writable")
+                )
+            ):
+                errors.append(
+                    "self-test failed to reject a user-controlled promotion gate checkout"
+                )
+    except OSError as error:
+        errors.append(f"untrusted gate self-test failed unexpectedly: {error}")
+    try:
+        head_result = subprocess.run(
+            [str(SOURCE_GIT), "-C", str(root), "rev-parse", "--verify", "HEAD"],
+            cwd=Path("/"),
+            env=source_git_environment(),
+            stdin=subprocess.DEVNULL,
+            check=False,
+            capture_output=True,
+            text=True,
+            close_fds=True,
+        )
+        head_commit = head_result.stdout.strip()
+        if (
+            head_result.returncode != 0
+            or head_result.stderr
+            or re.fullmatch(r"[0-9a-f]{40}", head_commit) is None
+        ):
+            raise ValueError("could not resolve self-test HEAD")
+        try:
+            authenticate_reviewed_source_file(
+                SOURCE_TREE_SEAL,
+                b"mutated helper bytes",
+                head_commit,
+                MAX_REVIEWED_HELPER_BYTES,
+            )
+        except ValueError as error:
+            if "differs from the source closure" not in str(error):
+                raise
+        else:
+            errors.append("self-test failed to reject a source-helper byte mutation")
+    except (OSError, ValueError) as error:
+        errors.append(f"source-helper authentication self-test failed unexpectedly: {error}")
+    system_git_descriptor = -1
+    try:
+        system_git_descriptor, system_git_fingerprint = pin_regular_metadata(
+            SOURCE_GIT,
+            "self-test source-authentication Git",
+            require_single_link=False,
+        )
+        require_production_root_custody(
+            system_git_descriptor, "self-test source-authentication Git"
+        )
+        if not system_git_fingerprint[3] & 0o111:
+            raise ValueError("fixed source-authentication Git is not executable")
+        revalidate_pinned_metadata(
+            SOURCE_GIT,
+            system_git_descriptor,
+            system_git_fingerprint,
+            "self-test source-authentication Git",
+        )
+    except (OSError, ValueError) as error:
+        errors.append(f"fixed Git custody self-test failed unexpectedly: {error}")
+    finally:
+        if system_git_descriptor >= 0:
+            os.close(system_git_descriptor)
+    try:
+        source_commit = "1" * 40
+        source_tree_sha256 = "2" * 64
+        closure_value: dict[str, object] = {
+            "schema": "iroha.reviewed-source-closure.v1",
+            "base_commit": source_commit,
+            "source_commit": source_commit,
+            "source_repo_dirty": False,
+            "source_tree_sha256": source_tree_sha256,
+            "tracked_binary_diff_sha256": "3" * 64,
+            "untracked_file_count": 0,
+            "untracked_path_mode_blob_oid_manifest": [],
+            "untracked_path_mode_blob_oid_manifest_sha256": "4" * 64,
+            "ignored_cargo_lock_size_bytes": 1,
+            "ignored_cargo_lock_sha256": "5" * 64,
+            "combined_source_fingerprint_sha256": "6" * 64,
+        }
+        closure_bytes = (
+            json.dumps(closure_value, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        closure_sha256 = hashlib.sha256(closure_bytes).hexdigest()
+        allowed_sha256 = "7" * 64
+        revocation_sha256 = "8" * 64
+        projection = {
+            "build_script_observed": {},
+            "outer_policy": {},
+            "reviewed_source_closure_hex": closure_bytes.hex(),
+            "reviewed_source_closure_sha256": closure_sha256,
+            "schema": "iroha.kagemusha.authenticated_source_seal_projection.v1",
+            "source_authority": {
+                "commit": source_commit,
+                "commit_object_sha256": "9" * 64,
+                "commit_object_size": 1,
+                "committer_epoch": 1,
+                "git_tree": "a" * 40,
+                "ordered_parents": ["b" * 40],
+                "parent_commit": "b" * 40,
+                "parent_tree": "c" * 40,
+                "signature": {
+                    "allowed_signers_sha256": allowed_sha256,
+                    "mechanism": "git-commit-ssh-signature-v1",
+                    "principal": "reviewer@example.test",
+                    "public_key_sha256": "d" * 64,
+                    "revocation_sha256": revocation_sha256,
+                    "signature_namespace": "git",
+                },
+            },
+            "source_commit": source_commit,
+            "source_date_epoch": 1,
+            "source_repo_dirty": False,
+            "source_tree_sha256": source_tree_sha256,
+        }
+        projection_bytes = (
+            json.dumps(projection, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        validate_source_trust_projection(
+            projection_bytes,
+            closure_bytes,
+            closure_sha256,
+            source_commit,
+            allowed_sha256,
+            revocation_sha256,
+        )
+        try:
+            validate_source_trust_projection(
+                projection_bytes,
+                closure_bytes,
+                closure_sha256,
+                source_commit,
+                "e" * 64,
+                revocation_sha256,
+            )
+        except ValueError as error:
+            if "trust-policy digests" not in str(error):
+                raise
+        else:
+            errors.append(
+                "self-test failed to bind SSH trust-policy digests to the reviewed closure"
+            )
+    except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+        errors.append(f"source trust-projection self-test failed unexpectedly: {error}")
     if (
         "recursive-step-two-qualification-v4.norito" not in FINAL_METADATA
         or MAX_RELEASE_INVENTORY_ENTRIES != 17
@@ -1883,6 +3493,145 @@ if self_test:
             errors.append("self-test failed at the whole-catalog byte boundary")
     else:
         errors.append("self-test failed to reject an oversized multi-release catalog")
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="kagemusha-self-test-staging-parent-"
+        ) as staging_text, tempfile.TemporaryDirectory(
+            prefix="kagemusha-self-test-attacker-tmpdir-"
+        ) as attacker_tmpdir:
+            staging_parent = Path(staging_text).resolve(strict=True)
+            prior_tmpdir = os.environ.get("TMPDIR")
+            os.environ["TMPDIR"] = attacker_tmpdir
+            try:
+                snapshot, snapshot_path = snapshot_private_bytes(
+                    b"authenticated physical-iOS evidence bytes",
+                    "evidence.json",
+                    "self-test evidence",
+                    staging_parent,
+                )
+                try:
+                    snapshot_metadata = snapshot_path.lstat()
+                    if (
+                        snapshot_path.read_bytes()
+                        != b"authenticated physical-iOS evidence bytes"
+                        or snapshot_path.parent.parent != staging_parent
+                        or Path(attacker_tmpdir).resolve(strict=True)
+                        in snapshot_path.parents
+                        or stat.S_IMODE(snapshot_metadata.st_mode) != 0o600
+                        or stat.S_IMODE(snapshot_path.parent.lstat().st_mode) != 0o700
+                    ):
+                        errors.append(
+                            "self-test failed to create an exact fixed-parent evidence snapshot"
+                        )
+                finally:
+                    snapshot.cleanup()
+                empty_snapshot, empty_snapshot_path = snapshot_private_bytes(
+                    b"",
+                    "revocation",
+                    "self-test empty SSH revocation policy",
+                    staging_parent,
+                    allow_empty=True,
+                )
+                try:
+                    if (
+                        empty_snapshot_path.stat().st_size != 0
+                        or hashlib.sha256(empty_snapshot_path.read_bytes()).hexdigest()
+                        != hashlib.sha256(b"").hexdigest()
+                    ):
+                        errors.append(
+                            "self-test failed to preserve an explicitly pinned empty revocation policy"
+                        )
+                finally:
+                    empty_snapshot.cleanup()
+                allowed_snapshot, allowed_path = snapshot_private_bytes(
+                    b"reviewer@example.test ssh-ed25519 AAAA\n",
+                    "allowed-signers",
+                    "self-test SSH allowed-signers policy",
+                    staging_parent,
+                )
+                revocation_snapshot, revocation_path = snapshot_private_bytes(
+                    b"",
+                    "revocation",
+                    "self-test SSH revocation policy",
+                    staging_parent,
+                    allow_empty=True,
+                )
+                config_snapshot: tempfile.TemporaryDirectory[str] | None = None
+                try:
+                    config_payload = isolated_source_trust_git_config(
+                        allowed_path, revocation_path
+                    )
+                    config_snapshot, config_path = snapshot_private_bytes(
+                        config_payload,
+                        ".gitconfig",
+                        "self-test isolated source SSH Git config",
+                        staging_parent,
+                    )
+                    config_environment = source_git_environment()
+                    config_environment.pop("GIT_CONFIG_GLOBAL", None)
+                    config_environment["HOME"] = str(config_path.parent)
+                    for key, expected in (
+                        ("gpg.ssh.allowedSignersFile", allowed_path),
+                        ("gpg.ssh.revocationFile", revocation_path),
+                    ):
+                        configured = subprocess.run(
+                            [
+                                str(SOURCE_GIT),
+                                "config",
+                                "--global",
+                                "--path",
+                                "--get",
+                                key,
+                            ],
+                            cwd=Path("/"),
+                            env=config_environment,
+                            stdin=subprocess.DEVNULL,
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                            close_fds=True,
+                        )
+                        if (
+                            configured.returncode != 0
+                            or configured.stderr
+                            or configured.stdout != f"{expected}\n"
+                        ):
+                            errors.append(
+                                "self-test failed to expose only the snapshotted source SSH trust policy"
+                            )
+                finally:
+                    if config_snapshot is not None:
+                        config_snapshot.cleanup()
+                    revocation_snapshot.cleanup()
+                    allowed_snapshot.cleanup()
+            finally:
+                if prior_tmpdir is None:
+                    os.environ.pop("TMPDIR", None)
+                else:
+                    os.environ["TMPDIR"] = prior_tmpdir
+    except (OSError, ValueError) as error:
+        errors.append(f"private evidence snapshot self-test failed unexpectedly: {error}")
+    try:
+        with tempfile.TemporaryDirectory(prefix="kagemusha-custody-self-test-") as temporary:
+            writable = Path(temporary) / "writable"
+            writable.write_bytes(b"untrusted")
+            writable.chmod(0o622)
+            descriptor, _ = pin_regular_metadata(writable, "self-test writable file")
+            try:
+                try:
+                    require_production_root_custody(
+                        descriptor, "self-test writable file"
+                    )
+                except ValueError:
+                    pass
+                else:
+                    errors.append(
+                        "self-test failed to reject a caller-writable production input"
+                    )
+            finally:
+                os.close(descriptor)
+    except (OSError, ValueError) as error:
+        errors.append(f"production custody self-test failed unexpectedly: {error}")
     report_manifest_artifacts = [
         {
             "file_name": name,
@@ -1900,6 +3649,9 @@ if self_test:
         "network_id": "self-test-network",
         "asset": "self-test-asset",
         "asset_scale": 2,
+        "authenticated_source_seal_projection_sha256": "b" * 64,
+        "reviewed_cargo_binary_sha256": "c" * 64,
+        "reviewed_rustc_binary_sha256": "d" * 64,
         "qualified_candidate_sha256": "7" * 64,
         "profiles": [
             {"artifacts": report_manifest_artifacts[:4]},
@@ -1941,6 +3693,9 @@ if self_test:
         "candidate_sha256": "3" * 64,
         "qualification_receipt_sha256": "4" * 64,
         "qualified_candidate_sha256": "7" * 64,
+        "authenticated_source_seal_projection_sha256": "b" * 64,
+        "reviewed_cargo_binary_sha256": "c" * 64,
+        "reviewed_rustc_binary_sha256": "d" * 64,
         "promotion_record_sha256": "6" * 64,
         "release_policy_sha256": "5" * 64,
         "generation": "self-test",
@@ -1979,6 +3734,28 @@ if self_test:
             errors.append(f"authenticated report self-test failed unexpectedly: {error}")
     else:
         errors.append("self-test failed to reject an unverified Kagami report")
+    for field in (
+        "authenticated_source_seal_projection_sha256",
+        "reviewed_cargo_binary_sha256",
+        "reviewed_rustc_binary_sha256",
+    ):
+        mismatched_report = dict(verifier_report)
+        mismatched_report[field] = "e" * 64
+        try:
+            validate_kagami_verification_report(
+                mismatched_report,
+                directory=Path("/release") / ("1" * 64),
+                manifest=report_manifest,
+                policy_sha256="5" * 64,
+                promotion_record_sha256="6" * 64,
+                qualification_receipt_sha256="4" * 64,
+                ios_candidate_sha256="3" * 64,
+            )
+        except ValueError as error:
+            if "differs from the manifest" not in str(error):
+                errors.append(f"authenticated report {field} self-test failed unexpectedly: {error}")
+        else:
+            errors.append(f"self-test failed to reject a mismatched Kagami report {field}")
     try:
         with tempfile.TemporaryDirectory(prefix="kagemusha-catalog-pin-self-test-") as temporary:
             catalog_root = Path(temporary).resolve(strict=True)
@@ -2035,9 +3812,10 @@ if self_test:
         READINESS: read(READINESS, []),
         MODEL: read_reviewed_model([], {}),
         MODEL_COMPONENT: read(MODEL_COMPONENT, []),
+        MODEL_VERIFIER_COMPONENT: read(MODEL_VERIFIER_COMPONENT, []),
         PRIVACY: read(PRIVACY, []),
         PRIVACY_PROTOCOL: read(PRIVACY_PROTOCOL, []),
-        CATALOG: read(CATALOG, []),
+        CATALOG: read_reviewed_catalog([], {}),
         CORE: read(CORE, []),
         KAGAMI: read(KAGAMI, []),
         BUNDLE: read(BUNDLE, []),
@@ -2056,6 +3834,13 @@ if self_test:
     )
     if not static_errors({MODEL_COMPONENT: detached_model_component}):
         errors.append("self-test failed to authenticate the split model component")
+    detached_verifier_component = baseline[MODEL_VERIFIER_COMPONENT].replace(
+        "const VERIFIER_IDENTITY_SCHEMA_V4",
+        "const DETACHED_VERIFIER_IDENTITY_SCHEMA_V4",
+        1,
+    )
+    if not static_errors({MODEL_VERIFIER_COMPONENT: detached_verifier_component}):
+        errors.append("self-test failed to authenticate the release-verifier component")
     sixteen_file_verifier = baseline[KAGAMI].replace(
         "if expected.len() != 17",
         "if expected.len() != 16",
@@ -2252,6 +4037,191 @@ if self_test:
         "promotion verifier command" in error for error in cargo_verifier_errors
     ):
         errors.append("self-test failed to reject a PATH-resolved Cargo verifier")
+    reopened_ios_evidence = baseline[READINESS].replace(
+        "                evidence_snapshot_path,\n                raw_root,",
+        "                directory / \"physical-device-benchmark.evidence\",\n"
+        "                raw_root,",
+        1,
+    )
+    reopened_ios_evidence_errors = static_errors(
+        {READINESS: reopened_ios_evidence}
+    )
+    if not any(
+        "same pinned evidence bytes and trusted key snapshot" in error
+        for error in reopened_ios_evidence_errors
+    ):
+        errors.append(
+            "self-test failed to reject reopening physical-iOS evidence for validation"
+        )
+    reopened_ios_key = baseline[READINESS].replace(
+        "                trusted_public_key_snapshot,\n            )",
+        "                ios_configuration[2],\n            )",
+        1,
+    )
+    reopened_ios_key_errors = static_errors({READINESS: reopened_ios_key})
+    if not any(
+        "same pinned evidence bytes and trusted key snapshot" in error
+        for error in reopened_ios_key_errors
+    ):
+        errors.append("self-test failed to reject reopening the physical-iOS trust key")
+    missing_root_custody = baseline[READINESS].replace(
+        "                        require_production_root_custody(descriptor, label)",
+        "                        # production root custody removed",
+        1,
+    )
+    missing_root_custody_errors = static_errors({READINESS: missing_root_custody})
+    if not any(
+        "root-custody every production trust class" in error
+        for error in missing_root_custody_errors
+    ):
+        errors.append("self-test failed to reject a missing production custody check")
+    unpinned_running_python = baseline[READINESS].replace(
+        "            != trusted_python_sha256",
+        "            != hash_pinned_descriptor(\n"
+        "                descriptor, fingerprint, MAX_KAGAMI_VERIFIER_BYTES, label\n"
+        "            )",
+        1,
+    )
+    unpinned_running_python_errors = static_errors(
+        {READINESS: unpinned_running_python}
+    )
+    if not any(
+        "running promotion interpreter digest revalidation" in error
+        for error in unpinned_running_python_errors
+    ):
+        errors.append("self-test failed to reject an unpinned running Python runtime")
+    path_reopened_python = baseline[READINESS].replace(
+        '"/dev/fd/${PYTHON_PIN_FD}"',
+        '"${PYTHON_BIN}"',
+    )
+    path_reopened_python_errors = static_errors({READINESS: path_reopened_python})
+    if not any(
+        "pre-exec Python descriptor custody" in error
+        for error in path_reopened_python_errors
+    ):
+        errors.append("self-test failed to reject path-reopened pre-exec Python")
+    ambient_snapshot_parent = baseline[READINESS].replace(
+        'prefix="kagemusha-pinned-input-", dir=staging_parent',
+        'prefix="kagemusha-pinned-input-"',
+        1,
+    )
+    ambient_snapshot_parent_errors = static_errors(
+        {READINESS: ambient_snapshot_parent}
+    )
+    if not any(
+        "explicit staging parent" in error
+        for error in ambient_snapshot_parent_errors
+    ):
+        errors.append("self-test failed to reject ambient-TMPDIR promotion staging")
+    ambient_source_helper_tmpdir = baseline[READINESS].replace(
+        '"TMPDIR": str(PROMOTION_STAGING_PARENT),',
+        '"TMPDIR": "/tmp",',
+        1,
+    )
+    ambient_source_helper_tmpdir_errors = static_errors(
+        {READINESS: ambient_source_helper_tmpdir}
+    )
+    if not any(
+        "fixed staging parent" in error
+        for error in ambient_source_helper_tmpdir_errors
+    ):
+        errors.append(
+            "self-test failed to reject ambient-TMPDIR promotion subprocess staging"
+        )
+    path_executed_source_helper = baseline[READINESS].replace(
+        "                str(trusted_source_helper_snapshot),",
+        "                str(source_helper_path),",
+        1,
+    )
+    path_executed_source_helper_errors = static_errors(
+        {READINESS: path_executed_source_helper}
+    )
+    if not any(
+        "source-closure-authenticated source-tree helper snapshot" in error
+        for error in path_executed_source_helper_errors
+    ):
+        errors.append("self-test failed to reject a path-executed source helper")
+    path_loaded_ios_validator = baseline[READINESS].replace(
+        "                validator_bytes, trusted_ios_validator_snapshot",
+        "                validator_bytes, ios_validator_path",
+        1,
+    )
+    path_loaded_ios_validator_errors = static_errors(
+        {READINESS: path_loaded_ios_validator}
+    )
+    if not any(
+        "source-closure-authenticated iOS validator snapshot" in error
+        for error in path_loaded_ios_validator_errors
+    ):
+        errors.append("self-test failed to reject a path-loaded iOS validator")
+    ambient_source_trust_home = baseline[READINESS].replace(
+        '"HOME": str(trusted_source_trust_home),',
+        '"HOME": "/var/empty",',
+        1,
+    )
+    ambient_source_trust_home_errors = static_errors(
+        {READINESS: ambient_source_trust_home}
+    )
+    if not any(
+        "source SSH trust" in error
+        or "closure-bound snapshotted" in error
+        for error in ambient_source_trust_home_errors
+    ):
+        errors.append("self-test failed to reject an unconfigured source trust HOME")
+    unbound_source_trust_projection = baseline[READINESS].replace(
+        "        validate_source_trust_projection(\n"
+        "            source_projection_bytes,",
+        "        bypass_source_trust_projection(\n"
+        "            source_projection_bytes,",
+        1,
+    )
+    unbound_source_trust_projection_errors = static_errors(
+        {READINESS: unbound_source_trust_projection}
+    )
+    if not any(
+        "closure-bound snapshotted source SSH trust policies" in error
+        for error in unbound_source_trust_projection_errors
+    ):
+        errors.append("self-test failed to reject unbound source SSH trust policies")
+    missing_gate_checkout_custody = baseline[READINESS].replace(
+        '  promotion_assert_root_custody "${DERIVED_ROOT_DIR}" '
+        '"promotion readiness checkout" || exit 2',
+        "  # promotion checkout custody removed",
+        1,
+    )
+    missing_gate_checkout_custody_errors = static_errors(
+        {READINESS: missing_gate_checkout_custody}
+    )
+    if not any(
+        "root-custodied gate bootstrap" in error
+        or "promotion_assert_root_custody" in error
+        for error in missing_gate_checkout_custody_errors
+    ):
+        errors.append("self-test failed to reject an untrusted gate checkout")
+    bypassed_gate_digest = baseline[READINESS].replace(
+        '  if [[ "${OBSERVED_GATE_SHA256}" != "${GATE_SHA256}" ]]; then',
+        "  if false; then",
+        1,
+    )
+    bypassed_gate_digest_errors = static_errors(
+        {READINESS: bypassed_gate_digest}
+    )
+    if not any(
+        "root-custodied gate bootstrap" in error
+        for error in bypassed_gate_digest_errors
+    ):
+        errors.append("self-test failed to reject a bypassed reviewed gate digest")
+    forged_dirname_root = baseline[READINESS].replace(
+        'SCRIPT_DIRECTORY_LEXICAL="${SCRIPT_PATH_LEXICAL%/*}"',
+        'SCRIPT_DIRECTORY_LEXICAL="$(dirname "${SCRIPT_PATH_LEXICAL}")"',
+        1,
+    )
+    forged_dirname_root_errors = static_errors({READINESS: forged_dirname_root})
+    if not any(
+        "promotion shell bootstrap" in error
+        for error in forged_dirname_root_errors
+    ):
+        errors.append("self-test failed to reject PATH-resolved root derivation")
 
 if errors:
     print(

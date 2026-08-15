@@ -38,7 +38,12 @@ KAGEMUSHA_MANAGED_CONFIG_KEYS = (
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
 MAX_VALIDATORS = 31
-GENESIS_EXPECTED_HASH_PLACEHOLDER = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
+# A syntactically valid, marker-bearing Iroha hash used only by the private
+# pre-signing render. The external signer replaces it with the signed genesis
+# hash before any runtime bundle is published.
+GENESIS_EXPECTED_HASH_PLACEHOLDER = (
+    "7a5823b7ebd34d7599807390890cf20c1d37072949641dca62f83c14fb4347cd"
+)
 GENESIS_EXPECTED_HASH_RE = re.compile(r"[0-9a-f]{64}")
 TAIRA_CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
 MIB = 1024 * 1024
@@ -1696,15 +1701,17 @@ def render_validator_config(
     trusted_peers_lines = _render_trusted_peers(validators)
     trusted_peers_pop_lines = _render_trusted_peers_pop(validators)
     shared = shared_secrets or SharedSecrets()
-    kagemusha_catalog_paths = (
-        kagemusha_release_policy_path,
-        kagemusha_artifact_dir,
-        kagemusha_catalog_qualification_seal_path,
-    )
-    if any(path is not None for path in kagemusha_catalog_paths) and not all(
-        path is not None for path in kagemusha_catalog_paths
+    if (kagemusha_release_policy_path is None) != (kagemusha_artifact_dir is None):
+        raise ValueError(
+            "Kagemusha release policy and artifact directory must be supplied together"
+        )
+    if (
+        kagemusha_catalog_qualification_seal_path is not None
+        and kagemusha_release_policy_path is None
     ):
-        raise ValueError("Kagemusha release catalog paths must be supplied together")
+        raise ValueError(
+            "Kagemusha qualification seal requires the release policy and artifact directory"
+        )
 
     for raw_line in template_text.splitlines():
         stripped = raw_line.strip()
@@ -1726,12 +1733,17 @@ def render_validator_config(
                             + _quote_toml(str(kagemusha_release_policy_path)),
                             "kagemusha_artifact_dir = "
                             + _quote_toml(str(kagemusha_artifact_dir)),
+                        ]
+                    )
+                    if kagemusha_catalog_qualification_seal_path is not None:
+                        rendered.append(
                             "kagemusha_catalog_qualification_seal_path = "
                             + _quote_toml(
                                 str(kagemusha_catalog_qualification_seal_path)
-                            ),
-                            f"kagemusha_max_decoded_bytes = {KAGEMUSHA_MAX_DECODED_BYTES}",
-                        ]
+                            )
+                        )
+                    rendered.append(
+                        f"kagemusha_max_decoded_bytes = {KAGEMUSHA_MAX_DECODED_BYTES}"
                     )
             if current_section == "[genesis]" and genesis_file is not None:
                 rendered.append(f"file = {_quote_toml(str(genesis_file))}")
@@ -2021,10 +2033,15 @@ def render_validator_config(
                 "kagemusha_release_policy_path = "
                 + _quote_toml(str(kagemusha_release_policy_path)),
                 "kagemusha_artifact_dir = " + _quote_toml(str(kagemusha_artifact_dir)),
-                "kagemusha_catalog_qualification_seal_path = "
-                + _quote_toml(str(kagemusha_catalog_qualification_seal_path)),
-                f"kagemusha_max_decoded_bytes = {KAGEMUSHA_MAX_DECODED_BYTES}",
             ]
+        )
+        if kagemusha_catalog_qualification_seal_path is not None:
+            rendered.append(
+                "kagemusha_catalog_qualification_seal_path = "
+                + _quote_toml(str(kagemusha_catalog_qualification_seal_path))
+            )
+        rendered.append(
+            f"kagemusha_max_decoded_bytes = {KAGEMUSHA_MAX_DECODED_BYTES}"
         )
 
     rendered_text = "\n".join(rendered)
@@ -2066,6 +2083,7 @@ def render_bundle(
     bundle_root: Path | None = None,
     onboarding_token_hash_tool: Path | None = None,
     kagemusha_release_root: Path | None = None,
+    include_kagemusha_qualification_seal: bool = True,
 ) -> list[Path]:
     """Render one config.toml per validator into output_dir."""
 
@@ -2128,6 +2146,15 @@ def render_bundle(
             )
         if not bundle_root.exists() or bundle_root.resolve(strict=True) != bundle_root:
             raise ValueError("bundle_root must be an existing canonical directory")
+    output_dir_text = str(output_dir)
+    if (
+        not output_dir.is_absolute()
+        or output_dir == Path("/")
+        or output_dir_text.startswith("//")
+        or os.path.normpath(output_dir_text) != output_dir_text
+        or any(ord(character) < 0x20 for character in output_dir_text)
+    ):
+        raise ValueError("output_dir must be a canonical, non-root absolute path")
     if kagemusha_release_root is not None:
         release_root_text = str(kagemusha_release_root)
         if (
@@ -2144,12 +2171,13 @@ def render_bundle(
             kagemusha_release_root == path_root
             or kagemusha_release_root.is_relative_to(path_root)
             or path_root.is_relative_to(kagemusha_release_root)
+            or kagemusha_release_root == output_dir
+            or kagemusha_release_root.is_relative_to(output_dir)
+            or output_dir.is_relative_to(kagemusha_release_root)
         ):
             raise ValueError(
-                "kagemusha_release_root and the validator-writable install or bundle root must be disjoint"
+                "kagemusha_release_root and the validator-writable install, bundle, and render roots must be disjoint"
             )
-    if not output_dir.is_absolute():
-        raise ValueError("output_dir must be an absolute path")
     _ensure_private_directory(output_dir, "render output directory")
     if bundle_root is None:
         _write_private_text(output_dir / ".gitignore", "*\n!.gitignore")
@@ -2270,6 +2298,7 @@ def render_bundle(
                 kagemusha_catalog_qualification_seal_path=(
                     kagemusha_release_root / KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
                     if kagemusha_release_root is not None
+                    and include_kagemusha_qualification_seal
                     else None
                 ),
                 sumeragi_body_bytes=sumeragi_body_bytes,

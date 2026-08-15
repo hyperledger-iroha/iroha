@@ -1,4 +1,6 @@
 //! Bridge-related data types for wrapped assets and receipts. Feature-gated behind `bridge`.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{NetworkId, nexus::LaneId, proof::ProofBox};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
@@ -49,10 +51,7 @@ pub use sccp_registry::{
 ///
 /// Stored alongside an Iroha asset definition to bind it to its origin.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct WrappedAssetDef {
     /// Origin chain identifier (canonical bytes, e.g., "btc", "evm-eth").
@@ -64,10 +63,7 @@ pub struct WrappedAssetDef {
 }
 /// A receipt emitted by the bridge lane to record a cross-chain action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeReceipt {
@@ -90,10 +86,7 @@ pub struct BridgeReceipt {
 }
 /// Hash function used by bridge Merkle proofs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "hash_function", content = "value")]
@@ -105,10 +98,7 @@ pub enum BridgeHashFunction {
 }
 /// Height range covered by a bridge proof artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeProofRange {
@@ -138,10 +128,7 @@ impl BridgeProofRange {
 }
 /// ICS-style proof payload (hash-only light client).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeIcsProof {
@@ -158,10 +145,7 @@ pub struct BridgeIcsProof {
 }
 /// Transparent ZK proof payload (rolling recursive proof).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeTransparentProof {
@@ -178,10 +162,7 @@ pub struct BridgeTransparentProof {
 /// selects one concrete native consensus and inclusion verifier, so an unknown value fails decoding
 /// instead of being routed by a node-local naming convention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
@@ -242,10 +223,7 @@ impl BridgeNativeProofBackendV1 {
 /// the family tag beside the commitment prevents a valid checkpoint hash from
 /// being routed to a different chain verifier through a domain-only lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct SccpNativeTrustAnchorV1 {
@@ -290,10 +268,7 @@ impl SccpNativeTrustAnchorV1 {
 /// identifier; it does not disguise native consensus evidence as a transparent ZK proof or place it
 /// inside a caller-labelled [`ProofBox`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeNativeProtocolProofV1 {
@@ -318,10 +293,7 @@ impl BridgeNativeProtocolProofV1 {
 /// An unknown or caller-labelled backend is unrepresentable. The SCCP cryptographic implementation
 /// additionally verifies that the canonical artifact's inner family agrees with this outer tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
@@ -374,10 +346,7 @@ impl BridgeSccpDestinationProofBackendV1 {
 /// This closed container prevents production SCCP delivery from being routed
 /// through generic [`ProofBox`] backend strings.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
@@ -412,10 +381,7 @@ impl BridgeSccpDestinationProofV1 {
 }
 /// Bridge proof payload kinds supported by the data model.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "kind", content = "payload")]
@@ -479,10 +445,7 @@ impl BridgeProofPayload {
 }
 /// Bridge proof artifact with a payload-owned verifier binding.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeProof {
@@ -512,10 +475,7 @@ impl BridgeProof {
 }
 /// Stored bridge proof record with size metadata and commitment.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeProofRecord {
@@ -539,10 +499,7 @@ pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
 /// roster powers, quorum, subject, and commit certificate. No legacy certificate projection or
 /// duplicate proof-controlled consensus field is carried alongside it.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeFinalityProof {
@@ -559,10 +516,7 @@ pub struct BridgeFinalityProof {
 /// durable tip produced `finality_proof`. The challenge is supplied by the caller and
 /// prevents a previously signed capture from being replayed into a later audit run.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeFinalityAttestationBodyV1 {
@@ -671,10 +625,7 @@ impl BridgeFinalityAttestationBodyV1 {
 }
 /// One node's signature over an exact challenge-bound durable-tip statement.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeFinalityAttestationV1 {
@@ -760,10 +711,7 @@ pub enum BridgeFinalityAttestationValidationError {
 }
 /// Commitment covering a block hash and its exact Sumeragi-v2 context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeCommitment {
@@ -778,10 +726,7 @@ pub struct BridgeCommitment {
 }
 /// Bundle containing a compact commitment and its exact typed finality proof.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeFinalityBundle {
