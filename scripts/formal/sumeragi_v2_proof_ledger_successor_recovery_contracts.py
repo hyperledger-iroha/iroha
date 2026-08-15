@@ -897,7 +897,7 @@ def _successor_activation_rank_source_fidelity_errors(
 
     chain_path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
     if chain_path.is_file():
-        chain_source = chain_path.read_text(encoding="utf-8")
+        chain_source = _chain_epoch_refinement_source(formal_dir)
         pending = _top_level_operator_body(
             chain_source,
             "IndexedSuccessorActivationPending",

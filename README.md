@@ -243,42 +243,17 @@ artifacts, and the current [`status.md`](./status.md) and
 [`roadmap.md`](./roadmap.md). Building or testing Iroha does not require a
 sibling `iroha-docs` checkout.
 
-The protected Stage-6 scratch source gives proof bodies through non-Completion
-node/candidate capacity descent, fair causal admission, no-debt acquisition,
-the Completion admissible bridge, and
-`FairProtectedStage6RankProgress`. The protected Stage-2 scratch source adds
-reachable one-/two-step Busy-phase descent, the production Busy fence,
-deferred-drain debt, and target-specific class-prefix/cursor descent in
-`ProtectedStage2RankProgressFromFenceObligation`. Both are explicit
-`specified_unproved` proof-ledger leaves: a source proof body, SANY acceptance,
-or parse-only obligation generation is not strict TLAPS evidence, and neither
-leaf has a fresh pinned strict-TLAPS receipt.
-
-The asynchronous proof graph is deliberately acyclic.
-`SumeragiV2AsyncLivenessProofs` is the proof-bearing base and contains no
-declaration-only theorem. The Stage-2, Stage-3, and Stage-6 leaves extend only
-that base. `SumeragiV2AsyncRankClosureProofs` then gives source proof bodies for
-the aggregate protected-service rank and starvation theorems; both remain
-`specified_unproved` until fresh strict receipts exist.
-The progress-witness chain now continues through
-`SumeragiV2DecisionWitnessPreservationProofs`,
-`SumeragiV2HistoricalLockedBodyWitnessPreservationProofs`, and
-`SumeragiV2ProgressWitnessFinalClosureProofs`; together they give a source
-proof of the inductive progress-witness theorem. The release ledger entry
-nevertheless remains `specified_unproved` until a fresh strict TLAPS receipt
-is bound to this source. `SumeragiV2AsyncTemporalClosureProofs` imports that
-final closure plus five proof-bearing temporal reduction leaves. It retains
-exactly three declaration-only kernels:
-`HeightProductivityResetBoundaryObligation`,
-`AdequateLeaderServiceKernelObligation`, and
-`ExactDecisionStageServiceObligation`. The release-facing height-productivity,
-rotating-leader, timeout/view, locked-body reproposal, and per-validator
-application-completion obligations now have source proof bodies reducing them
-to those kernels; timeout/view and locked-body are not independent debts.
-Chain/epoch refinement routes through that temporal layer. No ledger entry is
-promoted without a fresh strict receipt. The current 60-obligation ledger records
-28 `tlaps_proved`, 25 `specified_unproved`, 6 `trusted_contract`, and 1
-`out_of_scope`; `machine_checked_completion` remains false.
+The canonical 54-obligation release ledger records 44 `tlaps_proved`, 3
+`cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope`, with no
+`specified_unproved` rows and `machine_checked_completion: true`. This closes
+the checker-mandated legacy/revision-3-rooted deductive and cross-tool status
+inventory; the checked-in flag is not proof evidence by itself and does not
+turn the compact revision-4 TLC models into deductive TLAPS proofs. Release
+still requires fresh exact-source strict TLAPS, pinned Verus, derived
+cross-tool and production-trace evidence, the mandatory revision-4
+TLC/mutation corridor, and same-source signed receipts. See
+[`formal/sumeragi_v2/README.md`](./formal/sumeragi_v2/README.md) for the exact
+mechanization boundary.
 
 ## Translations
 

@@ -7,11 +7,9 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Workspace review closure
 
-- Freeze the resolved, uncommitted merge with `HEAD`
-  `c46d08e7467ead46728a75eaff75021ec047ce57` and `MERGE_HEAD`
-  `9910c20d5eb68efce4dce7f2ef224178fceab639`, then complete the remaining
-  authoritative formal and workspace-wide validation before preparing a signed
-  descendant. The conflict-free staged index and historical mutable-tree
+- Freeze the current revision-4 candidate only after the physical ChainEpoch
+  proof shards, exact four-validator fault corridor, and remaining authoritative
+  formal and workspace-wide validation are complete. Historical mutable-tree
   snapshots are not release receipts for the current source tree.
 - After that freeze, use the official workflows to regenerate and check the
   JavaScript current-Rust-contract fixture and generated-artifact registry.
@@ -63,13 +61,12 @@ Completed history lives in [`status.md`](./status.md).
 
 - Preserve the immutable 5,067,263-line first-party Rust baseline, the
   5,014,603-line active ratchet, and the 4,560,536-line ten-percent objective.
-  The resolved staged merge-tree audit counts 5,014,506 Rust lines, which is 97
-  lines below the active ratchet and 453,970 lines above the objective. Remove
-  at least 453 more lines to restore the required 550 lines of ratchet headroom;
-  do not redefine the baseline, count moved test code as a physical reduction,
-  or weaken required runtime, security, consensus, SDK, or release-evidence
+  The isolated revision-4 candidate audit counts 5,011,865 Rust lines, which is
+  2,738 lines below the active ratchet and 451,329 lines above the objective. Do
+  not redefine the baseline, count moved test code as a physical reduction, or
+  weaken required runtime, security, consensus, SDK, or release-evidence
   behavior to close it. Keep deterministic oversized-file exceptions as exact
-  ratchets and require the source-budget gate to return to finding-free.
+  ratchets and require the source-budget gate to remain finding-free.
 - Track every reviewed production module and add the new source and fixture
   files to the eventual signed commit, then rerun the strict SDK source-closure
   guard from that frozen candidate. Keep the staged merge-resolution and
@@ -129,6 +126,22 @@ regeneration from a clean exact candidate; the dirty unsigned development
 checkout is not release provenance. The outstanding revision-4 work is limited
 to:
 
+- Run the strict source-bound TLAPS wave for all sixteen physical
+  `SumeragiV2ChainEpochRefinementShard*` roots and archive the new shard 3
+  genesis-handoff and shard 16 successor exact-recovery promotion logs. Static
+  reconstruction, theorem-cap, façade-purity, and unique-provider checks are
+  complete, but do not replace backend proof evidence.
+- Execute the repaired mandatory four-peer autoscale lifecycle corridor with
+  release mode enabled. It must prove exact authenticated Hold/Drop evidence on
+  every non-sender receiver, an atomic empty drain fence before each restart,
+  post-restart catch-up, and both lane-incarnation retirement cycles. Also run
+  the focused configuration regression that rejects the retired
+  `[sumeragi.debug.rbc]` table.
+- Execute the migrated realistic localnet outage/restart/catch-up scenario and
+  the remaining revision-4 queue/baseline fixtures. Then complete the separate
+  telemetry/API/SDK compatibility pass: legacy-labeled RBC/collector/adaptive
+  observations may remain non-authoritative and zero, but must not be described
+  as configuration or an alternate protocol authority.
 - Execute the focused Rust coverage for the source-implemented Kura-root WAL
   handoff. Kura now retains the exact opened locked root; the lifecycle runner mints
   and consumes a move-only exact-instance `sumeragi_v2/wal` authority through
@@ -1044,14 +1057,16 @@ evidence.
 
 ## Sumeragi V2 production multilane release closure
 
-The current proof ledger records 35 `tlaps_proved`, 12 `specified_unproved`,
-6 `trusted_contract`, and 1 `out_of_scope`, with
-`machine_checked_completion: false`. Completion requires 44 `tlaps_proved`,
-3 `cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope`. The next
-formal step is to freeze a clean signed tree, run the strict TLAPS and pinned
-Verus targets, derive the canonical cross-tool and production-trace evidence,
-and only then promote the byte-exact ledger and validate the release receipt
-and completion marker against that same commit and ledger digest.
+The canonical 54-obligation ledger records 44 `tlaps_proved`, 3
+`cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope`, with no
+`specified_unproved` rows and `machine_checked_completion: true`. This freezes
+the checker-mandated legacy/revision-3-rooted status inventory before evidence
+generation; it is not proof evidence by itself and is not a deductive proof of
+revision 4. The next formal step is to freeze a clean signed tree, run strict
+TLAPS and pinned Verus, derive the cross-tool and production-trace evidence,
+execute the separate mandatory revision-4 TLC/mutation corridor, and validate
+the signed receipts and completion marker against that same commit and ledger
+digest.
 
 On the current tree, the independent 88-leg release inventory contract is
 sealed at 857 production tests across 40 modules, 525 G-UNIT rows, and four
@@ -1070,10 +1085,11 @@ transition-checked latest-index publication, configured evidence-byte bounds,
 and State-frontier authentication. Its focused failing-mutation pytest cases
 must still execute on the final source before freeze.
 
-- Run a live four-validator idle-chain check for the restored proposal-work
-  gate, confirming that idle heights do not manufacture empty blocks while
-  explicitly armed recovery heartbeats and genuine internal work still
-  advance.
+- Run the live four-validator idle-chain and Native AMX phase-cut recovery
+  checks for the restored proposal-work gate, confirming that genuinely idle
+  heights and bounded non-empty recovery retries which find no publishable work
+  retain the exact canonical tip, while authenticated external, state-derived
+  clock, autonomous, or other internal work advances when available.
 
 The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
@@ -1285,8 +1301,9 @@ production-reducer replay tests are fresh and green at exactly 100 normalized
 actions; that trace result alone does not promote a theorem. In particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` now have explicit
-source proof bodies but remain unpromoted until fresh strict TLAPS validates
-the final source. Adequate-leader closure freezes one
+source proof bodies. Their promoted target statuses are accepted for release
+only after fresh strict TLAPS validates the final source. Adequate-leader
+closure freezes one
 target/context/adequate-leader/view/subject corridor, requires Decision
 commands to be target-owned, aggregates durable target Decisions over the
 finite frozen voter roster, and ranks each frontier by semantic rank plus the
@@ -1296,7 +1313,7 @@ cover the full-`AsyncNext` scheduler-origin invariant, transport and ordinary
 runner admission, timeout/view convergence, target-corridor entry,
 producer/transport closure, finite/coalesced non-descent, and the quantitative
 fresh-self deadline. Fresh strict TLAPS plus checker and mutation evidence
-remains outstanding.
+remain outstanding.
 
 Exact-Decision closure is pinned to five leaves:
 `ExactDecisionRequestClockOwnerConvergenceProperty`,
@@ -1309,22 +1326,22 @@ producer actions. The current source adds an immutable lifecycle ingress rank,
 frozen predecessor sets, retained tombstones, and a finite/coalesced producer
 episode so simultaneous capacity cannot be reused as a repeated-episode
 argument. Fresh strict TLAPS and the source-fidelity mutation matrix are still
-required before promotion. The Rust mirror now also absorbs post-drain exact
+required before release acceptance. The Rust mirror now also absorbs post-drain exact
 Apply rediscovery through its typed Kura finality tombstone while retaining the
 original reducer tag; its focused unit and negative checker mutations still
 require fresh execution from the eventual source-sealed tree.
 The independent
 `ResponsiveStrongFairnessToReceiptResidual` and the composed cursor theorem
-have source proof bodies and remain source-bound support for the unpromoted
-production progress refinement; neither is an independent ledger row. Bounded
+have source proof bodies and remain source-bound support for the promoted
+production progress target; neither is an independent ledger row. Bounded
 model checks are not deductive proof evidence, and a fresh current-source
 strict run remains required for the final dependency closure. Typed rollover
 safety and its conditional temporal obligation likewise have source proof
-bodies and are transitive support for the unpromoted successor exact-recovery
-production refinement. No conditional completion is claimed while the
-rotating-leader dependency remains unproved; recovery, network/writer
-progress, repeated rollover, and production refinement remain outside its
-scope.
+bodies and are transitive support for the promoted successor exact-recovery
+production target. The checked-in completion flag is not release evidence;
+recovery, network/writer progress, repeated rollover, and production
+refinement remain unaccepted until their fresh strict and cross-tool evidence
+passes.
 
 ## SoraFS V1 production closure
 
@@ -14973,10 +14990,7 @@ excluded from the first release.
   and Ed25519 key generation before consuming peer or signer material; Kagami
   wizard BLS fixtures now use checked BLS key
   generation before vanilla config and missing trusted-peer PoP regressions
-  consume peer material; Sumeragi
-  recovery-heartbeat transaction construction now uses a fallible
-  `TransactionBuilder::try_sign` helper and returns contextual consensus errors
-  on backend signing failure;
+  consume peer material;
   transaction-gossip
   frame-size probing now uses `TransactionBuilder::try_sign` and falls back to a
   zero payload cap with a warning on dummy probe signing failure; Torii
@@ -26861,7 +26875,7 @@ after checked prefix arithmetic. Remaining consensus work is evidence and
 mechanization: this
 closure does not make the strict TLAPS runner, clean release corridor,
 100,000-height chaos receipt, or 24-hour Taira soak complete, and
-`machine_checked_completion` remains false.
+the checked-in completion flag is not a release receipt.
 
 Every Commit vote now requires the exact active durable lock, including votes
 from the current view. A pre-lock current Commit is a recoverable ignore. Once
@@ -27130,10 +27144,10 @@ seconds. The checked formal baseline and SANY analysis are recorded in
 `status.md`. The complete
 timeout-envelope DOMAIN/adapter boundary is TLAPS-proved, and the
 deferred-owner replacement mutation now pins scheduler-wide exact-envelope
-coalescing. The proof ledger still reports `machine_checked_completion: false`.
-Strict proof completion therefore remains pending, and post-GST height liveness
-remains a conditional target and paper argument rather than a machine-checked
-completion. The PR gate inventories 477 production-liveness tests across 30
+coalescing. The proof ledger reports `machine_checked_completion: true`, but
+fresh strict proof and revision-4 TLC evidence remain pending; post-GST height
+liveness remains a conditional protocol claim until that release corridor
+passes. The PR gate inventories 477 production-liveness tests across 30
 Rust modules before network startup. Exact regressions cover
 completion coalescing, conflicting evidence, production Busy transfer,
 transactional cross-queue retirement/duplicate rejection,
@@ -27244,8 +27258,8 @@ digest-mismatched evidence is rejected. This authenticates the
 signed candidate and runner relative to operator-protected inputs, but does not
 attest the host image, pre-Python dynamic loader, same-UID processes, trusted
 ancestor owners, or storage which violates `fsync`. The remaining work is to
-discharge the proof debts below and then execute the hardened gates, not to
-accept evidence from the mutable caller.
+produce the fresh proof evidence below and then execute the hardened gates,
+not to accept evidence from the mutable caller.
 
 Runner scheduler preservation and the dependent async type invariant are now
 `tlaps_proved`. Fresh hash-guarded strict TLAPS slices exited 0 for
@@ -27253,23 +27267,23 @@ transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
 (305/305), its strong caller and bracket (63/63), the exact type obligation
 (16/16), and the named always-strong wrapper (10/10).
 
-The 54-entry top-level ledger contains 35 `tlaps_proved`, 12
-`specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope` entries;
-machine-checked completion remains false. Sixteen source-bound decomposition
+The 54-entry top-level ledger contains 44 `tlaps_proved`, 3
+`cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope` entries, with
+no `specified_unproved` rows and machine-checked completion true. Sixteen
+source-bound decomposition
 leaves are checked transitively through those reviewed consumers rather than
 being additional release claims. Historical recovery now accounts for exactly
-three unpromoted temporal leaves—authority acquisition, certificate-rank
+three promoted temporal targets—authority acquisition, certificate-rank
 progress, and Decision/body rank progress—with source proof bodies, plus one
 proved Decision-stage ownership safety leaf. Composition derives that
 ownership property from `IndexedChainSpec`; it is not a fourth temporal
 premise. The three temporal
-leaves and top-level `height-liveness` remain `specified_unproved`, so this
-accounting repair changes neither the 54-row ledger nor its status counts. In
-particular,
+leaves and top-level `height-liveness` require fresh strict release evidence;
+their promoted statuses do not substitute for that evidence. In particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` have explicit source
-proof bodies but remain unpromoted; neither may be promoted without fresh
-strict evidence or through assumption, circular reuse, or a vacuous wrapper.
+proof bodies; neither may support release without fresh strict evidence or
+through assumption, circular reuse, or a vacuous wrapper.
 Outstanding release work:
 
 The async deadlock decomposition now scopes local runner-service debt to the
@@ -27306,9 +27320,9 @@ runtime premise on the final signed source.
 - revalidate the typed applied-height handoff and its complete dependency cone
   on the final frozen source. Historical strict and bounded receipts predate
   the current two-slot compaction/persistence relation and cannot be reused.
-  The remaining ledger debt at this boundary is the cross-tool exact-recovery
-  production refinement, followed by genesis handoff and indexed height
-  liveness; there is no separate unnamed rollover promotion.
+  The remaining release-evidence debt at this boundary is the cross-tool
+  exact-recovery production refinement, followed by genesis handoff and
+  indexed height liveness; there is no separate unnamed rollover promotion.
   Production independently rereads exact Kura
   sources for historical CommitQC, body, and lane-certificate responses; binds
   current-height global V2 output to the finality artifact; binds winning lane
@@ -27343,8 +27357,8 @@ runtime premise on the final signed source.
   ownership, and source manifests are structurally sealed, but source binding
   is not backend proof evidence. Run pinned Verus with `--no-cheating`, bind
   the fresh strict provider log, and generate the canonical cross-tool
-  document before the release gate permits promotion to
-  `cross_tool_proved`;
+  document before the release gate accepts the checked-in
+  `cross_tool_proved` status;
 - keep the standalone effect-capacity mutation matrix green and source-bound.
   Its 6 compact models and 28 pinned configurations cover the concrete
   A/B/TimeoutVote capacity trace, full-capacity Fetch reconstruction,
@@ -27361,7 +27375,7 @@ runtime premise on the final signed source.
   fixed cases and 18 targeted safety/liveness mutants generate 147 states and
   reach 146 distinct states. They are finite TLC
   regression evidence only; crash authority remains delegated to the crash
-  replay model, no ledger obligation is promoted, and the matrix does not
+  replay model, it supplies no ledger proof evidence, and the matrix does not
   discharge the outstanding Completion product-rank or cross-tool refinement
   obligations;
 - complete the production trace mapping for the now-proved exact durable
@@ -27439,7 +27453,7 @@ runtime premise on the final signed source.
   authenticated exact historical-recovery fairness transfer for validators absent
   from an old roster, and finite-height temporal induction, without global
   asynchronous shadow state, an alternate consensus transition relation, or a
-  favourable-network corridor; this promotion likewise follows the
+  favourable-network corridor; release acceptance likewise follows the
   rotating-leader, application-liveness, successor-activation starvation, and
   production-refinement proofs;
 - execute the cross-SDK fixture/status-parser legs and complete four-seed PR
@@ -27540,10 +27554,11 @@ runtime premise on the final signed source.
   aggregate release receipt.
 
 Transaction inclusion and censorship fairness are outside the consensus
-height-progress theorem. The proof permits a valid internal or
-recovery-heartbeat carrier when such work is armed while still requiring every
-certified body to be available, deterministically validated, durably applied,
-and independently advanced by each responsive validator.
+height-progress theorem. The proof conditions height progress on a valid
+proposal carrying authenticated external, state-derived clock, autonomous, or
+other internal semantic work, while still requiring every certified body to be
+available, deterministically validated, durably applied, and independently
+advanced by each responsive validator.
 
 ## Community and Governance
 

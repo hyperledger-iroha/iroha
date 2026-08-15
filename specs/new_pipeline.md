@@ -1102,12 +1102,15 @@ BridgeEventFilter {
 
 ---
 
-## Data Availability (Optional)
+## Data Availability (Mandatory Revision 4)
 
-- Erasure‑coded blobs: optionally encode large block bodies/proofs as erasure‑
-  coded chunks for faster propagation and robustness. DA sampling APIs are
-  operational (non‑consensus) and do not alter execution order or commitments.
-- Peer scoring and QUIC can be layered to improve resilience under churn.
+- Every proposal uses the signed revision-4 RS16 manifest and chunk geometry
+  for its canonical body. A validator may Prepare-vote only after reconstructing,
+  authenticating, durably storing, and deterministically validating that exact
+  body; the resulting equal-vote PrepareQC is the availability certificate.
+- Queue and payload caps are local resource bounds. They cannot disable DA,
+  select another encoding, create a separate DA committee, or authorize commit
+  without the exact locally available body.
 
 ---
 
@@ -1329,12 +1332,6 @@ struct BlockHeaderV2 {
   body_root: Hash            // Commitment to tx entrypoints/results/events
   receipts_root: Option<Hash>// Commitment to receipts/events (optional)
 
-  // Data Availability (DA)
-  da_root: Option<Hash>      // Commitment to erasure‑coded shares of DA payload
-  da_scheme: Option<u16>     // Enum code (e.g., RS_V1=1, FOUNTAIN_V1=2, NMT_V1=3)
-  da_committee: Option<Hash> // Hash/ID of the storage committee/epoch
-  da_certificate: Option<Bytes> // Aggregate/threshold attest over (height || da_root)
-
   // Validator set & finality
   validator_set_hash: Hash   // Commitment to validator set (or epoch id)
   consensus_certificate: Bytes // Norito‑encoded certificate (e.g., threshold/
@@ -1410,83 +1407,25 @@ Notes
 
 ---
 
-## Data Availability Layer (Consensus‑Critical)
+## Mandatory Revision-4 Data Availability
 
-Problem
-- Without a DA layer, blocks cannot safely include arbitrarily large payloads
-  (tx bodies, receipts, proofs, blobs, cold pages) without requiring every
-  validator to store/serve all data. DA ensures retrievability and scalability.
+The active wire protocol has one source of DA truth. Each signed
+`HeightContext` fixes the mandatory RS16 layout, payload limits, complete frozen
+validator committee, quorum, and Set A/Set B chunk fanout. Proposal control and
+Prepare/Commit votes reach the full committee; initial chunks target Set A and
+retransmission expands to Set B.
 
-Header additions (normative)
-- `da_root`: commitment to erasure‑coded shares of the block’s DA payload. Root
-  is a Merkle (or namespaced‑Merkle) tree over shares using the consensus hash
-  (Blake2b‑32). Optional (`None`) when no DA payload is present.
-- `da_scheme`: enum identifying the encoding (e.g., `RS_V1`, `FOUNTAIN_V1`,
-  `NMT_V1`). Encoded as a small integer; `None` if `da_root` is `None`.
-- `da_committee`: id/hash of the storage committee/epoch that attested this
-  block’s DA. `None` if `da_root` is `None`.
-- `da_certificate`: aggregate/threshold attest over `(height || da_root)` from
-  the DA committee. `None` if `da_root` is `None`.
+Every Prepare signer must reconstruct, authenticate, durably store, and
+deterministically validate the complete canonical body. Any validator may
+aggregate exactly `q = 2f + 1` equal Prepare votes; that PrepareQC certifies both
+validity and availability. Commit still requires the exact CommitQC and the
+locally authenticated canonical body.
 
-Validity rule (normative)
-- A block is valid iff:
-  - conventional header/consensus checks pass,
-  - Merkle commitments (state_root, body_root, receipts_root) verify, and
-  - if `da_root.is_some()`, then `verify_da_cert(da_committee, da_root, da_certificate) == true`.
-  - If DAS (sampling) is enabled, local sampling MUST meet configured success
-    thresholds; otherwise reject.
-
-Producer obligations
-1) Construct DA payload (tx bodies, receipts/events, blobs/proofs, optional cold pages).
-2) Chunk into fixed‑size pieces (e.g., 32–64 KiB). Erasure‑code to `N` shares
-   with recovery threshold `k` (e.g., Reed–Solomon `k‑of‑N`).
-3) Build a (namespaced) Merkle tree over shares to obtain `da_root`.
-4) Disperse shares to the DA committee (deterministic mapping via consistent
-   hashing against member IDs). Each member signs an ACK over
-   `(height, da_root, share_index_range)`.
-5) Aggregate ACKs into `da_certificate` (threshold/aggregate or bundle ≥k sigs).
-6) Include `da_root`, `da_scheme`, `da_committee`, `da_certificate` in the
-   header; sign and broadcast the block.
-
-Validator obligations
-- On receive, verify header, signatures, and DA certificate. If DAS is enabled,
-  perform configured number of random share samples with Merkle proofs against
-  `da_root`. If DA fails, NACK the block; otherwise, proceed with normal replay.
-
-DA header gating (normative)
-- If `protocol_version ≥ V_DA`, blocks MUST include `da_root`, `da_scheme`, and
-  a valid `da_certificate` (and associated committee metadata). Proposers MUST
-  refuse to build blocks that omit required DA fields. Validators MUST reject
-  blocks with missing or invalid DA proofs.
-- If `protocol_version < V_DA`, `da_*` fields MUST be absent. Mixed blocks are
-  invalid.
-
-Repair & retention
-- If shares go missing, any node can reconstruct from `k` shares and re‑disperse;
-  include a `da_repair_certificate` in the next block. The DA committee keeps
-  recent blocks; older data may be moved to archivers with the same proof API.
-
-Knobs & namespacing
-- `N` and `k` tune fault tolerance (e.g., `N=3f+3`, `k=f+1` for `f` byzantines + `f` crashes).
-- Chunk size (32–64 KiB) tuned for MTU/parallelism. Optionally use a namespaced
-  Merkle tree (`NMT_V1`) so clients can fetch specific streams (e.g., receipts,
-  blobs) via namespace proofs while sharing a single `da_root`.
-
-Scheme codes (normative)
-- `da_scheme` codes are small integers:
-  - `1 = RS_V1` (Reed–Solomon k‑of‑N over fixed‑size shares; Merkle root over shares)
-  - `2 = NMT_V1` (Namespaced Merkle tree over RS shares)
-  - `3 = FOUNTAIN_V1` (Fountain/RaptorQ codes; reserved)
-
-Deterministic committee mapping (rendezvous hashing)
-- For each share index `s ∈ [0..N)`, compute a score for every committee member
-  `m` as `score(m,s) = H("iroha:da:assign:v1\x00" || epoch_id || m_id || s || da_root)`,
-  where `H` is Blake2b‑32 and `m_id` is the canonical member id (e.g., Norito‑
-  encoded validator descriptor bytes). Assign `s` to the `R` members with the
-  highest scores (replication factor `R`, default `2`). Tie‑breakers are by
-  `m_id` lexicographically. Mapping is deterministic across nodes.
-- Members sign ACKs over `(height, da_root, s)` (or index ranges) upon storing
-  their assigned share(s). The producer aggregates ACKs into `da_certificate`.
+There are no optional `da_*` headers, protocol-version gate, variable local
+`N`/`k`, alternate Fountain/NMT scheme, sampling threshold, separate DA
+committee, ACK certificate, or DA enable switch. See
+[`sumeragi_v2.md`](./sumeragi_v2.md#payload-availability) for the source-coupled
+wire and recovery rules.
 
 ---
 
@@ -1786,9 +1725,8 @@ Observability & Metrics
   and operator tuning.
 - AOT artifact validation: emit events when translation‑validation rejects an
   artifact (include code hash, compiler fingerprint, feature bitmap).
- - DA metrics: per‑block encode/disperse/aggregate timings; shares missing;
-   sampling failure rate; repair count; certificate signer counts; per‑scheme
-   breakdown.
+- DA metrics: fixed-RS16 manifest/chunk encoding, authenticated reconstruction,
+  durable body-store, retransmission/fetch, and Prepare-gate outcomes.
 
 Light clients & proofs
 - Header chain conformance (validator set changes, certificates) and ICS‑23
@@ -1800,14 +1738,13 @@ Bridging
   with both light‑client and zk patterns (mock verifier acceptable initially).
 
 Data Availability
-- DA conformance: golden vectors for `da_root` over synthetic DA payloads across
-  schemes; certificate verification from simulated committees.
-- Erasure recovery: reconstruct payload from any `k` of `N` shares under packet
-  loss patterns; verify Merkle proofs for shares.
-- DAS (if enabled): sampling probability bounds vs sample counts; block reject
-  on under‑availability.
-- Repair: simulate share loss and re‑dispersal; verify `da_repair_certificate`
-  flow.
+- RS16 conformance: golden vectors cover the signed data/parity layout and
+  authenticated manifest/chunk commitments.
+- Erasure recovery reconstructs only at the signed data-shard threshold and
+  rejects missing, mixed-subject, or unauthenticated chunks.
+- Prepare gating requires the exact reconstructed body to cross the durable
+  body-store and deterministic-validation boundaries; certified-body fetch and
+  Set B retransmission recover packet loss without a separate DA certificate.
 
 ---
 
@@ -1848,7 +1785,9 @@ Additional consensus/determinism checks
 - Range conflicts: partial overlaps (e.g., `asset/foo/*` vs `asset/foo/bar`) produce correct conflict edges; no parallel execution when unsafe.
 - DAG scale: T=10k txs, avg K=8 keys, conflict‑graph build < 1s target; epoch partitioning stable.
 - TTL/seq edges: `expires_at_height == current_height` acceptance semantics; duplicates/regressions on `(sender, seq)` rejected at stateless validation.
-- DA gating: blocks with/without `da_*` according to `protocol_version`; missing/invalid DA proofs rejected deterministically.
+- DA gating: mandatory signed RS16 geometry and exact-body availability are
+  enforced before Prepare; missing or invalid manifest/chunk/body evidence is
+  rejected deterministically.
 - Triggers — boundary inclusion: craft blocks at `S−ε_early−1`, `S−ε_early`, `S+ε_late`, `S+ε_late+1`; verify validity decisions.
 - Triggers — long gap: simulate real‑time gaps; first subsequent block admits due triggers exactly once based on header time.
 - Triggers — duplicates: two watcher‑generated `trigger_id` txs; first valid wins; second rejected due to `Executed=true`.
@@ -1906,18 +1845,12 @@ Quarantine lane
   - prefetch_per_tx_max_ranges: 32
   - prefetch_per_tx_max_bytes: "1MiB"
   - prefetch_ordering: "epoch_tx_order"
-- Data Availability (DA):
-  - da_enabled: false|true
-  - da_scheme: "RS_V1" | "NMT_V1"
-  - da_chunk_size: "64KiB"
-  - da_n_shares: 48
-  - da_k_threshold: 24
-  - da_committee_size: 48
-  - da_replication_factor: 2
-  - da_sampling_enabled: false|true
-  - da_sampling_min_samples: 8
-  - da_sampling_success_threshold: 0.95
-  - da_repair_enabled: true
+- Consensus data availability:
+  - no local enable/disable or global scheme switch;
+  - the signed chain context fixes the revision-4 RS16 manifest, validator set,
+    quorum, and Set A/Set B assignment for each height;
+  - local configuration may bound queues and payload size, but cannot change the
+    wire geometry or bypass availability-certified commit.
 
 ---
 

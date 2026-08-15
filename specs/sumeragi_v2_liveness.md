@@ -10,8 +10,10 @@ The first-release target is therefore conditional:
 > height eventually decides and every responsive validator eventually applies
 > the decision and activates its successor height.
 
-This remains the conditional protocol target and paper argument until the
-proof ledger reports `machine_checked_completion: true`.
+This remains the conditional revision-4 protocol target and paper argument.
+The true completion flag belongs to the legacy/revision-3-rooted deductive
+ledger and does not replace the separate revision-4 TLC/mutation corridor or
+fresh same-source release evidence.
 
 The runtime premise is per validator. Each non-crashing responsive validator
 in the active-height or exact historical-recovery corridor must have an
@@ -745,8 +747,8 @@ argument remains conditional on publication of a ready exact receipt. The
 current `ReplyWriterDeadlineModelObligation` proof script targets local actor
 termination, and `ConditionalResponsiveWriterCursorLiveness` targets cursor
 advance under `ResponsiveWriterReceiptAssumption`; both have source proof
-bodies and are deductively classified support for the still-unpromoted
-production progress refinement. Deriving that assumption from
+bodies and are deductively classified support for the promoted production
+progress target. Deriving that assumption from
 `ResponsiveReplyWriterSpec` is the SANY-clean
 `ResponsiveStrongFairnessToReceiptResidual` proof target. Its chain retains
 outstanding ownership, applies weak fairness to reconnect and first dispatch,
@@ -1626,9 +1628,10 @@ terminating local work, fail-closed completion classification, certified-store
 waiting, retry, and delivery. Its 15,472 generated / 5,910 distinct-state TLC
 search is green to depth 15. Paired mutations expose reload-per-view,
 no-retry-after-store, and future-completion bugs; these are bounded regression
-witnesses, not deductive proof. The model obligation and the separate
-production worker/runtime refinement obligation both remain
-`specified_unproved`. Two production regressions additionally reject an
+witnesses, not deductive proof. The model and production-refinement targets are
+promoted in the checked-in legacy ledger, but release still requires their
+fresh exact-source TLAPS, Verus, and derived cross-tool evidence. Two
+production regressions additionally reject an
 unissued future completion without replacing its owner and preserve the latest
 consumer while a missing body waits for durable recovery and retries.
 
@@ -1637,32 +1640,35 @@ predate the authority-gated active-state fence, the V3 two-slot
 compaction/persistence relation, bootstrap adoption, validation-before-cleanup
 ordering, and the root trust boundary, so they are not current evidence. The
 control partition and `NoRolloverFailure` remain specification structure only.
-The conditional rollover declaration is not promoted while its final
-persistence relation and downstream rotating-leader dependency remain
-unproved. Both typed-handoff declarations remain source-bound support leaves
+The conditional rollover declaration is source-bound support for the promoted
+successor target, while its final persistence relation and downstream
+rotating-leader proof still require fresh release evidence. Both typed-handoff
+declarations remain source-bound support leaves
 consumed transitively by the top-level successor-activation production-
-refinement debt; they are not independent ledger rows and do not establish
+refinement target; they are not independent ledger rows and do not establish
 filesystem or Rust refinement, recovery, eventual finality validation, network
 or writer progress, repeated rollover, or end-to-end liveness. Fresh strict
 safety-and-liveness validation remains pending.
 
 The strict proof-run counts in the following paragraphs are retained
 historical submodule evidence, not current aggregate source-manifest-bound
-release evidence. The canonical 54-entry top-level proof ledger currently
-reports 35 `tlaps_proved`, 12 `specified_unproved`, 6 `trusted_contract`, and 1
-`out_of_scope` entry, with `machine_checked_completion: false`. Sixteen
+release evidence. The canonical 54-entry top-level proof ledger records 44
+`tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
+`out_of_scope` entry, with no `specified_unproved` rows and
+`machine_checked_completion: true`. Sixteen
 source-bound decomposition leaves remain checked transitively through their
 reviewed consumers and are not independent ledger rows. The legacy-named
 locked-body-reproposal entry denotes the exact three-arm progress obligation:
 old-round Commit, unchanged later-view same-round re-proposal, or legitimate
-Decision/higher-Prepare supersession. It and the production cross-tool refinements remain explicitly
-unproved; no bounded model or source-fidelity check promotes them. The
+Decision/higher-Prepare supersession. Its target and the production cross-tool
+targets are promoted, but no bounded model or source-fidelity check supplies
+the fresh release evidence they require. The
 aggregate temporal module gives
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` pinned source proof
 bodies and classifies them as deductively proved support leaves. They are not
-independent ledger rows; downstream wrappers cannot promote their consumers
-without fresh strict evidence for the complete dependency closure.
+independent ledger rows; release cannot accept their consumers without fresh
+strict evidence for the complete dependency closure.
 
 The adequate-leader residual is target-local rather than aggregate: another
 validator's Decision is not terminal for the indexed target. Its occurrence
@@ -1679,11 +1685,11 @@ recovery, or historical runner. Each classification is action-local. The five
 exact off-scheduler convergence leaves have source proof bodies over immutable
 owner identity, finite prefixes, admission/coalescing, and the nonphysical
 response gate. Their composition does not count replenishment itself as
-progress; fresh strict TLAPS is still required before their consumer is
-promoted.
+progress; fresh strict TLAPS is still required before release accepts their
+consumer.
 Independently, `ResponsiveStrongFairnessToReceiptResidual` and the conditional
 cursor theorem have source proof bodies and remain source-bound support for the
-unpromoted production progress refinement; a stale receipt cannot attest the
+promoted production progress target; a stale receipt cannot attest the
 final dependency closure. An honest
 validator outside `Responsive` may retain activation queued before GST;
 neither the formal fairness premise nor the conditional release target promises
@@ -1691,8 +1697,9 @@ its local-worker progress. The action-by-action safety
 induction is strict-green at 7,826/7,826 obligations, and the downstream
 `SumeragiV2Proofs` module is strict-green at 565/565; historical TC-lock
 authorization and its dependent direct-or-installed-authorization timeout
-theorem are therefore ledgered `tlaps_proved`. The remaining debt is the
-asynchronous ownership/fairness and multi-height liveness composition.
+theorem are therefore ledgered `tlaps_proved`. The remaining release work is
+fresh evidence for the promoted asynchronous ownership/fairness and
+multi-height liveness targets.
 The protected Stage-4 service-rank slice is strict-green at exactly 196/196
 TLAPS obligations. It establishes scheduler-wide exact ownership, coalesced
 causal successors, class-specific causal-capacity debt, independent fair
@@ -1716,11 +1723,12 @@ checker mutation-tests action deletion, quantifier drift, frame
 misclassification, claim or theorem weakening, unreviewed helper theorems, and
 any TLC-only duplicate variable or fairness relation. The full Core `Next`
 disjunction is intentionally kept out of individual fairness targets to avoid
-re-evaluating unrelated Core branches. This closes only the fair-action
-refinement entry; it does not complete the 18 remaining deductive obligations.
-This is not the complete protected-rank proof: progress-relevant Normal
-proposal/Prepare work and a productive, decreasing deadlock theorem are still
-missing, so no ledger status is promoted. Formal entrypoints now share a
+re-evaluating unrelated Core branches. That historical run closed only the
+fair-action refinement entry; at that checkpoint it did not complete the then-
+outstanding protected-rank, Normal proposal/Prepare, or productive-deadlock
+targets. Those targets are now recorded `tlaps_proved` in the legacy ledger,
+while fresh same-source release evidence remains required. Formal entrypoints
+now share a
 working-Java resolver which rejects an invalid explicit runtime and skips the
 macOS stub; the selected canonical binary remains hash-bound in release
 evidence.

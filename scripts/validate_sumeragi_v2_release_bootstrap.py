@@ -112,16 +112,16 @@ _TRUSTED_ARCHIVE_NAMES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "6ff2d5337414bbbf74a9530cc1b2bd59bc62141a82a1319fa2a270b84e64ce8c"
+        "1d874760e2f6ea41e512e4e98ec544e2c575a1d0825be0a62a8ba54356ca0645"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-        "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
+        "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
+        "886566b5a30d77607081ae13c683565f6e700f9249269824d77f3c26346b7f9e"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
+        "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
@@ -1115,10 +1115,17 @@ def _validate_framework_python_runtime(
                 "framework Python runtime members differ from the marker"
             )
         by_path = {record["path"]: record for record in observed}
+        top_level = {PurePosixPath(path).parts[0] for path in by_path}
+        framework_roots = top_level - {"bin", "Resources", "lib"}
+        if len(framework_roots) != 1:
+            raise ValidationError(
+                "framework Python runtime indispensable layout is incomplete"
+            )
+        framework = next(iter(framework_roots))
         required = {
             "bin": "directory",
             "bin/python3": "file",
-            "Python3": "file",
+            framework: "file",
             "Resources": "directory",
             "Resources/Python.app/Contents/MacOS/Python": "file",
             "lib": "directory",
@@ -1126,8 +1133,7 @@ def _validate_framework_python_runtime(
             f"lib/{stdlib_name}/lib-dynload": "directory",
         }
         if (
-            {PurePosixPath(path).parts[0] for path in by_path}
-            != {"bin", "Python3", "Resources", "lib"}
+            top_level != {"bin", framework, "Resources", "lib"}
             or any(
                 not isinstance(by_path.get(path), dict)
                 or by_path[path]["kind"] != kind
@@ -1157,7 +1163,7 @@ def _validate_framework_python_runtime(
                     parts.pop()
                 else:
                     parts.append(part)
-            if not parts or parts[0] not in {"Python3", "Resources", "lib"}:
+            if not parts or parts[0] not in {framework, "Resources", "lib"}:
                 raise ValidationError(
                     f"framework Python runtime symlink leaves its closure: {path}"
                 )

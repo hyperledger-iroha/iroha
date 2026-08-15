@@ -111,13 +111,11 @@ leader frequency. The remaining seats use the finalized epoch seed's
 deterministic PRF order.
 
 NPoS epochs contain exactly the configured `3,600` finalized consensus heights.
-Ordinary proposal production remains workload-driven and therefore contributes
-a non-empty block only when user, internal, or autonomous work exists. An
-explicitly armed recovery heartbeat may instead finalize one truly empty block;
-it advances the consensus and epoch height while leaving the non-empty-block
-counter unchanged. Generic block validation accepts that canonical carrier,
-while the local proposal-work gate is responsible for never manufacturing it
-from a clean idle height.
+Proposal production remains workload-driven. The shared semantic-work gate
+admits a resultless or wire-empty carrier only when it proves state-derived
+ledger-clock progress or authenticated external, autonomous, or other internal
+work. A genuinely idle, semantic-work-free body is rejected before voting and
+finality.
 The old committee authenticates the complete next-epoch roster, proofs of
 possession, equal-vote quorum, seed, and end height in the terminal height
 context before the successor committee can activate. A configured validator
@@ -236,12 +234,12 @@ marks the absence record processed without changing validator status. Economic p
 self-contained, signature-verified equivocation evidence admitted by a prior committed block.
 
 V2 configuration validation fails closed if transaction or body bounds are absent, any adapter
-queue is zero, DA is disabled, or a retired mode flip, phase-specific timeout, fast-finality cap,
-adaptive resilience path, or consensus fault-injection switch is enabled. Collector routing,
-global RBC state, adaptive pacemaker settings, and missing-QC recovery parameters remain in the
-legacy structure only while old implementation code is being deleted; the v2 projection neither
-hashes nor consumes them. Validators retransmit correctness-critical control messages to the
-whole voting roster.
+queue is zero, or a retired mode flip, phase-specific timeout, fast-finality cap, adaptive
+resilience path, or consensus fault-injection switch is supplied. Collector routing, global RBC
+state, adaptive pacemaker settings, and missing-QC recovery parameters are not part of the runtime
+configuration projection. Older fields with those labels, where still exposed by observability
+schemas, are non-authoritative counters and may remain zero. Validators retransmit
+correctness-critical control messages to the whole voting roster.
 
 Authenticated proposal/vote/timeout semantic keys are retained for the current view plus one full
 roster rotation. Capacity is derived from the frozen roster at four keys per validator per retained
@@ -770,17 +768,19 @@ lane body and ownership sidecars but WSV commit did not finish, restart does not
 planning. Recovery verifies the canonical block hash, exact ownership sidecars, active route and
 incarnation, QC tag, committee, expected global leader, replay material, and applied-or-snapshot
 predecessor, then still runs the normal complete block validator. Any drift fails closed. Missing
-lane or AMX work is fetched or requeued, and after bounded deferral an honest leader can still
-propose an explicitly armed empty recovery heartbeat.
+lane or AMX work is fetched or requeued. After a bounded work deferral or candidate rejection, the
+runner arms one ordinary non-empty proposal retry; if no publishable work is available, that retry
+retires and waits for work rather than manufacturing a carrier.
 
 Fresh global proposal production is workload-driven. The signed block cadence is the earliest
 view-zero proposal time, not an instruction to manufacture a body at every idle height. A leader
 defers before signing or encoding when the bounded queue snapshot, autonomous provider, and
 internal attachments contain no work. Internal work includes enabled, still-reachable time
 triggers which require ledger-clock progress, DA and pin material, previous-roster audit evidence,
-NPoS effects, SCCP commitments, certified merge work, and autonomous lane payloads. An empty body
-therefore remains valid and available only when that internal work requires a carrier or the local
-recovery state explicitly arms a heartbeat after a bounded work deferral or candidate rejection.
+NPoS effects, SCCP commitments, certified merge work, and autonomous lane payloads. A resultless or
+wire-empty carrier is therefore admissible only when the shared semantic-work gate proves
+state-derived ledger-clock progress or authenticated external, autonomous, or other internal work;
+genuinely idle bodies are rejected.
 
 Merge-committee certificates are likewise not applied out of band. A complete certificate is
 stored as a hash-addressed Kura sidecar bound to one global height, parent, and view. The matching
@@ -1143,9 +1143,9 @@ paper argument assumes that, after GST:
   ticks coalesce and an untrusted normal-message flood cannot discard an already emitted timeout;
 - body transfer, reconstruction, validation, signing, certificate formation, application, and
   fsync terminate within the declared service bounds;
-- an honest leader can construct a deterministically valid non-empty proposal
-  from available user or internal work, or an empty carrier from explicitly
-  armed recovery-heartbeat work;
+- an honest leader can construct a deterministically valid proposal from
+  available authenticated external, state-derived clock, autonomous, or other
+  internal work;
 - correct nodes eventually recover with intact WAL state;
 - an honest leader recurs within one roster rotation;
 - honest Prepare signers continue serving their durable bodies; and
@@ -1158,17 +1158,17 @@ Under those assumptions, the paper argument derives that failed views lead to a 
 reaches an honest leader, and a safe round forms PrepareQC and CommitQC. Every responsive correct
 node independently persists the exact decision, fetches and validates the certified body, applies
 it, and advances its local certified prefix; no global all-node application barrier is required.
-FLP is the reason these post-GST premises are explicit. This targets consensus-height progress,
-when a valid non-empty proposal or armed recovery-heartbeat carrier is
-available, not idle-height production, transaction-inclusion fairness, or
-censorship resistance.
+FLP is the reason these post-GST premises are explicit. This targets consensus-height progress when
+a valid proposal with semantic work is available, not idle-height production,
+transaction-inclusion fairness, or censorship resistance.
 
 Ten arbitrary-context Core safety wrappers are TLAPS-proved. This includes historical TC-lock
 Commit authorization, the dependent direct-or-installed-authorization timeout wrapper, and the
-narrower grouped-timeout kernel for Commit intents already present at timeout. The remaining
-asynchronous ownership/fairness and multi-height liveness composition obligations are still
-`specified_unproved`; the liveness claim must therefore remain a conditional paper argument while
-the proof ledger reports `machine_checked_completion: false`.
+narrower grouped-timeout kernel for Commit intents already present at timeout. The canonical
+legacy/revision-3-rooted ledger has its final 44/3/6/1 status vector and
+`machine_checked_completion: true`, but that flag is not revision-4 proof evidence. The liveness
+claim remains conditional until fresh strict ledger evidence and the separate mandatory revision-4
+TLC/mutation corridor pass against the same signed source.
 
 The executable reducer and persistence-effect ordering are the source-verification boundary.
 Cryptographic implementations, canonical Norito encoding, deterministic execution, OS fsync

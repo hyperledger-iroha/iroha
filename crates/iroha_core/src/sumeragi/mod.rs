@@ -579,9 +579,8 @@ pub(crate) mod v2_apply;
 pub(crate) mod v2_block_sync;
 pub(crate) mod v2_body_store;
 pub(crate) mod v2_candidate;
-// TODO: Wire the staged Certified-Serve payload durability boundary into the
-// lifecycle coordinator and retire the superseded Serve scheduling snapshot.
-#[allow(dead_code)]
+// Certified-Serve payload durability is owned by the production lifecycle
+// coordinator and its co-located ledger/recovery authority.
 pub(crate) mod v2_certified_serve_payload_store;
 pub(crate) mod v2_chunks;
 pub(crate) mod v2_context;
@@ -598,11 +597,8 @@ pub use v2_core::{
     production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
 };
 pub(crate) mod v2_effects;
-pub(crate) mod v2_lane_work;
-// TODO: Remove this allowance only in the separate complete scheduler switch;
-// the generic coordinator remains staged and unwired.
 pub(crate) mod v2_first_release_recovery;
-#[allow(dead_code)]
+pub(crate) mod v2_lane_work;
 pub(crate) mod v2_lifecycle_coordinator;
 pub(crate) mod v2_lifecycle_recovery;
 pub(crate) mod v2_npos;

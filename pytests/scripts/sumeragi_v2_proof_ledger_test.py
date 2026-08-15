@@ -51,6 +51,21 @@ def load_checker():
     return module
 
 
+def copy_chain_epoch_compact_fixture(tmp_path: Path, module) -> tuple[Path, Path]:
+    """Copy the async source and reconstructed chain/epoch source."""
+
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    async_name = "SumeragiV2AsyncNetwork.tla"
+    shutil.copy2(module.FORMAL_DIR / async_name, formal_dir / async_name)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    path.write_text(
+        module._chain_epoch_refinement_source(module.FORMAL_DIR),
+        encoding="utf-8",
+    )
+    return formal_dir, path
+
+
 PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_liveness_configuration_cases.py",
     "sumeragi_v2_proof_ledger_status_cases.py",
@@ -853,7 +868,8 @@ def test_tla_comment_stripping_reuses_bounded_content_cache() -> None:
     assert (third.hits, third.misses, third.maxsize) == (1, 2, 64)
 
 
-def test_repository_ledger_has_only_explicit_unproved_debt() -> None:
+def test_repository_ledger_has_machine_checked_completion() -> None:
+    """Pin the repository ledger's promoted completion baseline."""
     module = load_checker()
     ledger = module.load_ledger()
     result = module.validate_ledger(ledger)
@@ -872,7 +888,7 @@ def test_repository_ledger_has_only_explicit_unproved_debt() -> None:
         "requirement": None,
         "module": "SumeragiV2ChainLivenessProofs",
         "symbol": "HeightLivenessObligation",
-        "status": "specified_unproved",
+        "status": "tlaps_proved",
     }
     assert result.machine_checked_completion is ledger["machine_checked_completion"]
 
@@ -923,7 +939,7 @@ def test_reviewed_obligation_inventory_rejects_retargeting(
     assert expected_error in errors
 
 
-def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> None:
+def test_repository_ledger_pins_promoted_baseline_and_dependencies() -> None:
     module = load_checker()
     ledger = module.load_ledger()
 
@@ -937,8 +953,8 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         application["symbol"]
         == "AsyncTemporalClosureApplicationCompletionProgressObligation"
     )
-    assert application["status"] == "specified_unproved"
-    assert ledger["machine_checked_completion"] is False
+    assert application["status"] == "tlaps_proved"
+    assert ledger["machine_checked_completion"] is True
 
     by_id = {
         obligation["id"]: obligation for obligation in ledger["obligations"]
@@ -984,16 +1000,7 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         obligation["id"]
         for obligation in ledger["obligations"]
         if obligation["status"] == "specified_unproved"
-    ) == (
-        "effective-lock-body-acquisition-production-refinement",
-        "progress-witness-production-refinement",
-        "post-gst-deadlock-freedom", "post-gst-starvation-freedom",
-        "timeout-view-liveness", "rotating-leader-liveness",
-        "locked-body-reproposal", "application-liveness",
-        "successor-activation-starvation-freedom",
-        "successor-activation-exact-recovery-production-refinement",
-        "genesis-height-successor-handoff", "height-liveness",
-    )
+    ) == ()
     assert module.PROOF_STATUS_DEPENDENCIES == {
         "effective-lock-body-acquisition-production-refinement": (
             "effective-lock-body-acquisition-model",
@@ -1131,9 +1138,9 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         for status in module.STATUS_VALUES
     }
     assert current_target_counts == {
-        "tlaps_proved": 35,
-        "cross_tool_proved": 0,
-        "specified_unproved": 12,
+        "tlaps_proved": 44,
+        "cross_tool_proved": 3,
+        "specified_unproved": 0,
         "trusted_contract": 6,
         "out_of_scope": 1,
     }
@@ -1233,7 +1240,7 @@ def test_typed_rollover_liveness_remains_source_bound_support() -> None:
     ]
     consumer_id = module.SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
     assert support_id not in by_id
-    assert by_id[consumer_id]["status"] == "specified_unproved"
+    assert by_id[consumer_id]["status"] == "cross_tool_proved"
     assert support_module in module.RELEASE_PROOF_MODULES
     source = (
         module.FORMAL_DIR / f"{support_module}.tla"
@@ -1406,6 +1413,8 @@ def test_completion_claim_rejects_unproved_debt_without_release_mode() -> None:
     module = load_checker()
     ledger = copy.deepcopy(module.load_ledger())
     ledger["machine_checked_completion"] = True
+    by_id = {item["id"]: item for item in ledger["obligations"]}
+    by_id["height-liveness"]["status"] = "specified_unproved"
 
     errors = module.validate_ledger(ledger).errors
 
@@ -1659,11 +1668,17 @@ def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
     module.CROSS_TOOL_REFINEMENT_CONTRACTS = canonical_contracts
     by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
     assert all(
-        by_id[obligation_id]["status"] == "specified_unproved"
+        by_id[obligation_id]["status"] == "cross_tool_proved"
         for obligation_id in module.CROSS_TOOL_REFINEMENT_BY_ID
     )
+
+    dormant = copy.deepcopy(ledger)
+    dormant["machine_checked_completion"] = False
+    dormant_by_id = {item["id"]: item for item in dormant["obligations"]}
+    for obligation_id in module.CROSS_TOOL_REFINEMENT_BY_ID:
+        dormant_by_id[obligation_id]["status"] = "specified_unproved"
     assert module._cross_tool_evidence_errors(
-        ledger,
+        dormant,
         {},
         tlaps_evidence=None,
         verus_evidence=None,
@@ -1672,7 +1687,7 @@ def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
     ]
     with pytest.raises(ValueError, match="no cross_tool_proved obligations"):
         module.build_cross_tool_evidence(
-            ledger,
+            dormant,
             tlaps_evidence={},
             verus_evidence={},
         )
@@ -3483,8 +3498,14 @@ def test_cross_tool_obligation_query_is_dormant_canonical_and_fail_closed(
 ) -> None:
     module = load_checker()
     ledger_path = tmp_path / "proof_coverage.json"
+
+    dormant_ledger = copy.deepcopy(module.load_ledger())
+    dormant_ledger["machine_checked_completion"] = False
+    dormant_by_id = {item["id"]: item for item in dormant_ledger["obligations"]}
+    for obligation_id in module.CROSS_TOOL_REFINEMENT_BY_ID:
+        dormant_by_id[obligation_id]["status"] = "specified_unproved"
     ledger_path.write_text(
-        json.dumps(module.load_ledger()),
+        json.dumps(dormant_ledger),
         encoding="utf-8",
     )
     dormant = subprocess.run(
@@ -7344,7 +7365,7 @@ def test_async_production_model_and_proofs_are_ci_gated() -> None:
         assert historical_module in module.RELEASE_PROOF_MODULES
 
 
-def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
+def test_first_release_type_and_height_promotions_are_pinned() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
@@ -7354,22 +7375,23 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
         "same-round-lock-and-commit-authorization": "tlaps_proved",
         "effective-lock-body-acquisition-model": "tlaps_proved",
         "effective-lock-body-acquisition-production-refinement": (
-            "specified_unproved"
+            "cross_tool_proved"
         ),
+        "async-runner-scheduler-preservation": "tlaps_proved",
         "post-decision-timeout-exclusion": "tlaps_proved",
         "decision-recovery-across-restart": "tlaps_proved",
-        "progress-witness-production-refinement": "specified_unproved",
+        "progress-witness-production-refinement": "cross_tool_proved",
         "async-type-invariant": "tlaps_proved",
         "async-progress-ownership-invariant": "tlaps_proved",
         "protected-service-rank-stage4-ready-causal": "tlaps_proved",
         "protected-service-rank-serve-fifo": "tlaps_proved",
         "protected-service-rank-stage5-consensus-fifo": "tlaps_proved",
-        "successor-activation-starvation-freedom": "specified_unproved",
+        "successor-activation-starvation-freedom": "tlaps_proved",
         "successor-activation-exact-recovery-production-refinement": (
-            "specified_unproved"
+            "cross_tool_proved"
         ),
-        "genesis-height-successor-handoff": "specified_unproved",
-        "height-liveness": "specified_unproved",
+        "genesis-height-successor-handoff": "tlaps_proved",
+        "height-liveness": "tlaps_proved",
     }
     for obligation_id, target in module.FIXED_PROOF_OBLIGATION_TARGETS.items():
         target_module, symbol = target
@@ -7389,7 +7411,7 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
     )
 
 
-def test_effective_lock_body_model_is_proved_and_production_refinement_remains_debt() -> None:
+def test_effective_lock_body_model_and_production_refinement_are_proved() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
@@ -7421,7 +7443,7 @@ def test_effective_lock_body_model_is_proved_and_production_refinement_remains_d
         "requirement": refinement["requirement"],
         "module": "SumeragiV2AsyncLivenessProofs",
         "symbol": "EffectiveLockBodyAcquisitionProductionRefinementObligation",
-        "status": "specified_unproved",
+        "status": "cross_tool_proved",
     }
     source = (
         module.FORMAL_DIR / "SumeragiV2AsyncStage4RefinementProofs.tla"
@@ -7477,11 +7499,11 @@ def test_audited_progress_and_rank_leaves_are_tlaps_proved() -> None:
     assert sum(
         obligation["status"] == "tlaps_proved"
         for obligation in obligations
-    ) == 35
+    ) == 44
     assert sum(
         obligation["status"] == "specified_unproved"
         for obligation in obligations
-    ) == 12
+    ) == 0
     assert by_id["async-runner-scheduler-preservation"]["status"] == "tlaps_proved"
     assert by_id["async-type-invariant"]["status"] == "tlaps_proved"
     expected = {
@@ -14472,9 +14494,9 @@ def test_successor_activation_and_exact_recovery_refinement_has_reviewed_bridge(
         obligation["symbol"]
         == "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
     )
-    assert obligation["status"] == "specified_unproved"
+    assert obligation["status"] == "cross_tool_proved"
 
-    source = (module.FORMAL_DIR / "SumeragiV2ChainEpochRefinement.tla").read_text()
+    source = module._chain_epoch_refinement_source(module.FORMAL_DIR)
     trace_refinement = module._top_level_operator_body(
         source, "ProductionSuccessorAndExactRecoveryTraceRefinement"
     )
@@ -14524,7 +14546,7 @@ def test_successor_activation_and_exact_recovery_refinement_has_reviewed_bridge(
     assert module._chain_source_fidelity_errors(module.FORMAL_DIR) == []
 
 
-def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None:
+def test_successor_activation_starvation_freedom_is_tlaps_proved() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
@@ -14533,7 +14555,7 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
     obligation = by_id["successor-activation-starvation-freedom"]
     assert obligation["module"] == "SumeragiV2SuccessorActivationRefinementProofs"
     assert obligation["symbol"] == "SuccessorActivationStarvationFreedomObligation"
-    assert obligation["status"] == "specified_unproved"
+    assert obligation["status"] == "tlaps_proved"
 
     source = (
         module.FORMAL_DIR / "SumeragiV2SuccessorActivationRefinementProofs.tla"
@@ -14564,9 +14586,7 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
         "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom"
         in candidate_proof
     )
-    chain_source = (
-        module.FORMAL_DIR / "SumeragiV2ChainEpochRefinement.tla"
-    ).read_text(encoding="utf-8")
+    chain_source = module._chain_epoch_refinement_source(module.FORMAL_DIR)
     spec = module._top_level_operator_body(chain_source, "IndexedChainSpec")
     assert spec is not None
     assert "EventualFailureFreeSuccessorStartupSuffix" in spec[0]
@@ -31959,7 +31979,7 @@ def test_timeout_direct_provider_dependency_mutation_is_rejected() -> None:
     ), errors
 
 
-def test_timeout_ledger_target_and_status_remain_unpromoted() -> None:
+def test_timeout_ledger_target_and_status_are_tlaps_proved() -> None:
     module = load_checker()
     ledger = copy.deepcopy(module.load_ledger())
     obligation = next(
@@ -31972,18 +31992,13 @@ def test_timeout_ledger_target_and_status_remain_unpromoted() -> None:
     assert obligation["symbol"] == (
         "AsyncTemporalClosureTimeoutViewProgressObligation"
     )
-    assert obligation["status"] == "specified_unproved"
+    assert obligation["status"] == "tlaps_proved"
 
-    obligation["status"] = "tlaps_proved"
+    obligation["status"] = "specified_unproved"
     errors = module.validate_ledger(ledger).errors
+    assert any("timeout-view-liveness expected tlaps_proved" in error for error in errors), errors
     assert any(
-        "timeout-view-liveness" in error
-        and (
-            "prerequisite" in error
-            or "specified_unproved" in error
-            or "evidence" in error
-            or "log" in error
-        )
+        error.startswith("machine_checked_completion=true rejects specified_unproved target obligations:")
         for error in errors
     ), errors
 
@@ -34816,17 +34831,7 @@ def test_chain_epoch_serve_scheduler_substitutions_are_exact(
     projection: str,
 ) -> None:
     module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    for name in (
-        "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2ChainEpochRefinement.tla",
-    ):
-        (formal_dir / name).write_text(
-            (module.FORMAL_DIR / name).read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
-    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    formal_dir, path = copy_chain_epoch_compact_fixture(tmp_path, module)
     source = path.read_text(encoding="utf-8")
     exact_projection = projection.format(index=index)
     stale_projection = projection.format(index=index - 1)
@@ -34951,17 +34956,7 @@ def test_chain_epoch_producer_substitutions_are_exact(
     projection: str,
 ) -> None:
     module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    for name in (
-        "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2ChainEpochRefinement.tla",
-    ):
-        (formal_dir / name).write_text(
-            (module.FORMAL_DIR / name).read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
-    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    formal_dir, path = copy_chain_epoch_compact_fixture(tmp_path, module)
     source = path.read_text(encoding="utf-8")
     exact_projection = projection.format(index=index)
     replacement = (
@@ -35063,28 +35058,18 @@ def test_historical_instance_producer_substitutions_are_exact(
 
 def test_chain_epoch_rejects_stale_outer_state_shape(tmp_path: Path) -> None:
     module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    for name in (
-        "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2ChainEpochRefinement.tla",
-    ):
-        (formal_dir / name).write_text(
-            (module.FORMAL_DIR / name).read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
-    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    formal_dir, path = copy_chain_epoch_compact_fixture(tmp_path, module)
     source = path.read_text(encoding="utf-8")
     mutated = mutate_tla_operator(
         source,
         "IndexedAsyncStateShape",
         (
-            "Len(indexedAsyncState[initialContext]) = 6\n"
-            "       /\\ DOMAIN indexedAsyncState[initialContext] = 1..6"
+            "Len(indexedAsyncState[initialContext]) = 7\n"
+            "       /\\ DOMAIN indexedAsyncState[initialContext] = 1..7"
         ),
         (
-            "Len(indexedAsyncState[initialContext]) = 5\n"
-            "       /\\ DOMAIN indexedAsyncState[initialContext] = 1..5"
+            "Len(indexedAsyncState[initialContext]) = 6\n"
+            "       /\\ DOMAIN indexedAsyncState[initialContext] = 1..6"
         ),
     )
     path.write_text(mutated, encoding="utf-8")
@@ -35093,7 +35078,7 @@ def test_chain_epoch_rejects_stale_outer_state_shape(tmp_path: Path) -> None:
 
     assert any(
         "IndexedAsyncStateShape has stale" in error
-        and "Len(indexedAsyncState[initialContext]) = 6" in error
+        and "Len(indexedAsyncState[initialContext]) = 7" in error
         for error in errors
     ), errors
 
@@ -35120,17 +35105,7 @@ def test_chain_epoch_producer_projection_theorems_are_exact(
     new: str,
 ) -> None:
     module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    for name in (
-        "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2ChainEpochRefinement.tla",
-    ):
-        (formal_dir / name).write_text(
-            (module.FORMAL_DIR / name).read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
-    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    formal_dir, path = copy_chain_epoch_compact_fixture(tmp_path, module)
     source = path.read_text(encoding="utf-8")
     path.write_text(
         mutate_tla_theorem(source, symbol, old, new),
@@ -35148,17 +35123,7 @@ def test_chain_epoch_joined_step_keeps_producer_projection(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    for name in (
-        "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2ChainEpochRefinement.tla",
-    ):
-        (formal_dir / name).write_text(
-            (module.FORMAL_DIR / name).read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
-    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    formal_dir, path = copy_chain_epoch_compact_fixture(tmp_path, module)
     source = path.read_text(encoding="utf-8")
     path.write_text(
         mutate_tla_operator(
@@ -35186,16 +35151,7 @@ def test_async_original_state_erasure_keeps_producer_journal(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    for name in (
-        "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2ChainEpochRefinement.tla",
-    ):
-        (formal_dir / name).write_text(
-            (module.FORMAL_DIR / name).read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
+    formal_dir, _ = copy_chain_epoch_compact_fixture(tmp_path, module)
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     source = path.read_text(encoding="utf-8")
     path.write_text(
@@ -35221,16 +35177,7 @@ def test_async_original_state_erasure_keeps_serve_episode_debt(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    for name in (
-        "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2ChainEpochRefinement.tla",
-    ):
-        (formal_dir / name).write_text(
-            (module.FORMAL_DIR / name).read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
+    formal_dir, _ = copy_chain_epoch_compact_fixture(tmp_path, module)
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     source = path.read_text(encoding="utf-8")
     path.write_text(
@@ -35325,7 +35272,7 @@ def test_historical_recovery_support_accounting_is_four_proved() -> None:
         obligation_id not in by_id
         for obligation_id in module.HISTORICAL_RECOVERY_PROVED_SUPPORT_IDS
     )
-    assert by_id["height-liveness"]["status"] == "specified_unproved"
+    assert by_id["height-liveness"]["status"] == "tlaps_proved"
     assert module._proofless_release_theorem_errors(
         ledger["obligations"],
         {target_module: source},

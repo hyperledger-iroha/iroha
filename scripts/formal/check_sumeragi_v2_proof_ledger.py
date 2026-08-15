@@ -9365,61 +9365,6 @@ def _async_liveness_shard_contract(
     return errors, providers
 
 
-def _async_liveness_source(formal_dir: Path) -> str:
-    """Read the virtual façade source, falling back for compact test fixtures."""
-
-    shard_paths = [formal_dir / f"{module}.tla" for module, _ in ASYNC_LIVENESS_SHARDS]
-    if all(path.is_file() for path in shard_paths):
-        return "\n".join(path.read_text(encoding="utf-8") for path in shard_paths)
-    return (formal_dir / f"{ASYNC_LIVENESS_FACADE}.tla").read_text(encoding="utf-8")
-
-
-def _facade_provider_entries(
-    formal_dir: Path, root_dir: Path = ROOT_DIR
-) -> list[dict[str, Any]]:
-    """Resolve every ledger-facing façade symbol to its unique physical shard."""
-
-    sources = {
-        module: (formal_dir / f"{module}.tla").read_text(encoding="utf-8")
-        for module, _ in ASYNC_LIVENESS_SHARDS
-    }
-    errors, providers = _async_liveness_shard_contract(
-        {
-            **sources,
-            ASYNC_LIVENESS_FACADE: (
-                formal_dir / f"{ASYNC_LIVENESS_FACADE}.tla"
-            ).read_text(encoding="utf-8"),
-        }
-    )
-    if errors:
-        raise ValueError("invalid async liveness shard contract: " + "; ".join(errors))
-    ledger = load_ledger(formal_dir / "proof_coverage.json")
-    obligations = ledger.get("obligations")
-    if not isinstance(obligations, list):
-        raise ValueError("proof coverage obligations must be an array")
-    entries: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for obligation in obligations:
-        if not isinstance(obligation, dict) or obligation.get("module") != ASYNC_LIVENESS_FACADE:
-            continue
-        for symbol in _symbol_names(obligation.get("symbol", "")):
-            if symbol in seen:
-                continue
-            seen.add(symbol)
-            provider = providers.get(symbol)
-            if provider is None:
-                raise ValueError(
-                    f"facade ledger symbol {symbol} has no unique async shard provider"
-                )
-            log = (
-                _formal_evidence_logical_path("tlaps", f"{provider}.log")
-                if provider in RELEASE_PROOF_MODULES
-                else None
-            )
-            entries.append({"symbol": symbol, "module": provider, "log": log})
-    return entries
-
-
 def _module_sources(formal_dir: Path) -> tuple[dict[str, str], list[str]]:
     sources: dict[str, str] = {}
     errors: list[str] = []
@@ -9442,10 +9387,21 @@ def _module_sources(formal_dir: Path) -> tuple[dict[str, str], list[str]]:
         sources[module] = source
     shard_errors, _ = _async_liveness_shard_contract(sources)
     errors.extend(shard_errors)
+    chain_shard_errors, _ = _chain_epoch_refinement_shard_contract(sources)
+    errors.extend(chain_shard_errors)
     if all(module in sources for module, _ in ASYNC_LIVENESS_SHARDS):
         sources[ASYNC_LIVENESS_FACADE] = "\n".join(
             sources[module] for module, _ in ASYNC_LIVENESS_SHARDS
         )
+    if all(module in sources for module in CHAIN_EPOCH_REFINEMENT_SHARDS):
+        bodies, framing_errors = _chain_epoch_refinement_shard_bodies(sources)
+        errors.extend(framing_errors)
+        if len(bodies) == len(CHAIN_EPOCH_REFINEMENT_SHARDS):
+            sources[CHAIN_EPOCH_REFINEMENT_FACADE] = (
+                f"---- MODULE {CHAIN_EPOCH_REFINEMENT_FACADE} ----\n"
+                + "".join(bodies)
+                + "=============================================================================\n"
+            )
     return sources, errors
 
 
@@ -75072,7 +75028,11 @@ def validate_ledger(
             if (
                 status == "tlaps_proved"
                 and module not in RELEASE_PROOF_MODULES
-                and module != ASYNC_LIVENESS_FACADE
+                and module
+                not in {
+                    ASYNC_LIVENESS_FACADE,
+                    CHAIN_EPOCH_REFINEMENT_FACADE,
+                }
             ):
                 errors.append(
                     f"{where} claims TLAPS proof in non-release module {module}"

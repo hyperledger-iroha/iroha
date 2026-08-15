@@ -275,7 +275,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 )
 
     if refinement_path.is_file():
-        raw_source = refinement_path.read_text(encoding="utf-8")
+        raw_source = _chain_epoch_refinement_source(formal_dir)
         source = strip_tla_comments(raw_source)
         retired_shadows = (
             "asyncCertifiedHeight",

@@ -52,19 +52,6 @@ const QUEUE_CAPACITY_PER_USER: i64 = 24;
 const QUEUE_STRESS_TXS: usize = 128;
 const QUEUE_SATURATION_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const QUEUE_SATURATION_TIMEOUT: Duration = Duration::from_secs(90);
-const RBC_STORE_SCENARIO_NAME: &str = "npos_rbc_store_backpressure";
-const RBC_STORE_PAYLOAD_BYTES: usize = 3 * 1024 * 1024;
-const RBC_STORE_SOFT_SESSIONS: i64 = 1;
-const RBC_STORE_MAX_SESSIONS: i64 = 4;
-const RBC_STORE_SOFT_BYTES: i64 = 64 * 1024;
-const RBC_STORE_MAX_BYTES: i64 = 128 * 1024;
-const RBC_STORE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
-const RBC_STORE_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const CHUNK_LOSS_SCENARIO_NAME: &str = "npos_rbc_chunk_loss_fault";
-const CHUNK_LOSS_PAYLOAD_BYTES: usize = 64 * 1024;
-const CHUNK_LOSS_DROP_INTERVAL: i64 = 2;
-const CHUNK_LOSS_POLL_TIMEOUT: Duration = Duration::from_secs(120);
-const CHUNK_LOSS_RBC_VISIBILITY_TTL_MS: i64 = 10 * 60 * 1_000;
 const STRESS_PEERS_ENV: &str = "SUMERAGI_NPOS_STRESS_PEERS";
 const SUBMIT_CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
@@ -594,30 +581,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(
-                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
-                    16_i64 * 1024,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_max_sessions"],
-                    RBC_STORE_MAX_SESSIONS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_soft_sessions"],
-                    RBC_STORE_SOFT_SESSIONS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_max_bytes"],
-                    RBC_STORE_MAX_BYTES,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_soft_bytes"],
-                    RBC_STORE_SOFT_BYTES,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
-                    900_000i64,
-                )
                 .write(["queue", "capacity"], QUEUE_CAPACITY)
                 .write(["queue", "capacity_per_user"], QUEUE_CAPACITY_PER_USER);
         })
@@ -634,21 +597,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
     let network_id = network.network_id();
-    for idx in 0..2 {
-        let payload = format!(
-            "queue-rbc-primer-{idx:02}-{}",
-            "S".repeat(RBC_STORE_PAYLOAD_BYTES.saturating_sub(18))
-        );
-        let tx = TransactionBuilder::new(
-            network_id,
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, payload)])
-        .sign(ALICE_KEYPAIR.private_key());
-        let submit_client = network.client();
-        tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
-    }
     let mut handles = Vec::with_capacity(QUEUE_STRESS_TXS);
     for idx in 0..QUEUE_STRESS_TXS {
         let client = network.client();
@@ -697,7 +645,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     let http = integration_tests::http::client();
     let mut observed_saturation = queue_backpressure_rejects > 0;
     let mut observed_deferrals = 0.0;
-    let mut observed_rbc_deferrals = 0.0;
     let mut max_queue_depth = 0.0;
     let mut queue_capacity = 0.0;
     let start = Instant::now();
@@ -740,12 +687,7 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         {
             observed_deferrals = deferrals;
         }
-        if let Some(deferrals) = reader.get_optional("sumeragi_rbc_backpressure_deferrals_total")
-            && deferrals > 0.0
-        {
-            observed_rbc_deferrals = deferrals;
-        }
-        if observed_saturation && (observed_deferrals > 0.0 || observed_rbc_deferrals > 0.0) {
+        if observed_saturation && observed_deferrals > 0.0 {
             break;
         }
         sleep(QUEUE_SATURATION_POLL_INTERVAL).await;
@@ -755,8 +697,8 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         "queue saturation gauge never rose above zero"
     );
     ensure!(
-        observed_deferrals > 0.0 || observed_rbc_deferrals > 0.0,
-        "backpressure deferral counters remained zero (pacemaker={observed_deferrals}, rbc={observed_rbc_deferrals})"
+        observed_deferrals > 0.0,
+        "revision-4 queue backpressure deferral counter remained zero"
     );
     let mut summary_root = Map::new();
     summary_root.insert("scenario".into(), json_value(&QUEUE_STRESS_SCENARIO_NAME));
@@ -783,10 +725,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
             "pacemaker_deferrals_total".into(),
             json_value(&observed_deferrals),
         );
-        map.insert(
-            "rbc_deferrals_total".into(),
-            json_value(&observed_rbc_deferrals),
-        );
         Value::Object(map)
     });
     let summary_value = Value::Object(summary_root);
@@ -796,295 +734,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     let summary_pretty = norito::json::to_string_pretty(&summary_value)
         .wrap_err("serialize pretty stress summary json")?;
     persist_summary_if_requested(QUEUE_STRESS_SCENARIO_NAME, &summary_pretty)?;
-    network.shutdown().await;
-    Ok(())
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
-async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
-    init_instruction_registry();
-    let peers = stress_peer_count(4);
-    let builder = NetworkBuilder::new()
-        .with_peers(peers)
-        .with_auto_populated_trusted_peers()
-        .with_block_cadence(Duration::from_millis(1_500))
-        .with_npos_consensus()
-        .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
-                    16_i64 * 1024,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_max_sessions"],
-                    RBC_STORE_MAX_SESSIONS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_soft_sessions"],
-                    RBC_STORE_SOFT_SESSIONS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_max_bytes"],
-                    RBC_STORE_MAX_BYTES,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_soft_bytes"],
-                    RBC_STORE_SOFT_BYTES,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
-                    900_000i64,
-                );
-        })
-        .with_genesis_instruction(SetParameter::new(npos_custom_parameter()));
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(npos_rbc_store_backpressure_records_metrics),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    network
-        .ensure_blocks_with(|height| height.total >= 1)
-        .await?;
-    let network_id = network.network_id();
-    for idx in 0..2 {
-        let message = format!(
-            "rbc-store-{idx:02}-{}",
-            "S".repeat(RBC_STORE_PAYLOAD_BYTES.saturating_sub(13))
-        );
-        let tx = TransactionBuilder::new(
-            network_id,
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, message)])
-        .sign(ALICE_KEYPAIR.private_key());
-        let submit_client = network.client();
-        tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
-    }
-    let client = network.client();
-    let metrics_url = client
-        .torii_url
-        .join("metrics")
-        .wrap_err("compose metrics URL")?;
-    let http = integration_tests::http::client();
-    let mut max_pressure: f64 = 0.0;
-    let mut max_sessions: f64 = 0.0;
-    let mut max_bytes: f64 = 0.0;
-    let mut max_deferrals: f64 = 0.0;
-    let mut last_snapshot: Option<String> = None;
-    let start = Instant::now();
-    let mut timed_out = false;
-    loop {
-        if start.elapsed() > RBC_STORE_POLL_TIMEOUT {
-            timed_out = true;
-            break;
-        }
-        let response = http
-            .get(metrics_url.clone())
-            .header("Accept", "text/plain")
-            .send()
-            .await
-            .wrap_err("fetch metrics snapshot")?;
-        ensure!(
-            response.status().is_success(),
-            "metrics endpoint returned status {}",
-            response.status()
-        );
-        let snapshot = response.text().await.wrap_err("read metrics body")?;
-        let reader = MetricsReader::new(&snapshot);
-        if let Some(value) = reader.get_optional("sumeragi_rbc_store_pressure") {
-            max_pressure = max_pressure.max(value);
-        }
-        if let Some(value) = reader.get_optional("sumeragi_rbc_store_sessions") {
-            max_sessions = max_sessions.max(value);
-        }
-        if let Some(value) = reader.get_optional("sumeragi_rbc_store_bytes") {
-            max_bytes = max_bytes.max(value);
-        }
-        if let Some(value) = reader.get_optional("sumeragi_rbc_backpressure_deferrals_total") {
-            max_deferrals = max_deferrals.max(value);
-        }
-        if max_pressure > 0.0 || max_sessions > 0.0 || max_bytes > 0.0 || max_deferrals >= 1.0 {
-            last_snapshot.get_or_insert(snapshot);
-            break;
-        }
-        sleep(RBC_STORE_POLL_INTERVAL).await;
-    }
-    if timed_out && max_pressure <= 0.0 && max_sessions <= 0.0 && max_bytes <= 0.0 {
-        eprintln!(
-            "[npos_rbc_store_backpressure_records_metrics] RBC store pressure metrics remained zero before timeout"
-        );
-    }
-    let mut root = Map::new();
-    root.insert("scenario".into(), json_value(&RBC_STORE_SCENARIO_NAME));
-    let mut metrics = Map::new();
-    metrics.insert("max_pressure".into(), json_value(&max_pressure));
-    metrics.insert("max_sessions".into(), json_value(&max_sessions));
-    metrics.insert("max_bytes".into(), json_value(&max_bytes));
-    metrics.insert("deferrals_total".into(), json_value(&max_deferrals));
-    metrics.insert("timed_out".into(), json_value(&timed_out));
-    let snapshot_value = last_snapshot.unwrap_or_default();
-    metrics.insert("last_snapshot".into(), json_value(&snapshot_value));
-    root.insert("metrics".into(), Value::Object(metrics));
-    let summary_value = Value::Object(root);
-    let summary_json =
-        norito::json::to_string(&summary_value).wrap_err("serialize RBC store summary")?;
-    println!("sumeragi_baseline_summary::{RBC_STORE_SCENARIO_NAME}::{summary_json}");
-    let summary_pretty = norito::json::to_string_pretty(&summary_value)
-        .wrap_err("serialize pretty RBC store summary")?;
-    persist_summary_if_requested(RBC_STORE_SCENARIO_NAME, &summary_pretty)?;
-    network.shutdown().await;
-    Ok(())
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
-async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
-    init_instruction_registry();
-    let peers = stress_peer_count(4);
-    let builder = NetworkBuilder::new()
-        .with_peers(peers)
-        .with_auto_populated_trusted_peers()
-        .with_block_cadence(Duration::from_millis(1_500))
-        .with_npos_consensus()
-        .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(
-                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
-                    16_i64 * 1024,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
-                    CHUNK_LOSS_RBC_VISIBILITY_TTL_MS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"],
-                    CHUNK_LOSS_RBC_VISIBILITY_TTL_MS,
-                )
-                .write(
-                    ["sumeragi", "debug", "rbc", "drop_every_nth_chunk"],
-                    CHUNK_LOSS_DROP_INTERVAL,
-                );
-        })
-        .with_genesis_instruction(SetParameter::new(npos_custom_parameter()));
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(npos_rbc_chunk_loss_fault_reports_backlog),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    network
-        .ensure_blocks_with(|height| height.total >= 1)
-        .await?;
-    let client = network.client();
-    client.submit_blocking(
-        Log::new(Level::INFO, "chunk-loss seed".to_owned()),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    let network_id = network.network_id();
-    let message = format!(
-        "chunk-loss-fault-{}",
-        "C".repeat(CHUNK_LOSS_PAYLOAD_BYTES.saturating_sub(18))
-    );
-    let tx = TransactionBuilder::new(
-        network_id,
-        ALICE_ID.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, message)])
-    .sign(ALICE_KEYPAIR.private_key());
-    let submit_client = network.client();
-    tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
-    let http = integration_tests::http::client();
-    let probe_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
-    let metrics_urls = probe_clients
-        .iter()
-        .map(|client| client.torii_url.join("metrics"))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .wrap_err("compose metrics URLs")?;
-    let mut pending_sessions_max: f64 = 0.0;
-    let mut backlog_chunks_max: f64 = 0.0;
-    let mut backlog_chunks_total: f64 = 0.0;
-    let mut last_metrics_snapshot: Option<String> = None;
-    let start = Instant::now();
-    loop {
-        ensure!(
-            start.elapsed() <= CHUNK_LOSS_POLL_TIMEOUT,
-            "timed out waiting for RBC chunk loss backlog"
-        );
-        for metrics_url in &metrics_urls {
-            let response = http
-                .get(metrics_url.clone())
-                .header("Accept", "text/plain")
-                .send()
-                .await
-                .wrap_err("fetch metrics snapshot")?;
-            ensure!(
-                response.status().is_success(),
-                "metrics endpoint returned status {}",
-                response.status()
-            );
-            let snapshot = response.text().await.wrap_err("read metrics body")?;
-            let reader = MetricsReader::new(&snapshot);
-            if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_sessions_pending") {
-                pending_sessions_max = pending_sessions_max.max(value);
-            }
-            if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_chunks_total") {
-                backlog_chunks_total = backlog_chunks_total.max(value);
-            }
-            if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_chunks_max") {
-                backlog_chunks_max = backlog_chunks_max.max(value);
-            }
-            if pending_sessions_max >= 1.0
-                || backlog_chunks_total >= 1.0
-                || backlog_chunks_max >= 1.0
-            {
-                last_metrics_snapshot.get_or_insert(snapshot);
-            }
-        }
-        let backlog_observed =
-            pending_sessions_max >= 1.0 || backlog_chunks_total >= 1.0 || backlog_chunks_max >= 1.0;
-        if backlog_observed {
-            break;
-        }
-        sleep(RBC_STORE_POLL_INTERVAL).await;
-    }
-    let backlog_observed =
-        pending_sessions_max >= 1.0 || backlog_chunks_total >= 1.0 || backlog_chunks_max >= 1.0;
-    ensure!(
-        backlog_observed,
-        "expected chunk-loss fault to expose RBC backlog signals"
-    );
-    let mut root = Map::new();
-    root.insert("scenario".into(), json_value(&CHUNK_LOSS_SCENARIO_NAME));
-    let mut metrics = Map::new();
-    metrics.insert(
-        "pending_sessions_max".into(),
-        json_value(&pending_sessions_max),
-    );
-    metrics.insert(
-        "backlog_chunks_total".into(),
-        json_value(&backlog_chunks_total),
-    );
-    metrics.insert("backlog_chunks_max".into(), json_value(&backlog_chunks_max));
-    let metrics_snapshot = last_metrics_snapshot.unwrap_or_default();
-    metrics.insert("last_snapshot".into(), json_value(&metrics_snapshot));
-    root.insert("metrics".into(), Value::Object(metrics));
-    let summary_value = Value::Object(root);
-    let summary_json =
-        norito::json::to_string(&summary_value).wrap_err("serialize chunk-loss summary")?;
-    println!("sumeragi_baseline_summary::{CHUNK_LOSS_SCENARIO_NAME}::{summary_json}");
-    let summary_pretty = norito::json::to_string_pretty(&summary_value)
-        .wrap_err("serialize pretty chunk-loss summary")?;
-    persist_summary_if_requested(CHUNK_LOSS_SCENARIO_NAME, &summary_pretty)?;
     network.shutdown().await;
     Ok(())
 }

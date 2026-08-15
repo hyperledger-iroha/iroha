@@ -269,12 +269,20 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
 
     def read_reviewed_source_bundle(relative_path: str) -> str:
         """Mirror the complete source-sealed include manifest for one Rust parent."""
-        parent = Path(relative_path)
-        components = module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative_path, ())
-        return read_source_bundle(
-            relative_path,
-            *((parent.parent / component).as_posix() for component in components),
-        )
+        pending = [Path(relative_path)]
+        reviewed: list[Path] = []
+        while pending:
+            parent = pending.pop(0)
+            if parent in reviewed:
+                continue
+            reviewed.append(parent)
+            pending.extend(
+                parent.parent / component
+                for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
+                    parent.as_posix(), ()
+                )
+            )
+        return read_source_bundle(*(path.as_posix() for path in reviewed))
 
     seed_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_seed_matrix.sh"
@@ -1903,9 +1911,12 @@ kura.claim_autonomous_lifecycle_process_generation(
         )
         if f"{item[0]}{item[1]}"
         not in module._PRODUCTION_LIVENESS_RETIRED_REGRESSIONS
-    )
+        )
     for module_name, test_name, source in production_inventory_additions:
-        declaration_count = source.count(f"fn {test_name}(")
+        declaration_count = sum(
+            source.count(marker)
+            for marker in (f"fn {test_name}(", f"state_test! {{ sync {test_name}")
+        )
         assert declaration_count == 1, (
             module_name,
             test_name,
@@ -2163,7 +2174,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         "sumeragi::v2_worker::tests::certified_serve_receiver_close_aborts_reserved_replacement_without_orphan",
         "sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect",
     }
-    assert len(exact_certified_serve_regressions) == 37
+    assert len(exact_certified_serve_regressions) == 38
     assert exact_certified_serve_regressions <= set(production_inventory)
     assert exact_certified_serve_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
@@ -2509,8 +2520,8 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert "preflight-release-bootstrap pytest 258" in release_source
     assert "did not run exactly 44 passing tests" in release_source
     assert "preflight-release-bootstrap-validator pytest 44" in release_source
-    assert "did not run exactly 367 passing tests" in release_source
-    assert "preflight-release-receipt pytest 367" in release_source
+    assert "did not run exactly 368 passing tests" in release_source
+    assert "preflight-release-receipt pytest 368" in release_source
     assert (
         "pytests/scripts/sumeragi_v2_release_receipt_components_test.py"
         in release_source
@@ -2541,7 +2552,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                367,'
+        '"preflight-release-receipt",\n                "pytest",\n                368,'
         in receipt_source
     )
     assert "did not run exactly 5291 passing tests" in release_source
@@ -2839,7 +2850,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert expected_flag in release_source
 
     g4p_fidelity_root = tmp_path / "g4p-validator-argument-source-fidelity"
-    for relative in (
+    for relative in _release_inventory_fixture_paths(module, (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -2858,7 +2869,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-    ):
+    )):
         destination = g4p_fidelity_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)

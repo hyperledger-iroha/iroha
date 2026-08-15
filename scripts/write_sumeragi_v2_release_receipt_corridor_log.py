@@ -403,7 +403,8 @@ def _cargo_cache_tree(cargo_home: Path) -> dict[str, tuple[Any, ...]]:
 
 
 def _validate_cargo_cache_input(
-    fields: dict[str, str], *, artifact_root: Path
+    fields: dict[str, str], *, artifact_root: Path,
+    private_build_roots_available: bool = True,
 ) -> dict[str, Any]:
     cargo_home = artifact_root / "cargo-home"
     inventory_path = artifact_root / "cargo-cache-input.json"
@@ -414,7 +415,10 @@ def _validate_cargo_cache_input(
         or Path(fields["cargo_cache_final_inventory_path"]) != final_inventory_path
     ):
         raise ReceiptError("corridor Cargo cache paths are not the exact private output paths")
-    _private_evidence_directory(cargo_home, "corridor Cargo home")
+    if private_build_roots_available:
+        _private_evidence_directory(cargo_home, "corridor Cargo home")
+    else:
+        _require_pruned_private_root(cargo_home, "corridor Cargo home")
     expected_runtime = {
         "runtime_home_path": artifact_root / "home",
         "runtime_tmpdir_path": artifact_root / "tmp",
@@ -426,11 +430,18 @@ def _validate_cargo_cache_input(
         raise ReceiptError("corridor runtime environment escaped its private roots")
     runtime_directories = {}
     for name, path in {"home": artifact_root / "home", "tmp": artifact_root / "tmp", "cache": artifact_root / "cache"}.items():
-        _, metadata = _private_evidence_directory(path, f"corridor runtime {name}")
+        if private_build_roots_available:
+            _, metadata = _private_evidence_directory(path, f"corridor runtime {name}")
+            mode = format(stat.S_IMODE(metadata.st_mode), "04o")
+            owner_uid = metadata.st_uid
+        else:
+            _require_pruned_private_root(path, f"corridor runtime {name}")
+            mode = "0700"
+            owner_uid = os.geteuid()
         runtime_directories[name] = {
             "path": str(path),
-            "mode": format(stat.S_IMODE(metadata.st_mode), "04o"),
-            "owner_uid": metadata.st_uid,
+            "mode": mode,
+            "owner_uid": owner_uid,
         }
     inventory = _bounded_evidence_snapshot(
         inventory_path,
@@ -586,6 +597,7 @@ def _validate_cargo_cache_input(
     if final_file_bytes > _MAX_CARGO_CACHE_INPUT_TOTAL_BYTES:
         raise ReceiptError("Cargo cache final inventory exceeds its total byte limit")
     previous_final_path = ""
+    declared_final_bytes = 0
     for index, record in enumerate(final_document["records"]):
         name = f"Cargo cache final record {index}"
         if not isinstance(record, dict):
@@ -609,10 +621,20 @@ def _validate_cargo_cache_input(
         if kind == "file":
             _cargo_cache_integer(record["size"], name)
             _require_digest(record["sha256"], f"{name} digest")
+            declared_final_bytes += record["size"]
         elif kind == "symlink" and not isinstance(record["target"], str):
             raise ReceiptError(f"{name} symlink target is not text")
-    current_entries = _cargo_cache_tree(cargo_home)
-    if any(name in current_entries for name in ("config", "config.toml")):
+    if (
+        final_record_count != len(final_document["records"])
+        or final_file_bytes != declared_final_bytes
+    ):
+        raise ReceiptError("Cargo cache final inventory accounting is not exact")
+    current_entries = (
+        _cargo_cache_tree(cargo_home) if private_build_roots_available else {}
+    )
+    if private_build_roots_available and any(
+        name in current_entries for name in ("config", "config.toml")
+    ):
         raise ReceiptError("corridor Cargo home contains external configuration")
     final_records: list[dict[str, Any]] = []
     observed_final_bytes = 0
@@ -631,7 +653,7 @@ def _validate_cargo_cache_input(
         elif current[0] == "symlink":
             record["target"] = current[2]
         final_records.append(record)
-    if (
+    if private_build_roots_available and (
         final_document["records"] != final_records
         or final_record_count != len(final_records)
         or final_file_bytes != observed_final_bytes
@@ -654,7 +676,7 @@ def _validate_cargo_cache_input(
         if relative.parts[0] not in roots:
             raise ReceiptError(f"{name} is outside the declared cache roots")
         current = current_entries.get(relative_text)
-        if current is None:
+        if private_build_roots_available and current is None:
             raise ReceiptError(f"{name} is absent from the private Cargo home")
         kind = record.get("kind")
         if kind == "directory":
@@ -691,13 +713,15 @@ def _validate_cargo_cache_input(
             }
         else:
             raise ReceiptError(f"{name} has an unknown entry kind")
-        if set(record) != expected_keys or current[0] != kind:
+        if set(record) != expected_keys or (
+            private_build_roots_available and current[0] != kind
+        ):
             raise ReceiptError(f"{name} metadata is not exact")
         source_mode = _cargo_cache_octal_mode(record["source_mode"], name)
         destination_mode = _cargo_cache_octal_mode(record["destination_mode"], name)
         del source_mode
-        metadata = current[1]
-        if stat.S_IMODE(metadata.st_mode) != destination_mode:
+        metadata = current[1] if private_build_roots_available else None
+        if private_build_roots_available and stat.S_IMODE(metadata.st_mode) != destination_mode:
             raise ReceiptError(f"{name} mode does not match the private copy")
         if kind in {"directory", "file"}:
             source_identity = (
@@ -708,7 +732,9 @@ def _validate_cargo_cache_input(
                 _cargo_cache_integer(record["destination_device"], name),
                 _cargo_cache_integer(record["destination_inode"], name),
             )
-            if (metadata.st_dev, metadata.st_ino) != destination_identity:
+            if private_build_roots_available and (
+                metadata.st_dev, metadata.st_ino
+            ) != destination_identity:
                 raise ReceiptError(f"{name} inode does not match the private copy")
             if kind == "file" and destination_identity == source_identity:
                 raise ReceiptError(f"{name} shares a regular-file inode with its source")
@@ -721,11 +747,15 @@ def _validate_cargo_cache_input(
             input_file_bytes += size
             if input_file_bytes > _MAX_CARGO_CACHE_INPUT_TOTAL_BYTES:
                 raise ReceiptError("Cargo cache input exceeds its total byte limit")
-            if metadata.st_size != size or current[2] != digest:
+            if private_build_roots_available and (
+                metadata.st_size != size or current[2] != digest
+            ):
                 raise ReceiptError(f"{name} content does not match the private copy")
         elif kind == "symlink":
             target = record["target"]
-            if not isinstance(target, str) or current[2] != target:
+            if not isinstance(target, str) or (
+                private_build_roots_available and current[2] != target
+            ):
                 raise ReceiptError(f"{name} symlink target does not match the private copy")
     for root in roots:
         root_record = next(
@@ -773,7 +803,10 @@ def _validate_cargo_cache_input(
         },
         "cargo_home": {
             "archive_id": "release-cargo-cache.home.v1",
-            "mode": f"{stat.S_IMODE(cargo_home.lstat().st_mode):04o}",
+            "mode": (
+                f"{stat.S_IMODE(cargo_home.lstat().st_mode):04o}"
+                if private_build_roots_available else "0700"
+            ),
         },
         "source_cargo_home_disclosure": "withheld",
         "input_root_count": len(roots),
@@ -984,23 +1017,42 @@ def _prebuilt_artifact_root(
     return resolved
 
 
+def _require_pruned_private_root(path: Path, label: str) -> None:
+    """Require one disposable private build root to remain absent."""
+
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise ReceiptError(f"{label} pruning is indeterminate") from error
+    raise ReceiptError(f"{label} survived retained-release pruning")
+
+
 def _prebuilt_release_roots(
     *,
     repo_root: Path,
     fields: dict[str, str],
     expected_artifact_root: Path,
     expected_cargo_target_root: Path,
+    private_build_roots_available: bool = True,
 ) -> tuple[Path, Path]:
     """Bind the corridor root fields to the authenticated bootstrap layout."""
 
     artifact_root = _prebuilt_artifact_root(
         repo_root, expected_artifact_root
     )
-    cargo_target_root = _prebuilt_artifact_root(
-        repo_root,
-        expected_cargo_target_root,
-        "release Cargo target root",
-    )
+    cargo_target_root = expected_cargo_target_root
+    if private_build_roots_available:
+        cargo_target_root = _prebuilt_artifact_root(
+            repo_root,
+            expected_cargo_target_root,
+            "release Cargo target root",
+        )
+    else:
+        _require_pruned_private_root(
+            cargo_target_root, "release Cargo target root"
+        )
     if fields["artifact_root_path"] != str(artifact_root):
         raise ReceiptError(
             "corridor artifact root is not the exact authenticated release "
@@ -1403,7 +1455,7 @@ def _corridor_legs(
             (
                 "preflight-release-receipt",
                 "pytest",
-                367,
+                368,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "

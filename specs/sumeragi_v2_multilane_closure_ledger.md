@@ -50,7 +50,7 @@ statements in this document describe the mutable development checkout. They are
 inventories and source-consistency observations, not immutable-candidate
 execution or release receipts.
 
-## 2026-08-15 current merge audit
+## 2026-08-15 historical merge audit
 
 - The checkout is an uncommitted merge with `HEAD`
   `69f5e617e9cef11cb45d519396d89b22a7317ae0` and `MERGE_HEAD`
@@ -83,8 +83,10 @@ execution or release receipts.
   traversal and exact live-Kura identity rechecks. Signed lifecycle bootstrap,
   generation takeover, Queue snapshot recovery, local Kura rehydration, drain
   queue installation, and one-shot activation revalidation are present in the
-  production startup path. Generic lifecycle-coordinator replacement TODOs
-  remain explicitly out of scope below.
+  production startup path. The crate-internal `LifecycleCoordinator` and
+  `LifecycleLedgerV1` now own ordinary and recovered production heights,
+  including durable selection, launch, completion, finalization, cleanup,
+  restart, and exact successor handoff.
 - The schema-5 formal registry names all 27 production actions, and the
   structural production-trace extraction reports no open action name. This is
   a source partition only; no fresh TLC, Apalache, TLAPS, Verus, trace-replay,
@@ -1742,9 +1744,9 @@ The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 suite-source SHA-256 values are
 `a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
 and
-`1bec39d7d0b9a08bf151c90e52a1d7d46d30bce2857a7726d939bf9ed1daf6ee`.
+`45bac77032e3661bfd065ba287a6794587c0ce7bf2b62376ab7828713c00d849`.
 The checked-in grouped fixture has SHA-256
-`48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`.
+`af4b7092da0f0763c7e8d1bc16c5c084f49fbb096496b2dd9291c07e36bf6883`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
@@ -1915,7 +1917,7 @@ checkpoint also passed `cargo check -p iroha_core --lib`; later focused reruns
 covered startup binding, B/A/B recovery, the 18 Kura replica tests, and four
 configuration tests. These are historical partial results, not fresh archived
 execution of all 525 required tests. This reconciliation claims no immutable-
-candidate Cargo run or full matrix execution: the 856 production, 525 G-UNIT,
+candidate Cargo run or full matrix execution: the 857 production, 525 G-UNIT,
 and 55-control counts are mutable-development source inventory only. `G-UNIT`
 remains Open until the exact no-skip suites run through the compliant isolated
 wrapper and their logs and candidate identity are archived.
@@ -1964,7 +1966,7 @@ cross-tool, or mutation execution is claimed by this reconciliation. Model
 hashes, tool versions, logs, expected counterexamples, and terminal completion
 receipts must still be archived, so `G-FORMAL` remains Open.
 
-### G-4P — four-peer DA/RBC lifecycle suites
+### G-4P — four-peer DA and lifecycle suites
 
 **Evidence:** Open.
 
@@ -1983,7 +1985,10 @@ and the strict autoscale cycle tests in
 prerequisites are reachable. A skipped test or test-only producer is a failure.
 The mandatory four-peer lifecycle and rotating-validator Native tests are now
 non-ignored and source-bound into the release runner, but no fresh completion
-artifact is recorded here.
+artifact is recorded here. Rotating message-loss faults use the
+feature-isolated authenticated consensus message controller and must prove the
+installed hold/drop command and matched-message evidence before its atomic heal;
+retired `[sumeragi.debug.rbc]` keys are rejected configuration, not evidence.
 
 ### G-12P — twelve lane validators on a 13-peer global committee
 
@@ -2039,9 +2044,9 @@ closure contains exactly 1,397 records for each suite, with grouped and
 diagnostics suite-source SHA-256 values
 `a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
 and
-`1bec39d7d0b9a08bf151c90e52a1d7d46d30bce2857a7726d939bf9ed1daf6ee`.
+`45bac77032e3661bfd065ba287a6794587c0ce7bf2b62376ab7828713c00d849`.
 The current grouped JSON and wire TSV SHA-256 values are
-`48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
+`af4b7092da0f0763c7e8d1bc16c5c084f49fbb096496b2dd9291c07e36bf6883`
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 Those are development fixture inventories, not SDK results. The changed
@@ -2112,6 +2117,14 @@ diagnostics must be added here or mapped to a ledger row before release.
   installation, and activation-time owner revalidation. Its `Crash`, `Recover`,
   `RecoverReservationSnapshot`, and `RehydrateLocalKuraCustody` extraction
   names are structurally bound; formal and execution evidence remains Open.
+- **Lifecycle-coordinator cutover:** one crate-internal
+  `LifecycleCoordinator`/`LifecycleLedgerV1` owner now controls ordinary and
+  recovered production lifecycle admission, immutable ordinals, launch,
+  retries, completion, finalization, restart recovery, and successor rollover.
+  Certified-Serve payload durability and the concrete work registry are joined
+  to that owner; the former Serve snapshot, persistent predecessor witness,
+  latch, and producer-episode scheduler authorities are retired. Fresh
+  immutable-candidate execution and release evidence remains Open.
 
 ### No unresolved in-scope explicit TODO marker
 
@@ -2121,8 +2134,7 @@ multilane diagnostics. The former SafetyWal filesystem-identity marker is now
 implemented and source-bound: production runner cutover mints the opened WAL
 directory authority from Kura's retained opened root, and the adapter consumes
 that move-only authority only for the exact Kura instance. Any newly introduced
-marker must be classified here before release. Generic lifecycle-coordinator
-TODOs remain out of scope as recorded below.
+marker must be classified here before release.
 
 ### Unresolved in scope without a TODO marker
 
@@ -2157,24 +2169,6 @@ TODOs remain out of scope as recorded below.
   reservation, autonomous lane QC, merge carrier, Native participant
   application, autoscale frontier, or retirement decision. It is therefore
   outside this multilane ledger.
-- **Generic lifecycle-coordinator cutover:** the TODO above
-  `v2_lifecycle_coordinator` in
-  `crates/iroha_core/src/sumeragi/mod.rs` and the source-coupled record in
-  [Sumeragi lifecycle simplification](sumeragi_v2_lifecycle_simplification.md)
-  describe a follow-on replacement of the generic Serve, witness, latch, and
-  producer-episode scheduling authority. The staged module is compiled and
-  non-test source imports sealed admission, replay, and recovery helpers, but
-  the coordinator is not wired into production services: production selection,
-  the all-or-nothing queue/registry/output-permit transaction, publication,
-  runner execution, and final scheduler cutover remain unavailable or
-  intentionally unwired, and the existing scheduler authority remains in
-  place. Completing that architectural cutover is distinct from the automatic
-  lane create, drain, archive, destruction, and recreation semantics mapped by
-  `ML-LIFE-01` through `ML-LIFE-05`; it is not an `ML-*` closure condition.
-  This disposition applies only to completion of the cutover. It does not
-  remove currently referenced helpers from source closure or ordinary
-  compile/test coverage, and it advances no Implementation, Closure, Evidence,
-  or `G-*` state.
 - **Fee sponsorship:** the TODO in
   `ensure_global_fee_sponsor_asset` in
   `crates/iroha_core/src/smartcontracts/isi/world.rs` concerns propagating
@@ -2216,33 +2210,12 @@ TODOs remain out of scope as recorded below.
   Merkle indexing before an unrelated source population can become
   unbounded. It neither retains canonical execution bodies nor participates
   in Native, merge, reservation, autoscale, drain, or lane-archive authority.
-- **Generic Decision fetch refinement:** the TODO in
-  `SumeragiV2CertifiedRequestHashAuthorityProofs.tla` concerns the concrete
-  `ExecuteDecisionFetch` trace mapping for generic historical Decision body
-  recovery. The corresponding debt is already owned by
-  `ProgressWitnessProductionRefinementObligation`; it does not model lane
-  reservations, autonomous merge carriers, Native participant evidence,
-  autoscale, drain, or retirement and is therefore outside this multilane
-  closure ledger.
-- **Other generic Sumeragi liveness composition:** the remaining 12 TODOs in
-  `formal/sumeragi_v2/` are five locked-body reproposal provider/composition
-  obligations, one finite-producer descent proof, one adequate-leader corridor
-  deadline service property, two asynchronous finite-producer route/rank
-  obligations, and three finite-producer production/descent/source-isolation
-  obligations. They concern generic proposal/timeout/producer temporal
-  liveness, not the multilane kernels in
-  `multilane_source_bindings.json`. They remain proof debt, but cannot stand in
-  for or block the lane-specific safety/evidence rows.
-- **Generic causal-scheduler projection and liveness:** the TODO on
-  `production_fresh_causal_successors` in
-  `crates/iroha_sumeragi_core/src/verus_proofs.rs`, mirrored in
-  `crates/iroha_sumeragi_core/VERIFICATION.md`, concerns the machine-checked
-  production effect-to-TLA candidate identity/ownership mapping and
-  Completion-capacity product-rank proof needed for temporal liveness. It is a
-  generic scheduler-refinement obligation, already recorded as
-  `specified_unproved` in `formal/sumeragi_v2/PROOF.md`; it does not model
-  lane reservations, autonomous merge carriers, Native participant evidence,
-  autoscale, drain, or retirement and is outside this multilane ledger.
+- **Generic Sumeragi formal evidence:** the concrete historical Decision-fetch
+  mapping is now stated under the promoted
+  `ProgressWitnessProductionRefinementObligation`; no formal-directory TODO
+  remains for that mapping. Its fresh strict TLAPS, Verus, and derived
+  cross-tool evidence are generic release gates, not multilane identities or
+  substitutes for lane-specific safety/evidence rows.
 - **Unrelated source markers:** the TODOs in
   `crates/iroha_core/src/privacy_profiles.rs`, the Kagemusha SHA-256 table
   implementation, and `crates/ivm/build.rs` concern privacy-engine activation,

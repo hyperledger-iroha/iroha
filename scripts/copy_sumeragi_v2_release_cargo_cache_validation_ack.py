@@ -25,78 +25,127 @@ def publish_validation_failure(
         or not 1 <= validator_exit_status <= 255
     ):
         raise CacheCopyError("receipt validation failure inputs are not exact")
-    bootstrap_fd, bootstrap_identity = _open_directory(
-        bootstrap_evidence, "bootstrap evidence root"
-    )
-    try:
-        if (
-            bootstrap_identity.st_uid != os.geteuid()
-            or stat.S_IMODE(bootstrap_identity.st_mode) != 0o700
-        ):
-            raise CacheCopyError("bootstrap evidence root is not owner-private")
-        forbidden = {
-            "BOOTSTRAP_RELEASE_COMPLETED.json", "RELEASE_COMPLETED.json",
-            "receipt-validation-ack.json", "release-retained-inventory.json",
-            "release-runner-private-provenance.json",
-            "release-runner-result.json", "sealed-identity.json",
-        }
-        if any(
-            _optional_entry_stat(bootstrap_fd, name, f"forbidden success evidence {name}")
-            is not None
-            for name in forbidden
-        ):
-            raise CacheCopyError("receipt validation failure follows published success evidence")
-    finally:
-        os.close(bootstrap_fd)
+    def prepare_failure_publication() -> tuple[
+        os.stat_result,
+        bytes,
+        dict[str, object],
+        str,
+        str,
+        str,
+        int,
+        dict[str, bytes],
+        dict[str, dict[str, object]],
+    ]:
+        """Authenticate inputs that must be captured before root cleanup."""
 
-    identity_path = bootstrap_evidence / "candidate-identity.json"
-    completion_path = bootstrap_evidence / "BOOTSTRAP_COMPLETED.json"
-    validator_path = bootstrap_evidence / "validate-receipt.py"
-    identity_payload, _ = _read_regular(identity_path, "candidate identity")
+        bootstrap_fd, bootstrap_identity = _open_directory(
+            bootstrap_evidence, "bootstrap evidence root"
+        )
+        try:
+            if (
+                bootstrap_identity.st_uid != os.geteuid()
+                or stat.S_IMODE(bootstrap_identity.st_mode) != 0o700
+            ):
+                raise CacheCopyError("bootstrap evidence root is not owner-private")
+            forbidden = {
+                "BOOTSTRAP_RELEASE_COMPLETED.json", "RELEASE_COMPLETED.json",
+                "receipt-validation-ack.json", "release-retained-inventory.json",
+                "release-runner-private-provenance.json",
+                "release-runner-result.json", "sealed-identity.json",
+            }
+            if any(
+                _optional_entry_stat(
+                    bootstrap_fd, name, f"forbidden success evidence {name}"
+                )
+                is not None
+                for name in forbidden
+            ):
+                raise CacheCopyError(
+                    "receipt validation failure follows published success evidence"
+                )
+        finally:
+            os.close(bootstrap_fd)
+
+        identity_path = bootstrap_evidence / "candidate-identity.json"
+        completion_path = bootstrap_evidence / "BOOTSTRAP_COMPLETED.json"
+        validator_path = bootstrap_evidence / "validate-receipt.py"
+        identity_payload, _ = _read_regular(identity_path, "candidate identity")
+        try:
+            identity = json.loads(identity_payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise CacheCopyError("candidate identity is malformed") from error
+        identity_keys = {
+            "schema_version", "head_commit", "head_tree", "index_tree",
+            "workspace_source_manifest_sha256", "cargo_lock_sha256",
+        }
+        if (
+            not isinstance(identity, dict)
+            or set(identity) != identity_keys
+            or type(identity.get("schema_version")) is not int
+            or identity["schema_version"] != 1
+            or any(
+                not isinstance(identity.get(name), str)
+                or re.fullmatch(
+                    r"(?:[0-9a-f]{40}|[0-9a-f]{64})", identity[name]
+                )
+                is None
+                for name in ("head_commit", "head_tree", "index_tree")
+            )
+            or any(
+                not isinstance(identity.get(name), str)
+                or re.fullmatch(r"[0-9a-f]{64}", identity[name]) is None
+                for name in (
+                    "workspace_source_manifest_sha256", "cargo_lock_sha256"
+                )
+            )
+            or identity_payload != _canonical_payload(identity)
+        ):
+            raise CacheCopyError("candidate identity contract is not exact")
+        validator_sha256, _, _ = _digest_regular(
+            validator_path, "archived receipt validator"
+        )
+        completion_sha256, _, _ = _digest_regular(
+            completion_path, "bootstrap completion"
+        )
+        receipt_sha256, receipt_size = _stable_regular_digest(
+            invocation_root / "output" / "release" / "RELEASE_COMPLETED.json",
+            "unverified aggregate receipt",
+        )
+        stream_payloads: dict[str, bytes] = {}
+        stream_records: dict[str, dict[str, object]] = {}
+        for name in ("stdout", "stderr"):
+            payload, record = _validator_diagnostic_prefix(
+                invocation_root / f"receipt-validator.{name}", name
+            )
+            stream_payloads[name] = payload
+            stream_records[name] = record
+        return (
+            bootstrap_identity,
+            identity_payload,
+            identity,
+            validator_sha256,
+            completion_sha256,
+            receipt_sha256,
+            receipt_size,
+            stream_payloads,
+            stream_records,
+        )
+
     try:
-        identity = json.loads(identity_payload)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CacheCopyError("candidate identity is malformed") from error
-    identity_keys = {
-        "schema_version", "head_commit", "head_tree", "index_tree",
-        "workspace_source_manifest_sha256", "cargo_lock_sha256",
-    }
-    if (
-        not isinstance(identity, dict)
-        or set(identity) != identity_keys
-        or type(identity.get("schema_version")) is not int
-        or identity["schema_version"] != 1
-        or any(
-            not isinstance(identity.get(name), str)
-            or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", identity[name]) is None
-            for name in ("head_commit", "head_tree", "index_tree")
-        )
-        or any(
-            not isinstance(identity.get(name), str)
-            or re.fullmatch(r"[0-9a-f]{64}", identity[name]) is None
-            for name in ("workspace_source_manifest_sha256", "cargo_lock_sha256")
-        )
-        or identity_payload != _canonical_payload(identity)
-    ):
-        raise CacheCopyError("candidate identity contract is not exact")
-    validator_sha256, _, _ = _digest_regular(
-        validator_path, "archived receipt validator"
-    )
-    completion_sha256, _, _ = _digest_regular(
-        completion_path, "bootstrap completion"
-    )
-    receipt_sha256, receipt_size = _stable_regular_digest(
-        invocation_root / "output" / "release" / "RELEASE_COMPLETED.json",
-        "unverified aggregate receipt",
-    )
-    stream_payloads: dict[str, bytes] = {}
-    stream_records: dict[str, dict[str, object]] = {}
-    for name in ("stdout", "stderr"):
-        payload, record = _validator_diagnostic_prefix(
-            invocation_root / f"receipt-validator.{name}", name
-        )
-        stream_payloads[name] = payload
-        stream_records[name] = record
+        (
+            bootstrap_identity,
+            identity_payload,
+            identity,
+            validator_sha256,
+            completion_sha256,
+            receipt_sha256,
+            receipt_size,
+            stream_payloads,
+            stream_records,
+        ) = prepare_failure_publication()
+    except BaseException:
+        cleanup_invocation(cleanup_base, invocation_root, cleanup_prefix)
+        raise
 
     publications: list[tuple[Path, tuple[os.stat_result, os.stat_result]]] = []
     try:

@@ -1513,12 +1513,27 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     foreign_service_io.detach(&mut foreign_services);
     service_io.detach(&mut services);
 }
+fn reviewed_v2_adapter_source_for_test() -> String {
+    const RECOVERED_STARTUP_INCLUDE: &str =
+        "include!(\"v2_adapter_recovered_startup_branches.rs\");";
+    let parent = include_str!("../v2.rs");
+    assert_eq!(
+        parent.matches(RECOVERED_STARTUP_INCLUDE).count(),
+        1,
+        "the adapter must include the recovered-startup provider exactly once"
+    );
+    parent.replacen(
+        RECOVERED_STARTUP_INCLUDE,
+        include_str!("../v2_adapter_recovered_startup_branches.rs"),
+        1,
+    )
+}
 include!("v2_adapter_04_wal_recovery.rs");
 include!("v2_adapter_04b_lifecycle_startup.rs");
 include!("v2_adapter_05_direct_lifecycle.rs");
 #[test]
 fn recovered_wal_sign_status_publication_is_exact_last_and_unwired() {
-    let source = include_str!("../v2.rs");
+    let source = reviewed_v2_adapter_source_for_test();
     let body_store_source = include_str!("../v2_body_store.rs");
     let (production, _) = source
         .split_once("\n#[cfg(test)]\nmod tests {")

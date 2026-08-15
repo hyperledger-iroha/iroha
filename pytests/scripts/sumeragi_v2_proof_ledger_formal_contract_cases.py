@@ -250,6 +250,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('status/test_guards.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2.rs'): (
+        Path('v2_adapter_recovered_startup_branches.rs'),
         Path('tests/v2_adapter_main_00.rs'),
         Path('tests/v2_adapter_main_01.rs'),
         Path('tests/v2_adapter_main_02.rs'),

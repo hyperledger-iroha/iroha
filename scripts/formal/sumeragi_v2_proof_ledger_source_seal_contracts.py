@@ -536,6 +536,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'status/test_guards.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2.rs': (
+        'v2_adapter_recovered_startup_branches.rs',
         'tests/v2_adapter_main_00.rs',
         'tests/v2_adapter_main_01.rs',
         'tests/v2_adapter_main_02.rs',
@@ -4173,7 +4174,7 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
 
 # Exact comment/literal-free token digests for recovery-scoped eager CommitQC
 # discovery. These are production source-fidelity seals, not machine proofs:
-# the corresponding starvation-freedom obligation remains specified_unproved.
+# the promoted starvation-freedom target still requires fresh strict evidence.
 _PRODUCTION_RECOVERY_EAGER_BLOCK_SYNC_ITEM_SHA256 = {
     "initial_block_sync_deadline": (
         "b3455d656ecac4787561951ec55cc8cde44e2a2c90a3330ad3fe0c65e96c2185"

@@ -3548,8 +3548,9 @@ PROOF
 The Entry-38 candidate proof supplies only strict, named
 terminating-local-work steps.  Atomic Fair-ingress acceptance removes the
 packet in the same step that installs the leader-wire owner, so it is ordinary
-productive transport progress.  The ledger remains `specified_unproved` until
-this entire dependency cone passes the pinned strict TLAPS release invocation.
+productive transport progress.  The checked-in target status is promoted, but
+release accepts it only after this entire dependency cone passes the pinned
+strict TLAPS invocation against the exact ledger and source.
 ***************************************************************************)
 
 THEOREM DeadlockFreedomObligation ==

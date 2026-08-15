@@ -3,7 +3,7 @@
 use iroha_config::parameters::defaults::sumeragi::npos;
 use std::path::Path;
 #[test]
-fn sumeragi_doc_mentions_reconfig_defaults_and_errors() {
+fn sumeragi_doc_mentions_governed_reconfig_defaults_and_errors() {
     let repo_root = workspace_root();
     let doc =
         std::fs::read_to_string(repo_root.join("specs/sumeragi.md")).expect("read sumeragi.md");
@@ -11,16 +11,22 @@ fn sumeragi_doc_mentions_reconfig_defaults_and_errors() {
     let activation = npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
     let slashing_delay = npos::SLASHING_DELAY_BLOCKS;
     assert!(
-        doc.contains(&format!("evidence_horizon_blocks = {horizon}")),
-        "specs/sumeragi.md is missing the canonical evidence_horizon_blocks default ({horizon})"
+        doc.contains(&format!(
+            "SumeragiNposParameters.reconfig.evidence_horizon_blocks = {horizon}"
+        )),
+        "specs/sumeragi.md is missing the governed evidence horizon default ({horizon})"
     );
     assert!(
-        doc.contains(&format!("activation_lag_blocks = {activation}")),
-        "specs/sumeragi.md is missing the canonical activation_lag_blocks default ({activation})"
+        doc.contains(&format!(
+            "SumeragiNposParameters.reconfig.activation_lag_blocks = {activation}"
+        )),
+        "specs/sumeragi.md is missing the governed activation lag default ({activation})"
     );
     assert!(
-        doc.contains(&format!("slashing_delay_blocks = {slashing_delay}")),
-        "specs/sumeragi.md is missing the canonical slashing_delay_blocks default ({slashing_delay})"
+        doc.contains(&format!(
+            "SumeragiNposParameters.reconfig.slashing_delay_blocks = {slashing_delay}"
+        )),
+        "specs/sumeragi.md is missing the governed slashing delay default ({slashing_delay})"
     );
     assert!(
         doc.contains("mode_activation_height requires next_mode to be set in the same block"),
@@ -37,21 +43,21 @@ fn governance_api_doc_covers_joint_consensus_flow() {
     let slashing_delay = npos::SLASHING_DELAY_BLOCKS;
     assert!(
         doc.contains(&format!(
-            "sumeragi.npos.reconfig.evidence_horizon_blocks` (default `{horizon}` blocks)"
+            "SumeragiNposParameters.reconfig.evidence_horizon_blocks` (default `{horizon}` blocks)"
         )),
-        "specs/governance_api.md must mention the configured evidence horizon ({horizon})"
+        "specs/governance_api.md must mention the governed evidence horizon ({horizon})"
     );
     assert!(
         doc.contains(&format!(
-            "sumeragi.npos.reconfig.activation_lag_blocks` (default `{activation}`)"
+            "SumeragiNposParameters.reconfig.activation_lag_blocks` (default `{activation}`)"
         )),
-        "specs/governance_api.md must mention the configured activation lag ({activation})"
+        "specs/governance_api.md must mention the governed activation lag ({activation})"
     );
     assert!(
         doc.contains(&format!(
-            "sumeragi.npos.reconfig.slashing_delay_blocks` (default `{slashing_delay}`)"
+            "SumeragiNposParameters.reconfig.slashing_delay_blocks` (default `{slashing_delay}`)"
         )),
-        "specs/governance_api.md must mention the configured slashing delay ({slashing_delay})"
+        "specs/governance_api.md must mention the governed slashing delay ({slashing_delay})"
     );
     assert!(
         doc.contains("mode_activation_height requires next_mode to be set in the same block"),

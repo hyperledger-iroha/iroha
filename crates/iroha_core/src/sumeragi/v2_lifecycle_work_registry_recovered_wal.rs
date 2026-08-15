@@ -165,6 +165,7 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
     /// rows do not change it. The body-store join and adapter replay happen
     /// before the authority variant changes, and the exact store is reloaded
     /// once more before this method releases the prepared startup.
+    #[inline(never)]
     pub(in crate::sumeragi) fn prepare_cold_adapter_startup(
         self,
         verified: &VerifiedHeightContext,
@@ -182,22 +183,58 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
             repaired,
             authority,
         } = self;
-        let repair = match authority {
+        match authority {
             PersistedRecoveredWalLifecycleAuthority::Sign(repair) => {
-                return Ok((
-                    startup,
-                    Self {
-                        store,
-                        repaired,
-                        authority: PersistedRecoveredWalLifecycleAuthority::Sign(repair),
-                    },
-                ));
+                Self::prepare_cold_sign_branch(store, repaired, repair, startup)
             }
-            PersistedRecoveredWalLifecycleAuthority::SignedBroadcast(repair) => repair,
+            PersistedRecoveredWalLifecycleAuthority::SignedBroadcast(repair) => {
+                Self::prepare_cold_signed_broadcast_branch(
+                    store, repaired, repair, verified, startup, body_store,
+                )
+            }
             PersistedRecoveredWalLifecycleAuthority::SignedBroadcastAndNextVote { .. } => {
-                return Err("recovered phase cold adapter pair was prepared twice");
+                Err("recovered phase cold adapter pair was prepared twice")
             }
-        };
+        }
+    }
+    #[inline(never)]
+    fn prepare_cold_sign_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+        startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+    ) -> Result<
+        (
+            crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+            Self,
+        ),
+        &'static str,
+    > {
+        Ok((
+            startup,
+            Self {
+                store,
+                repaired,
+                authority: PersistedRecoveredWalLifecycleAuthority::Sign(repair),
+            },
+        ))
+    }
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn prepare_cold_signed_broadcast_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
+        verified: &VerifiedHeightContext,
+        startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+        body_store: &V2BodyStore,
+    ) -> Result<
+        (
+            crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+            Self,
+        ),
+        &'static str,
+    > {
         let (observed_broadcast, validate_ordinal, sign_ordinal, broadcast_ordinal) = repaired
             .authenticate_recovered_phase_signed_broadcast(verified, &repair.repair)
             .map_err(|_| "recovered phase Broadcast changed before cold adapter preparation")?;
@@ -220,22 +257,62 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
         if matching.next().is_some() {
             return Err("recovered phase Broadcast matched multiple durable successor pairs");
         }
-        let Some(pair_hint) = pair_hint else {
-            let adapter_authority = repair
-                .repair
-                .project_cold_adapter_authority(verified, &repair.broadcast)
-                .ok_or("recovered phase Broadcast cannot replay the exact cold adapter")?;
-            let startup = startup
-                .advance_recovered_lifecycle_signed_broadcast(verified, adapter_authority)?;
-            return Ok((
-                startup,
-                Self {
-                    store,
-                    repaired,
-                    authority: PersistedRecoveredWalLifecycleAuthority::SignedBroadcast(repair),
-                },
-            ));
-        };
+        drop(matching);
+        match pair_hint {
+            Some(pair_hint) => Self::prepare_cold_signed_broadcast_and_next_vote_branch(
+                store, repaired, repair, pair_hint, verified, startup, body_store,
+            ),
+            None => Self::prepare_cold_single_signed_broadcast_branch(
+                store, repaired, repair, verified, startup,
+            ),
+        }
+    }
+    #[inline(never)]
+    fn prepare_cold_single_signed_broadcast_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
+        verified: &VerifiedHeightContext,
+        startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+    ) -> Result<
+        (
+            crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+            Self,
+        ),
+        &'static str,
+    > {
+        let adapter_authority = repair
+            .repair
+            .project_cold_adapter_authority(verified, &repair.broadcast)
+            .ok_or("recovered phase Broadcast cannot replay the exact cold adapter")?;
+        let startup =
+            startup.advance_recovered_lifecycle_signed_broadcast(verified, adapter_authority)?;
+        Ok((
+            startup,
+            Self {
+                store,
+                repaired,
+                authority: PersistedRecoveredWalLifecycleAuthority::SignedBroadcast(repair),
+            },
+        ))
+    }
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn prepare_cold_signed_broadcast_and_next_vote_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
+        pair_hint: super::ledger::RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
+        verified: &VerifiedHeightContext,
+        startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+        body_store: &V2BodyStore,
+    ) -> Result<
+        (
+            crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+            Self,
+        ),
+        &'static str,
+    > {
         let mut preview = repair.repair.prepare_cold_signed_broadcast_and_sign(
             verified,
             startup,
@@ -289,6 +366,7 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
     }
     /// Install the exact recovered Sign without reopening or substituting storage.
     #[allow(clippy::result_large_err)]
+    #[inline(never)]
     pub(crate) fn install_recovered_wal_sign(
         self,
     ) -> Result<
@@ -300,20 +378,81 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
             repaired,
             authority,
         } = self;
-        let installed = match authority {
+        match authority {
             PersistedRecoveredWalLifecycleAuthority::Sign(repair) => {
-                repair.install_recovered_sign(&store)
+                Self::install_recovered_sign_branch(store, repaired, repair)
             }
             PersistedRecoveredWalLifecycleAuthority::SignedBroadcast(repair) => {
-                repair.install_recovered_broadcast(&store)
+                Self::install_recovered_broadcast_branch(store, repaired, repair)
             }
             PersistedRecoveredWalLifecycleAuthority::SignedBroadcastAndNextVote {
                 repair,
                 combined,
                 pair,
-            } => repair.install_recovered_broadcast_and_next_vote(&store, combined, pair),
-        };
-        match installed {
+            } => Self::install_recovered_broadcast_and_next_vote_branch(
+                store, repaired, repair, combined, pair,
+            ),
+        }
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn install_recovered_sign_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+    ) -> Result<
+        InstalledRecoveredWalSignStorage<'registry>,
+        ExactStoreRecoveredWalSignInstallError<'registry>,
+    > {
+        match repair.install_recovered_sign(&store) {
+            Ok(installed) => Ok(InstalledRecoveredWalSignStorage {
+                store,
+                repaired,
+                installed,
+            }),
+            Err(error) => Err(ExactStoreRecoveredWalSignInstallError {
+                _store: store,
+                _repaired: repaired,
+                error,
+            }),
+        }
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn install_recovered_broadcast_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
+    ) -> Result<
+        InstalledRecoveredWalSignStorage<'registry>,
+        ExactStoreRecoveredWalSignInstallError<'registry>,
+    > {
+        match repair.install_recovered_broadcast(&store) {
+            Ok(installed) => Ok(InstalledRecoveredWalSignStorage {
+                store,
+                repaired,
+                installed,
+            }),
+            Err(error) => Err(ExactStoreRecoveredWalSignInstallError {
+                _store: store,
+                _repaired: repaired,
+                error,
+            }),
+        }
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn install_recovered_broadcast_and_next_vote_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
+        combined: RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+        pair: super::ledger::RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
+    ) -> Result<
+        InstalledRecoveredWalSignStorage<'registry>,
+        ExactStoreRecoveredWalSignInstallError<'registry>,
+    > {
+        match repair.install_recovered_broadcast_and_next_vote(&store, combined, pair) {
             Ok(installed) => Ok(InstalledRecoveredWalSignStorage {
                 store,
                 repaired,

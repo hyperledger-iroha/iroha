@@ -1,3 +1,48 @@
+fn assert_certified_fetch(
+    reducer: &Reducer,
+    outcome: &StepOutcome,
+    certificate: &QuorumCertificate,
+    manifest: Option<PayloadManifest>,
+) {
+    let sources = reducer
+        .context()
+        .roster()
+        .iter()
+        .map(|validator| validator.id())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcome
+            .effects()
+            .iter()
+            .filter(|effect| matches!(effect, Effect::FetchBody { .. }))
+            .count(),
+        1
+    );
+    assert!(outcome.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::FetchBody {
+            tag,
+            round,
+            subject,
+            manifest: fetched_manifest,
+            certified_sources,
+            certificate: Some(fetched_certificate),
+        } if *tag == reducer.current_tag()
+            && *round == certificate.round()
+            && *subject == certificate.subject()
+            && fetched_manifest == &manifest
+            && certified_sources == &sources
+            && fetched_certificate == certificate
+    )));
+}
+fn assert_certified_fallback(reducer: &mut Reducer, certificate: &QuorumCertificate) {
+    let fallback = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("the retransmission boundary retries the exact certified body");
+    assert_certified_fetch(reducer, &fallback, certificate, None);
+}
 #[test]
 fn height_context_requires_bounded_three_f_plus_one_geometry() {
     assert!(matches!(
@@ -354,7 +399,7 @@ fn same_view_timeout_upgrade_resets_set_b_fallback() {
         replacement_subject,
         &remote_quorum,
     );
-    let upgrade = tc_with_high(&context, 0, higher_prepare, &remote_quorum);
+    let upgrade = tc_with_high(&context, 0, higher_prepare.clone(), &remote_quorum);
     let before_upgrade = reducer.current_tag();
     let upgrade_install = only_persist(
         reducer
@@ -371,36 +416,66 @@ fn same_view_timeout_upgrade_resets_set_b_fallback() {
         before_upgrade.generation(),
         "the upgraded certificate starts a replacement proposal generation"
     );
+    let replacement_proposal = proposal(
+        &context,
+        1,
+        replacement_subject,
+        ProposalJustification::Timeout(upgrade),
+    );
     let replacement = reducer
         .step(Event::ProposalReceived {
             tag: reducer.current_tag(),
-            proposal: proposal(
-                &context,
-                1,
-                replacement_subject,
-                ProposalJustification::Timeout(upgrade),
-            ),
+            proposal: replacement_proposal,
         })
         .expect("Set B retains the replacement proposal");
     assert!(
         replacement.effects().is_empty(),
         "a same-view timeout upgrade must reset fallback for the replacement proposal"
     );
-    let replacement_fallback = reducer
-        .step(Event::RetransmitElapsed {
-            tag: reducer.current_tag(),
-        })
-        .expect("the replacement proposal earns its own fallback boundary");
-    assert!(replacement_fallback.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::FetchBody {
-            round,
-            subject,
-            certificate: None,
-            ..
-        } if *round == Round::new(context.height(), 1)
-            && *subject == replacement_subject
-    )));
+    assert_certified_fallback(&mut reducer, &higher_prepare);
+    let replacement_round = Round::new(context.height(), 1);
+    assert!(matches!(
+        reducer
+            .step(Event::BodyAvailable {
+                tag: reducer.current_tag(),
+                round: replacement_round,
+                subject: replacement_subject,
+            })
+            .expect("the replacement body becomes available after fallback")
+            .effects(),
+        [Effect::StoreBody { round, subject, .. }]
+            if *round == replacement_round && *subject == replacement_subject
+    ));
+    assert!(matches!(
+        reducer
+            .step(Event::BodyStored {
+                tag: reducer.current_tag(),
+                round: replacement_round,
+                subject: replacement_subject,
+            })
+            .expect("the replacement body reaches validation after fallback")
+            .effects(),
+        [Effect::ValidateBody { round, subject, .. }]
+            if *round == replacement_round && *subject == replacement_subject
+    ));
+    let prepare = only_persist(
+        reducer
+            .step(Event::ValidationCompleted {
+                tag: reducer.current_tag(),
+                round: replacement_round,
+                subject: replacement_subject,
+                valid: true,
+            })
+            .expect("fallback authorizes the replacement Prepare intent"),
+    );
+    assert!(matches!(
+        prepare.record(),
+        WalRecord::PrepareIntent(vote)
+            if vote.round() == replacement_round
+                && vote.phase() == Phase::Prepare
+                && vote.subject() == replacement_subject
+                && vote.signer() == local
+    ));
 }
 #[test]
 fn retransmit_rebinds_durable_locked_validation_after_view_change() {

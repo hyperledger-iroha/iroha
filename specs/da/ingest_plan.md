@@ -632,11 +632,11 @@ cargo xtask da-proof-bench \
   --markdown-out artifacts/da/proof_bench/benchmark.md
 ```
 
-Block assembly enforces the same budgets: `sumeragi.da_max_commitments_per_block` and
-`sumeragi.da_max_proof_openings_per_block` gate the DA bundle before it is embedded in a block, and
-each commitment must carry a non-zero `proof_digest`. The guard treats the bundle length as the
-proof-opening count until explicit proof summaries are threaded through consensus, keeping the
-≤128-opening target enforceable at the block boundary.【crates/iroha_core/src/sumeragi/main_loop.rs:6573】
+Revision-4 consensus authenticates the mandatory Reed-Solomon-16 layout in
+signed genesis/current-height context. Candidate bodies remain bounded by
+`sumeragi.block.max_payload_bytes`; there are no node-local global DA
+commitment/opening knobs. Torii ingestion policy in this plan is separate from
+the consensus body/chunk layout and cannot weaken its validation.
 
 ## PoR failure handling and slashing
 

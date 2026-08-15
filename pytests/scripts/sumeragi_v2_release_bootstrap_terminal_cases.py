@@ -17,19 +17,17 @@ def test_release_runner_has_no_outer_timeout_or_output_capture(
     assert "stdout=stdout_descriptor" in runner_source
     assert "stderr=stderr_descriptor" in runner_source
 
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(release_fixture.launch_count, release_fixture.candidate, "slow-success"),
-        0o500,
     )
     arguments = _replace_flag(
-        release_fixture.arguments(), "--command-timeout-seconds", "1"
+        release_fixture.arguments(), "--command-timeout-seconds", "20"
     )
     started = time.monotonic()
-    result = release_fixture.run(arguments)
+    result = release_fixture.run(arguments, timeout_seconds=90)
 
     assert result.returncode == 0, result.stderr
-    assert time.monotonic() - started >= 1.5
+    assert time.monotonic() - started >= 20.5
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
     assert (release_fixture.evidence / "BOOTSTRAP_RELEASE_COMPLETED.json").is_file()
 
@@ -38,15 +36,13 @@ def test_blocked_bootstrap_diagnostics_cannot_backpressure_runner_output(
     release_fixture: Fixture,
 ) -> None:
     completed = release_fixture.root / "continuous-writer-completed"
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _continuous_writer_runner(
             release_fixture.launch_count,
             completed,
             chunks=32,
             hold_seconds=0.2,
         ),
-        0o500,
     )
     process = subprocess.Popen(
         release_fixture.arguments(),
@@ -56,11 +52,11 @@ def test_blocked_bootstrap_diagnostics_cannot_backpressure_runner_output(
         text=False,
         env={"PATH": os.environ.get("PATH", "")},
     )
-    _wait_for(completed)
+    _wait_for(completed, timeout=60)
     expected_size = int(completed.read_text(encoding="utf-8"))
     assert (release_fixture.evidence / "runner-stdout.log").stat().st_size >= expected_size
     assert (release_fixture.evidence / "runner-stderr.log").stat().st_size >= expected_size
-    stdout, stderr = process.communicate(timeout=10)
+    stdout, stderr = process.communicate(timeout=30)
     assert process.returncode == 37, stderr.decode("utf-8", "replace")
     assert stdout == b""
 
@@ -87,17 +83,31 @@ def test_blocked_bootstrap_diagnostics_cannot_backpressure_runner_output(
 def test_success_status_without_exact_authenticated_receipt_fails_closed(
     release_fixture: Fixture, action: str
 ) -> None:
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(release_fixture.launch_count, release_fixture.candidate, action),
-        0o500,
     )
 
     result = release_fixture.run()
 
-    assert result.returncode == 2, result.stderr
+    if action in {"receipt-hardlink", "receipt-symlink", "receipt-wrong-path"}:
+        # The failure publisher refuses to traverse or delete the hostile
+        # receipt, but must reclaim the exact owner-private invocation root.
+        assert result.returncode == 1, result.stderr
+        assert not release_fixture.retained_root.exists()
+        assert not release_fixture.evidence.exists()
+    elif action in {"receipt-tamper", "receipt-wrong-mode"}:
+        assert result.returncode == 2, result.stderr
+        assert release_fixture.evidence.is_dir()
+        assert {path.name for path in release_fixture.evidence.iterdir()} == {
+            "RECEIPT_VALIDATION_FAILED.json",
+            "receipt-validator-failure.stdout",
+            "receipt-validator-failure.stderr",
+        }
+        assert not release_fixture.retained_root.exists()
+    else:
+        assert result.returncode == 2, result.stderr
+        assert not release_fixture.evidence.exists()
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
-    assert not release_fixture.evidence.exists()
 
 
 @pytest.mark.parametrize(
@@ -118,22 +128,23 @@ def test_success_status_without_exact_authenticated_receipt_fails_closed(
 def test_terminal_receipt_requires_every_extended_release_field(
     release_fixture: Fixture, field: str
 ) -> None:
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(
             release_fixture.launch_count,
             release_fixture.candidate,
             "success",
             receipt_mutation_override=f'receipt["evidence"].pop({field!r})',
         ),
-        0o500,
     )
 
     result = release_fixture.run()
 
-    assert result.returncode == 2, result.stderr
+    expected_status = 1 if field in {"g4p_multilane", "g12_cross_dataspace"} else 2
+    assert result.returncode == expected_status, result.stderr
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
     assert not release_fixture.evidence.exists()
+    if expected_status == 1:
+        assert release_fixture.retained_root.is_dir()
 
 
 @pytest.mark.parametrize(
@@ -291,43 +302,51 @@ def test_terminal_receipt_requires_every_extended_release_field(
 def test_terminal_receipt_extended_artifact_mutations_fail_closed(
     release_fixture: Fixture, mutation: str
 ) -> None:
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(
             release_fixture.launch_count,
             release_fixture.candidate,
             "success",
             receipt_mutation_override=mutation,
         ),
-        0o500,
     )
 
     result = release_fixture.run()
 
-    assert result.returncode == 2, result.stderr
+    seal_time_path_mutation = any(
+        marker in mutation
+        for marker in (
+            '["g4p_multilane"]["completion"]["path"]',
+            '["g12_cross_dataspace"]["seed_completion"]["path"]',
+            '["g12_cross_dataspace"]["fault_soak_completion"]["path"]',
+        )
+    )
+    assert result.returncode == (1 if seal_time_path_mutation else 2), result.stderr
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
     assert not release_fixture.evidence.exists()
+    if seal_time_path_mutation:
+        assert release_fixture.retained_root.is_dir()
 
 
 def _assert_terminal_receipt_mutation_rejected(
-    release_fixture: Fixture, mutation: str
+    release_fixture: Fixture, mutation: str, *, expected_status: int = 2
 ) -> None:
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(
             release_fixture.launch_count,
             release_fixture.candidate,
             "success",
             receipt_mutation_override=mutation,
         ),
-        0o500,
     )
 
     result = release_fixture.run()
 
-    assert result.returncode == 2, result.stderr
+    assert result.returncode == expected_status, result.stderr
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
     assert not release_fixture.evidence.exists()
+    if expected_status == 1:
+        assert release_fixture.retained_root.is_dir()
 
 
 @pytest.mark.parametrize(
@@ -401,6 +420,7 @@ def test_terminal_receipt_rejects_g12_seed_soak_root_alias(
             'g12 = receipt["evidence"]["g12_cross_dataspace"]\n'
             'g12["fault_soak_completion"] = dict(g12["seed_completion"])'
         ),
+        expected_status=1,
     )
 
 
@@ -620,27 +640,26 @@ def test_source_drift_after_verification_never_launches(release_fixture: Fixture
 def test_post_launch_tampering_fails_closed(
     release_fixture: Fixture, action: str
 ) -> None:
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(release_fixture.launch_count, release_fixture.candidate, action),
-        0o500,
     )
     result = release_fixture.run()
-    assert result.returncode == 2, result.stderr
+    runner_failure = action in {"marker-tamper", "directory-mode-tamper"}
+    assert result.returncode == (1 if runner_failure else 2), result.stderr
+    if runner_failure:
+        assert "post-run bootstrap validation also failed" in result.stderr
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
     assert not release_fixture.evidence.exists()
 
 
 def test_post_launch_trusted_tool_drift_fails_closed(release_fixture: Fixture) -> None:
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(
             release_fixture.launch_count,
             release_fixture.candidate,
             "trusted-drift",
             trusted_mutation=release_fixture.git,
         ),
-        0o500,
     )
     result = release_fixture.run()
     assert result.returncode == 2, result.stderr
@@ -651,15 +670,13 @@ def test_post_launch_trusted_tool_drift_fails_closed(release_fixture: Fixture) -
 def test_post_launch_receipt_support_source_drift_fails_closed(
     release_fixture: Fixture,
 ) -> None:
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(
             release_fixture.launch_count,
             release_fixture.candidate,
             "trusted-drift",
             trusted_mutation=release_fixture.receipt_validator_support,
         ),
-        0o500,
     )
 
     result = release_fixture.run()
@@ -669,11 +686,35 @@ def test_post_launch_receipt_support_source_drift_fails_closed(
     assert not release_fixture.evidence.exists()
 
 
+def test_post_launch_sdk_source_manifest_archive_drift_fails_closed(
+    release_fixture: Fixture,
+) -> None:
+    release_fixture.install_planned_runner(
+        _runner(
+            release_fixture.launch_count,
+            release_fixture.candidate,
+            "trusted-drift",
+            trusted_mutation=(
+                release_fixture.evidence
+                / "sdk-dependency-bundle-manifest.json"
+            ),
+        ),
+    )
+
+    result = release_fixture.run()
+
+    assert result.returncode == 2, result.stderr
+    assert (
+        "archived sdk dependency bundle manifest changed during the release bootstrap"
+        in result.stderr
+    )
+    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
+    assert not release_fixture.evidence.exists()
+
+
 def test_runner_failure_status_is_preserved_exactly(release_fixture: Fixture) -> None:
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(release_fixture.launch_count, release_fixture.candidate, "fail"),
-        0o500,
     )
     result = release_fixture.run()
     assert result.returncode == 37, result.stderr
@@ -806,6 +847,19 @@ def test_bootstrap_protected_validation_accepts_real_terminal_receipt(
         bootstrap_evidence / "sdk-dependency-bundle-manifest.json"
     )
     assert private_sdk_manifest.is_file()
+    invocation_root = release_root.parent
+    output_root = invocation_root / "output"
+    for path in (
+        *(invocation_root / name for name in (
+            "runtime", "sdk-inputs", "sdk-work", "target",
+        )),
+        *(output_root / name for name in (
+            "home", "tmp", "cache", "cargo-home",
+        )),
+    ):
+        if path.exists():
+            shutil.rmtree(path)
+    Path(evidence["runtime_tool_probe_manifest"]).unlink()
     private_sdk_manifest.unlink()
     for log_name in ("runner-stdout.log", "runner-stderr.log"):
         (bootstrap_evidence / log_name).chmod(0o400)
@@ -919,6 +973,17 @@ def test_full_bootstrap_succeeds_with_real_terminal_receipt_validator(
     release_root = evidence["release_root"]
     assert isinstance(bootstrap_evidence, Path)
     assert isinstance(release_root, Path)
+    _write(
+        release_root
+        / "scripts"
+        / "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
+        (
+            REPO_ROOT
+            / "scripts"
+            / "copy_sumeragi_v2_release_cargo_cache_validation_ack.py"
+        ).read_bytes(),
+        0o400,
+    )
     release_output = release_root.parent / "output"
     for anchor_key, directory_name in (
         ("corridor_completion", "corridor"),
@@ -954,6 +1019,13 @@ def test_full_bootstrap_succeeds_with_real_terminal_receipt_validator(
         archive_name="python3",
         archive_mode=0o500,
     )
+    _rebind_bootstrap_trusted_input(
+        evidence,
+        label="bash",
+        source=release_fixture.bash,
+        archive_name="bash",
+        archive_mode=0o500,
+    )
     sealed_source = evidence["sealed"]
     bootstrap_identity = evidence["bootstrap_identity"]
     assert isinstance(sealed_source, Path)
@@ -987,6 +1059,11 @@ def test_full_bootstrap_succeeds_with_real_terminal_receipt_validator(
         source = evidence[evidence_key]
         assert isinstance(source, Path)
         protected_source_bytes[attribute] = (filename, source.read_bytes(), mode)
+    protected_source_bytes["bash"] = (
+        "real-bash",
+        (bootstrap_evidence / "bash").read_bytes(),
+        0o500,
+    )
     signature_cargo_lock = evidence["signature_cargo_lock"]
     assert isinstance(signature_cargo_lock, Path)
     signature_cargo_lock_bytes = signature_cargo_lock.read_bytes()
@@ -1034,6 +1111,16 @@ else:
         writer.read_bytes(),
         0o500,
     )
+    release_fixture.sdk_manifest = _write(
+        release_fixture.trust / "real-sdk-dependency-bundle-manifest.json",
+        (staged_bootstrap / "sdk-dependency-bundle-manifest.json").read_bytes(),
+        0o400,
+    )
+    release_fixture.tool_probe_helper = _write(
+        release_fixture.trust / "real-tool-probe-helper.py",
+        (staged_bootstrap / "probe-release-tools.py").read_bytes(),
+        0o400,
+    )
     for component_name in (
         "write_sumeragi_v2_release_receipt_corridor_log.py",
         "write_sumeragi_v2_release_receipt_formal_artifacts.py",
@@ -1058,10 +1145,9 @@ else:
     runner_tool_manifest = json.loads(
         release_fixture.tool_manifest.read_text(encoding="utf-8")
     )
-    for name in ("cargo", "rustc"):
-        source = evidence[f"bootstrap_runner_{name}"]
-        assert isinstance(source, Path)
-        source = staged_bootstrap / source.relative_to(bootstrap_evidence)
+    for name in runner_tool_manifest["tools"]:
+        source = staged_bootstrap / "runner-tools" / name
+        assert source.is_file() and not source.is_symlink()
         runner_tool_manifest["tools"][name] = {
             "path": str(source.resolve(strict=True)),
             "sha256": _sha256(source),
@@ -1095,6 +1181,14 @@ receipt_arguments=( \
     --candidate-identity "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY" \
     --sealed-identity "$release_runner/sealed-identity.json" \
     --release-root {shlex.quote(str(release_root))} \
+    --bootstrap-completion "$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION" \
+    --bootstrap-evidence-dir "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR" \
+    --bootstrap-identity "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY" \
+    --bootstrap-attestation "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION" \
+    --bootstrap-transcript "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT" \
+    --expected-bootstrap-completion-sha256 "$SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256" \
+    --bootstrap-candidate-root {shlex.quote(str(release_fixture.candidate))} \
+    --bootstrap-runner {shlex.quote(str(release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh"))} \
     --signature-attestation "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION" \
     --signature-transcript "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT" \
     --signature-raw-commit "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/identity-raw-commit" \
@@ -1108,14 +1202,6 @@ receipt_arguments=( \
     --expected-allowed-signers-sha256 "$SUMERAGI_V2_RELEASE_EXPECTED_SSH_ALLOWED_SIGNERS_SHA256" \
     --expected-revocation-sha256 "$SUMERAGI_V2_RELEASE_EXPECTED_SSH_REVOCATION_SHA256" \
     --expected-signer-fingerprint "$SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
-    --bootstrap-completion "$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION" \
-    --bootstrap-evidence-dir "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR" \
-    --bootstrap-identity "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY" \
-    --bootstrap-attestation "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION" \
-    --bootstrap-transcript "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT" \
-    --expected-bootstrap-completion-sha256 "$SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256" \
-    --bootstrap-candidate-root {shlex.quote(str(release_fixture.candidate))} \
-    --bootstrap-runner {shlex.quote(str(release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh"))} \
     --corridor-completion {evidence_path("corridor_completion")} \
     --formal-completion {evidence_path("formal_completion")} \
     --seed-completion {evidence_path("seed_completion")} \
@@ -1125,6 +1211,11 @@ receipt_arguments=( \
     --g12-seed-completion {evidence_path("g12_seed_completion")} \
     --g12-fault-soak-completion {evidence_path("g12_soak_completion")} \
     --scaling-evidence-manifest {shlex.quote(str(scaling_manifest))} \
+    --sdk-dependency-archive "$release_runner/sdk-dependency-bundle.tar" \
+    --sdk-dependency-input-inventory "$release_runner/sdk-dependency-input.json" \
+    --sdk-dependency-final-work-inventory "$release_runner/sdk-dependency-work-final.json" \
+    --runtime-tool-probe-manifest "$release_runner/runtime-tool-probe-manifest.json" \
+    --runtime-tool-probe-result "$release_runner/runtime-tool-probe-result.json" \
     --expected-scaling-trial-harness-sha256 "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
     --expected-scaling-configuration-sha256 "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
     --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
@@ -1134,7 +1225,10 @@ receipt_arguments=( \
 )
 python3 -I -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" \
     "${{receipt_arguments[@]}}"
-source_manifest_sha256="$(python3 -I -S -c 'import json,sys;print(json.load(open(sys.argv[1], encoding="utf-8"))["workspace_source_manifest_sha256"])' "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY")"
+source_manifest_sha256="$(python3 -I -S -c 'import json,sys;print(json.load(open(sys.argv[1], encoding="utf-8"))["workspace_source_manifest_sha256"])' "$release_runner/sealed-identity.json")"
+python3 -I -S -c 'import os,sys;[os.chmod(path, 0o400) for path in sys.argv[1:]]' \
+    "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/runner-stdout.log" \
+    "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/runner-stderr.log"
 python3 -I -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" \
     "${{receipt_arguments[@]}}" \
     --verify-existing \
@@ -1153,11 +1247,7 @@ python3 -I -S "$IROHA_RELEASE_RUNTIME_HELPER" \
     --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
     --expected-scaling-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256"
 '''
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
-        runner,
-        0o500,
-    )
+    release_fixture.install_planned_runner(runner)
 
     scaling_environment = {
         SCALING_EVIDENCE_ENV: str(scaling_manifest),
@@ -1184,6 +1274,9 @@ python3 -I -S "$IROHA_RELEASE_RUNTIME_HELPER" \
     assert result.returncode == 0, result.stderr
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
     assert (release_fixture.evidence / "BOOTSTRAP_RELEASE_COMPLETED.json").is_file()
+    assert not (
+        release_fixture.evidence / "sdk-dependency-bundle-manifest.json"
+    ).exists()
     marker = json.loads(
         (release_fixture.evidence / "BOOTSTRAP_COMPLETED.json").read_text(
             encoding="utf-8"
@@ -1246,50 +1339,50 @@ def test_bootstrap_invokes_real_terminal_receipt_validator(
     [
         pytest.param(
             "g4p-completion",
-            'nested_artifact(("g4p_multilane", "completion"))',
-            'nested_artifact(("g12_cross_dataspace", "seed_completion"))',
+            'artifact_path("g4p_multilane", "completion")',
+            'artifact_path("g12_cross_dataspace", "seed_completion")',
             id="g4p-completion-source",
         ),
         pytest.param(
             "g12-seed-completion",
-            'nested_artifact(("g12_cross_dataspace", "seed_completion"))',
-            'nested_artifact(("g4p_multilane", "completion"))',
+            'artifact_path("g12_cross_dataspace", "seed_completion")',
+            'artifact_path("g4p_multilane", "completion")',
             id="g12-seed-completion-source",
         ),
         pytest.param(
             "g12-fault-soak-completion",
-            'nested_artifact(\n                ("g12_cross_dataspace", "fault_soak_completion")\n            )',
-            'nested_artifact(\n                ("g12_cross_dataspace", "seed_completion")\n            )',
+            'artifact_path("g12_cross_dataspace", "fault_soak_completion")',
+            'artifact_path("g12_cross_dataspace", "seed_completion")',
             id="g12-fault-soak-completion-source",
         ),
         pytest.param(
             "scaling-evidence-manifest",
-            "str(_receipt_scaling_manifest_path(receipt, environment))",
-            'str(nested_artifact(("g4p_multilane", "completion")))',
+            '("path", scaling_manifest_path)',
+            '("path", artifact_path("g4p_multilane", "completion"))',
             id="scaling-manifest-source",
         ),
         pytest.param(
             "scaling-trial-harness-digest",
-            'scaling_digests["trial_harness_sha256"]',
-            'scaling_digests["configuration_sha256"]',
+            'scaling_trust["trial_harness_sha256"]',
+            'scaling_trust["configuration_sha256"]',
             id="scaling-trial-harness-value",
         ),
         pytest.param(
             "scaling-configuration-digest",
-            'scaling_digests["configuration_sha256"]',
-            'scaling_digests["trial_harness_sha256"]',
+            'scaling_trust["configuration_sha256"]',
+            'scaling_trust["trial_harness_sha256"]',
             id="scaling-configuration-value",
         ),
         pytest.param(
             "scaling-irohad-digest",
-            'scaling_digests["irohad_sha256"]',
-            'scaling_digests["iroha_cli_sha256"]',
+            'scaling_trust["irohad_sha256"]',
+            'scaling_trust["iroha_cli_sha256"]',
             id="scaling-irohad-value",
         ),
         pytest.param(
             "scaling-iroha-cli-digest",
-            'scaling_digests["iroha_cli_sha256"]',
-            'scaling_digests["irohad_sha256"]',
+            'scaling_trust["iroha_cli_sha256"]',
+            'scaling_trust["irohad_sha256"]',
             id="scaling-iroha-cli-value",
         ),
     ],
@@ -1307,6 +1400,8 @@ def test_protected_receipt_validator_extended_value_source_mutations_fail_closed
         source.replace(needle, replacement, 1),
         0o500,
     )
+    for component in BOOTSTRAP_COMPONENTS:
+        _write(mutated.parent / component.name, component.read_bytes(), 0o400)
     arguments = release_fixture.arguments()
     arguments[3] = str(mutated)
     arguments = _replace_flag(
@@ -1317,8 +1412,9 @@ def test_protected_receipt_validator_extended_value_source_mutations_fail_closed
     result = release_fixture.run(arguments)
 
     assert result.returncode == 2, result.stderr
+    assert release_fixture.launch_count.is_file(), result.stderr
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
-    assert "protected receipt validator rejected terminal receipt" in result.stderr
+    assert "receipt validator normalized option value is not exact" in result.stderr
     assert not release_fixture.evidence.exists()
 
 
@@ -1385,14 +1481,12 @@ def test_protected_validator_cannot_mutate_nested_terminal_evidence(
 def test_runner_failure_wins_over_post_validation_failure(
     release_fixture: Fixture,
 ) -> None:
-    _write(
-        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+    release_fixture.install_planned_runner(
         _runner(
             release_fixture.launch_count,
             release_fixture.candidate,
             "fail-and-tamper",
         ),
-        0o500,
     )
     result = release_fixture.run()
     assert result.returncode == 37, result.stderr

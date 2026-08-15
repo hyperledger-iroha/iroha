@@ -10,10 +10,10 @@ Example:
     python3 scripts/run_sumeragi_stress.py --artifacts out/stress
 
 The script does not replace the full baseline harness (see
-`scripts/run_sumeragi_baseline.py`) but focuses on fault-injection cases the
-revision-4 release gate tracks (baseline finality, queue backpressure, DA/RBC
-store pressure, and chunk loss). It purposely runs each scenario separately so
-a failure is easier to diagnose.
+`scripts/run_sumeragi_baseline.py`) but focuses on the revision-4 baseline and
+bounded transaction-queue pressure. Exact protocol-message fault cases live in
+the authenticated Sumeragi v2 runner harness rather than node-local config.
+Each scenario runs separately so a failure is easier to diagnose.
 
 NOTE: The scenarios are resource intensive; run them on a dedicated machine and
     expect the entire suite to take several minutes. Nothing in this helper
@@ -35,8 +35,6 @@ from typing import Iterable
 DEFAULT_TESTS = (
     "npos_baseline_1s_captures_metrics",
     "npos_queue_backpressure_triggers_metrics",
-    "npos_rbc_store_backpressure_records_metrics",
-    "npos_rbc_chunk_loss_fault_reports_backlog",
 )
 
 

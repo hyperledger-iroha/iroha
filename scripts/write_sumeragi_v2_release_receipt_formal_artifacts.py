@@ -189,6 +189,9 @@ def _formal_artifacts(
     sealed: dict[str, Any],
     checker_environment: dict[str, str],
     repo_root: Path,
+    bootstrap_runner_tools: dict[str, Any],
+    corridor_fields: dict[str, str],
+    private_build_roots_available: bool,
 ) -> tuple[
     PathContract,
     PathContract,
@@ -418,18 +421,90 @@ def _formal_artifacts(
         or toolchain["tlaps_threads"] != "1"
     ):
         raise ReceiptError("formal toolchain does not describe the pinned release profile")
+    runtime_root = repo_root.parent / "runtime"
+    expected_tool_paths = {
+        "java": runtime_root / "java-runtime" / "bin" / "java",
+        "tlapm": runtime_root / "tlapm-distribution" / "bin" / "tlapm",
+        "tla2tools": runtime_root / "tla2tools.jar",
+        "verus": runtime_root / "verus-distribution" / "verus",
+        "cargo_verus": runtime_root / "verus-distribution" / "cargo-verus",
+    }
+    runtime_inventory = _bounded_evidence_snapshot(
+        Path(corridor_fields["runtime_inventory_path"]),
+        "formal private runtime inventory",
+        maximum_bytes=_MAX_CARGO_CACHE_INPUT_INVENTORY_BYTES,
+        expected_mode=0o400,
+        allowed_owners={os.geteuid()},
+        require_single_link=True,
+    )
+    if runtime_inventory.sha256 != _require_digest(
+        corridor_fields["runtime_inventory_sha256"],
+        "formal private runtime inventory digest",
+    ):
+        raise ReceiptError("formal private runtime inventory binding is not exact")
+    runtime_document = _decode_canonical_json(
+        runtime_inventory.data, "formal private runtime inventory"
+    )
+    runtime_records = (
+        runtime_document.get("records")
+        if isinstance(runtime_document, dict)
+        else None
+    )
+    tla2tools_records = (
+        [
+            record
+            for record in runtime_records
+            if isinstance(record, dict)
+            and record.get("path") == "tla2tools.jar"
+            and record.get("kind") == "file"
+        ]
+        if isinstance(runtime_records, list)
+        else []
+    )
+    if len(tla2tools_records) != 1:
+        raise ReceiptError("formal TLA2Tools runtime record is not exact")
+    expected_tool_digests = {
+        "tla2tools": _require_digest(
+            tla2tools_records[0].get("sha256"),
+            "formal TLA2Tools runtime digest",
+        ),
+    }
+    for tool, runner_name in (
+        ("java", "java"),
+        ("tlapm", "tlapm"),
+        ("verus", "verus"),
+        ("cargo_verus", "cargo-verus"),
+    ):
+        runner_record = bootstrap_runner_tools.get(runner_name)
+        if (
+            not isinstance(runner_record, dict)
+            or runner_record.get("archive_name")
+            != f"runner-tools/{runner_name}"
+            or runner_record.get("alias_name") != runner_name
+        ):
+            raise ReceiptError(
+                f"formal {tool} is not an authenticated bootstrap runner tool"
+            )
+        expected_tool_digests[tool] = runner_record.get("sha256")
     for tool in ("java", "tlapm", "tla2tools", "verus", "cargo_verus"):
         raw_path = Path(toolchain[f"{tool}_path"])
-        if not raw_path.is_absolute():
-            raise ReceiptError(f"formal {tool} path is not absolute")
+        digest = toolchain[f"{tool}_sha256"]
+        if (
+            not raw_path.is_absolute()
+            or raw_path != expected_tool_paths[tool]
+            or not _DIGEST_RE.fullmatch(digest)
+            or digest != expected_tool_digests[tool]
+        ):
+            raise ReceiptError(f"formal {tool} tool binding is not exact")
+        if not private_build_roots_available:
+            continue
         tool_snapshot = _bounded_evidence_snapshot(
             raw_path,
             f"formal {tool} tool",
             maximum_bytes=_MAX_TOOL_BYTES,
             require_single_link=False,
         )
-        digest = toolchain[f"{tool}_sha256"]
-        if not _DIGEST_RE.fullmatch(digest) or tool_snapshot.sha256 != digest:
+        if tool_snapshot.sha256 != digest:
             raise ReceiptError(f"formal {tool} tool digest mismatch")
     log_lines = _decode_lf_text(gate_log, "formal gate log").splitlines()
     if (

@@ -1144,6 +1144,10 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
             "exact Decision Fetch coalesce validates without replacing the inode"
         );
     }
+    assert!(
+        crate::sumeragi::status::v2_status().is_none(),
+        "Decision Fetch owner construction must remain unpublished"
+    );
     {
         let runtime_verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs)
             .expect("verify the clean recovered Fetch executor context");
@@ -1195,9 +1199,11 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         assert!(!output_guard.restart_required());
         planner_io.detach(&mut services);
     }
-    assert!(
-        crate::sumeragi::status::v2_status().is_none(),
-        "Decision Fetch owner construction must remain unpublished"
+    assert_eq!(
+        crate::sumeragi::status::v2_status()
+            .expect("the explicitly published executor adapter remains visible")
+            .height,
+        wire_context.height
     );
     crate::sumeragi::status::clear_v2_status();
 }
@@ -2572,7 +2578,7 @@ fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
 }
 #[test]
 fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
-    let adapter = include_str!("../v2.rs");
+    let adapter = reviewed_v2_adapter_source_for_test();
     let body_store_source = include_str!("../v2_body_store.rs");
     let runtime = include_str!("../v2_runtime.rs");
     let replay = include_str!("../v2_lifecycle_replay_authority.rs");
