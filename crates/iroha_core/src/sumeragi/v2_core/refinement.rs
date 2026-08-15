@@ -7056,9 +7056,7 @@ macro_rules! volatile_summary_well_formed_body {
             && $summary.formed_timeouts <= 2u64
             // `OutboundControlClass` has seven exhaustive variants.
             && $summary.outbound_control <= 7u64
-            // At most one live PrepareQC owns the current body pipeline.
-            // Highest and locked add at most two durable references while a
-            // strictly newer observation is awaiting its WAL acknowledgement.
+            // One live PrepareQC plus durable high/lock bounds both caches.
             && $summary.pending_prepare <= 1u64
             && $summary.pending_prepare <= $summary.known_prepare
             && $summary.known_prepare <= 3u64

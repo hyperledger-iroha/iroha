@@ -4252,3 +4252,307 @@ ingress.reserved_body_available = Some(reservation.clone());
             f"extra={sorted(observed_capacity_seal_keys - expected_capacity_seal_keys)}"
         )
     return errors
+
+
+def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
+    """Keep deductive and finite specs on one canonical state/fairness surface."""
+
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    expected = {
+        "AsyncBaseInit": "AsyncBaseInitAt(ContextRecord(0, <<>>))",
+        "AsyncInitAt": "AsyncBaseInitAt(initialContext) /\\ ViewDomain = Nat",
+        "AsyncInit": "AsyncInitAt(ContextRecord(0, <<>>))",
+        "AsyncFiniteInitAt": (
+            "AsyncBaseInitAt(initialContext) /\\ ViewDomain = FiniteViews"
+        ),
+        "AsyncFiniteInit": "AsyncFiniteInitAt(ContextRecord(0, <<>>))",
+        "AsyncAllVars": (
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, "
+            "AsyncProducerVars, asyncFixedCorridorDeadlines, "
+            "asyncServeProducerEpisodeDue>>"
+        ),
+        "AsyncSpec": "AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
+        "AsyncSpecAt": (
+            "AsyncInitAt(initialContext) /\\ [][AsyncNext]_AsyncAllVars "
+            "/\\ AsyncFairnessAt(initialContext)"
+        ),
+        "AsyncFiniteSpec": (
+            "AsyncFiniteInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness"
+        ),
+        "AsyncFiniteSpecAt": (
+            "AsyncFiniteInitAt(initialContext) "
+            "/\\ [][AsyncNext]_AsyncAllVars "
+            "/\\ AsyncFairnessAt(initialContext)"
+        ),
+        "AsyncInstallGenerationBudget": (
+            "\\A request \\in pendingInstallTC: "
+            "(StrictSameRoundTcUpgrade(request.node, request.tc) "
+            "=> GenerationCanIncrement(generation[request.node]))"
+        ),
+        "AsyncRepresentativeLiveConfiguration": "N >= 4",
+        "AsyncLiveSpecAt": (
+            "AsyncRepresentativeLiveConfiguration /\\ AsyncSpecAt(initialContext)"
+        ),
+        "AsyncFiniteLiveSpec": (
+            "AsyncRepresentativeLiveConfiguration /\\ AsyncFiniteSpec"
+        ),
+        "AsyncFairness": "AsyncFairnessAt(ContextRecord(0, <<>>))",
+    }
+    errors: list[str] = []
+    if path.is_file():
+        source = path.read_text(encoding="utf-8")
+        for symbol, exact_body in expected.items():
+            extracted = _top_level_operator_body(source, symbol)
+            if extracted is None:
+                errors.append(f"{path}: missing required asynchronous operator {symbol}")
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{path}:{line}: {symbol} must equal only {exact_body!r}; "
+                    f"found {normalized!r}"
+                )
+
+        stripped = strip_tla_comments(source)
+        for forbidden in (
+            "AsyncTlcAllVars",
+            "AsyncTlcFairnessAt",
+            "AsyncTlcFairness",
+        ):
+            for match in re.finditer(rf"\b{re.escape(forbidden)}\b", stripped):
+                line = stripped.count("\n", 0, match.start()) + 1
+                errors.append(
+                    f"{path}:{line}: TLC-only duplicate {forbidden} is prohibited; "
+                    "finite and deductive specs must share AsyncAllVars and "
+                    "AsyncFairnessAt"
+                )
+
+        public_fairness = _top_level_operator_body(
+            source, "AsyncFairnessAt", preserve_string_contents=True
+        )
+        if public_fairness is None:
+            errors.append(f"{path}: missing required asynchronous operator AsyncFairnessAt")
+        else:
+            public_body, public_line = public_fairness
+            public_subscripts = set(
+                re.findall(r"\bWF_([A-Za-z][A-Za-z0-9_]*)\s*\(", public_body)
+            )
+            if public_subscripts != {"AsyncAllVars"}:
+                errors.append(
+                    f"{path}:{public_line}: AsyncFairnessAt may use only the "
+                    f"public AsyncAllVars subscript; found {sorted(public_subscripts)}"
+                )
+
+    for module in ("SumeragiV2LivenessProofs", "SumeragiV2AsyncLivenessProofs"):
+        proof_path = formal_dir / f"{module}.tla"
+        if not proof_path.is_file():
+            continue
+        stripped = strip_tla_comments(proof_path.read_text(encoding="utf-8"))
+        for match in re.finditer(r"\bAsyncFiniteSpec\b", stripped):
+            line = stripped.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{proof_path}:{line}: deductive liveness proofs must use "
+                "unbounded AsyncSpec, not the finite TLC instance"
+            )
+    return errors
+
+
+def _acyclic_liveness_debt_topology_errors(formal_dir: Path) -> list[str]:
+    """Keep retained-lock proof leaves strictly below the async debt shard."""
+
+    vocabulary_module = "SumeragiV2LivenessProofs"
+    lower_consumers = (
+        "SumeragiV2Stage2BusyRankScratch",
+        "SumeragiV2Stage3CursorKernelScratch",
+        "SumeragiV2Stage6CapacityScratch",
+        "SumeragiV2LockedBodyProposalActionProofs",
+    )
+    historical_kernel_module = "SumeragiV2AsyncHistoricalRecoveryLivenessProofs"
+    topology_modules = (
+        vocabulary_module,
+        *lower_consumers,
+        historical_kernel_module,
+        ASYNC_LIVENESS_DEBT_SHARD,
+    )
+    topology_present = any(
+        (formal_dir / f"{module}.tla").is_file()
+        for module in (
+            *lower_consumers,
+            historical_kernel_module,
+            ASYNC_LIVENESS_DEBT_SHARD,
+        )
+    )
+    if not topology_present and not (formal_dir / "proof_coverage.json").is_file():
+        return []
+
+    errors: list[str] = []
+    sources: dict[str, str] = {}
+    for module in topology_modules:
+        module_path = formal_dir / f"{module}.tla"
+        if not module_path.is_file():
+            errors.append(
+                f"missing required acyclic liveness-debt topology module "
+                f"{module}.tla"
+            )
+            continue
+        sources[module] = module_path.read_text(encoding="utf-8")
+
+    expected_extends = {
+        vocabulary_module: (
+            "SumeragiV2AsyncNetwork",
+            "SumeragiV2Proofs",
+        ),
+        **{
+            module: ("SumeragiV2AsyncTimeoutOwnershipProofs",)
+            for module in lower_consumers
+        },
+        historical_kernel_module: (
+            "SumeragiV2AsyncTimeoutOwnershipProofs",
+            "TLAPS",
+        ),
+    }
+    forbidden_dependencies = (
+        ASYNC_LIVENESS_DEBT_SHARD,
+        ASYNC_LIVENESS_FACADE,
+    )
+    for module, expected in expected_extends.items():
+        source = sources.get(module)
+        if source is None:
+            continue
+        actual = _module_extends(source)
+        if actual != expected:
+            errors.append(
+                f"{module}.tla must EXTEND exactly {list(expected)} to remain "
+                f"below the proofless async liveness debt; found {list(actual)}"
+            )
+        stripped = strip_tla_comments(source)
+        for forbidden in forbidden_dependencies:
+            if re.search(rf"\b{re.escape(forbidden)}\b", stripped):
+                errors.append(
+                    f"{module}.tla must not depend on {forbidden}; retained-lock "
+                    "proof leaves must remain below their async debt consumers"
+                )
+
+    temporal_root = "SumeragiV2AsyncTemporalClosureProofs"
+    temporal_root_path = formal_dir / f"{temporal_root}.tla"
+    if temporal_root_path.is_file():
+        import_graph = {
+            path.stem: _module_extends(path.read_text(encoding="utf-8"))
+            for path in sorted(formal_dir.glob("*.tla"))
+        }
+        for forbidden in forbidden_dependencies:
+            queue: list[tuple[str, tuple[str, ...]]] = [
+                (temporal_root, (temporal_root,))
+            ]
+            visited = {temporal_root}
+            found_path: tuple[str, ...] | None = None
+            while queue and found_path is None:
+                module, module_path = queue.pop(0)
+                for dependency in import_graph.get(module, ()):
+                    dependency_path = (*module_path, dependency)
+                    if dependency == forbidden:
+                        found_path = dependency_path
+                        break
+                    if dependency in import_graph and dependency not in visited:
+                        visited.add(dependency)
+                        queue.append((dependency, dependency_path))
+            if found_path is not None:
+                errors.append(
+                    f"{temporal_root}.tla must not transitively depend on "
+                    f"{forbidden}; found import path {' -> '.join(found_path)}"
+                )
+
+    expected_operator_bodies = {
+        "StableAvailableRetainedLock": r"""
+            /\ gst
+            /\ node \in AsyncCurrentResponsiveVoters \cap up
+            /\ lockedRound \in Views
+            /\ subject \in Subjects
+            /\ lockRank[node] = lockedRound
+            /\ lockSubject[node] = subject
+            /\ BodyHeldBy(durableBodies, node, context, lockedRound, subject)
+            /\ RetainedLockedBodyHeldBy(
+                 retainedLockedBodies, node, context, subject)
+        """,
+        "LockedBodyCommittedInOldRound": r"""
+            \E qc \in commitQCs:
+              /\ qc.context = context
+              /\ qc.phase = "Commit"
+              /\ qc.view = lockedRound
+              /\ qc.subject = subject
+              /\ node \in qc.signers
+        """,
+        "LockedBodyReproposedUnchangedLater": r"""
+            \E envelope \in proposalNetwork:
+              /\ envelope.proposal.context = context
+              /\ envelope.proposal.view > lockedRound
+              /\ envelope.proposal.subject = subject
+        """,
+        "LockedBodyLegitimatelyDecidedOrSuperseded": r"""
+            \/ NodeHasDecision(node)
+            \/ /\ lockRank[node] > lockedRound
+               /\ \E qc \in prepareQCs:
+                    /\ qc.context = context
+                    /\ qc.phase = "Prepare"
+                    /\ qc.view = lockRank[node]
+                    /\ qc.subject = lockSubject[node]
+        """,
+        "LockedBodyReproposalOutcome": r"""
+            \/ LockedBodyCommittedInOldRound(node, lockedRound, subject)
+            \/ LockedBodyReproposedUnchangedLater(lockedRound, subject)
+            \/ LockedBodyLegitimatelyDecidedOrSuperseded(
+                 node, lockedRound, subject)
+        """,
+        "LockedBodyReproposalProgressProperty": r"""
+            specification
+              => \A node \in ValidatorIds, lockedRound \in Views,
+                    subject \in Subjects:
+                   StableAvailableRetainedLock(node, lockedRound, subject)
+                     ~> LockedBodyReproposalOutcome(node, lockedRound, subject)
+        """,
+    }
+    all_sources = {
+        path.stem: path.read_text(encoding="utf-8")
+        for path in sorted(formal_dir.glob("*.tla"))
+    }
+    vocabulary_source = sources.get(vocabulary_module)
+    for symbol, expected_body in expected_operator_bodies.items():
+        providers = sorted(
+            module
+            for module, source in all_sources.items()
+            if _top_level_operator_body(source, symbol) is not None
+        )
+        if providers != [vocabulary_module]:
+            errors.append(
+                f"acyclic liveness vocabulary operator {symbol} must have "
+                f"exactly one lower provider {vocabulary_module}.tla; found "
+                f"{[provider + '.tla' for provider in providers]}"
+            )
+        if vocabulary_source is None:
+            continue
+        extracted = _top_level_operator_body(
+            vocabulary_source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        expected_normalized = " ".join(expected_body.split())
+        if normalized != expected_normalized:
+            errors.append(
+                f"{vocabulary_module}.tla:{line}: {symbol} must equal only "
+                f"{expected_normalized!r}; found {normalized!r}"
+            )
+
+    debt_source = sources.get(ASYNC_LIVENESS_DEBT_SHARD)
+    if debt_source is not None:
+        for symbol in expected_operator_bodies:
+            if _top_level_operator_body(debt_source, symbol) is not None:
+                errors.append(
+                    f"{ASYNC_LIVENESS_DEBT_SHARD}.tla must not redeclare lower "
+                    f"liveness vocabulary operator {symbol}"
+                )
+    return errors

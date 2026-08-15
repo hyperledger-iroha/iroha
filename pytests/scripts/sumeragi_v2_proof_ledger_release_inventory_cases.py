@@ -443,7 +443,7 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 856 tests",
+            "must contain exactly 857 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -509,9 +509,9 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "canonical module/test inventory SHA-256",
         ),
         (
+            "readonly expected_production_liveness_test_count=857",
             "readonly expected_production_liveness_test_count=856",
-            "readonly expected_production_liveness_test_count=855",
-            "production liveness source count must be sealed as 856",
+            "production liveness source count must be sealed as 857",
         ),
         (
             "  sumeragi::v2_core::tests\n"
@@ -1232,27 +1232,27 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("formal/sumeragi_v2/README.md"),
-            "current\ninventory to 856 tests across 40 modules.\n"
+            "current\ninventory to 857 tests across 40 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 88 legs.",
-            "current\ninventory to 856 tests across 40 modules.\n"
+            "current\ninventory to 857 tests across 40 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 87 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
-            "current 856-test, 40-module inventory. The complete source-sealed\n"
+            "current 857-test, 40-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 88 legs",
-            "current 856-test, 40-module inventory. The complete source-sealed\n"
+            "current 857-test, 40-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 87 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current\nsource-bound inventory to 856 exact tests across 40 modules and 88 pre-network\n"
+            "current\nsource-bound inventory to 857 exact tests across 40 modules and 88 pre-network\n"
             "legs.",
-            "current\nsource-bound inventory to 856 exact tests across 40 modules and 87 pre-network\n"
+            "current\nsource-bound inventory to 857 exact tests across 40 modules and 87 pre-network\n"
             "legs.",
         ),
         (
@@ -1334,9 +1334,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            "_PRODUCTION_TEST_COUNT = 857",
             "_PRODUCTION_TEST_COUNT = 856",
-            "_PRODUCTION_TEST_COUNT = 855",
-            "production test count must equal the exact shell inventory count 856",
+            "production test count must equal the exact shell inventory count 857",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -1398,8 +1398,8 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 135),',
             '("production-v2-worker", "sumeragi::v2_worker::tests", 134),',
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 133),',
             "production module receipt tuple must equal the exact shell",
         ),
         (

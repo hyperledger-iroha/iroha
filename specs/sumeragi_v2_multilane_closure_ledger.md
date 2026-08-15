@@ -52,8 +52,8 @@ execution or release receipts.
 
 ## 2026-08-14 mutable-development closure snapshot
 
-- The bound inventory contains exactly 856 production tests across 40 modules,
-  including 436 source-sealed ownership/regression names, plus 525 G-UNIT
+- The bound inventory contains exactly 857 production tests across 40 modules,
+  including 438 source-sealed ownership/regression names, plus 525 G-UNIT
   tests and 55 grouped Native negative controls. Its source-sealed pre-network
   corridor contains 88 legs. These are source counts, not claims that any suite
   was executed for this reconciliation.
@@ -1792,9 +1792,10 @@ current hash is a mutable-development fact, not a release anchor.
 The receipt-required
 `merge_share_transport_rejects_omission_nonleader_body_and_legacy_version`
 regression rejects a legacy merge-share version while leaving the signing guard
-unauthorized. It replaced one required release-corridor selector, preserving the
-856-production-test and 525-G-UNIT-test inventory counts; source binding is not
-an execution receipt.
+unauthorized. It replaced one required release-corridor selector without changing
+the then-current count; the autonomous-retirement regression added here raises
+the current production inventory to 857 tests while the G-UNIT inventory remains
+525 tests. Source binding is not an execution receipt.
 `KuraReplicaAdvertV1` is explicit and clean-break. Its nested runtime policy
 configures and validates TTL, refresh cadence, evictable window, replica floor,
 and checked registry geometry. The direct authenticated ingress and the exact
@@ -1860,7 +1861,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 856 tests across 40 modules, including 436
+inventory contains exactly 857 tests across 40 modules, including 438
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -2110,7 +2111,7 @@ TODOs remain out of scope as recorded below.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 856-production-test,
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 857-production-test,
   525-G-UNIT-test, and 55-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not

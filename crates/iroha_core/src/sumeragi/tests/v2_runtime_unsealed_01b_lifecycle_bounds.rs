@@ -850,8 +850,8 @@
                 next_tag,
                 CommandClass::Progress,
                 RuntimeFreshRootKind::HistoricalLockedRetransmit,
-            b"successor-generation exact request",
-        )
+                b"successor-generation exact request",
+            )
             .expect("round-tag reclamation reopens the same derived cache geometry");
         assert!(
             successor.lifecycle_ordinal() > last_ordinal.expect("cache was filled"),
