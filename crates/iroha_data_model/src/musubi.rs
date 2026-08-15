@@ -65,9 +65,9 @@ pub const MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1: u64 = 64 * 1024;
 /// The semantic release and exact verification lock share this provider-memory corridor; the
 /// artifact descriptor uses [`MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1`].
 pub const MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1: u64 = 2 * 1024 * 1024;
-// Norito charges nested length-delimited bodies, container reservations, and any whole-input
-// realignment copy cumulatively. The producer-reachable 2,056,570-byte dense-lock fixture needs
-// 43 MiB on a misaligned slice; the 48 MiB corridor retains 5 MiB of reviewed headroom.
+// Norito charges nested length-delimited bodies, container reservations, and any required
+// whole-input realignment copy cumulatively. The 48 MiB corridor is regression-tested against the
+// producer-reachable 2,056,570-byte dense-lock fixture with at least 5 MiB of reviewed headroom.
 const MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1: usize =
     24 * MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize;
 const MUSUBI_ARTIFACT_DESCRIPTOR_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(

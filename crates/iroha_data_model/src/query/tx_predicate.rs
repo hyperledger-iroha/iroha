@@ -1219,6 +1219,20 @@ fn write_named_predicate_to<T: JsonSerialize>(
     )
 }
 #[cfg(feature = "json")]
+fn write_named_display_predicate_to<T: core::fmt::Display>(
+    operation: &str,
+    field: &str,
+    value: &T,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    write_binary_predicate_to(
+        operation,
+        out,
+        |out| json::write_json_string_to(field, out),
+        |out| json::write_json_display_to(value, out),
+    )
+}
+#[cfg(feature = "json")]
 fn write_json_slice_to<T: JsonSerialize>(
     values: &[T],
     out: &mut dyn json::JsonWriteSink,
@@ -1230,6 +1244,23 @@ fn write_json_slice_to<T: JsonSerialize>(
             out.push(',')?;
         }
         value.json_serialize_to(out)?;
+    }
+    out.push(']')?;
+    out.end_container();
+    Ok(())
+}
+#[cfg(feature = "json")]
+fn write_json_display_slice_to<T: core::fmt::Display>(
+    values: &[T],
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    out.begin_container()?;
+    out.push('[')?;
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            out.push(',')?;
+        }
+        json::write_json_display_to(value, out)?;
     }
     out.push(']')?;
     out.end_container();
@@ -1282,19 +1313,19 @@ fn write_committed_tx_predicate_to(
         P::Not(inner) => write_predicate_expression_to("not", out, |out| {
             write_committed_tx_predicate_to(inner, out)
         }),
-        P::BlockEq(value) => write_named_predicate_to("eq", "block_hash", value, out),
-        P::BlockNe(value) => write_named_predicate_to("ne", "block_hash", value, out),
+        P::BlockEq(value) => write_named_display_predicate_to("eq", "block_hash", value, out),
+        P::BlockNe(value) => write_named_display_predicate_to("ne", "block_hash", value, out),
         P::BlockIn(values) => write_binary_predicate_to(
             "in",
             out,
             |out| json::write_json_string_to("block_hash", out),
-            |out| write_json_slice_to(values, out),
+            |out| write_json_display_slice_to(values, out),
         ),
         P::BlockNin(values) => write_binary_predicate_to(
             "nin",
             out,
             |out| json::write_json_string_to("block_hash", out),
-            |out| write_json_slice_to(values, out),
+            |out| write_json_display_slice_to(values, out),
         ),
         P::BlockExists(value) => write_named_predicate_to("exists", "block_hash", value, out),
         P::AuthorityEq(value) => write_named_predicate_to("eq", "authority", value, out),
@@ -1330,19 +1361,19 @@ fn write_committed_tx_predicate_to(
             |out| write_json_slice_to(values, out),
         ),
         P::TsExists(value) => write_named_predicate_to("exists", "timestamp_ms", value, out),
-        P::EntryEq(value) => write_named_predicate_to("eq", "entrypoint_hash", value, out),
-        P::EntryNe(value) => write_named_predicate_to("ne", "entrypoint_hash", value, out),
+        P::EntryEq(value) => write_named_display_predicate_to("eq", "entrypoint_hash", value, out),
+        P::EntryNe(value) => write_named_display_predicate_to("ne", "entrypoint_hash", value, out),
         P::EntryIn(values) => write_binary_predicate_to(
             "in",
             out,
             |out| json::write_json_string_to("entrypoint_hash", out),
-            |out| write_json_slice_to(values, out),
+            |out| write_json_display_slice_to(values, out),
         ),
         P::EntryNin(values) => write_binary_predicate_to(
             "nin",
             out,
             |out| json::write_json_string_to("entrypoint_hash", out),
-            |out| write_json_slice_to(values, out),
+            |out| write_json_display_slice_to(values, out),
         ),
         P::EntryExists(value) => write_named_predicate_to("exists", "entrypoint_hash", value, out),
         P::ResultEq(value) => write_named_predicate_to("eq", "result_ok", value, out),

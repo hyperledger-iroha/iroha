@@ -100,7 +100,7 @@ mod tests {
     }
     fn contract_address() -> ContractAddress {
         ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &account(0xC1),

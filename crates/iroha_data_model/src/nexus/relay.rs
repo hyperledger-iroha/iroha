@@ -1843,7 +1843,7 @@ mod tests {
             .nexus_fee_receipts
             .push(NexusFeeReceipt {
                 version: 1,
-                source_id: [0x11; 32],
+                source_id: [0xA5; 32],
                 debit_source: FeeDebitSource::Account(checked_account_id()),
                 fee_asset_id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
                     .parse()

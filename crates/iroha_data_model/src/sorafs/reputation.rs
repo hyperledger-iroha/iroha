@@ -2617,20 +2617,26 @@ impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
             ));
         }
         let zero = ReputationJournalEventIdV1::ZERO;
-        let fields: [&dyn norito::core::NoritoSerialize; 10] = [
+        let leading_fields: [&dyn norito::core::NoritoSerialize; 6] = [
             &self.0.version,
             &zero,
             &self.0.source_id,
             &self.0.source_revision,
             &self.0.predecessor_event_id,
             &self.0.provider_id,
-            &self.0.authority_policy_digest,
+        ];
+        let trailing_fields: [&dyn norito::core::NoritoSerialize; 3] = [
             &self.0.recorded_by,
             &self.0.source_time_unix_ms,
             &self.0.payload,
         ];
         let mut scratch = norito::core::DeriveSmallBuf::new();
-        for field in fields {
+        for field in leading_fields {
+            norito::core::write_len_prefixed(writer, field, &mut scratch)?;
+        }
+        norito::core::write_len(writer, self.0.authority_policy_digest.len() as u64)?;
+        writer.write_all(&self.0.authority_policy_digest)?;
+        for field in trailing_fields {
             norito::core::write_len_prefixed(writer, field, &mut scratch)?;
         }
         Ok(())
@@ -2640,19 +2646,30 @@ impl norito::core::NoritoSerialize for ReputationJournalEventIdSource<'_> {
             return None;
         }
         let zero = ReputationJournalEventIdV1::ZERO;
-        let fields: [&dyn norito::core::NoritoSerialize; 10] = [
+        let leading_fields: [&dyn norito::core::NoritoSerialize; 6] = [
             &self.0.version,
             &zero,
             &self.0.source_id,
             &self.0.source_revision,
             &self.0.predecessor_event_id,
             &self.0.provider_id,
-            &self.0.authority_policy_digest,
+        ];
+        let trailing_fields: [&dyn norito::core::NoritoSerialize; 3] = [
             &self.0.recorded_by,
             &self.0.source_time_unix_ms,
             &self.0.payload,
         ];
-        fields.into_iter().try_fold(0usize, |total, field| {
+        let leading_len = leading_fields.into_iter().try_fold(0usize, |total, field| {
+            let field_len = field.encoded_len_exact()?;
+            total
+                .checked_add(norito::core::len_prefix_len(field_len))?
+                .checked_add(field_len)
+        })?;
+        let digest_len = self.0.authority_policy_digest.len();
+        let leading_len = leading_len
+            .checked_add(norito::core::len_prefix_len(digest_len))?
+            .checked_add(digest_len)?;
+        trailing_fields.into_iter().try_fold(leading_len, |total, field| {
             let field_len = field.encoded_len_exact()?;
             total
                 .checked_add(norito::core::len_prefix_len(field_len))?

@@ -1559,21 +1559,48 @@ fn canonical_lock_decoder_accepts_large_aligned_and_misaligned_metadata() {
     misaligned_storage[misaligned_offset..misaligned_offset + bytes.len()].copy_from_slice(&bytes);
     let misaligned = &misaligned_storage[misaligned_offset..misaligned_offset + bytes.len()];
     assert_ne!(misaligned.as_ptr() as usize % alignment, 0);
-    let measured_minimum_limits =
-        norito::DecodeLimits::new(1_024, maximum, 8_000_000, 43 * 1024 * 1024, 64);
+    let measurement_limits = norito::DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+    );
+    let (decoded, usage) = norito::core::with_decode_limits_measured(measurement_limits, || {
+        decode_canonical_bundle_file_v1(
+            misaligned,
+            MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
+            MUSUBI_VERIFICATION_LOCK_DECODE_LIMITS_V1,
+            MusubiVerificationLockV1::validate,
+            "dense-lock measured allocation fixture",
+        )
+    });
+    assert_eq!(
+        decoded.expect("measure the large lock's exact allocation charge"),
+        lock
+    );
+    let exact_allocation = usage.total_allocated_bytes();
+    assert!(exact_allocation > 0, "the dense lock must charge allocations");
+    let exact_limits =
+        norito::DecodeLimits::new(1_024, maximum, 8_000_000, exact_allocation, 64);
     assert_eq!(
         decode_canonical_bundle_file_v1(
             misaligned,
             MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
-            measured_minimum_limits,
+            exact_limits,
             MusubiVerificationLockV1::validate,
             "dense-lock measured allocation fixture",
         )
-        .expect("43 MiB decodes the same large lock from a misaligned slice"),
+        .expect("the exact measured allocation budget decodes the large lock"),
         lock
     );
-    let below_measured_minimum_limits =
-        norito::DecodeLimits::new(1_024, maximum, 8_000_000, 42 * 1024 * 1024, 64);
+    let below_measured_minimum_limits = norito::DecodeLimits::new(
+        1_024,
+        maximum,
+        8_000_000,
+        exact_allocation - 1,
+        64,
+    );
     assert!(
         decode_canonical_bundle_file_v1(
             misaligned,
@@ -1583,12 +1610,17 @@ fn canonical_lock_decoder_accepts_large_aligned_and_misaligned_metadata() {
             "dense-lock measured allocation fixture",
         )
         .is_err(),
-        "42 MiB is below the measured misaligned dense-lock decode requirement"
+        "one byte below the measured allocation requirement must fail"
     );
     assert_eq!(
         MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1,
         48 * 1024 * 1024,
-        "the production corridor retains 5 MiB above the measured minimum"
+        "pin the reviewed production allocation corridor"
+    );
+    assert!(
+        MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1 - exact_allocation
+            >= 5 * 1024 * 1024,
+        "the production corridor retains at least 5 MiB above the measured minimum"
     );
     assert_eq!(
         MusubiVerificationLockV1::decode_canonical_bundle_file(misaligned)

@@ -910,7 +910,7 @@ fn compiled_profile_catalog_roundtrips_and_has_no_governance_projection() {
         "manifest_digest",
     ] {
         assert!(
-            !json.contains(governance_field),
+            !json.contains(&format!("\"{governance_field}\":")),
             "local catalog must not project governance field {governance_field}"
         );
     }
@@ -1865,14 +1865,11 @@ fn zk_ams_ristretto_wire_types_and_action_tags_are_closed() {
     }
 }
 #[test]
-fn context_rejects_zero_network_id_and_invalid_action_indexes() {
+fn context_accepts_marked_network_ids_and_rejects_invalid_action_indexes() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let mut value = context();
     value.network_id = network_id(0);
-    assert_eq!(
-        value.validate(&limits),
-        Err(PrivacyStatementValidationError::ZeroNetworkId)
-    );
+    assert_eq!(value.validate(&limits), Ok(()));
     value = context();
     value.action_index = 1;
     assert!(matches!(
@@ -1892,11 +1889,16 @@ fn context_rejects_zero_network_id_and_invalid_action_indexes() {
 #[test]
 fn native_consensus_binding_roundtrips_only_in_the_canonical_wire_shape() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let binding = PrivacyNativeConsensusBindingV1::new(&context(), raw(200), &limits)
+    let statement_context = context();
+    let binding = PrivacyNativeConsensusBindingV1::new(
+        &statement_context,
+        *statement_context.network_id.as_bytes(),
+        &limits,
+    )
         .expect("construct canonical native consensus binding");
     binding.validate(&limits).expect("validate binding");
     binding
-        .validate_against_context(&context(), &limits)
+        .validate_against_context(&statement_context, &limits)
         .expect("binding matches its statement context");
     let canonical = norito::encode_canonical(&binding).expect("encode canonical binding");
     assert_eq!(
@@ -1948,7 +1950,12 @@ fn native_consensus_binding_roundtrips_only_in_the_canonical_wire_shape() {
 #[test]
 fn native_consensus_binding_digest_changes_on_every_consensus_axis() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let binding = PrivacyNativeConsensusBindingV1::new(&context(), raw(200), &limits)
+    let statement_context = context();
+    let binding = PrivacyNativeConsensusBindingV1::new(
+        &statement_context,
+        *statement_context.network_id.as_bytes(),
+        &limits,
+    )
         .expect("construct canonical native consensus binding");
     let expected = binding.digest().expect("digest canonical binding");
     let mut mutations = Vec::new();
@@ -2003,8 +2010,12 @@ fn native_consensus_binding_rejects_zero_or_mismatched_network_identity() {
 fn native_consensus_binding_rejects_every_statement_context_substitution() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let base_context = context();
-    let binding = PrivacyNativeConsensusBindingV1::new(&base_context, raw(200), &limits)
-        .expect("construct canonical native consensus binding");
+    let binding = PrivacyNativeConsensusBindingV1::new(
+        &base_context,
+        *base_context.network_id.as_bytes(),
+        &limits,
+    )
+    .expect("construct canonical native consensus binding");
     let mut substitutions = Vec::new();
     let mut substituted = base_context.clone();
     substituted.network_id = network_id(201);

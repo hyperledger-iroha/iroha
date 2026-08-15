@@ -776,7 +776,7 @@ mod tests {
     use iroha_crypto::{Hash, KeyPair, Signature};
     use nonzero_ext::nonzero;
     use norito::{
-        codec::{DecodeAll as _, Encode as _, decode_adaptive, encode_with_header_flags},
+        codec::{DecodeAll as _, decode_adaptive, encode_with_header_flags},
         core::NoritoSerialize,
     };
     struct SamplePayload {

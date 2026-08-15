@@ -2111,7 +2111,10 @@ mod tests {
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
             trigger_completions: Vec::new(),
-            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot {
+                version: 1,
+                entries: Vec::new(),
+            },
         };
         let bytes = omitted_lane_finality.encode();
         let mut cursor = bytes.as_slice();

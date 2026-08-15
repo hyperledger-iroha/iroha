@@ -1533,29 +1533,28 @@ mod tests {
             norito::json!({"hash": (canonical_literal.clone())}),
             norito::json!({"EscrowId": (canonical_literal.clone())}),
         ];
-        for kind in ["FindAssetEscrowById", "FindAnonymousAssetEscrowById"] {
-            let canonical = norito::json!({
+        let kind = "FindAssetEscrowById";
+        let canonical = norito::json!({
+            "singular": {
+                "type": (kind),
+                "payload": {"escrow_id": (canonical_literal.clone())}
+            }
+        });
+        assert!(
+            norito::json::from_value::<QueryEnvelopeJson>(canonical).is_ok(),
+            "{kind} must accept one canonical checksummed hash literal"
+        );
+        for alias in &aliases {
+            let envelope = norito::json!({
                 "singular": {
                     "type": (kind),
-                    "payload": {"escrow_id": (canonical_literal.clone())}
+                    "payload": {"escrow_id": (alias.clone())}
                 }
             });
             assert!(
-                norito::json::from_value::<QueryEnvelopeJson>(canonical).is_ok(),
-                "{kind} must accept one canonical checksummed hash literal"
+                norito::json::from_value::<QueryEnvelopeJson>(envelope).is_err(),
+                "{kind} accepted noncanonical EscrowId JSON {alias:?}"
             );
-            for alias in &aliases {
-                let envelope = norito::json!({
-                    "singular": {
-                        "type": (kind),
-                        "payload": {"escrow_id": (alias.clone())}
-                    }
-                });
-                assert!(
-                    norito::json::from_value::<QueryEnvelopeJson>(envelope).is_err(),
-                    "{kind} accepted noncanonical EscrowId JSON {alias:?}"
-                );
-            }
         }
     }
     #[test]

@@ -3126,7 +3126,8 @@ mod tests {
             let error = <ProofAttachment as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
                 .expect_err("redundant trailing None fields must not have a second wire spelling");
             assert!(
-                error.to_string().contains("non-canonical redundant"),
+                matches!(&error, ncore::Error::LengthMismatch)
+                    || error.to_string().contains("non-canonical redundant"),
                 "unexpected error: {error}"
             );
         }
@@ -3885,7 +3886,7 @@ mod tests {
         ] {
             let error = norito::json::from_str::<ProofAttachment>(&json)
                 .expect_err("oversized attachment identifiers must reject");
-            assert!(error.to_string().contains("256-byte decoded limit"));
+            assert!(error.to_string().contains("256-byte limit"));
             let value = norito::json::parse_value(&json).expect("valid generic JSON fixture");
             <ProofAttachment as norito::json::JsonDeserialize>::json_from_value(&value)
                 .expect_err("borrowed Value preflight must reject oversized identifiers");

@@ -2139,7 +2139,7 @@ mod tests {
     fn provider_governance_actions_are_closed_canonical_and_compare_and_set() {
         let current = owner();
         let next = AccountId::new(
-            "ed01201111111111111111111111111111111111111111111111111111111111111111"
+            "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
                 .parse()
                 .expect("replacement public key"),
         );

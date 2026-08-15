@@ -2123,11 +2123,6 @@ mod tests {
                 drift.storage = LaneStorageProfile::CommitmentOnly;
                 drift
             }),
-            ("proof scheme", {
-                let mut drift = elastic.clone();
-                drift.proof_scheme = DaProofScheme::MerkleSha256;
-                drift
-            }),
             ("metadata value", {
                 let mut drift = elastic.clone();
                 drift

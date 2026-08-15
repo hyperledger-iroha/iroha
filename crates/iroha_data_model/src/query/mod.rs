@@ -4014,13 +4014,14 @@ mod json_roundtrip_tests {
             norito::codec::Encode::encode(&CompoundPredicate::<AssetEscrowRecord>::PASS);
         let selector_bytes =
             norito::codec::Encode::encode(&SelectorTuple::<AssetEscrowRecord>::default());
+        let params = parameters::QueryParams::default();
         let seller_envelope = QueryWithParams {
             query: (),
             query_payload: seller_payload.clone(),
             item: QueryItemKind::AssetEscrowsBySeller,
             predicate_bytes: predicate_bytes.clone(),
             selector_bytes: selector_bytes.clone(),
-            params: parameters::QueryParams::default(),
+            params: params.clone(),
         };
         let buyer_envelope = QueryWithParams {
             query: (),
@@ -4028,61 +4029,63 @@ mod json_roundtrip_tests {
             item: QueryItemKind::AssetEscrowsByBuyer,
             predicate_bytes: predicate_bytes.clone(),
             selector_bytes: selector_bytes.clone(),
-            params: parameters::QueryParams::default(),
+            params: params.clone(),
         };
         let status_envelope = QueryWithParams {
             query: (),
             query_payload: status_payload.clone(),
             item: QueryItemKind::AssetEscrowsByStatus,
-            predicate_bytes,
-            selector_bytes,
-            params: parameters::QueryParams::default(),
+            predicate_bytes: predicate_bytes.clone(),
+            selector_bytes: selector_bytes.clone(),
+            params: params.clone(),
         };
         let seller_wire = norito::codec::Encode::encode(&seller_envelope);
         let buyer_wire = norito::codec::Encode::encode(&buyer_envelope);
         let status_wire = norito::codec::Encode::encode(&status_envelope);
-        let tag_offset = norito::codec::Encode::encode(&()).len()
-            + norito::codec::Encode::encode(&seller_payload).len();
-        assert_eq!(&seller_wire[..tag_offset], &buyer_wire[..tag_offset]);
-        assert_eq!(
-            &seller_wire[tag_offset..tag_offset + 4],
-            &28_u32.to_le_bytes()
+        assert_ne!(
+            seller_wire, buyer_wire,
+            "the envelope discriminator must distinguish identical query payloads"
         );
-        assert_eq!(
-            &buyer_wire[tag_offset..tag_offset + 4],
-            &29_u32.to_le_bytes()
-        );
-        assert_eq!(
-            &seller_wire[tag_offset + 4..],
-            &buyer_wire[tag_offset + 4..]
-        );
-        let status_tag_offset = norito::codec::Encode::encode(&()).len()
-            + norito::codec::Encode::encode(&status_payload).len();
-        assert_eq!(
-            &status_wire[status_tag_offset..status_tag_offset + 4],
-            &30_u32.to_le_bytes()
-        );
-        let mut seller_input = seller_wire.as_slice();
-        let decoded_seller = <QueryWithParams as norito::codec::Decode>::decode(&mut seller_input)
-            .expect("decode seller envelope");
-        assert!(seller_input.is_empty());
-        assert_eq!(decoded_seller.item, QueryItemKind::AssetEscrowsBySeller);
-        assert_eq!(decoded_seller.query_payload, seller_payload);
-        let mut buyer_input = buyer_wire.as_slice();
-        let decoded_buyer = <QueryWithParams as norito::codec::Decode>::decode(&mut buyer_input)
-            .expect("decode buyer envelope");
-        assert!(buyer_input.is_empty());
-        assert_eq!(decoded_buyer.item, QueryItemKind::AssetEscrowsByBuyer);
-        assert_eq!(decoded_buyer.query_payload, buyer_payload);
-        let mut status_input = status_wire.as_slice();
-        let decoded_status = <QueryWithParams as norito::codec::Decode>::decode(&mut status_input)
-            .expect("decode status envelope");
-        assert!(status_input.is_empty());
-        assert_eq!(decoded_status.item, QueryItemKind::AssetEscrowsByStatus);
-        assert_eq!(decoded_status.query_payload, status_payload);
+        for (wire, expected_item, expected_payload) in [
+            (
+                seller_wire.as_slice(),
+                QueryItemKind::AssetEscrowsBySeller,
+                seller_payload.as_slice(),
+            ),
+            (
+                buyer_wire.as_slice(),
+                QueryItemKind::AssetEscrowsByBuyer,
+                buyer_payload.as_slice(),
+            ),
+            (
+                status_wire.as_slice(),
+                QueryItemKind::AssetEscrowsByStatus,
+                status_payload.as_slice(),
+            ),
+        ] {
+            let mut input = wire;
+            let decoded = <QueryWithParams as norito::codec::Decode>::decode(&mut input)
+                .expect("decode escrow query envelope");
+            assert!(input.is_empty());
+            assert_eq!(decoded.item, expected_item);
+            assert_eq!(decoded.query_payload, expected_payload);
+            assert_eq!(decoded.predicate_bytes, predicate_bytes);
+            assert_eq!(decoded.selector_bytes, selector_bytes);
+            assert_eq!(decoded.params, params);
+            assert_eq!(norito::codec::Encode::encode(&decoded), wire);
+        }
     }
     #[test]
     fn query_with_params_encoding_preserves_canonical_field_order() {
+        #[derive(norito::codec::Encode)]
+        struct CanonicalFieldOrder {
+            query: (),
+            query_payload: Vec<u8>,
+            item: QueryItemKind,
+            predicate_bytes: Vec<u8>,
+            selector_bytes: Vec<u8>,
+            params: parameters::QueryParams,
+        }
         let query_payload = vec![0x11, 0x22];
         let predicate_bytes = vec![0x33];
         let selector_bytes = vec![0x44, 0x55, 0x66];
@@ -4095,15 +4098,31 @@ mod json_roundtrip_tests {
             selector_bytes: selector_bytes.clone(),
             params: params.clone(),
         };
-        let mut expected = norito::codec::Encode::encode(&());
-        expected.extend(norito::codec::Encode::encode(&query_payload));
-        expected.extend(norito::codec::Encode::encode(
-            &QueryItemKind::AssetEscrowRecord,
-        ));
-        expected.extend(norito::codec::Encode::encode(&predicate_bytes));
-        expected.extend(norito::codec::Encode::encode(&selector_bytes));
-        expected.extend(norito::codec::Encode::encode(&params));
-        assert_eq!(norito::codec::Encode::encode(&query), expected);
+        let canonical = CanonicalFieldOrder {
+            query: (),
+            query_payload: query_payload.clone(),
+            item: QueryItemKind::AssetEscrowRecord,
+            predicate_bytes: predicate_bytes.clone(),
+            selector_bytes: selector_bytes.clone(),
+            params: params.clone(),
+        };
+        let wire = norito::codec::Encode::encode(&query);
+        assert_eq!(
+            wire,
+            norito::codec::Encode::encode(&canonical),
+            "the envelope must retain its canonical structural field order"
+        );
+        let mut input = wire.as_slice();
+        let decoded = <QueryWithParams as norito::codec::Decode>::decode(&mut input)
+            .expect("decode canonical query envelope");
+        assert!(input.is_empty());
+        let (item, predicate, selector, payload) = decoded.parts();
+        assert_eq!(item, QueryItemKind::AssetEscrowRecord);
+        assert_eq!(predicate, predicate_bytes);
+        assert_eq!(selector, selector_bytes);
+        assert_eq!(payload, query_payload);
+        assert_eq!(decoded.params, params);
+        assert_eq!(norito::codec::Encode::encode(&decoded), wire);
     }
 }
 /// Use a custom syntax to implement [`Query`] for applicable types

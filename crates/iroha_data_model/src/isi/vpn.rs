@@ -144,7 +144,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_primitives::numeric::{Numeric, Quantity};
-    use norito::{codec::Encode as _, core::DecodeFromSlice};
+    use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked VPN fixture account keypair");

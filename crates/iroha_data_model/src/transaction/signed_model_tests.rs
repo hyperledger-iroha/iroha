@@ -73,28 +73,30 @@ fn transaction_manual_json_families_have_exact_checked_bounds() {
 fn transaction_domain_network_and_genesis_wire_are_disjoint_and_pinned() {
     let network_id = test_network_id(0x35);
     let network = TransactionDomain::Network(network_id);
-    let network_bytes =
-        norito::encode_canonical(&network).expect("encode network transaction domain");
+    let network_payload = norito::codec::Encode::encode(&network);
     let mut expected_network = vec![0, 0, 0, 0, Hash::LENGTH as u8];
     expected_network.extend_from_slice(network_id.as_bytes());
-    assert_eq!(network_bytes, expected_network);
+    assert_eq!(network_payload, expected_network);
+    let network_bytes =
+        norito::encode_canonical(&network).expect("encode network transaction domain");
     assert_eq!(
-        norito::decode_from_bytes::<TransactionDomain>(&network_bytes)
+        norito::decode_canonical::<TransactionDomain>(&network_bytes)
             .expect("decode pinned network transaction domain"),
         network
     );
     let genesis = TransactionDomain::Genesis;
+    let genesis_payload = norito::codec::Encode::encode(&genesis);
+    assert_eq!(genesis_payload, [1, 0, 0, 0]);
     let genesis_bytes =
         norito::encode_canonical(&genesis).expect("encode genesis transaction domain");
-    assert_eq!(genesis_bytes, [1, 0, 0, 0]);
     assert_eq!(
-        norito::decode_from_bytes::<TransactionDomain>(&genesis_bytes)
+        norito::decode_canonical::<TransactionDomain>(&genesis_bytes)
             .expect("decode pinned genesis transaction domain"),
         genesis
     );
     assert_ne!(network_bytes, genesis_bytes);
     assert!(
-        norito::decode_from_bytes::<TransactionDomain>(&[2, 0, 0, 0]).is_err(),
+        <TransactionDomain as norito::codec::Decode>::decode(&mut &[2, 0, 0, 0][..]).is_err(),
         "the closed transaction-domain enum must reject unknown discriminants"
     );
 }
@@ -118,7 +120,7 @@ fn transaction_domain_json_is_closed_and_rejects_legacy_identity_keys() {
     assert_eq!(
         norito::json::to_json(&TransactionDomain::Genesis)
             .expect("serialize genesis transaction domain"),
-        r#"{"kind":"genesis"}"#
+        r#"{"kind":"genesis","value":null}"#
     );
     for rejected in [
         format!(r#"{{"kind":"network","content":{network_id_json}}}"#),

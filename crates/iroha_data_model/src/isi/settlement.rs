@@ -1244,7 +1244,7 @@ mod tests {
         };
         let encoded = norito::json::to_json(&policy).expect("serialize FX policy instruction");
         assert!(encoded.contains("\"owner\":"));
-        assert!(encoded.contains("\"oracle_feed_id\":\"aed_pkr\""));
+        assert!(encoded.contains("\"oracle_feed_id\":[\"aed_pkr\"]"));
         assert!(
             encoded.contains("\"allowed_destination_alias_domains\":[\"hbl.sbp\",\"ubl.sbp\"]")
         );

@@ -444,7 +444,6 @@ impl_encode_as_id_box! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norito::core::DecodeFromSlice as _;
     #[derive(Encode)]
     struct UncheckedChainIdWire(Box<str>);
     #[derive(Encode)]

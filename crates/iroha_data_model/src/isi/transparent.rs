@@ -1526,7 +1526,7 @@ impl SetParameter {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use norito::{codec::Encode as _, core::DecodeFromSlice};
+    use norito::core::DecodeFromSlice;
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked transparent ISI fixture keypair");
