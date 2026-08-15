@@ -38,7 +38,8 @@ mod rkg_one_creator_response_v1;
 #[path = "direct_relation_wire_v1/statement_v1.rs"]
 pub(super) mod statement_v1;
 pub(in crate::vega::zk_ams::mkhe) use rkg_one_creator_prover_v1::{
-    SealedDirectRkgOneProofOwnerV1, seal_direct_rkg_one_proof_owner_v1,
+    PublishedDirectRkgOneProofOwnerV2, SealedDirectRkgOneProofOwnerV1,
+    seal_direct_rkg_one_proof_owner_v1,
 };
 pub(super) use statement_v1::ExpectedDirectRelationStatementV1;
 #[cfg(test)]

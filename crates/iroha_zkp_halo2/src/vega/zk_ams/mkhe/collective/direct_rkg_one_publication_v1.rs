@@ -1,7 +1,7 @@
 //! Sequential H0/H1 publication owners for one direct RKG1 candidate.
 
 use super::super::super::{
-    ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
+    ZkAmsMkheDirectRkgOneLifecycleStoreV2, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
     active_exact_binding::{
         CompletedDirectRkgOneCreatorV1, DirectPolynomialObjectV1, DirectRelationPublicObjectsV1,
@@ -23,8 +23,15 @@ use super::super::super::{
     },
 };
 
+#[cfg(test)]
 #[path = "direct_rkg_one_publication_v1/direct_rkg_one_orphan_journal_v1.rs"]
 mod direct_rkg_one_orphan_journal_v1;
+#[path = "direct_rkg_one_publication_v1/direct_rkg_one_lifecycle_v2.rs"]
+mod direct_rkg_one_lifecycle_v2;
+pub(super) use direct_rkg_one_lifecycle_v2::{
+    DirectRkgOneFreshReservationOutcomeV2, DirectRkgOneProofPublishedUnverifiedOwnerV2,
+    persist_direct_rkg_one_proof_published_unverified_v2, reserve_direct_rkg_one_fresh_v2,
+};
 
 const RKG_ONE_POLYNOMIAL_BYTES_V1: u64 = 39_845_888;
 const RKG_ONE_LIMBS_V1: usize = 38;
@@ -124,22 +131,27 @@ impl DirectRkgOnePublicationOwnerV1 {
     }
 }
 
-pub(in crate::vega::zk_ams::mkhe) fn publish_direct_rkg_one_h0_h1_v1<'a, P>(
+pub(super) fn publish_direct_rkg_one_h0_h1_v1<'a, P>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     h0_ready: DirectRkgOneCreatorH0ReadyV1<'a>,
-    publisher: &mut P,
+    fresh: direct_rkg_one_lifecycle_v2::DirectRkgOneFreshPublishPermitV2,
+    provider: &mut P,
 ) -> Result<
     (
         CompletedDirectRkgOneCreatorV1<'a>,
         DirectRkgOnePublicationOwnerV1,
+        direct_rkg_one_lifecycle_v2::DirectRkgOnePublishedUnboundOwnerV2,
     ),
     ZkAmsMkheErrorV1,
 >
 where
-    P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
+    P: ZkAmsMkheDirectObjectCasPublicationV1
+        + ZkAmsMkheDirectRkgOneLifecycleStoreV2
+        + ?Sized,
 {
     let (context, party_index) = h0_ready.stream_axes_v1();
     let scope = direct_rkg_one_publication_scope_v1(roster, context, party_index)?;
+    direct_rkg_one_lifecycle_v2::validate_fresh_publish_permit_v2(&fresh, scope)?;
     let mut h0_stream = ZkAmsMkheDirectPolynomialStreamV1::begin_rkg_one_creator_v1(
         roster,
         context,
@@ -149,7 +161,7 @@ where
     let mut h0_publication = ZkAmsMkheDirectObjectPublicationTransactionV1::begin(
         ZkAmsMkheDirectObjectKindV1::RkgH0,
         RKG_ONE_POLYNOMIAL_BYTES_V1,
-        publisher,
+        provider,
     )?;
     let mut h0_replay = h0_ready.begin_h0_v1()?;
     let mut common_a = zeroed_limb_v1()?;
@@ -169,14 +181,17 @@ where
         ZkAmsMkheDirectObjectKindV1::RkgH0,
     )?;
 
-    let completed_and_h1 = publish_h1_v1(roster, h1_ready, publisher, &mut common_a)?;
+    let completed_and_h1 = publish_h1_v1(roster, h1_ready, provider, &mut common_a)?;
     let owner = DirectRkgOnePublicationOwnerV1 {
         scope,
         h0,
         h1: completed_and_h1.1,
     };
     validate_publication_pair_v1(&owner)?;
-    Ok((completed_and_h1.0, owner))
+    let lifecycle = direct_rkg_one_lifecycle_v2::persist_direct_rkg_one_published_unbound_v2(
+        fresh, &owner, provider,
+    )?;
+    Ok((completed_and_h1.0, owner, lifecycle))
 }
 
 fn publish_h1_v1<'a, P>(

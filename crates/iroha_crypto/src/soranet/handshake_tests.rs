@@ -1128,7 +1128,7 @@ mod tests {
         }
         .expect_err("malformed Ed25519 signature length must be rejected");
         assert!(
-            err.to_string().contains("Ed25519 signature"),
+            err.to_string().contains("ed25519 signature"),
             "unexpected error: {err}"
         );
     }
@@ -1165,7 +1165,7 @@ mod tests {
         }
         .expect_err("all-zero Ed25519 signature material must be rejected");
         assert!(
-            err.to_string().contains("Ed25519 signature") && err.to_string().contains("all zero"),
+            err.to_string().contains("ed25519 signature") && err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
     }

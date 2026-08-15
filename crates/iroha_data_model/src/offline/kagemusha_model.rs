@@ -101,10 +101,11 @@ mod model {
     }
     /// Canonical branch coordinate inside one top-up lineage.
     ///
-    /// The first `depth` most-significant bits of `path_bits` identify the branch. Unused bits must
-    /// be zero. A recipient output appends bit `0` and a sender-change output appends bit `1`. This
-    /// makes sibling redemptions disjoint while allowing the ledger to reject an ancestor and any
-    /// of its descendants by a deterministic prefix check.
+    /// The first `depth` most-significant bits of `path_bits` identify the
+    /// branch. Unused bits must be zero. A recipient output appends bit `0` and
+    /// a sender-change output appends bit `1`. This makes sibling redemptions
+    /// disjoint while allowing the ledger to reject an ancestor and any of its
+    /// descendants by a deterministic prefix check.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -122,11 +123,12 @@ mod model {
     }
     /// Replay-safe conflict claim for one independently spendable lineage leaf.
     ///
-    /// `transition_tags` is one contiguous byte string containing exactly `path.depth` consecutive
-    /// 24-byte entries. Entry `i` is the non-zero, domain-separated 192-bit tag of the complete
-    /// proof-bound transition digest selected at the edge from depth `i` to `i + 1`. Carrying every
-    /// ancestor choice prevents recipient/change outputs from alternative splits of the same parent
-    /// from being mixed to inflate value.
+    /// `transition_tags` is one contiguous byte string containing exactly
+    /// `path.depth` consecutive 24-byte entries. Entry `i` is the non-zero,
+    /// domain-separated 192-bit tag of the complete proof-bound transition
+    /// digest selected at the edge from depth `i` to `i + 1`.
+    /// Carrying every ancestor choice prevents recipient/change outputs from
+    /// alternative splits of the same parent from being mixed to inflate value.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -139,7 +141,8 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
         pub transition_tags: Vec<u8>,
     }
-    /// Public inputs used by the native bridge to derive one receiver-owned confidential output.
+    /// Public inputs used by the native bridge to derive one receiver-owned
+    /// confidential output.
     ///
     /// The receiver's local note opening is deliberately not part of this
     /// archive. It is supplied through a separate native-only archive and must
@@ -213,11 +216,12 @@ mod model {
     }
     /// Receiver-created, nonce-bound and device-signed request for one exact offline payment.
     ///
-    /// `sender_output_prover_material` is part of the signed peer request but remains opaque to
-    /// wallet code. The native bridge derives it from a receiver-held local note opening and the
-    /// public request fields. It contains only the amount opening, `rho`, and owner tag needed to
-    /// prove the requested commitment; it must never contain the receiver's spend key or
-    /// diversifier.
+    /// `sender_output_prover_material` is part of the signed peer request but
+    /// remains opaque to wallet code. The native bridge derives it from a
+    /// receiver-held local note opening and the public request fields. It
+    /// contains only the amount opening, `rho`, and owner tag needed to prove
+    /// the requested commitment; it must never contain the receiver's spend
+    /// key or diversifier.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -255,8 +259,9 @@ mod model {
     }
     /// Platform assertion made by the exact hardware key admitted at registration.
     ///
-    /// Both platforms carry the same canonical raw low-S P-256 signature. iOS additionally carries
-    /// the App Attest authenticator data that Apple binds ahead of the client-data hash.
+    /// Both platforms carry the same canonical raw low-S P-256 signature. iOS
+    /// additionally carries the App Attest authenticator data that Apple binds
+    /// ahead of the client-data hash.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -306,8 +311,9 @@ mod model {
         pub asset_definition_id: AssetDefinitionId,
         /// Globally unique chain idempotency/replay identifier.
         ///
-        /// Unlike nonces and payload digests, this identifier is not scoped by `authority`; every
-        /// Kagemusha V2 chain operation shares one replay namespace.
+        /// Unlike nonces and payload digests, this identifier is not scoped by
+        /// `authority`; every Kagemusha V2 chain operation shares one replay
+        /// namespace.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
@@ -371,12 +377,14 @@ mod model {
     /// Bounded projection of the live Sumeragi-v2 height context needed to
     /// authenticate one Commit certificate offline.
     ///
-    /// `context_id` is copied from the persisted [`HeightContext`] and is part of the exact live
-    /// [`crate::block::consensus_v2::Vote::signature_preimage`] through the certificate round.
-    /// Every non-roster identity field is retained so verification can reconstruct and validate the
-    /// complete context with the manifest-authenticated roster window, then require its computed
-    /// identifier to equal `context_id`. This avoids duplicating the current roster in every proof
-    /// without making the context identifier an opaque, attacker-selected cross-network binding.
+    /// `context_id` is copied from the persisted [`HeightContext`] and is part
+    /// of the exact live [`crate::block::consensus_v2::Vote::signature_preimage`]
+    /// through the certificate round. Every non-roster identity field is
+    /// retained so verification can reconstruct and validate the complete
+    /// context with the manifest-authenticated roster window, then require its
+    /// computed identifier to equal `context_id`. This avoids duplicating the
+    /// current roster in every proof without making the context identifier an
+    /// opaque, attacker-selected cross-network binding.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1846,9 +1854,10 @@ mod model {
     }
     /// Canonical fields signed by a receiver after durable payment persistence.
     ///
-    /// The receiver must persist the final acknowledgement bytes under `(operation_id,
-    /// recipient_request_digest)` in the same atomic operation that persists the accepted bundle.
-    /// Duplicate delivery returns those exact bytes instead of signing a new timestamp.
+    /// The receiver must persist the final acknowledgement bytes under
+    /// `(operation_id, recipient_request_digest)` in the same atomic operation
+    /// that persists the accepted bundle. Duplicate delivery returns those
+    /// exact bytes instead of signing a new timestamp.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1943,8 +1952,9 @@ mod model {
     }
     /// Degree-parameterized Pasta-cycle envelope carried by a V4 proof wrapper.
     ///
-    /// The backend-native Eq/Ep pair remains canonical opaque bytes inside `proof`; wallets and
-    /// bridge carriers do not reinterpret its internal accumulators or fold transcripts.
+    /// The backend-native Eq/Ep pair remains canonical opaque bytes inside
+    /// `proof`; wallets and bridge carriers do not reinterpret its internal
+    /// accumulators or fold transcripts.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1989,8 +1999,9 @@ mod model {
     }
     /// Exact fixed-size ABI-21 public operation row bound by the terminal proof.
     ///
-    /// Each consecutive group of eight limbs is one canonical Pallas-field element in little-endian
-    /// `u32` order. Core rejects non-canonical field encodings before proof verification.
+    /// Each consecutive group of eight limbs is one canonical Pallas-field
+    /// element in little-endian `u32` order. Core rejects non-canonical field
+    /// encodings before proof verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",

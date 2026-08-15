@@ -1666,6 +1666,168 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         assert any(error_fragment in error for error in errors), errors
 
 
+def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
+    tmp_path: Path,
+) -> None:
+    """PrepareQC cache bounds and stale-state pruning cannot hide behind new digests."""
+
+    module = load_checker()
+    source_relatives = tuple(
+        Path(relative)
+        for relative in module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256
+    )
+    prepare_regression_relative = Path(
+        "crates/iroha_core/src/sumeragi/v2_core/tests.rs"
+    )
+    prepare_regression_provider_relative = Path(
+        "crates/iroha_core/src/sumeragi/v2_core/tests/"
+        "committee_fallback_and_retransmit.rs"
+    )
+    fixture_paths = {*source_relatives, prepare_regression_relative}
+    pending_fixture_paths = list(fixture_paths)
+    while pending_fixture_paths:
+        source_path = pending_fixture_paths.pop()
+        for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
+            source_path.as_posix(), ()
+        ):
+            component_path = source_path.parent / component
+            if component_path in fixture_paths:
+                continue
+            fixture_paths.add(component_path)
+            pending_fixture_paths.append(component_path)
+
+    mutations = (
+        (
+            "live-bound",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "volatile_summary_well_formed_body",
+            "&& $summary.pending_prepare <= 1u64",
+            "&& $summary.pending_prepare <= 2u64",
+            "volatile PrepareQC ownership must remain one live pipeline",
+            True,
+        ),
+        (
+            "stale-admission",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_prepare_certificate",
+            "if certificate.round().view() < existing.round().view() {",
+            "if certificate.round().view() > existing.round().view() {",
+            "PrepareQC admission must reject durable-high conflicts and stale views",
+            False,
+        ),
+        (
+            "historical-retention",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "prune_observed_prepare_caches",
+            "certificate.round().view() == current_view",
+            "certificate.round().view() <= current_view",
+            "PrepareQC pruning must retain only the current live owner",
+            False,
+        ),
+        (
+            "lock-omission",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "prune_observed_prepare_caches",
+            ".chain(self.durable.locked())",
+            ".chain(self.durable.highest_prepare())",
+            "PrepareQC pruning must retain only the current live owner",
+            False,
+        ),
+        (
+            "ack-prune-omission",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_persisted",
+            "self.prune_observed_prepare_caches();",
+            "self.pending_prepare.clear();",
+            "ObservePrepare acknowledgement must apply durable state before pruning",
+            False,
+        ),
+        (
+            "regression-stutter-weakened",
+            prepare_regression_provider_relative,
+            "delayed_lower_prepare_qc_cannot_downgrade_retransmitted_progress",
+            "assert_eq!(reducer, before_older);",
+            "assert_eq!(reducer.current_tag(), before_older.current_tag());",
+            "the delayed lower PrepareQC regression must prove a complete ignored stutter",
+            False,
+        ),
+    )
+    canonical_regression_seals = dict(
+        module._PREPARE_CACHE_REGRESSION_TEST_SHA256
+    )
+    for case, relative, item_name, old, new, diagnostic, is_macro in mutations:
+        repo_root = tmp_path / case
+        for fixture_path in fixture_paths:
+            destination = repo_root / fixture_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / fixture_path, destination)
+
+        canonical_source_seals: dict[str, str] = {}
+        for source_relative in module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256:
+            expansion_errors: list[str] = []
+            _path, source = module._read_reviewed_rust_source(
+                repo_root,
+                source_relative,
+                expansion_errors,
+                "PrepareQC refreshed-seal mutation fixture",
+            )
+            assert not expansion_errors, expansion_errors
+            canonical_source_seals[source_relative] = hashlib.sha256(
+                source.encode("utf-8")
+            ).hexdigest()
+        module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256.clear()
+        module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256.update(
+            canonical_source_seals
+        )
+        module._PREPARE_CACHE_REGRESSION_TEST_SHA256.clear()
+        module._PREPARE_CACHE_REGRESSION_TEST_SHA256.update(
+            canonical_regression_seals
+        )
+
+        path = repo_root / relative
+        if is_macro:
+            mutate_source_once(path, old, new)
+        else:
+            mutate_rust_item_source(module, path, item_name, old, new)
+
+        changed_relatives: list[str] = []
+        for source_relative, canonical_sha256 in canonical_source_seals.items():
+            expansion_errors = []
+            _path, source = module._read_reviewed_rust_source(
+                repo_root,
+                source_relative,
+                expansion_errors,
+                "PrepareQC refreshed-seal mutation fixture",
+            )
+            assert not expansion_errors, expansion_errors
+            observed_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+            if observed_sha256 != canonical_sha256:
+                module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256[
+                    source_relative
+                ] = observed_sha256
+                changed_relatives.append(source_relative)
+        if relative == prepare_regression_provider_relative:
+            assert changed_relatives == [], (case, changed_relatives)
+            source = path.read_text(encoding="utf-8")
+            items = module.rust_items(source, item_name)
+            assert len(items) == 1, (case, item_name)
+            module._PREPARE_CACHE_REGRESSION_TEST_SHA256[item_name] = (
+                module._rust_item_token_sha256(items[0])
+            )
+        else:
+            assert len(changed_relatives) == 1, (case, changed_relatives)
+
+        errors = module._same_round_semantic_kernel_source_fidelity_errors(
+            repo_root
+        )
+        assert not any(
+            "same-round semantic kernel source must match exact reviewed SHA-256"
+            in error
+            for error in errors
+        ), errors
+        assert any(diagnostic in error for error in errors), errors
+
+
 def test_atomic_timeout_completion_contract_rejects_split_or_stale_projection(
     tmp_path: Path,
 ) -> None:

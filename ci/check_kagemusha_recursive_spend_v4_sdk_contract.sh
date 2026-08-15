@@ -27,7 +27,7 @@ mode = sys.argv[2]
 script = Path(sys.argv[3]).resolve()
 paths = {
     "data_model": Path("crates/iroha_data_model/src/offline/mod.rs"),
-    "data_model_fragment": Path(
+    "data_model_component": Path(
         "crates/iroha_data_model/src/offline/kagemusha_model.rs"
     ),
     "rust": Path("crates/connect_norito_bridge/src/lib.rs"),
@@ -111,11 +111,11 @@ data_model_include = 'include!("kagemusha_model.rs");'
 if texts["data_model"].count(data_model_include) != 1:
     raise SystemExit(
         f"{paths['data_model']}: expected exactly one reviewed "
-        f"{paths['data_model_fragment'].name} include"
+        f"{paths['data_model_component'].name} include"
     )
 texts["data_model"] = texts["data_model"].replace(
     data_model_include,
-    texts["data_model_fragment"],
+    texts["data_model_component"],
     1,
 )
 
@@ -145,22 +145,6 @@ texts["rust"] = "\n".join(
         *(texts[f"rust_platform_jni_part_{part}"] for part in range(1, 4)),
     )
 )
-
-# The check is dormant on branches that have no ABI21 SDK work. As soon as a
-# V4 lifecycle method or carrier is introduced, the entire boundary must land
-# atomically instead of relying on symbol presence or an ABI20 fallback.
-v4_markers = (
-    "nativeInitSpendV4",
-    "KagemushaRecursiveSpendInitLocalRequestV4",
-    "connect_norito_kagemusha_recursive_spend_init_v4",
-)
-if not any(
-    marker in texts[label]
-    for marker in v4_markers
-    for label in ("rust", "header", "swift_v4", "kotlin", "java")
-):
-    print("Kagemusha ABI21 SDK contract is not exposed; fail-closed pre-V4 state accepted.")
-    raise SystemExit(0)
 
 errors: list[str] = []
 
@@ -1283,11 +1267,11 @@ if mode == "--self-test":
                 )
 
     run_negative(
-        "reviewed data-model fragment cannot detach",
+        "reviewed data-model component cannot detach",
         lambda fixture: replace_once(
             fixture / paths["data_model"],
             'include!("kagemusha_model.rs");',
-            "// reviewed Kagemusha model fragment detached",
+            "// reviewed Kagemusha model component detached",
         ),
         "expected exactly one reviewed kagemusha_model.rs include",
     )

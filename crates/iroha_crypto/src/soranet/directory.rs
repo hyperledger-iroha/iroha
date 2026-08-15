@@ -38,7 +38,7 @@ const GUARD_DIRECTORY_DECODE_MAX_ALLOCATED_BYTES_V1: usize =
     2 * GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1;
 const GUARD_DIRECTORY_DECODE_MAX_NESTING_DEPTH_V1: usize = 16;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x2000_0000;
+const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
 #[cfg(any(
@@ -1002,6 +1002,23 @@ mod tests {
             .expect_err("directory path must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("direct regular file"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_file_reader_allows_symlinked_parent_path() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target_directory = directory.path().join("target");
+        let linked_directory = directory.path().join("linked");
+        fs::create_dir(&target_directory).expect("create target directory");
+        symlink(&target_directory, &linked_directory).expect("link parent directory");
+        fs::write(target_directory.join("directory.norito"), b"snapshot")
+            .expect("write target snapshot");
+        assert_eq!(
+            read_guard_directory_snapshot_file(&linked_directory.join("directory.norito"))
+                .expect("read through linked parent"),
+            b"snapshot"
+        );
     }
     #[cfg(unix)]
     #[test]

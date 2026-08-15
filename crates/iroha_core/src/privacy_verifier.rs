@@ -459,6 +459,7 @@ pub(crate) enum VerifiedPrivacyLedgerEffectsV1 {
     /// Atomic ZK-AMS provisioning key image and fresh account creation.
     ZkAmsProvisionAccount(VerifiedZkAmsProvisionAccountV1),
     /// Atomic policy-scoped replay insertion and transparent asset transfer.
+    #[cfg_attr(not(feature = "zk-stark"), allow(dead_code))]
     ZkAceAuthorization(VerifiedZkAceAuthorizationV1),
     /// Atomic policy-scoped certificate-nullifier insertion.
     ZkX509Certificate(VerifiedZkX509CertificateEffectV1),
@@ -613,10 +614,9 @@ fn verify_privacy_envelope_after_compiled_activation_v1(
                 PrivacyCanonicalEncodingFailureV1,
             ))
         })?;
-    // Envelope admission above established an exact protocol match between
-    // the envelope, statement, and proof (including the ZK-AMS action tag).
-    // Route only on the closed statement enum so adding a protocol cannot
-    // compile until this dispatcher has an explicit native-verifier arm.
+    // Envelope admission above established an exact protocol match between the envelope, statement,
+    // and proof (including the ZK-AMS action tag). Route only on the closed statement enum so
+    // adding a protocol cannot compile until this dispatcher has an explicit native-verifier arm.
     let proof = envelope.proof.bytes();
     let ledger = match &envelope.statement {
         #[cfg(feature = "zk-stark")]
@@ -1245,11 +1245,10 @@ fn verify_fcmp_plus_plus_action_v1(
             PrivacyFcmpStateFailureCodeV1::CurrentRootNotRetained,
         ));
     }
-    // The proof anchor and mutation head are deliberately distinct. FCMP++'s
-    // output set is append-only, so membership under any exactly retained
-    // historical root remains sound. Key-image uniqueness prevents replay,
-    // while newly created outputs are always appended to the current trusted
-    // frontier below.
+    // The proof anchor and mutation head are deliberately distinct. FCMP++'s output set is
+    // append-only, so membership under any exactly retained historical root remains sound.
+    // Key-image uniqueness prevents replay, while newly created outputs are always appended to the
+    // current trusted frontier below.
     let statement_root = statement.output_set_root.history_commitment();
     if !snapshot.contains_retained_root(statement.root_epoch, statement_root) {
         return Err(fcmp_state_error(
@@ -2279,7 +2278,6 @@ mod tests {
             },
             vega::derive_device_authentication_digest_v1,
             verange::{commit, prove_batch},
-            zk_ace::{ZkAcePrivacyWitnessV1, prove_zk_ace_privacy_v1},
             zk_ams::{
                 ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZK_AMS_MIN_RING_SIZE_V1,
                 ZkAmsBatchCredentialWitnessV1, ZkAmsSeedSecretV1, prove_zk_ams_batch_admission_v1,
@@ -2337,10 +2335,8 @@ mod tests {
             PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryIdV1, PrivacyZkAmsSeedPublicKeyV1,
             PrivacyZkAmsSubjectCommitmentV1, PrivacyZkX509CrlRecordV1,
             VeRangeTransparentRangeStatementV1, ZK_AMS_PHC_VERSION_V1,
-            ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZkAcePqAuthorizationStatementV1,
-            zk_ams_registry_record_digest_v1,
+            ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, zk_ams_registry_record_digest_v1,
         },
-        zk::derive_zk_ace_privacy_authorization_digest,
     };
     use iroha_zkp_halo2::vega::MAX_VEGA_PROOF_BYTES_V1;
     use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
@@ -3639,9 +3635,11 @@ mod tests {
                     .expect("ZK-ACE runtime account");
                 AccountId::new(key_pair.public_key().clone())
             };
-            let witness = ZkAcePrivacyWitnessV1::try_new([0x91; 32], [0x92; 32], [0x93; 32])
-                .expect("canonical ZK-ACE witness");
-            let statement = ZkAcePqAuthorizationStatementV1 {
+            let witness = crate::privacy_engines::zk_ace::ZkAcePrivacyWitnessV1::try_new(
+                [0x91; 32], [0x92; 32], [0x93; 32],
+            )
+            .expect("canonical ZK-ACE witness");
+            let statement = iroha_data_model::privacy::ZkAcePqAuthorizationStatementV1 {
                 context: PrivacyStatementContextV1 {
                     network_id: network_id.clone(),
                     action_index: 0,
@@ -3668,12 +3666,14 @@ mod tests {
             };
             let genesis_hash = [0xA7; 32];
             let mut public_inputs = ZkAcePrivacyPublicInputsV1::new(statement, genesis_hash);
-            let authorization_digest = derive_zk_ace_privacy_authorization_digest(&public_inputs)
-                .expect("ZK-ACE authorization digest");
+            let authorization_digest =
+                iroha_data_model::zk::derive_zk_ace_privacy_authorization_digest(&public_inputs)
+                    .expect("ZK-ACE authorization digest");
             public_inputs.statement.replay_nullifier =
                 witness.replay_nullifier_v1(&authorization_digest, &network_id);
-            let proof = prove_zk_ace_privacy_v1(&public_inputs, &witness)
-                .expect("native ZK-ACE runtime proof");
+            let proof =
+                crate::privacy_engines::zk_ace::prove_zk_ace_privacy_v1(&public_inputs, &witness)
+                    .expect("native ZK-ACE runtime proof");
             let statement =
                 PrivacyStatementV1::ZkAcePqAuthorizationV0(public_inputs.statement.clone());
             let statement_digest = statement.digest().expect("ZK-ACE statement digest");

@@ -35,13 +35,23 @@ macro_rules! assert_diag_clone_mutations {
     (
         $case:ident = $base:expr => $validator:ident(
             $($before:expr,)* @ $(, $after:expr)* $(,)?) ;
-        $($index:expr => $mutation:expr;)+
+        $index:expr => $mutation:expr;
+        $($rest:tt)*
     ) => {
-        $(
+        {
             let mut $case = ($base).clone();
             $mutation;
             assert_diag! { $index => $validator($($before,)* &$case $(, $after)*) };
-        )+
+        }
+        assert_diag_clone_mutations! {
+            $case = $base => $validator($($before,)* @ $(, $after)*);
+            $($rest)*
+        }
+    };
+    (
+        $case:ident = $base:expr => $validator:ident(
+            $($before:expr,)* @ $(, $after:expr)* $(,)?) ;
+    ) => {
     };
 }
 macro_rules! assert_local_diag_clone_mutations {
@@ -49,15 +59,27 @@ macro_rules! assert_local_diag_clone_mutations {
         $diagnostics:expr;
         $case:ident = $base:expr => $validator:ident(
             $($before:expr,)* @ $(, $after:expr)* $(,)?) ;
-        $($index:expr => $mutation:expr;)+
+        $index:expr => $mutation:expr;
+        $($rest:tt)*
     ) => {
-        $(
+        {
             let mut $case = ($base).clone();
             $mutation;
             assert_local_diag! {
                 $diagnostics; $index => $validator($($before,)* &$case $(, $after)*)
             };
-        )+
+        }
+        assert_local_diag_clone_mutations! {
+            $diagnostics;
+            $case = $base => $validator($($before,)* @ $(, $after)*);
+            $($rest)*
+        }
+    };
+    (
+        $diagnostics:expr;
+        $case:ident = $base:expr => $validator:ident(
+            $($before:expr,)* @ $(, $after:expr)* $(,)?) ;
+    ) => {
     };
 }
 use super::{
@@ -2768,7 +2790,7 @@ fn full_bootstrap_proof_native_key_material_is_typed_and_profile_bound() {
     assert_row! { decoded_generated_body.rejects_stale_galois_key_set_replay, "generated circuit body must bind stale Galois-key set replay rejection" };
     assert_row! { decoded_generated_body.rejects_stale_proof_key_artifacts, "generated circuit body must bind stale proof-key artifact rejection" };
     macro_rules! encode_native_verifier_material_from_payload {
-        ($circuit_id:expr, $payload:expr) => {
+        ($circuit_id:expr, $payload:expr $(,)?) => {
             encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_payload_v1(
                 $circuit_id,
                 $payload,

@@ -7056,7 +7056,8 @@ macro_rules! volatile_summary_well_formed_body {
             && $summary.formed_timeouts <= 2u64
             // `OutboundControlClass` has seven exhaustive variants.
             && $summary.outbound_control <= 7u64
-            // One live pipeline QC plus at most two highest/locked or pending-WAL references are known.
+            // One current-view pending PrepareQC plus durable high and locked
+            // references bound the known cache to three entries.
             && $summary.pending_prepare <= 1u64
             && $summary.pending_prepare <= $summary.known_prepare
             && $summary.known_prepare <= 3u64

@@ -9575,7 +9575,6 @@ where
 /// bounded decodes continue to inherit the stricter of the inner and outer limits.
 ///
 /// # Errors
-///
 /// Returns an archive-validation, deserialization, or resource-budget error.
 pub fn decode_from_bytes_with_limits<T>(bytes: &[u8], limits: DecodeLimits) -> Result<T, Error>
 where
@@ -9596,9 +9595,7 @@ where
 }
 /// Allocation-free writer that verifies a streamed frame against one exact byte slice.
 ///
-/// Mismatches are sticky while writes continue to report full consumption, so
-/// a later serializer error cannot hide bytes that already diverged. Callers
-/// must separately require [`Self::is_complete`] after a successful stream.
+/// Mismatches are sticky while writes report full consumption, so later serializer errors cannot hide divergence; callers must require [`Self::is_complete`] after success.
 struct ExactSliceWriter<'a> {
     expected: &'a [u8],
     offset: usize,
@@ -9649,9 +9646,8 @@ impl Write for ExactSliceWriter<'_> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::NonCanonicalEncoding`] when any byte differs, the streamed
-/// frame overruns `expected`, or `expected` has an unconsumed suffix. Serializer
-/// and framing errors are returned unchanged when no mismatch was observed.
+/// Returns [`Error::NonCanonicalEncoding`] when bytes differ, the stream overruns `expected`, or a suffix remains.
+/// Serializer and framing errors are returned unchanged when no mismatch was observed.
 #[doc(hidden)]
 pub fn verify_exact_frame<T>(value: &T, expected: &[u8]) -> Result<(), Error>
 where

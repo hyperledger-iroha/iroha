@@ -32,7 +32,7 @@ mode = sys.argv[2]
 self_test = sys.argv[3] == "true"
 
 MODEL = "crates/iroha_data_model/src/offline/mod.rs"
-MODEL_FRAGMENT = "crates/iroha_data_model/src/offline/kagemusha_model.rs"
+MODEL_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_model.rs"
 MODEL_INCLUDE = 'include!("kagemusha_model.rs");'
 PRIVACY = "crates/iroha_data_model/src/privacy.rs"
 PRIVACY_PROTOCOL = "crates/iroha_data_model/src/privacy/protocol.rs"
@@ -176,24 +176,24 @@ def read(relative: str, errors: list[str]) -> str:
 
 
 def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
-    """Read the parent and its authenticated model fragment as one source."""
+    """Read the parent and its authenticated model component as one source."""
 
     # Preserve the existing negative-test API: a MODEL override is already a
-    # complete logical source, while MODEL_FRAGMENT can exercise the split.
+    # complete logical source, while MODEL_COMPONENT can exercise the split.
     if MODEL in overrides:
         return overrides[MODEL]
     parent = read(MODEL, errors)
-    fragment = (
-        overrides[MODEL_FRAGMENT]
-        if MODEL_FRAGMENT in overrides
-        else read(MODEL_FRAGMENT, errors)
+    component = (
+        overrides[MODEL_COMPONENT]
+        if MODEL_COMPONENT in overrides
+        else read(MODEL_COMPONENT, errors)
     )
     if parent.count(MODEL_INCLUDE) != 1:
         errors.append(
-            f"{MODEL}: expected exactly one reviewed {Path(MODEL_FRAGMENT).name} include"
+            f"{MODEL}: expected exactly one reviewed {Path(MODEL_COMPONENT).name} include"
         )
         return parent
-    return parent.replace(MODEL_INCLUDE, fragment, 1)
+    return parent.replace(MODEL_INCLUDE, component, 1)
 
 
 def read_regular_bounded(path: Path, maximum_bytes: int, label: str) -> bytes:
@@ -1058,7 +1058,7 @@ if mode == "promotion":
 if self_test:
     baseline = {
         MODEL: read_reviewed_model([], {}),
-        MODEL_FRAGMENT: read(MODEL_FRAGMENT, []),
+        MODEL_COMPONENT: read(MODEL_COMPONENT, []),
         PRIVACY: read(PRIVACY, []),
         PRIVACY_PROTOCOL: read(PRIVACY_PROTOCOL, []),
         CATALOG: read(CATALOG, []),
@@ -1071,13 +1071,13 @@ if self_test:
     )
     if not static_errors({MODEL: mutated}):
         errors.append("self-test failed to reject ABI-21 substitution")
-    detached_model_fragment = baseline[MODEL_FRAGMENT].replace(
+    detached_model_component = baseline[MODEL_COMPONENT].replace(
         "pub enum KagemushaPastaCycleArtifactKindV4",
         "pub enum DetachedKagemushaPastaCycleArtifactKindV4",
         1,
     )
-    if not static_errors({MODEL_FRAGMENT: detached_model_fragment}):
-        errors.append("self-test failed to authenticate the split model fragment")
+    if not static_errors({MODEL_COMPONENT: detached_model_component}):
+        errors.append("self-test failed to authenticate the split model component")
     shared_bridge_abi_drift = baseline[PRIVACY_PROTOCOL].replace(
         "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;",
         "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",

@@ -21,7 +21,13 @@ use crate::{
         MaskedRelaxedRandomSourceV1,
         zk_ams::mkhe::{
             ZkAmsMkheErrorV1, direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1,
-            direct_object_transport::ZkAmsMkheDirectObjectReadAtProviderV1,
+            direct_object_transport::{
+                ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
+                ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectKindV1,
+                ZkAmsMkheDirectObjectPublicationReceiptV1,
+                ZkAmsMkheDirectObjectPublicationTransactionV1,
+                ZkAmsMkheDirectObjectReadAtProviderV1,
+            },
         },
     },
 };
@@ -69,12 +75,66 @@ pub(in crate::vega::zk_ams::mkhe) struct SealedDirectRkgOneProofOwnerV1<'a> {
     proof: SealedDirectRkgOneProofBytesV1,
 }
 
+/// Published but unverified proof owner retaining its move-only publication receipt.
+pub(in crate::vega::zk_ams::mkhe) struct PublishedDirectRkgOneProofOwnerV2<'a> {
+    sealed: SealedDirectRkgOneProofOwnerV1<'a>,
+    publication: ZkAmsMkheDirectObjectPublicationReceiptV1,
+}
+
 struct PostSemanticDirectRkgOneProofOwnerV1<S> {
     _semantic_owner: S,
     _proof: SealedDirectRkgOneProofBytesV1,
+    _publication: ZkAmsMkheDirectObjectPublicationReceiptV1,
 }
 
 impl<'a> SealedDirectRkgOneProofOwnerV1<'a> {
+    pub(in crate::vega::zk_ams::mkhe) const CANONICAL_PROOF_BYTES_V1: u64 =
+        DIRECT_RKG_ONE_PROOF_BYTES_V1 as u64;
+
+    /// Consume the unpublished owner and stream its exact bytes into one immutable proof object.
+    pub(in crate::vega::zk_ams::mkhe) fn publish_unverified_v2<P>(
+        self,
+        publisher: &mut P,
+    ) -> Result<PublishedDirectRkgOneProofOwnerV2<'a>, ZkAmsMkheErrorV1>
+    where
+        P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
+    {
+        let publication = {
+            let proof_bytes = self.proof.as_bytes();
+            if proof_bytes.len() != DIRECT_RKG_ONE_PROOF_BYTES_V1 {
+                return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
+            }
+            let mut transaction = ZkAmsMkheDirectObjectPublicationTransactionV1::begin(
+                ZkAmsMkheDirectObjectKindV1::ProofEnvelope,
+                Self::CANONICAL_PROOF_BYTES_V1,
+                publisher,
+            )?;
+            for chunk in proof_bytes.chunks(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1) {
+                transaction.write_exact(chunk)?;
+            }
+            transaction.finish()?
+        };
+        if publication.pointer().kind() != ZkAmsMkheDirectObjectKindV1::ProofEnvelope
+            || publication.pointer().payload_bytes() != Self::CANONICAL_PROOF_BYTES_V1
+            || publication.post_publish_read_receipt().canonical_bytes()
+                != Self::CANONICAL_PROOF_BYTES_V1
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        Ok(PublishedDirectRkgOneProofOwnerV2 {
+            sealed: self,
+            publication,
+        })
+    }
+}
+
+impl<'a> PublishedDirectRkgOneProofOwnerV2<'a> {
+    pub(in crate::vega::zk_ams::mkhe) const fn publication_receipt_v2(
+        &self,
+    ) -> &ZkAmsMkheDirectObjectPublicationReceiptV1 {
+        &self.publication
+    }
+
     pub(in crate::vega::zk_ams::mkhe) fn verify_semantic_candidate_v1<P>(
         self,
         context: ZkAmsMkheDirectCeremonyContextV1,
@@ -84,10 +144,10 @@ impl<'a> SealedDirectRkgOneProofOwnerV1<'a> {
     where
         P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
     {
-        let Self {
+        let SealedDirectRkgOneProofOwnerV1 {
             _finalized_capability,
             proof,
-        } = self;
+        } = self.sealed;
         let semantic_owner = verify_finalized_direct_rkg_one_semantic_candidate_v1(
             _finalized_capability,
             context,
@@ -98,6 +158,7 @@ impl<'a> SealedDirectRkgOneProofOwnerV1<'a> {
         Ok(PostSemanticDirectRkgOneProofOwnerV1 {
             _semantic_owner: semantic_owner,
             _proof: proof,
+            _publication: self.publication,
         })
     }
 }

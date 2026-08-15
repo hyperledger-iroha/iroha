@@ -28,11 +28,9 @@ fn consume_unknown_meta(meta: syn::meta::ParseNestedMeta) -> SynResult<()> {
     if meta.input.peek(syn::token::Paren) {
         meta.parse_nested_meta(consume_unknown_meta)?
     } else if meta.input.peek(Token![=]) {
-        // Parse exactly one attribute value. Parsing a free-form TokenStream here
-        // consumes every remaining comma-separated item in the enclosing
-        // `#[norito(...)]` list, which can silently hide a later option from a
-        // different derive (for example `tag = "kind", schema_name = "stable",
-        // deny_unknown_fields`).
+        // Parse one value: a free-form TokenStream consumes the remaining comma-separated
+        // `#[norito(...)]` items and can hide later options from another derive, such as
+        // `tag = "kind", schema_name = "stable", deny_unknown_fields`.
         meta.value()?.parse::<syn::Expr>()?;
     }
     Ok(())
@@ -54,10 +52,8 @@ fn u8_array_len(ty: &syn::Type) -> Option<&syn::Expr> {
     };
     matches!(&*array.elem, syn::Type::Path(path) if path.path.is_ident("u8")).then_some(&array.len)
 }
-// ---- Type classification helpers for packed-struct hybrid layout ----
-// Fixed-size types either have a statically known serialized size or are
-// special-cased ([u8; N]). Returns Some(byte_len) when known (the value is
-// not used arithmetically in all call sites; Some(..) signifies fixed-size).
+// Packed-struct fixed-size types have a static serialized size or are special-cased
+// (`[u8; N]`); `Some(byte_len)` signifies fixed-size even where the length is unused.
 fn is_fixed_size(ty: &syn::Type) -> Option<usize> {
     match ty {
         syn::Type::Path(tp) => {
@@ -95,15 +91,10 @@ fn is_self_delimiting(ty: &syn::Type) -> bool {
                 .last()
                 .map(|s| s.ident.to_string())
                 .unwrap_or_default();
-            // Conservative rule: only a tight allowlist of well-known
-            // primitives/wrappers that are guaranteed to carry their own
-            // length headers are considered self‑delimiting at the field
-            // boundary. This avoids requiring `DecodeFromSlice` on arbitrary
-            // user‑defined types (e.g., `*Id` newtypes/structs) which only
-            // implement Norito (de)serialization but not the strict slice API.
-            //
-            // Collections like Vec/Map/Set/Option/Result are self‑delimiting
-            // because they embed their own lengths.
+            // Only well-known primitives/wrappers guaranteed to carry length headers are
+            // self-delimiting at field boundaries. This avoids requiring `DecodeFromSlice`
+            // on arbitrary user types (such as `*Id`) that only implement Norito codecs.
+            // Collections such as Vec/Map/Set/Option/Result embed their own lengths.
             if matches!(id.as_str(), "String" | "Cow" | "PhantomData") {
                 return true;
             }
@@ -235,14 +226,8 @@ fn token_stream_mentions_generic(tokens: TokenStream2, generic_names: &[syn::Ide
         proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => false,
     })
 }
-/// Add a trait bound to the generated `where` clause when the field type
-/// depends on one of the container's generic parameters.
-///
-/// Concrete field types are checked directly while compiling the generated
-/// implementation, so repeating their trait obligations in a `where` clause
-/// is unnecessary. More importantly, such bounds turn a valid concrete
-/// recursive type such as `enum Expr { Nested(Box<Expr>) }` into the cyclic
-/// obligation `Box<Expr>: Trait -> Expr: Trait -> Box<Expr>: Trait`.
+/// Add a generated `where` bound only when the field depends on a container generic.
+/// Repeating concrete obligations is unnecessary and makes recursive types such as `Expr::Nested(Box<Expr>)` cyclic: `Box<Expr>: Trait -> Expr: Trait -> Box<Expr>: Trait`.
 fn add_bound(generics: &mut Generics, ty: &syn::Type, bound: TokenStream2) {
     let generic_names = generics
         .params

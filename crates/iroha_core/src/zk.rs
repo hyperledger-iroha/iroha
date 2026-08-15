@@ -129,8 +129,7 @@ struct Halo2IpaProvingKeyArchive {
 /// Encode Halo2 IPA proving-key bytes with circuit-family and verifier-key binding.
 ///
 /// The archive is the portable key-artifact format consumed by the IVM prover.
-/// It rejects empty or oversized fields and emits one exact canonical,
-/// uncompressed Norito frame.
+/// It rejects empty or oversized fields and emits one exact canonical, uncompressed Norito frame.
 ///
 /// # Errors
 ///
@@ -841,6 +840,7 @@ pub(crate) enum PreparedVerifyingKeyMaterialV1 {
         ipa_k: u32,
     },
     /// Native STARK/FRI material pinned by the canonical registry payload.
+    #[cfg_attr(not(feature = "zk-stark"), allow(dead_code))]
     StarkFri {
         /// Canonical circuit identifier embedded in the key payload.
         circuit_id: String,

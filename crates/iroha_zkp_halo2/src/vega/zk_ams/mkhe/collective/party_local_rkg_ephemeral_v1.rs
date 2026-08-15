@@ -36,6 +36,8 @@ use crate::{
 
 #[path = "direct_rkg_one_candidate_v1.rs"]
 mod direct_rkg_one_candidate_v1;
+#[path = "direct_rkg_one_creator_v2.rs"]
+mod direct_rkg_one_creator_v2;
 #[path = "direct_rkg_one_publication_v1.rs"]
 mod direct_rkg_one_publication_v1;
 #[path = "direct_rkg_one_sealed_candidate_v1.rs"]

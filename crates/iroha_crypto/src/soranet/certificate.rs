@@ -3093,7 +3093,7 @@ mod tests {
         );
     }
     #[test]
-    fn parse_certificate_payload_rejects_invalid_endpoint_tags() {
+    fn certificate_encoding_rejects_invalid_endpoint_tags() {
         for tags in [
             vec![String::new()],
             vec!["nk 3".to_string()],
@@ -3102,8 +3102,9 @@ mod tests {
         ] {
             let mut certificate = sample_certificate();
             certificate.endpoints[0].tags = tags;
-            let err = parse_certificate_payload(&certificate.to_cbor())
-                .expect_err("ambiguous endpoint tags must fail");
+            let err = certificate
+                .try_to_cbor()
+                .expect_err("ambiguous endpoint tags must not encode");
             match err {
                 CertificateError::InvalidFieldValue { field, .. } => {
                     assert_eq!(field, "endpoint.tags");

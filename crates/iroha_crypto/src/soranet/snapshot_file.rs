@@ -7,7 +7,7 @@ use std::{
 };
 use tempfile::NamedTempFile;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-const SNAPSHOT_O_NOFOLLOW_FLAG: i32 = 0x2000_0000;
+const SNAPSHOT_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SNAPSHOT_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
 #[cfg(any(
@@ -348,6 +348,28 @@ mod tests {
         assert!(
             !abandoned_path.exists(),
             "dropping an uncommitted snapshot must remove it"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_reader_allows_symbolic_link_in_parent_path() {
+        use std::os::unix::fs::symlink;
+        let directory = tempdir().expect("temporary directory");
+        let target_directory = directory.path().join("target");
+        let linked_directory = directory.path().join("linked");
+        fs::create_dir(&target_directory).expect("create target directory");
+        symlink(&target_directory, &linked_directory).expect("link parent directory");
+        fs::write(target_directory.join("ledger.snapshot"), [0x33; 4])
+            .expect("write target snapshot");
+        assert_eq!(
+            read_optional_bounded_regular_file(
+                &linked_directory.join("ledger.snapshot"),
+                8,
+                "test snapshot",
+            )
+            .expect("read through linked parent")
+            .expect("snapshot exists"),
+            [0x33; 4]
         );
     }
     #[cfg(unix)]

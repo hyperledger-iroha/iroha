@@ -16117,8 +16117,7 @@ fn validate_soracloud_fhe_full_bootstrap_execution_prover_input_material_for_art
 /// The release-prover material is validated before native STARK/FRI envelope
 /// construction against the concrete governed artifacts, so stale prefix
 /// traces, stale arithmetic/AIR material, or unrelated generated
-/// prover/verifier proof-key pairs are rejected before a proof attachment is
-/// emitted.
+/// prover/verifier proof-key pairs are rejected before a proof attachment is emitted.
 ///
 /// # Errors
 /// Returns an execution error when the verifier key is not the governed STARK/FRI key for the
@@ -16657,7 +16656,9 @@ mod tests {
         state::{State, World, WorldReadOnly},
     };
     #[cfg(feature = "zk-stark")]
-    use iroha_crypto::fhe_bfv::BfvBootstrapKeyMode;
+    use iroha_crypto::fhe_bfv::{
+        BfvBootstrapKeyMode, encode_bfv_full_bootstrap_circuit_artifact_payload_v1,
+    };
     use iroha_crypto::{
         Hash, KeyPair,
         fhe_bfv::{
@@ -16688,7 +16689,6 @@ mod tests {
             encode_bfv_full_bootstrap_accumulator_artifact_v1,
             encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1,
             encode_bfv_full_bootstrap_blind_rotation_artifact_v1,
-            encode_bfv_full_bootstrap_circuit_artifact_payload_v1,
             encode_bfv_full_bootstrap_linear_transform_artifact_v1,
             encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1,
             encode_bfv_full_bootstrap_proof_key_artifact_v1,
