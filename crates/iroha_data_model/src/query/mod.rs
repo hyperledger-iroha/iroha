@@ -2130,10 +2130,10 @@ mod model {
             })?;
             norito::core::reserve_decode_allocation(bytes.len())
                 .map_err(norito::json::Error::from_decode_resource)?;
-            let signature = iroha_crypto::Signature::try_from_bytes(&bytes).map_err(|_| {
+            let signature = iroha_crypto::Signature::try_from_bytes(&bytes).map_err(|error| {
                 norito::json::Error::InvalidField {
                     field: String::from("QuerySignature"),
-                    message: String::from("invalid signature payload"),
+                    message: error.to_string(),
                 }
             })?;
             Ok(QuerySignature(SignatureOf::from_signature(signature)))
@@ -2518,6 +2518,21 @@ where
     /// `asset_definition` for `FindAccountsWithAsset`) are preserved.
     payload: Vec<u8>,
 }
+
+struct QueryFieldRef<'a>(&'a dyn norito::core::NoritoSerialize);
+
+impl norito::core::NoritoSerialize for QueryFieldRef<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+}
+
+fn query_field_encoded_len(value: &dyn norito::core::NoritoSerialize) -> Option<usize> {
+    value
+        .encoded_len_exact()
+        .or_else(|| norito::core::encoded_payload_len(&QueryFieldRef(value)).ok())
+}
+
 struct ErasedIterQueryStreaming<'a, T>(&'a ErasedIterQuery<T>)
 where
     T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync;
@@ -2533,9 +2548,6 @@ where
         let values: [&dyn norito::core::NoritoSerialize; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
-            if value.encoded_len_exact().is_none() {
-                return Err(norito::core::Error::LengthMismatch);
-            }
             norito::core::write_len_prefixed_exact(writer, value, &mut field)?;
         }
         Ok(())
@@ -2551,7 +2563,7 @@ where
         let values: [&dyn norito::core::NoritoSerialize; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
-            let field_len = value.encoded_len_exact()?;
+            let field_len = query_field_encoded_len(value)?;
             total = total
                 .checked_add(norito::core::len_prefix_len(field_len))?
                 .checked_add(field_len)?;
@@ -4247,6 +4259,7 @@ mod trait_object_tests {
     use super::*;
     use crate::query::dsl::{HasProjection, PredicateMarker, SelectorMarker};
     use norito::codec::Encode;
+
     fn bare_bytes_with_flags(value: &dyn norito::core::NoritoSerialize, flags: u8) -> Vec<u8> {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
@@ -4254,14 +4267,21 @@ mod trait_object_tests {
         value.serialize(&mut encoder).expect("encode bare value");
         bytes
     }
+
     #[test]
     fn query_box_streaming_wire_matches_owned_tuple_for_all_sequence_layouts() {
         let concrete = domain::FindDomains;
-        let query: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Domain>::new(
+        let erased = ErasedIterQuery::<Domain>::new(
             CompoundPredicate::PASS,
             SelectorTuple::default(),
             concrete.encode(),
-        ));
+        );
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(&erased.selector),
+            None,
+            "the fixture must exercise the count-first field path"
+        );
+        let query: QueryBox<QueryOutputBatchBox> = Box::new(erased);
         let expected = (
             query_wire_id(query.type_name_key()).to_owned(),
             query.encode_bytes(),

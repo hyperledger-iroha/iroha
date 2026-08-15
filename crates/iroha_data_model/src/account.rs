@@ -180,7 +180,7 @@ fn account_id_from_json_str(value: &str) -> Result<AccountId, norito::json::Erro
 
 #[cfg(feature = "json")]
 fn invalid_account_id_json() -> norito::json::Error {
-    norito::json::Error::Message("invalid account identifier".to_owned())
+    norito::json::Error::Message("invalid I105 account identifier".to_owned())
 }
 #[cfg(feature = "json")]
 pub(super) fn reserve_account_literal_json_decode(

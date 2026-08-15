@@ -9537,18 +9537,10 @@ const CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES: usize = 256 * 1024 * 1024;
 const CANONICAL_DECODE_FIXED_ALLOCATION_BYTES: usize = 64 * 1024;
 /// Return conservative decode limits derived from one complete encoded value.
 ///
-/// Packed boolean sequences may carry eight logical elements per encoded byte,
-/// so sequence and cumulative element budgets use an eightfold allowance.
-/// Allocation includes the encoded length, up to 63 further encoded lengths for
-/// heterogeneous owned object graphs and nested canonical values, and a fixed
-/// 64 KiB floor for small structural values. The amplified extra is capped at
-/// 256 MiB, so small reviewed frames retain the `64 * length + 64 KiB` envelope
-/// while large configured archives cannot multiply their complete size by 64.
-/// Independent field, element, and nesting limits remain in force.
-///
-/// Saturating arithmetic prevents integer wrap; safety also relies on the
-/// archive maximum and protocol frame-size limits rejecting excessive encoded
-/// inputs before this decoder policy is applied.
+/// Packed booleans may carry eight logical elements per encoded byte, so sequence and cumulative element budgets use an eightfold allowance.
+/// Allocation includes the encoded length, up to 63 further encoded lengths for heterogeneous owned graphs and nested canonical values, plus a 64 KiB floor.
+/// The amplified extra is capped at 256 MiB: small frames retain the `64 * length + 64 KiB` envelope, while large archives cannot multiply their size by 64.
+/// Independent field, element, and nesting limits remain in force; saturating arithmetic prevents wrap, and archive/frame limits reject excessive inputs first.
 #[must_use]
 pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
     let amplified_extra = payload_len.saturating_mul(CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER);
@@ -9569,13 +9561,8 @@ pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
     )
 }
 
-/// Derive default limits for a validated frame header.
-///
-/// Structural limits must cover the uncompressed payload, while the cumulative
-/// allocation limit stays anchored to the bytes supplied by the caller. The
-/// latter keeps a small compressed frame from authorizing arbitrary expansion;
-/// [`deserialize_stream`] charges the complete declared payload before it
-/// allocates or decompresses it.
+/// Derive default limits for a validated frame header. Structural limits cover the uncompressed payload while cumulative allocation remains tied to caller bytes.
+/// This prevents a small compressed frame from authorizing arbitrary expansion; [`deserialize_stream`] charges the declared payload before allocation or decompression.
 fn framed_decode_limits(frame_len: usize, uncompressed_payload_len: usize) -> DecodeLimits {
     let frame_limits = canonical_decode_limits(frame_len);
     let structural_len = frame_len.max(uncompressed_payload_len);
@@ -9588,16 +9575,12 @@ fn framed_decode_limits(frame_len: usize, uncompressed_payload_len: usize) -> De
     )
 }
 
-/// Decode an object from Norito-encoded bytes (compressed or not) under a
-/// payload-derived resource budget.
+/// Decode an object from Norito-encoded bytes, compressed or not, under a payload-derived resource budget.
 ///
-/// Structural byte and element limits cover the validated header's declared
-/// uncompressed payload length. The cumulative allocation budget remains
-/// derived from the complete frame length, so a short input cannot force an
-/// allocation proportional only to an attacker-declared uncompressed length.
-/// Callers with a narrower schema limit, or trusted compressed data whose
-/// legitimate expansion exceeds the default envelope, can use
-/// [`decode_from_bytes_with_limits`] with an explicit budget.
+/// Structural byte and element limits cover the validated header's declared uncompressed payload length.
+/// Cumulative allocation remains derived from the complete frame, so a short input cannot force allocation from only an attacker-declared uncompressed length.
+/// Callers with narrower schema limits, or trusted compressed data whose legitimate expansion exceeds the default envelope,
+/// can use [`decode_from_bytes_with_limits`] with an explicit budget.
 pub fn decode_from_bytes<T>(bytes: &[u8]) -> Result<T, Error>
 where
     for<'de> T: NoritoDeserialize<'de>,
@@ -9628,16 +9611,12 @@ where
     }
     Ok(value)
 }
-/// Decode a Norito archive with explicit per-value and cumulative resource
-/// limits.
+/// Decode a Norito archive with explicit per-value and cumulative resource limits.
 ///
-/// This enters the private decoder directly rather than recursively invoking
-/// [`decode_from_bytes`], so a caller can provide a larger, still-finite budget
-/// for trusted high-compression data. Nested bounded decodes continue to
-/// inherit the stricter of the inner and outer limits.
+/// This enters the private decoder directly instead of recursively invoking [`decode_from_bytes`],
+/// allowing a larger but finite budget for trusted high-compression data while nested bounded decodes inherit the stricter limit.
 ///
 /// # Errors
-///
 /// Returns an archive-validation, deserialization, or resource-budget error.
 pub fn decode_from_bytes_with_limits<T>(bytes: &[u8], limits: DecodeLimits) -> Result<T, Error>
 where
@@ -9657,12 +9636,9 @@ where
 {
     decode_canonical_with_limits(bytes, canonical_decode_limits(bytes.len()))
 }
-/// Allocation-free writer that verifies a streamed frame against one exact
-/// byte slice.
+/// Allocation-free writer that verifies a streamed frame against one exact byte slice.
 ///
-/// Mismatches are sticky while writes continue to report full consumption, so
-/// a later serializer error cannot hide bytes that already diverged. Callers
-/// must separately require [`Self::is_complete`] after a successful stream.
+/// Mismatches are sticky while writes report full consumption, so later serializer errors cannot hide divergence; callers must require [`Self::is_complete`] after success.
 struct ExactSliceWriter<'a> {
     expected: &'a [u8],
     offset: usize,
@@ -9706,17 +9682,14 @@ impl Write for ExactSliceWriter<'_> {
 }
 /// Verify that `value` encodes to exactly `expected` under the active layout.
 ///
-/// The comparison streams the complete header, alignment padding, and payload
-/// directly over `expected`; it does not allocate a second frame-sized buffer.
-/// This preserves the ambient layout behavior of [`core::to_bytes`]. Callers
-/// that require the fixed canonical V1 layout should use
-/// [`decode_canonical_with_limits`] instead.
+/// The comparison streams the complete header, alignment padding, and payload directly over `expected`;
+/// it does not allocate a second frame-sized buffer and preserves [`core::to_bytes`] layout behavior.
+/// Callers requiring the fixed canonical V1 layout should use [`decode_canonical_with_limits`] instead.
 ///
 /// # Errors
 ///
-/// Returns [`Error::NonCanonicalEncoding`] when any byte differs, the streamed
-/// frame overruns `expected`, or `expected` has an unconsumed suffix. Serializer
-/// and framing errors are returned unchanged when no mismatch was observed.
+/// Returns [`Error::NonCanonicalEncoding`] when bytes differ, the stream overruns `expected`, or a suffix remains.
+/// Serializer and framing errors are returned unchanged when no mismatch was observed.
 #[doc(hidden)]
 pub fn verify_exact_frame<T>(value: &T, expected: &[u8]) -> Result<(), Error>
 where

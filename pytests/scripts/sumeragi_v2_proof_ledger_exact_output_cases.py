@@ -2709,3 +2709,132 @@ def _apply_exact_output_non_runtime_extended_mutations(
         diagnostics.append(diagnostic)
     monkeypatch.setattr(module, "_require_rust_item_token_sha256", lambda *args: None)
     return diagnostics
+
+
+@pytest.mark.parametrize(
+    ("item_name", "old", "new", "expected_error"),
+    (
+        (
+            "proposal_predecessor_is_ready_for_progress",
+            "|| self.autonomous_payload_is_expected_for(proposal)",
+            "|| false",
+            "lane predecessor readiness must dispatch autonomous and ordinary proofs",
+        ),
+        (
+            "persist_anchored_sessions",
+            "if !self.proposal_predecessor_is_ready_for_progress(&session.proposal) {",
+            "if false {",
+            "anchored lane persistence must retain a certified successor",
+        ),
+        (
+            "reconstruct_durable_lane_certificate",
+            "if !self.proposal_predecessor_is_ready_for_progress(proposal) {",
+            "if false {",
+            "lane recovery reconstruction must not emit a successor certificate",
+        ),
+        (
+            "preflight_effect_insertion",
+            "if !predecessor_ready {",
+            "if false {",
+            "lane effect admission must reject every fresh consensus output",
+        ),
+        (
+            "hydrate_canonical_lane_artifacts",
+            "if !raw_slots.insert((lane_id, lane_block_height)) {",
+            "if false && !raw_slots.insert((lane_id, lane_block_height)) {",
+            "raw lane hydration must fail stop on a duplicate or cyclic predecessor slot",
+        ),
+        (
+            "hydrate_canonical_lane_artifacts",
+            "raw_proposals.len().saturating_add(route_chain.len())\n"
+            "                    >= ordinary_hydration_capacity",
+            "raw_proposals.len().saturating_add(route_chain.len())\n"
+            "                    > ordinary_hydration_capacity",
+            "raw lane hydration must fail stop at the exact bounded inventory",
+        ),
+        (
+            "hydrate_canonical_lane_artifacts",
+            "read_lane_block_artifact_without_sidecar_repair(lane_id, lane_block_height)",
+            "read_lane_block_artifact(lane_id, lane_block_height)",
+            "read only the indexed immutable artifact",
+        ),
+        (
+            "hydrate_canonical_lane_artifacts",
+            "|| !canonical_shape",
+            "|| false",
+            "raw lane hydration must reject malformed, inactive, or non-canonical carrier ownership",
+        ),
+        (
+            "hydrate_canonical_lane_artifacts",
+            "if canonical.as_slice() != [artifact.clone()] {",
+            "if false {",
+            "raw lane hydration must require one exact canonical ownership artifact",
+        ),
+        (
+            "hydrate_canonical_lane_artifacts",
+            "if !canonical_raw_lane_predecessor_matches_proposal(",
+            "if false && !canonical_raw_lane_predecessor_matches_proposal(",
+            "raw lane hydration must authenticate every unapplied predecessor link",
+        ),
+        (
+            "hydrate_canonical_lane_artifacts",
+            "route_chain.reverse();",
+            "route_chain.clear();",
+            "raw lane hydration must restore each predecessor chain in forward application order",
+        ),
+        (
+            "hydrate_canonical_lane_artifacts",
+            "raw_proposals.sort_by_key(|proposal| {\n"
+            "            let descriptor = &proposal.descriptor;\n"
+            "            (\n"
+            "                descriptor.proposal_height,\n"
+            "                descriptor.lane_id,\n"
+            "                descriptor.dataspace_id,\n"
+            "                descriptor.lane_block_height,\n"
+            "                proposal.proposal_hash,\n"
+            "            )\n"
+            "        });",
+            "raw_proposals.reverse();",
+            "raw lane hydration must install independent chains in canonical deterministic order",
+        ),
+    ),
+)
+def test_lane_predecessor_ordering_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Refreshed lane item seals cannot hide raw/predecessor order weakening."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    lane_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    context = (("impl", "V2LaneWorkAdapter"),)
+    mutate_rust_item_source_in_context(
+        module, lane_path, item_name, context, old, new
+    )
+    qualified = f"V2LaneWorkAdapter::{item_name}"
+    if qualified in module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256:
+        bindings = (
+            (module._PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256, qualified),
+        )
+    else:
+        assert item_name == "reconstruct_durable_lane_certificate"
+        bindings = (
+            (module._PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256, item_name),
+        )
+    original = rebind_reviewed_rust_item_digests(
+        module, lane_path, item_name, context, bindings
+    )
+    try:
+        errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+    finally:
+        restore_reviewed_rust_item_digests(original)
+
+    assert any(expected_error in error for error in errors), errors
+    assert not any(
+        item_name in error and "exact reviewed token digest" in error
+        for error in errors
+    ), errors

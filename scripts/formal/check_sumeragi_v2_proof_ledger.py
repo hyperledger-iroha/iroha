@@ -62103,6 +62103,7 @@ if self.pending_server_closures.is_empty() {
         "effect_count",
         "requeue_effect",
         "drain_effects",
+        "proposal_predecessor_is_ready_for_progress",
         "preflight_effect_insertion",
         "push_effect",
         "schedule_retransmission",
@@ -67280,44 +67281,6 @@ pub(crate) fn requeue_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
     )
     _require_exact_rust_tokens(
         lane_path,
-        lane_ack_items.get("V2LaneWorkAdapter::preflight_effect_insertion"),
-        """
-fn preflight_effect_insertion(
-    &mut self,
-    effect: &V2LaneWorkEffect,
-) -> Result<Hash, LaneWorkEffectInsertionOutcome> {
-    if !lane_work_effect_reply_routes_have_valid_shape(effect) {
-        return Err(LaneWorkEffectInsertionOutcome::Rejected);
-    }
-    let key = lane_work_effect_key(effect);
-    if self.effect_keys.contains(&key) {
-        return Err(
-            if self
-                .effects
-                .iter_mut()
-                .find(|queued| lane_work_effect_key(queued) == key)
-                .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, effect))
-            {
-                LaneWorkEffectInsertionOutcome::Duplicate
-            } else {
-                LaneWorkEffectInsertionOutcome::Rejected
-            },
-        );
-    }
-    if !lane_work_effect_reply_routes_are_valid(effect) {
-        return Err(LaneWorkEffectInsertionOutcome::Rejected);
-    }
-    if self.effects.len() >= self.limits.effect_capacity.get() {
-        return Err(LaneWorkEffectInsertionOutcome::Rejected);
-    }
-    Ok(key)
-}
-""",
-        "ordinary lane effect preflight must retain exact identity, bounded capacity, and complete reply-route history",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::push_effect"),
         """
 fn push_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
@@ -70128,6 +70091,9 @@ let certificate = match self.reconstruct_durable_lane_certificate(proposal, send
 """,
         "lane recovery emitter must require a nonempty route set with a live authenticated source",
         errors,
+    )
+    _require_lane_predecessor_ordering_source_contracts(
+        lane_path, lane_ack_items, lane_items, errors
     )
     _require_rust_token_sequence(
         lane_path,

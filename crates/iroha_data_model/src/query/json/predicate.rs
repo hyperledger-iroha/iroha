@@ -650,14 +650,14 @@ mod tests {
         let expected = PredicateJson::try_from_value(&input).expect("borrowed conversion");
         let limits = norito::DecodeLimits::new(64, 4 * 1_024, 256, 4 * 1_024, 16);
         let (actual, usage) = norito::core::with_decode_limits_measured(limits, || {
-            PredicateJson::try_from_owned_value(input)
+            PredicateJson::try_from_owned_value(input.clone())
         });
         assert_eq!(actual.expect("owned conversion"), expected);
         assert!(usage.total_allocated_bytes() > 0);
         let denied = norito::core::with_decode_limits(
             norito::DecodeLimits::new(64, 4 * 1_024, 256, 1, 16),
             || {
-                PredicateJson::try_from_owned_value(value())
+                PredicateJson::try_from_owned_value(input)
                     .map_err(|error| norito::core::Error::Message(error.to_string()))
             },
         );

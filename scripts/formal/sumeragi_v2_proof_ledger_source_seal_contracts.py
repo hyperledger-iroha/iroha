@@ -3180,13 +3180,14 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::stranded_retryable_sidecar_control_index": "09ed26efa19aefc39d448b1bee81d5b070c272557137e89a51c4f1dc6334419b",
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "ac05dcfd3b1457f5632cbd3eb9fc337ee2a1200b6ce02e2cd154c392a3f5cc32",
-    "V2LaneWorkAdapter::persist_anchored_sessions": "a8ea64ed2657d6fa38b586cdbc6e8804ae7a7ac381d2ee4d7aa133257342ddbd",
-    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "15bb7473773ab07cf8f68557c3ce443defa60fac45c9697aaef3945a3b5a24cf",
+    "V2LaneWorkAdapter::persist_anchored_sessions": "ac81d09b993cf6c83cfcf157d87de1873395bfb240bdc256159243dc05387ee1",
+    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "0df3ea8e18a50206465b35407003a6e3606e67da1d4edeaebde620301fac2a54",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
     "V2LaneWorkAdapter::drain_effects": "478982ec7c7cec9990a70993011e34e0cf79f57fb903b3c7cbabc040052b1aba",
-    "V2LaneWorkAdapter::preflight_effect_insertion": "568289d7497ed37ca03cd91e1fc222bfa010109de640b5d3244672d0a9cf41b3",
+    "V2LaneWorkAdapter::proposal_predecessor_is_ready_for_progress": "af90f5ebe15136bfc8255dc8d1a8aeac7101d4226c79ef8a94e4821eeeb0d78a",
+    "V2LaneWorkAdapter::preflight_effect_insertion": "ed3875247788398142bf50a42def4acd00988688e272a94a4dddffc8a2c9bf87",
     "V2LaneWorkAdapter::push_effect": "8974bca860609c853efe07e78397cb4be80e8bf1a688831bf1c28b1807293441",
     "V2LaneWorkAdapter::schedule_retransmission": "7468d25a90d61258242527880622e74ff38143c0f75c2e7bf572c9792c9f6232",
     "V2LaneWorkAdapter::schedule_retransmission_at": "5f5ccf9a1f78a69d064ed99331a452571d0379497e28cd67daac836effbecd51",
@@ -3763,7 +3764,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
         "bcab2428b4a2d43dd23989bebe917077e84b069c4e120808f6b25ce4503ce52f"
     ),
     "reconstruct_durable_lane_certificate": (
-        "adf988938c94e9869ec4f26c9942cea89fb0cc0669677688640f9c7567dc2a59"
+        "d0f552b3786458048dfb987c161bc37f3a55e92680a92d1818a11b658f64396b"
     ),
     "reply_routes_are_live_for_peer": (
         "cdca18bef9df99c77e3698622c9cf6941dd249967bb587f60e9fd381a4f8b235"
