@@ -1,8 +1,7 @@
 //! GAR controller bundle generator (SNNet-15G).
 //!
-//! Reads a GAR controller config, emits NATS dispatch events, and records GAR
-//! enforcement receipts for each PoP so compliance/export pipelines can ship a
-//! single evidence bundle.
+//! Reads a GAR controller config, emits NATS dispatch events, and records GAR enforcement receipts
+//! for each PoP so compliance/export pipelines can ship a single evidence bundle.
 use blake3::Hasher;
 use eyre::{Result, WrapErr, eyre};
 use hex::encode as hex_encode;

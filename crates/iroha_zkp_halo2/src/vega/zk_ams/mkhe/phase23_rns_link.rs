@@ -277,9 +277,8 @@ pub(super) struct ZkAmsPhase23RnsLinkFamilyGeometryV1 {
 }
 /// Geometry derived from the canonical native relation and packing map.
 ///
-/// This descriptor is public statement metadata only. It is deliberately not
-/// a proof, a receipt, or release evidence, and there is no conversion from it
-/// to any verified RNS-Link capability.
+/// This descriptor is public statement metadata only. It is deliberately not a proof, a receipt, or
+/// release evidence, and there is no conversion from it to any verified RNS-Link capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkReleaseGeometryV1 {
     profile_digest: [u8; 32],
@@ -468,9 +467,8 @@ fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
         digest,
     })
 }
-/// Allocation-bounded, parent-private result of checking the exact native
-/// packed accumulator family geometry and recomputing every packed/RNS chunk
-/// binding.
+/// Allocation-bounded, parent-private result of checking the exact native packed accumulator family
+/// geometry and recomputing every packed/RNS chunk binding.
 ///
 /// This type intentionally carries `Unverified` in its name: ciphertext
 /// openings, radix/CRT carries, negacyclic quotients, and Hyrax equality are
@@ -785,13 +783,11 @@ fn immutable_algorithm_manifest_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1
 #[path = "phase23_rns_link_context_authority_v1.rs"]
 mod context_authority_v1;
 pub(super) use context_authority_v1::ZkAmsPhase23RnsLinkContextV1;
-/// Producer-claimed roots of tables that must exist before Fiat--Shamir
-/// sampling.
+/// Producer-claimed roots of tables that must exist before Fiat--Shamir sampling.
 ///
-/// The type remains part of the private structural checkpoint, but production
-/// has no digest-only constructor. Tests can build hostile shells; a release
-/// prover must instead gain a constructor that consumes state-owned openings
-/// and actual committed tables.
+/// The type remains part of the private structural checkpoint, but production has no digest-only
+/// constructor. Tests can build hostile shells; a release prover must instead gain a constructor
+/// that consumes state-owned openings and actual committed tables.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
     layout_digest: [u8; 32],
@@ -1088,11 +1084,10 @@ fn derive_release_evaluation_points_v1(
 /// Verifier-owned binding between the canonical whole-proof transport and the
 /// real release relation inputs.
 ///
-/// `statement_digest` is the digest of the complete challenge set derived from
-/// the context and all ordered commitments. It is never accepted from the
-/// proof producer. The wire decoder may use this value to reject a digest shell
-/// or a structurally valid envelope carrying commitments from another proof.
-/// This binding deliberately makes no claim that the relation responses verify.
+/// `statement_digest` is the digest of the complete challenge set derived from the context and all
+/// ordered commitments. It is never accepted from the proof producer. The wire decoder may use this
+/// value to reject a digest shell or a structurally valid envelope carrying commitments from
+/// another proof. This binding deliberately makes no claim that the relation responses verify.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkWholeProofBindingV1 {
     pub(super) profile_digest: [u8; 32],
@@ -1258,11 +1253,9 @@ fn validate_native_bgv_public_artifacts_v1(
     }
     Ok(rns_binding_digest)
 }
-/// Verify one real release-profile encryption opening and advance only the
-/// concrete, topology-only relation-prerequisite sink while the opening is
-/// live.
-/// No checked token, callback, witness reference, or transferable authority is
-/// returned.
+/// Verify one real release-profile encryption opening and advance only the concrete, topology-only
+/// relation-prerequisite sink while the opening is live. No checked token, callback, witness
+/// reference, or transferable authority is returned.
 #[cfg(test)]
 fn verify_zk_ams_phase23_native_bgv_opening_v1(
     key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -1941,9 +1934,8 @@ fn rns_link_wire_length_v1(bytes: &[u8], offset: usize) -> Result<usize, ZkAmsMk
     usize::try_from(rns_link_wire_u64_v1(bytes, offset)?)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-/// Allocation-light structural pass. It completes exact length arithmetic and
-/// canonical scalar/point validation before proof vectors or IPA generators
-/// can be allocated.
+/// Allocation-light structural pass. It completes exact length arithmetic and canonical
+/// scalar/point validation before proof vectors or IPA generators can be allocated.
 fn preflight_rns_link_bitness_wire_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
     bytes: &[u8],

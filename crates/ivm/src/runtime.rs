@@ -1,10 +1,9 @@
 //! Runtime façade for embedding the IVM safely.
 //!
-//! The goal of this module is to expose a compact interface that callers can
-//! depend on instead of touching the sprawling `IVM` implementation directly.
-//! Keeping the entry points narrow makes it easier to reason about security
-//! policies (syscalls, pointer checks) and lets future optimisations – such as
-//! alternate interpreters or JITs – slot in behind the same trait without
+//! The goal of this module is to expose a compact interface that callers can depend on instead of
+//! touching the sprawling `IVM` implementation directly. Keeping the entry points narrow makes it
+//! easier to reason about security policies (syscalls, pointer checks) and lets future
+//! optimisations – such as alternate interpreters or JITs – slot in behind the same trait without
 //! compromising determinism.
 //!
 //! Typical usage:
@@ -34,23 +33,20 @@ use std::{
 };
 /// Runtime operations exposed by the VM core.
 pub trait VmEngine {
-    /// Attach a host implementation. Hosts are responsible for syscall handling
-    /// and should enforce any execution policy required by the deployment. The
-    /// generic parameter ensures strongly typed hosts can be attached without
-    /// forcing callers to allocate trait objects themselves.
+    /// Attach a host implementation. Hosts are responsible for syscall handling and should enforce
+    /// any execution policy required by the deployment. The generic parameter ensures strongly
+    /// typed hosts can be attached without forcing callers to allocate trait objects themselves.
     fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H);
-    /// Load a compiled program (`.to` bytecode) into the VM. Implementations
-    /// must preserve the existing INPUT buffer so that hosts can preload TLVs
-    /// deterministically prior to execution.
+    /// Load a compiled program (`.to` bytecode) into the VM. Implementations must preserve the
+    /// existing INPUT buffer so that hosts can preload TLVs deterministically prior to execution.
     fn load_program(&mut self, program: &[u8]) -> Result<(), VMError>;
     /// Execute the currently loaded program from the `pc`. Errors must surface
     /// deterministically and leave the VM in a halted state.
     fn run(&mut self) -> Result<(), VMError>;
     /// Access immutable program metadata as parsed from the bytecode header.
     fn program_metadata(&self) -> &ProgramMetadata;
-    /// Convenience helper that sets a host, loads a program and immediately
-    /// executes it. Useful for embedding scenarios where the host lifecycle is
-    /// scoped to a single call.
+    /// Convenience helper that sets a host, loads a program and immediately executes it. Useful for
+    /// embedding scenarios where the host lifecycle is scoped to a single call.
     fn execute_with_host<H: IVMHost + Send + Sync + 'static>(
         &mut self,
         host: H,

@@ -4,8 +4,7 @@
 //! It can be constructed only inside Phase 23 and can advance only when the
 //! collective opening verifier lends its unconstructible permit after checking
 //! both native RLWE equations.  It fixes the 43-opening order, counts the two
-//! equations across all 38 release limbs, and binds only public geometry and
-//! canonical topology.
+//! equations across all 38 release limbs, and binds only public geometry and canonical topology.
 //!
 //! It does not receive, retain, or hash witness coefficients or derived
 //! q-native relation values.  The current Merkle + FRI prototype is not hiding,
@@ -133,15 +132,13 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
             ordered_topology_hash,
         })
     }
-    /// Record that both native equations for the next canonical opening were
-    /// validated while the owned opening was still live in the collective
-    /// verifier.
+    /// Record that both native equations for the next canonical opening were validated while the
+    /// owned opening was still live in the collective verifier.
     ///
-    /// The collective verifier has already checked the exact public artifacts,
-    /// RNS binding, and both native equations before this call. Consequently
-    /// the sink accepts only the unconstructible permit. It derives the next
-    /// family, chunk, and layout from geometry captured by its restricted
-    /// constructor; no witness-bearing reference crosses this boundary.
+    /// The collective verifier has already checked the exact public artifacts, RNS binding, and
+    /// both native equations before this call. Consequently the sink accepts only the
+    /// unconstructible permit. It derives the next family, chunk, and layout from geometry captured
+    /// by its restricted constructor; no witness-bearing reference crosses this boundary.
     pub(in super::super) fn absorb_validated_opening_topology_v1(
         &mut self,
         _permit: &ZkAmsPhase23NativeBgvOpeningVerifierPermitV1,

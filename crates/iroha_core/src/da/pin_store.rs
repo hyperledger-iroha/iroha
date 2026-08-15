@@ -1,8 +1,7 @@
 //! In-memory DA pin intent index mirrored from the on-chain registry.
 //!
-//! Pin intents are persisted into WSV during block application. This cache
-//! provides fast lookups for Torii/query paths and can be rebuilt from the
-//! block log or WSV indexes after restart.
+//! Pin intents are persisted into WSV during block application. This cache provides fast lookups
+//! for Torii/query paths and can be rebuilt from the block log or WSV indexes after restart.
 use iroha_data_model::{
     da::{
         commitment::DaCommitmentLocation,
@@ -121,10 +120,9 @@ impl DaPinStore {
     }
     /// Return intents in canonical location order strictly after `cursor`.
     ///
-    /// The ordered map seeks directly to the cursor in logarithmic time. Callers
-    /// should separately require [`Self::contains_query_location`] before
-    /// accepting a client-supplied cursor so removed or foreign locations fail
-    /// closed.
+    /// The ordered map seeks directly to the cursor in logarithmic time. Callers should separately
+    /// require [`Self::contains_query_location`] before accepting a client-supplied cursor so
+    /// removed or foreign locations fail closed.
     pub fn all_sorted_after(
         &self,
         cursor: Option<DaCommitmentLocation>,

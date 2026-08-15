@@ -5,9 +5,8 @@
 //! arbitrarily offset (misaligned) and when lengths are not multiples of the
 //! chunk size. This covers both tails and misaligned base pointers.
 //!
-//! The tests are deterministic and do not require any specific hardware
-//! features. On platforms without SIMD, `ivm::vector` falls back to scalar
-//! intrinsics, so parity still holds.
+//! The tests are deterministic and do not require any specific hardware features. On platforms
+//! without SIMD, `ivm::vector` falls back to scalar intrinsics, so parity still holds.
 #![allow(clippy::needless_range_loop)]
 use ivm::{vadd32, vadd64, vand, vor, vrot32, vxor};
 // Simple deterministic PRNG (xoshiro-like) to avoid external deps.

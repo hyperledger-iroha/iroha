@@ -222,10 +222,9 @@ impl ProofToken {
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError`] when the payload is truncated, malformed, or
-    /// uses an unsupported version. Also enforces mint invariants such as
-    /// canonical flags, non-empty entry lists, and `expires_at` strictly after
-    /// `issued_at`.
+    /// Returns [`DecodeError`] when the payload is truncated, malformed, or uses an unsupported
+    /// version. Also enforces mint invariants such as canonical flags, non-empty entry lists, and
+    /// `expires_at` strictly after `issued_at`.
     pub fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.len() < FRAME_MAGIC.len() + 2 {
             return Err(DecodeError::Truncated);

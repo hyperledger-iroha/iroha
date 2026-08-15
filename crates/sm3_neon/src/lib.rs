@@ -1,11 +1,10 @@
 #![allow(clippy::missing_const_for_fn)]
 //! NEON helpers for the SM3 hash function.
 //!
-//! The routine below implements the SM3 compression function and padding while
-//! keeping the API surface aligned with the `sm4-neon` helper. The current
-//! implementation still mirrors the scalar RustCrypto path but executes inside
-//! an AArch64 NEON context so additional vectorisation can be layered in
-//! step-by-step.
+//! The routine below implements the SM3 compression function and padding while keeping the API
+//! surface aligned with the `sm4-neon` helper. The current implementation still mirrors the scalar
+//! RustCrypto path but executes inside an AArch64 NEON context so additional vectorisation can be
+//! layered in step-by-step.
 #[cfg(target_arch = "aarch64")]
 mod neon {
     use core::arch::aarch64::*;

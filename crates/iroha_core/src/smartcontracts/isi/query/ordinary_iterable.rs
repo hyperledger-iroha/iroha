@@ -1,10 +1,9 @@
 //! Allocation primitives and the fail-closed boundary for ordinary iterables.
 //!
-//! A generic [`ValidQuery`] iterator is not a source proof: producer-local
-//! clones, candidate collections, and synthetic-field predicate evaluators can
-//! allocate before pagination observes an item. Unadapted producers stop
-//! before `ValidQuery::execute`; each admitted producer instead owns rows
-//! through its query-specific bounded adapter.
+//! A generic [`ValidQuery`] iterator is not a source proof: producer-local clones, candidate
+//! collections, and synthetic-field predicate evaluators can allocate before pagination observes an
+//! item. Unadapted producers stop before `ValidQuery::execute`; each admitted producer instead owns
+//! rows through its query-specific bounded adapter.
 #![allow(unsafe_code)]
 use super::{
     OrdinaryQueryExecutionLimits, QueryExecutionStats, ordinary_memory::OrdinaryCursorMode,

@@ -20093,6 +20093,164 @@ mod tests {
             output_bound,
         )
     }
+    struct FullBootstrapExecutionCase {
+        params: BfvParameters,
+        evaluation_keys: BfvEvaluationKeyBundle,
+        transcript: BfvEvaluationKeyRefreshTranscriptV1,
+        artifacts: BfvFullBootstrapCircuitArtifactBundleV1,
+        job: FheJobSpecV1,
+        input: BfvIdentifierCiphertext,
+        output: BfvIdentifierCiphertext,
+        input_bound: u128,
+        output_bound: u128,
+    }
+    impl FullBootstrapExecutionCase {
+        fn sample() -> Self {
+            let (
+                params,
+                evaluation_keys,
+                transcript,
+                artifacts,
+                job,
+                input,
+                output,
+                input_bound,
+                output_bound,
+            ) = sample_full_bootstrap_execution_verification_case();
+            Self {
+                params,
+                evaluation_keys,
+                transcript,
+                artifacts,
+                job,
+                input,
+                output,
+                input_bound,
+                output_bound,
+            }
+        }
+        #[cfg(feature = "zk-stark")]
+        fn with_verifier_key(vk_box: &iroha_data_model::proof::VerifyingKeyBox) -> Self {
+            let (
+                params,
+                evaluation_keys,
+                transcript,
+                artifacts,
+                job,
+                input,
+                output,
+                input_bound,
+                output_bound,
+            ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(vk_box);
+            Self {
+                params,
+                evaluation_keys,
+                transcript,
+                artifacts,
+                job,
+                input,
+                output,
+                input_bound,
+                output_bound,
+            }
+        }
+        fn sample_proofs(
+            &self,
+            vk_commitment: [u8; Hash::LENGTH],
+        ) -> Vec<SoracloudFheFullBootstrapExecutionProofV1> {
+            sample_full_bootstrap_execution_proofs_for_claims(
+                &self.params,
+                &self.evaluation_keys,
+                &self.transcript,
+                &self.artifacts,
+                &self.input,
+                &self.output,
+                self.input_bound,
+                self.output_bound,
+                vk_commitment,
+            )
+        }
+        fn verify(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            bound_mode: BfvCiphertextBoundModeV1,
+            proofs: &[SoracloudFheFullBootstrapExecutionProofV1],
+        ) -> Result<(), InstructionExecutionError> {
+            verify_soracloud_fhe_full_bootstrap_execution_proofs(
+                state_transaction,
+                &self.params,
+                &self.evaluation_keys,
+                &self.transcript,
+                &self.job,
+                std::slice::from_ref(&self.input),
+                &[self.input_bound],
+                &self.output,
+                Some(self.output_bound),
+                bound_mode,
+                Some(&self.artifacts),
+                proofs,
+            )
+        }
+        #[cfg(feature = "zk-stark")]
+        fn governed_verifier_key(
+            &self,
+        ) -> Result<iroha_data_model::proof::VerifyingKeyBox, InstructionExecutionError> {
+            governed_full_bootstrap_execution_verifier_key(
+                &self.params,
+                &self.evaluation_keys,
+                &self.artifacts,
+            )
+        }
+        #[cfg(feature = "zk-stark")]
+        fn prove(
+            &self,
+            verifier_key: &iroha_data_model::proof::VerifyingKeyBox,
+        ) -> Result<Vec<SoracloudFheFullBootstrapExecutionProofV1>, InstructionExecutionError>
+        {
+            prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
+                &self.params,
+                &self.evaluation_keys,
+                &self.transcript,
+                &self.artifacts,
+                &self.input,
+                &self.output,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                self.input_bound,
+                self.output_bound,
+                verifier_key,
+            )
+        }
+        #[cfg(feature = "zk-stark")]
+        fn binding_air_proofs(
+            &self,
+            verifier_key: &iroha_data_model::proof::VerifyingKeyBox,
+        ) -> Vec<SoracloudFheFullBootstrapExecutionProofV1> {
+            sample_full_bootstrap_execution_binding_air_proofs_for_claims(
+                &self.params,
+                &self.evaluation_keys,
+                &self.transcript,
+                &self.artifacts,
+                &self.input,
+                &self.output,
+                self.input_bound,
+                self.output_bound,
+                verifier_key,
+            )
+        }
+        #[cfg(feature = "zk-stark")]
+        fn prover_input_material(&self) -> BfvFullBootstrapExecutionProverInputMaterialV1 {
+            sample_full_bootstrap_execution_prover_input_material(
+                &self.params,
+                &self.evaluation_keys,
+                &self.transcript,
+                &self.artifacts,
+                &self.input,
+                &self.output,
+                self.input_bound,
+                self.output_bound,
+            )
+        }
+    }
     #[cfg(feature = "zk-stark")]
     fn retarget_sample_full_bootstrap_verifier_key_artifact(
         artifacts: &mut BfvFullBootstrapCircuitArtifactBundleV1,
@@ -26811,50 +26969,40 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_artifacts_outside_full_bootstrap_context()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            mut evaluation_keys,
-            transcript,
-            artifacts,
-            mut job,
-            _input,
-            _output,
-            _input_bound,
-            _output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        job.operation = FheJobOperationV1::Add;
-        job.bootstrap_count = 0;
+        let mut case = FullBootstrapExecutionCase::sample();
+        case.job.operation = FheJobOperationV1::Add;
+        case.job.bootstrap_count = 0;
         let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
             &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
+            &case.job,
             &[],
             &[],
             &BfvIdentifierCiphertext { slots: Vec::new() },
             None,
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
+            Some(&case.artifacts),
             &[],
         )
         .expect_err("full-bootstrap execution artifacts must fail outside bootstrap jobs");
         assert_invalid_parameter_contains(err, "only accepted for full-bootstrap operations");
-        job.operation = FheJobOperationV1::Bootstrap;
-        job.bootstrap_count = 1;
-        evaluation_keys.bootstrap_key = None;
+        case.job.operation = FheJobOperationV1::Bootstrap;
+        case.job.bootstrap_count = 1;
+        case.evaluation_keys.bootstrap_key = None;
         let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
             &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
+            &case.job,
             &[],
             &[],
             &BfvIdentifierCiphertext { slots: Vec::new() },
             None,
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
+            Some(&case.artifacts),
             &[],
         )
         .expect_err("full-bootstrap execution artifacts must fail without bootstrap key material");
@@ -26865,70 +27013,32 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_is_required_for_full_bootstrap_outputs()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &[],
-        )
-        .expect_err("full-bootstrap outputs must carry one execution proof per output slot");
+        let case = FullBootstrapExecutionCase::sample();
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &[],
+            )
+            .expect_err("full-bootstrap outputs must carry one execution proof per output slot");
         assert_invalid_parameter_contains(err, "proof count must match output slot count");
         Ok(())
     }
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_preflight_rejects_non_exact_proof_count()
     -> Result<(), eyre::Report> {
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
+        let case = FullBootstrapExecutionCase::sample();
         let err = preflight_soracloud_fhe_full_bootstrap_execution_proofs(
-            &job,
-            &evaluation_keys,
-            std::slice::from_ref(&input),
-            Some(&artifacts),
+            &case.job,
+            &case.evaluation_keys,
+            std::slice::from_ref(&case.input),
+            Some(&case.artifacts),
             &[],
         )
         .expect_err("empty full-bootstrap execution proofs must fail preflight");
         assert_invalid_parameter_contains(err, "proof count must match input/output slot count");
-        let proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            [0x63; Hash::LENGTH],
-        );
-        assert_eq!(proofs.len(), input.slots.len());
+        let proofs = case.sample_proofs([0x63; Hash::LENGTH]);
+        assert_eq!(proofs.len(), case.input.slots.len());
         assert!(
             proofs.len() > 1,
             "preflight count regression requires at least two slots"
@@ -26936,10 +27046,10 @@ mod tests {
         let mut short_proofs = proofs.clone();
         short_proofs.pop();
         let err = preflight_soracloud_fhe_full_bootstrap_execution_proofs(
-            &job,
-            &evaluation_keys,
-            std::slice::from_ref(&input),
-            Some(&artifacts),
+            &case.job,
+            &case.evaluation_keys,
+            std::slice::from_ref(&case.input),
+            Some(&case.artifacts),
             &short_proofs,
         )
         .expect_err("short full-bootstrap execution proof vector must fail preflight");
@@ -26947,19 +27057,19 @@ mod tests {
         let mut surplus_proofs = proofs.clone();
         surplus_proofs.push(proofs[0].clone());
         let err = preflight_soracloud_fhe_full_bootstrap_execution_proofs(
-            &job,
-            &evaluation_keys,
-            std::slice::from_ref(&input),
-            Some(&artifacts),
+            &case.job,
+            &case.evaluation_keys,
+            std::slice::from_ref(&case.input),
+            Some(&case.artifacts),
             &surplus_proofs,
         )
         .expect_err("surplus full-bootstrap execution proof vector must fail preflight");
         assert_invalid_parameter_contains(err, "proof count must match input/output slot count");
         preflight_soracloud_fhe_full_bootstrap_execution_proofs(
-            &job,
-            &evaluation_keys,
-            std::slice::from_ref(&input),
-            Some(&artifacts),
+            &case.job,
+            &case.evaluation_keys,
+            std::slice::from_ref(&case.input),
+            Some(&case.artifacts),
             &proofs,
         )
         .expect("exact full-bootstrap execution proof vector must pass preflight");
@@ -26969,44 +27079,16 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_multi_count_before_statement_derivation()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            mut job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        job.bootstrap_count = 2;
-        let proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            [0x63; Hash::LENGTH],
-        );
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &proofs,
-        )
-        .expect_err("multi-count full-bootstrap proofs must fail before statement derivation");
+        let mut case = FullBootstrapExecutionCase::sample();
+        case.job.bootstrap_count = 2;
+        let proofs = case.sample_proofs([0x63; Hash::LENGTH]);
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &proofs,
+            )
+            .expect_err("multi-count full-bootstrap proofs must fail before statement derivation");
         assert_invalid_parameter_contains(err, "bootstrap_count exactly 1");
         Ok(())
     }
@@ -27014,28 +27096,8 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_surplus_and_reordered_slot_proofs()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        let proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            [0x63; Hash::LENGTH],
-        );
+        let case = FullBootstrapExecutionCase::sample();
+        let proofs = case.sample_proofs([0x63; Hash::LENGTH]);
         assert!(
             proofs.len() >= 2,
             "slot-reorder regression requires at least two output slots"
@@ -27046,35 +27108,27 @@ mod tests {
         );
         let mut surplus_proofs = proofs.clone();
         surplus_proofs.push(proofs[0].clone());
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &surplus_proofs,
-        )
-        .expect_err("surplus full-bootstrap execution proofs must fail exact proof count");
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &surplus_proofs,
+            )
+            .expect_err("surplus full-bootstrap execution proofs must fail exact proof count");
         assert_invalid_parameter_contains(err, "proof count must match output slot count");
-        let mut duplicate_slot_input = input.clone();
+        let mut duplicate_slot_input = case.input.clone();
         duplicate_slot_input.slots[1] = duplicate_slot_input.slots[0].clone();
-        let mut duplicate_slot_output = output.clone();
+        let mut duplicate_slot_output = case.output.clone();
         duplicate_slot_output.slots[1] = duplicate_slot_output.slots[0].clone();
         let duplicate_slot_proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
+            &case.artifacts,
             &duplicate_slot_input,
             &duplicate_slot_output,
-            input_bound,
-            output_bound,
+            case.input_bound,
+            case.output_bound,
             [0x63; Hash::LENGTH],
         );
         assert_ne!(
@@ -27085,37 +27139,31 @@ mod tests {
         slot_index_replay.swap(0, 1);
         let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
             &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
+            &case.job,
             std::slice::from_ref(&duplicate_slot_input),
-            &[input_bound],
+            &[case.input_bound],
             &duplicate_slot_output,
-            Some(output_bound),
+            Some(case.output_bound),
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
+            Some(&case.artifacts),
             &slot_index_replay,
         )
         .expect_err("slot-index replay must fail even when ciphertext slots are duplicated");
         assert_invalid_parameter_contains(err, "statement hash mismatch for slot 0");
         let mut reordered_proofs = proofs;
         reordered_proofs.swap(0, 1);
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &reordered_proofs,
-        )
-        .expect_err("slot-reordered full-bootstrap execution proofs must fail statement binding");
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &reordered_proofs,
+            )
+            .expect_err(
+                "slot-reordered full-bootstrap execution proofs must fail statement binding",
+            );
         assert_invalid_parameter_contains(err, "statement hash mismatch for slot 0");
         Ok(())
     }
@@ -27123,18 +27171,8 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_statement_hash_mismatch()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        let proofs = (0..output.slots.len())
+        let case = FullBootstrapExecutionCase::sample();
+        let proofs = (0..case.output.slots.len())
             .map(|_| {
                 sample_fhe_full_bootstrap_execution_proof(
                     Hash::new(b"wrong-full-bootstrap-execution-statement"),
@@ -27142,21 +27180,13 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &proofs,
-        )
-        .expect_err("statement hash mismatch must fail before verifier lookup");
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &proofs,
+            )
+            .expect_err("statement hash mismatch must fail before verifier lookup");
         assert_invalid_parameter_contains(err, "statement hash mismatch for slot 0");
         Ok(())
     }
@@ -27164,73 +27194,31 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_bound_mode_replay()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        let exact_proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            [0x63; Hash::LENGTH],
-        );
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::BoundedNoise,
-            Some(&artifacts),
-            &exact_proofs,
-        )
+        let case = FullBootstrapExecutionCase::sample();
+        let exact_proofs = case.sample_proofs([0x63; Hash::LENGTH]);
+        let err = case.verify(&mut stx, BfvCiphertextBoundModeV1::BoundedNoise, &exact_proofs)
         .expect_err(
             "exact-mode full-bootstrap execution proofs must not replay as bounded-noise proofs",
         );
         assert_invalid_parameter_contains(err, "statement hash mismatch for slot 0");
         let bounded_proofs = sample_full_bootstrap_execution_proofs_for_claims_with_bound_mode(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
+            &case.artifacts,
+            &case.input,
+            &case.output,
             BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise,
-            input_bound,
-            output_bound,
+            case.input_bound,
+            case.output_bound,
             [0x63; Hash::LENGTH],
         );
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
+        let result = case.verify(
             &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
             &bounded_proofs,
-        )
-        .expect_err(
+        );
+        let err = result.expect_err(
             "bounded-noise full-bootstrap execution proofs must not replay as exact-mode proofs",
         );
         assert_invalid_parameter_contains(err, "statement hash mismatch for slot 0");
@@ -27240,45 +27228,17 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_attachment_metadata_drift()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        let proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            [0x63; Hash::LENGTH],
-        );
+        let case = FullBootstrapExecutionCase::sample();
+        let proofs = case.sample_proofs([0x63; Hash::LENGTH]);
         let mut expect_rejection = |proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
                                     expected_message: &str| {
-            let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-                &mut stx,
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &job,
-                std::slice::from_ref(&input),
-                &[input_bound],
-                &output,
-                Some(output_bound),
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                Some(&artifacts),
-                &proofs,
-            )
-            .expect_err("attachment metadata drift must fail before verifier lookup");
+            let err = case
+                .verify(
+                    &mut stx,
+                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    &proofs,
+                )
+                .expect_err("attachment metadata drift must fail before verifier lookup");
             assert_invalid_parameter_contains(err, expected_message);
         };
         let mut missing_vk_commitment = proofs.clone();
@@ -27300,40 +27260,20 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_input_metadata_shape_drift()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        let proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            [0x63; Hash::LENGTH],
-        );
+        let case = FullBootstrapExecutionCase::sample();
+        let proofs = case.sample_proofs([0x63; Hash::LENGTH]);
         let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
             &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound, input_bound],
-            &output,
-            Some(output_bound),
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
+            &case.job,
+            std::slice::from_ref(&case.input),
+            &[case.input_bound, case.input_bound],
+            &case.output,
+            Some(case.output_bound),
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
+            Some(&case.artifacts),
             &proofs,
         )
         .expect_err("extra input-bound metadata must fail before proof verification");
@@ -27341,37 +27281,37 @@ mod tests {
             err,
             "input bound metadata must match input envelope count",
         );
-        let mut rotation_drift_job = job.clone();
+        let mut rotation_drift_job = case.job.clone();
         rotation_drift_job.rotation_steps = 1;
         let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
             &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
             &rotation_drift_job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
+            std::slice::from_ref(&case.input),
+            &[case.input_bound],
+            &case.output,
+            Some(case.output_bound),
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
+            Some(&case.artifacts),
             &proofs,
         )
         .expect_err("bootstrap operation-shape drift must fail before proof verification");
         assert_invalid_parameter_contains(err, "bootstrap operation cannot request depth/rotation");
-        let input_envelopes = [input.clone(), input];
+        let input_envelopes = [case.input.clone(), case.input];
         let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
             &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
+            &case.job,
             &input_envelopes,
-            &[input_bound, input_bound],
-            &output,
-            Some(output_bound),
+            &[case.input_bound, case.input_bound],
+            &case.output,
+            Some(case.output_bound),
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
+            Some(&case.artifacts),
             &proofs,
         )
         .expect_err("multi-input bootstrap drift must fail before proof verification");
@@ -27735,47 +27675,22 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_requires_governed_verifier_record()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
-        let vk_commitment = crate::zk::hash_vk(&governed_verifier_key);
-        let proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            vk_commitment,
-        );
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &proofs,
+        let case = FullBootstrapExecutionCase::sample();
+        let governed_verifier_key = governed_full_bootstrap_execution_verifier_key(
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
         )
-        .expect_err("full-bootstrap execution proof must require governed verifier record");
+        .expect("governed full-bootstrap execution verifier key");
+        let vk_commitment = crate::zk::hash_vk(&governed_verifier_key);
+        let proofs = case.sample_proofs(vk_commitment);
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &proofs,
+            )
+            .expect_err("full-bootstrap execution proof must require governed verifier record");
         assert_invariant_contains(err, "verifying key not found");
         Ok(())
     }
@@ -27783,20 +27698,13 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_inactive_governed_verifier_record()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::sample();
+        let governed_verifier_key = governed_full_bootstrap_execution_verifier_key(
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
+        )
+        .expect("governed full-bootstrap execution verifier key");
         let (vk_id, vk_commitment) =
             install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
         stx.world
@@ -27804,32 +27712,14 @@ mod tests {
             .get_mut(&vk_id)
             .expect("installed full-bootstrap execution verifier record")
             .status = ConfidentialStatus::Withdrawn;
-        let proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            vk_commitment,
-        );
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &proofs,
-        )
-        .expect_err("withdrawn full-bootstrap execution verifier must fail closed");
+        let proofs = case.sample_proofs(vk_commitment);
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &proofs,
+            )
+            .expect_err("withdrawn full-bootstrap execution verifier must fail closed");
         assert_invariant_contains(err, "verifying key is not active");
         Ok(())
     }
@@ -27884,21 +27774,11 @@ mod tests {
                 .header();
             let mut state_block = state.block(block_header);
             let mut stx = state_block.transaction();
-            let (
-                params,
-                evaluation_keys,
-                transcript,
-                artifacts,
-                job,
-                input,
-                output,
-                input_bound,
-                output_bound,
-            ) = sample_full_bootstrap_execution_verification_case();
+            let case = FullBootstrapExecutionCase::sample();
             let governed_verifier_key = governed_full_bootstrap_execution_verifier_key(
-                &params,
-                &evaluation_keys,
-                &artifacts,
+                &case.params,
+                &case.evaluation_keys,
+                &case.artifacts,
             )
             .expect("governed full-bootstrap execution verifier key");
             let (vk_id, vk_commitment) = install_fhe_full_bootstrap_execution_verifier_record(
@@ -28007,32 +27887,14 @@ mod tests {
                         .key = Some(drifted_key);
                 }
             }
-            let proofs = sample_full_bootstrap_execution_proofs_for_claims(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
-                input_bound,
-                output_bound,
-                vk_commitment,
-            );
-            let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-                &mut stx,
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &job,
-                std::slice::from_ref(&input),
-                &[input_bound],
-                &output,
-                Some(output_bound),
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                Some(&artifacts),
-                &proofs,
-            )
-            .expect_err("metadata-drifted full-bootstrap execution verifier must fail closed");
+            let proofs = case.sample_proofs(vk_commitment);
+            let err = case
+                .verify(
+                    &mut stx,
+                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    &proofs,
+                )
+                .expect_err("metadata-drifted full-bootstrap execution verifier must fail closed");
             match tamper {
                 VerifierTamper::MaxProofBytes => {
                     assert_invalid_parameter_contains(err, expected_error);
@@ -28048,33 +27910,16 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_rejects_unverified_fake_proof()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case();
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::sample();
+        let governed_verifier_key = governed_full_bootstrap_execution_verifier_key(
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
+        )
+        .expect("governed full-bootstrap execution verifier key");
         let (_vk_id, vk_commitment) =
             install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            vk_commitment,
-        );
+        let proofs = case.sample_proofs(vk_commitment);
         #[cfg(feature = "zk-stark")]
         {
             let proof_lengths = proofs
@@ -28083,21 +27928,13 @@ mod tests {
                 .collect::<Vec<_>>();
             enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
         }
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &proofs,
-        )
-        .expect_err("active execution verifier must still reject an unverified fake proof");
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &proofs,
+            )
+            .expect_err("active execution verifier must still reject an unverified fake proof");
         #[cfg(feature = "zk-stark")]
         assert_invalid_parameter_contains(err, "native AIR envelope");
         #[cfg(not(feature = "zk-stark"))]
@@ -28108,32 +27945,12 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_empty_input_slots() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            mut input,
-            mut output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        input.slots.clear();
-        output.slots.clear();
-        let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect_err("empty input slots must fail before proof generation");
+        let mut case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        case.input.slots.clear();
+        case.output.slots.clear();
+        let err = case
+            .prove(&vk_box)
+            .expect_err("empty input slots must fail before proof generation");
         assert_invalid_parameter_contains(err, "must contain at least one slot");
     }
     #[cfg(feature = "zk-stark")]
@@ -28185,58 +28002,28 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_wrong_governed_verifier_key() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
         let wrong_vk_box = sample_fhe_bootstrap_key_stark_vk_box();
-        let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &wrong_vk_box,
-        )
-        .expect_err("wrong governed verifier key must fail before proof generation");
+        let err = case
+            .prove(&wrong_vk_box)
+            .expect_err("wrong governed verifier key must fail before proof generation");
         assert_invalid_parameter_contains(err, "verifier key must match governed artifact");
     }
     #[cfg(feature = "zk-stark")]
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_role_spliced_artifacts() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let mut role_spliced_artifacts = artifacts.clone();
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let mut role_spliced_artifacts = case.artifacts.clone();
         role_spliced_artifacts.sample_extraction_key =
             encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
-                &params,
+                &case.params,
                 1,
                 BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
                 b"role-spliced-soracloud-execution-proof-helper-sample-extraction",
             )
             .expect("encode role-spliced sample-extraction artifact");
-        let mut role_spliced_evaluation_keys = evaluation_keys.clone();
+        let mut role_spliced_evaluation_keys = case.evaluation_keys.clone();
         role_spliced_evaluation_keys
             .bootstrap_key
             .as_mut()
@@ -28247,15 +28034,15 @@ mod tests {
             .sample_extraction_key_digest =
             Hash::new(&role_spliced_artifacts.sample_extraction_key);
         let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
+            &case.params,
             &role_spliced_evaluation_keys,
-            &transcript,
+            &case.transcript,
             &role_spliced_artifacts,
-            &input,
-            &output,
+            &case.input,
+            &case.output,
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
+            case.input_bound,
+            case.output_bound,
             &vk_box,
         )
         .expect_err("execution proof helper must reject role-spliced artifacts");
@@ -28266,32 +28053,23 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_stale_proof_key_artifacts() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let full_bootstrap_material = evaluation_keys
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let full_bootstrap_material = case
+            .evaluation_keys
             .bootstrap_key
             .as_ref()
             .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
             .expect("sample carries full-bootstrap material");
         let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
-            &params,
+            &case.params,
             1,
-            &artifacts.coefficient_to_slot_key,
-            &artifacts.slot_to_coefficient_key,
-            &artifacts.blind_rotation_key,
-            &artifacts.sample_extraction_key,
-            &artifacts.accumulator,
-            &artifacts.proof_public_input_schema,
-            &artifacts.arithmetic_air_constraint_system,
+            &case.artifacts.coefficient_to_slot_key,
+            &case.artifacts.slot_to_coefficient_key,
+            &case.artifacts.blind_rotation_key,
+            &case.artifacts.sample_extraction_key,
+            &case.artifacts.accumulator,
+            &case.artifacts.proof_public_input_schema,
+            &case.artifacts.arithmetic_air_constraint_system,
         )
         .expect("derive governed evaluator artifact-set digest");
         let stale_evaluator_artifact_set_digest = Hash::new(
@@ -28310,24 +28088,24 @@ mod tests {
             sample_full_bootstrap_native_verifier_material_for_core_vk(&vk_box);
         let (stale_prover_key_artifact, stale_verifier_key_artifact) =
             sample_full_bootstrap_proof_key_artifact_payloads(
-                &params,
+                &case.params,
                 full_bootstrap_material.proof_public_input_schema_digest,
                 stale_evaluator_artifact_set_digest,
                 &stale_prover_key_material,
                 &stale_verifier_key_material,
             );
-        let mut stale_prover_artifacts = artifacts.clone();
+        let mut stale_prover_artifacts = case.artifacts.clone();
         stale_prover_artifacts.prover_key = stale_prover_key_artifact;
         let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
             &stale_prover_artifacts,
-            &input,
-            &output,
+            &case.input,
+            &case.output,
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
+            case.input_bound,
+            case.output_bound,
             &vk_box,
         )
         .expect_err("execution proof helper must reject stale prover-key artifacts");
@@ -28336,18 +28114,18 @@ mod tests {
             err,
             "artifact digest does not match governed full-bootstrap material",
         );
-        let mut stale_verifier_artifacts = artifacts.clone();
+        let mut stale_verifier_artifacts = case.artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
         let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
             &stale_verifier_artifacts,
-            &input,
-            &output,
+            &case.input,
+            &case.output,
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
+            case.input_bound,
+            case.output_bound,
             &vk_box,
         )
         .expect_err("execution proof helper must reject stale verifier-key artifacts");
@@ -28361,36 +28139,16 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_stale_transcript_public_key() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            mut transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let mut case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
         let (_other_secret_key, other_public_key, _other_relinearization_key) = keygen_from_seed(
-            &params,
+            &case.params,
             b"soracloud-fhe-full-bootstrap-stale-transcript-keygen",
         )
         .expect("stale transcript public keygen");
-        transcript.public_key = other_public_key;
-        let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect_err("stale transcript public key must fail before proof generation");
+        case.transcript.public_key = other_public_key;
+        let err = case
+            .prove(&vk_box)
+            .expect_err("stale transcript public key must fail before proof generation");
         assert_invalid_parameter_contains(err, "public-key digest");
     }
     #[cfg(feature = "zk-stark")]
@@ -28428,32 +28186,13 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_prover_emits_valid_native_air_proof() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let prover_input_material = sample_full_bootstrap_execution_prover_input_material(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-        );
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let prover_input_material = case.prover_input_material();
         let proof =
             prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-                &params,
-                &evaluation_keys,
-                &artifacts,
+                &case.params,
+                &case.evaluation_keys,
+                &case.artifacts,
                 &prover_input_material,
                 &vk_box,
             )
@@ -28512,9 +28251,9 @@ mod tests {
             .witness_material
             .clone();
         let stale_prefix_c0 = &mut stale_prefix_witness.trace.coefficient_to_slot_output.c0[0];
-        *stale_prefix_c0 = (*stale_prefix_c0 + 1) % params.ciphertext_modulus;
+        *stale_prefix_c0 = (*stale_prefix_c0 + 1) % case.params.ciphertext_modulus;
         let stale_prefix_proof_input = bfv_full_bootstrap_execution_proof_input_material_v1(
-            &transcript.public_key,
+            &case.transcript.public_key,
             &stale_prefix_witness,
         )
         .expect("build self-consistent stale-prefix proof input material");
@@ -28525,9 +28264,9 @@ mod tests {
         )
         .expect("build self-consistent stale-prefix prover input material");
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
-            &artifacts,
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
             &stale_prefix_prover_input,
             &vk_box,
         )
@@ -28542,36 +28281,26 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_release_package() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
         let (release_audit_package, release_audit_package_digest) =
             sample_full_bootstrap_release_audit_package_and_digest(
-                &params,
-                &evaluation_keys,
-                &artifacts,
+                &case.params,
+                &case.evaluation_keys,
+                &case.artifacts,
                 &reviewer_key_pair,
             );
         let proofs =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
+                &case.params,
+                &case.evaluation_keys,
+                &case.transcript,
+                &case.artifacts,
+                &case.input,
+                &case.output,
                 BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
+                case.input_bound,
+                case.output_bound,
                 &vk_box,
                 &release_audit_package,
                 release_audit_package_digest,
@@ -28579,16 +28308,16 @@ mod tests {
                 reviewer_key_pair.public_key(),
             )
             .expect("trusted release audit package authorizes native proof generation");
-        assert_eq!(proofs.len(), input.slots.len());
+        assert_eq!(proofs.len(), case.input.slots.len());
         let expected_claim_proofs = sample_full_bootstrap_execution_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
+            &case.params,
+            &case.evaluation_keys,
+            &case.transcript,
+            &case.artifacts,
+            &case.input,
+            &case.output,
+            case.input_bound,
+            case.output_bound,
             crate::zk::hash_vk(&vk_box),
         );
         let expected_statement_hashes = expected_claim_proofs
@@ -28870,23 +28599,13 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_air_root_query_downgrade() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
         let (release_audit_package, release_audit_package_digest) =
             sample_full_bootstrap_release_audit_package_and_digest(
-                &params,
-                &evaluation_keys,
-                &artifacts,
+                &case.params,
+                &case.evaluation_keys,
+                &case.artifacts,
                 &reviewer_key_pair,
             );
         let mut downgraded_package = release_audit_package.clone();
@@ -28897,15 +28616,15 @@ mod tests {
             .binds_fri_queries_to_air_commitment_roots = false;
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
+                &case.params,
+                &case.evaluation_keys,
+                &case.transcript,
+                &case.artifacts,
+                &case.input,
+                &case.output,
                 BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
+                case.input_bound,
+                case.output_bound,
                 &vk_box,
                 &downgraded_package,
                 release_audit_package_digest,
@@ -28990,35 +28709,25 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_role_spliced_artifacts() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
         let (release_audit_package, release_audit_package_digest) =
             sample_full_bootstrap_release_audit_package_and_digest(
-                &params,
-                &evaluation_keys,
-                &artifacts,
+                &case.params,
+                &case.evaluation_keys,
+                &case.artifacts,
                 &reviewer_key_pair,
             );
-        let mut role_spliced_artifacts = artifacts.clone();
+        let mut role_spliced_artifacts = case.artifacts.clone();
         role_spliced_artifacts.sample_extraction_key =
             encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
-                &params,
+                &case.params,
                 1,
                 BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
                 b"role-spliced-soracloud-execution-audited-prover-sample-extraction",
             )
             .expect("encode role-spliced sample-extraction artifact");
-        let mut role_spliced_evaluation_keys = evaluation_keys.clone();
+        let mut role_spliced_evaluation_keys = case.evaluation_keys.clone();
         role_spliced_evaluation_keys
             .bootstrap_key
             .as_mut()
@@ -29030,15 +28739,15 @@ mod tests {
             Hash::new(&role_spliced_artifacts.sample_extraction_key);
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
+                &case.params,
                 &role_spliced_evaluation_keys,
-                &transcript,
+                &case.transcript,
                 &role_spliced_artifacts,
-                &input,
-                &output,
+                &case.input,
+                &case.output,
                 BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
+                case.input_bound,
+                case.output_bound,
                 &vk_box,
                 &release_audit_package,
                 release_audit_package_digest,
@@ -29056,40 +28765,31 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_stale_proof_key_artifacts() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
         let reviewer_key_pair = checked_keypair();
         let (release_audit_package, release_audit_package_digest) =
             sample_full_bootstrap_release_audit_package_and_digest(
-                &params,
-                &evaluation_keys,
-                &artifacts,
+                &case.params,
+                &case.evaluation_keys,
+                &case.artifacts,
                 &reviewer_key_pair,
             );
-        let full_bootstrap_material = evaluation_keys
+        let full_bootstrap_material = case
+            .evaluation_keys
             .bootstrap_key
             .as_ref()
             .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
             .expect("sample carries full-bootstrap material");
         let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
-            &params,
+            &case.params,
             1,
-            &artifacts.coefficient_to_slot_key,
-            &artifacts.slot_to_coefficient_key,
-            &artifacts.blind_rotation_key,
-            &artifacts.sample_extraction_key,
-            &artifacts.accumulator,
-            &artifacts.proof_public_input_schema,
-            &artifacts.arithmetic_air_constraint_system,
+            &case.artifacts.coefficient_to_slot_key,
+            &case.artifacts.slot_to_coefficient_key,
+            &case.artifacts.blind_rotation_key,
+            &case.artifacts.sample_extraction_key,
+            &case.artifacts.accumulator,
+            &case.artifacts.proof_public_input_schema,
+            &case.artifacts.arithmetic_air_constraint_system,
         )
         .expect("derive governed evaluator artifact-set digest");
         let stale_evaluator_artifact_set_digest = Hash::new(
@@ -29108,25 +28808,25 @@ mod tests {
             sample_full_bootstrap_native_verifier_material_for_core_vk(&vk_box);
         let (stale_prover_key_artifact, stale_verifier_key_artifact) =
             sample_full_bootstrap_proof_key_artifact_payloads(
-                &params,
+                &case.params,
                 full_bootstrap_material.proof_public_input_schema_digest,
                 stale_evaluator_artifact_set_digest,
                 &stale_prover_key_material,
                 &stale_verifier_key_material,
             );
-        let mut stale_prover_artifacts = artifacts.clone();
+        let mut stale_prover_artifacts = case.artifacts.clone();
         stale_prover_artifacts.prover_key = stale_prover_key_artifact;
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
+                &case.params,
+                &case.evaluation_keys,
+                &case.transcript,
                 &stale_prover_artifacts,
-                &input,
-                &output,
+                &case.input,
+                &case.output,
                 BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
+                case.input_bound,
+                case.output_bound,
                 &vk_box,
                 &release_audit_package,
                 release_audit_package_digest,
@@ -29136,19 +28836,19 @@ mod tests {
             .expect_err("release audit gate must reject stale prover-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
         assert_invalid_parameter_contains(err, "artifact");
-        let mut stale_verifier_artifacts = artifacts.clone();
+        let mut stale_verifier_artifacts = case.artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
+                &case.params,
+                &case.evaluation_keys,
+                &case.transcript,
                 &stale_verifier_artifacts,
-                &input,
-                &output,
+                &case.input,
+                &case.output,
                 BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
+                case.input_bound,
+                case.output_bound,
                 &vk_box,
                 &release_audit_package,
                 release_audit_package_digest,
@@ -30157,37 +29857,27 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_wrong_verifier_key() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
         let wrong_vk_box = sample_fhe_bootstrap_key_stark_vk_box();
         let reviewer_key_pair = checked_keypair();
         let (release_audit_package, release_audit_package_digest) =
             sample_full_bootstrap_release_audit_package_and_digest(
-                &params,
-                &evaluation_keys,
-                &artifacts,
+                &case.params,
+                &case.evaluation_keys,
+                &case.artifacts,
                 &reviewer_key_pair,
             );
         let err =
             prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &artifacts,
-                &input,
-                &output,
+                &case.params,
+                &case.evaluation_keys,
+                &case.transcript,
+                &case.artifacts,
+                &case.input,
+                &case.output,
                 BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                input_bound,
-                output_bound,
+                case.input_bound,
+                case.output_bound,
                 &wrong_vk_box,
                 &release_audit_package,
                 release_audit_package_digest,
@@ -30202,32 +29892,13 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_prover_accepts_native_verifier_key_preflight() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
         let native_vk_box = sample_fhe_full_bootstrap_execution_native_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let prover_input_material = sample_full_bootstrap_execution_prover_input_material(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-        );
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let prover_input_material = case.prover_input_material();
         let proof =
             prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-                &params,
-                &evaluation_keys,
-                &artifacts,
+                &case.params,
+                &case.evaluation_keys,
+                &case.artifacts,
                 &prover_input_material,
                 &native_vk_box,
             )
@@ -30249,27 +29920,8 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_prover_rejects_unbound_verifier_key() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let prover_input_material = sample_full_bootstrap_execution_prover_input_material(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-        );
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let prover_input_material = case.prover_input_material();
         let mut unbound_vk_box = vk_box.clone();
         let mut payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
             norito::decode_from_bytes(&unbound_vk_box.bytes)
@@ -30278,9 +29930,9 @@ mod tests {
         unbound_vk_box.bytes =
             norito::to_bytes(&payload).expect("encode unbound execution verifier key");
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
-            &artifacts,
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
             &prover_input_material,
             &unbound_vk_box,
         )
@@ -30295,35 +29947,16 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_prefix_trace_against_artifacts()
     {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let prover_input_material = sample_full_bootstrap_execution_prover_input_material(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-        );
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let prover_input_material = case.prover_input_material();
         let mut stale_witness = prover_input_material
             .proof_input_material
             .witness_material
             .clone();
         let stale_prefix_c0 = &mut stale_witness.trace.coefficient_to_slot_output.c0[0];
-        *stale_prefix_c0 = (*stale_prefix_c0 + 1) % params.ciphertext_modulus;
+        *stale_prefix_c0 = (*stale_prefix_c0 + 1) % case.params.ciphertext_modulus;
         let stale_proof_input = bfv_full_bootstrap_execution_proof_input_material_v1(
-            &transcript.public_key,
+            &case.transcript.public_key,
             &stale_witness,
         )
         .expect("derive internally consistent stale-prefix proof input");
@@ -30336,9 +29969,9 @@ mod tests {
         validate_bfv_full_bootstrap_execution_prover_input_material_v1(&stale_prover_input)
             .expect("generic prover input validation accepts self-consistent stale prefix trace");
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
-            &artifacts,
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
             &stale_prover_input,
             &vk_box,
         )
@@ -30349,35 +29982,16 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_galois_key_set() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let prover_input_material = sample_full_bootstrap_execution_prover_input_material(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-        );
-        let mut stale_evaluation_keys = evaluation_keys.clone();
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let prover_input_material = case.prover_input_material();
+        let mut stale_evaluation_keys = case.evaluation_keys.clone();
         let stale_galois_coefficient = stale_evaluation_keys.galois_keys[0].entries[0].b[0];
         stale_evaluation_keys.galois_keys[0].entries[0].b[0] =
-            (stale_galois_coefficient + 1) % params.ciphertext_modulus;
+            (stale_galois_coefficient + 1) % case.params.ciphertext_modulus;
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
+            &case.params,
             &stale_evaluation_keys,
-            &artifacts,
+            &case.artifacts,
             &prover_input_material,
             &vk_box,
         )
@@ -30388,27 +30002,8 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_galois_key_set_digest() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let prover_input_material = sample_full_bootstrap_execution_prover_input_material(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-        );
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let prover_input_material = case.prover_input_material();
         let mut stale_witness = prover_input_material
             .proof_input_material
             .witness_material
@@ -30424,7 +30019,7 @@ mod tests {
             "fixture must retarget the embedded Galois key-set digest"
         );
         let stale_proof_input = bfv_full_bootstrap_execution_proof_input_material_v1(
-            &transcript.public_key,
+            &case.transcript.public_key,
             &stale_witness,
         )
         .expect("derive internally consistent stale-Galois-digest proof input");
@@ -30437,9 +30032,9 @@ mod tests {
         validate_bfv_full_bootstrap_execution_prover_input_material_v1(&stale_prover_input)
             .expect("generic prover input validation accepts self-consistent stale Galois digest");
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
-            &artifacts,
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
             &stale_prover_input,
             &vk_box,
         )
@@ -30450,42 +30045,24 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_proof_key_artifacts() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let prover_input_material = sample_full_bootstrap_execution_prover_input_material(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-        );
-        let full_bootstrap_material = evaluation_keys
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let prover_input_material = case.prover_input_material();
+        let full_bootstrap_material = case
+            .evaluation_keys
             .bootstrap_key
             .as_ref()
             .and_then(|bootstrap_key| bootstrap_key.full_bootstrap_material.as_ref())
             .expect("sample carries full-bootstrap material");
         let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
-            &params,
+            &case.params,
             1,
-            &artifacts.coefficient_to_slot_key,
-            &artifacts.slot_to_coefficient_key,
-            &artifacts.blind_rotation_key,
-            &artifacts.sample_extraction_key,
-            &artifacts.accumulator,
-            &artifacts.proof_public_input_schema,
-            &artifacts.arithmetic_air_constraint_system,
+            &case.artifacts.coefficient_to_slot_key,
+            &case.artifacts.slot_to_coefficient_key,
+            &case.artifacts.blind_rotation_key,
+            &case.artifacts.sample_extraction_key,
+            &case.artifacts.accumulator,
+            &case.artifacts.proof_public_input_schema,
+            &case.artifacts.arithmetic_air_constraint_system,
         )
         .expect("derive governed evaluator artifact-set digest");
         let stale_evaluator_artifact_set_digest =
@@ -30503,28 +30080,28 @@ mod tests {
             sample_full_bootstrap_native_verifier_material_for_core_vk(&vk_box);
         let (stale_prover_key_artifact, stale_verifier_key_artifact) =
             sample_full_bootstrap_proof_key_artifact_payloads(
-                &params,
+                &case.params,
                 full_bootstrap_material.proof_public_input_schema_digest,
                 stale_evaluator_artifact_set_digest,
                 &stale_prover_key_material,
                 &stale_verifier_key_material,
             );
-        let mut stale_prover_artifacts = artifacts.clone();
+        let mut stale_prover_artifacts = case.artifacts.clone();
         stale_prover_artifacts.prover_key = stale_prover_key_artifact;
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
+            &case.params,
+            &case.evaluation_keys,
             &stale_prover_artifacts,
             &prover_input_material,
             &vk_box,
         )
         .expect_err("stale same-role prover-key artifact must fail before proof generation");
         assert_invalid_parameter_contains(err, "artifact bundle digest mismatch");
-        let mut stale_verifier_artifacts = artifacts.clone();
+        let mut stale_verifier_artifacts = case.artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
+            &case.params,
+            &case.evaluation_keys,
             &stale_verifier_artifacts,
             &prover_input_material,
             &vk_box,
@@ -30537,34 +30114,15 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_air_binding() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let prover_input_material = sample_full_bootstrap_execution_prover_input_material(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-        );
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let prover_input_material = case.prover_input_material();
         let mut stale_air_contract_material = prover_input_material.clone();
         stale_air_contract_material.arithmetic_air_constraint_system_digest =
             Hash::new(b"stale core full-bootstrap prover input AIR contract digest");
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
-            &artifacts,
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
             &stale_air_contract_material,
             &vk_box,
         )
@@ -30574,9 +30132,9 @@ mod tests {
         stale_air_artifact_material.arithmetic_air_constraint_system_artifact_digest =
             Hash::new(b"stale core full-bootstrap prover input AIR artifact digest");
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
-            &artifacts,
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
             &stale_air_artifact_material,
             &vk_box,
         )
@@ -30588,9 +30146,9 @@ mod tests {
             .arithmetic_trace_material_digest =
             Hash::new(b"stale core full-bootstrap AIR evaluation trace material digest");
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
-            &artifacts,
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
             &stale_air_evaluation_trace_material,
             &vk_box,
         )
@@ -30601,9 +30159,9 @@ mod tests {
             .arithmetic_air_evaluation_material
             .composition_values[0] = 1;
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
-            &artifacts,
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
             &nonzero_air_composition_material,
             &vk_box,
         )
@@ -30613,9 +30171,9 @@ mod tests {
         stale_air_evaluation_digest_material.arithmetic_air_evaluation_material_digest =
             Hash::new(b"stale core full-bootstrap AIR evaluation material digest");
         let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
-            &params,
-            &evaluation_keys,
-            &artifacts,
+            &case.params,
+            &case.evaluation_keys,
+            &case.artifacts,
             &stale_air_evaluation_digest_material,
             &vk_box,
         )
@@ -30633,31 +30191,11 @@ mod tests {
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_helper_emits_native_air_proofs() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect("valid full-bootstrap claims emit BFV-native execution proofs");
-        assert_eq!(proofs.len(), output.slots.len());
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let proofs = case
+            .prove(&vk_box)
+            .expect("valid full-bootstrap claims emit BFV-native execution proofs");
+        assert_eq!(proofs.len(), case.output.slots.len());
         for proof in proofs {
             proof
                 .validate()
@@ -30670,31 +30208,11 @@ mod tests {
     fn soracloud_fhe_full_bootstrap_execution_proof_helper_accepts_native_verifier_key_preflight() {
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
         let native_vk_box = sample_fhe_full_bootstrap_execution_native_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            _job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &native_vk_box,
-        )
-        .expect("native verifier-key payload canonicalizes before helper proof generation");
-        assert_eq!(proofs.len(), output.slots.len());
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let proofs = case
+            .prove(&native_vk_box)
+            .expect("native verifier-key payload canonicalizes before helper proof generation");
+        assert_eq!(proofs.len(), case.output.slots.len());
         for proof in proofs {
             assert_eq!(proof.proof.vk_commitment, Some(crate::zk::hash_vk(&vk_box)));
         }
@@ -30705,54 +30223,21 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         assert_eq!(governed_verifier_key, vk_box);
         let (_vk_id, vk_commitment) =
             install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
         assert_eq!(vk_commitment, crate::zk::hash_vk(&vk_box));
-        let proofs = sample_full_bootstrap_execution_binding_air_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            &vk_box,
-        );
+        let proofs = case.binding_air_proofs(&vk_box);
         let proof_lengths = proofs
             .iter()
             .map(|proof| proof.proof.proof.bytes.len())
             .collect::<Vec<_>>();
         enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &proofs,
-        )
+        let err = case.verify(&mut stx, BfvCiphertextBoundModeV1::ExactResidualMultiple, &proofs)
         .expect_err("generic binding AIR must not satisfy production full-bootstrap execution proof verification");
         assert_invalid_parameter_contains(err, FHE_FULL_BOOTSTRAP_GENERIC_BINDING_AIR_REJECTED);
         Ok(())
@@ -30763,52 +30248,23 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         assert_eq!(governed_verifier_key, vk_box);
         install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect("release prover emits BFV-native full-bootstrap execution proofs");
+        let proofs = case
+            .prove(&vk_box)
+            .expect("release prover emits BFV-native full-bootstrap execution proofs");
         let proof_lengths = proofs
             .iter()
             .map(|proof| proof.proof.proof.bytes.len())
             .collect::<Vec<_>>();
         enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
-        verify_soracloud_fhe_full_bootstrap_execution_proofs(
+        case.verify(
             &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
             &proofs,
         )
         .expect("release-prover BFV-native full-bootstrap execution proofs must verify");
@@ -30820,34 +30276,14 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let mut proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect("release prover emits BFV-native full-bootstrap execution proofs");
+        let mut proofs = case
+            .prove(&vk_box)
+            .expect("release prover emits BFV-native full-bootstrap execution proofs");
         mutate_full_bootstrap_execution_native_stark_envelope(&mut proofs[0], |native| {
             native
                 .proof
@@ -30861,21 +30297,13 @@ mod tests {
             .map(|proof| proof.proof.proof.bytes.len())
             .collect::<Vec<_>>();
         enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &proofs,
-        )
-        .expect_err("release-prover trace-root drift must fail before native proof acceptance");
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &proofs,
+            )
+            .expect_err("release-prover trace-root drift must fail before native proof acceptance");
         assert_invalid_parameter_contains(
             err,
             "trace root does not match governed arithmetic trace",
@@ -30888,34 +30316,14 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let base_proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect("release prover emits BFV-native full-bootstrap execution proofs");
+        let base_proofs = case
+            .prove(&vk_box)
+            .expect("release prover emits BFV-native full-bootstrap execution proofs");
         let mut composition_root_drift = base_proofs.clone();
         let drifted_composition_root = [0xCD; Hash::LENGTH];
         mutate_full_bootstrap_execution_native_stark_envelope(
@@ -30955,42 +30363,28 @@ mod tests {
             .map(|proof| proof.proof.proof.bytes.len())
             .collect::<Vec<_>>();
         enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &composition_root_drift,
-        )
-        .expect_err(
-            "release-prover composition-root drift must fail before native proof acceptance",
-        );
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &composition_root_drift,
+            )
+            .expect_err(
+                "release-prover composition-root drift must fail before native proof acceptance",
+            );
         assert_invalid_parameter_contains(
             err,
             "composition root does not match governed AIR evaluation",
         );
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &base_root_mismatch,
-        )
-        .expect_err("release-prover FRI base-root drift must fail before native proof acceptance");
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &base_root_mismatch,
+            )
+            .expect_err(
+                "release-prover FRI base-root drift must fail before native proof acceptance",
+            );
         assert_invalid_parameter_contains(err, "composition root mismatch");
         Ok(())
     }
@@ -31000,34 +30394,14 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let mut proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect("release prover emits BFV-native full-bootstrap execution proofs");
+        let mut proofs = case
+            .prove(&vk_box)
+            .expect("release prover emits BFV-native full-bootstrap execution proofs");
         mutate_full_bootstrap_execution_native_stark_envelope(&mut proofs[0], |native| {
             native
                 .proof
@@ -31044,21 +30418,13 @@ mod tests {
             .map(|proof| proof.proof.proof.bytes.len())
             .collect::<Vec<_>>();
         enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
-        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-            &mut stx,
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            &output,
-            Some(output_bound),
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            Some(&artifacts),
-            &proofs,
-        )
-        .expect_err("release-prover opened AIR drift must fail before native proof acceptance");
+        let err = case
+            .verify(
+                &mut stx,
+                BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                &proofs,
+            )
+            .expect_err("release-prover opened AIR drift must fail before native proof acceptance");
         assert_invalid_parameter_contains(
             err,
             "composition value does not match governed AIR evaluation",
@@ -31071,34 +30437,14 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let base_proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect("release prover emits BFV-native full-bootstrap execution proofs");
+        let base_proofs = case
+            .prove(&vk_box)
+            .expect("release prover emits BFV-native full-bootstrap execution proofs");
         let drifted_cases = execution_native_air_replay_tamper_cases()
             .into_iter()
             .map(|(tamper, expected_error)| {
@@ -31119,21 +30465,12 @@ mod tests {
             .collect::<Vec<_>>();
         enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
         for (drifted_proofs, expected_error) in drifted_cases {
-            let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
+            let result = case.verify(
                 &mut stx,
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &job,
-                std::slice::from_ref(&input),
-                &[input_bound],
-                &output,
-                Some(output_bound),
                 BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                Some(&artifacts),
                 &drifted_proofs,
-            )
-            .expect_err(
+            );
+            let err = result.expect_err(
                 "release-prover opening commitment drift must fail before native proof acceptance",
             );
             assert_invalid_parameter_contains(err, expected_error);
@@ -31398,34 +30735,14 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         assert_eq!(governed_verifier_key, vk_box);
         let (_vk_id, _vk_commitment) =
             install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let proofs = sample_full_bootstrap_execution_binding_air_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            &vk_box,
-        );
+        let proofs = case.binding_air_proofs(&vk_box);
         let proof_lengths = proofs
             .iter()
             .map(|proof| proof.proof.proof.bytes.len())
@@ -31439,21 +30756,13 @@ mod tests {
                     apply_native_air_tamper(native, tamper);
                 },
             );
-            let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-                &mut stx,
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &job,
-                std::slice::from_ref(&input),
-                &[input_bound],
-                &output,
-                Some(output_bound),
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                Some(&artifacts),
-                &drifted_proofs,
-            )
-            .expect_err("full-bootstrap execution generic AIR drift must fail");
+            let err = case
+                .verify(
+                    &mut stx,
+                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    &drifted_proofs,
+                )
+                .expect_err("full-bootstrap execution generic AIR drift must fail");
             assert_invalid_parameter_contains(
                 err,
                 full_bootstrap_generic_air_tamper_error(tamper, expected_error),
@@ -31468,36 +30777,16 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         assert_eq!(governed_verifier_key, vk_box);
         let (_vk_id, _vk_commitment) =
             install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let base_proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect("release prover emits BFV-native full-bootstrap execution proofs");
+        let base_proofs = case
+            .prove(&vk_box)
+            .expect("release prover emits BFV-native full-bootstrap execution proofs");
         stx.apply();
         for (tamper, _) in native_air_tamper_cases() {
             let mut drifted_proofs = base_proofs.clone();
@@ -31513,21 +30802,13 @@ mod tests {
                 .map(|proof| proof.proof.proof.bytes.len())
                 .collect::<Vec<_>>();
             enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
-            let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-                &mut stx,
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &job,
-                std::slice::from_ref(&input),
-                &[input_bound],
-                &output,
-                Some(output_bound),
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                Some(&artifacts),
-                &drifted_proofs,
-            )
-            .expect_err("guarded verifier must reject release-native BFV AIR drift");
+            let err = case
+                .verify(
+                    &mut stx,
+                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    &drifted_proofs,
+                )
+                .expect_err("guarded verifier must reject release-native BFV AIR drift");
             assert_invalid_parameter_contains(
                 err,
                 full_bootstrap_bfv_native_air_tamper_error(tamper),
@@ -31542,36 +30823,16 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         assert_eq!(governed_verifier_key, vk_box);
         let (_vk_id, _vk_commitment) =
             install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let base_proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect("release prover emits BFV-native full-bootstrap execution proofs");
+        let base_proofs = case
+            .prove(&vk_box)
+            .expect("release prover emits BFV-native full-bootstrap execution proofs");
         stx.apply();
         let mut composition_root_drift = base_proofs.clone();
         let drifted_composition_root = [0xCF; Hash::LENGTH];
@@ -31600,21 +30861,13 @@ mod tests {
                 .map(|proof| proof.proof.proof.bytes.len())
                 .collect::<Vec<_>>();
             enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
-            let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-                &mut stx,
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &job,
-                std::slice::from_ref(&input),
-                &[input_bound],
-                &output,
-                Some(output_bound),
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                Some(&artifacts),
-                &composition_root_drift,
-            )
-            .expect_err("guarded verifier must reject release-native composition-root drift");
+            let err = case
+                .verify(
+                    &mut stx,
+                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    &composition_root_drift,
+                )
+                .expect_err("guarded verifier must reject release-native composition-root drift");
             assert_invalid_parameter_contains(
                 err,
                 "composition root does not match governed AIR evaluation",
@@ -31640,21 +30893,13 @@ mod tests {
                 .map(|proof| proof.proof.proof.bytes.len())
                 .collect::<Vec<_>>();
             enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
-            let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-                &mut stx,
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &job,
-                std::slice::from_ref(&input),
-                &[input_bound],
-                &output,
-                Some(output_bound),
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                Some(&artifacts),
-                &base_root_mismatch,
-            )
-            .expect_err("guarded verifier must reject release-native FRI base-root drift");
+            let err = case
+                .verify(
+                    &mut stx,
+                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    &base_root_mismatch,
+                )
+                .expect_err("guarded verifier must reject release-native FRI base-root drift");
             assert_invalid_parameter_contains(err, "composition root mismatch");
         }
         Ok(())
@@ -31666,36 +30911,16 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         assert_eq!(governed_verifier_key, vk_box);
         let (_vk_id, _vk_commitment) =
             install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let base_proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            BfvCiphertextBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-            &vk_box,
-        )
-        .expect("release prover emits BFV-native full-bootstrap execution proofs");
+        let base_proofs = case
+            .prove(&vk_box)
+            .expect("release prover emits BFV-native full-bootstrap execution proofs");
         stx.apply();
         for (tamper, expected_error) in execution_native_air_replay_tamper_cases() {
             let mut drifted_proofs = base_proofs.clone();
@@ -31711,21 +30936,13 @@ mod tests {
                 .map(|proof| proof.proof.proof.bytes.len())
                 .collect::<Vec<_>>();
             enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
-            let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-                &mut stx,
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &job,
-                std::slice::from_ref(&input),
-                &[input_bound],
-                &output,
-                Some(output_bound),
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                Some(&artifacts),
-                &drifted_proofs,
-            )
-            .expect_err("guarded verifier must reject release-native opening commitment drift");
+            let err = case
+                .verify(
+                    &mut stx,
+                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    &drifted_proofs,
+                )
+                .expect_err("guarded verifier must reject release-native opening commitment drift");
             assert_invalid_parameter_contains(err, expected_error);
         }
         Ok(())
@@ -31737,34 +30954,14 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
         let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
-        let (
-            params,
-            evaluation_keys,
-            transcript,
-            artifacts,
-            job,
-            input,
-            output,
-            input_bound,
-            output_bound,
-        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
-        let governed_verifier_key =
-            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
-                .expect("governed full-bootstrap execution verifier key");
+        let case = FullBootstrapExecutionCase::with_verifier_key(&vk_box);
+        let governed_verifier_key = case
+            .governed_verifier_key()
+            .expect("governed full-bootstrap execution verifier key");
         assert_eq!(governed_verifier_key, vk_box);
         let (_vk_id, _vk_commitment) =
             install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
-        let proofs = sample_full_bootstrap_execution_binding_air_proofs_for_claims(
-            &params,
-            &evaluation_keys,
-            &transcript,
-            &artifacts,
-            &input,
-            &output,
-            input_bound,
-            output_bound,
-            &vk_box,
-        );
+        let proofs = case.binding_air_proofs(&vk_box);
         stx.apply();
         for (tamper, expected_error) in native_air_tamper_cases() {
             let mut drifted_proofs = proofs.clone();
@@ -31780,21 +30977,15 @@ mod tests {
                 .map(|proof| proof.proof.proof.bytes.len())
                 .collect::<Vec<_>>();
             enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
-            let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
-                &mut stx,
-                &params,
-                &evaluation_keys,
-                &transcript,
-                &job,
-                std::slice::from_ref(&input),
-                &[input_bound],
-                &output,
-                Some(output_bound),
-                BfvCiphertextBoundModeV1::ExactResidualMultiple,
-                Some(&artifacts),
-                &drifted_proofs,
-            )
-            .expect_err("guarded verifier must reject full-bootstrap execution generic AIR drift");
+            let err = case
+                .verify(
+                    &mut stx,
+                    BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                    &drifted_proofs,
+                )
+                .expect_err(
+                    "guarded verifier must reject full-bootstrap execution generic AIR drift",
+                );
             assert_invalid_parameter_contains(
                 err,
                 full_bootstrap_generic_air_tamper_error(tamper, expected_error),
@@ -38220,88 +37411,334 @@ mod tests {
         );
         Ok(())
     }
+    #[derive(Clone)]
+    struct FheInputStateFixture {
+        service_name: Name,
+        binding_name: Name,
+        state_key: String,
+        payload: Vec<u8>,
+        governance_tx_hash: Hash,
+        residual_bound: u128,
+        bound_mode: BfvCiphertextBoundModeV1,
+        public_key: Option<BfvPublicKey>,
+    }
+    impl FheInputStateFixture {
+        fn names() -> (Name, Name) {
+            (
+                "portal".parse().expect("valid"),
+                "vault".parse().expect("valid"),
+            )
+        }
+        fn exact(
+            state_key: &str,
+            identity: &[u8],
+            payload_seed: &[u8],
+            governance_seed: &[u8],
+        ) -> Self {
+            let (service_name, binding_name) = Self::names();
+            let state_key = state_key.to_owned();
+            let payload = sample_fhe_payload(identity, payload_seed);
+            Self::with_exact_payload(
+                service_name,
+                binding_name,
+                state_key,
+                payload,
+                governance_seed,
+            )
+        }
+        fn oversized(
+            state_key: &str,
+            identity: &[u8],
+            payload_seed: &[u8],
+            governance_seed: &[u8],
+        ) -> Self {
+            let (service_name, binding_name) = Self::names();
+            let state_key = state_key.to_owned();
+            let payload = sample_oversized_fhe_payload(identity, payload_seed);
+            Self::with_exact_payload(
+                service_name,
+                binding_name,
+                state_key,
+                payload,
+                governance_seed,
+            )
+        }
+        fn with_exact_payload(
+            service_name: Name,
+            binding_name: Name,
+            state_key: String,
+            payload: Vec<u8>,
+            governance_seed: &[u8],
+        ) -> Self {
+            Self {
+                service_name,
+                binding_name,
+                state_key,
+                payload,
+                governance_tx_hash: Hash::new(governance_seed),
+                residual_bound: bfv_encrypted_zero_refresh_residual_multiple_bound(
+                    &ram_lfe_bfv_parameters_v1(),
+                )
+                .expect("fresh input residual bound"),
+                bound_mode: BfvCiphertextBoundModeV1::ExactResidualMultiple,
+                public_key: None,
+            }
+        }
+        fn bounded_noise(
+            state_key: &str,
+            values: &[u64],
+            payload_seed: &str,
+            governance_seed: &[u8],
+        ) -> Self {
+            let (service_name, binding_name) = Self::names();
+            let state_key = state_key.to_owned();
+            let (_secret_key, public_key, _evaluation_keys, _transcript, _digest) =
+                sample_registered_bounded_noise_bfv_material();
+            let payload = sample_bounded_noise_fhe_payload(&public_key, values, payload_seed);
+            let governance_tx_hash = Hash::new(governance_seed);
+            let residual_bound =
+                bfv_fresh_bounded_noise_ciphertext_bound(&ram_lfe_bfv_parameters_v1())
+                    .expect("fresh input noise bound");
+            Self {
+                service_name,
+                binding_name,
+                state_key,
+                payload,
+                governance_tx_hash,
+                residual_bound,
+                bound_mode: BfvCiphertextBoundModeV1::BoundedNoise,
+                public_key: Some(public_key),
+            }
+        }
+        fn storage_key(&self) -> (String, String, String) {
+            (
+                self.service_name.as_ref().to_owned(),
+                self.binding_name.as_ref().to_owned(),
+                self.state_key.clone(),
+            )
+        }
+        fn is_absent(&self, state_transaction: &StateTransaction<'_, '_>) -> bool {
+            state_transaction
+                .world
+                .soracloud_service_state_entries
+                .get(&self.storage_key())
+                .is_none()
+        }
+        fn input_ref(&self) -> FheJobInputRefV1 {
+            sample_fhe_input_ref(&self.state_key, &self.payload)
+        }
+        fn unverified_proof(&self) -> SoracloudFheInputAdmissionProofV1 {
+            if let Some(public_key) = &self.public_key {
+                sample_fhe_input_admission_proof_with_public_key_and_bound_mode(
+                    &self.service_name,
+                    &self.binding_name,
+                    &self.state_key,
+                    &self.payload,
+                    self.governance_tx_hash,
+                    self.residual_bound,
+                    public_key,
+                    self.bound_mode,
+                )
+            } else {
+                sample_fhe_input_admission_proof(
+                    &self.service_name,
+                    &self.binding_name,
+                    &self.state_key,
+                    &self.payload,
+                    self.governance_tx_hash,
+                    self.residual_bound,
+                )
+            }
+        }
+        #[cfg(feature = "zk-stark")]
+        fn verified_proof(
+            &self,
+            vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+        ) -> SoracloudFheInputAdmissionProofV1 {
+            if let Some(public_key) = &self.public_key {
+                sample_verified_fhe_input_admission_proof_with_public_key_and_bound_mode(
+                    &self.service_name,
+                    &self.binding_name,
+                    &self.state_key,
+                    &self.payload,
+                    self.governance_tx_hash,
+                    self.residual_bound,
+                    public_key,
+                    self.bound_mode,
+                    vk_box,
+                )
+            } else {
+                sample_verified_fhe_input_admission_proof(
+                    &self.service_name,
+                    &self.binding_name,
+                    &self.state_key,
+                    &self.payload,
+                    self.governance_tx_hash,
+                    self.residual_bound,
+                    vk_box,
+                )
+            }
+        }
+        fn execute_upsert(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
+        ) -> Result<(), InstructionExecutionError> {
+            iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
+                service_name: self.service_name.clone(),
+                binding_name: self.binding_name.clone(),
+                state_key: self.state_key.clone(),
+                operation: SoraStateMutationOperationV1::Upsert,
+                value_size_bytes: Some(u64::try_from(self.payload.len()).expect("payload len")),
+                value_payload: Some(self.payload.clone()),
+                encryption: SoraStateEncryptionV1::FheCiphertext,
+                governance_tx_hash: self.governance_tx_hash,
+                fhe_input_admission_proof: admission_proof.clone(),
+                provenance: state_mutation_provenance(
+                    &self.service_name,
+                    &self.binding_name,
+                    &self.state_key,
+                    SoraStateMutationOperationV1::Upsert,
+                    Some(u64::try_from(self.payload.len()).expect("payload len")),
+                    Some(Hash::new(&self.payload)),
+                    SoraStateEncryptionV1::FheCiphertext,
+                    self.governance_tx_hash,
+                    admission_proof,
+                ),
+            })
+            .execute(&ALICE_ID, state_transaction)
+        }
+        fn state_entry(
+            &self,
+            sequence: u64,
+            bound_mode: Option<BfvCiphertextBoundModeV1>,
+        ) -> SoraServiceStateEntryV1 {
+            SoraServiceStateEntryV1 {
+                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                service_name: self.service_name.clone(),
+                service_version: "1.0.0".to_string(),
+                binding_name: self.binding_name.clone(),
+                state_key: self.state_key.clone(),
+                encryption: SoraStateEncryptionV1::FheCiphertext,
+                payload_bytes: NonZeroU64::new(
+                    u64::try_from(self.payload.len()).expect("payload len"),
+                )
+                .expect("nonzero"),
+                payload_commitment: Hash::new(&self.payload),
+                payload: self.payload.clone(),
+                fhe_public_key_digest: Some(sample_bfv_public_key_digest()),
+                fhe_residual_multiple_bound: Some(self.residual_bound),
+                fhe_bound_mode: bound_mode,
+                last_update_sequence: sequence,
+                governance_tx_hash: self.governance_tx_hash,
+                source_action: SoraServiceLifecycleActionV1::StateMutation,
+            }
+        }
+        fn record(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            sequence: u64,
+        ) -> Result<(), InstructionExecutionError> {
+            record_service_state_entry(
+                state_transaction,
+                self.state_entry(sequence, Some(self.bound_mode)),
+            )
+        }
+        fn record_with_public_key_digest(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            sequence: u64,
+            public_key_digest: Hash,
+        ) -> Result<(), InstructionExecutionError> {
+            let mut entry = self.state_entry(sequence, Some(self.bound_mode));
+            entry.fhe_public_key_digest = Some(public_key_digest);
+            record_service_state_entry(state_transaction, entry)
+        }
+        fn insert_without_bound_mode(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            sequence: u64,
+        ) {
+            state_transaction
+                .world
+                .soracloud_service_state_entries
+                .insert(self.storage_key(), self.state_entry(sequence, None));
+        }
+        fn install_policy(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            governance_seed: &[u8],
+        ) -> Result<SoracloudFhePolicyReferenceV1, InstructionExecutionError> {
+            let policy = sample_fhe_policy();
+            let param_set = sample_fhe_param_set();
+            let evaluation_keys = sample_bfv_evaluation_key_bundle();
+            let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
+            install_governed_fhe_material(
+                state_transaction,
+                sample_governed_fhe_material(
+                    &self.service_name,
+                    NonZeroU32::new(1).expect("nonzero"),
+                    policy,
+                    param_set,
+                    evaluation_keys,
+                    evaluation_key_refresh_transcript,
+                    None,
+                ),
+                Hash::new(governance_seed),
+            )
+        }
+        fn run_job(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            job: FheJobSpecV1,
+            policy_reference: SoracloudFhePolicyReferenceV1,
+        ) -> Result<(), InstructionExecutionError> {
+            iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
+                service_name: self.service_name.clone(),
+                binding_name: self.binding_name.clone(),
+                job: job.clone(),
+                policy_reference: policy_reference.clone(),
+                public_key_proof: None,
+                bootstrap_key_zero_refresh_proof: None,
+                full_bootstrap_execution_proofs: Vec::new(),
+                provenance: fhe_job_provenance(
+                    &self.service_name,
+                    &self.binding_name,
+                    job,
+                    policy_reference,
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            })
+            .execute(&ALICE_ID, state_transaction)
+        }
+    }
     #[test]
     fn run_soracloud_fhe_job_rejects_missing_policy_bound_public_key_proof()
     -> Result<(), eyre::Report> {
         setup_fhe_service_test!(kura, state, bundle, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        let binding_name: iroha_data_model::name::Name = "vault".parse().expect("valid");
-        let input_1_payload = sample_fhe_payload(b"alice", b"seed-missing-public-key-proof-1");
-        let input_2_payload = sample_fhe_payload(b"bob", b"seed-missing-public-key-proof-2");
-        let input_residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        for (state_key, payload) in [
-            ("/state/private/input-1", input_1_payload.clone()),
-            ("/state/private/input-2", input_2_payload.clone()),
-        ] {
-            record_service_state_entry(
-                &mut stx,
-                SoraServiceStateEntryV1 {
-                    schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-                    service_name: service_name.clone(),
-                    service_version: "1.0.0".to_string(),
-                    binding_name: binding_name.clone(),
-                    state_key: state_key.to_string(),
-                    encryption: SoraStateEncryptionV1::FheCiphertext,
-                    payload_bytes: NonZeroU64::new(
-                        u64::try_from(payload.len()).expect("payload len"),
-                    )
-                    .expect("nonzero"),
-                    payload_commitment: Hash::new(&payload),
-                    payload,
-                    fhe_public_key_digest: Some(sample_bfv_public_key_digest()),
-                    fhe_residual_multiple_bound: Some(input_residual_bound),
-                    fhe_bound_mode: Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
-                    last_update_sequence: 1,
-                    governance_tx_hash: Hash::new(b"input-state"),
-                    source_action: SoraServiceLifecycleActionV1::StateMutation,
-                },
-            )?;
-        }
-        let job = sample_fhe_job(vec![
-            sample_fhe_input_ref("/state/private/input-1", &input_1_payload),
-            sample_fhe_input_ref("/state/private/input-2", &input_2_payload),
-        ]);
-        let policy = sample_fhe_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let governance_tx_hash = Hash::new(b"gov-fhe-missing-public-key-proof");
-        let policy_reference = install_governed_fhe_material(
-            &mut stx,
-            sample_governed_fhe_material(
-                &service_name,
-                NonZeroU32::new(1).expect("nonzero"),
-                policy,
-                param_set,
-                evaluation_keys,
-                evaluation_key_refresh_transcript,
-                None,
-            ),
-            governance_tx_hash,
-        )?;
-        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            job: job.clone(),
-            policy_reference: policy_reference.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            provenance: fhe_job_provenance(
-                &service_name,
-                &binding_name,
-                job,
-                policy_reference,
-                None,
-                None,
-                Vec::new(),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("policy-bound FHE jobs must require public-key proof attachments");
+        let input_1 = FheInputStateFixture::exact(
+            "/state/private/input-1",
+            b"alice",
+            b"seed-missing-public-key-proof-1",
+            b"input-state",
+        );
+        let input_2 = FheInputStateFixture::exact(
+            "/state/private/input-2",
+            b"bob",
+            b"seed-missing-public-key-proof-2",
+            b"input-state",
+        );
+        input_1.record(&mut stx, 1)?;
+        input_2.record(&mut stx, 1)?;
+        let job = sample_fhe_job(vec![input_1.input_ref(), input_2.input_ref()]);
+        let policy_reference =
+            input_1.install_policy(&mut stx, b"gov-fhe-missing-public-key-proof")?;
+        let err = input_1
+            .run_job(&mut stx, job, policy_reference)
+            .expect_err("policy-bound FHE jobs must require public-key proof attachments");
         assert_invalid_parameter_contains(err, "requires public-key proof");
         Ok(())
     }
@@ -38310,91 +37747,30 @@ mod tests {
     {
         setup_fhe_service_test!(kura, state, bundle, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let input_1_payload = sample_fhe_payload(b"alice", b"seed-public-key-digest-mismatch-1");
-        let input_2_payload = sample_fhe_payload(b"bob", b"seed-public-key-digest-mismatch-2");
-        let input_residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        for (state_key, payload, public_key_digest) in [
-            (
-                "/state/private/input-1",
-                input_1_payload.clone(),
-                Hash::new(b"wrong-fhe-input-public-key-digest"),
-            ),
-            (
-                "/state/private/input-2",
-                input_2_payload.clone(),
-                sample_bfv_public_key_digest(),
-            ),
-        ] {
-            record_service_state_entry(
-                &mut stx,
-                SoraServiceStateEntryV1 {
-                    schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-                    service_name: service_name.clone(),
-                    service_version: "1.0.0".to_string(),
-                    binding_name: binding_name.clone(),
-                    state_key: state_key.to_string(),
-                    encryption: SoraStateEncryptionV1::FheCiphertext,
-                    payload_bytes: NonZeroU64::new(
-                        u64::try_from(payload.len()).expect("payload len"),
-                    )
-                    .expect("nonzero"),
-                    payload_commitment: Hash::new(&payload),
-                    payload,
-                    fhe_public_key_digest: Some(public_key_digest),
-                    fhe_residual_multiple_bound: Some(input_residual_bound),
-                    fhe_bound_mode: Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
-                    last_update_sequence: 1,
-                    governance_tx_hash: Hash::new(b"input-public-key-digest-mismatch-state"),
-                    source_action: SoraServiceLifecycleActionV1::StateMutation,
-                },
-            )?;
-        }
-        let job = sample_fhe_job(vec![
-            sample_fhe_input_ref("/state/private/input-1", &input_1_payload),
-            sample_fhe_input_ref("/state/private/input-2", &input_2_payload),
-        ]);
-        let policy = sample_fhe_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let governance_tx_hash = Hash::new(b"gov-fhe-input-public-key-digest-mismatch");
-        let policy_reference = install_governed_fhe_material(
+        let input_1 = FheInputStateFixture::exact(
+            "/state/private/input-1",
+            b"alice",
+            b"seed-public-key-digest-mismatch-1",
+            b"input-public-key-digest-mismatch-state",
+        );
+        let input_2 = FheInputStateFixture::exact(
+            "/state/private/input-2",
+            b"bob",
+            b"seed-public-key-digest-mismatch-2",
+            b"input-public-key-digest-mismatch-state",
+        );
+        input_1.record_with_public_key_digest(
             &mut stx,
-            sample_governed_fhe_material(
-                &service_name,
-                NonZeroU32::new(1).expect("nonzero"),
-                policy,
-                param_set,
-                evaluation_keys,
-                evaluation_key_refresh_transcript,
-                None,
-            ),
-            governance_tx_hash,
+            1,
+            Hash::new(b"wrong-fhe-input-public-key-digest"),
         )?;
-        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            job: job.clone(),
-            policy_reference: policy_reference.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            provenance: fhe_job_provenance(
-                &service_name,
-                &binding_name,
-                job,
-                policy_reference,
-                None,
-                None,
-                Vec::new(),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("persisted FHE inputs must bind the governed public key digest");
+        input_2.record(&mut stx, 1)?;
+        let job = sample_fhe_job(vec![input_1.input_ref(), input_2.input_ref()]);
+        let policy_reference =
+            input_1.install_policy(&mut stx, b"gov-fhe-input-public-key-digest-mismatch")?;
+        let err = input_1
+            .run_job(&mut stx, job, policy_reference)
+            .expect_err("persisted FHE inputs must bind the governed public key digest");
         assert_invalid_parameter_contains(err, "public-key digest mismatch");
         Ok(())
     }
@@ -39390,89 +38766,25 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_fhe_service_test!(kura, state, bundle, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        let binding_name: iroha_data_model::name::Name = "vault".parse().expect("valid");
-        let input_1_payload = sample_fhe_payload(b"alice", b"seed-missing-bound-1");
-        let input_2_payload = sample_fhe_payload(b"bob", b"seed-missing-bound-2");
-        for (state_key, payload, governance_seed) in [
-            (
-                "/state/private/input-1",
-                input_1_payload.clone(),
-                b"gov-fhe-input-1".as_slice(),
-            ),
-            (
-                "/state/private/input-2",
-                input_2_payload.clone(),
-                b"gov-fhe-input-2".as_slice(),
-            ),
-        ] {
-            let governance_tx_hash = Hash::new(governance_seed);
-            iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
-                service_name: service_name.clone(),
-                binding_name: binding_name.clone(),
-                state_key: state_key.to_string(),
-                operation: SoraStateMutationOperationV1::Upsert,
-                value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
-                value_payload: Some(payload.clone()),
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash,
-                fhe_input_admission_proof: None,
-                provenance: state_mutation_provenance(
-                    &service_name,
-                    &binding_name,
-                    state_key,
-                    SoraStateMutationOperationV1::Upsert,
-                    Some(u64::try_from(payload.len()).expect("payload len")),
-                    Some(Hash::new(&payload)),
-                    SoraStateEncryptionV1::FheCiphertext,
-                    governance_tx_hash,
-                    None,
-                ),
-            })
-            .execute(&ALICE_ID, &mut stx)?;
-        }
-        let job = sample_fhe_job(vec![
-            sample_fhe_input_ref("/state/private/input-1", &input_1_payload),
-            sample_fhe_input_ref("/state/private/input-2", &input_2_payload),
-        ]);
-        let policy = sample_fhe_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let governance_tx_hash = Hash::new(b"gov-fhe-missing-bound");
-        let policy_reference = install_governed_fhe_material(
-            &mut stx,
-            sample_governed_fhe_material(
-                &service_name,
-                NonZeroU32::new(1).expect("nonzero"),
-                policy,
-                param_set,
-                evaluation_keys,
-                evaluation_key_refresh_transcript,
-                None,
-            ),
-            governance_tx_hash,
-        )?;
-        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            job: job.clone(),
-            policy_reference: policy_reference.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            provenance: fhe_job_provenance(
-                &service_name,
-                &binding_name,
-                job,
-                policy_reference,
-                None,
-                None,
-                Vec::new(),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("client-mutated FHE inputs without residual metadata must fail closed");
+        let input_1 = FheInputStateFixture::exact(
+            "/state/private/input-1",
+            b"alice",
+            b"seed-missing-bound-1",
+            b"gov-fhe-input-1",
+        );
+        let input_2 = FheInputStateFixture::exact(
+            "/state/private/input-2",
+            b"bob",
+            b"seed-missing-bound-2",
+            b"gov-fhe-input-2",
+        );
+        input_1.execute_upsert(&mut stx, None)?;
+        input_2.execute_upsert(&mut stx, None)?;
+        let job = sample_fhe_job(vec![input_1.input_ref(), input_2.input_ref()]);
+        let policy_reference = input_1.install_policy(&mut stx, b"gov-fhe-missing-bound")?;
+        let err = input_1
+            .run_job(&mut stx, job, policy_reference)
+            .expect_err("client-mutated FHE inputs without residual metadata must fail closed");
         assert_invalid_parameter_contains(err, "missing exact BFV residual metadata");
         Ok(())
     }
@@ -39481,107 +38793,26 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_fhe_service_test!(kura, state, bundle, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let legacy_key = "/state/private/legacy-input";
-        let legacy_payload = sample_fhe_payload(b"alice", b"seed-legacy-bound-mode-input");
-        let exact_key = "/state/private/exact-input";
-        let exact_payload = sample_fhe_payload(b"bob", b"seed-exact-bound-mode-input");
-        let input_residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        stx.world.soracloud_service_state_entries.insert(
-            (
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                legacy_key.to_string(),
-            ),
-            SoraServiceStateEntryV1 {
-                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-                service_name: service_name.clone(),
-                service_version: "1.0.0".to_string(),
-                binding_name: binding_name.clone(),
-                state_key: legacy_key.to_string(),
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                payload_bytes: NonZeroU64::new(
-                    u64::try_from(legacy_payload.len()).expect("payload len"),
-                )
-                .expect("nonzero"),
-                payload_commitment: Hash::new(&legacy_payload),
-                payload: legacy_payload.clone(),
-                fhe_public_key_digest: Some(sample_bfv_public_key_digest()),
-                fhe_residual_multiple_bound: Some(input_residual_bound),
-                fhe_bound_mode: None,
-                last_update_sequence: 1,
-                governance_tx_hash: Hash::new(b"legacy-bound-mode-input-state"),
-                source_action: SoraServiceLifecycleActionV1::StateMutation,
-            },
+        let legacy_input = FheInputStateFixture::exact(
+            "/state/private/legacy-input",
+            b"alice",
+            b"seed-legacy-bound-mode-input",
+            b"legacy-bound-mode-input-state",
         );
-        record_service_state_entry(
-            &mut stx,
-            SoraServiceStateEntryV1 {
-                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-                service_name: service_name.clone(),
-                service_version: "1.0.0".to_string(),
-                binding_name: binding_name.clone(),
-                state_key: exact_key.to_string(),
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                payload_bytes: NonZeroU64::new(
-                    u64::try_from(exact_payload.len()).expect("payload len"),
-                )
-                .expect("nonzero"),
-                payload_commitment: Hash::new(&exact_payload),
-                payload: exact_payload.clone(),
-                fhe_public_key_digest: Some(sample_bfv_public_key_digest()),
-                fhe_residual_multiple_bound: Some(input_residual_bound),
-                fhe_bound_mode: Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
-                last_update_sequence: 2,
-                governance_tx_hash: Hash::new(b"exact-bound-mode-input-state"),
-                source_action: SoraServiceLifecycleActionV1::StateMutation,
-            },
-        )?;
-        let job = sample_fhe_job(vec![
-            sample_fhe_input_ref(legacy_key, &legacy_payload),
-            sample_fhe_input_ref(exact_key, &exact_payload),
-        ]);
-        let policy = sample_fhe_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let governance_tx_hash = Hash::new(b"gov-fhe-missing-bound-mode");
-        let policy_reference = install_governed_fhe_material(
-            &mut stx,
-            sample_governed_fhe_material(
-                &service_name,
-                NonZeroU32::new(1).expect("nonzero"),
-                policy,
-                param_set,
-                evaluation_keys,
-                evaluation_key_refresh_transcript,
-                None,
-            ),
-            governance_tx_hash,
-        )?;
-        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            job: job.clone(),
-            policy_reference: policy_reference.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            provenance: fhe_job_provenance(
-                &service_name,
-                &binding_name,
-                job,
-                policy_reference,
-                None,
-                None,
-                Vec::new(),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("persisted FHE input bounds without a mode must fail closed");
+        let exact_input = FheInputStateFixture::exact(
+            "/state/private/exact-input",
+            b"bob",
+            b"seed-exact-bound-mode-input",
+            b"exact-bound-mode-input-state",
+        );
+        legacy_input.insert_without_bound_mode(&mut stx, 1);
+        exact_input.record(&mut stx, 2)?;
+        let job = sample_fhe_job(vec![legacy_input.input_ref(), exact_input.input_ref()]);
+        let policy_reference =
+            legacy_input.install_policy(&mut stx, b"gov-fhe-missing-bound-mode")?;
+        let err = legacy_input
+            .run_job(&mut stx, job, policy_reference)
+            .expect_err("persisted FHE input bounds without a mode must fail closed");
         assert_invalid_parameter_contains(err, "missing exact BFV bound-mode metadata");
         Ok(())
     }
@@ -39590,103 +38821,26 @@ mod tests {
     {
         setup_fhe_service_test!(kura, state, bundle, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let input_key = "/state/private/bounded-input";
-        let input_payload = sample_fhe_payload(b"alice", b"seed-bounded-noise-job-input");
-        let exact_input_key = "/state/private/exact-input";
-        let exact_input_payload = sample_fhe_payload(b"bob", b"seed-exact-job-input");
-        let input_residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        record_service_state_entry(
-            &mut stx,
-            SoraServiceStateEntryV1 {
-                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-                service_name: service_name.clone(),
-                service_version: "1.0.0".to_string(),
-                binding_name: binding_name.clone(),
-                state_key: input_key.to_string(),
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                payload_bytes: NonZeroU64::new(
-                    u64::try_from(input_payload.len()).expect("payload len"),
-                )
-                .expect("nonzero"),
-                payload_commitment: Hash::new(&input_payload),
-                payload: input_payload.clone(),
-                fhe_public_key_digest: Some(sample_bfv_public_key_digest()),
-                fhe_residual_multiple_bound: Some(input_residual_bound),
-                fhe_bound_mode: Some(BfvCiphertextBoundModeV1::BoundedNoise),
-                last_update_sequence: 1,
-                governance_tx_hash: Hash::new(b"bounded-noise-input-state"),
-                source_action: SoraServiceLifecycleActionV1::StateMutation,
-            },
-        )?;
-        record_service_state_entry(
-            &mut stx,
-            SoraServiceStateEntryV1 {
-                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-                service_name: service_name.clone(),
-                service_version: "1.0.0".to_string(),
-                binding_name: binding_name.clone(),
-                state_key: exact_input_key.to_string(),
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                payload_bytes: NonZeroU64::new(
-                    u64::try_from(exact_input_payload.len()).expect("payload len"),
-                )
-                .expect("nonzero"),
-                payload_commitment: Hash::new(&exact_input_payload),
-                payload: exact_input_payload.clone(),
-                fhe_public_key_digest: Some(sample_bfv_public_key_digest()),
-                fhe_residual_multiple_bound: Some(input_residual_bound),
-                fhe_bound_mode: Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
-                last_update_sequence: 2,
-                governance_tx_hash: Hash::new(b"exact-input-state"),
-                source_action: SoraServiceLifecycleActionV1::StateMutation,
-            },
-        )?;
-        let job = sample_fhe_job(vec![
-            sample_fhe_input_ref(input_key, &input_payload),
-            sample_fhe_input_ref(exact_input_key, &exact_input_payload),
-        ]);
-        let policy = sample_fhe_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let governance_tx_hash = Hash::new(b"gov-fhe-bounded-input");
-        let policy_reference = install_governed_fhe_material(
-            &mut stx,
-            sample_governed_fhe_material(
-                &service_name,
-                NonZeroU32::new(1).expect("nonzero"),
-                policy,
-                param_set,
-                evaluation_keys,
-                evaluation_key_refresh_transcript,
-                None,
-            ),
-            governance_tx_hash,
-        )?;
-        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            job: job.clone(),
-            policy_reference: policy_reference.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            provenance: fhe_job_provenance(
-                &service_name,
-                &binding_name,
-                job,
-                policy_reference,
-                None,
-                None,
-                Vec::new(),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("bounded-noise FHE inputs must fail closed for the exact evaluator");
+        let mut bounded_input = FheInputStateFixture::exact(
+            "/state/private/bounded-input",
+            b"alice",
+            b"seed-bounded-noise-job-input",
+            b"bounded-noise-input-state",
+        );
+        bounded_input.bound_mode = BfvCiphertextBoundModeV1::BoundedNoise;
+        let exact_input = FheInputStateFixture::exact(
+            "/state/private/exact-input",
+            b"bob",
+            b"seed-exact-job-input",
+            b"exact-input-state",
+        );
+        bounded_input.record(&mut stx, 1)?;
+        exact_input.record(&mut stx, 2)?;
+        let job = sample_fhe_job(vec![bounded_input.input_ref(), exact_input.input_ref()]);
+        let policy_reference = bounded_input.install_policy(&mut stx, b"gov-fhe-bounded-input")?;
+        let err = bounded_input
+            .run_job(&mut stx, job, policy_reference)
+            .expect_err("bounded-noise FHE inputs must fail closed for the exact evaluator");
         assert_invalid_parameter_contains(err, "not annotated with exact BFV residual metadata");
         Ok(())
     }
@@ -39695,127 +38849,33 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_fhe_service_test!(kura, state, bundle, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let input_key = "/state/private/oversized-input";
-        let input_payload = sample_oversized_fhe_payload(b"alice", b"seed-oversized-job-input");
-        let input_residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        record_service_state_entry(
-            &mut stx,
-            SoraServiceStateEntryV1 {
-                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-                service_name: service_name.clone(),
-                service_version: "1.0.0".to_string(),
-                binding_name: binding_name.clone(),
-                state_key: input_key.to_string(),
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                payload_bytes: NonZeroU64::new(
-                    u64::try_from(input_payload.len()).expect("payload len"),
-                )
-                .expect("nonzero"),
-                payload_commitment: Hash::new(&input_payload),
-                payload: input_payload.clone(),
-                fhe_public_key_digest: Some(sample_bfv_public_key_digest()),
-                fhe_residual_multiple_bound: Some(input_residual_bound),
-                fhe_bound_mode: Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
-                last_update_sequence: 1,
-                governance_tx_hash: Hash::new(b"oversized-input-state"),
-                source_action: SoraServiceLifecycleActionV1::StateMutation,
-            },
-        )?;
-        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(input_key, &input_payload)]);
+        let oversized_input = FheInputStateFixture::oversized(
+            "/state/private/oversized-input",
+            b"alice",
+            b"seed-oversized-job-input",
+            b"oversized-input-state",
+        );
+        oversized_input.record(&mut stx, 1)?;
+        let mut job = sample_fhe_job(vec![oversized_input.input_ref()]);
         job.operation = FheJobOperationV1::Bootstrap;
         job.bootstrap_count = 1;
-        let policy = sample_fhe_policy();
-        let param_set = sample_fhe_param_set();
-        let evaluation_keys = sample_bfv_evaluation_key_bundle();
-        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let governance_tx_hash = Hash::new(b"gov-fhe-oversized-input");
-        let policy_reference = install_governed_fhe_material(
-            &mut stx,
-            sample_governed_fhe_material(
-                &service_name,
-                NonZeroU32::new(1).expect("nonzero"),
-                policy,
-                param_set,
-                evaluation_keys,
-                evaluation_key_refresh_transcript,
-                None,
-            ),
-            governance_tx_hash,
-        )?;
-        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            job: job.clone(),
-            policy_reference: policy_reference.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            provenance: fhe_job_provenance(
-                &service_name,
-                &binding_name,
-                job,
-                policy_reference.clone(),
-                None,
-                None,
-                Vec::new(),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("missing bootstrap proof must fail before persisted input decode");
+        let policy_reference =
+            oversized_input.install_policy(&mut stx, b"gov-fhe-oversized-input")?;
+        let err = oversized_input
+            .run_job(&mut stx, job, policy_reference.clone())
+            .expect_err("missing bootstrap proof must fail before persisted input decode");
         assert_invalid_parameter_contains(err, "requires bootstrap-key proof");
-        let exact_input_key = "/state/private/exact-input";
-        let exact_input_payload = sample_fhe_payload(b"bob", b"seed-exact-oversized-job-input");
-        record_service_state_entry(
-            &mut stx,
-            SoraServiceStateEntryV1 {
-                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-                service_name: service_name.clone(),
-                service_version: "1.0.0".to_string(),
-                binding_name: binding_name.clone(),
-                state_key: exact_input_key.to_string(),
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                payload_bytes: NonZeroU64::new(
-                    u64::try_from(exact_input_payload.len()).expect("payload len"),
-                )
-                .expect("nonzero"),
-                payload_commitment: Hash::new(&exact_input_payload),
-                payload: exact_input_payload.clone(),
-                fhe_public_key_digest: Some(sample_bfv_public_key_digest()),
-                fhe_residual_multiple_bound: Some(input_residual_bound),
-                fhe_bound_mode: Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
-                last_update_sequence: 2,
-                governance_tx_hash: Hash::new(b"exact-oversized-input-state"),
-                source_action: SoraServiceLifecycleActionV1::StateMutation,
-            },
-        )?;
-        let add_job = sample_fhe_job(vec![
-            sample_fhe_input_ref(input_key, &input_payload),
-            sample_fhe_input_ref(exact_input_key, &exact_input_payload),
-        ]);
-        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            job: add_job.clone(),
-            policy_reference: policy_reference.clone(),
-            public_key_proof: None,
-            bootstrap_key_zero_refresh_proof: None,
-            full_bootstrap_execution_proofs: Vec::new(),
-            provenance: fhe_job_provenance(
-                &service_name,
-                &binding_name,
-                add_job,
-                policy_reference,
-                None,
-                None,
-                Vec::new(),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("oversized persisted FHE input envelopes must fail before execution");
+        let exact_input = FheInputStateFixture::exact(
+            "/state/private/exact-input",
+            b"bob",
+            b"seed-exact-oversized-job-input",
+            b"exact-oversized-input-state",
+        );
+        exact_input.record(&mut stx, 2)?;
+        let add_job = sample_fhe_job(vec![oversized_input.input_ref(), exact_input.input_ref()]);
+        let err = oversized_input
+            .run_job(&mut stx, add_job, policy_reference)
+            .expect_err("oversized persisted FHE input envelopes must fail before execution");
         assert_invalid_parameter_contains(err, "slot count");
         Ok(())
     }
@@ -39823,60 +38883,20 @@ mod tests {
     fn mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier()
     -> Result<(), eyre::Report> {
         setup_soracloud_test_transaction!(kura, state, state_block, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let state_key = "/state/private/input-bounded-proof";
-        let (_secret_key, public_key, _evaluation_keys, _transcript, _digest) =
-            sample_registered_bounded_noise_bfv_material();
-        let payload =
-            sample_bounded_noise_fhe_payload(&public_key, &[21, 34], "seed-proof-bounded-noise");
-        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-bounded-noise");
-        let noise_bound = bfv_fresh_bounded_noise_ciphertext_bound(&ram_lfe_bfv_parameters_v1())
-            .expect("fresh input noise bound");
-        let admission_proof = sample_fhe_input_admission_proof_with_public_key_and_bound_mode(
-            &service_name,
-            &binding_name,
-            state_key,
-            &payload,
-            governance_tx_hash,
-            noise_bound,
-            &public_key,
-            BfvCiphertextBoundModeV1::BoundedNoise,
+        let input = FheInputStateFixture::bounded_noise(
+            "/state/private/input-bounded-proof",
+            &[21, 34],
+            "seed-proof-bounded-noise",
+            b"gov-fhe-input-proof-bounded-noise",
         );
-        let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            state_key: state_key.to_string(),
-            operation: SoraStateMutationOperationV1::Upsert,
-            value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
-            value_payload: Some(payload.clone()),
-            encryption: SoraStateEncryptionV1::FheCiphertext,
-            governance_tx_hash,
-            fhe_input_admission_proof: Some(admission_proof.clone()),
-            provenance: state_mutation_provenance(
-                &service_name,
-                &binding_name,
-                state_key,
-                SoraStateMutationOperationV1::Upsert,
-                Some(u64::try_from(payload.len()).expect("payload len")),
-                Some(Hash::new(&payload)),
-                SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash,
-                Some(admission_proof),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("unregistered bounded-noise proof verifier must reject FHE input admission");
+        let err = input
+            .execute_upsert(&mut stx, Some(input.unverified_proof()))
+            .expect_err(
+                "unregistered bounded-noise proof verifier must reject FHE input admission",
+            );
         assert_invariant_contains(err, "FHE input admission verifying key not found");
         assert!(
-            stx.world
-                .soracloud_service_state_entries
-                .get(&(
-                    service_name.as_ref().to_owned(),
-                    binding_name.as_ref().to_owned(),
-                    state_key.to_string(),
-                ))
-                .is_none(),
+            input.is_absent(&stx),
             "bounded-noise FHE input admission must not persist state"
         );
         Ok(())
@@ -39886,56 +38906,18 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_fhe_service_test!(kura, state, bundle, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let state_key = "/state/private/input-1";
-        let payload = sample_fhe_payload(b"alice", b"seed-proof-missing-vk");
-        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof");
-        let residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        let admission_proof = sample_fhe_input_admission_proof(
-            &service_name,
-            &binding_name,
-            state_key,
-            &payload,
-            governance_tx_hash,
-            residual_bound,
+        let input = FheInputStateFixture::exact(
+            "/state/private/input-1",
+            b"alice",
+            b"seed-proof-missing-vk",
+            b"gov-fhe-input-proof",
         );
-        let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            state_key: state_key.to_string(),
-            operation: SoraStateMutationOperationV1::Upsert,
-            value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
-            value_payload: Some(payload.clone()),
-            encryption: SoraStateEncryptionV1::FheCiphertext,
-            governance_tx_hash,
-            fhe_input_admission_proof: Some(admission_proof.clone()),
-            provenance: state_mutation_provenance(
-                &service_name,
-                &binding_name,
-                state_key,
-                SoraStateMutationOperationV1::Upsert,
-                Some(u64::try_from(payload.len()).expect("payload len")),
-                Some(Hash::new(&payload)),
-                SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash,
-                Some(admission_proof),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("unregistered proof verifier must reject FHE input admission");
+        let err = input
+            .execute_upsert(&mut stx, Some(input.unverified_proof()))
+            .expect_err("unregistered proof verifier must reject FHE input admission");
         assert_invariant_contains(err, "FHE input admission verifying key not found");
         assert!(
-            stx.world
-                .soracloud_service_state_entries
-                .get(&(
-                    service_name.as_ref().to_owned(),
-                    binding_name.as_ref().to_owned(),
-                    state_key.to_string(),
-                ))
-                .is_none(),
+            input.is_absent(&stx),
             "failed admission must not persist FHE input state"
         );
         Ok(())
@@ -39945,56 +38927,18 @@ mod tests {
     -> Result<(), eyre::Report> {
         setup_fhe_service_test!(kura, state, bundle, state_block, stx);
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let state_key = "/state/private/input-oversized";
-        let payload = sample_oversized_fhe_payload(b"alice", b"seed-proof-oversized-envelope");
-        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-oversized-envelope");
-        let residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        let admission_proof = sample_fhe_input_admission_proof(
-            &service_name,
-            &binding_name,
-            state_key,
-            &payload,
-            governance_tx_hash,
-            residual_bound,
+        let input = FheInputStateFixture::oversized(
+            "/state/private/input-oversized",
+            b"alice",
+            b"seed-proof-oversized-envelope",
+            b"gov-fhe-input-proof-oversized-envelope",
         );
-        let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            state_key: state_key.to_string(),
-            operation: SoraStateMutationOperationV1::Upsert,
-            value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
-            value_payload: Some(payload.clone()),
-            encryption: SoraStateEncryptionV1::FheCiphertext,
-            governance_tx_hash,
-            fhe_input_admission_proof: Some(admission_proof.clone()),
-            provenance: state_mutation_provenance(
-                &service_name,
-                &binding_name,
-                state_key,
-                SoraStateMutationOperationV1::Upsert,
-                Some(u64::try_from(payload.len()).expect("payload len")),
-                Some(Hash::new(&payload)),
-                SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash,
-                Some(admission_proof),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("oversized FHE input envelopes must fail before verifier lookup");
+        let err = input
+            .execute_upsert(&mut stx, Some(input.unverified_proof()))
+            .expect_err("oversized FHE input envelopes must fail before verifier lookup");
         assert_invalid_parameter_contains(err, "slot count");
         assert!(
-            stx.world
-                .soracloud_service_state_entries
-                .get(&(
-                    service_name.as_ref().to_owned(),
-                    binding_name.as_ref().to_owned(),
-                    state_key.to_string(),
-                ))
-                .is_none(),
+            input.is_absent(&stx),
             "oversized FHE input admission must not persist state"
         );
         Ok(())
@@ -40015,60 +38959,23 @@ mod tests {
             )
         );
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let state_key = "/state/private/input-verified";
-        let payload = sample_fhe_payload(b"alice", b"seed-proof-registered-vk");
-        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-registered");
-        let residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        let admission_proof = sample_verified_fhe_input_admission_proof(
-            &service_name,
-            &binding_name,
-            state_key,
-            &payload,
-            governance_tx_hash,
-            residual_bound,
-            &vk_box,
+        let input = FheInputStateFixture::exact(
+            "/state/private/input-verified",
+            b"alice",
+            b"seed-proof-registered-vk",
+            b"gov-fhe-input-proof-registered",
         );
-        iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            state_key: state_key.to_string(),
-            operation: SoraStateMutationOperationV1::Upsert,
-            value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
-            value_payload: Some(payload.clone()),
-            encryption: SoraStateEncryptionV1::FheCiphertext,
-            governance_tx_hash,
-            fhe_input_admission_proof: Some(admission_proof.clone()),
-            provenance: state_mutation_provenance(
-                &service_name,
-                &binding_name,
-                state_key,
-                SoraStateMutationOperationV1::Upsert,
-                Some(u64::try_from(payload.len()).expect("payload len")),
-                Some(Hash::new(&payload)),
-                SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash,
-                Some(admission_proof),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        input.execute_upsert(&mut stx, Some(input.verified_proof(&vk_box)))?;
         stx.apply();
         state_block.commit()?;
         let view = state.view();
         let world = view.world();
         let entry = world
             .soracloud_service_state_entries()
-            .get(&(
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                state_key.to_string(),
-            ))
+            .get(&input.storage_key())
             .expect("admitted FHE state entry");
         assert_eq!(entry.encryption, SoraStateEncryptionV1::FheCiphertext);
-        assert_eq!(entry.payload_commitment, Hash::new(&payload));
+        assert_eq!(entry.payload_commitment, Hash::new(&input.payload));
         assert_eq!(
             entry.fhe_public_key_digest,
             Some(sample_bfv_public_key_digest()),
@@ -40076,12 +38983,12 @@ mod tests {
         );
         assert_eq!(
             entry.fhe_residual_multiple_bound,
-            Some(residual_bound),
+            Some(input.residual_bound),
             "verified FHE input admission must persist the proven residual bound"
         );
         assert_eq!(
             entry.fhe_bound_mode,
-            Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
+            Some(input.bound_mode),
             "verified FHE input admission must persist exact bound semantics"
         );
         assert_eq!(
@@ -40110,84 +39017,45 @@ mod tests {
             )
         );
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let state_key = "/state/private/input-verified-bounded";
-        let (_secret_key, public_key, _evaluation_keys, _transcript, _digest) =
-            sample_registered_bounded_noise_bfv_material();
-        let payload = sample_bounded_noise_fhe_payload(
-            &public_key,
+        let input = FheInputStateFixture::bounded_noise(
+            "/state/private/input-verified-bounded",
             &[21, 34],
             "seed-proof-registered-bounded-vk",
+            b"gov-fhe-input-proof-registered-bounded",
         );
-        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-registered-bounded");
-        let noise_bound = bfv_fresh_bounded_noise_ciphertext_bound(&ram_lfe_bfv_parameters_v1())
-            .expect("fresh input noise bound");
-        let admission_proof =
-            sample_verified_fhe_input_admission_proof_with_public_key_and_bound_mode(
-                &service_name,
-                &binding_name,
-                state_key,
-                &payload,
-                governance_tx_hash,
-                noise_bound,
-                &public_key,
-                BfvCiphertextBoundModeV1::BoundedNoise,
-                &vk_box,
-            );
-        iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            state_key: state_key.to_string(),
-            operation: SoraStateMutationOperationV1::Upsert,
-            value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
-            value_payload: Some(payload.clone()),
-            encryption: SoraStateEncryptionV1::FheCiphertext,
-            governance_tx_hash,
-            fhe_input_admission_proof: Some(admission_proof.clone()),
-            provenance: state_mutation_provenance(
-                &service_name,
-                &binding_name,
-                state_key,
-                SoraStateMutationOperationV1::Upsert,
-                Some(u64::try_from(payload.len()).expect("payload len")),
-                Some(Hash::new(&payload)),
-                SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash,
-                Some(admission_proof),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        input.execute_upsert(&mut stx, Some(input.verified_proof(&vk_box)))?;
         stx.apply();
         state_block.commit()?;
         let view = state.view();
         let world = view.world();
         let entry = world
             .soracloud_service_state_entries()
-            .get(&(
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                state_key.to_string(),
-            ))
+            .get(&input.storage_key())
             .expect("admitted bounded FHE state entry");
         assert_eq!(entry.encryption, SoraStateEncryptionV1::FheCiphertext);
-        assert_eq!(entry.payload_commitment, Hash::new(&payload));
+        assert_eq!(entry.payload_commitment, Hash::new(&input.payload));
         assert_eq!(
             entry.fhe_public_key_digest,
             Some(
-                bfv_public_key_digest(&ram_lfe_bfv_parameters_v1(), &public_key)
-                    .expect("bounded public-key digest")
+                bfv_public_key_digest(
+                    &ram_lfe_bfv_parameters_v1(),
+                    input
+                        .public_key
+                        .as_ref()
+                        .expect("bounded fixture public key"),
+                )
+                .expect("bounded public-key digest")
             ),
             "verified bounded FHE input admission must persist the admitted public-key digest"
         );
         assert_eq!(
             entry.fhe_residual_multiple_bound,
-            Some(noise_bound),
+            Some(input.residual_bound),
             "verified bounded FHE input admission must persist the proven noise bound"
         );
         assert_eq!(
             entry.fhe_bound_mode,
-            Some(BfvCiphertextBoundModeV1::BoundedNoise),
+            Some(input.bound_mode),
             "verified bounded FHE input admission must persist bounded-noise semantics"
         );
         assert_eq!(
@@ -40222,57 +39090,18 @@ mod tests {
             .expect("registered input-admission verifier")
             .circuit_id = "soracloud_fhe_input_admission_shadow_v1".to_string();
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let state_key = "/state/private/input-wrong-circuit";
-        let payload = sample_fhe_payload(b"alice", b"seed-proof-wrong-circuit");
-        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-wrong-circuit");
-        let residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        let admission_proof = sample_verified_fhe_input_admission_proof(
-            &service_name,
-            &binding_name,
-            state_key,
-            &payload,
-            governance_tx_hash,
-            residual_bound,
-            &vk_box,
+        let input = FheInputStateFixture::exact(
+            "/state/private/input-wrong-circuit",
+            b"alice",
+            b"seed-proof-wrong-circuit",
+            b"gov-fhe-input-proof-wrong-circuit",
         );
-        let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            state_key: state_key.to_string(),
-            operation: SoraStateMutationOperationV1::Upsert,
-            value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
-            value_payload: Some(payload.clone()),
-            encryption: SoraStateEncryptionV1::FheCiphertext,
-            governance_tx_hash,
-            fhe_input_admission_proof: Some(admission_proof.clone()),
-            provenance: state_mutation_provenance(
-                &service_name,
-                &binding_name,
-                state_key,
-                SoraStateMutationOperationV1::Upsert,
-                Some(u64::try_from(payload.len()).expect("payload len")),
-                Some(Hash::new(&payload)),
-                SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash,
-                Some(admission_proof),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("wrong input-admission circuit must fail closed");
+        let err = input
+            .execute_upsert(&mut stx, Some(input.verified_proof(&vk_box)))
+            .expect_err("wrong input-admission circuit must fail closed");
         assert_invariant_contains(err, "canonical v1 circuit");
         assert!(
-            stx.world
-                .soracloud_service_state_entries
-                .get(&(
-                    service_name.as_ref().to_owned(),
-                    binding_name.as_ref().to_owned(),
-                    state_key.to_string(),
-                ))
-                .is_none(),
+            input.is_absent(&stx),
             "wrong-circuit admission must not persist FHE input state"
         );
         Ok(())
@@ -40302,57 +39131,18 @@ mod tests {
             "test setup must drift the registered verifier record version"
         );
         deploy_sample_soracloud_service!(bundle, stx);
-        let service_name: Name = "portal".parse().expect("valid");
-        let binding_name: Name = "vault".parse().expect("valid");
-        let state_key = "/state/private/input-wrong-version";
-        let payload = sample_fhe_payload(b"alice", b"seed-proof-wrong-version");
-        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-wrong-version");
-        let residual_bound =
-            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                .expect("fresh input residual bound");
-        let admission_proof = sample_verified_fhe_input_admission_proof(
-            &service_name,
-            &binding_name,
-            state_key,
-            &payload,
-            governance_tx_hash,
-            residual_bound,
-            &vk_box,
+        let input = FheInputStateFixture::exact(
+            "/state/private/input-wrong-version",
+            b"alice",
+            b"seed-proof-wrong-version",
+            b"gov-fhe-input-proof-wrong-version",
         );
-        let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
-            service_name: service_name.clone(),
-            binding_name: binding_name.clone(),
-            state_key: state_key.to_string(),
-            operation: SoraStateMutationOperationV1::Upsert,
-            value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
-            value_payload: Some(payload.clone()),
-            encryption: SoraStateEncryptionV1::FheCiphertext,
-            governance_tx_hash,
-            fhe_input_admission_proof: Some(admission_proof.clone()),
-            provenance: state_mutation_provenance(
-                &service_name,
-                &binding_name,
-                state_key,
-                SoraStateMutationOperationV1::Upsert,
-                Some(u64::try_from(payload.len()).expect("payload len")),
-                Some(Hash::new(&payload)),
-                SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash,
-                Some(admission_proof),
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("wrong input-admission verifier version must fail closed");
+        let err = input
+            .execute_upsert(&mut stx, Some(input.verified_proof(&vk_box)))
+            .expect_err("wrong input-admission verifier version must fail closed");
         assert_invariant_contains(err, "canonical v1 circuit version");
         assert!(
-            stx.world
-                .soracloud_service_state_entries
-                .get(&(
-                    service_name.as_ref().to_owned(),
-                    binding_name.as_ref().to_owned(),
-                    state_key.to_string(),
-                ))
-                .is_none(),
+            input.is_absent(&stx),
             "wrong-version admission must not persist FHE input state"
         );
         Ok(())
@@ -40379,24 +39169,7 @@ mod tests {
                 b"seed-proof-wrong-vk-len".as_slice(),
             ),
         ] {
-            let kura = Kura::blank_kura_for_testing();
-            let state = state_with_soracloud_permission(&kura)?;
-            let bundle = sample_bundle_with_state_binding(
-                "portal",
-                "1.0.0",
-                0,
-                "vault",
-                "/state/private",
-                SoraStateEncryptionV1::FheCiphertext,
-                SoraStateMutabilityV1::ReadWrite,
-                131_072,
-                262_144,
-            );
-            let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-                .as_ref()
-                .header();
-            let mut state_block = state.block(block_header);
-            let mut stx = state_block.transaction();
+            setup_fhe_service_test!(kura, state, bundle, state_block, stx);
             stx.zk.stark.enabled = true;
             let vk_box = sample_fhe_input_admission_vk_box();
             let vk_id = register_fhe_input_admission_verifier(&mut stx, vk_box.clone())?;
@@ -40418,63 +39191,15 @@ mod tests {
                         .saturating_add(1);
                 }
             }
-            isi::DeploySoracloudService {
-                bundle: bundle.clone(),
-                initial_service_configs: BTreeMap::new(),
-                initial_service_secrets: BTreeMap::new(),
-                provenance: bundle_provenance(&bundle),
-            }
-            .execute(&ALICE_ID, &mut stx)?;
-            let service_name: Name = "portal".parse().expect("valid");
-            let binding_name: Name = "vault".parse().expect("valid");
-            let payload = sample_fhe_payload(b"alice", seed);
-            let governance_tx_hash = Hash::new(state_key.as_bytes());
-            let residual_bound =
-                bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
-                    .expect("fresh input residual bound");
-            let admission_proof = sample_verified_fhe_input_admission_proof(
-                &service_name,
-                &binding_name,
-                state_key,
-                &payload,
-                governance_tx_hash,
-                residual_bound,
-                &vk_box,
-            );
-            let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
-                service_name: service_name.clone(),
-                binding_name: binding_name.clone(),
-                state_key: state_key.to_string(),
-                operation: SoraStateMutationOperationV1::Upsert,
-                value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
-                value_payload: Some(payload.clone()),
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash,
-                fhe_input_admission_proof: Some(admission_proof.clone()),
-                provenance: state_mutation_provenance(
-                    &service_name,
-                    &binding_name,
-                    state_key,
-                    SoraStateMutationOperationV1::Upsert,
-                    Some(u64::try_from(payload.len()).expect("payload len")),
-                    Some(Hash::new(&payload)),
-                    SoraStateEncryptionV1::FheCiphertext,
-                    governance_tx_hash,
-                    Some(admission_proof),
-                ),
-            })
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("restored verifier metadata drift must fail closed");
+            deploy_sample_soracloud_service!(bundle, stx);
+            let input =
+                FheInputStateFixture::exact(state_key, b"alice", seed, state_key.as_bytes());
+            let err = input
+                .execute_upsert(&mut stx, Some(input.verified_proof(&vk_box)))
+                .expect_err("restored verifier metadata drift must fail closed");
             assert_invariant_contains(err, expected_error);
             assert!(
-                stx.world
-                    .soracloud_service_state_entries
-                    .get(&(
-                        service_name.as_ref().to_owned(),
-                        binding_name.as_ref().to_owned(),
-                        state_key.to_string(),
-                    ))
-                    .is_none(),
+                input.is_absent(&stx),
                 "metadata-drifted verifier must not persist FHE input state"
             );
         }

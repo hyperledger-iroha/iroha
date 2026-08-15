@@ -1,16 +1,14 @@
 //! Sealed direct-equality soundness prerequisite for persistent decryption.
 //!
-//! The existing `persistent_decryption_response_link` is auxiliary and
-//! non-authorizing. Its T256 projection can check a useful consistency
-//! relation, but it cannot establish that the same wide integer witness is
-//! used by every RNS share equation. In particular, neither evaluation at one
-//! field point nor cancellation by a sparse challenge is sound in a
-//! negacyclic quotient ring with zero divisors.
+//! The existing `persistent_decryption_response_link` is auxiliary and non-authorizing. Its T256
+//! projection can check a useful consistency relation, but it cannot establish that the same wide
+//! integer witness is used by every RNS share equation. In particular, neither evaluation at one
+//! field point nor cancellation by a sparse challenge is sound in a negacyclic quotient ring with
+//! zero divisors.
 //!
 //! The direct language frozen here would instead require each existing
 //! commitment to open as `Cs_j = <s[j*16384..(j+1)*16384], G> + r_j H`,
-//! constrain the assembled polynomial `s` to be ternary, and prove all 38
-//! equations directly:
+//! constrain the assembled polynomial `s` to be ternary, and prove all 38 equations directly:
 //!
 //! ```text
 //! share_l = c1_l * s + (pT mod q_l) * (z mod q_l) mod q_l,

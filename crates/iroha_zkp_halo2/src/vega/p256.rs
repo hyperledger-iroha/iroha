@@ -1,8 +1,7 @@
 //! Complete affine P-256 and ES256 verification gadgets over T256's scalar field.
 //!
-//! T256's scalar field is exactly the P-256 coordinate field, so curve
-//! coordinates are native R1CS values. ECDSA scalars remain explicitly
-//! bit-constrained below the P-256 group order.
+//! T256's scalar field is exactly the P-256 coordinate field, so curve coordinates are native R1CS
+//! values. ECDSA scalars remain explicitly bit-constrained below the P-256 group order.
 use super::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1 as Scalar,
     circuit::{Bit, CircuitBuilder, CircuitError, LinearCombination},
@@ -158,8 +157,7 @@ pub(super) fn verify_es256_low_s_from_inverse(
     let recomposed = scalar_mul(builder, &recovery, &s.bits_le)?;
     enforce_points_equal(builder, &recomposed, &right)
 }
-/// Verify one canonical low-s ES256 signature without trusting a host-side
-/// modular inverse.
+/// Verify one canonical low-s ES256 signature without trusting a host-side modular inverse.
 ///
 /// The private recovery point `R` is constrained on curve, constrained by
 /// `x(R) mod n = r`, and used in the exact group equation

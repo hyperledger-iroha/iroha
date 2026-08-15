@@ -55,8 +55,7 @@ impl GatewayProviderBindingV1 {
 /// Payload-free validation failures for gateway runtime-provider bindings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum GatewayProviderBindingErrorV1 {
-    /// The provider handle is empty, oversized, non-ASCII, or contains a
-    /// forbidden byte.
+    /// The provider handle is empty, oversized, non-ASCII, or contains a forbidden byte.
     #[error("gateway runtime provider handle is invalid")]
     InvalidHandle,
     /// The provider handle is explicitly marked for test or development use.

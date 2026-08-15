@@ -2,20 +2,18 @@
 //!
 //! The active-party boundary is deliberately stricter than a collection of
 //! signed byte strings.  A secret epoch fixes exactly eight authentication
-//! party IDs in one canonical order, every authentication key proves possession
-//! against a separate whole-roster key-material certificate before the roster
-//! can be admitted, and every later contribution is
-//! bound to that roster, epoch, protocol transcript, round, record index, and
+//! party IDs in one canonical order, every authentication key proves possession against a separate
+//! whole-roster key-material certificate before the roster can be admitted, and every later
+//! contribution is bound to that roster, epoch, protocol transcript, round, record index, and
 //! payload.  Aggregation either returns an exact ordered receipt or stable
 //! identifiable-abort evidence naming the first offending position.
 //!
-//! This module closes roster governance, rogue-authentication-key resistance,
-//! and deterministic active-round accounting. Schnorr authentication is never
-//! treated as a polynomial proof. RKG uses the narrow-coefficient lattice proof
-//! below; statistically smudged CKS uses a distinct fixed-width wide-coefficient
-//! proof because its release witness bound cannot fit in `i64`. The readiness
-//! gate remains closed until both families are wired to canonical records and
-//! release KATs.
+//! This module closes roster governance, rogue-authentication-key resistance, and deterministic
+//! active-round accounting. Schnorr authentication is never treated as a polynomial proof. RKG uses
+//! the narrow-coefficient lattice proof below; statistically smudged CKS uses a distinct
+//! fixed-width wide-coefficient proof because its release witness bound cannot fit in `i64`. The
+//! readiness gate remains closed until both families are wired to canonical records and release
+//! KATs.
 use super::packing::{
     ZK_AMS_T256_GALOIS_KEY_COUNT_V1, validate_zk_ams_t256_galois_key_schedule_v1,
     zk_ams_t256_galois_key_schedule_v1,
@@ -99,9 +97,8 @@ impl ZkAmsMkheRosterKeyProofV1 {
 }
 /// Secret authentication state for one governed active party.
 ///
-/// The scalar is generated from a caller-supplied cryptographic random source,
-/// is never cloneable, is redacted from debug output, and is cleared on drop by
-/// the underlying secret type.
+/// The scalar is generated from a caller-supplied cryptographic random source, is never cloneable,
+/// is redacted from debug output, and is cleared on drop by the underlying secret type.
 pub struct ZkAmsMkheActivePartySecretV1 {
     authentication: AuthenticationSecret,
 }
@@ -1391,8 +1388,7 @@ fn active_rkg_linear_proof_parameter_digest(
     frame.extend_from_slice(b"signed-i64-big-endian-twos-complement");
     keccak256(&frame)
 }
-/// Borrowed public statement linking one party's bounded secret to its
-/// collective-public-key share.
+/// Borrowed public statement linking one party's bounded secret to its collective-public-key share.
 #[derive(Clone, Copy, Debug)]
 pub struct ZkAmsMkheActiveCollectivePublicKeyStatementV1<'a> {
     public_a: &'a super::ZkAmsMkheRnsPolynomialWireV1,
@@ -1710,8 +1706,7 @@ impl<'a> ZkAmsMkheActiveGaloisSourceWitnessV1<'a> {
         })
     }
 }
-/// Authenticated canonical narrow-coefficient proof for one collective-key or
-/// streamed RKG record.
+/// Authenticated canonical narrow-coefficient proof for one collective-key or streamed RKG record.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZkAmsMkheActiveRkgProofV1 {
     statement_digest: [u8; 32],
@@ -1903,9 +1898,8 @@ impl ZkAmsMkheActiveRkgProofV1 {
         }
         Ok(value)
     }
-    /// Decode one exact framed proof record from a reader without retaining a
-    /// second encoded copy. The caller supplies the enclosing record's trusted
-    /// length and owns any desired EOF check.
+    /// Decode one exact framed proof record from a reader without retaining a second encoded copy.
+    /// The caller supplies the enclosing record's trusted length and owns any desired EOF check.
     pub fn decode_evidence_from_reader<R: std::io::Read>(
         reader: &mut R,
         encoded_len: u64,
@@ -3230,12 +3224,11 @@ impl LinearRelationStatementV1 {
 }
 /// Fiat--Shamir-with-aborts proof of one or more exact linear RNS relations.
 ///
-/// This is a lattice proof, not a signature and not a digest-as-proof. The
-/// verifier reconstructs the masked ring commitments from the bounded response
-/// polynomials and the sparse challenge, then re-derives the challenge seed.
-/// Soundness is the standard special-soundness reduction to the corresponding
-/// module-SIS relation. Uniform-box aborts keep every accepted response inside
-/// a witness-independent common interval.
+/// This is a lattice proof, not a signature and not a digest-as-proof. The verifier reconstructs
+/// the masked ring commitments from the bounded response polynomials and the sparse challenge, then
+/// re-derives the challenge seed. Soundness is the standard special-soundness reduction to the
+/// corresponding module-SIS relation. Uniform-box aborts keep every accepted response inside a
+/// witness-independent common interval.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LinearRelationProofV1 {
     challenge_seed: [u8; 32],

@@ -1,13 +1,11 @@
 //! `SoraNet`-specific data model extensions.
 //!
-//! This module hosts forward-looking types for privacy tickets, relay
-//! incentives, and additional transport metadata surfaced by the `SoraNet`
-//! anonymity layer. The initial implementation focused on zero-knowledge
-//! privacy tickets so SoraFS streaming requests can remain anonymous while
-//! remaining auditable by relays and gateways. The incentive scaffolding
-//! introduced in SNNet-7 models relay bonding, bandwidth attestations, and
-//! reward instructions so the treasury can remunerate SoraNet relays with
-//! deterministic Norito payloads.
+//! This module hosts forward-looking types for privacy tickets, relay incentives, and additional
+//! transport metadata surfaced by the `SoraNet` anonymity layer. The initial implementation focused
+//! on zero-knowledge privacy tickets so SoraFS streaming requests can remain anonymous while
+//! remaining auditable by relays and gateways. The incentive scaffolding introduced in SNNet-7
+//! models relay bonding, bandwidth attestations, and reward instructions so the treasury can
+//! remunerate SoraNet relays with deterministic Norito payloads.
 #![allow(clippy::module_name_repetitions)]
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 /// Canonical 32-byte digest type used across `SoraNet` payloads.

@@ -40,10 +40,8 @@ mod direct_rkg_one_candidate_v1;
 mod direct_rkg_one_publication_v1;
 #[path = "direct_rkg_one_sealed_candidate_v1.rs"]
 mod direct_rkg_one_sealed_candidate_v1;
-pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_candidate_v1::DirectRkgOneOwnerDerivedProvenanceV1;
-pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_publication_v1::{
-    DirectRkgOnePublicationOwnerV1, publish_direct_rkg_one_h0_h1_v1,
-};
+pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_candidate_v1::DirectRkgOneProverSessionV1;
+pub(in crate::vega::zk_ams::mkhe) use direct_rkg_one_publication_v1::DirectRkgOnePublicationOwnerV1;
 
 const RKG_EPHEMERAL_BLINDING_ENTROPY_BYTES_V1: usize = 64;
 const RKG_EPHEMERAL_POINT_WIRE_BYTES_V1: usize = 33;

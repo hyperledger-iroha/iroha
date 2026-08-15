@@ -2,24 +2,21 @@
 //!
 //! This module freezes the secret-only store geometry and its move-only state
 //! transitions.  The public collective key and ciphertext limbs stay in their
-//! existing authenticated direct-object store; this source reserves space only
-//! for the 43 canonical plaintexts, their three signed encryption witnesses,
-//! and their 43 fresh-encryption nonces.
+//! existing authenticated direct-object store; this source reserves space only for the 43 canonical
+//! plaintexts, their three signed encryption witnesses, and their 43 fresh-encryption nonces.
 //!
 //! A private adapter owns the concrete confidential-spool writers and immutable
 //! snapshots.  Construction consumes an already validated Phase-23 context;
 //! blocks are accepted only in the frozen record/component/block order, with a
 //! nonce completing each record.  The adapter exposes no path, key, codec, raw
 //! snapshot bytes, or detached-digest constructor.  Its receipt is still only
-//! structural metadata, never a hiding commitment, algebraic proof, or release
-//! receipt.
+//! structural metadata, never a hiding commitment, algebraic proof, or release receipt.
 //!
 //! The collective-encryption orchestrator does not yet feed this writer.  Thus
-//! `confidential_backend_wired` means only that the real backend is reachable
-//! from a validated context; every stronger construction and release axis
-//! remains closed.
-//! The adapter also inherits the leaf's explicit exclusions for secure
-//! deletion, swap/core/page-cache control, panic-abort erasure, and measured RSS.
+//! `confidential_backend_wired` means only that the real backend is reachable from a validated
+//! context; every stronger construction and release axis remains closed. The adapter also inherits
+//! the leaf's explicit exclusions for secure deletion, swap/core/page-cache control, panic-abort
+//! erasure, and measured RSS.
 use super::super::ZkAmsMkheErrorV1;
 use super::{
     RNS_LINK_FAMILY_ORDER_V1, RNS_LINK_RELEASE_COMMITMENTS_V1, RNS_LINK_VERSION_V1,
@@ -452,9 +449,8 @@ fn source_store_context_digest_v1(
 /// Move-only, zeroizing plaintext owner accepted by the source writer.
 ///
 /// The only constructors allocate one exact main or nonce slot.  The mutable
-/// borrow exists solely so the already-private Phase-23 producer can fill the
-/// owned allocation; no publication or snapshot API returns raw borrowed
-/// bytes.
+/// borrow exists solely so the already-private Phase-23 producer can fill the owned allocation; no
+/// publication or snapshot API returns raw borrowed bytes.
 #[must_use = "dropping this chunk zeroizes it without storing a source block"]
 pub(in super::super) struct ZkAmsPhase23RnsLinkSecretChunkV1(ConfidentialSpoolChunkV1);
 impl ZkAmsPhase23RnsLinkSecretChunkV1 {

@@ -1,10 +1,9 @@
 //! Static analysis helpers for compiled IVM programs.
 //!
-//! This module exposes lightweight inspection utilities that decode `.to`
-//! artifacts, walk the canonical instruction stream, and derive register,
-//! memory, and syscall usage summaries. The output feeds the AMX/Nexus
-//! pipelines (see roadmap item NX-17) by providing a deterministic read/write
-//! fingerprint that can be compared against the declared UAID manifests.
+//! This module exposes lightweight inspection utilities that decode `.to` artifacts, walk the
+//! canonical instruction stream, and derive register, memory, and syscall usage summaries. The
+//! output feeds the AMX/Nexus pipelines (see roadmap item NX-17) by providing a deterministic
+//! read/write fingerprint that can be compared against the declared UAID manifests.
 //!
 //! Typical usage:
 //! ```no_run
@@ -38,10 +37,9 @@ use std::{
 };
 /// Bytecode-proven durable-state accesses for one deployable contract scope.
 ///
-/// `complete` is true only when every reachable durable-state syscall receives
-/// one canonical, authenticated `StatePath` payload on every control-flow
-/// path. A caller must retain its conservative state wildcard when this flag
-/// is false.
+/// `complete` is true only when every reachable durable-state syscall receives one canonical,
+/// authenticated `StatePath` payload on every control-flow path. A caller must retain its
+/// conservative state wildcard when this flag is false.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StaticStateAccessAnalysis {
     /// Canonical scheduler keys read by the selected entrypoint scope.
@@ -265,12 +263,10 @@ pub fn analyze_prepared(contract: &PreparedContract) -> ProgramAnalysis {
 /// Prove exact durable-state targets from a prepared contract's authenticated
 /// literal table and reachable bytecode.
 ///
-/// Passing an entrypoint restricts the proof to that public selector. Passing
-/// `None` analyzes the union of every embedded entrypoint. The proof is
-/// deliberately narrow: state targets hidden behind a call, computed at
-/// runtime, or merged from ambiguous paths make the result incomplete. This
-/// lets scheduler metadata improve precision without becoming a security
-/// authority.
+/// Passing an entrypoint restricts the proof to that public selector. Passing `None` analyzes the
+/// union of every embedded entrypoint. The proof is deliberately narrow: state targets hidden
+/// behind a call, computed at runtime, or merged from ambiguous paths make the result incomplete.
+/// This lets scheduler metadata improve precision without becoming a security authority.
 #[must_use]
 pub fn analyze_prepared_static_state_accesses(
     contract: &PreparedContract,

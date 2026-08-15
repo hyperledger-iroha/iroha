@@ -1,8 +1,7 @@
 //! Transaction composition helpers for the MOCHI UI.
 //!
-//! The composer utilities provide lightweight building blocks for
-//! transaction previews so front ends can offer form-based instruction
-//! builders without pulling additional crates.
+//! The composer utilities provide lightweight building blocks for transaction previews so front
+//! ends can offer form-based instruction builders without pulling additional crates.
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     NetworkId,
@@ -525,8 +524,7 @@ pub fn mint_quantity_preview(
     };
     compose_preview_with_authority(network_id, &[draft], default_authority())
 }
-/// Compose a transaction preview for an exact network from a list of
-/// [`InstructionDraft`] entries.
+/// Compose a transaction preview for an exact network from a list of [`InstructionDraft`] entries.
 ///
 /// # Errors
 ///
@@ -554,8 +552,7 @@ pub fn compose_preview_with_authority(
         &TransactionComposeOptions::default(),
     )
 }
-/// Compose an exact-network preview while applying the supplied
-/// [`TransactionComposeOptions`].
+/// Compose an exact-network preview while applying the supplied [`TransactionComposeOptions`].
 ///
 /// # Errors
 ///

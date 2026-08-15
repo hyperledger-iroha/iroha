@@ -4886,9 +4886,7 @@ pub fn archived_from_slice<'a, T>(bytes: &'a [u8]) -> Result<ArchivedRef<'a, T>,
     if min > 0 && bytes.len() < min {
         return Err(Error::LengthMismatch);
     }
-    let type_align = archived_payload_align::<T>();
-    let min_align = core::mem::align_of::<u128>();
-    let align_target = type_align.max(min_align);
+    let align_target = archived_payload_align::<T>();
     let ptr_usize = bytes.as_ptr() as usize;
     let needs_copy =
         align_target > 1 && !bytes.is_empty() && !ptr_usize.is_multiple_of(align_target);

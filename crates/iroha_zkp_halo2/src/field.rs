@@ -99,10 +99,9 @@ impl PrimeField64 {
     }
     /// Convert the field element back into a `u64`.
     ///
-    /// This assumes the element was originally constructed from a `u64`, which
-    /// holds for all VM-side usage. Only the lower 64 bits of the canonical
-    /// representation are considered; callers must avoid values outside that
-    /// range.
+    /// This assumes the element was originally constructed from a `u64`, which holds for all
+    /// VM-side usage. Only the lower 64 bits of the canonical representation are considered;
+    /// callers must avoid values outside that range.
     #[inline]
     pub fn to_u64(self) -> u64 {
         let bytes = self.to_bytes();

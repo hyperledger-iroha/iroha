@@ -1,9 +1,8 @@
 //! Privacy ticket payloads used by the `SoraNet` anonymity layer.
 //!
-//! The types defined here mirror the specification captured in
-//! `specs/soranet/zk_ticket_plan.md`. They intentionally keep the schema
-//! lean so Halo2 commitments can be layered on top without frequent changes.
-//! The cryptographic proof plumbing (commitments, nullifier checks, Halo2
+//! The types defined here mirror the specification captured in `specs/soranet/zk_ticket_plan.md`.
+//! They intentionally keep the schema lean so Halo2 commitments can be layered on top without
+//! frequent changes. The cryptographic proof plumbing (commitments, nullifier checks, Halo2
 //! verification) lives in the host runtime and the `iroha_zkp_halo2` crate.
 use super::Digest32;
 #[cfg(feature = "json")]

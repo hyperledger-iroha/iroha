@@ -108,9 +108,8 @@ impl Sm2KeyPair {
     /// Sign `message` using deterministic SM2 DSA and return the canonical r∥s bytes.
     ///
     /// # Errors
-    /// Returns [`CryptoError::Signing`] if the stored private key or
-    /// distinguishing identifier can no longer be rebuilt into an SM2 signing
-    /// key.
+    /// Returns [`CryptoError::Signing`] if the stored private key or distinguishing identifier can
+    /// no longer be rebuilt into an SM2 signing key.
     pub fn try_sign(&self, message: &[u8]) -> Result<[u8; Sm2Signature::LENGTH], CryptoError> {
         Ok(self.private.try_sign(message)?.to_bytes())
     }

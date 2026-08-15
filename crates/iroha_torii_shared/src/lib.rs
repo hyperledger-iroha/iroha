@@ -697,9 +697,8 @@ pub struct PipelineTransactionStatus {
 }
 /// Authenticated detailed transaction response.
 ///
-/// This payload is never returned by the public pipeline-status endpoint. It is
-/// available only after canonical signed-query admission and an involved-account
-/// or operator authorization check.
+/// This payload is never returned by the public pipeline-status endpoint. It is available only
+/// after canonical signed-query admission and an involved-account or operator authorization check.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]

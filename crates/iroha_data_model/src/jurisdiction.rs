@@ -1,8 +1,7 @@
 //! Jurisdiction Data Guardian (JDG) attestations and committee types.
 //!
-//! These types define the canonical Norito encoding for JDG attestations,
-//! including their scope, signer sets, optional proofs, and the domain-tagged
-//! hash used for signing.
+//! These types define the canonical Norito encoding for JDG attestations, including their scope,
+//! signer sets, optional proofs, and the domain-tagged hash used for signing.
 use crate::{nexus::DataSpaceId, proof::ProofBox};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
 use iroha_schema::IntoSchema;

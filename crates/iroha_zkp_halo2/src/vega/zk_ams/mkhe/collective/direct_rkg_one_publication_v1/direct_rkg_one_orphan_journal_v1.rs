@@ -2,22 +2,19 @@
 //!
 //! `PublicationUnknown` is deliberately not a reservation, evidence that no
 //! publication occurred, or permission to retry publication.  After its marker
-//! becomes durable, a crash may have happened before H0 staging; during H0
-//! writes, sealing, publication, lookup, or readback; after H0 completed but
-//! before H1 started; during the corresponding H1 steps; after either publish
-//! acknowledgement was lost; after both move-only publication receipts existed
-//! but before the journal transition; or after that transition became durable
-//! but before its acknowledgement returned.
+//! becomes durable, a crash may have happened before H0 staging; during H0 writes, sealing,
+//! publication, lookup, or readback; after H0 completed but before H1 started; during the
+//! corresponding H1 steps; after either publish acknowledgement was lost; after both move-only
+//! publication receipts existed but before the journal transition; or after that transition became
+//! durable but before its acknowledgement returned.
 //!
-//! `PublishedUnbound` records the two pointers already retained by an opaque
-//! publication owner. Recovery validates their stored encodings only to classify
-//! journal bytes: the recovered handle contains no pointer and cannot recreate a
-//! publication receipt or read authority. It does not prove object availability
-//! or authorize a proof, contribution, aggregate, or later round. The publication
-//! identity is retained only as a corroborating session label; it is excluded
-//! from transaction identity and carries no authority.
-//! The record footer is a canonical corruption check, not authentication or an
-//! authority-bearing claim.
+//! `PublishedUnbound` records the two pointers already retained by an opaque publication owner.
+//! Recovery validates their stored encodings only to classify journal bytes: the recovered handle
+//! contains no pointer and cannot recreate a publication receipt or read authority. It does not
+//! prove object availability or authorize a proof, contribution, aggregate, or later round. The
+//! publication identity is retained only as a corroborating session label; it is excluded from
+//! transaction identity and carries no authority. The record footer is a canonical corruption
+//! check, not authentication or an authority-bearing claim.
 //! The complete state machine is `Absent -> PublicationUnknown ->
 //! PublishedUnbound`; there is no reverse or further transition here.
 
@@ -91,15 +88,13 @@ pub(super) enum DirectRkgOneRecoveredOrphanV1 {
 
 /// Atomic durable storage for one exact fixed-width orphan-journal record.
 ///
-/// Every method addresses the canonical, internally derived raw storage key.
-/// `load_exact_v1` must bypass caches. `Ok(true)` overwrites all 334 output
-/// bytes with the durable value; `Ok(false)` overwrites all 334 bytes with zero.
-/// An error makes the output unspecified and the caller discards it.
-/// `put_if_absent_exact_v1` never overwrites an existing key.
-/// `compare_exchange_exact_v1` replaces only a byte-for-byte expected record.
-/// Both mutations are atomic, linearizable, and crash-durable before success.
-/// Their acknowledgement can still be lost, so the adapter performs exactly
-/// one cache-bypassing load after every returned `Ok` or `Err`.
+/// Every method addresses the canonical, internally derived raw storage key. `load_exact_v1` must
+/// bypass caches. `Ok(true)` overwrites all 334 output bytes with the durable value; `Ok(false)`
+/// overwrites all 334 bytes with zero. An error makes the output unspecified and the caller
+/// discards it. `put_if_absent_exact_v1` never overwrites an existing key.
+/// `compare_exchange_exact_v1` replaces only a byte-for-byte expected record. Both mutations are
+/// atomic, linearizable, and crash-durable before success. Their acknowledgement can still be lost,
+/// so the adapter performs exactly one cache-bypassing load after every returned `Ok` or `Err`.
 pub(super) trait DirectRkgOneOrphanJournalStoreV1 {
     fn load_exact_v1(
         &mut self,

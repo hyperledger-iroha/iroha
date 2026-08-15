@@ -1,11 +1,10 @@
 //! Supervised Torii runtime for durable native SoraFS orderbook transactions.
 //!
-//! The durable `sorafs_node` forwarder is the only local delivery state.
-//! Policy, book status, channels, receipts, and transaction outcomes are read
-//! from one immutable finalized ledger view. Signing and submission are
-//! separate boundaries: an injected runtime/HSM signer sees only an exact
-//! fee-quoted payload, and only strict durable Torii ingress can expose the
-//! resulting signed transaction.
+//! The durable `sorafs_node` forwarder is the only local delivery state. Policy, book status,
+//! channels, receipts, and transaction outcomes are read from one immutable finalized ledger view.
+//! Signing and submission are separate boundaries: an injected runtime/HSM signer sees only an
+//! exact fee-quoted payload, and only strict durable Torii ingress can expose the resulting signed
+//! transaction.
 
 #![cfg(feature = "app_api")]
 use super::orderbook_worker::{
@@ -150,10 +149,9 @@ impl SorafsOrderbookFinalizedTelemetryErrorV1 {
 }
 /// Orderbook supervision uses one role-activation predicate.
 ///
-/// Provider storage keeps durable drain/reconciliation active even when new
-/// orderbook generation is disabled. When both storage and generation are
-/// disabled, no worker is started and therefore no external progress occurs.
-/// Opening the local [`sorafs_node::NodeHandle`] may still normalize an
+/// Provider storage keeps durable drain/reconciliation active even when new orderbook generation is
+/// disabled. When both storage and generation are disabled, no worker is started and therefore no
+/// external progress occurs. Opening the local [`sorafs_node::NodeHandle`] may still normalize an
 /// interrupted signer-only claim from `Signing` to `Ready`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct OrderbookWorkerSupervisionV1 {

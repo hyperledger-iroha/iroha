@@ -462,9 +462,8 @@ impl DaReceiptCursorIndex {
 ///
 /// # Errors
 ///
-/// Returns a [`DaReceiptSpoolError`] if the spool directory or any matching
-/// receipt file cannot be read, decoded, or matched against its advertised
-/// filename tuple.
+/// Returns a [`DaReceiptSpoolError`] if the spool directory or any matching receipt file cannot be
+/// read, decoded, or matched against its advertised filename tuple.
 pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaReceiptSpoolError> {
     let Some(dir_entries) =
         open_receipt_spool_dir(spool_dir).map_err(|source| DaReceiptSpoolError::ReadDir {
@@ -916,9 +915,8 @@ pub fn align_commitments_for_receipts(
 }
 /// Remove stale receipts from the spool based on the committed cursor snapshot.
 ///
-/// Cleanup failures are reported and logged, but they do not abort callers.
-/// Proposal assembly must continue to rely on validated receipt loading and
-/// cursor checks rather than on cleanup success.
+/// Cleanup failures are reported and logged, but they do not abort callers. Proposal assembly must
+/// continue to rely on validated receipt loading and cursor checks rather than on cleanup success.
 pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) -> DaReceiptPruneReport {
     let mut report = DaReceiptPruneReport::default();
     let entries = match open_receipt_spool_dir(spool_dir) {

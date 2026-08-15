@@ -1,10 +1,9 @@
 //! Shared routing registry for queued transactions.
 //!
-//! Transactions are routed when they enter the queue. The routing decision must
-//! survive until the transaction leaves the pipeline so that downstream event
-//! emitters (block processing, telemetry, APIs) can expose the correct
-//! lane/dataspace metadata. This module provides a global registry keyed by the
-//! transaction hash to keep those decisions alive across subsystem boundaries.
+//! Transactions are routed when they enter the queue. The routing decision must survive until the
+//! transaction leaves the pipeline so that downstream event emitters (block processing, telemetry,
+//! APIs) can expose the correct lane/dataspace metadata. This module provides a global registry
+//! keyed by the transaction hash to keep those decisions alive across subsystem boundaries.
 use super::router::{RoutingDecision, RoutingPlan};
 use dashmap::DashMap;
 use iroha_crypto::HashOf;

@@ -606,10 +606,9 @@ pub fn parse_manifest(source: &str) -> Result<Manifest, ManifestError> {
 ///
 /// # Errors
 ///
-/// Returns an error if the input manifest is invalid, the alias is invalid, an
-/// inherited dependency is requested in `[workspace.dependencies]`, or a
-/// targeted entry uses a multiline/table form that cannot be replaced without
-/// touching unrelated text.
+/// Returns an error if the input manifest is invalid, the alias is invalid, an inherited dependency
+/// is requested in `[workspace.dependencies]`, or a targeted entry uses a multiline/table form that
+/// cannot be replaced without touching unrelated text.
 pub fn upsert_dependency(
     source: &str,
     section: DependencySection,
@@ -634,9 +633,8 @@ pub fn upsert_dependency(
 ///
 /// # Errors
 ///
-/// Returns an error if the manifest or alias is invalid, the selected table is
-/// absent, the alias is absent, or the entry cannot be removed as one focused
-/// assignment line.
+/// Returns an error if the manifest or alias is invalid, the selected table is absent, the alias is
+/// absent, or the entry cannot be removed as one focused assignment line.
 pub fn remove_dependency(
     source: &str,
     section: DependencySection,

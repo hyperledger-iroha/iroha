@@ -1,6 +1,5 @@
-//! SN15-M0 operations pack for the SoraGlobal Gateway CDN.
-//! Emits observability, compliance, and security scaffolding so M0 PoPs
-//! rehearse the full evidence bundle before production.
+//! SN15-M0 operations pack for the SoraGlobal Gateway CDN. Emits observability, compliance, and
+//! security scaffolding so M0 PoPs rehearse the full evidence bundle before production.
 use crate::soranet_gateway_chaos::{self, ChaosScenario, ScenarioPack, ScheduleEntry};
 use eyre::{Result, WrapErr, eyre};
 use norito::{

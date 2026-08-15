@@ -1,10 +1,9 @@
 //! Canonical native-Rust transaction builder for first-release ZK-ACE.
 //!
-//! This crate exposes one typed path: an active governed policy, a private
-//! non-serializable witness, the compiled native verifier profile, and a
-//! two-pass [`SubmitPrivacyProofV1`] transaction. There is no caller-selected
-//! backend, verifying key, proof attachment, generic `OpenVerify` envelope, or
-//! alternate action wire.
+//! This crate exposes one typed path: an active governed policy, a private non-serializable
+//! witness, the compiled native verifier profile, and a two-pass [`SubmitPrivacyProofV1`]
+//! transaction. There is no caller-selected backend, verifying key, proof attachment, generic
+//! `OpenVerify` envelope, or alternate action wire.
 use core::{num::NonZeroU32, time::Duration};
 pub use iroha_core::privacy_engines::zk_ace::{
     ZkAcePrivacyWitnessV1, ZkAcePrivacyWitnessValidationErrorV1,

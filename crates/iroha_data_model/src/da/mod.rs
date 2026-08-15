@@ -1,10 +1,9 @@
 //! Data availability (DA) data model scaffolding.
 //!
-//! This module hosts forward-looking types for the DA ingest pipeline (Torii
-//! blob submission, manifest generation, replication metadata) described in
-//! `specs/da/ingest_plan.md`. The actual networking/storage plumbing
-//! lives outside the data model; these structures exist purely for Norito
-//! encoding, schema documentation, and cross-crate integration.
+//! This module hosts forward-looking types for the DA ingest pipeline (Torii blob submission,
+//! manifest generation, replication metadata) described in `specs/da/ingest_plan.md`. The actual
+//! networking/storage plumbing lives outside the data model; these structures exist purely for
+//! Norito encoding, schema documentation, and cross-crate integration.
 /// Commitment structures embedded into blocks and RPC responses.
 pub mod commitment;
 /// Confidential-compute lane policies.

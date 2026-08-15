@@ -241,8 +241,7 @@ pub fn parse_source(
     let output = crate::syntax::parse_program(source, budget);
     output.program.ok_or(output.diagnostics)
 }
-/// Parse once and retain the exact significant token stream for later
-/// resolution/type diagnostics.
+/// Parse once and retain the exact significant token stream for later resolution/type diagnostics.
 pub(crate) fn parse_source_spanned(
     source: &SourceFile,
     budget: FrontendBudget,

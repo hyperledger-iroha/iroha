@@ -16001,21 +16001,18 @@ mod tests {
         state::{ElectionState, State, World, ZkAssetState},
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_data_model::query::{
+        QueryWithParams,
+        account::prelude::FindAccounts,
+        dsl::prelude::{CompoundPredicate, SelectorTuple},
+        parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
+    };
     use iroha_data_model::{
         parameter::{CustomParameter, Parameter, SmartContractParameter},
         privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1},
         proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
-    };
-    use iroha_data_model::{
-        prelude::*,
-        query::{
-            QueryWithParams,
-            account::prelude::FindAccounts,
-            dsl::prelude::{CompoundPredicate, SelectorTuple},
-            parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
-        },
     };
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,

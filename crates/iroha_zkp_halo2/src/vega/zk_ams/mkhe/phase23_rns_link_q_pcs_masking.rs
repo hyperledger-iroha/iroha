@@ -2,40 +2,34 @@
 //!
 //! This child is deliberately private and non-authorizing. It borrows five
 //! caller-provided `(P_j,H_j)` pairs, samples five full `degree <= N-2` masks
-//! into zeroizing owners, and constructs the fixed row order
-//! `(P~_0,H~_0),...,(P~_4,H~_4)`, where
-//! `H~=H+S` and `P~=P+(X^N+1)S`. It requires both original and masked residuals
-//! to be zero, but neither
-//! constructs the five source-owned aggregate pairs nor binds them to the
-//! Fiat-Shamir transcript. The existing PCS still mixes only two FRI rows and
-//! its variable-degree input path is incompatible with fixed-width top zeros;
-//! this child is isolated from that path and ten-row wiring remains false.
+//! into zeroizing owners, and constructs the fixed row order `(P~_0,H~_0),...,(P~_4,H~_4)`, where
+//! `H~=H+S` and `P~=P+(X^N+1)S`. It requires both original and masked residuals to be zero, but
+//! neither constructs the five source-owned aggregate pairs nor binds them to the Fiat-Shamir
+//! transcript. The existing PCS still mixes only two FRI rows and its variable-degree input path is
+//! incompatible with fixed-width top zeros; this child is isolated from that path and ten-row
+//! wiring remains false.
 //!
-//! `S` is private sampler entropy, never a Fiat-Shamir/public derivation. The
-//! precommit domain binds the sealed source transcript, limb, repetition,
-//! `gamma`, and `beta`, but deliberately cannot contain the later DEEP point
-//! `r`: all ten rows must be masked and committed before `r` is derived. A
-//! private type-state split enforces that local order. The descriptor only
-//! separates sampler calls; it cannot prove that a caller-supplied sampler is
-//! uniform or uncorrelated. Exact repeated masks are rejected by comparing
-//! the retained zeroizing mask owners directly, without retaining a mask
-//! digest. No mask, source polynomial, or secret-derived digest is returned.
-//! All ten borrowed coefficient ranges must be disjoint; equal-valued slices
-//! in independent allocations remain valid and no content provenance follows.
+//! `S` is private sampler entropy, never a Fiat-Shamir/public derivation. The precommit domain
+//! binds the sealed source transcript, limb, repetition, `gamma`, and `beta`, but deliberately
+//! cannot contain the later DEEP point `r`: all ten rows must be masked and committed before `r` is
+//! derived. A private type-state split enforces that local order. The descriptor only separates
+//! sampler calls; it cannot prove that a caller-supplied sampler is uniform or uncorrelated. Exact
+//! repeated masks are rejected by comparing the retained zeroizing mask owners directly, without
+//! retaining a mask digest. No mask, source polynomial, or secret-derived digest is returned. All
+//! ten borrowed coefficient ranges must be disjoint; equal-valued slices in independent allocations
+//! remain valid and no content provenance follows.
 //!
-//! The 74,662,064-byte bound below is isolated PCS-kernel accounting only. It
-//! excludes the currently borrowed 43-ciphertext set (about 3.2 GiB), packed
-//! owner (about 172 MiB), opening/plaintext-lift duplication (about 38 MiB),
-//! source adapter, allocator overhead, OS page cache, and RSS evidence. It is
-//! therefore not an end-to-end residency claim or release evidence. This
-//! retired test prototype's ten-row spool and retained cross-limb aggregates
-//! used an independently enumerated 3,785,356,320-byte minimum external peak;
-//! it is not the concrete V2 spool layout. The classified work
-//! total is only a lower accounting: it omits sampler/rejection, batch mixing,
-//! quotient construction, and hash-byte work, and is blocked explicitly below.
+//! The 74,662,064-byte bound below is isolated PCS-kernel accounting only. It excludes the
+//! currently borrowed 43-ciphertext set (about 3.2 GiB), packed owner (about 172 MiB),
+//! opening/plaintext-lift duplication (about 38 MiB), source adapter, allocator overhead, OS page
+//! cache, and RSS evidence. It is therefore not an end-to-end residency claim or release evidence.
+//! This retired test prototype's ten-row spool and retained cross-limb aggregates used an
+//! independently enumerated 3,785,356,320-byte minimum external peak; it is not the concrete V2
+//! spool layout. The classified work total is only a lower accounting: it omits sampler/rejection,
+//! batch mixing, quotient construction, and hash-byte work, and is blocked explicitly below.
 //! Zeroization covers named heap coefficient owners on Rust drop paths only;
-//! arithmetic/register/compiler temporaries and panic-abort are outside that
-//! best-effort guarantee, so no confidentiality or release claim follows.
+//! arithmetic/register/compiler temporaries and panic-abort are outside that best-effort guarantee,
+//! so no confidentiality or release claim follows.
 
 #![cfg(test)]
 use super::{
@@ -113,9 +107,8 @@ struct PrototypeBorrowedRelationPairV1<'a> {
     product: &'a [u64],
     quotient: &'a [u64],
 }
-/// Public-only domain separation metadata passed to the private sampler.
-/// Possessing it does not reveal `S`, but neither does it enforce sampler
-/// uniformity or independence.
+/// Public-only domain separation metadata passed to the private sampler. Possessing it does not
+/// reveal `S`, but neither does it enforce sampler uniformity or independence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PrototypeMaskDomainV1 {
     q_pcs_parameter_digest: [u8; 32],
@@ -160,9 +153,8 @@ std::thread_local! {
         std::cell::Cell::new(0)
     };
 }
-/// Heap-stable owner allocated while all coefficients are zero and filled in
-/// place. Deliberately neither cloneable nor debuggable and has no raw-Vec
-/// extraction API.
+/// Heap-stable owner allocated while all coefficients are zero and filled in place. Deliberately
+/// neither cloneable nor debuggable and has no raw-Vec extraction API.
 struct ZeroizingQPolynomialV1 {
     coefficients: Vec<u64>,
 }
@@ -214,9 +206,8 @@ struct PrototypePostcommitOpeningBindingV1 {
     r: u64,
     opening_transcript_digest: [u8; 32],
 }
-/// Move-only precommit state. Construction has sampled and masked all ten
-/// fixed-width rows, but no DEEP point has been accepted yet. It is not a
-/// commitment, proof, receipt, or capability.
+/// Move-only precommit state. Construction has sampled and masked all ten fixed-width rows, but no
+/// DEEP point has been accepted yet. It is not a commitment, proof, receipt, or capability.
 struct PendingMaskedRowsV1 {
     modulus: u64,
     ring_degree: usize,
@@ -807,9 +798,8 @@ impl PendingMaskedRowsV1 {
     }
 }
 impl RootSealedMaskedRowsV1 {
-    /// Accepts postcommit points only from a root-sealed type state. This
-    /// prototype validates ordering and field constraints but cannot
-    /// authenticate the root or derive `r` itself.
+    /// Accepts postcommit points only from a root-sealed type state. This prototype validates
+    /// ordering and field constraints but cannot authenticate the root or derive `r` itself.
     fn bind_opening_points_v1(
         self,
         openings: [PrototypePostcommitOpeningBindingV1; OPENING_REPETITIONS_V1],

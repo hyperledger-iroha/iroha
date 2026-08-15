@@ -52,9 +52,8 @@ pub fn field_impl_test_lock() -> MutexGuard<'static, ()> {
 static TEST_CHOICE: AtomicU8 = AtomicU8::new(0);
 /// Return the field arithmetic backend selected for this platform.
 ///
-/// The implementation is chosen on first use based on the SIMD
-/// capabilities detected by [`vector::simd_choice`]. The selected
-/// instance is cached for all subsequent calls.
+/// The implementation is chosen on first use based on the SIMD capabilities detected by
+/// [`vector::simd_choice`]. The selected instance is cached for all subsequent calls.
 pub fn field_impl() -> &'static dyn FieldArithmetic {
     #[cfg(any(test, feature = "bench", feature = "ivm_zk_tests"))]
     {

@@ -1,5 +1,4 @@
-//! Generate or check ABI/gas hash goldens and runtime samples.
-//! Usage:
+//! Generate or check ABI/gas hash goldens and runtime samples. Usage:
 //!   cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --write
 //!   cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --check
 //!   cargo run -p ivm --features dev-tools --bin gen_abi_hash_doc -- --write --root /tmp/ivm-doc-stage

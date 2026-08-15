@@ -392,9 +392,8 @@ pub mod action {
         pub fn executable(&self) -> &Executable {
             &self.executable
         }
-        /// The repeating scheme of the action. It's kept as part of the
-        /// action and not inside the [`Trigger`] type, so that further
-        /// sanity checking can be done.
+        /// The repeating scheme of the action. It's kept as part of the action and not inside the
+        /// [`Trigger`] type, so that further sanity checking can be done.
         pub fn repeats(&self) -> Repeats {
             self.repeats
         }
@@ -416,9 +415,8 @@ pub mod action {
         ///
         /// # Errors
         ///
-        /// Returns an error if the filter is not valid for triggers, if the filter-bound
-        /// authority conflicts with the trigger authority, or if retry policy constraints
-        /// are violated.
+        /// Returns an error if the filter is not valid for triggers, if the filter-bound authority
+        /// conflicts with the trigger authority, or if retry policy constraints are violated.
         pub fn new(
             executable: impl Into<Executable>,
             repeats: impl Into<Repeats>,
@@ -444,9 +442,8 @@ pub mod action {
         }
         /// Attach a retry policy for scheduled time-trigger execution.
         ///
-        /// Only scheduled time triggers accept retry policies. Runtime retry
-        /// state is tracked internally; query surfaces continue exposing only
-        /// the configured policy.
+        /// Only scheduled time triggers accept retry policies. Runtime retry state is tracked
+        /// internally; query surfaces continue exposing only the configured policy.
         ///
         /// # Errors
         ///

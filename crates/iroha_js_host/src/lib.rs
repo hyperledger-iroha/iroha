@@ -1711,11 +1711,10 @@ fn subscription_syscall_program_bytes(syscall: u32, max_cycles: NonZeroU64) -> V
 /// Inspect and fail closed on one subscription trigger action returned inside
 /// a Torii unsigned mutation draft.
 ///
-/// The returned summary is intentionally small: this function first verifies
-/// that the full action contains only the exact first-release billing or usage
-/// syscall program, repetition policy, event filter, retry policy, and
-/// metadata shape. JavaScript then binds the trusted summary to the reviewed
-/// account, subscription, trigger, and charge time before signing.
+/// The returned summary is intentionally small: this function first verifies that the full action
+/// contains only the exact first-release billing or usage syscall program, repetition policy, event
+/// filter, retry policy, and metadata shape. JavaScript then binds the trusted summary to the
+/// reviewed account, subscription, trigger, and charge time before signing.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Result<String> {

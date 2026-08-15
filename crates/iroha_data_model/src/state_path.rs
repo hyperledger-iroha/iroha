@@ -7,9 +7,8 @@ use norito::core::{DecodeFromSlice, Error as NoritoError};
 use std::{borrow::Borrow, str::FromStr, string::String};
 /// Maximum UTF-8 byte length of a canonical [`StatePath`].
 ///
-/// The limit covers a canonical `StateMap` base (`Name`, at most 255 UTF-8
-/// bytes), one separator, and the lowercase-hex expansion of a canonical key
-/// of at most 4 KiB, with framing slack.
+/// The limit covers a canonical `StateMap` base (`Name`, at most 255 UTF-8 bytes), one separator,
+/// and the lowercase-hex expansion of a canonical key of at most 4 KiB, with framing slack.
 pub const MAX_STATE_PATH_BYTES: usize = 16 * 1024;
 #[model]
 mod model {

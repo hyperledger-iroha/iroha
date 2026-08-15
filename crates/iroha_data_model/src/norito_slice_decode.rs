@@ -1,10 +1,9 @@
 //! Implement Norito slice-based decoding for data model types used inside
 //! packed sequences and option fields.
 //!
-//! These impls simply reinterpret the provided slice as an archived payload of
-//! the target type and delegate to `NoritoDeserialize`. The encoded lengths are
-//! tracked by container decoders (e.g., Vec/Option) so we can return the full
-//! slice length as bytes consumed.
+//! These impls simply reinterpret the provided slice as an archived payload of the target type and
+//! delegate to `NoritoDeserialize`. The encoded lengths are tracked by container decoders (e.g.,
+//! Vec/Option) so we can return the full slice length as bytes consumed.
 use norito::core::{DecodeFromSlice, Error, decode_field_canonical};
 fn decode_via_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where

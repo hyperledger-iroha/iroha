@@ -1118,7 +1118,7 @@
                 })
                 .expect("execute rejected Ready Validate fixture"),
         };
-        coordinator
+        let _publication = coordinator
             .complete_durable_validate_dispatch(&mut holder, executed)
             .expect("publish Ready Validate completion fixture");
         let replacement_digest = holder.registry_for_test().entries[&fixture.address].digest;

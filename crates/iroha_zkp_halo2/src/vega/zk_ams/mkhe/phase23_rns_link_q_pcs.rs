@@ -23,28 +23,23 @@
 //! exists, and no production wire consumes this prototype.  Moreover, the
 //! Merkle + FRI rows are binding but not hiding: opening raw relation or
 //! quotient evaluations would disclose witness information.  No masking
-//! theorem or zero-knowledge transform has been implemented. Fresh collective
-//! encryption lineage is nonce-hiding, but this PCS still has no deterministic
-//! source/witness linkage from those openings to its relation rows.
-//! The packed-plaintext owner now zeroizes on drop, redacts `Debug`, and derives
-//! `Clone` only under `cfg(test)`; that hardening does not supply the missing
-//! deterministic PCS source/witness linkage.
-//! A test-only private child exercises the masking identity `H~=H+S`,
-//! `P~=P+(X^N+1)S` for five caller-sampled, domain-separated masks and freezes
-//! the resulting ten-row accounting. A separate private V2 child freezes the
-//! fixed-width ten-row parameter identity and owns concrete authenticated
-//! coefficient/LDE spools. Its production constructor requires an uninhabited
-//! source-and-algebra seal, so it cannot yet accept witness material. A third
-//! private V2 child fixes the ten-row transcript order, derives 190 post-root
-//! points, checks every masked relation evaluation before accepting the
-//! opening-quotient root, and strictly parses the bounded proof shape. Its
-//! private verifier child authenticates borrowed C0, Cq, and FRI multiproofs
-//! and checks every one-point quotient, ten-row batch, fold, and terminal
-//! equation with fixed scratch. The production source/replay seal remains
-//! uninhabited. The topology sink constructs no aggregate pairs, this V1 PCS
-//! still accepts only two batch rows, and no production uniform sampler,
-//! source link, ten-row prover, or wire integration exists.
-//! All qualification booleans below consequently remain false.
+//! theorem or zero-knowledge transform has been implemented. Fresh collective encryption lineage is
+//! nonce-hiding, but this PCS still has no deterministic source/witness linkage from those openings
+//! to its relation rows. The packed-plaintext owner now zeroizes on drop, redacts `Debug`, and
+//! derives `Clone` only under `cfg(test)`; that hardening does not supply the missing deterministic
+//! PCS source/witness linkage. A test-only private child exercises the masking identity `H~=H+S`,
+//! `P~=P+(X^N+1)S` for five caller-sampled, domain-separated masks and freezes the resulting
+//! ten-row accounting. A separate private V2 child freezes the fixed-width ten-row parameter
+//! identity and owns concrete authenticated coefficient/LDE spools. Its production constructor
+//! requires an uninhabited source-and-algebra seal, so it cannot yet accept witness material. A
+//! third private V2 child fixes the ten-row transcript order, derives 190 post-root points, checks
+//! every masked relation evaluation before accepting the opening-quotient root, and strictly parses
+//! the bounded proof shape. Its private verifier child authenticates borrowed C0, Cq, and FRI
+//! multiproofs and checks every one-point quotient, ten-row batch, fold, and terminal equation with
+//! fixed scratch. The production source/replay seal remains uninhabited. The topology sink
+//! constructs no aggregate pairs, this V1 PCS still accepts only two batch rows, and no production
+//! uniform sampler, source link, ten-row prover, or wire integration exists. All qualification
+//! booleans below consequently remain false.
 use super::super::manifest::{
     RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, release_profile_v1,
 };
@@ -699,9 +694,8 @@ fn validate_cross_limb_challenges_v1(
 trait CanonicalQPolynomialChunkSourceV1 {
     fn coefficient_count(&self) -> usize;
     /// Read the exact next coefficient chunk.  Full chunks contain 1,024
-    /// big-endian `u64` residues; the final chunk has the exact remainder.
-    /// Returning a different length, or data after the declared final chunk,
-    /// is a canonical-transport failure.
+    /// big-endian `u64` residues; the final chunk has the exact remainder. Returning a different
+    /// length, or data after the declared final chunk, is a canonical-transport failure.
     fn read_chunk(
         &mut self,
         chunk_index: usize,

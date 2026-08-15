@@ -1,9 +1,8 @@
 //! Durable admission-bound Sora-PDP provider challenge and proof lifecycle.
 //!
-//! The runtime in this module is deliberately transport-neutral. Torii supplies
-//! council-verified admission records, while the runtime owns canonical replay
-//! protection, deadline enforcement, exhaustive proof verification, durable
-//! terminal handoff state, and deterministic queue ordering.
+//! The runtime in this module is deliberately transport-neutral. Torii supplies council-verified
+//! admission records, while the runtime owns canonical replay protection, deadline enforcement,
+//! exhaustive proof verification, durable terminal handoff state, and deterministic queue ordering.
 use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 pub use sorafs_manifest::pdp::{
@@ -667,9 +666,8 @@ impl PdpProviderProtocol {
     }
     /// Submit exact canonical proof bytes for one authenticated challenge identity.
     ///
-    /// Malformed, cross-challenge, wrong-signer, and otherwise invalid proof
-    /// submissions all become a durable `invalid_proof` verdict and authoritative
-    /// repair handoff for the named challenge.
+    /// Malformed, cross-challenge, wrong-signer, and otherwise invalid proof submissions all become
+    /// a durable `invalid_proof` verdict and authoritative repair handoff for the named challenge.
     pub fn submit_proof_for_challenge_bytes(
         &self,
         challenge_id: [u8; 32],

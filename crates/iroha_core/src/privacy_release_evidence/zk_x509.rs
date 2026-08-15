@@ -166,10 +166,9 @@ pub struct PrivacyReleaseZkX509ResourceCertificateV1 {
 }
 /// One genuine native X.509 action and a separately signed malformed proof.
 ///
-/// This non-shipping release-gate value exposes only ordinary production
-/// transactions and their public governance inputs. Certificate, CRL,
-/// ownership-signature, and disclosure-opening witness bytes remain inside
-/// `iroha_core`.
+/// This non-shipping release-gate value exposes only ordinary production transactions and their
+/// public governance inputs. Certificate, CRL, ownership-signature, and disclosure-opening witness
+/// bytes remain inside `iroha_core`.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseZkX509NetworkActionsV1 {
     /// Ordinary production transaction carrying a valid native X5S1 proof.
@@ -402,10 +401,9 @@ pub const fn privacy_release_expectation_fixture_matches_v1(
 }
 /// Return the canonical fixed process profile for `protocol_id`, when present.
 ///
-/// `None` means that the protocol uses the release runner's generic reviewed
-/// stage limits. A returned profile is exact rather than merely an upper bound:
-/// every case for that protocol must carry the same wall-time, peak-RSS, and
-/// address-space values.
+/// `None` means that the protocol uses the release runner's generic reviewed stage limits. A
+/// returned profile is exact rather than merely an upper bound: every case for that protocol must
+/// carry the same wall-time, peak-RSS, and address-space values.
 pub const fn privacy_release_process_profile_v1(
     protocol_id: PrivacyProtocolIdV1,
 ) -> Option<PrivacyReleaseProcessProfileV1> {
@@ -660,13 +658,11 @@ fn zk_x509_network_draft_envelope_v1(
 /// function returns [`PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable`]
 /// and cannot expose candidate material as a network action.
 ///
-/// `resource_certificate` must be the canonical installed certificate and must
-/// match every authenticated source pin. The authenticated process ceiling is
-/// reduced by `admission_reserve`, which must be nonzero and must fit after the
-/// authenticated positive observation. The resulting proof ceiling and the
-/// live statement deadline are enforced against this call's actual elapsed
-/// time. This builder does not invent or record RSS, address-space, or
-/// second-proof measurements.
+/// `resource_certificate` must be the canonical installed certificate and must match every
+/// authenticated source pin. The authenticated process ceiling is reduced by `admission_reserve`,
+/// which must be nonzero and must fit after the authenticated positive observation. The resulting
+/// proof ceiling and the live statement deadline are enforced against this call's actual elapsed
+/// time. This builder does not invent or record RSS, address-space, or second-proof measurements.
 ///
 /// The caller must pass an actual committed block timestamp and submit the
 /// returned action within the closed five-minute presentation window.
@@ -736,13 +732,11 @@ pub fn build_privacy_release_zk_x509_network_actions_v1(
         statement: fixture.statement,
     })
 }
-/// Build one fresh semantic replay against a newly signed active CRL
-/// successor.
+/// Build one fresh semantic replay against a newly signed active CRL successor.
 ///
-/// This invokes exactly one independent native prover run with its own
-/// authenticated proof ceiling and `admission_reserve`. The supplied current
-/// CRL is used only to derive and validate the exact epoch, CRLNumber, and
-/// predecessor-digest transition. No pair-time or process-memory observation
+/// This invokes exactly one independent native prover run with its own authenticated proof ceiling
+/// and `admission_reserve`. The supplied current CRL is used only to derive and validate the exact
+/// epoch, CRLNumber, and predecessor-digest transition. No pair-time or process-memory observation
 /// is produced.
 #[allow(clippy::too_many_arguments)]
 pub fn build_privacy_release_zk_x509_semantic_replay_v1(

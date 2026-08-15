@@ -4,9 +4,8 @@
 //! transport, journal, or public re-export.  It only defines the canonical request
 //! and transaction checks that a separately provisioned retained-genesis-key service
 //! must perform in the future.  No production module calls it.  Keeping the module in
-//! normal builds makes release compilation type-check the contract while the retained
-//! external genesis signer and its same-key `FinalizePrivacyGenesis` transition remain
-//! unavailable.
+//! normal builds makes release compilation type-check the contract while the retained external
+//! genesis signer and its same-key `FinalizePrivacyGenesis` transition remain unavailable.
 //!
 //! Request account fields use the data model's canonical JSON address representation:
 //! bounded lowercase `0x` canonical bytes.  They never accept aliases, legacy

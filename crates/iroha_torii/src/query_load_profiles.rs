@@ -74,9 +74,8 @@ impl QueryLoadProfile {
     /// Validate the profile before a benchmark constructs fixtures.
     ///
     /// # Errors
-    /// Returns a structured error when a profile is nonsensical, too large for
-    /// a local benchmark run, or unable to exercise the requested continuation
-    /// path.
+    /// Returns a structured error when a profile is nonsensical, too large for a local benchmark
+    /// run, or unable to exercise the requested continuation path.
     pub fn validate(&self) -> Result<(), QueryLoadProfileError> {
         validate_profile_name(self.name)?;
         if self.warmup_ops > MAX_BENCH_MEASURED_OPS {

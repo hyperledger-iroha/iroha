@@ -82,8 +82,7 @@ mod relay {
     #[derive(Debug)]
     struct RelayPeer {
         real_addr: SocketAddr,
-        /// Map of proxied destinations.
-        /// Key is a peer id of
+        /// Map of proxied destinations. Key is a peer id of
         mock_outgoing: HashMap<PeerId, (SocketAddr, AllocatedPort)>,
         suspend: Suspend,
     }

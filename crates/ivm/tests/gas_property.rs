@@ -1,11 +1,9 @@
 //! Gas accounting property tests for IVM
 //!
-//! These tests assert that summing the static gas costs for a sequence of
-//! instructions equals the gas consumed by the VM during execution for simple
-//! programs without branches or syscalls. This guards the contract that the
-//! canonical gas table in `ivm::gas::cost_of[_with_params]` matches the
-//! interpreter’s runtime accounting across scalar, memory, and vector-heavy
-//! programs.
+//! These tests assert that summing the static gas costs for a sequence of instructions equals the
+//! gas consumed by the VM during execution for simple programs without branches or syscalls. This
+//! guards the contract that the canonical gas table in `ivm::gas::cost_of[_with_params]` matches
+//! the interpreter’s runtime accounting across scalar, memory, and vector-heavy programs.
 fn cost_of(word: u32) -> u64 {
     ivm::cost_of(word).expect("valid opcode must have gas cost")
 }

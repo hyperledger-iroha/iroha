@@ -1,11 +1,10 @@
 //! Durable journal for the latest query projection checkpoint descriptor.
 //!
-//! Query aggregate responses already expose a durable indexed-height marker.
-//! This companion journal stores the latest DA-backed projection checkpoint
-//! metadata so future rebuild workers can recover the most recent checkpoint
-//! without scanning external DA manifests ad hoc. Recovery handles temp and
-//! main candidates sequentially and applies fixed byte/allocation/shard limits
-//! before retaining a decoded checkpoint.
+//! Query aggregate responses already expose a durable indexed-height marker. This companion journal
+//! stores the latest DA-backed projection checkpoint metadata so future rebuild workers can recover
+//! the most recent checkpoint without scanning external DA manifests ad hoc. Recovery handles temp
+//! and main candidates sequentially and applies fixed byte/allocation/shard limits before retaining
+//! a decoded checkpoint.
 use crate::query::projection_checkpoint::{
     QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES,
     QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS,

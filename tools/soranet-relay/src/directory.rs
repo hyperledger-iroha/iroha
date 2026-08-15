@@ -546,8 +546,7 @@ pub fn build_snapshot_from_config_with_options(
     }
     build_snapshot(config, path.parent().unwrap_or_else(|| Path::new(".")))
 }
-/// Read and decode one first-release guard pinning proof from a stable direct
-/// regular file.
+/// Read and decode one first-release guard pinning proof from a stable direct regular file.
 ///
 /// The file is capped at 64 KiB (the maximum encoded SRCv2 bundle size), its
 /// JSON is lexically admitted without allocation, and the owned decode runs

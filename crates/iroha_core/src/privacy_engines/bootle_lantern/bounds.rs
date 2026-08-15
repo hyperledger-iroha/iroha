@@ -7,9 +7,8 @@ use super::{
 use thiserror::Error;
 /// Validate all proof components whose bounds are independently public.
 ///
-/// This does not replace the ABDLOP commitment equation or the linear/norm
-/// subprotocol checks. It is the fail-fast layer for `z1`, reconciliation
-/// hints, `z3`, and `z4`.
+/// This does not replace the ABDLOP commitment equation or the linear/norm subprotocol checks. It
+/// is the fail-fast layer for `z1`, reconciliation hints, `z3`, and `z4`.
 ///
 /// # Errors
 ///

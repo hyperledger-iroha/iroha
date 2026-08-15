@@ -1,19 +1,17 @@
 //! Numeric output-projection AIR for the closed zk-X509 profile.
 //!
-//! The projection chip does not trust a native hash result. It constructs the
-//! exact framed SHA-256 preimages for the scoped certificate-key commitment,
-//! deterministic certificate nullifier, disclosed attributes, and
-//! wallet-ownership challenge. Fixed-size, zero-padded buffers and private
-//! message lengths are sent to the SHA segment through byte channels. SHA
-//! digests return through the same channel system and are constrained to the
-//! verifier's public statement where applicable.
+//! The projection chip does not trust a native hash result. It constructs the exact framed SHA-256
+//! preimages for the scoped certificate-key commitment, deterministic certificate nullifier,
+//! disclosed attributes, and wallet-ownership challenge. Fixed-size, zero-padded buffers and
+//! private message lengths are sent to the SHA segment through byte channels. SHA digests return
+//! through the same channel system and are constrained to the verifier's public statement where
+//! applicable.
 //!
-//! Private serial and attribute lengths do not affect the trace topology or
-//! proof size. Prefix bits select their canonical bytes, running counters bind
-//! the encoded `u64` field lengths, and a transcript-challenged permutation
-//! binds sparse source tokens to each compact SHA message. A separate
-//! four-lane copy product binds every repeated byte occurrence. Padding rows
-//! and unused hash slots are algebraically zero.
+//! Private serial and attribute lengths do not affect the trace topology or proof size. Prefix bits
+//! select their canonical bytes, running counters bind the encoded `u64` field lengths, and a
+//! transcript-challenged permutation binds sparse source tokens to each compact SHA message. A
+//! separate four-lane copy product binds every repeated byte occurrence. Padding rows and unused
+//! hash slots are algebraically zero.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::io_air::{
     ZkX509IoChannelDeclarationV1, ZkX509IoChannelWitnessV1, ZkX509IoEndpointV1,
@@ -1736,9 +1734,8 @@ fn projection_stark_fixed_row_v1(
     fixed[FIX_LAST_ROW] = F(u64::from(row_index + 1 == ZK_X509_PROJECTION_TRACE_SIZE_V1));
     fixed
 }
-/// Compile the exact numeric preprocessing rows consumed by the aggregate
-/// verifier. The proof never supplies any selector, expected output byte, or
-/// permutation label.
+/// Compile the exact numeric preprocessing rows consumed by the aggregate verifier. The proof never
+/// supplies any selector, expected output byte, or permutation label.
 pub(crate) fn compile_zk_x509_projection_stark_fixed_rows_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<Vec<[F; ZK_X509_PROJECTION_STARK_FIXED_WIDTH_V1]>, ZkX509ProjectionAirErrorV1> {
@@ -2769,10 +2766,9 @@ fn push_projection_stark_variable_v1(
 }
 /// Evaluate the projection AIR as one fixed-width polynomial vector.
 ///
-/// Unlike the test-only native projection constraint evaluator, this
-/// evaluator has no native fixed-row branch. Every branch selector, public
-/// output byte, copy label, and boundary flag is a verifier-preprocessed
-/// polynomial opening, so the same function is valid on the extension domain.
+/// Unlike the test-only native projection constraint evaluator, this evaluator has no native
+/// fixed-row branch. Every branch selector, public output byte, copy label, and boundary flag is a
+/// verifier-preprocessed polynomial opening, so the same function is valid on the extension domain.
 ///
 /// # Errors
 ///

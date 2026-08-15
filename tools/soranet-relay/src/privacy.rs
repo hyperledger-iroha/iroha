@@ -1,9 +1,8 @@
 //! Privacy-preserving telemetry aggregation for the SoraNet relay runtime.
 //!
-//! The relay accumulates handshake, throttling, and capacity events into
-//! coarse-grained buckets so operators can observe health without retaining
-//! per-client metadata. Buckets are emitted once they satisfy the configured
-//! contribution thresholds; otherwise they surface as
+//! The relay accumulates handshake, throttling, and capacity events into coarse-grained buckets so
+//! operators can observe health without retaining per-client metadata. Buckets are emitted once
+//! they satisfy the configured contribution thresholds; otherwise they surface as
 //! `soranet_privacy_bucket_suppressed` markers.
 use crate::config::{
     PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1, PRIVACY_MAX_COMPLETED_BUCKETS_V1,

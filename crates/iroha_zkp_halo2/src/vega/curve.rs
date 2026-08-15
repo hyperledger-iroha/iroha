@@ -49,8 +49,7 @@ pub enum VegaCurveError {
     /// A decoded point did not belong to the prime-order group.
     #[error("T256 point is not in the prime-order subgroup")]
     WrongSubgroup,
-    /// A transcript attempted to absorb the identity, which has no affine
-    /// representation.
+    /// A transcript attempted to absorb the identity, which has no affine representation.
     #[error("cannot absorb the T256 identity into a Vega transcript")]
     IdentityTranscriptPoint,
     /// Generator derivation received an empty or excessively long label.
@@ -94,10 +93,9 @@ impl VegaT256PointV1 {
     }
     /// Decode one exact, non-identity canonical 33-byte proof point.
     ///
-    /// The format is one flag byte (`0x00` or `0x80`, the parity of `y`)
-    /// followed by the canonical big-endian x-coordinate. Infinity, x=0,
-    /// undefined flag bits, non-canonical coordinates, off-curve points,
-    /// alternate encodings, and trailing or truncated material are rejected.
+    /// The format is one flag byte (`0x00` or `0x80`, the parity of `y`) followed by the canonical
+    /// big-endian x-coordinate. Infinity, x=0, undefined flag bits, non-canonical coordinates,
+    /// off-curve points, alternate encodings, and trailing or truncated material are rejected.
     ///
     /// # Errors
     ///
@@ -230,9 +228,8 @@ impl VegaT256PointV1 {
     }
     /// Select `a` for zero and `b` for one without secret-dependent branches.
     ///
-    /// Only the low bit of `choice` is used. Multiplication by that scalar uses
-    /// the linked curve's constant-time scalar multiplication and avoids a
-    /// secret-dependent branch or table lookup.
+    /// Only the low bit of `choice` is used. Multiplication by that scalar uses the linked curve's
+    /// constant-time scalar multiplication and avoids a secret-dependent branch or table lookup.
     #[must_use]
     pub fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
         *a + (*b - *a).mul_scalar(VegaT256ScalarV1::from_u64(u64::from(choice & 1)))
@@ -296,15 +293,13 @@ impl fmt::Debug for VegaT256PointV1 {
 }
 /// Derive canonical nothing-up-my-sleeve T256 generators from a label.
 ///
-/// This is the pinned Vega derivation: SHAKE256 emits consecutive 32-byte
-/// messages, each mapped with the T256 RFC 9380 suite under the
-/// `from_uniform_bytes` domain prefix.
+/// This is the pinned Vega derivation: SHAKE256 emits consecutive 32-byte messages, each mapped
+/// with the T256 RFC 9380 suite under the `from_uniform_bytes` domain prefix.
 ///
 /// # Errors
 ///
-/// Rejects labels outside 1..=255 bytes, counts outside
-/// 1..=[`MAX_VEGA_T256_GENERATORS_V1`], or the cryptographically negligible
-/// event that hash-to-curve returns the identity.
+/// Rejects labels outside 1..=255 bytes, counts outside 1..=[`MAX_VEGA_T256_GENERATORS_V1`], or the
+/// cryptographically negligible event that hash-to-curve returns the identity.
 pub fn derive_t256_generators_v1(
     label: &[u8],
     count: usize,

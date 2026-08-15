@@ -20,22 +20,20 @@ where
 }
 /// Return conservative resource limits derived from one complete Norito frame.
 ///
-/// Packed boolean sequences may carry eight logical elements per encoded byte,
-/// so sequence and cumulative element budgets use an eightfold allowance.
-/// Allocation receives a wider multiplier plus a fixed 64 KiB floor for small
-/// structural values. Saturating arithmetic keeps malformed length inputs
-/// fail-closed.
+/// Packed boolean sequences may carry eight logical elements per encoded byte, so sequence and
+/// cumulative element budgets use an eightfold allowance. Allocation receives a wider multiplier
+/// plus a fixed 64 KiB floor for small structural values. Saturating arithmetic keeps malformed
+/// length inputs fail-closed.
 #[must_use]
 pub const fn canonical_norito_decode_limits(payload_len: usize) -> DecodeLimits {
     norito::canonical_decode_limits(payload_len)
 }
 /// Decode one complete Norito frame using the V1 canonical layout.
 ///
-/// Norito frames carry layout flags and can therefore have multiple byte
-/// representations for the same semantic value. Consensus and ABI boundaries
-/// accept only the representation produced by [`norito::core::default_encode_flags`].
-/// The guard also prevents an ambient decoder layout from changing the
-/// canonicality decision.
+/// Norito frames carry layout flags and can therefore have multiple byte representations for the
+/// same semantic value. Consensus and ABI boundaries accept only the representation produced by
+/// [`norito::core::default_encode_flags`]. The guard also prevents an ambient decoder layout from
+/// changing the canonicality decision.
 ///
 /// # Errors
 ///
@@ -55,9 +53,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when decoding exceeds either resource
-/// budget, the frame is malformed, or re-encoding is not byte-for-byte
-/// canonical.
+/// Returns [`VMError::NoritoInvalid`] when decoding exceeds either resource budget, the frame is
+/// malformed, or re-encoding is not byte-for-byte canonical.
 pub fn decode_canonical_norito_with_limits<T>(
     payload: &[u8],
     limits: DecodeLimits,

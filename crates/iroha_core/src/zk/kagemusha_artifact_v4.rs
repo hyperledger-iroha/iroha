@@ -1550,7 +1550,6 @@ mod tests {
         KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, KagemushaPastaPublicLayoutV4,
         KagemushaStepCircuitParamsV4,
     };
-    use sha2::Digest as _;
     use std::io::Cursor;
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =

@@ -1,9 +1,8 @@
 //! Native-only confidential-note derivation shared by the mobile SDKs.
 //!
-//! The SDKs deliberately do not implement the Pasta/Poseidon transcript. This
-//! boundary keeps the complete V3 permutation and its domain constants owned
-//! by `iroha_core`, so every language derives byte-identical commitments and
-//! nullifiers from the same implementation.
+//! The SDKs deliberately do not implement the Pasta/Poseidon transcript. This boundary keeps the
+//! complete V3 permutation and its domain constants owned by `iroha_core`, so every language
+//! derives byte-identical commitments and nullifiers from the same implementation.
 use iroha_core::zk::confidential_v2::{
     CONFIDENTIAL_TREE_CAPACITY_V2, CONFIDENTIAL_TREE_DEPTH_V2, ConfidentialMerklePathV2,
     compute_confidential_merkle_path_v3, default_confidential_diversifier_v2,

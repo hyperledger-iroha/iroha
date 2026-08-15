@@ -5,11 +5,10 @@
 //! (e.g., Norito RPC/streaming). The actual protocol adapters live in the
 //! runtime; this module focuses on configuration and deterministic decoding.
 //!
-//! First-release on-disk catalogs are producer-canonical binary Norito files:
-//! traversal, file bytes, decoded fields, and retained routes each have an
-//! independent hard corridor declared below. Catalog files must be direct,
-//! stable regular files and their filename route/stream IDs must match the
-//! decoded update before the route can enter the cache.
+//! First-release on-disk catalogs are producer-canonical binary Norito files: traversal, file
+//! bytes, decoded fields, and retained routes each have an independent hard corridor declared
+//! below. Catalog files must be direct, stable regular files and their filename route/stream IDs
+//! must match the decoded update before the route can enter the cache.
 use crate::config::{
     ConfigError, ExitRoutingConfig, KaigiStreamRoutingConfig, NoritoStreamRoutingConfig,
 };
@@ -958,9 +957,8 @@ impl KaigiStreamState {
 }
 /// Derive a blinded Kaigi room identifier from route metadata.
 ///
-/// The derivation uses BLAKE3 with a fixed domain separator so room identifiers
-/// remain stable across relays while hiding the underlying channel and route
-/// identifiers from observers.
+/// The derivation uses BLAKE3 with a fixed domain separator so room identifiers remain stable
+/// across relays while hiding the underlying channel and route identifiers from observers.
 #[must_use]
 pub fn derive_kaigi_room_id(
     channel_id: &[u8; 32],

@@ -130,10 +130,9 @@ pub trait GovernanceDagRuntimeSigner: Send + Sync + fmt::Debug {
     fn handle(&self) -> &str;
     /// Qualify the active adapter and its public policy revision.
     ///
-    /// Implementations must fail when the external-signer adapter is
-    /// unavailable, revoked, stale, test-marked, or otherwise not
-    /// production-ready. Provider diagnostics can contain secrets and are
-    /// therefore always redacted by the caller.
+    /// Implementations must fail when the external-signer adapter is unavailable, revoked, stale,
+    /// test-marked, or otherwise not production-ready. Provider diagnostics can contain secrets and
+    /// are therefore always redacted by the caller.
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
     /// Governed publisher peer identity bound to this signer.
     fn publisher_peer_id(&self) -> &[u8];
@@ -141,9 +140,8 @@ pub trait GovernanceDagRuntimeSigner: Send + Sync + fmt::Debug {
     fn public_key(&self) -> [u8; 32];
     /// Sign one exact canonical Governance DAG payload.
     ///
-    /// Implementations must not include credentials or provider diagnostics in
-    /// the returned error. This crate nevertheless redacts every provider error
-    /// at the trust boundary.
+    /// Implementations must not include credentials or provider diagnostics in the returned error.
+    /// This crate nevertheless redacts every provider error at the trust boundary.
     fn sign(
         &self,
         purpose: GovernanceDagSigningPurposeV1,

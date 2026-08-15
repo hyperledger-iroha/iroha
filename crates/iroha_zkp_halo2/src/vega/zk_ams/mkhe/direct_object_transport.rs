@@ -2,15 +2,13 @@
 //!
 //! A sound direct-relation verifier needs the actual canonical public RNS
 //! polynomials, not only digests copied into a statement.  Those polynomials
-//! are too large to inline in a proof envelope, so this module establishes the
-//! phase-one boundary for publishing them into and reading them from an
-//! immutable content-addressed object provider.
+//! are too large to inline in a proof envelope, so this module establishes the phase-one boundary
+//! for publishing them into and reading them from an immutable content-addressed object provider.
 //!
-//! Publication uses move-only staging authority, an atomically consumed seal,
-//! a complete bounded reread of immutable sealed bytes, atomic idempotent
-//! publication by the resulting pointer, authoritative lost-ack lookup, and a
-//! second complete readback through the published provider. There is no abort,
-//! delete, or unpublish transition at this boundary.
+//! Publication uses move-only staging authority, an atomically consumed seal, a complete bounded
+//! reread of immutable sealed bytes, atomic idempotent publication by the resulting pointer,
+//! authoritative lost-ack lookup, and a second complete readback through the published provider.
+//! There is no abort, delete, or unpublish transition at this boundary.
 //!
 //! The provider's identity and snapshot label are treated only as freshness
 //! signals.  They are checked before and after every bounded `read_at`, but a
@@ -268,11 +266,10 @@ fn direct_object_pointer_digest(pointer: ZkAmsMkheDirectObjectPointerV1) -> [u8;
 }
 /// Move-only authority for one unpublished direct-object staging allocation.
 ///
-/// The backend must issue a globally unique `staging_identity` for every
-/// successful allocation in one publication namespace. The canonical adapter
-/// additionally binds that identity to the exact publication session, object
-/// kind, and length. A staging token is deliberately neither `Clone` nor
-/// `Copy`; sealing consumes it.
+/// The backend must issue a globally unique `staging_identity` for every successful allocation in
+/// one publication namespace. The canonical adapter additionally binds that identity to the exact
+/// publication session, object kind, and length. A staging token is deliberately neither `Clone`
+/// nor `Copy`; sealing consumes it.
 pub struct ZkAmsMkheDirectObjectStagingTokenV1 {
     publication_identity: [u8; 32],
     staging_identity: [u8; 32],
@@ -363,11 +360,10 @@ fn direct_object_staging_token_digest(token: &ZkAmsMkheDirectObjectStagingTokenV
 }
 /// Move-only authority for one immutable, completely written staging object.
 ///
-/// A backend constructs this token only by consuming the matching staging
-/// token. The distinct seal identity prevents a mutable-stage handle from
-/// being confused with immutable sealed storage. Publication borrows this
-/// token so an ambiguous commit can be reconciled without inventing an abort
-/// or unpublish operation.
+/// A backend constructs this token only by consuming the matching staging token. The distinct seal
+/// identity prevents a mutable-stage handle from being confused with immutable sealed storage.
+/// Publication borrows this token so an ambiguous commit can be reconciled without inventing an
+/// abort or unpublish operation.
 pub struct ZkAmsMkheDirectObjectSealTokenV1 {
     publication_identity: [u8; 32],
     staging_identity: [u8; 32],
@@ -552,19 +548,17 @@ fn direct_object_published_binding_digest(
 }
 /// Absolute-offset CAS publication backend for immutable direct objects.
 ///
-/// Staging storage is never visible through
-/// [`ZkAmsMkheDirectObjectReadAtProviderV1`]. `seal_staged` atomically consumes
-/// mutable staging authority and freezes its bytes. `publish_sealed_by_pointer`
-/// atomically installs the exact pointer or succeeds idempotently when that
-/// pointer already names identical immutable content; it must never overwrite
-/// another entry. Its error is potentially ambiguous, so callers always use
-/// `lookup_published_pointer` before deciding whether publication occurred.
-/// The read-provider supertrait is mandatory because publication is incomplete
-/// until the installed pointer passes a full independent provider readback.
+/// Staging storage is never visible through [`ZkAmsMkheDirectObjectReadAtProviderV1`].
+/// `seal_staged` atomically consumes mutable staging authority and freezes its bytes.
+/// `publish_sealed_by_pointer` atomically installs the exact pointer or succeeds idempotently when
+/// that pointer already names identical immutable content; it must never overwrite another entry.
+/// Its error is potentially ambiguous, so callers always use `lookup_published_pointer` before
+/// deciding whether publication occurred. The read-provider supertrait is mandatory because
+/// publication is incomplete until the installed pointer passes a full independent provider
+/// readback.
 ///
-/// This trait deliberately has no abort, discard, delete, or unpublish method.
-/// Incomplete staging and orphaned seals are backend garbage-collection
-/// concerns, not security transitions.
+/// This trait deliberately has no abort, discard, delete, or unpublish method. Incomplete staging
+/// and orphaned seals are backend garbage-collection concerns, not security transitions.
 pub trait ZkAmsMkheDirectObjectCasPublicationV1: ZkAmsMkheDirectObjectReadAtProviderV1 {
     /// Nonzero identity of this exact open publication session.
     fn publication_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1>;
@@ -622,10 +616,9 @@ pub trait ZkAmsMkheDirectObjectCasPublicationV1: ZkAmsMkheDirectObjectReadAtProv
 /// `provider_identity` names this exact open provider session.
 /// `snapshot_identity` names the immutable revision visible to the session and
 /// must not encode object pointers, request offsets, or call counts.  Every
-/// object operation carries its exact pointer, so one provider snapshot can
-/// serve all public polynomials and the proof without mutable object selection.
-/// `read_at` performs one absolute, non-retrying read; a short result is always
-/// rejected by the canonical adapter.
+/// object operation carries its exact pointer, so one provider snapshot can serve all public
+/// polynomials and the proof without mutable object selection. `read_at` performs one absolute,
+/// non-retrying read; a short result is always rejected by the canonical adapter.
 pub trait ZkAmsMkheDirectObjectReadAtProviderV1 {
     /// Nonzero identity of this exact open provider session.
     fn provider_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1>;
@@ -1169,11 +1162,10 @@ where
 }
 /// Single-use absolute-offset transaction for one immutable CAS publication.
 ///
-/// Every invalid or failed write permanently poisons the transaction. Finishing
-/// consumes the staging token, rereads only immutable sealed storage to derive
-/// the content address, publishes atomically, reconciles the authoritative
-/// pointer lookup even after an error acknowledgement, and finally validates a
-/// complete read through the published-object provider.
+/// Every invalid or failed write permanently poisons the transaction. Finishing consumes the
+/// staging token, rereads only immutable sealed storage to derive the content address, publishes
+/// atomically, reconciles the authoritative pointer lookup even after an error acknowledgement, and
+/// finally validates a complete read through the published-object provider.
 ///
 /// This type intentionally has no `Drop` implementation. In particular, a
 /// failed post-publish check can never invoke backend cleanup that might race a

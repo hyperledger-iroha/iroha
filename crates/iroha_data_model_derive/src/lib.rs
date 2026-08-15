@@ -192,13 +192,12 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
     };
     Ok(expanded)
 }
-/// Derive macro for `Identifiable` trait which also automatically implements [`Ord`], [`Eq`],
-/// and [`Hash`] for the annotated struct by delegating to it's identifier field. Identifier
-/// field for the struct can be selected by annotating the desired field with `#[id]` or
-/// `#[id(transparent)]`. The use of `transparent` assumes that the field is also `Identifiable`,
-/// and the macro takes the field identifier of the annotated structure. In the absence
-/// of any helper attribute, the macro uses the field named `id` if there is such a field.
-/// Otherwise, the macro expansion fails.
+/// Derive macro for `Identifiable` trait which also automatically implements [`Ord`], [`Eq`], and
+/// [`Hash`] for the annotated struct by delegating to it's identifier field. Identifier field for
+/// the struct can be selected by annotating the desired field with `#[id]` or `#[id(transparent)]`.
+/// The use of `transparent` assumes that the field is also `Identifiable`, and the macro takes the
+/// field identifier of the annotated structure. In the absence of any helper attribute, the macro
+/// uses the field named `id` if there is such a field. Otherwise, the macro expansion fails.
 ///
 /// The macro should never be used on structs that aren't uniquely identifiable
 ///

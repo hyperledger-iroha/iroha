@@ -1,11 +1,10 @@
 //! Generate and finalize calibrated ABI-21 Kagemusha release bundles.
 //!
-//! Candidate generation runs the independently reviewed recursion source
-//! closure exactly once and
-//! publishes eight immutable `KRV4KEY` artifacts plus one canonical pre-evidence
-//! candidate record. Finalization never regenerates proof material: it binds the
-//! unchanged candidate to supplied evidence and authenticates the resulting
-//! release before publishing a distinct final directory atomically.
+//! Candidate generation runs the independently reviewed recursion source closure exactly once and
+//! publishes eight immutable `KRV4KEY` artifacts plus one canonical pre-evidence candidate record.
+//! Finalization never regenerates proof material: it binds the unchanged candidate to supplied
+//! evidence and authenticates the resulting release before publishing a distinct final directory
+//! atomically.
 use iroha_core::zk::kagemusha_artifact_v4::{
     KagemushaValidatedArtifactPayloadV4, read_kagemusha_pasta_cycle_artifact_v4,
     read_kagemusha_pasta_cycle_candidate_artifact_v4,
@@ -81,7 +80,7 @@ use std::{
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    process::Command,
+    sync::OnceLock,
 };
 const HELP: &str = "\
 Generate an unsigned ABI-21 candidate, then finalize those exact bytes after approval.
@@ -217,13 +216,58 @@ const MAX_ATTESTATION_BYTES: u64 = 1024 * 1024;
 const KAGEMUSHA_RELEASE_MIN_PUBLIC_VALIDATORS_V4: usize = 4;
 const BUILD_SOURCE_COMMIT: Option<&str> = option_env!("KAGEMUSHA_BUILD_SOURCE_COMMIT");
 const BUILD_SOURCE_TREE_SHA256: Option<&str> = option_env!("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256");
-const BUILD_REVIEWED_SOURCE_CLOSURE: Option<&str> =
-    option_env!("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE");
-const BUILD_REVIEWED_SOURCE_CLOSURE_SHA256: Option<&str> =
-    option_env!("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256");
-const TRUSTED_GIT_EXECUTABLE: &str = "/usr/bin/git";
-const TRUSTED_PYTHON_EXECUTABLE: &str = "/usr/bin/python3";
-const TRUSTED_TOOL_PATH: &str = "/usr/bin:/bin";
+const BUILD_SOURCE_DATE_EPOCH: Option<&str> = option_env!("KAGEMUSHA_BUILD_SOURCE_DATE_EPOCH");
+const BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX: Option<&str> =
+    option_env!("KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX");
+const BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256: Option<&str> =
+    option_env!("KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256");
+const AUTHORIZED_SOURCE_PARENT_COMMIT: &str = "5d41c784787ed496ccbd46379ee236cc992d9c65";
+const AUTHORIZED_SOURCE_PARENT_TREE: &str = "f20ab04ddd65c2b7da71250e77e2cc1006aa38f2";
+const AUTHORIZED_SOURCE_PARENT_EPOCH: u64 = 1_786_749_503;
+const AUTHENTICATED_SOURCE_SEAL_PROJECTION_SCHEMA: &str =
+    "iroha.kagemusha.authenticated_source_seal_projection.v1";
+const SOURCE_SEAL_BUILD_SCRIPT_OBSERVED_SCHEMA: &str =
+    "iroha.kagemusha.source_seal_build_script_observed.v1";
+const SOURCE_SEAL_OUTER_POLICY_SCHEMA: &str = "iroha.kagemusha.cprime_source_seal_outer_policy.v1";
+const SOURCE_SEAL_UNIT_GRAPH_NORMALIZATION: &str = "cargo-unit-graph-v1-package-root-relative-src-path-source-cache-placeholders-sorted-compact-lf-v1";
+const SOURCE_SEAL_RESOLVED_FEATURES: &[&str] = &[
+    "bls",
+    "circuit-params",
+    "default",
+    "dev-tools",
+    "json",
+    "kagemusha-candidate-evidence-lab",
+    "kagemusha-candidate-source-seal",
+    "node",
+    "proofs-halo2",
+    "proofs-stark",
+    "runtime",
+    "zk-halo2",
+    "zk-halo2-ipa",
+    "zk-ipa-native",
+    "zk-stark",
+];
+const SOURCE_SEAL_EXPLICIT_FEATURES: &[&str] = &[
+    "iroha_core/dev-tools",
+    "iroha_core/kagemusha-candidate-evidence-lab",
+    "iroha_core/kagemusha-candidate-source-seal",
+];
+const SOURCE_SEAL_SEMANTIC_ARGV: &[&str] = &[
+    "build",
+    "--release",
+    "--locked",
+    "--target-dir",
+    "<EXTERNAL_TARGET_DIR>",
+    "-p",
+    "iroha_core",
+    "--features",
+    "iroha_core/dev-tools,iroha_core/kagemusha-candidate-source-seal,iroha_core/kagemusha-candidate-evidence-lab",
+    "--bin",
+    "kagemusha_recursive_spend_v4_bundle",
+    "--jobs",
+    "1",
+    "--message-format=json-render-diagnostics",
+];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpec {
     file_name: &'static str,
@@ -595,6 +639,7 @@ struct CandidateValidationReportV2 {
     topup_finality_roster_sha256: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct FullSourceTreeIdentityV1 {
     schema: String,
     source_commit: String,
@@ -603,6 +648,91 @@ struct FullSourceTreeIdentityV1 {
     reviewed_source_closure: KagemushaReviewedSourceClosureV1,
     reviewed_source_closure_descriptor_sha256: String,
 }
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SourceSealBuildScriptObservedV1 {
+    debug_assertions: bool,
+    features: Vec<String>,
+    host: String,
+    num_jobs: u64,
+    opt_level: String,
+    profile: String,
+    schema: String,
+    target: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SourceSealUnitGraphV1 {
+    custom_build_packages: u64,
+    custom_build_units: u64,
+    iroha_core_units: u64,
+    normalization: String,
+    packages: u64,
+    sha256: String,
+    size_bytes: u64,
+    units: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SourceSealCargoPolicyV1 {
+    binary: String,
+    explicit_features: Vec<String>,
+    package: String,
+    profile: String,
+    semantic_argv: Vec<String>,
+    target: String,
+    unit_graph: SourceSealUnitGraphV1,
+}
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SourceSealOuterPolicyV1 {
+    cargo: SourceSealCargoPolicyV1,
+    execution_policy_sha256: String,
+    schema: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SourceSealSshSignatureV1 {
+    allowed_signers_sha256: String,
+    mechanism: String,
+    principal: String,
+    public_key_sha256: String,
+    revocation_sha256: String,
+    signature_namespace: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SourceSealAuthorityV1 {
+    commit: String,
+    commit_object_sha256: String,
+    commit_object_size: u64,
+    committer_epoch: u64,
+    git_tree: String,
+    ordered_parents: Vec<String>,
+    parent_commit: String,
+    parent_tree: String,
+    signature: SourceSealSshSignatureV1,
+}
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AuthenticatedSourceSealProjectionV1 {
+    build_script_observed: SourceSealBuildScriptObservedV1,
+    outer_policy: SourceSealOuterPolicyV1,
+    reviewed_source_closure_hex: String,
+    reviewed_source_closure_sha256: String,
+    schema: String,
+    source_authority: SourceSealAuthorityV1,
+    source_commit: String,
+    source_date_epoch: u64,
+    source_repo_dirty: bool,
+    source_tree_sha256: String,
+}
+#[derive(Debug, Clone)]
+struct EmbeddedSourceSealV1 {
+    projection: AuthenticatedSourceSealProjectionV1,
+    identity: FullSourceTreeIdentityV1,
+}
+static EMBEDDED_SOURCE_SEAL: OnceLock<Result<EmbeddedSourceSealV1, String>> = OnceLock::new();
 #[derive(Debug)]
 enum PublicationCommitOutcomeV1 {
     Committed {

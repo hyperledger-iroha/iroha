@@ -79,10 +79,9 @@ impl ConstString {
 
     /// Retain one borrowed string under the active decode-allocation budget.
     ///
-    /// Short values remain inline and allocate nothing. Longer values reserve
-    /// their exact byte length before using the fallible raw allocator, so
-    /// parser clients do not hide a source-sized `String` clone behind an
-    /// ordinary infallible conversion.
+    /// Short values remain inline and allocate nothing. Longer values reserve their exact byte
+    /// length before using the fallible raw allocator, so parser clients do not hide a source-sized
+    /// `String` clone behind an ordinary infallible conversion.
     ///
     /// # Errors
     ///
@@ -417,14 +416,12 @@ impl Drop for BoxedString {
         }
     }
 }
-/// `BoxedString` is `Send` because the data they
-/// reference is unaliased. Aliasing invariant is enforced by
-/// creation of `BoxedString`.
+/// `BoxedString` is `Send` because the data they reference is unaliased. Aliasing invariant is
+/// enforced by creation of `BoxedString`.
 #[allow(unsafe_code)]
 unsafe impl Send for BoxedString {}
-/// `BoxedString` is `Sync` because the data they
-/// reference is unaliased. Aliasing invariant is enforced by
-/// creation of `BoxedString`.
+/// `BoxedString` is `Sync` because the data they reference is unaliased. Aliasing invariant is
+/// enforced by creation of `BoxedString`.
 #[allow(unsafe_code)]
 unsafe impl Sync for BoxedString {}
 #[derive(Clone, Copy)]

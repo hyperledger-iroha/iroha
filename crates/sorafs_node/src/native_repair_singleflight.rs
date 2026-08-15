@@ -1,9 +1,8 @@
 //! Bounded ephemeral coordination for finalized native repair execution.
 //!
-//! This gate suppresses concurrent execution of the same finalized task and
-//! caps process-local work. It carries no task state or authority: the set is
-//! rebuilt empty on restart, while leases and terminal outcomes remain solely
-//! chain-authoritative.
+//! This gate suppresses concurrent execution of the same finalized task and caps process-local
+//! work. It carries no task state or authority: the set is rebuilt empty on restart, while leases
+//! and terminal outcomes remain solely chain-authoritative.
 use std::{
     collections::BTreeSet,
     sync::{Arc, Mutex},

@@ -18,9 +18,8 @@
 //! offset `D`; equality constraints copy every lane endpoint into the next
 //! lane start and close the last endpoint back to `D`.  The ring closes exactly
 //! when the original unsplit MSM is the identity.  Offset selection scans the
-//! complete source order to avoid every exceptional affine addition, and the
-//! circuit independently requires a nonzero denominator for each active
-//! addition.
+//! complete source order to avoid every exceptional affine addition, and the circuit independently
+//! requires a nonzero denominator for each active addition.
 use ff::{Field as _, PrimeField, WithSmallOrderMulGroup};
 use halo2_base::{
     AssignedValue, Context,
@@ -495,8 +494,7 @@ where
     Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
     Scalar<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
 {
-    /// Queue one source-ordered MSM and prove its normalized GLV bindings in
-    /// the Base circuit.
+    /// Queue one source-ordered MSM and prove its normalized GLV bindings in the Base circuit.
     pub(super) fn queue_constrained(
         &mut self,
         ctx: &mut Context<Base<C>>,

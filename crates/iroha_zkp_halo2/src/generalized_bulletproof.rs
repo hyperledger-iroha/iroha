@@ -3,6 +3,10 @@
 //! This module owns the curve-agnostic proof equations. Transcript codecs,
 //! concrete curves, generator derivation domains, and entropy providers remain
 //! explicit adapters so a protocol can freeze its own consensus bytes.
+pub(crate) mod exact_small_coefficient_source_v1;
+use exact_small_coefficient_source_v1::{
+    ExactSmallCoefficientAggregatesV1, ExactSmallCoefficientConstraintSourceV1,
+};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use std::{
@@ -1569,6 +1573,10 @@ fn accumulate<F: ProofScalar>(accumulator: &mut ScalarVector<F>, values: &[(usiz
         accumulator[*index] += *coefficient * weight;
     }
 }
+enum VerifierConstraintSourceV1 {
+    Materialized,
+    ExactSmallCoefficient(ExactSmallCoefficientConstraintSourceV1),
+}
 /// Public circuit statement, constraints, and commitment points to verify.
 #[derive(Clone, Debug)]
 pub struct ArithmeticCircuitStatement<'a, S: ProofSuite> {
@@ -1984,6 +1992,16 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
     where
         T: VerifierTranscript<S>,
     {
+        self.verify_with_constraint_source(VerifierConstraintSourceV1::Materialized, transcript)
+    }
+    fn verify_with_constraint_source<T>(
+        self,
+        constraint_source: VerifierConstraintSourceV1,
+        transcript: &mut T,
+    ) -> Result<(), GeneralizedBulletproofErrorV1>
+    where
+        T: VerifierTranscript<S>,
+    {
         let n = self.generators.g_bold.len();
         let commitment_count = self.vector_commitments.len();
         let ni = 2 + (2 * (commitment_count / 2));
@@ -1998,15 +2016,57 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let s_point = transcript.read_point()?;
         let y = transcript.challenge()?;
         let z_one = transcript.challenge()?;
-        let (y_inverse, z) = self.yz_challenges(y, z_one)?;
-        let mut l_weights = ScalarVector::zero(n);
-        let mut r_weights = ScalarVector::zero(n);
-        let mut o_weights = ScalarVector::zero(n);
-        for (constraint, z) in self.constraints.iter().zip(&z.0) {
-            accumulate(&mut l_weights, &constraint.wl, *z);
-            accumulate(&mut r_weights, &constraint.wr, *z);
-            accumulate(&mut o_weights, &constraint.wo, *z);
-        }
+        let (y_inverse, z, exact_aggregates) = match constraint_source {
+            VerifierConstraintSourceV1::Materialized => {
+                let (y_inverse, z) = self.yz_challenges(y, z_one)?;
+                (y_inverse, Some(z), None)
+            }
+            VerifierConstraintSourceV1::ExactSmallCoefficient(source) => {
+                let y_inverse = y
+                    .invert()
+                    .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
+                let y_inverse = ScalarVector::powers(y_inverse, n);
+                (y_inverse, None, Some(source.aggregate(z_one)?))
+            }
+        };
+        let (
+            l_weights,
+            r_weights,
+            o_weights,
+            exact_cg_weights,
+            exact_v_weights,
+            exact_constraint_product,
+        ) = match exact_aggregates {
+            Some(ExactSmallCoefficientAggregatesV1 {
+                l_weights,
+                r_weights,
+                o_weights,
+                vector_commitment_weights,
+                scalar_commitment_weights,
+                constraint_product,
+            }) => (
+                l_weights,
+                r_weights,
+                o_weights,
+                Some(vector_commitment_weights),
+                Some(scalar_commitment_weights),
+                Some(constraint_product),
+            ),
+            None => {
+                let z = z
+                    .as_ref()
+                    .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
+                let mut l_weights = ScalarVector::zero(n);
+                let mut r_weights = ScalarVector::zero(n);
+                let mut o_weights = ScalarVector::zero(n);
+                for (constraint, z) in self.constraints.iter().zip(&z.0) {
+                    accumulate(&mut l_weights, &constraint.wl, *z);
+                    accumulate(&mut r_weights, &constraint.wr, *z);
+                    accumulate(&mut o_weights, &constraint.wo, *z);
+                }
+                (l_weights, r_weights, o_weights, None, None, None)
+            }
+        };
         let r_weights = r_weights * &y_inverse;
         let delta = r_weights.inner_product(l_weights.0.iter());
         let mut t_before = Vec::with_capacity(ni);
@@ -2025,13 +2085,24 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let mut polynomial = BatchVerifier::<S>::new();
         polynomial.g += t_caret;
         polynomial.h += tau_x;
-        let mut v_weights = ScalarVector::zero(self.scalar_commitments.len());
-        for (constraint, z) in self.constraints.iter().zip(&z.0) {
-            accumulate(&mut v_weights, &constraint.wv, -*z);
-        }
+        let (mut v_weights, constraint_product) = match (exact_v_weights, exact_constraint_product)
+        {
+            (Some(v_weights), Some(constraint_product)) => (v_weights, constraint_product),
+            (None, None) => {
+                let z = z
+                    .as_ref()
+                    .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
+                let mut v_weights = ScalarVector::zero(self.scalar_commitments.len());
+                for (constraint, z) in self.constraints.iter().zip(&z.0) {
+                    accumulate(&mut v_weights, &constraint.wv, -*z);
+                }
+                let constraint_product =
+                    z.inner_product(self.constraints.iter().map(|constraint| &constraint.c));
+                (v_weights, constraint_product)
+            }
+            _ => return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant),
+        };
         v_weights = v_weights * x[ni];
-        let constraint_product =
-            z.inner_product(self.constraints.iter().map(|constraint| &constraint.c));
         polynomial.g -= x[ni] * (*delta.expose_ref() - *constraint_product.expose_ref());
         drop((delta, constraint_product));
         polynomial.additional.extend(
@@ -2073,16 +2144,24 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             ipa.g_bold[index] += weight;
         }
         h_bold_scalars = h_bold_scalars + &(o_weights * S::Scalar::ONE);
-        let mut cg_weights = Vec::with_capacity(self.vector_commitments.len());
-        for commitment in 0..self.vector_commitments.len() {
-            let mut weights = ScalarVector::zero(n);
-            for (constraint, z) in self.constraints.iter().zip(&z.0) {
-                if let Some(values) = constraint.wcg.get(commitment) {
-                    accumulate(&mut weights, values, *z);
+        let cg_weights = if let Some(weights) = exact_cg_weights {
+            vec![weights]
+        } else {
+            let z = z
+                .as_ref()
+                .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
+            let mut cg_weights = Vec::with_capacity(self.vector_commitments.len());
+            for commitment in 0..self.vector_commitments.len() {
+                let mut weights = ScalarVector::zero(n);
+                for (constraint, z) in self.constraints.iter().zip(&z.0) {
+                    if let Some(values) = constraint.wcg.get(commitment) {
+                        accumulate(&mut weights, values, *z);
+                    }
                 }
+                cg_weights.push(weights);
             }
-            cg_weights.push(weights);
-        }
+            cg_weights
+        };
         for (mut index, (commitment, weights)) in self
             .vector_commitments
             .iter()
@@ -2464,4 +2543,5 @@ where
 mod secret_cleanup_tests {
     include!("generalized_bulletproof_secret_cleanup_tests.rs");
     include!("generalized_bulletproof_secret_cleanup_more_tests.rs");
+    include!("generalized_bulletproof_streaming_constraint_tests.rs");
 }

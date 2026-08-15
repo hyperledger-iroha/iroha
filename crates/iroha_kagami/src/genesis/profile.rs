@@ -106,8 +106,7 @@ pub fn public_xor_profile_for_chain_id(chain_id: &str) -> Option<GenesisProfile>
 ///
 /// # Errors
 ///
-/// Returns an error if the built-in literal stops parsing as a canonical asset
-/// definition id.
+/// Returns an error if the built-in literal stops parsing as a canonical asset definition id.
 pub fn default_public_xor_asset_definition_id(
     profile: GenesisProfile,
 ) -> Result<Option<AssetDefinitionId>> {
@@ -123,9 +122,8 @@ pub fn default_public_xor_asset_definition_id(
 ///
 /// # Errors
 ///
-/// Returns an error when a supplied literal is not canonical Base58, when a
-/// public Nexus NPoS manifest omits the id, or when the flag is used for a
-/// non-public/non-NPoS manifest.
+/// Returns an error when a supplied literal is not canonical Base58, when a public Nexus NPoS
+/// manifest omits the id, or when the flag is used for a non-public/non-NPoS manifest.
 pub fn resolve_public_xor_asset_definition_id(
     profile: Option<GenesisProfile>,
     configured: Option<&str>,

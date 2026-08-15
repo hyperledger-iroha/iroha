@@ -1,9 +1,8 @@
 //! Alias management service primitives.
 //!
-//! This module wires the data-model types into a runtime friendly storage
-//! container. Iroha v1 deliberately does not expose an OPRF/VOPRF service; a
-//! future privacy-preserving lookup protocol must ship as a complete, keyed,
-//! verifiable construction rather than a hash-shaped placeholder.
+//! This module wires the data-model types into a runtime friendly storage container. Iroha v1
+//! deliberately does not expose an OPRF/VOPRF service; a future privacy-preserving lookup protocol
+//! must ship as a complete, keyed, verifiable construction rather than a hash-shaped placeholder.
 use crate::state::WorldReadOnly;
 use iroha_crypto::{HashOf, KeyPair, Signature};
 use iroha_data_model::{

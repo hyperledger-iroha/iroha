@@ -285,9 +285,8 @@ impl VerifiedDirectCommonAStatementV1 {
 }
 /// Single-use replay of the deterministic round-one common-`a` statement.
 ///
-/// The expected statement remains inside this transaction. Callers may borrow
-/// each derived limb for relation reconstruction, but cannot extract a digest
-/// or turn a partial replay into authority.
+/// The expected statement remains inside this transaction. Callers may borrow each derived limb for
+/// relation reconstruction, but cannot extract a digest or turn a partial replay into authority.
 pub(super) struct DirectCommonAReplayV1 {
     context: ZkAmsMkheDirectCeremonyContextV1,
     expected_statement_digest: [u8; 32],
@@ -377,9 +376,8 @@ fn derive_verified_direct_common_a_statement_v1(
     stream.finish()
 }
 
-/// Consume one private common-`a` authority into the only valid round-one
-/// selector shape. Neither the authority nor its raw digest crosses this
-/// module boundary.
+/// Consume one private common-`a` authority into the only valid round-one selector shape. Neither
+/// the authority nor its raw digest crosses this module boundary.
 fn new_rkg_round_one_selector_v1(
     context: ZkAmsMkheDirectCeremonyContextV1,
     prior_round_digest: [u8; 32],

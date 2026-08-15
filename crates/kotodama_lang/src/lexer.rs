@@ -131,12 +131,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>, String> {
     let source = SourceFile::new(SourceId(0), "<source>", src);
     lex_source(&source, FrontendBudget::v1()).map_err(|bundle| bundle.render_human())
 }
-/// Lex one source file into the significant, value-carrying token stream used
-/// by the AST parser.
+/// Lex one source file into the significant, value-carrying token stream used by the AST parser.
 ///
-/// This is an adapter over the lossless lexer, not a second scanner. Formatter,
-/// CST, LSP, and compiler consumers therefore agree on token boundaries and
-/// resource limits.
+/// This is an adapter over the lossless lexer, not a second scanner. Formatter, CST, LSP, and
+/// compiler consumers therefore agree on token boundaries and resource limits.
 pub(crate) fn lex_source(
     source: &SourceFile,
     budget: FrontendBudget,
@@ -160,10 +158,9 @@ pub(crate) fn lower_lexed(
 /// Lower every valid token from one lossless scan while retaining lexical
 /// diagnostics for CST recovery.
 ///
-/// Compiler-facing callers use [`lower_lexed`] and therefore still fail
-/// closed on any lexical error. The lossless parser uses this form so one bad
-/// token does not collapse otherwise recognisable declarations into a single
-/// root error node.
+/// Compiler-facing callers use [`lower_lexed`] and therefore still fail closed on any lexical
+/// error. The lossless parser uses this form so one bad token does not collapse otherwise
+/// recognisable declarations into a single root error node.
 pub(crate) fn lower_lexed_recovering(
     source: &SourceFile,
     budget: FrontendBudget,

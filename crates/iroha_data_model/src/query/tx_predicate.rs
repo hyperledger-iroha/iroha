@@ -16,11 +16,10 @@ use thiserror::Error;
 /// object with exactly `op` and `args` fields. Field paths are strings
 /// (`block_hash`, `authority`, `timestamp_ms`, `entrypoint_hash`, `result_ok`, or
 /// `metadata.<name>`); presence operators carry an explicit boolean argument.
-/// Decoding rejects empty logical nodes, empty or duplicate membership sets,
-/// unknown fields, alternate literal spellings, and trees exceeding the shared
-/// depth, node, or membership budgets. Invalid programmatic trees evaluate to
-/// `false`, serialize as `{"op":"const","args":[false]}`, and are rejected by
-/// the binary serializer.
+/// Decoding rejects empty logical nodes, empty or duplicate membership sets, unknown fields,
+/// alternate literal spellings, and trees exceeding the shared depth, node, or membership budgets.
+/// Invalid programmatic trees evaluate to `false`, serialize as `{"op":"const","args":[false]}`,
+/// and are rejected by the binary serializer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommittedTxPredicate {
     /// Logical conjunction of sub-predicates.
@@ -1716,9 +1715,8 @@ mod wire {
     thread_local! {
         /// Remaining aggregate membership literals while decoding one predicate.
         ///
-        /// The outer node stream is always decoded serially, so every nested
-        /// membership decoder observes this same scoped budget before it asks
-        /// the allocator to materialize its vector.
+        /// The outer node stream is always decoded serially, so every nested membership decoder
+        /// observes this same scoped budget before it asks the allocator to materialize its vector.
         static MEMBERSHIP_DECODE_REMAINING: Cell<Option<usize>> = const { Cell::new(None) };
     }
     struct MembershipDecodeBudgetGuard {

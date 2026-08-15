@@ -139,9 +139,8 @@ pub const CONTRACT_HAJIMARI_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint
 pub const CONTRACT_KAIZEN_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
 /// Canonical human-readable prefix for every Bech32m contract address.
 ///
-/// Exact genesis-derived network identity is committed inside the address digest. The
-/// presentation prefix is therefore deliberately network-independent and parsers reject every
-/// other prefix.
+/// Exact genesis-derived network identity is committed inside the address digest. The presentation
+/// prefix is therefore deliberately network-independent and parsers reject every other prefix.
 pub const CONTRACT_ADDRESS_HRP: &str = "irohac";
 const CONTRACT_ADDRESS_VERSION_V1: u8 = 1;
 const CONTRACT_ADDRESS_TAG_V1: &[u8] = b"iroha:contract-address:v1";
@@ -943,10 +942,9 @@ mod contract_address_tests {
 pub mod entrypoint;
 // Smart contract manifest types and helpers.
 pub mod manifest {
-    //! Manifest metadata for IVM smart contracts.
-    //! It can be attached to a transaction's `metadata` under a well-known
-    //! key for admission-time checks. When attached or registered, a V1
-    //! manifest must carry both consensus-binding hashes.
+    //! Manifest metadata for IVM smart contracts. It can be attached to a transaction's `metadata`
+    //! under a well-known key for admission-time checks. When attached or registered, a V1 manifest
+    //! must carry both consensus-binding hashes.
     use crate::{
         account::AccountId,
         events::EventFilterBox,
@@ -963,11 +961,10 @@ pub mod manifest {
     pub const MANIFEST_METADATA_KEY: &str = "contract_manifest";
     /// Smart contract manifest used for admission-time validation.
     ///
-    /// `code_hash` and `abi_hash` remain represented as options so malformed
-    /// external payloads can be decoded into a stable, structured admission
-    /// error. Every V1 registration and every admission path that observes a
-    /// manifest rejects either field when absent; the remaining fields are
-    /// optional metadata.
+    /// `code_hash` and `abi_hash` remain represented as options so malformed external payloads can
+    /// be decoded into a stable, structured admission error. Every V1 registration and every
+    /// admission path that observes a manifest rejects either field when absent; the remaining
+    /// fields are optional metadata.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[norito(reuse_archived)]
     #[cfg_attr(
@@ -995,25 +992,22 @@ pub mod manifest {
         /// Content-addressed hash of the compiled `.to` bytecode.
         /// Required in V1 and compared with the complete submitted artifact.
         pub code_hash: Option<Hash>,
-        /// ABI hash computed by the node for the `abi_version` policy.
-        /// Required in V1 and must match the artifact's authenticated CNTR
-        /// binding and the node's canonical ABI descriptor.
+        /// ABI hash computed by the node for the `abi_version` policy. Required in V1 and must
+        /// match the artifact's authenticated CNTR binding and the node's canonical ABI descriptor.
         pub abi_hash: Option<Hash>,
         /// Optional compiler fingerprint (e.g., rustc/LLVM versions).
         pub compiler_fingerprint: Option<String>,
         /// Compiler-derived, hash-covered execution capability bitmap.
         ///
-        /// V1 mirrors the artifact's ZK and VECTOR execution-mode bits. This is
-        /// not source-selectable metadata and never describes host SIMD, Metal,
-        /// or CUDA availability.
+        /// V1 mirrors the artifact's ZK and VECTOR execution-mode bits. This is not
+        /// source-selectable metadata and never describes host SIMD, Metal, or CUDA availability.
         pub features_bitmap: Option<u64>,
         /// Optional advisory access-set hints for scheduler.
         ///
-        /// When present, the scheduler may use these read/write keys for conflict
-        /// detection without requiring a dynamic VM prepass. Keys are canonical
-        /// strings of the form `account:…`, `domain:…`, `asset_def:…`, `asset:…`,
-        /// `nft:…`, or their `*.detail:…` variants, matching the internal
-        /// pipeline access-key format.
+        /// When present, the scheduler may use these read/write keys for conflict detection without
+        /// requiring a dynamic VM prepass. Keys are canonical strings of the form `account:…`,
+        /// `domain:…`, `asset_def:…`, `asset:…`, `nft:…`, or their `*.detail:…` variants, matching
+        /// the internal pipeline access-key format.
         #[norito(default)]
         pub access_set_hints: Option<AccessSetHints>,
         /// Optional entrypoint descriptors (name, kind, permission) advertised by the compiler.

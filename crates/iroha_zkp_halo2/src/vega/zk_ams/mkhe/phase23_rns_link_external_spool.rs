@@ -2,8 +2,7 @@
 //!
 //! This adapter owns the two live writers and later the two immutable
 //! snapshots.  It exposes neither file paths nor keys.  All identities below
-//! are non-secret transcript bindings; only possession of a snapshot permits
-//! authenticated reads.
+//! are non-secret transcript bindings; only possession of a snapshot permits authenticated reads.
 use super::{
     SECRET_MAIN_FILE_BYTES_V1, SECRET_MAIN_PLAINTEXT_BYTES_V1, SECRET_MAIN_SLOT_COUNT_V1,
     SECRET_NONCE_FILE_BYTES_V1, SECRET_NONCE_PLAINTEXT_BYTES_V1, SECRET_NONCE_SLOT_COUNT_V1,

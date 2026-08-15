@@ -1,7 +1,6 @@
 //! Abstract syntax tree definitions for KOTODAMA.
 //!
-//! These structures represent the parsed Kotodama source surface accepted by
-//! the compiler.
+//! These structures represent the parsed Kotodama source surface accepted by the compiler.
 use crate::source::{SourceRange, TextRange};
 use iroha_primitives::bigint::BigInt;
 /// Stable identity assigned when a spanned AST node enters resolved HIR.
@@ -22,13 +21,11 @@ impl NodeId {
         usize::try_from(self.0).expect("u32 source-node identity fits usize")
     }
 }
-/// Compiler-owned call name used after parsing the canonical
-/// `StateMap.get(key)` method form.
+/// Compiler-owned call name used after parsing the canonical `StateMap.get(key)` method form.
 ///
-/// Source code cannot call this name directly. Keeping the marker distinct
-/// from the source spelling preserves enough call-form information for name
-/// resolution to distinguish a user function named `get` from the StateMap
-/// intrinsic.
+/// Source code cannot call this name directly. Keeping the marker distinct from the source spelling
+/// preserves enough call-form information for name resolution to distinguish a user function named
+/// `get` from the StateMap intrinsic.
 pub(crate) const STATE_MAP_GET_INTRINSIC: &str = "state_map_get";
 #[derive(Debug, PartialEq, Clone)]
 pub struct Program {
@@ -517,9 +514,8 @@ pub enum Expr {
         args: Vec<Expr>,
         /// Source argument names in source order. `None` denotes an all-positional call.
         ///
-        /// Method receivers are stored as `args[0]` and are deliberately excluded
-        /// from this list because they are compiler-inserted rather than source
-        /// arguments.
+        /// Method receivers are stored as `args[0]` and are deliberately excluded from this list
+        /// because they are compiler-inserted rather than source arguments.
         argument_names: Option<Vec<String>>,
         /// Whether `args[0]` is the implicit receiver from source method syntax.
         implicit_receiver: bool,
@@ -541,8 +537,7 @@ pub enum Expr {
     },
     /// Tuple literal: `(a, b, c)`
     Tuple(Vec<Expr>),
-    /// Bounded list literal. Its capacity is inferred from context or the
-    /// exact number of elements.
+    /// Bounded list literal. Its capacity is inferred from context or the exact number of elements.
     List(Vec<Expr>),
     /// Capacity-proven list comprehension:
     /// `[expression for item in source if condition]`.
@@ -1116,11 +1111,10 @@ pub(crate) fn strip_program_provenance(program: &mut Program) {
 /// Destroy a parsed program without recursively dropping adversarially deep
 /// expression, statement, or type trees.
 ///
-/// V1 accepts nesting up to the fixed frontend limit. Rust's derived drop glue
-/// walks recursive enums on the caller's stack, which can overflow the smaller
-/// stacks used by editor workers and test executors even though parsing itself
-/// stayed within that limit. Tooling that consumes an AST only for validation
-/// uses this explicit work list instead.
+/// V1 accepts nesting up to the fixed frontend limit. Rust's derived drop glue walks recursive
+/// enums on the caller's stack, which can overflow the smaller stacks used by editor workers and
+/// test executors even though parsing itself stayed within that limit. Tooling that consumes an AST
+/// only for validation uses this explicit work list instead.
 pub(crate) fn drop_program_iterative(program: Program) {
     enum Pending {
         Statement(Statement),

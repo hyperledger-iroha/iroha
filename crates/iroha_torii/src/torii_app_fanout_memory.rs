@@ -2,10 +2,9 @@
 /// Logical bytes charged for one `BTreeMap` entry in an owned JSON object.
 ///
 /// Norito's native `Value` uses `BTreeMap<String, Value>`. The standard
-/// library stores multiple entries per node, but the layout is private. One
-/// page per entry therefore covers a node allocation, parent/edge slack, the
-/// inline key/value handles, and allocator metadata without depending on that
-/// private layout.
+/// library stores multiple entries per node, but the layout is private. One page per entry
+/// therefore covers a node allocation, parent/edge slack, the inline key/value handles, and
+/// allocator metadata without depending on that private layout.
 const TORII_FANOUT_JSON_OBJECT_ENTRY_BYTES: usize = 4 * 1024;
 /// Logical bytes charged for an owned JSON object's root handle.
 const TORII_FANOUT_JSON_OBJECT_BASE_BYTES: usize = 256;
@@ -21,11 +20,10 @@ const TORII_FANOUT_JSON_STRING_MIN_CAPACITY: usize = 16;
 const TORII_APP_FANOUT_NORITO_FIXED_BYTES: usize = 4 * 1024;
 /// Physical allowance for collection nodes not charged exactly by Norito.
 ///
-/// Norito now charges its standard collection nodes, but dynamically boxed
-/// values, reference-count headers, non-byte fixed-array staging, and some
-/// schema-specific validation scratch remain outside that counter. One page
-/// per admitted element is retained as a secondary envelope; fixed roots must
-/// also fit the separate route allowance. Any production DTO needs a complete
+/// Norito now charges its standard collection nodes, but dynamically boxed values, reference-count
+/// headers, non-byte fixed-array staging, and some schema-specific validation scratch remain
+/// outside that counter. One page per admitted element is retained as a secondary envelope; fixed
+/// roots must also fit the separate route allowance. Any production DTO needs a complete
 /// reachability audit before it can implement the sealed marker below.
 const TORII_APP_FANOUT_NORITO_UNTRACKED_ELEMENT_BYTES: usize = 4 * 1024;
 /// Physical-to-logical allowance for allocator/container capacity slack in
@@ -125,8 +123,7 @@ fn sanitize_torii_app_fanout_json_error(_: norito::json::Error) -> ToriiAppFanou
 fn sanitize_torii_app_fanout_norito_error(_: norito::Error) -> ToriiAppFanoutDecodeFailure {
     ToriiAppFanoutDecodeFailure::Norito
 }
-/// Independent syntax/resource ceilings applied before constructing a JSON
-/// `Value` graph.
+/// Independent syntax/resource ceilings applied before constructing a JSON `Value` graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ToriiFanoutJsonLimits {
     raw_bytes: usize,
@@ -270,13 +267,11 @@ mod torii_app_fanout_norito_dto_sealed {
 /// Closed set of Torii response DTOs whose complete decode and source graphs
 /// have been audited against [`ToriiFanoutNoritoDecodePlan`].
 ///
-/// There are deliberately no production implementations yet. `ProofRecord`
-/// can clone a 64 MiB bridge proof before coordinator admission, `Asset` can
-/// clone an account-controller graph before admission, account metadata's
-/// `Json` decoder builds an uncharged semantic graph, and committed
-/// transactions reach dynamically boxed instructions. Admitting any of those
-/// types here before both source and decoder roots are bounded would turn this
-/// marker into a false memory-safety claim.
+/// There are deliberately no production implementations yet. `ProofRecord` can clone a 64 MiB
+/// bridge proof before coordinator admission, `Asset` can clone an account-controller graph before
+/// admission, account metadata's `Json` decoder builds an uncharged semantic graph, and committed
+/// transactions reach dynamically boxed instructions. Admitting any of those types here before both
+/// source and decoder roots are bounded would turn this marker into a false memory-safety claim.
 // TODO: Add one concrete implementation at a time after its authoritative
 // source path and every reachable decoder allocation are pre-admission bounded.
 trait ToriiAppFanoutNoritoDto:
@@ -285,10 +280,9 @@ trait ToriiAppFanoutNoritoDto:
 }
 /// Decode one admitted, canonical-layout route response sequentially.
 ///
-/// `SequentialOverrideGuard` currently resolves layout flags to the default
-/// layout, so the header is checked first and non-default or compressed frames
-/// fail closed. This avoids per-worker decoder contexts without guessing wire
-/// flags.
+/// `SequentialOverrideGuard` currently resolves layout flags to the default layout, so the header
+/// is checked first and non-default or compressed frames fail closed. This avoids per-worker
+/// decoder contexts without guessing wire flags.
 fn decode_torii_app_fanout_norito<T>(
     bytes: &[u8],
     plan: ToriiFanoutNoritoDecodePlan,
@@ -317,9 +311,8 @@ impl ToriiAppFanoutMemoryBudget {
     /// Start a request ledger only while owning the process-wide shared fanout
     /// reservation used by signed and generic fanout paths.
     ///
-    /// The reservation is intentionally borrowed: routed local legs must pass
-    /// the same token through instead of recursively acquiring the one-slot
-    /// default pool.
+    /// The reservation is intentionally borrowed: routed local legs must pass the same token
+    /// through instead of recursively acquiring the one-slot default pool.
     fn from_shared_query_fanout_reservation(
         _reservation: &QueryFanoutMemoryReservation,
         capacity_bytes: usize,

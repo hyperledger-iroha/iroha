@@ -112,10 +112,9 @@ async fn accept_one_websocket_test_connection(
     };
     let _ = network.accept_stream(reader, writer, remote_address).await;
 }
-/// This test creates a network and one peer.
-/// This peer connects back to our network, emulating some distant peer.
-/// There is no need to create separate networks to check that messages
-/// are properly sent and received using encryption and serialization/deserialization.
+/// This test creates a network and one peer. This peer connects back to our network, emulating some
+/// distant peer. There is no need to create separate networks to check that messages are properly
+/// sent and received using encryption and serialization/deserialization.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn network_create() {
@@ -734,9 +733,8 @@ async fn update_peers_triggers_immediate_connect() {
     .expect("expected immediate connect before periodic tick");
     assert_eq!(network1.online_peers(std::collections::HashSet::len), 1);
 }
-/// When multiple addresses are provided for the same peer id, the dialer should
-/// attempt them in parallel so the reachable one wins quickly even if another is
-/// down or blackholed.
+/// When multiple addresses are provided for the same peer id, the dialer should attempt them in
+/// parallel so the reachable one wins quickly even if another is down or blackholed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[allow(clippy::too_many_lines)]
 async fn happy_eyeballs_parallel_dials() {

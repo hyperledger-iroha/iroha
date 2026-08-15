@@ -5,17 +5,15 @@
 //! bounded amounts.  This module supplies the missing RingCT relation with one
 //! aggregate Monero Bulletproofs+ proof.  For every output commitment `C` the
 //! proof contains both `C` and `C - H` in its ordered public statement.  A
-//! 64-bit range proof for both points proves that the hidden amount is in
-//! `1..=u64::MAX`: the first relation establishes the upper bound and the
-//! second excludes zero.
+//! 64-bit range proof for both points proves that the hidden amount is in `1..=u64::MAX`: the first
+//! relation establishes the upper bound and the second excludes zero.
 //!
 //! The equations and Monero generator derivation are a native port of the
 //! MIT-licensed `monero-bulletproofs` implementation by Luke Parker at Serai
 //! commit `971951a1a66014fce5a943b4c78fc24c63187dbb`.  Iroha adds an explicit
 //! transcript domain, the complete typed-statement digest, and the ordered
 //! output commitments before the standard Figure-3 challenges.  Proofs cannot
-//! therefore be transplanted across pools, assets, roots, transactions, or
-//! output orderings.
+//! therefore be transplanted across pools, assets, roots, transactions, or output orderings.
 use super::{
     FCMP_MAX_OUTPUTS_NATIVE_V1, FcmpNativeErrorV1, FcmpOutputTupleV1,
     field::{
@@ -138,10 +136,9 @@ impl<T: Zeroize> Drop for PendingZeroizingValue<T> {
 }
 /// Exact-capacity owner for prover-secret vectors.
 ///
-/// Storage is reserved before the first secret copy is accepted. The logical
-/// capacity is public proof-shape data; the separately remembered allocation
-/// capacity lets every insertion assert that no reallocation occurred. Drop
-/// clears the complete allocation on success, error, and unwind.
+/// Storage is reserved before the first secret copy is accepted. The logical capacity is public
+/// proof-shape data; the separately remembered allocation capacity lets every insertion assert that
+/// no reallocation occurred. Drop clears the complete allocation on success, error, and unwind.
 struct ExactSizeZeroizingVec<T: Zeroize> {
     values: Vec<T>,
     exact_capacity: usize,

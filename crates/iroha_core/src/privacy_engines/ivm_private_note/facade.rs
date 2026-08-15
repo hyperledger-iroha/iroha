@@ -95,12 +95,11 @@ fn map_verifier_error_v1(error: ProofManagedNoteStarkErrorV1) -> IvmPrivateNoteP
 }
 /// Construct a complete canonical private-note proof with injected entropy.
 ///
-/// The complete relation and exact one-to-two cardinality bounds are checked
-/// before entropy is sampled or the fixed trace is allocated. The trusted
-/// native consensus binding must exactly match the statement context under the
-/// supplied consensus limits, and its typed digest is committed by the STARK
-/// public-input transcript. The returned bytes have passed the independent
-/// production verifier.
+/// The complete relation and exact one-to-two cardinality bounds are checked before entropy is
+/// sampled or the fixed trace is allocated. The trusted native consensus binding must exactly match
+/// the statement context under the supplied consensus limits, and its typed digest is committed by
+/// the STARK public-input transcript. The returned bytes have passed the independent production
+/// verifier.
 ///
 /// # Errors
 ///
@@ -136,8 +135,7 @@ pub fn prove_ivm_private_note_v1_with_rng<R: TryCryptoRng + ?Sized>(
 ///
 /// # Errors
 ///
-/// Returns the same closed typed failures as
-/// [`prove_ivm_private_note_v1_with_rng`].
+/// Returns the same closed typed failures as [`prove_ivm_private_note_v1_with_rng`].
 pub fn prove_ivm_private_note_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,
@@ -156,9 +154,8 @@ pub fn prove_ivm_private_note_v1(
 ///
 /// # Errors
 ///
-/// Rejects an invalid consensus binding or limits and malformed, oversized,
-/// non-canonical, statement-substituted, or cross-genesis proof bytes with a
-/// typed failure.
+/// Rejects an invalid consensus binding or limits and malformed, oversized, non-canonical,
+/// statement-substituted, or cross-genesis proof bytes with a typed failure.
 pub fn verify_ivm_private_note_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,

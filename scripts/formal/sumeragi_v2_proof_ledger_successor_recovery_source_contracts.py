@@ -1343,7 +1343,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 launch_source,
                 "Kura-bound production lifecycle launch",
                 "pub(in crate::sumeragi) fn launch(\n        mut self,",
-                "\n}\n\n#[cfg(test)]\nmod tests {",
+                "\n}\n#[cfg(test)]\nmod tests {",
             )
             require_order(
                 launch_path,
@@ -3062,7 +3062,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 registry_source,
                 "opaque recovered Broadcast-and-next-Sign registry preparation",
                 "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor<",
-                "impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor",
+                "impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter>",
             )
             require_order(
                 registry_path,
@@ -4038,7 +4038,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 sumeragi_source,
                 "shared strict-then-dependency fair selection",
                 "fn select_fair_v2_ingress_candidate<T>(",
-                "fn fair_v2_ingress_queue_gate_verdict(",
+                "/// Fixed-capacity, roster-aware v2 ingress with per-hop admission and service fairness.",
             )
             require_order(
                 sumeragi_path,

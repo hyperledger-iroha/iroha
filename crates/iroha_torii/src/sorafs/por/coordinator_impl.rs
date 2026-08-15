@@ -236,11 +236,10 @@ impl PorCoordinator {
     }
     /// Apply one exact node-authoritative lifecycle update in logarithmic time.
     ///
-    /// The currently installed generation must either equal the update
-    /// generation for an exact replay or immediately precede it for one insert
-    /// or forward lifecycle transition. Any rollback, gap, identity change, or
-    /// conflicting replay invalidates the rebuildable projection so reads fail
-    /// closed until startup reconciliation installs a complete checkpoint.
+    /// The currently installed generation must either equal the update generation for an exact
+    /// replay or immediately precede it for one insert or forward lifecycle transition. Any
+    /// rollback, gap, identity change, or conflicting replay invalidates the rebuildable projection
+    /// so reads fail closed until startup reconciliation installs a complete checkpoint.
     pub(crate) fn apply_authoritative_update(
         &self,
         update: PorStatusAuthorityUpdateV1,
@@ -513,9 +512,8 @@ impl PorCoordinator {
     ///
     /// Returns [`PorCoordinatorError::InvalidProof`] if validation fails,
     /// [`PorCoordinatorError::DuplicateProof`] for any replay,
-    /// [`PorCoordinatorError::UnknownChallenge`] when the challenge cannot be
-    /// found, or [`PorCoordinatorError::Persistence`] if persisting updates
-    /// fails.
+    /// [`PorCoordinatorError::UnknownChallenge`] when the challenge cannot be found, or
+    /// [`PorCoordinatorError::Persistence`] if persisting updates fails.
     #[cfg(test)]
     pub(crate) fn record_proof(
         &self,
@@ -889,9 +887,8 @@ impl PorCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns [`PorCoordinatorError`] when a continuation cursor is invalid,
-    /// belongs to another filter or generation, or one record cannot fit the
-    /// explicit canonical-byte budget.
+    /// Returns [`PorCoordinatorError`] when a continuation cursor is invalid, belongs to another
+    /// filter or generation, or one record cannot fit the explicit canonical-byte budget.
     pub(crate) fn query_status_page(
         &self,
         filter: &PorStatusFilter,

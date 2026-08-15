@@ -1,11 +1,10 @@
 //! Fixed Halo2/IPA backend for first-release SoraFS PoP membership proofs.
 //!
-//! The circuit proves two hidden statements at once: membership of a credential
-//! leaf in the signed active credential tree, and non-membership of that leaf's
-//! private 128-bit revocation nonce in the signed sparse revocation tree. The
-//! holder secret, credential identifier, holder commitment, nonce, and both
-//! authentication paths remain advice values and never enter the public-input
-//! or proof-envelope schemas.
+//! The circuit proves two hidden statements at once: membership of a credential leaf in the signed
+//! active credential tree, and non-membership of that leaf's private 128-bit revocation nonce in
+//! the signed sparse revocation tree. The holder secret, credential identifier, holder commitment,
+//! nonce, and both authentication paths remain advice values and never enter the public-input or
+//! proof-envelope schemas.
 use super::{
     POP_CREDENTIAL_TREE_DEPTH_V1, POP_MEMBERSHIP_PROOF_MAX_BYTES_V1,
     POP_MEMBERSHIP_PROOF_VERSION_V1, POP_REVOCATION_TREE_DEPTH_V1, PopCredentialV1,

@@ -1,10 +1,9 @@
 //! Structured adaptation for failures emitted by typed semantic analysis.
 //!
-//! Name, declaration, type, and call diagnostics are produced by the resolved
-//! HIR pass with exact `SourceId`/`TextRange` nodes. Typed analysis joins its
-//! AST nodes to the same immutable source table and records exact structured
-//! ranges, labels, and fix recipes. Whole-program state invariants use their
-//! parser-owned state/lifecycle declaration nodes. This adapter deliberately
+//! Name, declaration, type, and call diagnostics are produced by the resolved HIR pass with exact
+//! `SourceId`/`TextRange` nodes. Typed analysis joins its AST nodes to the same immutable source
+//! table and records exact structured ranges, labels, and fix recipes. Whole-program state
+//! invariants use their parser-owned state/lifecycle declaration nodes. This adapter deliberately
 //! does not scan diagnostic messages or source tokens to guess a spelling.
 #[cfg(test)]
 use crate::diagnostic::DiagnosticPhase;
@@ -146,11 +145,10 @@ fn materialize_fix(
 }
 /// Convert failures from typed/effect analysis into canonical diagnostics.
 ///
-/// Structured semantic metadata supplies the primary range, secondary labels,
-/// and any fix recipe. A function location is used only as a conservative
-/// fallback for failures that predate structured metadata. Known program-wide
-/// invariants use resolved declaration nodes; unknown invariants do not invent
-/// a zero-width or spelling-based span when no owning node exists.
+/// Structured semantic metadata supplies the primary range, secondary labels, and any fix recipe. A
+/// function location is used only as a conservative fallback for failures that predate structured
+/// metadata. Known program-wide invariants use resolved declaration nodes; unknown invariants do
+/// not invent a zero-width or spelling-based span when no owning node exists.
 pub(crate) fn from_semantic_failures(
     failures: crate::semantic::SemanticFailures,
     _source_name: Option<&str>,

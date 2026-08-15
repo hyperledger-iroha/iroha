@@ -32,13 +32,11 @@ pub const CANONICAL_QUERY_OUTPUT_CONTAINER_OVERHEAD_BYTES: u64 = 512;
 pub const CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES: u64 = 1024;
 /// Deterministic fixed allowance for reconstructing one admitted identifier.
 ///
-/// This covers the one-element sequence plan and output slot, short-value
-/// padding in the legacy archived-field adapters, allocator metadata, and the
-/// fixed Rust wrappers. Variable frame, identifier, and name buffers are
-/// charged separately from their exact lengths.
+/// This covers the one-element sequence plan and output slot, short-value padding in the legacy
+/// archived-field adapters, allocator metadata, and the fixed Rust wrappers. Variable frame,
+/// identifier, and name buffers are charged separately from their exact lengths.
 const CANONICAL_QUERY_ID_DECODE_FIXED_OVERHEAD_BYTES: u64 = 512;
-/// Resource ceilings for canonical query output produced by a server-owned
-/// ephemeral fanout lane.
+/// Resource ceilings for canonical query output produced by a server-owned ephemeral fanout lane.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct CanonicalQueryOutputLimits {
     max_items: u64,
@@ -128,10 +126,9 @@ impl CanonicalQueryOutputAccumulator {
     }
     /// Admit every row in one projected output column.
     ///
-    /// The first canonical-fanout release admits only `RoleId` and `TriggerId`
-    /// columns. Their name-backed rows and serializers are protocol-bounded
-    /// before this method performs exact sizing. Every other variant fails
-    /// closed before inspecting or serializing a candidate.
+    /// The first canonical-fanout release admits only `RoleId` and `TriggerId` columns. Their
+    /// name-backed rows and serializers are protocol-bounded before this method performs exact
+    /// sizing. Every other variant fails closed before inspecting or serializing a candidate.
     ///
     /// Empty batches pin the expected variant. Every later batch must have the
     /// exact same discriminant. Multi-row batches are split into canonical
@@ -139,9 +136,8 @@ impl CanonicalQueryOutputAccumulator {
     ///
     /// # Errors
     /// Returns [`Error::Conversion`] for a variant mismatch or codec failure,
-    /// [`Error::GasBudgetExceeded`] when one candidate exceeds its transient
-    /// frame ceiling, or [`Error::CapacityLimit`] when the retained top-K set
-    /// cannot fit its byte ceiling.
+    /// [`Error::GasBudgetExceeded`] when one candidate exceeds its transient frame ceiling, or
+    /// [`Error::CapacityLimit`] when the retained top-K set cannot fit its byte ceiling.
     pub fn push_batch(&mut self, batch: QueryOutputBatchBox) -> Result<(), Error> {
         if !matches!(
             &batch,
@@ -248,11 +244,10 @@ impl CanonicalQueryOutputAccumulator {
     }
     /// Reconstruct the retained canonical page in byte order.
     ///
-    /// Pagination is applied only after all routes or source rows have been
-    /// admitted. Each selected frame is decoded under the configured explicit
-    /// allocation ceiling and rechecked for one row and the pinned variant.
-    /// Reconstruction consumes set entries progressively; its peak is bounded
-    /// by the retained-byte envelope plus the decode/output allocation envelope.
+    /// Pagination is applied only after all routes or source rows have been admitted. Each selected
+    /// frame is decoded under the configured explicit allocation ceiling and rechecked for one row
+    /// and the pinned variant. Reconstruction consumes set entries progressively; its peak is
+    /// bounded by the retained-byte envelope plus the decode/output allocation envelope.
     /// The final per-arm output `Vec` is charged from `size_of::<Item>()` and
     /// reserved at the exact selected count only after aggregate admission, so
     /// geometric growth and old/new backing-allocation overlap are impossible.

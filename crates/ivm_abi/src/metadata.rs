@@ -2,8 +2,7 @@
 //!
 //! Each compiled program begins with a small header describing the VM version,
 //! enabled features and optional cycle limit.  This module defines a
-//! [`ProgramMetadata`] structure and helpers for encoding and decoding this
-//! header.
+//! [`ProgramMetadata`] structure and helpers for encoding and decoding this header.
 //!
 //! The metadata header encodes the VM version, execution mode flags, optional
 //! vector length and cycle limit.  It also reserves bits for hardware
@@ -51,10 +50,9 @@ pub const LITERAL_KIND_SHIFT: u32 = 56;
 pub const LITERAL_OFFSET_MASK: u64 = (1_u64 << LITERAL_KIND_SHIFT) - 1;
 /// Canonical kinds carried by ABI-v1 indexed-literal table descriptors.
 ///
-/// Each descriptor is one little-endian `u64`: the high byte is this kind and
-/// the low 56 bits are an offset relative to the `LTLB` marker. Keeping the
-/// kind in the authenticated table prevents `LDLIT` and `LDI64` from giving
-/// the same bytes two incompatible interpretations.
+/// Each descriptor is one little-endian `u64`: the high byte is this kind and the low 56 bits are
+/// an offset relative to the `LTLB` marker. Keeping the kind in the authenticated table prevents
+/// `LDLIT` and `LDI64` from giving the same bytes two incompatible interpretations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum LiteralKindV1 {
@@ -91,9 +89,8 @@ pub const CONTRACT_INTERFACE_SECTION_MAGIC: [u8; 4] = *b"CNTR";
 /// Compiler-owned local entrypoint that identifies the terminal return target
 /// in a Kotodama test-suite interface sidecar.
 ///
-/// Generic IVM 1.0 test images do not embed the sidecar. Production contract
-/// admission rejects this reserved selector; only the crate-private Kotodama
-/// test preparation path accepts it.
+/// Generic IVM 1.0 test images do not embed the sidecar. Production contract admission rejects this
+/// reserved selector; only the crate-private Kotodama test preparation path accepts it.
 pub const KOTO_TEST_RETURN_ENTRYPOINT: &str = "__koto_test_return";
 /// Stable nominal Norito schema name for the first-release contract interface.
 pub const CONTRACT_INTERFACE_SCHEMA_NAME_V1: &str = "iroha.kotodama.EmbeddedContractInterfaceV1";
@@ -157,11 +154,10 @@ pub struct EmbeddedStateFieldDescriptor {
 }
 /// Compact durable-state type schema embedded in contract artifacts.
 ///
-/// Equality and destruction walk the recursive type tree iteratively so the
-/// complete V1 nesting budget remains safe on constrained runtime stacks.
-/// `Clone` and `Debug` remain recursively derived for tooling; production
-/// boundary code must borrow rather than clone or format an untrusted
-/// maximum-depth tree.
+/// Equality and destruction walk the recursive type tree iteratively so the complete V1 nesting
+/// budget remains safe on constrained runtime stacks. `Clone` and `Debug` remain recursively
+/// derived for tooling; production boundary code must borrow rather than clone or format an
+/// untrusted maximum-depth tree.
 #[derive(Clone, Debug)]
 pub enum EmbeddedStateType {
     Int,

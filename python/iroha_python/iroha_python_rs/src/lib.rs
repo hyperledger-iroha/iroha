@@ -11262,12 +11262,11 @@ impl TransactionBuilder {
     }
     /// Validate and sign one canonical, intent-bound ZK-X509 identity presentation.
     ///
-    /// The profile-owned worker returns only a typed public statement and its
-    /// fixed-capacity `X5S1` proof. Native code authenticates their exact
-    /// transaction/genesis binding before the transaction is signed. Signing
-    /// remains unavailable until the production compiled profile passes every
-    /// release-readiness gate; unsigned release-candidate material is never
-    /// accepted here.
+    /// The profile-owned worker returns only a typed public statement and its fixed-capacity `X5S1`
+    /// proof. Native code authenticates their exact transaction/genesis binding before the
+    /// transaction is signed. Signing remains unavailable until the production compiled profile
+    /// passes every release-readiness gate; unsigned release-candidate material is never accepted
+    /// here.
     fn sign_privacy_zk_x509_identity_presentation_action_v1(
         &mut self,
         py: Python<'_>,

@@ -734,10 +734,9 @@ impl Drop for PopPrivateWitnessEnvelopeV1 {
         self.zeroize();
     }
 }
-/// RAII owner for a decoded membership witness used during local proof
-/// generation. `PopMembershipWitnessV1` is defined in the manifest crate and
-/// cannot implement `Drop` here, so this guard ensures every return path
-/// scrubs the holder secret and Merkle witness material.
+/// RAII owner for a decoded membership witness used during local proof generation.
+/// `PopMembershipWitnessV1` is defined in the manifest crate and cannot implement `Drop` here, so
+/// this guard ensures every return path scrubs the holder secret and Merkle witness material.
 struct PrivateMembershipWitnessGuard {
     witness: PopMembershipWitnessV1,
 }
@@ -1172,12 +1171,11 @@ pub struct PopAuthenticatedPrincipalV1 {
 }
 /// Runtime authentication adapter used by the PoP API facade.
 ///
-/// The opaque credential can be a Torii bearer token, mutual-TLS exporter,
-/// WebAuthn assertion, or a deployment-specific composite. Implementations
-/// must bind authorization to `action` and `request_binding`, and may report
-/// [`PopRequestAuthorityV1::CallerSignedTransaction`] only after verifying a
-/// caller signature over both. The service never stores the credential or
-/// provider error details.
+/// The opaque credential can be a Torii bearer token, mutual-TLS exporter, WebAuthn assertion, or a
+/// deployment-specific composite. Implementations must bind authorization to `action` and
+/// `request_binding`, and may report [`PopRequestAuthorityV1::CallerSignedTransaction`] only after
+/// verifying a caller signature over both. The service never stores the credential or provider
+/// error details.
 pub trait PopCredentialApiAuthenticator: Send + Sync + fmt::Debug {
     /// Authenticate and authorize one request.
     fn authenticate(
@@ -1305,9 +1303,8 @@ impl PopCredentialApiV1 {
     /// Authenticate a request-id-only trigger, require the runtime-resolved
     /// private draft to match it, and invoke external-signer-backed issuance.
     ///
-    /// This is the HTTP-safe issuance pattern: the private draft is obtained
-    /// from a runtime-only provider and never accepted from or returned to the
-    /// client.
+    /// This is the HTTP-safe issuance pattern: the private draft is obtained from a runtime-only
+    /// provider and never accepted from or returned to the client.
     pub fn issue_resolved<R: TryCryptoRng>(
         &self,
         service: &mut PopCredentialService,
@@ -1389,8 +1386,7 @@ impl PopCredentialApiV1 {
         )?;
         service.reconcile_next(reader, now_epoch)
     }
-    /// Authenticate and return a bounded clone of the current finalized public
-    /// registry projection.
+    /// Authenticate and return a bounded clone of the current finalized public registry projection.
     pub fn finalized_projection(
         &self,
         service: &mut PopCredentialService,

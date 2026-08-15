@@ -166,10 +166,9 @@ pub fn write_bare_norito_base64_json<T: NoritoSerialize>(value: &T, output: &mut
 }
 /// Stream a canonical Norito frame as one padded standard-base64 JSON string.
 ///
-/// The encoder retains only a three-byte base64 carry. Canonical framing is
-/// count-first and rejects length, checksum, or layout-flag drift before this
-/// function reports success. An error may leave a partial string in `output`;
-/// callers must discard the enclosing response.
+/// The encoder retains only a three-byte base64 carry. Canonical framing is count-first and rejects
+/// length, checksum, or layout-flag drift before this function reports success. An error may leave
+/// a partial string in `output`; callers must discard the enclosing response.
 pub fn write_canonical_base64_json_to<T: NoritoSerialize>(
     value: &T,
     output: &mut dyn JsonWriteSink,

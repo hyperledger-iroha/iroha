@@ -1,7 +1,6 @@
-//! SNNet-15H1 — pen-test and bug bounty rollout helper.
-//! Generates a repeatable packet (overview, triage checklist, remediation
-//! template, JSON summary) so SRE/Security can contract testers and prove
-//! scope/SLA compliance for the gateway CDN.
+//! SNNet-15H1 — pen-test and bug bounty rollout helper. Generates a repeatable packet (overview,
+//! triage checklist, remediation template, JSON summary) so SRE/Security can contract testers and
+//! prove scope/SLA compliance for the gateway CDN.
 use eyre::{Result, WrapErr};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},

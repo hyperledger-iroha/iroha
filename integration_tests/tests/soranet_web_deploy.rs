@@ -1,8 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Build a static HTML manifest and derive public DNS settings (including
-//! delegation placeholders) for a regular internet zone pointing at the
-//! `SoraDNS` gateway. Provider storage ingest is exercised by the internal
-//! finalized-ledger outbox suites, not by a public upload route.
+//! Build a static HTML manifest and derive public DNS settings (including delegation placeholders)
+//! for a regular internet zone pointing at the `SoraDNS` gateway. Provider storage ingest is
+//! exercised by the internal finalized-ledger outbox suites, not by a public upload route.
 use eyre::{Result, eyre};
 use iroha_primitives::soradns::{GatewayHostBindings, derive_gateway_hosts};
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};

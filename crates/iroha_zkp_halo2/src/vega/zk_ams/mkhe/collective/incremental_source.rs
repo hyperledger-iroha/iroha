@@ -1,18 +1,16 @@
 //! Source-authenticated, limb-streamed collective encryption.
 //!
-//! A staged CPK successor publishes every release limb of common `a` and
-//! aggregate `b` under distinct content-addressed kinds, then mints the sole
-//! move-only key authority. Fresh encryption authenticates all 76 key-limb
-//! objects before entropy, rereads one exact limb into a two-owner arithmetic
-//! workspace, and publishes 38 independently addressed `c0` limbs followed by
-//! 38 independently addressed `c1` limbs. No native `P`-sized key component or
-//! `2P`-sized ciphertext crosses this public boundary.
+//! A staged CPK successor publishes every release limb of common `a` and aggregate `b` under
+//! distinct content-addressed kinds, then mints the sole move-only key authority. Fresh encryption
+//! authenticates all 76 key-limb objects before entropy, rereads one exact limb into a two-owner
+//! arithmetic workspace, and publishes 38 independently addressed `c0` limbs followed by 38
+//! independently addressed `c1` limbs. No native `P`-sized key component or `2P`-sized ciphertext
+//! crosses this public boundary.
 //!
-//! Publication receipts are retained in the authority/manifest and every
-//! second source pass must finish under the exact provider snapshot observed by
-//! the complete prepass before its corresponding output stage can be sealed.
-//! A late failure can leave only unauthorizing CAS orphans: neither a key
-//! authority nor a ciphertext manifest is issued.
+//! Publication receipts are retained in the authority/manifest and every second source pass must
+//! finish under the exact provider snapshot observed by the complete prepass before its
+//! corresponding output stage can be sealed. A late failure can leave only unauthorizing CAS
+//! orphans: neither a key authority nor a ciphertext manifest is issued.
 #[cfg(test)]
 use super::super::direct_object_transport::{
     ZkAmsMkheDirectObjectPublishedBindingV1, ZkAmsMkheDirectObjectSealTokenV1,
@@ -64,15 +62,13 @@ impl CollectiveRnsComponentV1 {
         }
     }
 }
-/// Incremental hash state for exactly two flat, component-major RNS
-/// polynomials. Limb and modulus ordinals are validation inputs only: the
-/// legacy framing commits one big-endian flat coefficient count followed by
-/// every big-endian residue of component zero, then repeats that framing for
+/// Incremental hash state for exactly two flat, component-major RNS polynomials. Limb and modulus
+/// ordinals are validation inputs only: the legacy framing commits one big-endian flat coefficient
+/// count followed by every big-endian residue of component zero, then repeats that framing for
 /// component one.
 ///
-/// The state deliberately implements neither `Clone` nor `Debug`. Its sponge
-/// is allocated before the first component residue is absorbed and finalized
-/// through a mutable borrow.
+/// The state deliberately implements neither `Clone` nor `Debug`. Its sponge is allocated before
+/// the first component residue is absorbed and finalized through a mutable borrow.
 struct ComponentMajorRnsDigestStateV1 {
     hash: Box<Keccak256>,
     ring_degree: usize,
@@ -250,10 +246,9 @@ impl IncrementalCollectiveKeyBindingV1 {
         }
     }
 }
-/// Private proof that the full legacy key was validated exactly once before
-/// any plaintext scratch allocation or randomness. It is a transitional
-/// prerequisite; the future external source must mint an equivalent binding
-/// while streaming the two component-major polynomials.
+/// Private proof that the full legacy key was validated exactly once before any plaintext scratch
+/// allocation or randomness. It is a transitional prerequisite; the future external source must
+/// mint an equivalent binding while streaming the two component-major polynomials.
 #[derive(Clone, Copy)]
 struct ValidatedIncrementalCollectiveKeyV1<'key> {
     key: &'key ZkAmsMkheCollectivePublicKeyV1,
@@ -339,9 +334,8 @@ impl ComponentMajorCollectiveCiphertextDigestV1 {
             .map_err(|_| ZkAmsMkheErrorV1::InvalidCiphertext)
     }
 }
-/// Heap-stable, optimizer-resistant owner for one reusable release-RNS limb.
-/// It is allocated while zero and deliberately implements neither `Clone` nor
-/// `Debug`.
+/// Heap-stable, optimizer-resistant owner for one reusable release-RNS limb. It is allocated while
+/// zero and deliberately implements neither `Clone` nor `Debug`.
 struct ZeroizingCollectiveEncryptionLimbV1(Box<[u64]>);
 #[cfg(test)]
 std::thread_local! {
@@ -375,9 +369,8 @@ impl Drop for ZeroizingCollectiveEncryptionLimbV1 {
         }
     }
 }
-/// Heap-stable, zeroizing owner for one of the three signed RLWE witnesses.
-/// It is allocated before entropy is requested and filled in place, so moves
-/// after sampling move only its box pointer.
+/// Heap-stable, zeroizing owner for one of the three signed RLWE witnesses. It is allocated before
+/// entropy is requested and filled in place, so moves after sampling move only its box pointer.
 struct ZeroizingCollectiveEncryptionWitnessV1(Box<[i64]>);
 #[cfg(test)]
 std::thread_local! {
@@ -414,9 +407,8 @@ impl Drop for ZeroizingCollectiveEncryptionWitnessV1 {
         }
     }
 }
-/// Exactly two reusable one-limb owners. No third arithmetic/result limb is
-/// allocated: the left owner becomes the result, while the right owner is
-/// erased and reused after the NTT product.
+/// Exactly two reusable one-limb owners. No third arithmetic/result limb is allocated: the left
+/// owner becomes the result, while the right owner is erased and reused after the NTT product.
 struct ZeroizingCollectiveEncryptionWorkspaceV1 {
     left: ZeroizingCollectiveEncryptionLimbV1,
     right: ZeroizingCollectiveEncryptionLimbV1,
@@ -448,9 +440,8 @@ impl ZeroizingCollectiveEncryptionWorkspaceV1 {
         })
     }
 }
-/// Typed immutable borrow of one completed public ciphertext limb. The
-/// component/limb/modulus association cannot be changed by the writer that
-/// receives this borrow.
+/// Typed immutable borrow of one completed public ciphertext limb. The component/limb/modulus
+/// association cannot be changed by the writer that receives this borrow.
 struct FilledIncrementalCollectiveCiphertextLimbV1<'limb> {
     component: CollectiveRnsComponentV1,
     limb: usize,
@@ -477,11 +468,10 @@ impl FilledIncrementalCollectiveCiphertextLimbV1<'_> {
 }
 /// Private, non-authorizing one-limb encryption kernel.
 ///
-/// The only retained secret state is the opening nonce and the three native
-/// signed witnesses `(r,e0,e1)`. Canonical coefficient bytes are borrowed from
-/// one artifact that was validated before randomness, and the two reusable
-/// limb owners are the complete ring-arithmetic workspace. Output order is
-/// fixed to all 38 `c0` limbs followed by all 38 `c1` limbs so the incremental
+/// The only retained secret state is the opening nonce and the three native signed witnesses
+/// `(r,e0,e1)`. Canonical coefficient bytes are borrowed from one artifact that was validated
+/// before randomness, and the two reusable limb owners are the complete ring-arithmetic workspace.
+/// Output order is fixed to all 38 `c0` limbs followed by all 38 `c1` limbs so the incremental
 /// digest is byte-identical to the native ciphertext digest.
 ///
 /// A failed or unwinding fill poisons the kernel. Successful calls return only
@@ -2695,9 +2685,8 @@ impl StreamingCollectiveAutomorphismDigestV1 {
         Ok(digest)
     }
 }
-/// Preallocated, poison-on-failure output publication state for one streamed
-/// automorphism. No output pointer can be supplied independently of its
-/// publication/readback receipt.
+/// Preallocated, poison-on-failure output publication state for one streamed automorphism. No
+/// output pointer can be supplied independently of its publication/readback receipt.
 pub(crate) struct ZkAmsMkheStreamingCollectiveAutomorphismOutputV1 {
     expected_input_manifest_digest: [u8; 32],
     eval_binding_digest: [u8; 32],

@@ -1,11 +1,10 @@
 //! Compiler for the KOTODAMA language.
 //!
-//! This module implements a practical, growing compiler from Kotodama source
-//! into IVM bytecode (`.to`). It performs parsing, a lightweight semantic pass,
-//! IR lowering, simple register allocation, and final code generation with an
-//! IVM metadata header. ABI v1, vector metadata, and bounded-iteration policy
-//! are compiler-owned; callers may select only deployment policy such as ZK
-//! mode, cycle ceilings, safety profile, and production/test mode.
+//! This module implements a practical, growing compiler from Kotodama source into IVM bytecode
+//! (`.to`). It performs parsing, a lightweight semantic pass, IR lowering, simple register
+//! allocation, and final code generation with an IVM metadata header. ABI v1, vector metadata, and
+//! bounded-iteration policy are compiler-owned; callers may select only deployment policy such as
+//! ZK mode, cycle ceilings, safety profile, and production/test mode.
 //!
 //! Kotodama targets the IVM bytecode format exclusively. All helpers in this
 //! module emit the canonical wide encoding introduced for the first release; no
@@ -592,11 +591,10 @@ fn signed_branch_plan(op: BinaryOp, left: u8, right: u8) -> Option<(u8, u8, u8)>
 }
 /// Lay out lowering blocks so every conditional has one adjacent successor.
 ///
-/// The iterative scheduler follows one unplaced successor when possible. If a
-/// merge-heavy or backward-edge graph has already placed both successors, it
-/// splits one edge through a unique adjacent jump block. The remaining edge
-/// uses one relaxed transfer, so code generation never grows a conditional
-/// into a three-word branch-plus-two-jumps sequence.
+/// The iterative scheduler follows one unplaced successor when possible. If a merge-heavy or
+/// backward-edge graph has already placed both successors, it splits one edge through a unique
+/// adjacent jump block. The remaining edge uses one relaxed transfer, so code generation never
+/// grows a conditional into a three-word branch-plus-two-jumps sequence.
 fn layout_compact_branch_fallthrough(function: &mut ir::Function) -> Result<(), String> {
     let mut label_to_index = HashMap::with_capacity(function.blocks.len());
     for (index, block) in function.blocks.iter().enumerate() {
@@ -1672,10 +1670,9 @@ pub struct CompilerOptions {
     pub chain_discriminant: u16,
     /// Selects production artifact compilation or explicit local-test compilation.
     ///
-    /// Production mode rejects test declarations and test-capable typed HIR;
-    /// it never silently strips them from a deployable artifact. Test mode
-    /// emits an ABI-authenticated generic IVM 1.0 harness without a deployable
-    /// CNTR section.
+    /// Production mode rejects test declarations and test-capable typed HIR; it never silently
+    /// strips them from a deployable artifact. Test mode emits an ABI-authenticated generic IVM 1.0
+    /// harness without a deployable CNTR section.
     pub mode: CompilerMode,
 }
 impl Default for CompilerOptions {

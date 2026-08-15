@@ -3,8 +3,7 @@
 //! This private module freezes only topology, statement roles, transcript
 //! ordering, opaque streaming-owner contracts, and conditional accounting.  It
 //! does not construct or verify a proof.  Its production seals are uninhabited,
-//! and every proof, binding, receipt, authority, RSS, and release gate remains
-//! false.
+//! and every proof, binding, receipt, authority, RSS, and release gate remains false.
 
 #![allow(dead_code, reason = "production entry seals are uninhabited")]
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};

@@ -3,9 +3,8 @@
 //! This is a concrete native port of the BP+/GSP conjunction used by Monero
 //! FCMP++.  The transcript and proof order intentionally match the pinned
 //! upstream construction.  The caller-supplied context hash must already bind
-//! the complete transaction statement (including the typed root, namespace,
-//! pseudo-outs, outputs, and network/domain); changing it invalidates the
-//! proof and prevents cross-statement replay.
+//! the complete transaction statement (including the typed root, namespace, pseudo-outs, outputs,
+//! and network/domain); changing it invalidates the proof and prevents cross-statement replay.
 use super::{
     FCMP_POINT_BYTES_V1, FcmpNativeErrorV1,
     field::{decode_edwards_point, validate_edwards_scalar},
@@ -464,9 +463,8 @@ fn validate_sal_witness_relation_v1(
 }
 /// Produce the canonical FCMP++ SAL proof.
 ///
-/// `context_hash` must be the protocol-domain-separated digest of the complete
-/// authoritative statement. The function rejects a witness that does not open
-/// O~, R, and L exactly.
+/// `context_hash` must be the protocol-domain-separated digest of the complete authoritative
+/// statement. The function rejects a witness that does not open O~, R, and L exactly.
 pub fn prove_fcmp_sal_v1(
     rng: &mut (impl RngCore + CryptoRng),
     context_hash: [u8; 32],
@@ -550,10 +548,9 @@ fn prove_fcmp_sal_once_v1(
 }
 /// Verify all four FCMP++ SAL equations directly.
 ///
-/// Success means the proof authorizes the hidden output key and binds the
-/// key image to the same secret used in O~, while proving the required
-/// bilinear conjunction. Membership and tuple re-randomization remain the
-/// responsibility of the FCMP circuit verifier.
+/// Success means the proof authorizes the hidden output key and binds the key image to the same
+/// secret used in O~, while proving the required bilinear conjunction. Membership and tuple
+/// re-randomization remain the responsibility of the FCMP circuit verifier.
 pub fn verify_fcmp_sal_v1(
     context_hash: [u8; 32],
     public: &FcmpProofInputPublicV1,

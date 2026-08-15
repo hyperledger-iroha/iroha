@@ -7,11 +7,10 @@
 //! collection decoding cannot enforce the different polynomial, digit, proof,
 //! and sample ceilings early enough for release-sized (`N = 131_072`) inputs.
 //!
-//! This module implements the canonical representation/predecode obligation.
-//! Decryption shares deliberately do not reuse its combined-contribution
-//! frame: their release transport is the authenticated split manifest plus
-//! separately addressed polynomial and native-proof objects implemented by
-//! `decryption`.
+//! This module implements the canonical representation/predecode obligation. Decryption shares
+//! deliberately do not reuse its combined-contribution frame: their release transport is the
+//! authenticated split manifest plus separately addressed polynomial and native-proof objects
+//! implemented by `decryption`.
 use super::{
     BgvProfile, MKHE_VERSION_V1, Scalar, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     checked_rns_polynomial_bytes,
@@ -41,10 +40,9 @@ const CONTRIBUTION_HEADER_WIRE_BYTES: usize =
 const PROOF_ENVELOPE_HEADER_WIRE_BYTES: usize = COMMON_BINDING_WIRE_BYTES + 1 + 32 + 4;
 /// Absolute allocation ceiling for one opaque canonical proof payload.
 ///
-/// The enclosing CKS/RKG record applies its stricter governed round ceiling as
-/// well. Proof-system decoders must independently enforce
-/// their own exact canonical layout after this transport layer has preflighted
-/// the byte string.
+/// The enclosing CKS/RKG record applies its stricter governed round ceiling as well. Proof-system
+/// decoders must independently enforce their own exact canonical layout after this transport layer
+/// has preflighted the byte string.
 pub const ZK_AMS_MKHE_MAX_PROOF_BYTES_V1: usize = 32 * 1024 * 1024;
 #[derive(Clone, Copy)]
 struct WireDimensions<'a> {
@@ -459,10 +457,9 @@ impl TryFrom<u8> for ZkAmsMkheProofKindV1 {
 }
 /// Canonical kind-tagged envelope for one proof system's exact byte encoding.
 ///
-/// The transport does not invent a common curve-point/scalar shape: the active
-/// RKG and CKS proof systems have different native transcripts and enforce
-/// their canonical encodings in their own decoders. Decryption proofs use
-/// their standalone native `ZADP` encoding instead.
+/// The transport does not invent a common curve-point/scalar shape: the active RKG and CKS proof
+/// systems have different native transcripts and enforce their canonical encodings in their own
+/// decoders. Decryption proofs use their standalone native `ZADP` encoding instead.
 #[cfg_attr(test, derive(Clone))]
 #[derive(PartialEq, Eq)]
 pub struct ZkAmsMkheProofEnvelopeWireV1 {

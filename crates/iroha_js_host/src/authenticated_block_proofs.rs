@@ -1,10 +1,9 @@
 //! Authenticated native verification for Torii block-entry proofs.
 //!
-//! The JavaScript SDK's pure Merkle helper deliberately cannot establish a
-//! trust anchor. This module accepts the exact executed block wire and Torii's
-//! canonical finality/proof archives, verifies Sumeragi-v2 finality under an
-//! application-pinned network context, and only then asks the data model to
-//! derive its non-serializable `TrustedBlockProofAnchor` capability.
+//! The JavaScript SDK's pure Merkle helper deliberately cannot establish a trust anchor. This
+//! module accepts the exact executed block wire and Torii's canonical finality/proof archives,
+//! verifies Sumeragi-v2 finality under an application-pinned network context, and only then asks
+//! the data model to derive its non-serializable `TrustedBlockProofAnchor` capability.
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
@@ -31,10 +30,9 @@ const AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1: usize = 9 * 1024 *
 const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Bounded inputs for one authenticated block-proof verification.
 ///
-/// `previous_finality_proof_norito` is the optional last proof in the
-/// application's already-pinned verifier state. When present, it must match
-/// `trusted_context_id` and the target proof must be its immediate successor.
-/// When absent, the target proof itself must match `trusted_context_id`.
+/// `previous_finality_proof_norito` is the optional last proof in the application's already-pinned
+/// verifier state. When present, it must match `trusted_context_id` and the target proof must be
+/// its immediate successor. When absent, the target proof itself must match `trusted_context_id`.
 #[napi(object, use_nullable = true)]
 pub struct JsAuthenticatedBlockProofInputV1 {
     /// Exact bridge ABI version. The first release requires `1`.

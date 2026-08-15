@@ -1,10 +1,9 @@
 //! Typed authority for deterministic direct-ceremony Galois target `a`.
 //!
-//! Target `a` is ceremony-global for one schedule entry and gadget digit, so
-//! its derivation deliberately has no party axis. The exact ordered CPK
-//! binding set is the sole production authority. This precursor mints only a
-//! typed selector; it does not mint a proof, receipt, capability, admission,
-//! or release signal.
+//! Target `a` is ceremony-global for one schedule entry and gadget digit, so its derivation
+//! deliberately has no party axis. The exact ordered CPK binding set is the sole production
+//! authority. This precursor mints only a typed selector; it does not mint a proof, receipt,
+//! capability, admission, or release signal.
 
 use super::super::direct_collective_eval_ceremony::{
     ZkAmsMkheDirectCeremonyContextV1, ZkAmsMkheDirectEvaluatedKeyTargetV1,
@@ -346,9 +345,8 @@ impl VerifiedDirectGaloisTargetAStatementV1 {
 
 /// Single-use replay of deterministic Galois target `a`.
 ///
-/// The expected statement stays inside this transaction. Callers may borrow
-/// each complete limb for relation reconstruction, but cannot extract a
-/// digest or turn a partial replay into authority.
+/// The expected statement stays inside this transaction. Callers may borrow each complete limb for
+/// relation reconstruction, but cannot extract a digest or turn a partial replay into authority.
 pub(super) struct DirectGaloisTargetAReplayV1 {
     context: ZkAmsMkheDirectCeremonyContextV1,
     expected_statement_digest: [u8; 32],
@@ -476,9 +474,8 @@ fn derive_verified_direct_galois_target_a_statement_v1(
     stream.finish()
 }
 
-/// Consume one private target-`a` authority into the only valid Galois
-/// selector shape. Neither the authority nor its raw digest crosses this
-/// module boundary.
+/// Consume one private target-`a` authority into the only valid Galois selector shape. Neither the
+/// authority nor its raw digest crosses this module boundary.
 fn new_galois_selector_v1(
     context: ZkAmsMkheDirectCeremonyContextV1,
     contribution_statement_digest: [u8; 32],

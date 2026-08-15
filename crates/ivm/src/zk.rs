@@ -1,18 +1,14 @@
-//! Zero-knowledge execution helpers: tracking ASSERT operations and padding to
-//! fixed cycles.
+//! Zero-knowledge execution helpers: tracking ASSERT operations and padding to fixed cycles.
 //!
-//! This module provides a minimal constraint logger used by the VM when
-//! zero-knowledge padding is enabled. `ASSERT` instructions register constraints
-//! which can be inspected by a prover. The VM also pads execution to a fixed
-//! cycle length as required by the specification.
+//! This module provides a minimal constraint logger used by the VM when zero-knowledge padding is
+//! enabled. `ASSERT` instructions register constraints which can be inspected by a prover. The VM
+//! also pads execution to a fixed cycle length as required by the specification.
 //!
 //! Register and memory Merkle proofs are captured incrementally so that state
 //! hashes do not need to be recomputed after every operation.  The VM records
-//! authentication paths for each access together with the resulting Merkle
-//! roots, allowing external circuits to verify the trace without storing the
-//! full register file.
-/// Default maximum trace length used for padding.
-/// Default maximum trace length used for padding.
+//! authentication paths for each access together with the resulting Merkle roots, allowing external
+//! circuits to verify the trace without storing the full register file.
+/// Default maximum trace length used for padding. Default maximum trace length used for padding.
 ///
 /// The original implementation limited zero-knowledge execution to 2^16
 /// cycles. As the proving backend and hardware improved we can handle larger
@@ -268,9 +264,8 @@ pub struct RegisterState {
     pub gpr: [u64; 256],
     pub tags: [bool; 256],
 }
-/// Collector for the register trace. When zero-knowledge padding is enabled the
-/// prover needs the complete sequence of register states to construct the
-/// witness.
+/// Collector for the register trace. When zero-knowledge padding is enabled the prover needs the
+/// complete sequence of register states to construct the witness.
 #[derive(Default, Clone)]
 pub struct TraceLog {
     pub states: Vec<RegisterState>,
@@ -373,9 +368,8 @@ impl StepLog {
 }
 /// Verify a trace against recorded constraints.
 ///
-/// This helper is a lightweight stand‑in for a real proof verifier. It checks
-/// that each `Constraint` logged during execution holds for the corresponding
-/// cycle in `TraceLog`.
+/// This helper is a lightweight stand‑in for a real proof verifier. It checks that each
+/// `Constraint` logged during execution holds for the corresponding cycle in `TraceLog`.
 pub fn verify_trace(
     trace: &[RegisterState],
     constraints: &[Constraint],

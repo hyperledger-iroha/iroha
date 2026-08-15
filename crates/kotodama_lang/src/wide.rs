@@ -1,14 +1,12 @@
 //! Kotodama helpers for emitting the canonical IVM wide-opcode encodings.
 //!
-//! These routines provide strongly typed builders for the 8-bit opcode layout
-//! and are used throughout the compiler to assemble final bytecode. All code
-//! generation now flows through these helpers; alternate instruction formats no
-//! longer participate in the pipeline.
+//! These routines provide strongly typed builders for the 8-bit opcode layout and are used
+//! throughout the compiler to assemble final bytecode. All code generation now flows through these
+//! helpers; alternate instruction formats no longer participate in the pipeline.
 //!
-//! 128-bit loads/stores dedicate the third operand slot to the high
-//! destination/source register. They therefore do not offer an inline
-//! displacement; callers must pre-adjust the base register (e.g., chunked frame
-//! updates via [`encode_addi`]) before issuing the wide memory operation.
+//! 128-bit loads/stores dedicate the third operand slot to the high destination/source register.
+//! They therefore do not offer an inline displacement; callers must pre-adjust the base register
+//! (e.g., chunked frame updates via [`encode_addi`]) before issuing the wide memory operation.
 use crate::{encoding::wide, instruction};
 /// Errors produced when constructing wide-opcode encodings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

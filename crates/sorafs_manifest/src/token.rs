@@ -33,8 +33,7 @@ impl StreamTokenBodyV1 {
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         norito::encode_canonical(self)
     }
-    /// Build the exact domain-separated payload that an external Ed25519
-    /// signer must sign.
+    /// Build the exact domain-separated payload that an external Ed25519 signer must sign.
     pub fn signing_payload_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         let body = self.to_canonical_bytes()?;
         let mut message = Vec::with_capacity(STREAM_TOKEN_SIGNATURE_DOMAIN_V1.len() + body.len());

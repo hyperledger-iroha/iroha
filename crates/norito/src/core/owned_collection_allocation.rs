@@ -24,10 +24,9 @@ impl DecodeAllocationUsage {
 }
 /// Run a synchronous decode scope and return its exact cumulative charges.
 ///
-/// Nested decode limits still compose normally: this scope records its own
-/// counters while every already-active outer scope observes the same charges.
-/// The guard is dropped before this function returns, including during unwind.
-/// Lazy work returned by `decode` is outside the measured scope.
+/// Nested decode limits still compose normally: this scope records its own counters while every
+/// already-active outer scope observes the same charges. The guard is dropped before this function
+/// returns, including during unwind. Lazy work returned by `decode` is outside the measured scope.
 #[doc(hidden)]
 pub fn with_decode_limits_measured<T>(
     limits: DecodeLimits,
@@ -130,9 +129,8 @@ pub fn reserve_decode_arc_allocation<T>() -> Result<(), Error> {
 /// `std::collections::BTreeMap` uses a degree-six B-tree in the pinned Rust
 /// toolchain: eleven key/value slots and twelve child edges per node.
 ///
-/// These constants describe allocator-visible node storage, not the Norito
-/// wire layout. Keep them in sync when the repository's pinned toolchain
-/// changes its B-tree node geometry.
+/// These constants describe allocator-visible node storage, not the Norito wire layout. Keep them
+/// in sync when the repository's pinned toolchain changes its B-tree node geometry.
 const STD_BTREE_NODE_CAPACITY: usize = 11;
 const STD_BTREE_NODE_MIN_ENTRIES: usize = 5;
 const STD_BTREE_INTERNAL_EDGE_CAPACITY: usize = 12;
@@ -210,10 +208,9 @@ fn btree_maps_node_count_upper_bound(maps: usize, entries: usize) -> Result<usiz
 }
 /// Bytes reserved by all `BTreeMap<K, V>` nodes created for `entries`.
 ///
-/// An internal node is the largest standard-library B-tree node: it owns the
-/// leaf header, eleven key/value slots, and twelve child pointers. Charging
-/// that layout for the maximum live node count also covers leaf-only trees and
-/// insertion splits.
+/// An internal node is the largest standard-library B-tree node: it owns the leaf header, eleven
+/// key/value slots, and twelve child pointers. Charging that layout for the maximum live node count
+/// also covers leaf-only trees and insertion splits.
 #[doc(hidden)]
 pub fn owned_btree_allocation_bytes<K, V>(entries: usize) -> Result<usize, Error> {
     let node_bytes = btree_node_allocation_bytes::<K, V>()?;
@@ -297,11 +294,10 @@ fn hash_table_bucket_count<T>(entries: usize) -> Result<usize, Error> {
 }
 /// Bytes requested by the standard hash table for `entries` values of `T`.
 ///
-/// This mirrors the repository's pinned std/hashbrown `capacity_to_buckets`
-/// and `TableLayout::calculate_layout_for` implementations: their small-table
-/// policy, 7/8 load factor, bucket/control alignment, one control byte per
-/// bucket, and one trailing target-specific control group. It measures the
-/// allocator request rather than an allocator-specific usable-size class.
+/// This mirrors the repository's pinned std/hashbrown `capacity_to_buckets` and
+/// `TableLayout::calculate_layout_for` implementations: their small-table policy, 7/8 load factor,
+/// bucket/control alignment, one control byte per bucket, and one trailing target-specific control
+/// group. It measures the allocator request rather than an allocator-specific usable-size class.
 #[doc(hidden)]
 pub fn owned_hash_table_allocation_bytes<T>(entries: usize) -> Result<usize, Error> {
     if entries == 0 {

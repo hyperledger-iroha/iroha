@@ -801,7 +801,7 @@
     }
 
     #[test]
-    fn dormant_fresh_owner_cache_is_derived_bounded_and_purged_by_view() {
+    fn dormant_fresh_owner_cache_is_derived_bounded_and_purged_by_round_tag() {
         let start = Instant::now();
         let owner_tag = tag(0);
         let queue = RuntimeQueueConfig::new(8, 2, 2);
@@ -833,19 +833,26 @@
             Err(EnqueueError::Full)
         );
 
-        let next_tag = tag(1);
+        let next_tag = EventTag::new(
+            owner_tag.height(),
+            owner_tag.view(),
+            Generation::new(owner_tag.generation().get() + 1),
+        );
         runtime
             .observe_effects_with_test_ownership(start, &[FakeEffect::enter_view(next_tag)])
             .expect("test EnterView retains positional producer ownership");
-        assert!(runtime.dormant_fresh_lifecycle_owners.is_empty());
+        assert!(
+            runtime.dormant_fresh_lifecycle_owners.is_empty(),
+            "a same-view generation upgrade must purge stale clock owners"
+        );
         let successor = runtime
             .mint_fresh_lifecycle_owner(
                 next_tag,
                 CommandClass::Progress,
                 RuntimeFreshRootKind::HistoricalLockedRetransmit,
-                b"successor-view exact request",
-            )
-            .expect("view reclamation reopens the same derived cache geometry");
+            b"successor-generation exact request",
+        )
+            .expect("round-tag reclamation reopens the same derived cache geometry");
         assert!(
             successor.lifecycle_ordinal() > last_ordinal.expect("cache was filled"),
             "cache reclamation cannot reuse an old admission ordinal"

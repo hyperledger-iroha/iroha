@@ -39,9 +39,8 @@ impl TransactionBuilder {
     }
     /// Reconstruct an explicit genesis-only builder from one exact unsigned payload.
     ///
-    /// This entry point is intentionally separate from [`Self::from_payload`]
-    /// so ordinary quote, external-signing, and relay workflows cannot accept
-    /// the genesis marker.
+    /// This entry point is intentionally separate from [`Self::from_payload`] so ordinary quote,
+    /// external-signing, and relay workflows cannot accept the genesis marker.
     ///
     /// # Errors
     ///
@@ -101,9 +100,8 @@ impl TransactionBuilder {
     ///
     /// # Errors
     ///
-    /// Returns a Norito error when `bytes` is malformed, non-canonical for the
-    /// default V1 layout, contains trailing bytes, or carries the genesis-only
-    /// transaction domain.
+    /// Returns a Norito error when `bytes` is malformed, non-canonical for the default V1 layout,
+    /// contains trailing bytes, or carries the genesis-only transaction domain.
     pub fn decode_payload(bytes: &[u8]) -> Result<Self, norito::core::Error> {
         Self::decode_payload_for_construction(bytes, TransactionConstruction::Ordinary)
     }
@@ -111,9 +109,8 @@ impl TransactionBuilder {
     ///
     /// # Errors
     ///
-    /// Returns a Norito error when `bytes` is malformed, non-canonical for the
-    /// default V1 layout, contains trailing bytes, or does not carry the
-    /// genesis transaction domain.
+    /// Returns a Norito error when `bytes` is malformed, non-canonical for the default V1 layout,
+    /// contains trailing bytes, or does not carry the genesis transaction domain.
     pub fn decode_genesis_payload(bytes: &[u8]) -> Result<Self, norito::core::Error> {
         Self::decode_payload_for_construction(bytes, TransactionConstruction::Genesis)
     }

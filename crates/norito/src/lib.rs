@@ -4532,7 +4532,7 @@ pub mod json {
                     Error::ExpectedObjectStart { byte, line, col }
                 });
             }
-            let (profile, _) = preflight::value_profile_at_depth(self.input(), self.i, 1)
+            let (profile, _) = preflight::container_profile_at_depth(self.input(), self.i, 1)
                 .map_err(|error| self.lexical_preflight_error(error))?;
             let entries = profile.root_container_entries();
             crate::core::enforce_decode_sequence_length(
@@ -9549,21 +9549,8 @@ pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
         core::MAX_OWNED_VALUE_DECODE_DEPTH,
     )
 }
-/// Decode an object from Norito-encoded bytes (compressed or not) under a
-/// payload-derived resource budget.
-///
-/// The default budget is derived from the complete frame length, so a short input cannot force an
-/// allocation proportional only to an attacker-declared uncompressed length. Callers with a
-/// narrower schema limit, or trusted compressed data whose legitimate expansion exceeds the default
-/// envelope, can use [`decode_from_bytes_with_limits`] with an explicit budget.
-pub fn decode_from_bytes<T>(bytes: &[u8]) -> Result<T, Error>
-where
-    for<'de> T: NoritoDeserialize<'de>,
-{
-    with_decode_limits(canonical_decode_limits(bytes.len()), || {
-        decode_from_bytes_inner(bytes)
-    })
-}
+
+include!("framed_decode.rs");
 fn decode_from_bytes_inner<T>(bytes: &[u8]) -> Result<T, Error>
 where
     for<'de> T: NoritoDeserialize<'de>,

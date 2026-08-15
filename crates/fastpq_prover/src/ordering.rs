@@ -1,8 +1,7 @@
 //! Deterministic ordering helpers for FASTPQ batches.
 //!
-//! Ordering commitments follow the staged plan in `specs/fastpq_plan.md`
-//! and now use the canonical Poseidon2 sponge over Goldilocks with the
-//! `fastpq:v1:ordering` domain tag.
+//! Ordering commitments follow the staged plan in `specs/fastpq_plan.md` and now use the canonical
+//! Poseidon2 sponge over Goldilocks with the `fastpq:v1:ordering` domain tag.
 use crate::{Result, TransitionBatch, pack_bytes, poseidon};
 use ::core::convert::TryInto as _;
 use iroha_crypto::Hash;

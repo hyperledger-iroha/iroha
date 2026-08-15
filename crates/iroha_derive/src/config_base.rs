@@ -3,8 +3,7 @@
 //! Currently exposes [`ReadConfig`] which generates an implementation of
 //! [`iroha_config_base::read::ReadConfig`] for the annotated struct.
 //!
-//! The macro reads fields from environment variables or provides defaults.
-//! Supported attributes:
+//! The macro reads fields from environment variables or provides defaults. Supported attributes:
 //! - `env = "VAR"` - load from an environment variable.
 //! - `default` or `default = "expr"` - fallback value.
 //! - `nested` - read a nested struct under the field-name namespace unless `key` overrides it.

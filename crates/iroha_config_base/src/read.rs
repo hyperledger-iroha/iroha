@@ -327,10 +327,9 @@ impl Error {
     }
 }
 #[expect(clippy::too_long_first_doc_paragraph)]
-/// The reader, which provides an API to accumulate config sources,
-/// read parameters from them, override with environment variables, fallback to default values,
-/// and finally, construct an exhaustive error report with as many errors, accumulated along the
-/// way, as possible.
+/// The reader, which provides an API to accumulate config sources, read parameters from them,
+/// override with environment variables, fallback to default values, and finally, construct an
+/// exhaustive error report with as many errors, accumulated along the way, as possible.
 pub struct ConfigReader {
     /// The namespace this [`ConfigReader`] is handling. All the `ParameterId` handled will be prefixed with it.
     nesting: Vec<String>,
@@ -387,10 +386,9 @@ impl ConfigReader {
     }
     /// Rewrite the ordered TOML sources before typed parameter deserialization.
     ///
-    /// Sources are provided in resolution order: later entries have higher
-    /// precedence. This hook is intended for schema-owned canonicalization of
-    /// disabled optional subtrees, where dormant values must be removed before
-    /// type and unknown-parameter validation run.
+    /// Sources are provided in resolution order: later entries have higher precedence. This hook is
+    /// intended for schema-owned canonicalization of disabled optional subtrees, where dormant
+    /// values must be removed before type and unknown-parameter validation run.
     #[must_use]
     pub fn rewrite_toml_sources(mut self, rewrite: impl FnOnce(&mut [TomlSource])) -> Self {
         rewrite(&mut self.sources);
@@ -398,9 +396,8 @@ impl ConfigReader {
     }
     /// Return whether any loaded TOML source explicitly defines `id`.
     ///
-    /// This distinguishes an operator-provided value from a value materialized
-    /// by [`ReadConfig`] defaults. Sources loaded through
-    /// [`Self::read_toml_with_extends`] are included.
+    /// This distinguishes an operator-provided value from a value materialized by [`ReadConfig`]
+    /// defaults. Sources loaded through [`Self::read_toml_with_extends`] are included.
     #[must_use]
     pub fn contains_toml_parameter(&self, id: impl Into<ParameterId>) -> bool {
         let id = self.full_id(id);
@@ -410,13 +407,11 @@ impl ConfigReader {
     }
     /// Reads a TOML file and handles its `extends` field, implementing mixins mechanism.
     ///
-    /// The traversal is depth-first in declared order. Canonically identical
-    /// files reached through a diamond are applied once, while an edge back to
-    /// an active source is rejected as a cycle. The traversal is bounded by
-    /// [`MAX_TOML_EXTENDS_DEPTH`], [`MAX_TOML_EXTENDS_SOURCES`],
-    /// [`MAX_TOML_EXTENDS_TOTAL_BYTES`], and
-    /// [`toml::MAX_TOML_SOURCE_BYTES`]. Source paths must name stable regular
-    /// files; symbolic links are rejected.
+    /// The traversal is depth-first in declared order. Canonically identical files reached through
+    /// a diamond are applied once, while an edge back to an active source is rejected as a cycle.
+    /// The traversal is bounded by [`MAX_TOML_EXTENDS_DEPTH`], [`MAX_TOML_EXTENDS_SOURCES`],
+    /// [`MAX_TOML_EXTENDS_TOTAL_BYTES`], and [`toml::MAX_TOML_SOURCE_BYTES`]. Source paths must
+    /// name stable regular files; symbolic links are rejected.
     ///
     /// # Errors
     ///

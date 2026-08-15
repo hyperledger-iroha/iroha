@@ -158,9 +158,8 @@ impl SettlementEngine {
     ///
     /// # Errors
     ///
-    /// Returns a stable error when price arithmetic or timestamp validation
-    /// fails. No implicit fixed-unit conversion, rounding, or saturation is
-    /// performed at this consensus boundary.
+    /// Returns a stable error when price arithmetic or timestamp validation fails. No implicit
+    /// fixed-unit conversion, rounding, or saturation is performed at this consensus boundary.
     pub fn quote(
         &self,
         source_id: [u8; 32],

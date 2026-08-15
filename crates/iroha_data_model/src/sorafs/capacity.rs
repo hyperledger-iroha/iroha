@@ -1,9 +1,8 @@
 //! Capacity registry records for SoraFS providers (SF-2c).
 //!
-//! These types provide a stable, schema-driven interface between
-//! smart-contract ISI definitions and the runtime registry that
-//! tracks provider capacity declarations, telemetry snapshots, and
-//! fee accrual ledgers.
+//! These types provide a stable, schema-driven interface between smart-contract ISI definitions and
+//! the runtime registry that tracks provider capacity declarations, telemetry snapshots, and fee
+//! accrual ledgers.
 use crate::metadata::Metadata;
 use core::fmt;
 use hex;

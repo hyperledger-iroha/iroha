@@ -438,9 +438,8 @@ pub(crate) enum TypedRequestContentFormat {
 /// Classify one stored first-release typed media value using the same strict
 /// grammar as HTTP request admission.
 ///
-/// JSON permits no parameter or exactly `charset=utf-8`; native Norito is
-/// parameter-free. Empty, malformed, duplicate, quality-weighted, and
-/// structured-suffix values fail closed.
+/// JSON permits no parameter or exactly `charset=utf-8`; native Norito is parameter-free. Empty,
+/// malformed, duplicate, quality-weighted, and structured-suffix values fail closed.
 pub(crate) fn strict_typed_content_format(raw: &str) -> Option<TypedRequestContentFormat> {
     let declared = trim_optional_whitespace(raw);
     if declared.is_empty() {
@@ -493,11 +492,10 @@ fn typed_request_media_rejection(
 }
 /// Validate and classify a typed request's `Content-Type` without reading its body.
 ///
-/// The header must occur exactly once and be either `application/json` (with no
-/// parameter or one `charset=utf-8`) or parameter-free `application/x-norito`.
-/// This helper is shared by early admission middleware and body extractors so
-/// unsupported media cannot reach idempotency handling or body collection through
-/// a divergent second parsing path.
+/// The header must occur exactly once and be either `application/json` (with no parameter or one
+/// `charset=utf-8`) or parameter-free `application/x-norito`. This helper is shared by early
+/// admission middleware and body extractors so unsupported media cannot reach idempotency handling
+/// or body collection through a divergent second parsing path.
 #[allow(clippy::result_large_err)]
 pub(crate) fn typed_request_content_format(
     headers: &axum::http::HeaderMap,
@@ -577,10 +575,9 @@ pub(crate) fn typed_request_content_format(
 }
 /// Validate the canonical first-release JSON request representation.
 ///
-/// Unlike the compatibility-oriented [`extractors::JsonOnly`] extractor, this
-/// requires exactly one `Content-Type` header and accepts only
-/// `application/json` with an optional UTF-8 charset. It deliberately rejects
-/// structured-suffix JSON and native Norito so an endpoint cannot advertise a
+/// Unlike the compatibility-oriented [`extractors::JsonOnly`] extractor, this requires exactly one
+/// `Content-Type` header and accepts only `application/json` with an optional UTF-8 charset. It
+/// deliberately rejects structured-suffix JSON and native Norito so an endpoint cannot advertise a
 /// narrower protocol than it actually enforces.
 #[allow(clippy::result_large_err)]
 pub(crate) fn canonical_json_request_content_type(

@@ -363,10 +363,9 @@ impl OperatorSignatures {
     }
     /// Return the canonical Ed25519 key payloads trusted by operator policy.
     ///
-    /// PoR verdict authentication reuses this configured trust root rather
-    /// than trusting keys embedded by the submitter. Non-Ed25519 operator keys
-    /// are intentionally excluded because first-release PoR artefacts require
-    /// Ed25519 signatures.
+    /// PoR verdict authentication reuses this configured trust root rather than trusting keys
+    /// embedded by the submitter. Non-Ed25519 operator keys are intentionally excluded because
+    /// first-release PoR artefacts require Ed25519 signatures.
     pub(crate) fn trusted_ed25519_key_bytes(&self) -> Vec<Vec<u8>> {
         let mut keys = self
             .allowed_public_keys

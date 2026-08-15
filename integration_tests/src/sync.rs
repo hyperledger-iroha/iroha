@@ -51,8 +51,7 @@ pub fn get_status_with_retry(client: &Client) -> Result<Status> {
 ///
 /// # Errors
 ///
-/// Returns the final status error when retries are exhausted and no storage
-/// snapshot is available.
+/// Returns the final status error when retries are exhausted and no storage snapshot is available.
 pub fn get_status_with_retry_or_storage(
     network: &Network,
     client: &Client,

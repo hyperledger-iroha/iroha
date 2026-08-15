@@ -897,16 +897,14 @@ fn prepare_potr_delivery(
         }),
     })
 }
-/// Derive the canonical durable outbox operation identity for one governed
-/// final PoTR receipt.
+/// Derive the canonical durable outbox operation identity for one governed final PoTR receipt.
 ///
 /// Exactly-once handoff clients use this value to authenticate the
 /// acknowledgement returned by the proof-outcome outbox.
 ///
 /// # Errors
 ///
-/// Rejects an invalid receipt, a zero admission-envelope digest, or canonical
-/// encoding failure.
+/// Rejects an invalid receipt, a zero admission-envelope digest, or canonical encoding failure.
 pub fn potr_proof_outcome_operation_id_v1(
     receipt: &PotrReceiptV1,
     admission_envelope_digest: [u8; 32],

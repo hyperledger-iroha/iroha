@@ -1,12 +1,10 @@
 //! CUDA GPU-assisted zstd helper for Norito.
 //!
-//! This crate exports the same C ABI as `gpuzstd_metal`, but under the
-//! `gpuzstd_cuda` artifact name so Unix/Windows Norito builds can load an
-//! in-tree CUDA helper directly. The CUDA path performs deterministic
-//! match-finding and sequence generation on the GPU, then uses the shared zstd
-//! frame encoder for host-side frame assembly. Decode uses the
-//! shared frame decoder and falls back to the CPU zstd decoder for frames the
-//! in-crate decoder does not yet support.
+//! This crate exports the same C ABI as `gpuzstd_metal`, but under the `gpuzstd_cuda` artifact name
+//! so Unix/Windows Norito builds can load an in-tree CUDA helper directly. The CUDA path performs
+//! deterministic match-finding and sequence generation on the GPU, then uses the shared zstd frame
+//! encoder for host-side frame assembly. Decode uses the shared frame decoder and falls back to the
+//! CPU zstd decoder for frames the in-crate decoder does not yet support.
 use std::{io::Cursor, ptr, slice};
 #[allow(dead_code)]
 #[path = "../../gpuzstd_metal/src/bitstream.rs"]
@@ -218,9 +216,8 @@ unsafe fn decompress_ffi(src: *const u8, src_len: usize, dst: *mut u8, dst_len: 
 /// Compress `src` into `dst` using the CUDA helper.
 ///
 /// # Safety
-/// `src` must point to `src_len` readable bytes. `dst` must point to a writable
-/// buffer whose capacity is provided via `*dst_len`. `dst_len` must be non-null
-/// and writable.
+/// `src` must point to `src_len` readable bytes. `dst` must point to a writable buffer whose
+/// capacity is provided via `*dst_len`. `dst_len` must be non-null and writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpu_zstd_compress(
     src: *const u8,
@@ -234,9 +231,8 @@ pub unsafe extern "C" fn gpu_zstd_compress(
 /// Decompress `src` into `dst` using the CUDA helper.
 ///
 /// # Safety
-/// `src` must point to `src_len` readable bytes. `dst` must point to a writable
-/// buffer whose capacity is provided via `*dst_len`. `dst_len` must be non-null
-/// and writable.
+/// `src` must point to `src_len` readable bytes. `dst` must point to a writable buffer whose
+/// capacity is provided via `*dst_len`. `dst_len` must be non-null and writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpu_zstd_decompress(
     src: *const u8,

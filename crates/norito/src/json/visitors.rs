@@ -68,10 +68,9 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
     }
     /// Parse the pending value directly from the underlying parser.
     ///
-    /// The closure must consume exactly one JSON value. Object delimiter
-    /// handling remains owned by this visitor, so custom seeded decoders can
-    /// stream into typed owners without constructing an intermediate
-    /// [`crate::json::Value`].
+    /// The closure must consume exactly one JSON value. Object delimiter handling remains owned by
+    /// this visitor, so custom seeded decoders can stream into typed owners without constructing an
+    /// intermediate [`crate::json::Value`].
     pub fn parse_value_with_parser<T>(
         &mut self,
         parse: impl FnOnce(&mut Parser<'a>) -> Result<T, Error>,
@@ -119,9 +118,8 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
     }
     /// Fetch the next key and coerce it into `T` using `FromStr`.
     ///
-    /// Returns `Ok(None)` when the object has no more entries. Any parse
-    /// failure from `T::from_str` is wrapped in a deterministic JSON
-    /// [`Error`].
+    /// Returns `Ok(None)` when the object has no more entries. Any parse failure from `T::from_str`
+    /// is wrapped in a deterministic JSON [`Error`].
     pub fn coerce_key<T>(&mut self) -> Result<Option<T>, Error>
     where
         T: core::str::FromStr,
@@ -178,8 +176,8 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
     }
     /// Construct a duplicate-field error.
     #[inline]
-    pub fn duplicate_field(_field: &str) -> Error {
-        Error::Message("duplicate JSON object field".to_owned())
+    pub fn duplicate_field(field: &str) -> Error {
+        Error::duplicate_field(field)
     }
     /// Construct an unknown-field error.
     #[inline]

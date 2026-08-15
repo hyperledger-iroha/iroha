@@ -2,8 +2,7 @@
 use iroha_data_model_derive::{HasOrigin, IdEqOrdHash};
 /// Minimal `Identifiable` trait needed for the tests
 ///
-/// This is intentionally simplified to avoid depending on the
-/// `iroha_data_model` crate.
+/// This is intentionally simplified to avoid depending on the `iroha_data_model` crate.
 pub trait Identifiable: Ord + Eq {
     /// Identifier type
     type Id: Ord + Eq + core::hash::Hash;

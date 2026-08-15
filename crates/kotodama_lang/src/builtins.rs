@@ -1,8 +1,7 @@
 //! Shared builtin classification for the stable Kotodama helper surface.
 //!
-//! The parser still sees raw identifiers, but semantic analysis, lowering, and
-//! effect checks should agree on the canonical builtin set through this enum
-//! instead of open-coded string matching.
+//! The parser still sees raw identifiers, but semantic analysis, lowering, and effect checks should
+//! agree on the canonical builtin set through this enum instead of open-coded string matching.
 /// Typed pointer ABI constructors recognized by compiler lowering.
 ///
 /// Only constructors whose enclosing [`Builtin`] has a source-visible surface
@@ -153,10 +152,9 @@ pub enum BuiltinGasClass {
 }
 /// Source-call form admitted for a builtin.
 ///
-/// Method calls are desugared to an internal free-call shape after parsing, so
-/// this classification must remain separate from [`BuiltinMode`]. In
-/// particular, a method-only helper must never become a source-visible global
-/// merely because lowering recognizes its internal name.
+/// Method calls are desugared to an internal free-call shape after parsing, so this classification
+/// must remain separate from [`BuiltinMode`]. In particular, a method-only helper must never become
+/// a source-visible global merely because lowering recognizes its internal name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuiltinSurface {
     /// A canonical namespaced (or language-intrinsic) free function.
@@ -180,9 +178,8 @@ pub enum BuiltinLowering {
     Instructions,
     /// Lowers one-to-one to the single operation syscall in the spec.
     DirectSyscall,
-    /// Expands to a compiler-owned sequence that can issue these operation
-    /// syscalls recorded in the spec. The list is exhaustive for every
-    /// control-flow path.
+    /// Expands to a compiler-owned sequence that can issue these operation syscalls recorded in the
+    /// spec. The list is exhaustive for every control-flow path.
     DerivedSyscalls,
 }
 /// Machine-readable source signature for a builtin.
@@ -520,10 +517,9 @@ pub enum Builtin {
 impl Builtin {
     /// Iterate over every canonical builtin variant.
     ///
-    /// Both enums derive their iterators from their declarations, so adding a
-    /// variant automatically expands this fail-closed registry. The payload
-    /// placeholder emitted for `PointerConstructor` by `EnumIter` is
-    /// replaced with every pointer-constructor variant.
+    /// Both enums derive their iterators from their declarations, so adding a variant automatically
+    /// expands this fail-closed registry. The payload placeholder emitted for `PointerConstructor`
+    /// by `EnumIter` is replaced with every pointer-constructor variant.
     pub fn all() -> impl Iterator<Item = Self> {
         use strum::IntoEnumIterator as _;
         PointerConstructor::iter()

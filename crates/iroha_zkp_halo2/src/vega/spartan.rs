@@ -1,9 +1,8 @@
 //! Non-zero-knowledge Relaxed Spartan for the Nova-folded Vega instance.
 //!
-//! This proof deliberately absorbs only the folded scalar `u` and public
-//! inputs. It is sound only inside the canonical composition where Nova NIFS
-//! has already bound both input instances and the cross-term commitment to the
-//! same transcript. The type and entry points remain crate-private.
+//! This proof deliberately absorbs only the folded scalar `u` and public inputs. It is sound only
+//! inside the canonical composition where Nova NIFS has already bound both input instances and the
+//! cross-term commitment to the same transcript. The type and entry points remain crate-private.
 use super::{
     VegaT256ScalarV1 as Scalar,
     algebra::{

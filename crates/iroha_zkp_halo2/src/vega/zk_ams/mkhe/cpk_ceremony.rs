@@ -58,11 +58,10 @@ pub const ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1: usize =
 /// This enumerates the currently source-derived ring/proof/witness allocations
 /// owned by the ceremony, complete native relation verifier, and
 /// caller-retained prior admitted state successors.  The new state-owned
-/// membership producer workspace is named explicitly but remains
-/// unenumerated. Fixed struct and allocator metadata are deliberately excluded,
-/// as in the neighboring decryption residency certificate. Caller-selected CAS
-/// storage, page cache, and filesystem buffering are also not covered. This is
-/// not an RSS measurement, and release certification remains closed until all
+/// membership producer workspace is named explicitly but remains unenumerated. Fixed struct and
+/// allocator metadata are deliberately excluded, as in the neighboring decryption residency
+/// certificate. Caller-selected CAS storage, page cache, and filesystem buffering are also not
+/// covered. This is not an RSS measurement, and release certification remains closed until all
 /// workspace and an authenticated whole-worker peak are pinned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCpkCeremonyResidencyEvidenceV1 {
@@ -656,12 +655,11 @@ impl ZkAmsMkheFinalizedCpkCeremonyV1 {
     ) -> ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
         self.streaming_collective_encryption_key_authority
     }
-    /// Consume the one-shot compact authority and bind a streaming decryption
-    /// statement without recreating any public-key share. Release admission
-    /// requires the provider to expose the CPK and ciphertext objects through
-    /// the same immutable snapshot. The authority is poisoned before any
-    /// provider-controlled preflight. A failed bind is terminal. It cannot be
-    /// retried, and no party-use capability escapes a failed admission.
+    /// Consume the one-shot compact authority and bind a streaming decryption statement without
+    /// recreating any public-key share. Release admission requires the provider to expose the CPK
+    /// and ciphertext objects through the same immutable snapshot. The authority is poisoned before
+    /// any provider-controlled preflight. A failed bind is terminal. It cannot be retried, and no
+    /// party-use capability escapes a failed admission.
     pub fn bind_streaming_decryption_statement_v1<'a, P>(
         &'a mut self,
         roster: &'a ZkAmsMkheGovernedRosterWireV1,
@@ -780,12 +778,11 @@ impl ZkAmsMkheCpkRuntimeV1 {
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
-    /// Consume the remaining one-shot authority into a compact streaming
-    /// decryption statement. Release admission requires the provider to expose
-    /// the CPK and ciphertext objects through the same immutable snapshot. The
-    /// authority is poisoned before any provider-controlled preflight. A failed
-    /// bind is terminal. It cannot be retried, and no party-use capability
-    /// escapes a failed admission.
+    /// Consume the remaining one-shot authority into a compact streaming decryption statement.
+    /// Release admission requires the provider to expose the CPK and ciphertext objects through the
+    /// same immutable snapshot. The authority is poisoned before any provider-controlled preflight.
+    /// A failed bind is terminal. It cannot be retried, and no party-use capability escapes a
+    /// failed admission.
     pub fn bind_streaming_decryption_statement_v1<'a, P>(
         &'a mut self,
         roster: &'a ZkAmsMkheGovernedRosterWireV1,

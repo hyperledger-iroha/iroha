@@ -291,10 +291,9 @@ pub fn read_bounded_direct_regular_file(
 /// Read one immutable private-file snapshot with the same bounds and direct
 /// identity checks as [`read_bounded_direct_regular_file`].
 ///
-/// On Unix, every metadata observation in the open/read chain must have no
-/// group or other permission bits. This binds the permission decision to the
-/// descriptor that supplies the returned bytes instead of trusting a separate
-/// path inspection.
+/// On Unix, every metadata observation in the open/read chain must have no group or other
+/// permission bits. This binds the permission decision to the descriptor that supplies the returned
+/// bytes instead of trusting a separate path inspection.
 pub fn read_bounded_private_regular_file(
     path: &Path,
     maximum: usize,
@@ -1421,8 +1420,7 @@ pub struct PowConfig {
     /// Slowloris mitigation thresholds applied to client hellos.
     #[norito(default)]
     pub slowloris: SlowlorisConfig,
-    /// Argon2 puzzle applied to every inbound connection without a signed
-    /// admission credential.
+    /// Argon2 puzzle applied to every inbound connection without a signed admission credential.
     #[norito(default)]
     pub puzzle: Option<PuzzleConfig>,
     /// Optional signed token authentication layer.
@@ -2073,9 +2071,8 @@ pub struct GuardDirectoryConfig {
     pub snapshot_path: PathBuf,
     /// Required domain-separated BLAKE3 digest of the exact snapshot bytes.
     ///
-    /// This value must be obtained through a trust path independent of
-    /// `snapshot_path`; the snapshot's embedded `directory_hash` does not
-    /// authenticate its embedded issuer records.
+    /// This value must be obtained through a trust path independent of `snapshot_path`; the
+    /// snapshot's embedded `directory_hash` does not authenticate its embedded issuer records.
     pub expected_snapshot_digest_hex: String,
     /// Whether to tolerate missing entries when verifying a snapshot.
     #[norito(default)]
@@ -2108,8 +2105,7 @@ impl GuardDirectoryConfig {
     /// Decode the externally provisioned exact snapshot digest.
     ///
     /// # Errors
-    /// Returns an error unless the configured value is exactly 32 hex-encoded
-    /// bytes.
+    /// Returns an error unless the configured value is exactly 32 hex-encoded bytes.
     pub fn expected_snapshot_digest(&self) -> Result<[u8; 32], ConfigError> {
         let raw = hex::decode(&self.expected_snapshot_digest_hex).map_err(|_| {
             ConfigError::GuardDirectory(
@@ -3244,9 +3240,8 @@ pub struct RelayConfig {
     pub admin_listen: Option<String>,
     /// File containing the bearer token for protected admin routes.
     ///
-    /// Every enabled admin listener requires this file and must bind to a
-    /// loopback address. Remote observability must use a separately secured
-    /// proxy or sidecar.
+    /// Every enabled admin listener requires this file and must bind to a loopback address. Remote
+    /// observability must use a separately secured proxy or sidecar.
     #[norito(default)]
     pub admin_auth_token_path: Option<PathBuf>,
     /// TLS settings for the QUIC endpoint.

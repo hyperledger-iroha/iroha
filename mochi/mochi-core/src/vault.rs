@@ -1,9 +1,8 @@
 //! Signing authority vault management for MOCHI.
 //!
-//! The vault keeps user-provided signing authorities on disk so the composer
-//! can sign transactions with real account keys instead of the bundled
-//! development fixtures. First-release byte, signer, field, and JSON-graph
-//! ceilings are enforced before owned decoding or filesystem mutation.
+//! The vault keeps user-provided signing authorities on disk so the composer can sign transactions
+//! with real account keys instead of the bundled development fixtures. First-release byte, signer,
+//! field, and JSON-graph ceilings are enforced before owned decoding or filesystem mutation.
 use crate::{
     compose::{InstructionPermission, SigningAuthority, development_signing_authorities},
     config::NetworkPaths,

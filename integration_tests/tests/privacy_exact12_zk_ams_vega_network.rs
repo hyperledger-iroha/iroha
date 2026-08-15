@@ -2,12 +2,11 @@
 //! Four-validator activation, adversarial intent/governance, replay, and
 //! restart coverage for the canonical native ZK-AMS and Vega action APIs.
 //!
-//! This release gate intentionally leaves the network's DA/RBC configuration
-//! untouched. A validator is stopped only after all negative probes converge,
-//! then both protocol lineages are finalized by the remaining quorum and
-//! recovered byte-for-byte by the restarted validator. The ZK-AMS lineage
-//! includes the two canonical eight-member admissions required for a minimum
-//! ring, successor-root account provisioning, and persisted key-image replay.
+//! This release gate intentionally leaves the network's DA/RBC configuration untouched. A validator
+//! is stopped only after all negative probes converge, then both protocol lineages are finalized by
+//! the remaining quorum and recovered byte-for-byte by the restarted validator. The ZK-AMS lineage
+//! includes the two canonical eight-member admissions required for a minimum ring, successor-root
+//! account provisioning, and persisted key-image replay.
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;

@@ -1,10 +1,9 @@
 //! Move-only admission for one complete evaluated-key evidence pair.
 //!
-//! This capability certifies exact ordered, independently verified source and
-//! CKS records plus their manifest digests. It also commits the ordered expected
-//! CKS compact outputs so the runtime can compare them with streamed ZARK
-//! digits before minting a validated handle. It deliberately does not claim the
-//! stronger cross-set algebraic equality between accumulated source outputs and
+//! This capability certifies exact ordered, independently verified source and CKS records plus
+//! their manifest digests. It also commits the ordered expected CKS compact outputs so the runtime
+//! can compare them with streamed ZARK digits before minting a validated handle. It deliberately
+//! does not claim the stronger cross-set algebraic equality between accumulated source outputs and
 //! the CKS source/compact-output relation.
 use super::*;
 const VERIFIED_EVIDENCE_SET_CAPABILITY_DOMAIN_V1: &[u8] =
@@ -187,11 +186,10 @@ impl CksCompactOutputSetDigestV1 {
 /// Sealed proof that both evidence streams for one exact manifest entry were
 /// consumed completely and in canonical order.
 ///
-/// This owner is move-only, non-serializable, and carries no receipt, payload,
-/// reader, provider, or dynamically allocated object. It certifies ordered
-/// record verification and expected CKS outputs only. CKS-output/ZARK equality
-/// is established later by the authenticated provider scan.
-/// It does not certify cross-set source-output algebraic equality.
+/// This owner is move-only, non-serializable, and carries no receipt, payload, reader, provider, or
+/// dynamically allocated object. It certifies ordered record verification and expected CKS outputs
+/// only. CKS-output/ZARK equality is established later by the authenticated provider scan. It does
+/// not certify cross-set source-output algebraic equality.
 pub struct ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1 {
     _private: private::CapabilitySealV1,
     version: u8,
@@ -406,10 +404,9 @@ pub(super) fn expected_source_descriptor_v1(
 }
 /// Consume and aggregate both exact receipt streams for one manifest entry.
 ///
-/// Each iterator is lazy and is advanced exactly once per expected record plus
-/// one final extra-record probe. Receipts are consumed immediately; none is
-/// retained or collected. Any failure is terminal because all preceding
-/// move-only receipts have already been consumed.
+/// Each iterator is lazy and is advanced exactly once per expected record plus one final
+/// extra-record probe. Receipts are consumed immediately; none is retained or collected. Any
+/// failure is terminal because all preceding move-only receipts have already been consumed.
 pub fn verify_zk_ams_mkhe_evaluated_key_evidence_set_v1<SI, CI>(
     source_context: &ZkAmsMkheTrustedSourceContextV1,
     cks_context: &ZkAmsMkheTrustedCksContextV1,

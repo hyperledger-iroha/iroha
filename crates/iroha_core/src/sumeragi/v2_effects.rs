@@ -7,13 +7,11 @@
 //! status, and evidence boundaries. View-specific consumers retain their exact
 //! [`EventTag`], while immutable persistence and validation work can be rebound
 //! after a certified view transition.
-//!
 //! The caller must explicitly select the exact-body signature policy: the
 //! configured genesis authority at height one or the context's rotating leader
 //! thereafter. The executor forwards that policy to the body store and still
 //! routes full semantic block validation through the deterministic validator;
 //! it never invents a second block-authorization rule.
-//!
 //! Exact-body fsync executes as a tagged asynchronous task, but its immutable
 //! storage operation is separate from the current reducer consumer. Canonical
 //! decoding and deterministic validation execute against an immutable durable

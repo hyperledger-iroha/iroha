@@ -85,12 +85,10 @@ mod model {
     }
 }
 string_id!(NftId);
-/// Read-only reference to [`Nft`].
-/// Used in query filters to avoid copying.
+/// Read-only reference to [`Nft`]. Used in query filters to avoid copying.
 pub type NftEntry<'world> = Ref<'world, NftId, NftValue>;
-/// [`Nft`] without `id` field.
-/// Needed only for the world-state NFT map to reduce memory usage.
-/// In other places use [`Nft`] directly.
+/// [`Nft`] without `id` field. Needed only for the world-state NFT map to reduce memory usage. In
+/// other places use [`Nft`] directly.
 #[derive(Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
 #[cfg_attr(
     feature = "json",

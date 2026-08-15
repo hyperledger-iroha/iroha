@@ -1,10 +1,9 @@
 //! Authenticated workspace boundary for structured Kotodama V1 tests.
 //!
-//! Selected workspace roots own their test targets and development edges. The
-//! consumer lock remains authoritative for exact registry selections, while
-//! every reachable registry bundle is re-authenticated before it can become a
-//! compiler input. Filesystem-backed execution is qualified on Unix; other
-//! targets fail closed before reading workspace, cache, or test-source state.
+//! Selected workspace roots own their test targets and development edges. The consumer lock remains
+//! authoritative for exact registry selections, while every reachable registry bundle is
+//! re-authenticated before it can become a compiler input. Filesystem-backed execution is qualified
+//! on Unix; other targets fail closed before reading workspace, cache, or test-source state.
 use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
     compiler::validate_exact_registry_interfaces_v1,
@@ -169,10 +168,9 @@ impl AuthenticatedTestRegistryV1 for MusubiCache {
 }
 /// Run tests for exactly `selected` workspace roots after authenticating their lock graph.
 ///
-/// Development dependencies are considered only on explicitly selected roots;
-/// registry nodes are already forbidden from carrying development edges by the
-/// lock schema. This function never discovers or runs tests owned by dependency
-/// packages.
+/// Development dependencies are considered only on explicitly selected roots; registry nodes are
+/// already forbidden from carrying development edges by the lock schema. This function never
+/// discovers or runs tests owned by dependency packages.
 ///
 /// # Errors
 ///

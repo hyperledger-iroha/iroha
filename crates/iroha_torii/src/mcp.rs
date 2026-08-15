@@ -1,16 +1,14 @@
 //! Native MCP endpoint support for Torii.
 //!
-//! This module exposes a lightweight JSON-RPC bridge that maps MCP tool calls to
-//! existing Torii HTTP routes. OpenAPI supplies operation schemas, but an HTTP
-//! operation becomes an MCP tool only after its exact method/path pair opts
-//! into the catalog's MCP projection. Purpose-built `iroha.*` tools form a
-//! separate, explicit allowlist.
+//! This module exposes a lightweight JSON-RPC bridge that maps MCP tool calls to existing Torii
+//! HTTP routes. OpenAPI supplies operation schemas, but an HTTP operation becomes an MCP tool only
+//! after its exact method/path pair opts into the catalog's MCP projection. Purpose-built `iroha.*`
+//! tools form a separate, explicit allowlist.
 //!
-//! Route response bytes never become raw MCP JSON or free-form success text.
-//! JSON responses are parsed into [`norito::json::Value`], other response
-//! bodies become JSON strings, and the typed value is placed under
-//! `structuredContent`. This keeps ledger-controlled content in the data plane
-//! instead of promoting it into the MCP result's text summary.
+//! Route response bytes never become raw MCP JSON or free-form success text. JSON responses are
+//! parsed into [`norito::json::Value`], other response bodies become JSON strings, and the typed
+//! value is placed under `structuredContent`. This keeps ledger-controlled content in the data
+//! plane instead of promoting it into the MCP result's text summary.
 use crate::{SharedAppState, limits, openapi};
 use axum::{
     body::Body,

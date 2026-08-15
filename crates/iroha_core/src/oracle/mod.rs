@@ -60,8 +60,7 @@ impl<'a> ObservationAdmission<'a> {
 ///
 /// # Errors
 ///
-/// Returns [`OracleAggregationError`] when observations violate feed rules or
-/// aggregation fails.
+/// Returns [`OracleAggregationError`] when observations violate feed rules or aggregation fails.
 pub fn aggregate(
     config: &FeedConfig,
     slot: FeedSlot,

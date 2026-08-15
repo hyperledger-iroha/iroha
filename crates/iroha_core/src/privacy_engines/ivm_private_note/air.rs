@@ -1633,8 +1633,7 @@ fn build_private_note_trace_v1(
         rows: builder.rows,
     })
 }
-/// Compile the complete prover trace after checking the native differential
-/// oracle.
+/// Compile the complete prover trace after checking the native differential oracle.
 pub(super) fn build_private_note_base_trace_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     witness: &IvmPrivateNoteWitnessV1,
@@ -2917,10 +2916,9 @@ fn validate_vm_next_v1(
     }
     Ok(())
 }
-/// Evaluate every native private-note AIR constraint against one complete
-/// canonical base trace. This is deliberately proof-format neutral; the shared
-/// aggregate SHA-256/Goldilocks engine consumes the same fixed and base
-/// columns.
+/// Evaluate every native private-note AIR constraint against one complete canonical base trace.
+/// This is deliberately proof-format neutral; the shared aggregate SHA-256/Goldilocks engine
+/// consumes the same fixed and base columns.
 pub(super) fn validate_private_note_base_trace_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     trace: &PrivateNoteBaseTraceV1,

@@ -1,11 +1,10 @@
 //! Canonical encrypted evaluation for the ZK-AMS Phase-II/III fold.
 //!
-//! This module owns the bounded external CSR representation, the compact
-//! canonical A/B/C manifest, the allocation-free paper-order view of the shared
-//! relation shape, and the packed-ciphertext evaluator shared by Equations (6),
-//! (7), and (9)--(11). The evaluator never decodes a ciphertext and never
-//! substitutes a plaintext calculation. Plaintext calculations appear only in
-//! tests as an independent oracle.
+//! This module owns the bounded external CSR representation, the compact canonical A/B/C manifest,
+//! the allocation-free paper-order view of the shared relation shape, and the packed-ciphertext
+//! evaluator shared by Equations (6), (7), and (9)--(11). The evaluator never decodes a ciphertext
+//! and never substitutes a plaintext calculation. Plaintext calculations appear only in tests as an
+//! independent oracle.
 //!
 //! The frozen release certificate deliberately remains open.  A small-profile
 //! KAT exercises the complete native path, but it is not evidence for the
@@ -244,9 +243,8 @@ impl ZkAmsPhase23CommitmentPreimageLayoutV1 {
 }
 /// Compact identity of one canonical release relation map.
 ///
-/// This manifest deliberately contains no CSR buffers. The canonical entries
-/// remain owned exactly once by the shared `Shape` and are exposed internally
-/// through a bounded paper-order row stream.
+/// This manifest deliberately contains no CSR buffers. The canonical entries remain owned exactly
+/// once by the shared `Shape` and are exposed internally through a bounded paper-order row stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23SparseMapManifestV1 {
     version: u8,
@@ -294,8 +292,7 @@ impl ZkAmsPhase23SparseMapManifestV1 {
         self.digest
     }
 }
-/// Compact manifest for the sole canonical release A/B/C relation and Hyrax
-/// G/H preimage layout.
+/// Compact manifest for the sole canonical release A/B/C relation and Hyrax G/H preimage layout.
 ///
 /// Release entrypoints share the canonical `Shape` and this constant-size
 /// manifest. They never construct or retain a second paper-order CSR copy.
@@ -369,8 +366,7 @@ impl ZkAmsPhase23ReleaseRelationV1 {
         self.manifest
     }
 }
-/// Borrow the canonical release relation without constructing paper-order CSR
-/// buffers.
+/// Borrow the canonical release relation without constructing paper-order CSR buffers.
 pub(super) fn zk_ams_phase23_release_relation_v1()
 -> Result<ZkAmsPhase23ReleaseRelationV1, ZkAmsMkheErrorV1> {
     let manifest = zk_ams_phase23_release_map_manifest_v1()?;
@@ -570,8 +566,7 @@ pub struct ZkAmsPhase23CrossTermCommitmentV1 {
     digest: [u8; 32],
 }
 impl ZkAmsPhase23CrossTermCommitmentV1 {
-    /// Bind full-roster-decrypted/PBS commitment points to the sole release
-    /// preimage layout.
+    /// Bind full-roster-decrypted/PBS commitment points to the sole release preimage layout.
     pub fn new(
         points: Vec<[u8; 33]>,
         preimage_layout_digest: [u8; 32],
@@ -690,10 +685,9 @@ impl ZkAmsPhase23PublicFoldHistoryV1 {
     /// Construct a complete release history with the sole core admission
     /// transcript, canonical shape, and canonical Hyrax key.
     ///
-    /// The context frame must be the exact output of the core ZK-AMS admission
-    /// context builder. It is retained byte-for-byte so settlement can compare
-    /// it with its independently reconstructed frame. Every result and
-    /// challenge is derived internally with Nova; callers cannot nominate a
+    /// The context frame must be the exact output of the core ZK-AMS admission context builder. It
+    /// is retained byte-for-byte so settlement can compare it with its independently reconstructed
+    /// frame. Every result and challenge is derived internally with Nova; callers cannot nominate a
     /// terminal public accumulator.
     pub fn new(
         terminal_context: super::terminal::ZkAmsPhase3TerminalContextV1,

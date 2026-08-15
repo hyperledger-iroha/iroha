@@ -2,8 +2,7 @@
 //!
 //! The monitor keeps one task per peer that periodically pulls `/status` and
 //! `/metrics` endpoints.  This module hides the blocking HTTP client behind
-//! `tokio::spawn_blocking` and normalises the responses into lightweight
-//! snapshots used by the TUI.
+//! `tokio::spawn_blocking` and normalises the responses into lightweight snapshots used by the TUI.
 use eyre::Result;
 use norito::{derive::JsonDeserialize, json};
 use std::{

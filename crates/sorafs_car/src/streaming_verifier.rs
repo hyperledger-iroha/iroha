@@ -1,12 +1,11 @@
 //! Streaming verifier for CARv2 archives.
 //!
-//! This module provides a state-machine based verifier that can process CAR bytes incrementally.
-//! It validates the CAR header, section headers, and payload chunks against a trusted manifest.
-//! It is designed to be used in network streams where backpressure is required.
-//! This state machine is an integrity and resource-bounding preflight: callers
-//! making an admission decision must still run [`crate::verifier::CarVerifier`]
-//! on the completed archive (or compare against a canonical writer) so DAG and
-//! index canonicality are enforced rather than inferred from a signed digest.
+//! This module provides a state-machine based verifier that can process CAR bytes incrementally. It
+//! validates the CAR header, section headers, and payload chunks against a trusted manifest. It is
+//! designed to be used in network streams where backpressure is required. This state machine is an
+//! integrity and resource-bounding preflight: callers making an admission decision must still run
+//! [`crate::verifier::CarVerifier`] on the completed archive (or compare against a canonical
+//! writer) so DAG and index canonicality are enforced rather than inferred from a signed digest.
 use crate::{
     BLAKE3_256_MULTIHASH_CODE, DAG_CBOR_CODEC, HEADER_LEN, PRAGMA, RAW_CODEC,
     verifier::CarVerifyError,
@@ -108,9 +107,8 @@ impl StreamingCarVerifier {
             roots_validated: false,
         }
     }
-    /// Process a chunk of bytes.
-    /// Returns the number of bytes consumed. If less than `bytes.len()`, the caller should
-    /// handle backpressure or store the remainder.
+    /// Process a chunk of bytes. Returns the number of bytes consumed. If less than `bytes.len()`,
+    /// the caller should handle backpressure or store the remainder.
     ///
     /// If an error occurs, the verifier enters the `Error` state and returns `Err`.
     pub fn update(&mut self, bytes: &[u8]) -> Result<usize, CarVerifyError> {

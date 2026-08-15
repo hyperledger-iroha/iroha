@@ -1,12 +1,11 @@
 //! Reserve-plus-rent policy quoting (SFM-6 / DA-7).
 //!
 //! These types translate the economics specification captured in
-//! `specs/sorafs_reserve_rent_plan.md` into deterministic payloads so
-//! governance, CLI tooling, and ledger ISIs can derive the same rent and
-//! reserve requirements. The quoting logic intentionally mirrors the formulas
-//! documented in the roadmap: monthly rent is computed per storage class and
-//! duration, underwriting ratios determine collateral requirements, and credit
-//! line caps / APR values track the assigned provider tier.
+//! `specs/sorafs_reserve_rent_plan.md` into deterministic payloads so governance, CLI tooling, and
+//! ledger ISIs can derive the same rent and reserve requirements. The quoting logic intentionally
+//! mirrors the formulas documented in the roadmap: monthly rent is computed per storage class and
+//! duration, underwriting ratios determine collateral requirements, and credit line caps / APR
+//! values track the assigned provider tier.
 use crate::{
     DeriveJsonDeserialize, DeriveJsonSerialize,
     account::AccountId,
@@ -675,8 +674,7 @@ pub struct ReserveAuthorityPolicyV1 {
     /// Exact service account authorized to register reserve partitions and
     /// administer deterministic rent, lifecycle, and credit transitions.
     pub operations_authority: AccountId,
-    /// Exact service account authorized to decide pending reserve movements
-    /// and lifecycle appeals.
+    /// Exact service account authorized to decide pending reserve movements and lifecycle appeals.
     pub decision_authority: AccountId,
     /// Grace period before delinquency.
     pub grace_period_days: u16,
@@ -932,9 +930,8 @@ impl ReserveProviderAccountV1 {
     }
     /// Accrue whole-day simple interest on outstanding principal.
     ///
-    /// The anchor advances only by complete elapsed days, so repeated calls in
-    /// the same day are idempotent and validator wall-clock precision cannot
-    /// change the result.
+    /// The anchor advances only by complete elapsed days, so repeated calls in the same day are
+    /// idempotent and validator wall-clock precision cannot change the result.
     ///
     /// # Errors
     ///

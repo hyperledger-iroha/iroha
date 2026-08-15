@@ -1,7 +1,6 @@
-//! Emits deterministic chunk metadata (offsets, lengths, BLAKE3 digests) for a
-//! file or standard input. By default it uses the canonical SoraFS profile, but
-//! callers can override the chunking parameters via CLI flags to experiment
-//! with alternate layouts.
+//! Emits deterministic chunk metadata (offsets, lengths, BLAKE3 digests) for a file or standard
+//! input. By default it uses the canonical SoraFS profile, but callers can override the chunking
+//! parameters via CLI flags to experiment with alternate layouts.
 use sorafs_chunker::{ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile};
 use std::{
     env,

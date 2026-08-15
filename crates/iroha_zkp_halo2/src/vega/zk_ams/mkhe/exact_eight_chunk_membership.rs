@@ -3,9 +3,8 @@
 //! The release ring is always represented by eight ordered 16,384-
 //! coefficient chunks.  Role marker types fix the coefficient bound, outer
 //! wire magic, and every transcript/root domain at compile time.  In
-//! particular, persistent-secret, RKG-ephemeral, and CPK-error evidence cannot
-//! be converted into one another and no verified membership capability alone
-//! establishes a polynomial relation.
+//! particular, persistent-secret, RKG-ephemeral, and CPK-error evidence cannot be converted into
+//! one another and no verified membership capability alone establishes a polynomial relation.
 use super::ZkAmsMkhePartyIdV1;
 use crate::{
     generalized_bulletproof::ProofRandomSource,
@@ -407,9 +406,8 @@ impl<'a, R: ExactEightChunkMembershipRoleV1> PreflightedExactEightChunkMembershi
     }
     /// Replay all eight borrowed chunk wires without constructing owned proofs.
     ///
-    /// The preflighted frame remains reusable. This returns no capability or
-    /// receipt and retains only the eight transcript digests needed to recheck
-    /// the exact ordered transcript-set root.
+    /// The preflighted frame remains reusable. This returns no capability or receipt and retains
+    /// only the eight transcript digests needed to recheck the exact ordered transcript-set root.
     pub(super) fn verify_replayable(&self) -> Result<(), ExactEightChunkMembershipErrorV1> {
         ensure_canonical_generator_basis()?;
         self.verify_replayable_with(|context_digest, ordinal, wire| {
@@ -881,10 +879,9 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
 }
 /// Move-only proof-verified membership capability for exactly one sealed role.
 ///
-/// This capability deliberately has no relation or active-binding conversion.
-/// It records membership provenance only; a complete native CPK equation and
-/// authentication verifier must consume it together with the other relation
-/// objects before minting any reusable witness lineage.
+/// This capability deliberately has no relation or active-binding conversion. It records membership
+/// provenance only; a complete native CPK equation and authentication verifier must consume it
+/// together with the other relation objects before minting any reusable witness lineage.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct VerifiedExactEightChunkMembershipV1<R> {
     context: ExactEightChunkMembershipContextV1<R>,

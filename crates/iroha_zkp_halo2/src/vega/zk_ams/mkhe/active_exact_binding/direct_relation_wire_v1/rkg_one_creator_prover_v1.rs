@@ -2,19 +2,28 @@
 
 use super::super::{
     FinalizedDirectRkgOneCapabilityV1, PreparedDirectRkgOneCreatorPermitV1,
-    direct_rkg_one_creator_adapter_v1::finalize_direct_rkg_one_capability_v1,
+    direct_rkg_one_creator_adapter_v1::{
+        finalize_direct_rkg_one_capability_v1,
+        verify_finalized_direct_rkg_one_semantic_candidate_v1,
+    },
 };
 use super::{
-    BLIND_RESPONSE_BYTES_V1, BODY_BYTES_V1, CHALLENGE_SEED_BYTES_V1, HEADER_BYTES_V1,
-    MEMBERSHIP_BYTES_V1, PersistentDirectRelationV1, RESPONSE_BYTES_V1, RKG_ONE_STATEMENT_BYTES_V1,
-    canonical_header_fields_v1,
+    BLIND_RESPONSE_BYTES_V1, BODY_BYTES_V1, CHALLENGE_SEED_BYTES_V1, DirectRelationPublicObjectsV1,
+    HEADER_BYTES_V1, MEMBERSHIP_BYTES_V1, PersistentDirectRelationV1, RESPONSE_BYTES_V1,
+    RKG_ONE_STATEMENT_BYTES_V1, canonical_header_fields_v1,
     rkg_one_creator_membership_v1::generate_direct_rkg_one_memberships_v1,
     rkg_one_creator_response_v1::create_direct_rkg_one_responses_v1,
     statement_v1::PreparedDirectRkgOneStatementCoreV1,
 };
 use crate::{
     generalized_bulletproof::ProofRandomSource,
-    vega::{MaskedRelaxedRandomSourceV1, zk_ams::mkhe::ZkAmsMkheErrorV1},
+    vega::{
+        MaskedRelaxedRandomSourceV1,
+        zk_ams::mkhe::{
+            ZkAmsMkheErrorV1, direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1,
+            direct_object_transport::ZkAmsMkheDirectObjectReadAtProviderV1,
+        },
+    },
 };
 #[path = "rkg_one_creator_prover_v1/transcript_v1.rs"]
 mod transcript_v1;
@@ -53,23 +62,43 @@ impl core::fmt::Debug for SealedDirectRkgOneProofBytesV1 {
     }
 }
 
-/// Composite final owner of the actual opening provenance, single-use
-/// capability, and exact proof bytes. No verifier completion is present.
+/// Composite final owner of local prover-session/opening ownership, single-use capability,
+/// and exact proof bytes; not provenance, extractor evidence, or verifier completion.
 pub(in crate::vega::zk_ams::mkhe) struct SealedDirectRkgOneProofOwnerV1<'a> {
     _finalized_capability: FinalizedDirectRkgOneCapabilityV1<'a>,
     proof: SealedDirectRkgOneProofBytesV1,
 }
 
-impl<'a> SealedDirectRkgOneProofOwnerV1<'a> {
-    pub(in crate::vega::zk_ams::mkhe) fn proof_bytes(&self) -> &[u8] {
-        self.proof.as_bytes()
-    }
+struct PostSemanticDirectRkgOneProofOwnerV1<S> {
+    _semantic_owner: S,
+    _proof: SealedDirectRkgOneProofBytesV1,
+}
 
-    pub(in crate::vega::zk_ams::mkhe) fn into_compacted_post_seal_v1(self) -> impl Sized + 'a {
-        (
-            self._finalized_capability.into_compacted_post_seal_v1(),
-            self.proof,
-        )
+impl<'a> SealedDirectRkgOneProofOwnerV1<'a> {
+    pub(in crate::vega::zk_ams::mkhe) fn verify_semantic_candidate_v1<P>(
+        self,
+        context: ZkAmsMkheDirectCeremonyContextV1,
+        objects: DirectRelationPublicObjectsV1,
+        provider: &mut P,
+    ) -> Result<impl Sized + use<'a, P>, ZkAmsMkheErrorV1>
+    where
+        P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+    {
+        let Self {
+            _finalized_capability,
+            proof,
+        } = self;
+        let semantic_owner = verify_finalized_direct_rkg_one_semantic_candidate_v1(
+            _finalized_capability,
+            context,
+            objects,
+            proof.as_bytes(),
+            provider,
+        )?;
+        Ok(PostSemanticDirectRkgOneProofOwnerV1 {
+            _semantic_owner: semantic_owner,
+            _proof: proof,
+        })
     }
 }
 

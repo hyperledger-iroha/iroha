@@ -7839,21 +7839,8 @@ pub(crate) struct FinalizedV2Height {
     wal_retirement_warning: Option<String>,
 }
 impl FinalizedV2Height {
-    /// Cleanup diagnostic after Kura already made the decision durable.
-    ///
-    /// A retained WAL is safe and replayable; it must be retried or reported,
-    /// but it cannot turn a durably finalized height back into an unfinalized
-    /// one.
-    #[cfg(test)]
-    pub(crate) fn wal_retirement_warning(&self) -> Option<&str> {
-        self.wal_retirement_warning.as_deref()
-    }
-
     /// Consume the cleanup result into its retained warning.
-    ///
-    /// The lifecycle finalization type state keeps this diagnostic beside the
-    /// typed Kura receipt until output rollover has crossed its durable
-    /// handoff. It exposes no reducer, WAL, or serviced-candidate owner.
+    /// It exposes no reducer, WAL, or serviced-candidate owner.
     pub(in crate::sumeragi) fn into_wal_retirement_warning(self) -> Option<String> {
         self.wal_retirement_warning
     }
@@ -10961,12 +10948,8 @@ pub(crate) struct SumeragiV2Adapter {
     /// instead of re-entering an adapter-owned FIFO.
     reducer_fence_generation: u64,
     replay_complete: bool,
-    /// Whether reducer transitions may publish the current-height global status.
-    ///
-    /// Recovered startup keeps this closed until the lifecycle activation
-    /// authority snapshots the exact ordinary or PendingKura height. Reducer
-    /// recovery still computes and validates every status while publication is
-    /// deferred, so opening the live boundary cannot hide an invalid snapshot.
+    /// Whether reducer transitions may publish current-height global status;
+    /// recovered startup keeps this closed until lifecycle activation.
     status_publication_enabled: bool,
     fail_closed: bool,
 }
@@ -11031,13 +11014,8 @@ impl SumeragiV2Adapter {
             deferred_admission_ordinals,
         )
     }
-    /// Open using the already validated runtime/effect ownership geometry.
-    ///
-    /// The production runner uses this constructor so a configured command
-    /// queue larger than the standalone fixture default cannot exhaust the
-    /// serviced-identity table while its legitimate lifecycles remain active.
-    #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)]
+    /// Open with validated ownership geometry and configured queue capacity.
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn open_with_capacity_geometry(
         kura: &Kura,
         wal_authority: KuraSafetyWalDirectoryAuthority,
@@ -11065,13 +11043,8 @@ impl SumeragiV2Adapter {
             deferred_admission_ordinals,
         )
     }
-    /// Open one adapter while keeping its startup batch behind the WAL-recovery seal.
-    ///
-    /// Unlike [`Self::open_with_capacity_geometry`], this constructor neither
-    /// publishes initial status nor exposes the replay batch before the final
-    /// WAL record is authenticated and any unique phase vote is removed.
-    #[allow(dead_code)]
-    #[allow(clippy::too_many_arguments)]
+    /// Open behind the WAL-recovery seal without publishing or exposing replay.
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn open_recovered_startup_with_capacity_geometry(
         kura: &Kura,
         wal_authority: KuraSafetyWalDirectoryAuthority,
@@ -11131,8 +11104,7 @@ impl SumeragiV2Adapter {
         )
     }
     /// Open with deferred status publication and the validated queue geometry.
-    #[allow(dead_code)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn open_deferred_status_with_capacity_geometry(
         kura: &Kura,
         wal_authority: KuraSafetyWalDirectoryAuthority,
@@ -16325,10 +16297,8 @@ impl SumeragiV2Adapter {
         self.status_publication_enabled = true;
         Ok(status)
     }
-    /// Snapshot and open status publication for an already-applied PendingKura height.
-    ///
-    /// Unlike ordinary successor activation, this boundary deliberately does
-    /// not record a successor-height marker or arm the pacemaker.
+    /// Snapshot and publish an applied PendingKura height without recording a
+    /// successor marker or arming the pacemaker.
     pub(in crate::sumeragi) fn pending_kura_activation_status(
         &mut self,
     ) -> Result<wire::SumeragiV2Status, AdapterError> {

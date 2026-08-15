@@ -3,29 +3,24 @@
 //! The workflow deliberately keeps network authentication and signing outside
 //! the persisted state.  Its journal contains only public request material,
 //! signed public evidence, finalized records, and idempotency identifiers.  A
-//! backend is therefore supplied at runtime and cannot smuggle provider URLs,
-//! bearer credentials, private keys, or a retired public upload route into a
-//! project or operation journal.
+//! backend is therefore supplied at runtime and cannot smuggle provider URLs, bearer credentials,
+//! private keys, or a retired public upload route into a project or operation journal.
 //!
-//! Archive registration has three durable checkpoints inside the public
-//! `ArchiveRegistration` phase: a bounded append-only sequence of exact
-//! fee-quoted signed transaction attempts, the finalized authoritative archive
-//! record recovered from the registry, and only then permanent pin/order
-//! coordination. An attempt is never replaced while its application state is
-//! absent, unknown, or pending. A new receipt and transaction generation are
-//! permitted only after durable terminal and finalized-absence evidence for the
-//! preceding attempt. Archive locations have an independent bounded append-only
-//! generation history: each exact signed CAS is persisted before submission,
-//! every later generation requires authoritative terminal finalized state, and
-//! retired stable location identities are never reused.
-//! Release submission follows the same Phase-B boundary: clean readbacks and one
-//! fee-quoted signature are persisted atomically before any send, every retry first
-//! queries the exact transaction hash, and an absent transaction is submitted only
-//! while the selected finalized location is byte-identical to the signed floor.
+//! Archive registration has three durable checkpoints inside the public `ArchiveRegistration`
+//! phase: a bounded append-only sequence of exact fee-quoted signed transaction attempts, the
+//! finalized authoritative archive record recovered from the registry, and only then permanent
+//! pin/order coordination. An attempt is never replaced while its application state is absent,
+//! unknown, or pending. A new receipt and transaction generation are permitted only after durable
+//! terminal and finalized-absence evidence for the preceding attempt. Archive locations have an
+//! independent bounded append-only generation history: each exact signed CAS is persisted before
+//! submission, every later generation requires authoritative terminal finalized state, and retired
+//! stable location identities are never reused. Release submission follows the same Phase-B
+//! boundary: clean readbacks and one fee-quoted signature are persisted atomically before any send,
+//! every retry first queries the exact transaction hash, and an absent transaction is submitted
+//! only while the selected finalized location is byte-identical to the signed floor.
 //!
-//! Filesystem-backed journal and staged-CAR access is qualified on Unix. Other
-//! targets fail closed with the platform's unsupported error before inspecting
-//! or creating the selected state path.
+//! Filesystem-backed journal and staged-CAR access is qualified on Unix. Other targets fail closed
+//! with the platform's unsupported error before inspecting or creating the selected state path.
 use crate::atomic_io::{AtomicWriteError, AtomicWriteRoot};
 use iroha::musubi_runtime::{
     MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1, MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,

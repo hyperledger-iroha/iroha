@@ -1,10 +1,9 @@
 //! Rail-specific ISO 20022 profile catalog for the bridge.
 //!
-//! The profile data is embedded as Norito JSON so all nodes start from the same
-//! deterministic baseline without runtime network fetches. Operators can layer
-//! configuration overrides in Torii, but the defaults here remain the source of
-//! truth for generic ISO, CBPR+, Fedwire, SEPA SCT Inst, and securities CSD
-//! validation policy.
+//! The profile data is embedded as Norito JSON so all nodes start from the same deterministic
+//! baseline without runtime network fetches. Operators can layer configuration overrides in Torii,
+//! but the defaults here remain the source of truth for generic ISO, CBPR+, Fedwire, SEPA SCT Inst,
+//! and securities CSD validation policy.
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use norito::json::{self, Value};
 use sha2::{Digest as _, Sha256};

@@ -506,8 +506,7 @@ pub mod stream {
     #[model]
     mod model {
         use super::*;
-        /// Message sent by the stream producer.
-        /// Event sent by the peer.
+        /// Message sent by the stream producer. Event sent by the peer.
         #[derive(Debug, Clone, Decode, Encode, IntoSchema, Constructor)]
         #[cfg_attr(
             feature = "json",
@@ -515,8 +514,7 @@ pub mod stream {
         )]
         #[repr(transparent)]
         pub struct EventMessage(pub EventBox);
-        /// Message sent by the stream consumer.
-        /// Request sent by the client to subscribe to events.
+        /// Message sent by the stream consumer. Request sent by the client to subscribe to events.
         ///
         /// Proof filters are bundled with the primary subscription message to keep
         /// the WebSocket format single-shot and deterministic for the first release.

@@ -1,10 +1,9 @@
 //! Data structures describing Taikai live-broadcast artefacts.
 //!
-//! The Taikai Segment Envelope (TSE) captures the metadata required to map a
-//! low-latency broadcast segment to its deterministic data availability
-//! manifest, CAR commitments, and playback descriptors. Hosts and clients use
-//! the envelope to anchor CMAF ladders, enforce policy, and build viewer
-//! dashboards without re-deriving ingest metadata.
+//! The Taikai Segment Envelope (TSE) captures the metadata required to map a low-latency broadcast
+//! segment to its deterministic data availability manifest, CAR commitments, and playback
+//! descriptors. Hosts and clients use the envelope to anchor CMAF ladders, enforce policy, and
+//! build viewer dashboards without re-deriving ingest metadata.
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{

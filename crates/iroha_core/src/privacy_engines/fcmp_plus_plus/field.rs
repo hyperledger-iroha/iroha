@@ -291,9 +291,8 @@ macro_rules! define_local_field {
     ($name:ident, $residue:ty) => {
         /// Local transparent field boundary used by the reusable proof backend.
         ///
-        /// Keeping the newtype local makes its cryptographic trait
-        /// implementations coherent while every operation continues to
-        /// delegate to the same constant-modulus residue arithmetic.
+        /// Keeping the newtype local makes its cryptographic trait implementations coherent while
+        /// every operation continues to delegate to the same constant-modulus residue arithmetic.
         #[repr(transparent)]
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
         pub(super) struct $name($residue);
@@ -481,8 +480,7 @@ pub(super) fn with_secret_field25519_scalar_encoding_v1<T>(
     drop(encoded);
     result
 }
-/// Helioselene counterpart of
-/// [`with_secret_field25519_scalar_encoding_v1`].
+/// Helioselene counterpart of [`with_secret_field25519_scalar_encoding_v1`].
 pub(super) fn with_secret_helioselene_scalar_encoding_v1<T>(
     value: &HelioseleneField,
     use_encoding: impl FnOnce(&[u8; 32]) -> T,
@@ -660,10 +658,9 @@ macro_rules! define_cycle_point {
                 drop(inverse);
                 Some(coordinates)
             }
-            /// Extract a private affine x-coordinate by borrowing a point
-            /// retained in an upstream erasing owner. The projective point is
-            /// never copied by value; inverse and coordinate scratch remain
-            /// in local move-only erasing owners on every exit path.
+            /// Extract a private affine x-coordinate by borrowing a point retained in an upstream
+            /// erasing owner. The projective point is never copied by value; inverse and coordinate
+            /// scratch remain in local move-only erasing owners on every exit path.
             pub(super) fn secret_x_ref_v1(&self) -> Option<SecretCycleScalarV1<$field>> {
                 let (mut inverse, is_some) = self.z.invert();
                 let inverse = BorrowedZeroizingCopySlot(&mut inverse);
@@ -696,10 +693,9 @@ macro_rules! define_cycle_point {
                 drop(point);
                 Some(encoded)
             }
-            /// Encode a borrowed secret-derived projective point while its
-            /// upstream owner remains responsible for erasing the point.
-            /// Every inverse, affine coordinate, integer, and byte scratch
-            /// value created here remains in an erasing owner.
+            /// Encode a borrowed secret-derived projective point while its upstream owner remains
+            /// responsible for erasing the point. Every inverse, affine coordinate, integer, and
+            /// byte scratch value created here remains in an erasing owner.
             pub(super) fn secret_encode_ref_v1(&self) -> Option<SecretEncodedScalarV1> {
                 let (mut inverse, is_some) = self.z.invert();
                 let inverse = BorrowedZeroizingCopySlot(&mut inverse);

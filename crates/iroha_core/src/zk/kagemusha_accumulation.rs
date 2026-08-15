@@ -607,7 +607,7 @@ mod tests {
     use super::*;
     use ff::Field as _;
     use halo2_proofs::{
-        halo2curves::group::{Curve as _, Group as _},
+        halo2curves::group::Group as _,
         poly::{commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
     };
     fn ipa_h_coefficients<F: ff::Field>(challenges: &[F], scalar: F) -> Vec<F> {

@@ -48,8 +48,7 @@ const REVOCATION_SNAPSHOT_ENTRY_LIMIT_BYTES: usize = 128;
 const REVOCATION_SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
 /// First-release hard ceiling for persistent ticket-revocation entries.
 pub const TICKET_REVOCATION_STORE_MAX_ENTRIES_V1: usize = 65_536;
-/// Derive the mandatory admission transcript commitment for a serialized
-/// client hello.
+/// Derive the mandatory admission transcript commitment for a serialized client hello.
 ///
 /// The exact length and bytes are committed so an admission credential cannot
 /// be moved to a different handshake, even when optional hello fields differ.
@@ -137,8 +136,7 @@ impl Ticket {
     pub fn expires_at_time(&self) -> SystemTime {
         self.checked_expires_at_time().unwrap_or(UNIX_EPOCH)
     }
-    /// Returns the ticket expiration timestamp if it is representable by
-    /// `SystemTime`.
+    /// Returns the ticket expiration timestamp if it is representable by `SystemTime`.
     #[must_use]
     pub fn checked_expires_at_time(&self) -> Option<SystemTime> {
         unix_time_from_secs(self.expires_at)
@@ -174,11 +172,10 @@ fn read_ticket_field<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result
 }
 /// A `PoW` ticket signed by a relay using ML-DSA-44 (Dilithium2).
 ///
-/// Signed tickets act as reusable tokens or "fast passes" for clients, binding
-/// the proof-of-work (or a difficulty-0 grant) to a specific relay and session
-/// context. The signature covers the ticket bytes, the relay ID, and the
-/// mandatory transcript hash to prevent replay across different sessions or
-/// relays.
+/// Signed tickets act as reusable tokens or "fast passes" for clients, binding the proof-of-work
+/// (or a difficulty-0 grant) to a specific relay and session context. The signature covers the
+/// ticket bytes, the relay ID, and the mandatory transcript hash to prevent replay across different
+/// sessions or relays.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct SignedTicket {
     /// The underlying `PoW` ticket.
@@ -244,9 +241,8 @@ impl SignedTicket {
     /// Verify the signature on this ticket against the provided public key.
     ///
     /// # Errors
-    /// Returns [`Error::Malformed`] if the signature length is invalid,
-    /// [`Error::InvalidSignature`] if verification fails, or [`Error::PostQuantum`]
-    /// if the key format is invalid.
+    /// Returns [`Error::Malformed`] if the signature length is invalid, [`Error::InvalidSignature`]
+    /// if verification fails, or [`Error::PostQuantum`] if the key format is invalid.
     pub fn verify(&self, public_key: &[u8]) -> Result<(), Error> {
         Self::validate_ticket_format(&self.ticket)?;
         Self::validate_signature_material(&self.signature)?;
@@ -302,8 +298,7 @@ impl SignedTicket {
     pub fn expires_at(&self) -> SystemTime {
         self.checked_expires_at().unwrap_or(UNIX_EPOCH)
     }
-    /// Returns the signed ticket expiration timestamp if it is representable by
-    /// `SystemTime`.
+    /// Returns the signed ticket expiration timestamp if it is representable by `SystemTime`.
     #[must_use]
     pub fn checked_expires_at(&self) -> Option<SystemTime> {
         self.ticket.checked_expires_at_time()
@@ -866,10 +861,9 @@ impl<'a> ChallengeBinding<'a> {
 impl Parameters {
     /// Construct new `PoW` parameters.
     ///
-    /// Invalid bounds produce a fail-closed policy that rejects all minted and
-    /// verified tickets. Runtime configuration loaders should prefer
-    /// [`Parameters::try_new`] so invalid policy input can be surfaced as a
-    /// configuration error.
+    /// Invalid bounds produce a fail-closed policy that rejects all minted and verified tickets.
+    /// Runtime configuration loaders should prefer [`Parameters::try_new`] so invalid policy input
+    /// can be surfaced as a configuration error.
     #[must_use]
     pub fn new(difficulty: u8, max_future_skew: Duration, min_ttl: Duration) -> Self {
         Self::try_new(difficulty, max_future_skew, min_ttl)

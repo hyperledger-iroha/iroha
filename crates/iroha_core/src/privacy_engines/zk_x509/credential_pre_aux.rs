@@ -1,12 +1,11 @@
 //! Shared pre-auxiliary Fiat--Shamir schedule for the X5S1 credential proof.
 //!
-//! The MAIN and compact-CA traces compare grand-product terminals. Those
-//! products are meaningful only when both subproofs use the same tuple
-//! challenges. MAIN's projection products have the same base-before-auxiliary
-//! chronology requirement. This module samples every credential challenge
-//! family only after all six MAIN base roots and the compact-CA base root have
-//! been committed, then supplies an opaque phase token to MAIN and a binding
-//! that each local subproof absorbs before its auxiliary commitments.
+//! The MAIN and compact-CA traces compare grand-product terminals. Those products are meaningful
+//! only when both subproofs use the same tuple challenges. MAIN's projection products have the same
+//! base-before-auxiliary chronology requirement. This module samples every credential challenge
+//! family only after all six MAIN base roots and the compact-CA base root have been committed, then
+//! supplies an opaque phase token to MAIN and a binding that each local subproof absorbs before its
+//! auxiliary commitments.
 use super::{
     der_stark::{ZkX509DerStarkChallengesV1, derive_zk_x509_der_stark_challenges_v1},
     io_air::{ZkX509IoChallengesV1, derive_zk_x509_io_challenges_v1},
@@ -85,9 +84,8 @@ const _: () = {
 };
 /// MAIN-owned input to the joint pre-auxiliary challenge schedule.
 ///
-/// The outer verifier constructs this only after decoding the canonical MAIN
-/// layout. The fixed-size root array makes omission, excess, and a caller-
-/// selected group count unrepresentable.
+/// The outer verifier constructs this only after decoding the canonical MAIN layout. The fixed-size
+/// root array makes omission, excess, and a caller- selected group count unrepresentable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CredentialMainPreAuxV1 {
     /// Digest of the complete verifier-owned statement and genesis context.
@@ -160,10 +158,9 @@ impl ZkX509CredentialMainPreAuxV1 {
 }
 /// MAIN challenge phase available only after every X5S1 base commitment.
 ///
-/// Prover and verifier adapters accept this opaque token instead of raw
-/// challenge structures. Its fields and construction stay private to this
-/// module, so an adapter cannot fabricate the pre-auxiliary phase or sample
-/// any auxiliary challenge before X5B1 has bound all seven roots.
+/// Prover and verifier adapters accept this opaque token instead of raw challenge structures. Its
+/// fields and construction stay private to this module, so an adapter cannot fabricate the
+/// pre-auxiliary phase or sample any auxiliary challenge before X5B1 has bound all seven roots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CredentialMainPostBaseChallengesV1 {
     projection: ZkX509ProjectionChallengesV1,
@@ -237,10 +234,9 @@ impl ZkX509CredentialMainPostBaseChallengesV1 {
 pub(crate) struct ZkX509CredentialPreAuxBindingV1 {
     /// Exact MAIN commitment phase from which the joint schedule was derived.
     ///
-    /// Retaining this typed provenance lets the consuming MAIN phase reject a
-    /// valid X5B1 capability minted for another six-root phase before any
-    /// challenge-dependent child is mutated. It is deliberately not exposed
-    /// as raw roots or digests.
+    /// Retaining this typed provenance lets the consuming MAIN phase reject a valid X5B1 capability
+    /// minted for another six-root phase before any challenge-dependent child is mutated. It is
+    /// deliberately not exposed as raw roots or digests.
     main_pre_aux: ZkX509CredentialMainPreAuxV1,
     main_post_base: ZkX509CredentialMainPostBaseChallengesV1,
 }
@@ -563,10 +559,9 @@ pub(crate) fn derive_zk_x509_credential_pre_aux_binding_v1(
 }
 /// Bind a recomputed joint pre-auxiliary schedule into one local transcript.
 ///
-/// This call belongs immediately after that subproof's own base-root frame and
-/// immediately before its auxiliary-root frame. Encoding the challenges as
-/// well as the post-challenge state makes accidental state/challenge mixing
-/// fail closed even inside crate-private integration code.
+/// This call belongs immediately after that subproof's own base-root frame and immediately before
+/// its auxiliary-root frame. Encoding the challenges as well as the post-challenge state makes
+/// accidental state/challenge mixing fail closed even inside crate-private integration code.
 pub(crate) fn absorb_zk_x509_credential_pre_aux_binding_v1(
     transcript: &mut TransparentTranscriptV1,
     binding: ZkX509CredentialPreAuxBindingV1,

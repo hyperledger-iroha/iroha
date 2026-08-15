@@ -220,9 +220,8 @@ pub fn verify_small_with_network_id(
 }
 /// Verify a Small-variant VRF proof using canonical compressed public-key bytes.
 ///
-/// This is the wire-boundary counterpart to [`verify_small_with_network_id`]. It
-/// rejects malformed, non-canonical, wrong-subgroup, and identity public keys
-/// before performing the pairing check.
+/// This is the wire-boundary counterpart to [`verify_small_with_network_id`]. It rejects malformed,
+/// non-canonical, wrong-subgroup, and identity public keys before performing the pairing check.
 #[must_use]
 pub fn verify_small_bytes_with_network_id(
     public_key: &[u8],

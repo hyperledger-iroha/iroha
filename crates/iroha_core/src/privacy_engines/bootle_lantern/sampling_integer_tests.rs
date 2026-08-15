@@ -1,7 +1,6 @@
 use super::*;
-use p256::elliptic_curve::bigint::Encoding as _;
 use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-use zeroize::{Zeroize as _, Zeroizing};
+use zeroize::Zeroizing;
 struct TestRng {
     state: u64,
     fail: bool,

@@ -3,8 +3,7 @@
 //! This module allocates the complete current dual-`z` identity inventory before
 //! the first `Csrc` blinding is sampled.  Only the already-existing 344 source
 //! commitments can be adopted in this slice.  Every later purpose transition is
-//! deliberately absent, and production still cannot construct the entropy
-//! source.
+//! deliberately absent, and production still cannot construct the entropy source.
 
 #![allow(dead_code, reason = "later commitment purposes remain uninhabited")]
 #![cfg_attr(

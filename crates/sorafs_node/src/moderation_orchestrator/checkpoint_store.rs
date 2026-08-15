@@ -47,9 +47,8 @@ pub struct ModerationCheckpointStoreRecordV1 {
 impl ModerationCheckpointStoreRecordV1 {
     /// Verify the canonical envelope fields visible at a runtime-provider boundary.
     ///
-    /// Network namespace and exact predecessor ancestry require orchestrator
-    /// context and are checked separately when the record is opened or
-    /// committed.
+    /// Network namespace and exact predecessor ancestry require orchestrator context and are
+    /// checked separately when the record is opened or committed.
     #[must_use]
     pub fn has_valid_provider_envelope(
         &self,

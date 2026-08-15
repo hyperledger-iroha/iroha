@@ -445,8 +445,7 @@ mod model {
         pub policy_digest: [u8; 32],
         /// Resulting provider revision, or zero for policy activation.
         pub provider_revision: u64,
-        /// Resulting authoritative provider lifecycle stage, absent only for
-        /// policy activation.
+        /// Resulting authoritative provider lifecycle stage, absent only for policy activation.
         pub resulting_lifecycle_stage: Option<crate::sorafs::reserve::ReserveLifecycleStage>,
         /// Transaction authority that committed the transition.
         pub authority: crate::account::AccountId,
@@ -647,7 +646,6 @@ mod json_support {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use base64::Engine as _;
         fn assert_bare_base64_json<T>(value: &T)
         where
             T: norito::codec::Encode + norito::core::NoritoSerialize + norito::json::JsonSerialize,

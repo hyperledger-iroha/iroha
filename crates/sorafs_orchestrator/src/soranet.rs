@@ -1,10 +1,9 @@
 //! SoraNet client helpers for guard selection, pinning, and persistence.
 //!
-//! The guard selection engine keeps entry relays sticky for a configurable
-//! retention window, updates metadata from the latest directory consensus, and
-//! persists selections using Norito so CLI tooling and SDKs can reuse guard
-//! caches across sessions. This underpins SNNet-5 by providing deterministic
-//! guard pinning ahead of the circuit manager and transport integration.
+//! The guard selection engine keeps entry relays sticky for a configurable retention window,
+//! updates metadata from the latest directory consensus, and persists selections using Norito so
+//! CLI tooling and SDKs can reuse guard caches across sessions. This underpins SNNet-5 by providing
+//! deterministic guard pinning ahead of the circuit manager and transport integration.
 #![allow(unexpected_cfgs)]
 use crate::{AnonymityPolicy, SORANET_BANDWIDTH_UNIT_BYTES};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -688,10 +687,9 @@ impl RelayDirectory {
     }
     /// Authenticate an exact guard directory artifact at an explicit Unix second.
     ///
-    /// The expected snapshot digest must be obtained independently of the
-    /// snapshot bytes. It commits to the embedded issuer records, unlike the
-    /// snapshot's `directory_hash`, which binds certificates to consensus
-    /// metadata but does not authenticate the snapshot file itself.
+    /// The expected snapshot digest must be obtained independently of the snapshot bytes. It
+    /// commits to the embedded issuer records, unlike the snapshot's `directory_hash`, which binds
+    /// certificates to consensus metadata but does not authenticate the snapshot file itself.
     ///
     /// # Errors
     ///

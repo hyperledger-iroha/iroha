@@ -8,9 +8,8 @@
 //! while checking every release RNS limb in all four challenge repetitions.
 //! Only that complete path can mint the move-only relation receipt.
 //!
-//! The complete relation will combine bound-one membership evidence for the
-//! persistent secret with bound-two membership evidence for the public error
-//! and the native polynomial Sigma equations
+//! The complete relation will combine bound-one membership evidence for the persistent secret with
+//! bound-two membership evidence for the public error and the native polynomial Sigma equations
 //!
 //! ```text
 //! b_l = -a_l*s + (t mod q_l)*e                      (mod q_l, X^N + 1)
@@ -410,9 +409,8 @@ impl ZkAmsMkheCpkShareStatementV1 {
     }
     /// Construct the sole statement accepted under an independently governed roster.
     ///
-    /// Profile, security-certificate, roster, key-material, epoch, party, and
-    /// deterministic public-`a` axes are derived here instead of copied from an
-    /// untrusted proof envelope.
+    /// Profile, security-certificate, roster, key-material, epoch, party, and deterministic
+    /// public-`a` axes are derived here instead of copied from an untrusted proof envelope.
     pub(super) fn from_governed_roster(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         cpk_transcript_digest: [u8; 32],
@@ -1515,12 +1513,11 @@ impl fmt::Debug for ZkAmsMkheCpkProverResponseV1 {
 }
 /// Sample and reject complete attempts, delegating only actual first-message algebra.
 ///
-/// The callback must compute all commitment and RNS first messages from the
-/// supplied masks and return the reconstructed seed and its four coordinates.
-/// An identity commitment first message must return `FirstMessageRejected`;
-/// that signal and only response-box rejection consume another bounded attempt.
-/// Malformed transcript, RNS-stream, and provider errors remain terminal.
-/// Retry ordinals are intentionally absent from both callback input and wire.
+/// The callback must compute all commitment and RNS first messages from the supplied masks and
+/// return the reconstructed seed and its four coordinates. An identity commitment first message
+/// must return `FirstMessageRejected`; that signal and only response-box rejection consume another
+/// bounded attempt. Malformed transcript, RNS-stream, and provider errors remain terminal. Retry
+/// ordinals are intentionally absent from both callback input and wire.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn construct_zk_ams_mkhe_cpk_responses_with_aborts_v1<R, F>(
     secret: &[i8],
@@ -2645,10 +2642,9 @@ impl VerifiedZkAmsMkheCpkContributionV1 {
     /// Consume the complete contribution into the sole lineage accepted by
     /// collective-key-share admission.
     ///
-    /// This deliberately repeats every state/share axis at the transition:
-    /// possession of a previously verified relation is insufficient when its
-    /// roster, transcript, party position, or canonical `b_i` object does not
-    /// match the state being admitted.
+    /// This deliberately repeats every state/share axis at the transition: possession of a
+    /// previously verified relation is insufficient when its roster, transcript, party position, or
+    /// canonical `b_i` object does not match the state being admitted.
     pub(super) fn into_collective_binding_source(
         self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2670,11 +2666,10 @@ impl VerifiedZkAmsMkheCpkContributionV1 {
     }
     /// Consume the complete verifier capability for bounded decryption setup.
     ///
-    /// Unlike the legacy admission adapter, this transition does not accept a
-    /// caller-supplied content hash. It carries the exact governed pointer and
-    /// the verifier's owned complete-read receipt forward with the move-only
-    /// secret-commitment lineage. The bounded ceremony must subsequently
-    /// match and republish the canonical public share at this pointer.
+    /// Unlike the legacy admission adapter, this transition does not accept a caller-supplied
+    /// content hash. It carries the exact governed pointer and the verifier's owned complete-read
+    /// receipt forward with the move-only secret-commitment lineage. The bounded ceremony must
+    /// subsequently match and republish the canonical public share at this pointer.
     pub(super) fn into_compact_decryption_source(
         self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2739,9 +2734,8 @@ impl fmt::Debug for VerifiedZkAmsMkheCpkContributionV1 {
 }
 /// Move-only CPK lineage plus exact direct-object provenance for decryption.
 ///
-/// There is no decoder, raw-pointer constructor, or `Clone` implementation.
-/// Only the complete native CPK verifier can create the contribution consumed
-/// into this value.
+/// There is no decoder, raw-pointer constructor, or `Clone` implementation. Only the complete
+/// native CPK verifier can create the contribution consumed into this value.
 pub(super) struct VerifiedZkAmsMkheCompactDecryptionSourceV1 {
     binding_source: VerifiedZkAmsMkheCpkBindingSourceV1,
     party_b_pointer: ZkAmsMkheCpkPartyBPointerV1,

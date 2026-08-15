@@ -1,9 +1,8 @@
 //! Helpers for decoding proof stream responses delivered over compressed transports.
 //!
-//! Gateways may apply HTTP content encodings (e.g., `gzip`, `zstd`) when
-//! streaming NDJSON proof items. This module centralises the decompression
-//! logic so callers (CLI, orchestrator, tests) can share a hardened
-//! implementation.
+//! Gateways may apply HTTP content encodings (e.g., `gzip`, `zstd`) when streaming NDJSON proof
+//! items. This module centralises the decompression logic so callers (CLI, orchestrator, tests) can
+//! share a hardened implementation.
 use crate::proof_stream::{
     ProofStreamItem, ProofStreamSequenceVerifier, ProofStreamVerificationContext,
 };

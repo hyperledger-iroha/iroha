@@ -46,17 +46,15 @@ pub(super) struct SumcheckProof {
 }
 /// Move-only owner for one prover table containing witness-derived scalars.
 ///
-/// Binding erases the discarded half before shortening the vector, and drop
-/// erases the live half on success, error, or unwind. The scalar type is
-/// `Copy`, so this is a best-effort erasure of the owned heap allocation, not
-/// a claim that compiler-created register or stack copies are erased.
+/// Binding erases the discarded half before shortening the vector, and drop erases the live half on
+/// success, error, or unwind. The scalar type is `Copy`, so this is a best-effort erasure of the
+/// owned heap allocation, not a claim that compiler-created register or stack copies are erased.
 pub(super) struct SecretScalarTable {
     values: Vec<Scalar>,
 }
-/// One full multilinear table stored as independently allocated lower and
-/// upper halves. Consuming the first sum-check round binds into `lower` and
-/// drops `upper`, so the allocator can release half of the resident table
-/// instead of retaining a full-table `Vec` capacity after truncation.
+/// One full multilinear table stored as independently allocated lower and upper halves. Consuming
+/// the first sum-check round binds into `lower` and drops `upper`, so the allocator can release
+/// half of the resident table instead of retaining a full-table `Vec` capacity after truncation.
 pub(super) struct SplitSecretScalarTable {
     lower: SecretScalarTable,
     upper: SecretScalarTable,

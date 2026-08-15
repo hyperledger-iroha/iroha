@@ -152,8 +152,7 @@ impl IvmCache {
             }
         }
     }
-    /// Decode the code buffer using the canonical decoder. Returns a shared
-    /// slice of decoded ops.
+    /// Decode the code buffer using the canonical decoder. Returns a shared slice of decoded ops.
     pub fn decode_stream(code: &[u8]) -> Result<Arc<[DecodedOp]>, crate::VMError> {
         if (code.len() as u64) > crate::memory::Memory::HEAP_START {
             return Err(crate::VMError::MemoryOutOfBounds);
@@ -208,8 +207,7 @@ impl IvmCache {
         let key = Self::key_for(code, vmaj, vmin);
         self.get_or_predecode_with_key(key, code)
     }
-    /// Decode a full artifact that begins with a supported IVM 1.1 header followed by code
-    /// bytes.
+    /// Decode a full artifact that begins with a supported IVM 1.1 header followed by code bytes.
     pub fn decode_artifact(
         artifact: &[u8],
     ) -> Result<(ProgramMetadata, Arc<[DecodedOp]>), crate::VMError> {

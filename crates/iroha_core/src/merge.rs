@@ -162,8 +162,7 @@ pub fn canonical_merge_ledger_entry_bytes(entry: &MergeLedgerEntry) -> Vec<u8> {
 pub fn merge_ledger_entry_hash(entry: &MergeLedgerEntry) -> HashOf<MergeLedgerEntry> {
     entry.canonical_hash()
 }
-/// Return the exact canonical framed byte length committed by a compact
-/// merge-entry reference.
+/// Return the exact canonical framed byte length committed by a compact merge-entry reference.
 #[must_use]
 pub fn merge_ledger_entry_encoded_len(entry: &MergeLedgerEntry) -> u64 {
     entry.canonical_encoded_len()
@@ -375,11 +374,10 @@ struct MergePostStatePreimage {
 }
 /// Compute the deterministic post-state identity represented by a batch.
 ///
-/// `base_state_hash` is the canonical committed WSV snapshot hash, not the latest
-/// global block hash. `write_set_root` commits every changed key/value in the
-/// ordered execution overlay (plus direct transaction membership). Together they
-/// form a canonical post-state identity that detects divergent writes even when
-/// two executions return equal success/failure result vectors.
+/// `base_state_hash` is the canonical committed WSV snapshot hash, not the latest global block
+/// hash. `write_set_root` commits every changed key/value in the ordered execution overlay (plus
+/// direct transaction membership). Together they form a canonical post-state identity that detects
+/// divergent writes even when two executions return equal success/failure result vectors.
 #[must_use]
 pub fn merge_expected_post_state_hash(
     base_state_height: u64,

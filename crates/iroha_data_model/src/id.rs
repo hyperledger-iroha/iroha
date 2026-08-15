@@ -14,9 +14,8 @@ use norito::core::{DecodeFromSlice, Error as NoritoError};
 use std::borrow::Borrow;
 /// Maximum byte length of a canonical [`ChainId`].
 ///
-/// Chain identifiers are ASCII, so this is also the maximum character count.
-/// The bound keeps every signed, configured, and peer-advertised chain identity
-/// small before any allocation is performed.
+/// Chain identifiers are ASCII, so this is also the maximum character count. The bound keeps every
+/// signed, configured, and peer-advertised chain identity small before any allocation is performed.
 pub const MAX_CHAIN_ID_BYTES: usize = 128;
 #[model]
 mod model {
@@ -92,9 +91,8 @@ mod model {
     }
     /// Canonical, deployment-selected identifier of a blockchain.
     ///
-    /// The value is exact, case-sensitive ASCII. It starts and ends with an
-    /// alphanumeric byte and may otherwise contain ASCII alphanumerics plus
-    /// `.`, `_`, `:`, or `-`.
+    /// The value is exact, case-sensitive ASCII. It starts and ends with an alphanumeric byte and
+    /// may otherwise contain ASCII alphanumerics plus `.`, `_`, `:`, or `-`.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
@@ -444,7 +442,6 @@ impl_encode_as_id_box! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norito::core::DecodeFromSlice as _;
     #[derive(Encode)]
     struct UncheckedChainIdWire(Box<str>);
     #[derive(Encode)]

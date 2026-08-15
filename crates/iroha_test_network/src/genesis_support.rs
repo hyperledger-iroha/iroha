@@ -153,12 +153,11 @@ impl ManagedNodeConfig {
 /// Build and sign a prepared genesis manifest using the policies selected by a
 /// canonical node configuration.
 ///
-/// The manifest chain, chain discriminant, optional expected consensus mode,
-/// signing key, and canonical manifest path are bound to the parsed
-/// configuration before signing. The unresolved expected-hash sentinel is
-/// accepted only for this preparation step and is replaced in memory before
-/// canonical configuration parsing. If the configuration already selects an
-/// exact hash, the newly produced block must match it.
+/// The manifest chain, chain discriminant, optional expected consensus mode, signing key, and
+/// canonical manifest path are bound to the parsed configuration before signing. The unresolved
+/// expected-hash sentinel is accepted only for this preparation step and is replaced in memory
+/// before canonical configuration parsing. If the configuration already selects an exact hash, the
+/// newly produced block must match it.
 ///
 /// # Errors
 ///

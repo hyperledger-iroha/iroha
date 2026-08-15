@@ -2006,7 +2006,7 @@
             })
             .expect("execute second duplicate-CAS fixture");
         let mut waiting_again = first_coordinator.clone();
-        first_coordinator
+        let _publication = first_coordinator
             .complete_durable_validate_dispatch(&mut first_holder, first_executed)
             .expect("publish first exact completion carrier");
         let coordinator_before = format!("{waiting_again:?}");

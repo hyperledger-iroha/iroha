@@ -1,12 +1,11 @@
 //! App-facing governance API.
 #![allow(unexpected_cfgs)]
 //!
-//! This module hosts minimal DTOs and handlers for governance endpoints
-//! described in `gov.md` and `specs/contract_deployment.md`.
-//! Handlers validate inputs and build instruction skeletons for callers to
-//! submit through the locally signed transaction pipeline. Draft request
-//! schemas that previously exposed server-side signing inputs are strict and
-//! no longer admit private signing material.
+//! This module hosts minimal DTOs and handlers for governance endpoints described in `gov.md` and
+//! `specs/contract_deployment.md`. Handlers validate inputs and build instruction skeletons for
+//! callers to submit through the locally signed transaction pipeline. Draft request schemas that
+//! previously exposed server-side signing inputs are strict and no longer admit private signing
+//! material.
 //!
 //! Notes
 //! - JSON parsing uses Norito's serde wrappers via the `NoritoJson` extractor.
@@ -1331,8 +1330,7 @@ pub struct LocksGetResponse {
     /// Locks record, when present.
     pub locks: Option<iroha_core::state::GovernanceLocksForReferendum>,
 }
-/// Response payload for GET /v1/gov/referenda/{id}
-/// Response payload for referendum lookup by id.
+/// Response payload for GET /v1/gov/referenda/{id} Response payload for referendum lookup by id.
 #[derive(Copy, Clone, Debug, JsonSerialize)]
 pub struct ReferendumGetResponse {
     /// Whether the referendum exists.

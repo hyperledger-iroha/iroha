@@ -309,13 +309,12 @@ impl AppealFinanceSealedCheckpointRecordV1 {
 }
 /// Runtime-only HSM/KMS signer plus monotonic sealed checkpoint head.
 ///
-/// Implementations must keep signing material and credentials out of process
-/// configuration, make the head compare-and-swap linearizable, preserve the
-/// exact latest record across restarts, and never roll its revision back.
-/// Persisted heads must use
+/// Implementations must keep signing material and credentials out of process configuration, make
+/// the head compare-and-swap linearizable, preserve the exact latest record across restarts, and
+/// never roll its revision back. Persisted heads must use
 /// [`AppealFinanceSealedCheckpointRecordV1::to_canonical_bytes`] and
-/// [`AppealFinanceSealedCheckpointRecordV1::from_canonical_bytes`]; provider
-/// metadata belongs outside that canonical record.
+/// [`AppealFinanceSealedCheckpointRecordV1::from_canonical_bytes`]; provider metadata belongs
+/// outside that canonical record.
 pub trait AppealFinanceCheckpointRuntime: Send + Sync + fmt::Debug {
     /// Return the current provider identity.
     ///
@@ -344,8 +343,7 @@ pub trait AppealFinanceCheckpointRuntime: Send + Sync + fmt::Debug {
     ) -> Result<Option<AppealFinanceSealedCheckpointRecordV1>, AppealFinanceCheckpointExternalError>;
     /// Atomically replace the sealed head if its exact revision is unchanged.
     ///
-    /// Uncertain writes must return
-    /// [`AppealFinanceCheckpointExternalError::Ambiguous`].
+    /// Uncertain writes must return [`AppealFinanceCheckpointExternalError::Ambiguous`].
     ///
     /// # Errors
     ///
@@ -800,10 +798,9 @@ impl AppealFinanceTransactionForwarder {
     }
     /// Open or create a private, authenticated, single-writer durable checkpoint.
     ///
-    /// The HSM/KMS-backed runtime signs every exact checkpoint and owns a
-    /// monotonic sealed head. The sealed record is committed before the local
-    /// atomic rename so a crash can recover the exact newer checkpoint without
-    /// accepting rollback or substitution.
+    /// The HSM/KMS-backed runtime signs every exact checkpoint and owns a monotonic sealed head.
+    /// The sealed record is committed before the local atomic rename so a crash can recover the
+    /// exact newer checkpoint without accepting rollback or substitution.
     ///
     /// # Errors
     ///

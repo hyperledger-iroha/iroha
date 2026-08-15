@@ -80,11 +80,16 @@ fn derived_tuple_enum_rejects_understated_first_field_length() {
     let view = norito::core::from_bytes_view(&frame).expect("inspect canonical frame");
     let flags = view.flags();
     let mut payload = view.as_bytes().to_vec();
+    assert_eq!(
+        norito::core::NoritoSerialize::encoded_len_exact(&value),
+        Some(payload.len()),
+        "skipped enum fields must not contribute to the exact payload length"
+    );
     let first_field_prefix = 4;
     let (declared, prefix_len) =
         norito::core::read_len_from_slice_with_flags(&payload[first_field_prefix..], flags)
             .expect("read first field length");
-    assert_eq!(declared, 4);
+    assert_eq!(declared, core::mem::size_of::<u32>() + prefix_len);
     assert_eq!(prefix_len, 1);
     payload[first_field_prefix] = u8::try_from(declared - 1).expect("shortened field length");
     let forged = norito::core::frame_bare_with_header_flags::<DerivedTupleEnum>(&payload, flags)

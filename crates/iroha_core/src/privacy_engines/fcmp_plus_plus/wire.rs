@@ -2,10 +2,9 @@
 //!
 //! The upstream Monero proof wire omits the input count, tree depth,
 //! pseudo-outs, and key images.  Iroha's sole first-release `IFC1` envelope
-//! commits to the three structural counts in a fixed header, while the
-//! authoritative statement supplies canonical O~/I~/R/C~/L values and the
-//! decoder rejects disagreement with the duplicated proof O~/I~/R.
-//! The contained proof bytes retain the upstream order:
+//! commits to the three structural counts in a fixed header, while the authoritative statement
+//! supplies canonical O~/I~/R/C~/L values and the decoder rejects disagreement with the duplicated
+//! proof O~/I~/R. The contained proof bytes retain the upstream order:
 //! `O~ || I~ || R || SAL` per input, followed by the generalized
 //! Bulletproofs FCMP and its root-blind proof of knowledge, then the sole
 //! ordered aggregate output Bulletproofs+ range proof.
@@ -99,8 +98,7 @@ pub struct ParsedFcmpProofInputV1 {
 /// Strictly framed but not yet cryptographically verified FCMP++ proof.
 ///
 /// Construction of this type proves only canonical structure and size.  It is
-/// intentionally not a verification token and cannot be converted into a
-/// ledger effect.
+/// intentionally not a verification token and cannot be converted into a ledger effect.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedFcmpPlusPlusWireV1 {
     /// Header input count.
@@ -481,10 +479,9 @@ pub fn decode_fcmp_plus_plus_wire_v1(
         range_proof,
     })
 }
-/// Decode a pinned upstream membership-only IFC1 fixture for differential
-/// tests. This path is absent from production builds: it supplies a
-/// structurally canonical dummy range suffix solely so the production parser
-/// can exercise the historical membership component against upstream bytes.
+/// Decode a pinned upstream membership-only IFC1 fixture for differential tests. This path is
+/// absent from production builds: it supplies a structurally canonical dummy range suffix solely so
+/// the production parser can exercise the historical membership component against upstream bytes.
 #[cfg(test)]
 pub(super) fn decode_fcmp_membership_fixture_v1(
     bytes: &[u8],

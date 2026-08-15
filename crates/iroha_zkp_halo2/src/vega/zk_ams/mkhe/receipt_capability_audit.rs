@@ -8,10 +8,9 @@
 //! refuses each operational requirement whose corresponding handoff remains
 //! open. Full release remains unavailable until every handoff closes.
 //!
-//! The release manifest and readiness gate consume the complete audit digest,
-//! blocker mask, and aggregate availability. This makes later implementation
-//! flips reviewable without allowing an unrelated readiness bit to bypass an
-//! open receipt handoff.
+//! The release manifest and readiness gate consume the complete audit digest, blocker mask, and
+//! aggregate availability. This makes later implementation flips reviewable without allowing an
+//! unrelated readiness bit to bypass an open receipt handoff.
 
 use super::{MKHE_VERSION_V1, ZkAmsMkheErrorV1};
 use crate::vega::sponge::Keccak256;
@@ -243,10 +242,9 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
 /// Require one operational capability without accepting a digest shell or a
 /// structurally decoded RNS-Link envelope as a substitute.
 ///
-/// The collective-public-key aggregate and the three evaluated-key receipt
-/// consumers are authorized through their sealed handoffs. The independent
-/// algebraic/materialization/decryption blockers remain open, so these local
-/// successes do not make the complete release available.
+/// The collective-public-key aggregate and the three evaluated-key receipt consumers are authorized
+/// through their sealed handoffs. The independent algebraic/materialization/decryption blockers
+/// remain open, so these local successes do not make the complete release available.
 pub(super) fn require_zk_ams_mkhe_receipt_capability_v1(
     consumer: ZkAmsMkheReceiptCapabilityConsumerV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {

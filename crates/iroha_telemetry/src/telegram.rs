@@ -10,9 +10,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use url::Url;
 /// Maximum Prometheus text examined during one Telegram metrics sample.
 ///
-/// This is a protocol-facing first-release resource ceiling, rather than a
-/// process-memory tuning knob: identical responses are accepted or rejected on
-/// every node regardless of available memory.
+/// This is a protocol-facing first-release resource ceiling, rather than a process-memory tuning
+/// knob: identical responses are accepted or rejected on every node regardless of available memory.
 const TELEGRAM_METRICS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum single Prometheus line retained while streaming a sample.
 const TELEGRAM_METRICS_LINE_MAX_BYTES: usize = 16 * 1024;

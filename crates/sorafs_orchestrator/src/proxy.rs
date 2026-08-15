@@ -1,9 +1,8 @@
 //! Local QUIC proxy helpers for browser/SDK integrations.
 //!
-//! The proxy terminates QUIC connections on the operator workstation and
-//! relays metadata (certificate, manifest) to browser extensions so they can
-//! connect to SoraNet-enabled Torii gateways without handling certificates or
-//! guard cache keys directly.
+//! The proxy terminates QUIC connections on the operator workstation and relays metadata
+//! (certificate, manifest) to browser extensions so they can connect to SoraNet-enabled Torii
+//! gateways without handling certificates or guard cache keys directly.
 #![allow(unexpected_cfgs)]
 use crate::soranet::{GuardCacheKey, GuardCacheKeyError};
 #[cfg(feature = "local-quic-proxy")]

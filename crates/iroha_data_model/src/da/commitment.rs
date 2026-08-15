@@ -180,9 +180,8 @@ impl DaCommitmentBundle {
     }
     /// Canonical Merkle root over the commitment records in this bundle.
     ///
-    /// Leaves and internal nodes use distinct, versioned hash domains. Odd
-    /// leaves are promoted unchanged to the next layer instead of being
-    /// duplicated.
+    /// Leaves and internal nodes use distinct, versioned hash domains. Odd leaves are promoted
+    /// unchanged to the next layer instead of being duplicated.
     #[must_use]
     pub fn merkle_root(&self) -> Option<Hash> {
         if self.commitments.is_empty() {

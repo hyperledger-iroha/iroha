@@ -1,12 +1,11 @@
 //! Governed SoraFS gateway-compliance catalog admission and durable promotion.
 //!
-//! The controller deliberately owns no credentials and performs no ambient DNS
-//! or HTTP access. Feed transport and catalog signatures cross explicit runtime
-//! boundaries so production embeddings can keep authentication material in
-//! their KMS/HSM and pin the exact addresses used for each connection.
-//! Enabled feed transports attest a stable V1 handle, revision, and canonical
-//! hostname/SPKI policy digest before checkpoint state is opened and again
-//! before and after every feed operation.
+//! The controller deliberately owns no credentials and performs no ambient DNS or HTTP access. Feed
+//! transport and catalog signatures cross explicit runtime boundaries so production embeddings can
+//! keep authentication material in their KMS/HSM and pin the exact addresses used for each
+//! connection. Enabled feed transports attest a stable V1 handle, revision, and canonical
+//! hostname/SPKI policy digest before checkpoint state is opened and again before and after every
+//! feed operation.
 use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
 use blake3::Hasher;
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
@@ -1104,10 +1103,9 @@ impl GatewayComplianceControllerConfig {
 }
 /// Compute the V1 domain-separated digest of a canonical hostname/SPKI policy.
 ///
-/// Runtime adapter implementations use this helper to attest the exact
-/// non-secret trust inventory they enforce. Hostnames and pin sets are
-/// traversed in `BTreeMap`/`BTreeSet` order, so every platform produces the
-/// same digest.
+/// Runtime adapter implementations use this helper to attest the exact non-secret trust inventory
+/// they enforce. Hostnames and pin sets are traversed in `BTreeMap`/`BTreeSet` order, so every
+/// platform produces the same digest.
 ///
 /// # Errors
 ///
@@ -1431,9 +1429,8 @@ struct FileGatewayComplianceStoreTestHook {
     before_persist_replacement: std::sync::Mutex<Option<Vec<u8>>>,
 }
 impl FileGatewayComplianceStore {
-    /// Construct an absolute-path store. The parent directory must be
-    /// provisioned ahead of startup, must not traverse symlinks, and must not
-    /// be group- or world-writable.
+    /// Construct an absolute-path store. The parent directory must be provisioned ahead of startup,
+    /// must not traverse symlinks, and must not be group- or world-writable.
     pub fn new(path: PathBuf) -> Result<Self, GatewayComplianceError> {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err(GatewayComplianceError::Persistence(
@@ -1655,10 +1652,9 @@ pub struct GatewayComplianceController {
 impl GatewayComplianceController {
     /// Load or initialize a controller without enabling external feed access.
     ///
-    /// Production launchers must use [`Self::new_with_feed_transport`]. This
-    /// private constructor exists for controller-core tests and for the
-    /// test-only allow-all policy; [`Self::fetch_feed`] fails closed when no
-    /// transport identity was bound at construction.
+    /// Production launchers must use [`Self::new_with_feed_transport`]. This private constructor
+    /// exists for controller-core tests and for the test-only allow-all policy;
+    /// [`Self::fetch_feed`] fails closed when no transport identity was bound at construction.
     #[cfg(test)]
     fn new(
         config: GatewayComplianceControllerConfig,
@@ -1805,10 +1801,9 @@ impl GatewayComplianceController {
         validate_catalog_against_config(&payload, &self.config)?;
         Ok(payload)
     }
-    /// Durably stage a threshold-signed candidate under an exact request
-    /// binding. Exact replays return the original durable result even after a
-    /// later promotion; same-key substitution and same-sequence equivocation
-    /// are rejected.
+    /// Durably stage a threshold-signed candidate under an exact request binding. Exact replays
+    /// return the original durable result even after a later promotion; same-key substitution and
+    /// same-sequence equivocation are rejected.
     pub fn stage_catalog(
         &self,
         catalog: GatewayComplianceCatalogV1,
@@ -1859,8 +1854,7 @@ impl GatewayComplianceController {
             recorded_at_unix: observed_at_unix,
         })
     }
-    /// Durably record one signed gateway acknowledgement under an exact
-    /// request binding.
+    /// Durably record one signed gateway acknowledgement under an exact request binding.
     pub fn acknowledge(
         &self,
         acknowledgement: GatewayComplianceAcknowledgementV1,
@@ -1928,8 +1922,7 @@ impl GatewayComplianceController {
             recorded_at_unix: observed_at_unix,
         })
     }
-    /// Promote the exact expected staged catalog after the configured
-    /// regional-gateway quorum.
+    /// Promote the exact expected staged catalog after the configured regional-gateway quorum.
     pub fn promote(
         &self,
         expected_catalog_digest: [u8; 32],

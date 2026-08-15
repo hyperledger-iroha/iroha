@@ -263,9 +263,8 @@ pub fn seal_envelope(
 ///
 /// # Errors
 ///
-/// Returns an error when the frame is not ciphertext, the redundant directions
-/// disagree, decryption or decoding fails, or the decrypted envelope sequence
-/// does not match the frame sequence.
+/// Returns an error when the frame is not ciphertext, the redundant directions disagree, decryption
+/// or decoding fails, or the decrypted envelope sequence does not match the frame sequence.
 pub fn open_envelope_current(
     key: &[u8; 32],
     frame: &ConnectFrameV1,
@@ -293,9 +292,8 @@ pub fn open_envelope_current(
 ///
 /// # Errors
 ///
-/// Returns an error when the frame is not ciphertext, the redundant directions
-/// disagree, decryption or decoding fails, or the decrypted envelope sequence
-/// does not match the frame sequence.
+/// Returns an error when the frame is not ciphertext, the redundant directions disagree, decryption
+/// or decoding fails, or the decrypted envelope sequence does not match the frame sequence.
 pub fn open_envelope(key: &[u8; 32], frame: &ConnectFrameV1) -> Result<EnvelopeV1, &'static str> {
     open_envelope_current(key, frame)
 }

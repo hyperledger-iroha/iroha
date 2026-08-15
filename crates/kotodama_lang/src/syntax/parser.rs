@@ -44,9 +44,8 @@ pub struct ProgramParseOutput {
     pub diagnostics: DiagnosticBundle,
     /// Significant spanned tokens lowered from the same lossless scan.
     ///
-    /// Compiler phases use this private stream for exact semantic source
-    /// ranges; exposing it only within the crate prevents a second scanner
-    /// from drifting from the CST.
+    /// Compiler phases use this private stream for exact semantic source ranges; exposing it only
+    /// within the crate prevents a second scanner from drifting from the CST.
     pub(crate) tokens: Vec<crate::lexer::Token>,
     /// Stable CST-derived AST source facts for compiler resolution.
     pub(crate) ast_facts: Option<crate::spanned_ast::AstFacts>,

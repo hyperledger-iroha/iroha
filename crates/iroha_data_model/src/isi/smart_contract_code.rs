@@ -72,11 +72,10 @@ impl crate::seal::Instruction for CommitContractDeployment {}
 isi! {
     /// Register compiled contract bytecode on-chain keyed by its `code_hash`.
     ///
-    /// The bytecode is the full compiled `.to` image including the IVM header.
-    /// Nodes verify that `code_hash` equals the domain-separated canonical hash of the
-    /// complete deployable `.to` artifact, including the execution header, `CNTR`,
-    /// literals, and code, before storing. The authority must hold
-    /// `CanRegisterSmartContractCode`.
+    /// The bytecode is the full compiled `.to` image including the IVM header. Nodes verify that
+    /// `code_hash` equals the domain-separated canonical hash of the complete deployable `.to`
+    /// artifact, including the execution header, `CNTR`, literals, and code, before storing. The
+    /// authority must hold `CanRegisterSmartContractCode`.
     pub struct RegisterSmartContractBytes {
         /// Domain-separated canonical hash of the complete deployable `.to` artifact.
         pub code_hash: iroha_crypto::Hash,

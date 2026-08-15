@@ -8,8 +8,8 @@ Completed history lives in [`status.md`](./status.md).
 ## Workspace review closure
 
 - Freeze the current uncommitted merge with `HEAD`
-  `45ff358ba83adbb351eab54bdbc96625816e2487` and `MERGE_HEAD`
-  `5d41c784787ed496ccbd46379ee236cc992d9c65`, then complete the focused,
+  `69f5e617e9cef11cb45d519396d89b22a7317ae0` and `MERGE_HEAD`
+  `51deea83409635f99ce2fcbb6a983b7cca18b99b`, then complete the focused,
   authoritative formal, and workspace-wide validation before preparing a
   signed descendant. Those validation lanes remain pending. Historical
   integration checkpoints and mutable-tree snapshots are not receipts for the
@@ -64,13 +64,13 @@ Completed history lives in [`status.md`](./status.md).
 
 - Preserve the immutable 5,067,263-line first-party Rust baseline, the
   5,014,603-line active ratchet, and the 4,560,536-line ten-percent objective.
-  The official exact count is 5,014,041 Rust lines, leaving 562 lines of
-  ratchet headroom and a 453,505-line gap to the objective. Keep at least 550
-  lines of headroom; do not redefine the baseline, count moved test code as a
-  physical reduction, or weaken required runtime, security, consensus, SDK, or
-  release-evidence behavior to close it. Keep deterministic oversized-file
-  exceptions as exact ratchets and require the source-budget gate to remain
-  finding-free.
+  The current merge-tree audit counts 5,018,852 Rust lines, which is 4,249
+  lines above the active ratchet and 458,316 lines above the objective. Remove
+  at least 4,799 lines to restore the required 550 lines of ratchet headroom;
+  do not redefine the baseline, count moved test code as a physical reduction,
+  or weaken required runtime, security, consensus, SDK, or release-evidence
+  behavior to close it. Keep deterministic oversized-file exceptions as exact
+  ratchets and require the source-budget gate to return to finding-free.
 - Track every reviewed production module and add the new source and fixture
   files to the eventual signed commit, then rerun the strict SDK source-closure
   guard from that frozen candidate. Keep the staged merge-resolution and
@@ -1095,13 +1095,13 @@ classified outside the multilane closure ledger.
 
 The earlier 8,029-path, 198-exception, 5,022,733-line source-budget snapshot is
 historical. It exceeded the active 5,014,603-line ratchet by 8,130 lines and
-was not a pass or a receipt for the current tree. The official exact current
-check inspected 8,031 paths with 197 exceptions and counted 5,014,041 Rust
-lines with zero findings, leaving 562 lines of headroom and 453,505 lines to
-the 4,560,536 objective. This static result does not replace the pending
-focused, formal, or workspace validation. The separate generic
-lifecycle-coordinator cutover receives no multilane credit toward that
-reduction, and immutable-candidate evidence remains open.
+was not a pass or a receipt for the current tree. The later 8,031-path,
+197-exception, 5,014,041-line zero-finding snapshot is also historical and has
+been superseded by the current merge-tree audit in the build-efficiency
+closeout above. Neither static snapshot replaces the pending focused, formal,
+or workspace validation. The separate generic lifecycle-coordinator cutover
+receives no multilane credit toward that reduction, and immutable-candidate
+evidence remains open.
 
 Historical autonomous recovery now uses one bounded canonical namespace
 scanner across startup replay binding, disk accounting, and lane-geometry

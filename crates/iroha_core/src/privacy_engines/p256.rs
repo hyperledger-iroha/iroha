@@ -535,7 +535,6 @@ pub(crate) fn validate_generator_independence(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use p256::elliptic_curve::sec1::ToEncodedPoint as _;
     struct FailingRng;
     impl RngCore for FailingRng {
         fn next_u32(&mut self) -> u32 {

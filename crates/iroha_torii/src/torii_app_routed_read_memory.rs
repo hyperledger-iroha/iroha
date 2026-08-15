@@ -36,11 +36,10 @@ struct ToriiBoundedNoritoPayload<T> {
 }
 /// Logical ledger backed by one existing query-fanout working-set permit.
 ///
-/// Route bodies are decoded sequentially. Norito's measured decode scope
-/// records every allocation request made by JSON or binary decoders, so a
-/// successful value can be retained against the aggregate phase without a
-/// guessed per-element allowance or a per-route fair split. Candidate encodings
-/// and the final response use their existing independent envelope phases.
+/// Route bodies are decoded sequentially. Norito's measured decode scope records every allocation
+/// request made by JSON or binary decoders, so a successful value can be retained against the
+/// aggregate phase without a guessed per-element allowance or a per-route fair split. Candidate
+/// encodings and the final response use their existing independent envelope phases.
 #[derive(Debug)]
 struct ToriiRoutedReadMemoryBudget {
     envelope: QueryFanoutMemoryEnvelope,
@@ -240,11 +239,10 @@ impl ToriiRoutedReadMemoryBudget {
         self.ensure_retained_vec_capacity(&mut values, capacity)?;
         Ok(values)
     }
-    /// Grow a retained payload vector only after its requested Rust-layout
-    /// capacity is admitted. Growth allocates the exact replacement layout,
-    /// moves the initialized prefix, and only then releases the old layout.
-    /// The old allocation during that transfer fits in the second accumulator
-    /// phase because it is no larger than the newly admitted allocation.
+    /// Grow a retained payload vector only after its requested Rust-layout capacity is admitted.
+    /// Growth allocates the exact replacement layout, moves the initialized prefix, and only then
+    /// releases the old layout. The old allocation during that transfer fits in the second
+    /// accumulator phase because it is no larger than the newly admitted allocation.
     #[allow(unsafe_code)]
     fn ensure_retained_vec_capacity<T>(
         &mut self,
@@ -346,9 +344,8 @@ impl ToriiRoutedReadMemoryBudget {
         self.admit_merge_allocation(bytes)?;
         torii_routed_read_exact_vec(capacity, "merge vector", bytes)
     }
-    /// Encode one transient canonical key inside the space left beside keys
-    /// that the merge has actually retained. Callers commit its byte length
-    /// only if they keep the returned allocation.
+    /// Encode one transient canonical key inside the space left beside keys that the merge has
+    /// actually retained. Callers commit its byte length only if they keep the returned allocation.
     fn canonical_json_candidate(&self, value: &Value) -> Result<Vec<u8>, Response> {
         let limit = self.canonical_remaining()?;
         norito::json::to_json_bounded_boxed(value, limit)
@@ -401,10 +398,9 @@ impl ToriiRoutedReadMemoryBudget {
 }
 /// Allocate a `Vec` with exactly the admitted non-ZST element layout.
 ///
-/// `Vec::try_reserve_exact` is permitted to return spare capacity. Observing
-/// and charging that excess after allocation is too late for a strict peak
-/// proof, so routed-read retained and merge vectors use the allocator directly
-/// after their complete byte request has been admitted.
+/// `Vec::try_reserve_exact` is permitted to return spare capacity. Observing and charging that
+/// excess after allocation is too late for a strict peak proof, so routed-read retained and merge
+/// vectors use the allocator directly after their complete byte request has been admitted.
 #[allow(unsafe_code)]
 fn torii_routed_read_exact_vec<T>(
     capacity: usize,
@@ -428,11 +424,10 @@ fn torii_routed_read_exact_vec<T>(
 }
 /// Heap bytes reachable from a native JSON `Value` after parsing.
 ///
-/// Strings and arrays use the parser's exact-reserve requests. The lexical
-/// profile sums Norito core's checked node-count bound separately for every
-/// object, so empty and differently sized objects cannot inflate one another's
-/// topology charge. The parser separately charges any allocator capacity
-/// returned above an exact-reserve request.
+/// Strings and arrays use the parser's exact-reserve requests. The lexical profile sums Norito
+/// core's checked node-count bound separately for every object, so empty and differently sized
+/// objects cannot inflate one another's topology charge. The parser separately charges any
+/// allocator capacity returned above an exact-reserve request.
 fn torii_routed_read_json_value_graph_bytes(
     profile: norito::json::JsonPreflightProfile,
 ) -> Result<usize, Response> {

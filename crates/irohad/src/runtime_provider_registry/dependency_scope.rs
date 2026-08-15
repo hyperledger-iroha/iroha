@@ -1,8 +1,7 @@
 //! Exact scope checks for deployment-resolved runtime dependencies.
 //!
-//! The registry accepts only the dependency roles requested by the sanitized
-//! binding catalog. Shared provider objects remain valid only when every role
-//! in their fixed V1 pair was requested.
+//! The registry accepts only the dependency roles requested by the sanitized binding catalog.
+//! Shared provider objects remain valid only when every role in their fixed V1 pair was requested.
 use super::*;
 /// Return whether the resolved dependency catalog contains the requested role.
 pub(super) fn dependency_is_present(

@@ -169,10 +169,9 @@ const MAX_STORED_QUERY_RETAINED_ITEMS: usize = 4_096;
 const MAX_STORED_QUERY_RETAINED_BYTES: u64 = 8 * 1024 * 1024;
 /// Deterministic work budget for an ephemeral query.
 ///
-/// The weighted limit prevents callers from independently exhausting the item
-/// and byte ceilings from the same pool of execution units. Bytes are measured
-/// without allocating an encoded buffer and include every value traversed by
-/// sorting or pagination, plus the final framed response.
+/// The weighted limit prevents callers from independently exhausting the item and byte ceilings
+/// from the same pool of execution units. Bytes are measured without allocating an encoded buffer
+/// and include every value traversed by sorting or pagination, plus the final framed response.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct QueryExecutionBudget {
     max_items: u64,
@@ -273,9 +272,8 @@ impl QueryExecutionStats {
     }
     /// Number of encoded bytes charged by query execution.
     ///
-    /// This intentionally includes both source values traversed by the query
-    /// and the final framed response: scanning/sorting and response encoding
-    /// are separate pieces of deterministic work.
+    /// This intentionally includes both source values traversed by the query and the final framed
+    /// response: scanning/sorting and response encoding are separate pieces of deterministic work.
     #[must_use]
     pub const fn processed_bytes(self) -> u64 {
         self.processed_bytes

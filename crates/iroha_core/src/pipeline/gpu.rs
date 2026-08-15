@@ -30,9 +30,8 @@ pub struct AccessTriplet {
 }
 /// Attempt to sort triplets using the CUDA bitonic path.
 ///
-/// Returns `Ok(())` when the GPU produced a sorted ordering, or a
-/// [`GpuSortError`] describing the fallback reason. Callers should fall back to
-/// CPU ordering when an error is returned.
+/// Returns `Ok(())` when the GPU produced a sorted ordering, or a [`GpuSortError`] describing the
+/// fallback reason. Callers should fall back to CPU ordering when an error is returned.
 ///
 /// # Errors
 ///

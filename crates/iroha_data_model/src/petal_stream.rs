@@ -1,8 +1,7 @@
 //! Petal stream framing for offline payload handoff.
 //!
-//! Petal stream encodes the raw `QrStreamFrame` bytes into a custom optical
-//! grid with calibration anchors so a dedicated scanner can recover frames
-//! from sakura-style animations.
+//! Petal stream encodes the raw `QrStreamFrame` bytes into a custom optical grid with calibration
+//! anchors so a dedicated scanner can recover frames from sakura-style animations.
 use thiserror::Error;
 /// Magic bytes that start every petal stream payload (`PS`).
 pub const PETAL_STREAM_MAGIC: [u8; 2] = [0x50, 0x53];
@@ -349,9 +348,8 @@ pub fn score_petal_capture_profile_with_seed(
 }
 /// Render one deterministic capture-attempt sample grid for a Petal bit grid.
 ///
-/// The `attempt` and `seed` values select the deterministic luminance
-/// perturbation stream. No runtime randomness is used, so identical inputs
-/// produce identical samples on every host.
+/// The `attempt` and `seed` values select the deterministic luminance perturbation stream. No
+/// runtime randomness is used, so identical inputs produce identical samples on every host.
 ///
 /// # Errors
 /// Returns an error when the profile is invalid or the generated sample grid

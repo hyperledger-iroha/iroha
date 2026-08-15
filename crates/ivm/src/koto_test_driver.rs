@@ -321,10 +321,9 @@ pub fn run_tests_structured_with_modules_v1(
 }
 /// Run one caller-supplied test root against an exact locked module graph.
 ///
-/// This is the structured source-set boundary for package managers and other
-/// authenticated callers. The source text is never reopened from
-/// [`KotoTestRunRequestV1::target`], and no sibling or recursive filesystem
-/// discovery occurs. The request target must exactly equal the source unit's
+/// This is the structured source-set boundary for package managers and other authenticated callers.
+/// The source text is never reopened from [`KotoTestRunRequestV1::target`], and no sibling or
+/// recursive filesystem discovery occurs. The request target must exactly equal the source unit's
 /// portable diagnostic name.
 ///
 /// # Errors
@@ -564,8 +563,7 @@ pub fn run_cli(args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
-/// Discover the Kotodama test names contributed by one target or standalone
-/// test source.
+/// Discover the Kotodama test names contributed by one target or standalone test source.
 ///
 /// Developer frontends use this before dispatching filtered runs so a filter
 /// that matches a test in one file does not fail early on an unrelated file.

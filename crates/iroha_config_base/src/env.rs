@@ -35,8 +35,7 @@ where
         value.parse()
     }
 }
-/// Enables polymorphism for environment readers.
-/// Has default implementations for plain functions,
+/// Enables polymorphism for environment readers. Has default implementations for plain functions,
 /// thus it should work for closures as well.
 pub trait ReadEnv {
     /// Read a value from an environment variable.
@@ -50,9 +49,8 @@ where
         self(key)
     }
 }
-/// An adapter of [`std::env::var`] for [`ReadEnv`] trait.
-/// Does not fail in case of [`std::env::VarError::NotUnicode`], but prints it as an error via
-/// [log].
+/// An adapter of [`std::env::var`] for [`ReadEnv`] trait. Does not fail in case of
+/// [`std::env::VarError::NotUnicode`], but prints it as an error via [log].
 ///
 /// [`crate::read::ConfigReader`] uses it by default.
 pub fn std_env(key: &str) -> Option<Cow<'static, str>> {

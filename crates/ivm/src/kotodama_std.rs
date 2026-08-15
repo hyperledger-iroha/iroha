@@ -1,11 +1,10 @@
 //! Minimal helpers used by tests and examples to build TLVs for INPUT.
 //!
-//! These utilities construct Norito TLV envelopes expected by the pointer‑ABI
-//! and place them into the VM INPUT region using the internal bump allocator
-//! (`IVM::alloc_input_tlv`). In addition, Kotodama provides language‑level
-//! intrinsics (for example, ballot verification and the vendor bridge wrappers)
-//! that lower to SCALLs with Norito TLVs. These helpers
-//! remain useful for tests and for building TLVs from host code.
+//! These utilities construct Norito TLV envelopes expected by the pointer‑ABI and place them into
+//! the VM INPUT region using the internal bump allocator (`IVM::alloc_input_tlv`). In addition,
+//! Kotodama provides language‑level intrinsics (for example, ballot verification and the vendor
+//! bridge wrappers) that lower to SCALLs with Norito TLVs. These helpers remain useful for tests
+//! and for building TLVs from host code.
 use crate::{
     IVM, Memory, PointerType,
     host::IVMHost,
@@ -62,10 +61,9 @@ pub fn zk_verify_with_env(
         .expect("syscall ok");
     vm.register(10)
 }
-/// Vendor bridge: enqueue a built-in instruction by passing a Norito-encoded
-/// `InstructionBox` in a `NoritoBytes` TLV via INPUT and invoking the vendor
-/// syscall. Returns the host gas cost (0 for `DefaultHost`; CoreHost returns
-/// metered costs) and leaves r10 unspecified.
+/// Vendor bridge: enqueue a built-in instruction by passing a Norito-encoded `InstructionBox` in a
+/// `NoritoBytes` TLV via INPUT and invoking the vendor syscall. Returns the host gas cost (0 for
+/// `DefaultHost`; CoreHost returns metered costs) and leaves r10 unspecified.
 pub fn vendor_execute_instruction_bytes(
     host: &mut dyn IVMHost,
     vm: &mut IVM,

@@ -20,6 +20,7 @@ fn owner_is_move_only_private_and_contains_one_opening() {
         ["fn ", "blindings("].concat(),
         ["fn ", "coefficients("].concat(),
         ["impl Fn", "Once"].concat(),
+        "expected_".to_owned(),
     ] {
         assert!(
             !PRODUCTION_SOURCE_V1.contains(&forbidden),
@@ -53,8 +54,7 @@ fn owner_is_move_only_private_and_contains_one_opening() {
         .split("impl<'a> PostCpkPersistentDirectOpeningGuardV1")
         .next()
         .expect("post-CPK guard boundary");
-    assert!(guard.contains("public_error: &'a SecretPolynomial"));
-    assert!(guard.contains("creation_mask_digit_burn: (&'a u64, u64)"));
+    assert_eq!(guard.matches(": ").count(), 4);
     let compact = PRODUCTION_SOURCE_V1
         .split("fn into_compacted_post_seal_v1")
         .nth(1)

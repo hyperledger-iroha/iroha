@@ -3,14 +3,12 @@
 //! The only production constructor is deliberately uninhabited until the
 //! parent RNS-Link module can mint a context-correspondence seal from its
 //! otherwise private context axes.  The implementation behind that seal is
-//! complete enough to freeze the one-pass ownership and memory topology: one
-//! validated packed chunk is borrowed by the exact live encryption witnesses,
-//! persisted in canonical source order before C0/C1 publication, and then
-//! moved unchanged into scalar materialization.
+//! complete enough to freeze the one-pass ownership and memory topology: one validated packed chunk
+//! is borrowed by the exact live encryption witnesses, persisted in canonical source order before
+//! C0/C1 publication, and then moved unchanged into scalar materialization.
 //!
-//! A private child also freezes the scalable Phase-23 radix/range topology as
-//! static planning evidence. Its production seals and every stronger gate are
-//! deliberately uninhabited.
+//! A private child also freezes the scalable Phase-23 radix/range topology as static planning
+//! evidence. Its production seals and every stronger gate are deliberately uninhabited.
 
 #![allow(
     dead_code,
@@ -399,9 +397,8 @@ fn require_exact_release_shape_v1(
     }
     Ok(())
 }
-/// One move-only correspondence owner. It deliberately exposes no getters,
-/// codec, clone, or tuple decomposition; later stages must add a
-/// purpose-specific consuming transition.
+/// One move-only correspondence owner. It deliberately exposes no getters, codec, clone, or tuple
+/// decomposition; later stages must add a purpose-specific consuming transition.
 #[must_use = "dropping this owner closes the source snapshots and all correspondence capability"]
 struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
     materialized: ZkAmsPhase23MaterializedAccumulatorsV1,

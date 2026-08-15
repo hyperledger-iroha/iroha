@@ -1,8 +1,7 @@
 //! Pluggable schema registry used by hosts to encode/decode typed Norito payloads.
 //!
-//! Schemas are resolved only through explicitly registered names and families.
-//! Unsupported names fail closed; registered schemas expose a stable 32-byte id
-//! and version for host metadata.
+//! Schemas are resolved only through explicitly registered names and families. Unsupported names
+//! fail closed; registered schemas expose a stable 32-byte id and version for host metadata.
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::query::{
     QueryRequest, QueryResponse,

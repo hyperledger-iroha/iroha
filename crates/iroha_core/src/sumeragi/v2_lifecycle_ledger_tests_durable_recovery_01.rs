@@ -1780,7 +1780,7 @@ fn complete_tip_all_row_retirement_consumes_pending_serve_terminal_update() {
     drop(payload_store);
     drop(body_store);
 
-    complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+    let _retired = complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
         .into_canonical_predecessor_storage(&fixture.keys[0])
         .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
         .expect("retire exact Pending Serve and its ProducerTurn");
@@ -1939,7 +1939,7 @@ pub(crate) fn complete_tip_retirement_survives_completed_serve_body_cleanup_with
         );
     }
 
-    complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+    let _retired = complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
         .into_canonical_predecessor_storage(&fixture.keys[0])
         .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
         .expect("retire Completed Serve after body cleanup");

@@ -68369,18 +68369,21 @@ fn certified_sidecar_prefix_covers_occurrence(
         else:
             item = matching[0]
         reservation_items[qualified_name] = item
+        expected_attributes = {
+            "ProductionV2Services::start": (
+                "#[allow(clippy::too_many_arguments, dead_code)]",
+            ),
+            "ProductionV2Services::start_inner": (
+                "#[allow(clippy::too_many_arguments)]",
+            ),
+        }.get(qualified_name, ())
         _require_rust_item_context(
             worker_path,
             item,
             expected_context,
             f"exact-output reservation {qualified_name} production item",
             errors,
-            expected_attributes=("#[allow(clippy::too_many_arguments)]",)
-            if qualified_name in {
-                "ProductionV2Services::start",
-                "ProductionV2Services::start_inner",
-            }
-            else (),
+            expected_attributes=expected_attributes,
         )
         if item is not None:
             observed_sha256 = _rust_item_token_sha256(item)
@@ -70574,58 +70577,20 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
         )
         return errors
     height_ingress_source = height_ingress_path.read_text(encoding="utf-8")
-    height_ingress_binding_items: dict[str, RustItem | None] = {}
-    for owner, methods, source_path, source in (
-        (
-            "LeaderWireIngressBinding",
-            ("bind", "retire"),
-            runner_path,
-            runner_source,
-        ),
-        (
-            "HeightIngressBindings",
-            ("new", "retire"),
-            height_ingress_path,
-            height_ingress_source,
-        ),
-    ):
-        for item_name in methods:
-            qualified_name = f"runner::{owner}::{item_name}"
-            height_ingress_binding_items[qualified_name] = (
-                _require_qualified_rust_item(
-                    source_path,
-                    source,
-                    owner,
-                    item_name,
-                    errors,
-                    f"joint height-ingress owner {owner}::{item_name}",
-                )
+    # The former LeaderWireIngressBinding/CertifiedServeIngressBinding and
+    # HeightIngressBindings wrappers are now cfg(test)-only compatibility
+    # fixtures. Production retirement is owned by the queue-level close and
+    # authenticated unbind operations below, so seal only those live seams.
+    height_ingress_binding_items: dict[str, RustItem | None] = {
+        "runner::close_ingress_for_rollover": (
+            _require_rust_item(
+                height_ingress_path,
+                height_ingress_source,
+                "close_ingress_for_rollover",
+                errors,
             )
-    for owner, source_path, source in (
-        ("LeaderWireIngressBinding", runner_path, runner_source),
-        ("HeightIngressBindings", height_ingress_path, height_ingress_source),
-    ):
-        matches = [
-            item
-            for item in rust_items(source, "drop")
-            if item.brace_context == (("impl", "Drop", "for", owner),)
-        ]
-        qualified_name = f"runner::{owner}::drop"
-        item = matches[0] if len(matches) == 1 else None
-        if item is None:
-            errors.append(
-                f"{source_path}: require exactly one real {owner}::drop item; "
-                f"found {len(matches)}"
-            )
-        height_ingress_binding_items[qualified_name] = item
-    height_ingress_binding_items["runner::close_ingress_for_rollover"] = (
-        _require_rust_item(
-            height_ingress_path,
-            height_ingress_source,
-            "close_ingress_for_rollover",
-            errors,
         )
-    )
+    }
     for item_name in (
         "unbind_leader_wire_lifecycle_gate",
         "unbind_height_ingress_gates",
@@ -70642,12 +70607,6 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
             )
         )
     expected_height_ingress_binding_keys = {
-        "runner::LeaderWireIngressBinding::bind",
-        "runner::LeaderWireIngressBinding::retire",
-        "runner::LeaderWireIngressBinding::drop",
-        "runner::HeightIngressBindings::new",
-        "runner::HeightIngressBindings::retire",
-        "runner::HeightIngressBindings::drop",
         "runner::close_ingress_for_rollover",
         "ingress::unbind_leader_wire_lifecycle_gate",
         "ingress::unbind_height_ingress_gates",
@@ -70667,12 +70626,8 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
     ):
         if qualified_name.startswith("ingress::"):
             path = ingress_path
-        elif qualified_name.startswith("runner::HeightIngressBindings::") or qualified_name == (
-            "runner::close_ingress_for_rollover"
-        ):
-            path = height_ingress_path
         else:
-            path = runner_path
+            path = height_ingress_path
         _require_rust_item_token_sha256(
             path,
             height_ingress_binding_items.get(qualified_name),
@@ -70681,148 +70636,6 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
             errors,
         )
 
-    _require_rust_token_sequence(
-        runner_path,
-        height_ingress_binding_items["runner::LeaderWireIngressBinding::bind"],
-        """
-block_ingress
-    .bind_leader_wire_lifecycle_gate(
-        Arc::clone(&gate),
-        restore,
-        lifecycle_ordinals,
-        context_id,
-        height,
-    )
-    .map_err(V2RunnerError::Service)?;
-Ok(Self {
-    ingress_ready,
-    block_ingress,
-    gate: Some(gate),
-})
-""",
-        "leader-wire binding must publish the exact durable gate into the shared fair-ingress queue before becoming live",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        height_ingress_binding_items["runner::LeaderWireIngressBinding::retire"],
-        """
-let Some(gate) = self.gate.as_ref() else {
-    return Ok(());
-};
-close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);
-self.block_ingress
-    .unbind_leader_wire_lifecycle_gate(gate)
-    .map_err(V2RunnerError::Service)?;
-self.gate = None;
-Ok(())
-""",
-        "standalone leader-wire retirement must close admission before unbinding and clear ownership only after success",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        height_ingress_binding_items["runner::LeaderWireIngressBinding::drop"],
-        """
-if let Err(error) = self.retire() {
-    iroha_logger::error!(
-        %error,
-        "failed to retire the per-height durable leader-wire lifecycle gate"
-    );
-}
-""",
-        "abnormal leader-wire binding drop must attempt the same close-before-unbind retirement",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        height_ingress_path,
-        height_ingress_binding_items["runner::HeightIngressBindings::new"],
-        """
-fn new(
-    certified_serve: CertifiedServeIngressBinding,
-    leader_wire: LeaderWireIngressBinding,
-) -> Self {
-    Self {
-        certified_serve,
-        leader_wire,
-    }
-}
-""",
-        "joint height-ingress construction must take move-only ownership of both child bindings",
-        errors,
-    )
-    _require_rust_token_sequence(
-        height_ingress_path,
-        height_ingress_binding_items["runner::HeightIngressBindings::retire"],
-        """
-match (
-    self.certified_serve.gate.as_ref(),
-    self.leader_wire.gate.as_ref(),
-) {
-    (None, None) => return Ok(()),
-    (Some(_), None) | (None, Some(_)) => {
-        return Err(V2RunnerError::Service(
-            "per-height ingress gates changed joint ownership".to_owned(),
-        ));
-    }
-    (Some(_), Some(_)) => {}
-}
-if !Arc::ptr_eq(
-    &self.certified_serve.ingress_ready,
-    &self.leader_wire.ingress_ready,
-) || !Arc::ptr_eq(
-    &self.certified_serve.block_ingress,
-    &self.leader_wire.block_ingress,
-) {
-    return Err(V2RunnerError::Service(
-        "per-height ingress gates changed their shared queue".to_owned(),
-    ));
-}
-
-close_ingress_for_rollover(
-    &self.certified_serve.ingress_ready,
-    &self.certified_serve.block_ingress,
-);
-self.certified_serve
-    .block_ingress
-    .unbind_height_ingress_gates(
-        self.certified_serve
-            .gate
-            .as_ref()
-            .expect("joint binding retains the certified Serve gate"),
-        self.leader_wire
-            .gate
-            .as_ref()
-            .expect("joint binding retains the leader-wire gate"),
-    )
-    .map_err(V2RunnerError::Service)?;
-self.certified_serve.gate = None;
-self.leader_wire.gate = None;
-Ok(())
-""",
-        "joint height-ingress retirement must validate paired ownership, close once, atomically unbind both gates, and clear both child guards only after success",
-        errors,
-    )
-    _require_rust_token_sequence(
-        height_ingress_path,
-        height_ingress_binding_items["runner::HeightIngressBindings::drop"],
-        """
-if let Err(error) = self.retire() {
-    close_ingress_for_rollover(
-        &self.certified_serve.ingress_ready,
-        &self.certified_serve.block_ingress,
-    );
-    self.certified_serve.gate = None;
-    self.leader_wire.gate = None;
-    iroha_logger::error!(
-        %error,
-        "failed to atomically retire the per-height ingress gates"
-    );
-}
-""",
-        "failed joint drop must keep ingress closed and disarm both split child destructors",
-        errors,
-    )
     _require_exact_rust_tokens(
         height_ingress_path,
         height_ingress_binding_items["runner::close_ingress_for_rollover"],
@@ -70959,8 +70772,6 @@ Ok(())
         )
 
     expected_height_ingress_test_keys = {
-        "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut",
-        "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership",
         "worker::closed_height_atomically_retires_serve_and_leader_ingress",
     }
     observed_height_ingress_test_keys = set(
@@ -71019,113 +70830,6 @@ Ok(())
             f"joint height-ingress regression {qualified_name}",
             errors,
         )
-
-    runner_success = height_ingress_test_items.get(
-        "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut"
-    )
-    _require_rust_token_sequence(
-        runner_test_path,
-        runner_success,
-        """
-bindings
-    .retire()
-    .expect("retire both per-height ingress gates atomically");
-assert!(!ingress_ready.load(Ordering::Acquire));
-assert!(bindings.certified_serve.gate.is_none());
-assert!(bindings.leader_wire.gate.is_none());
-{
-    let state = ingress.state.lock();
-    assert!(!state.open);
-    assert!(state.certified_serve_gate.is_none());
-    assert!(state.leader_wire_lifecycle_gate.is_none());
-    assert!(state.leader_wire_lifecycle_ordinals.is_none());
-    assert!(state.leader_wire_context.is_none());
-}
-bindings
-    .retire()
-    .expect("joint height retirement remains idempotent");
-""",
-        "joint binding regression must close and detach both gates in one idempotent retirement",
-        errors,
-    )
-
-    runner_failure = height_ingress_test_items.get(
-        "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership"
-    )
-    _require_rust_token_sequence(
-        runner_test_path,
-        runner_failure,
-        """
-bindings.leader_wire.ingress_ready = Arc::new(AtomicBool::new(true));
-let error = bindings
-    .retire()
-    .expect_err("mismatched readiness ownership must reject joint retirement");
-assert!(matches!(
-    error,
-    V2RunnerError::Service(ref reason)
-        if reason == "per-height ingress gates changed their shared queue"
-));
-assert!(ingress_ready.load(Ordering::Acquire));
-assert!(ingress.state.lock().open);
-
-drop(bindings);
-assert!(!ingress_ready.load(Ordering::Acquire));
-let state = ingress.state.lock();
-assert!(!state.open);
-assert!(
-    state
-        .certified_serve_gate
-        .as_ref()
-        .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
-    "a failed joint validation cannot partially detach the Serve gate"
-);
-assert!(
-    state.leader_wire_lifecycle_gate.as_ref().is_some_and(
-        |bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)
-    ),
-    "a failed joint validation cannot partially detach the leader-wire gate"
-);
-""",
-        "mismatched joint ownership must reject before mutation and Drop must fail closed without split teardown",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_failure,
-        """
-bindings.leader_wire.gate = None;
-let error = bindings
-    .retire()
-    .expect_err("partial child ownership must reject joint retirement");
-assert!(matches!(
-    error,
-    V2RunnerError::Service(ref reason)
-        if reason == "per-height ingress gates changed joint ownership"
-));
-assert!(ingress_ready.load(Ordering::Acquire));
-assert!(ingress.state.lock().open);
-
-drop(bindings);
-assert!(!ingress_ready.load(Ordering::Acquire));
-let state = ingress.state.lock();
-assert!(!state.open);
-assert!(
-    state
-        .certified_serve_gate
-        .as_ref()
-        .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
-    "partial child ownership cannot trigger split Serve teardown"
-);
-assert!(
-    state.leader_wire_lifecycle_gate.as_ref().is_some_and(
-        |bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)
-    ),
-    "partial child ownership cannot trigger split leader-wire teardown"
-);
-""",
-        "partial joint ownership must reject before mutation and Drop must fail closed without split teardown",
-        errors,
-    )
 
     worker_regression = height_ingress_test_items.get(
         "worker::closed_height_atomically_retires_serve_and_leader_ingress"
@@ -71213,100 +70917,6 @@ assert_eq!(
         errors,
     )
 
-    certified_serve_binding_items: dict[str, RustItem | None] = {}
-    for item_name in ("bind", "retire"):
-        qualified_name = f"CertifiedServeIngressBinding::{item_name}"
-        certified_serve_binding_items[qualified_name] = _require_qualified_rust_item(
-            runner_path,
-            runner_source,
-            "CertifiedServeIngressBinding",
-            item_name,
-            errors,
-            f"exact Serve ingress binding {item_name}",
-        )
-    binding_drop_matches = [
-        item
-        for item in rust_items(runner_source, "drop")
-        if item.brace_context
-        == (("impl", "Drop", "for", "CertifiedServeIngressBinding"),)
-    ]
-    binding_drop = (
-        binding_drop_matches[0] if len(binding_drop_matches) == 1 else None
-    )
-    if binding_drop is None:
-        errors.append(
-            f"{runner_path}: require exactly one real "
-            "CertifiedServeIngressBinding::drop item; "
-            f"found {len(binding_drop_matches)}"
-        )
-    else:
-        _require_rust_item_context(
-            runner_path,
-            binding_drop,
-            (("impl", "Drop", "for", "CertifiedServeIngressBinding"),),
-            "exact Serve ingress binding drop retirement",
-            errors,
-        )
-    certified_serve_binding_items["CertifiedServeIngressBinding::drop"] = (
-        binding_drop
-    )
-    for qualified_name, expected_sha256 in (
-        _PRODUCTION_CERTIFIED_SERVE_INGRESS_BINDING_ITEM_SHA256.items()
-    ):
-        _require_rust_item_token_sha256(
-            runner_path,
-            certified_serve_binding_items[qualified_name],
-            expected_sha256,
-            f"exact Serve ingress binding {qualified_name}",
-            errors,
-        )
-    _require_rust_token_sequence(
-        runner_path,
-        certified_serve_binding_items["CertifiedServeIngressBinding::bind"],
-        """
-block_ingress
-    .bind_certified_serve_gate(gate.clone())
-    .map_err(V2RunnerError::Service)?;
-Ok(Self {
-    ingress_ready,
-    block_ingress,
-    gate: Some(gate),
-})
-""",
-        "the per-height ingress owner must bind the exact Serve reservation gate before becoming live",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        certified_serve_binding_items["CertifiedServeIngressBinding::retire"],
-        """
-let Some(gate) = self.gate.as_ref() else {
-    return Ok(());
-};
-close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);
-self.block_ingress
-    .unbind_certified_serve_gate(gate)
-    .map_err(V2RunnerError::Service)?;
-self.gate = None;
-Ok(())
-""",
-        "ingress rollover must close selection before unbinding the exact Serve reservation gate",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        certified_serve_binding_items["CertifiedServeIngressBinding::drop"],
-        """
-if let Err(error) = self.retire() {
-    iroha_logger::error!(
-        %error,
-        "failed to retire the per-height certified Serve ingress gate"
-    );
-}
-""",
-        "every abnormal binding drop must attempt the same ordered ingress retirement",
-        errors,
-    )
     expected_exact_output_runner_items = {
         "drain_v2_ingress",
         "rollover_finalized_height_outputs",

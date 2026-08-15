@@ -1,8 +1,7 @@
 //! BN254 backend wiring for IPA commitments.
 //!
-//! This backend leverages `halo2curves` BN254 types to expose deterministic
-//! generators along with canonical scalar/group encodings compatible with the
-//! Norito wire types used across Iroha.
+//! This backend leverages `halo2curves` BN254 types to expose deterministic generators along with
+//! canonical scalar/group encodings compatible with the Norito wire types used across Iroha.
 use crate::{
     backend::{IpaBackend, IpaGroup, IpaScalar},
     errors::Error,

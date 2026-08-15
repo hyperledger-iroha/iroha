@@ -121,11 +121,10 @@ fn statement_digest_v1(
 }
 /// Construct a complete STARK-plus-ML-DSA PQ-MASP proof with injected entropy.
 ///
-/// The function preflights the exact one-to-two relation and ML-DSA secret-key
-/// binding before proof allocation. It reserves canonical source block two for
-/// the independent authorization hedge, replays block one to the STARK before
-/// continuing at block three, signs the protocol-tagged statement and exact
-/// inner-proof digest, then verifies the complete outer wire before returning.
+/// The function preflights the exact one-to-two relation and ML-DSA secret-key binding before proof
+/// allocation. It reserves canonical source block two for the independent authorization hedge,
+/// replays block one to the STARK before continuing at block three, signs the protocol-tagged
+/// statement and exact inner-proof digest, then verifies the complete outer wire before returning.
 ///
 /// # Errors
 ///
@@ -200,8 +199,7 @@ pub fn prove_pq_masp_v1(
 /// # Errors
 ///
 /// Rejects malformed, oversized, non-canonical, wrong-key, statement- or
-/// consensus-binding-substituted, signature-invalid, or inner-proof-invalid
-/// bytes.
+/// consensus-binding-substituted, signature-invalid, or inner-proof-invalid bytes.
 pub fn verify_pq_masp_v1(
     statement: &PqMaspStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,
@@ -235,9 +233,8 @@ pub fn verify_pq_masp_v1(
 ///
 /// # Errors
 ///
-/// Rejects malformed keys or note material, recipient mismatch, entropy
-/// failure or repetition, allocation failure, or authenticated-encryption
-/// failure.
+/// Rejects malformed keys or note material, recipient mismatch, entropy failure or repetition,
+/// allocation failure, or authenticated-encryption failure.
 pub fn encrypt_pq_masp_note_v1_with_rng<R: TryCryptoRng + ?Sized>(
     statement: &PqMaspStarkStatementV1,
     note: &PqMaspNotePlaintextV1,
@@ -263,8 +260,7 @@ pub fn encrypt_pq_masp_note_v1_with_rng<R: TryCryptoRng + ?Sized>(
 ///
 /// # Errors
 ///
-/// Returns the same closed typed failures as
-/// [`encrypt_pq_masp_note_v1_with_rng`].
+/// Returns the same closed typed failures as [`encrypt_pq_masp_note_v1_with_rng`].
 pub fn encrypt_pq_masp_note_v1(
     statement: &PqMaspStarkStatementV1,
     note: &PqMaspNotePlaintextV1,

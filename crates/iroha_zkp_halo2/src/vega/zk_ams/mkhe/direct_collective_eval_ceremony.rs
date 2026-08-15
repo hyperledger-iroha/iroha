@@ -171,9 +171,8 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
     ///
     /// This raw-digest constructor exists only for adversarial unit fixtures: a
     /// digest does not prove persistent-witness membership.  Production uses
-    /// `from_verified_binding_set`, which consumes the opaque ordered set whose
-    /// secret role mask covers CPK, both RKG rounds, normalization, every
-    /// Galois key, and decryption.
+    /// `from_verified_binding_set`, which consumes the opaque ordered set whose secret role mask
+    /// covers CPK, both RKG rounds, normalization, every Galois key, and decryption.
     #[cfg(test)]
     pub(super) fn new(
         roster: &ZkAmsMkheGovernedActiveRosterV1,

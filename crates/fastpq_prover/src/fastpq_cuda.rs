@@ -723,8 +723,7 @@ pub(crate) fn fastpq_lde_submit(
 ///
 /// Returns [`CudaBackendError::ShapeMismatch`] when `elements` does not match the expected dense
 /// canonical-limb layout, [`CudaBackendError::InvalidInput`] when `log_size` is unsupported, or
-/// propagates [`CudaBackendError::Unavailable`] / [`CudaBackendError::Cuda`] from the CUDA
-/// backend.
+/// propagates [`CudaBackendError::Unavailable`] / [`CudaBackendError::Cuda`] from the CUDA backend.
 pub fn fastpq_bn254_fft(elements: &mut [u64], column_count: usize, log_size: u32) -> Result<()> {
     validate_bn254_dense(elements.len(), column_count, log_size)?;
     let twiddles = bn254::stage_twiddles_limbs(log_size).map_err(CudaBackendError::InvalidInput)?;

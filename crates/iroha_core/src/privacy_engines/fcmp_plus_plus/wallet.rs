@@ -1,11 +1,10 @@
 //! Fixed first-release FCMP++ wallet note encryption.
 //!
-//! There is exactly one codec: X25519 key agreement, a SHA-256 domain-separated
-//! key derivation, and XChaCha20-Poly1305 over one fixed-width note. The AEAD
-//! associated data binds the governed pool (which transitively fixes its
-//! asset), recipient identity, ephemeral key, output identifier, and complete
-//! `(O,I,C)` tuple. Consensus validates this exact public shape; recipient
-//! wallets additionally authenticate and decode the note.
+//! There is exactly one codec: X25519 key agreement, a SHA-256 domain-separated key derivation, and
+//! XChaCha20-Poly1305 over one fixed-width note. The AEAD associated data binds the governed pool
+//! (which transitively fixes its asset), recipient identity, ephemeral key, output identifier, and
+//! complete `(O,I,C)` tuple. Consensus validates this exact public shape; recipient wallets
+//! additionally authenticate and decode the note.
 use super::{
     FCMP_OUTPUT_TUPLE_BYTES_V1, FcmpNativeErrorV1, FcmpOutputCommitmentOpeningV1,
     FcmpOutputTupleV1,
@@ -392,8 +391,7 @@ fn model_output(output: PrivacyFcmpOutputTupleV1) -> Result<FcmpOutputTupleV1, F
         output.amount_commitment,
     )
 }
-/// Derive the sole first-release recipient identity from a canonical X25519
-/// public key.
+/// Derive the sole first-release recipient identity from a canonical X25519 public key.
 pub fn derive_fcmp_recipient_id_v1(
     recipient_public_key: [u8; 32],
 ) -> Result<PrivacyRecipientIdV1, FcmpNativeErrorV1> {

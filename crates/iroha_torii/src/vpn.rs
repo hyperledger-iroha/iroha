@@ -459,8 +459,7 @@ pub(crate) struct VpnQuoteRecord {
     pub directory_snapshot_digest: [u8; 32],
     pub relay_trust_valid_until_ms: u64,
 }
-/// Reverse indexes, in-flight reservations, and bounds for the compound VPN
-/// runtime caches.
+/// Reverse indexes, in-flight reservations, and bounds for the compound VPN runtime caches.
 ///
 /// The enclosing `vpn_state_lock` protects these indexes together with every
 /// mutation of `vpn_quotes`, `vpn_sessions`, and `vpn_used_payments`. Keeping

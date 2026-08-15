@@ -53,8 +53,8 @@ execution or release receipts.
 ## 2026-08-15 current merge audit
 
 - The checkout is an uncommitted merge with `HEAD`
-  `45ff358ba83adbb351eab54bdbc96625816e2487` and `MERGE_HEAD`
-  `5d41c784787ed496ccbd46379ee236cc992d9c65`, not a signed immutable
+  `69f5e617e9cef11cb45d519396d89b22a7317ae0` and `MERGE_HEAD`
+  `51deea83409635f99ce2fcbb6a983b7cca18b99b`, not a signed immutable
   candidate. Historical snapshots below are not current receipts.
 - The immutable source-budget baseline, active ratchet, and objective remain
   5,067,263, 5,014,603, and 4,560,536 Rust lines, with at least 550 lines of

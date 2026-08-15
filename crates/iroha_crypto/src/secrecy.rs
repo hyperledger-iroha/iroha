@@ -1,5 +1,4 @@
-//! This is analogue of `secrecy` crate,
-//! but it requires `ZeroizeOnDrop` trait instead of `Zeroize`.
+//! This is analogue of `secrecy` crate, but it requires `ZeroizeOnDrop` trait instead of `Zeroize`.
 use zeroize::ZeroizeOnDrop;
 #[derive(Clone)]
 pub struct Secret<S>

@@ -1,12 +1,11 @@
 //! Private Phase-23 source-algebra prerequisite.
 //!
-//! This child freezes the exact ciphertext/source coordinate map and the
-//! future aggregation transcript, but deliberately constructs no relation
-//! polynomial and mints no proof, writer, snapshot, or qPCS authority. The
-//! ordering seal at its parent seam is uninhabited in production; the separate
-//! radix/Hyrax seal is accepted only after authenticated source replay exists.
-//! Test-only permits exercise framing without making the existing Phase-23
-//! context seal or any release capability constructible.
+//! This child freezes the exact ciphertext/source coordinate map and the future aggregation
+//! transcript, but deliberately constructs no relation polynomial and mints no proof, writer,
+//! snapshot, or qPCS authority. The ordering seal at its parent seam is uninhabited in production;
+//! the separate radix/Hyrax seal is accepted only after authenticated source replay exists.
+//! Test-only permits exercise framing without making the existing Phase-23 context seal or any
+//! release capability constructible.
 
 #![allow(
     dead_code,
@@ -582,9 +581,8 @@ struct SourceAlgebraPrerequisiteRecordV2 {
     release_complete: bool,
     record_digest: [u8; 32],
 }
-/// Move-only pre-replay owner of the consumed Phase-23 bundle and its
-/// false-gated prerequisite record. It makes no radix/Hyrax claim and has no
-/// field accessors or decomposition seam.
+/// Move-only pre-replay owner of the consumed Phase-23 bundle and its false-gated prerequisite
+/// record. It makes no radix/Hyrax claim and has no field accessors or decomposition seam.
 pub(super) struct Phase23SourceAlgebraPrerequisiteV2<K, P> {
     live: Option<SourceAlgebraLiveV2<K, P>>,
     record: SourceAlgebraPrerequisiteRecordV2,

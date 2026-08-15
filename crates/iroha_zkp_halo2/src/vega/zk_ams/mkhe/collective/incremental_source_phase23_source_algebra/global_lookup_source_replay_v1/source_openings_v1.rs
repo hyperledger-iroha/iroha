@@ -1,8 +1,7 @@
-//! Purpose-bound source openings for the Phase-23 global lookup. The first
-//! authenticated pass creates 344 `Csrc` commitments in `j=256*b+i` order and
-//! binds packing coordinate `k=64*i+b`, retaining only a confidential blinding
-//! spool, public points, and the upstream owners. A private coordinate-free second
-//! pass can later form two weighted columns. No plaintext mirror or `Cpack`
+//! Purpose-bound source openings for the Phase-23 global lookup. The first authenticated pass
+//! creates 344 `Csrc` commitments in `j=256*b+i` order and binds packing coordinate `k=64*i+b`,
+//! retaining only a confidential blinding spool, public points, and the upstream owners. A private
+//! coordinate-free second pass can later form two weighted columns. No plaintext mirror or `Cpack`
 //! exists, and every proof, authority, receipt, RSS, and release gate is false.
 
 #![allow(

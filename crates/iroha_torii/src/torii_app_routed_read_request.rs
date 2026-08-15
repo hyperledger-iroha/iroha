@@ -1,11 +1,9 @@
 // Allocation-bounded request decoding for application-API routed reads.
-/// Maximum number of non-empty form pairs accepted by the V1 routed-read
-/// control plane.
+/// Maximum number of non-empty form pairs accepted by the V1 routed-read control plane.
 ///
-/// Current endpoint DTOs use fewer than sixteen fields. Allowing sixty-four
-/// pairs preserves duplicate-last form semantics with ample compatibility
-/// headroom while bounding the allocation-free duplicate scan to 4,096 key
-/// comparisons.
+/// Current endpoint DTOs use fewer than sixteen fields. Allowing sixty-four pairs preserves
+/// duplicate-last form semantics with ample compatibility headroom while bounding the
+/// allocation-free duplicate scan to 4,096 key comparisons.
 const TORII_ROUTED_READ_MAX_QUERY_PAIRS_V1: usize = 64;
 #[derive(Clone, Copy, Debug)]
 struct ToriiRoutedReadRequestDecodePlan {

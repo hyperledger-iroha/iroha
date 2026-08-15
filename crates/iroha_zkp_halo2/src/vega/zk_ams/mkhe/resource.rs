@@ -63,8 +63,7 @@ pub struct ZkAmsMkheResourceCertificateV1 {
     pub per_evaluated_key_ceiling_met: bool,
     /// The portable streamed workspace is within its frozen ceiling.
     pub workspace_ceiling_met: bool,
-    /// The longest canonical composed rotation is within the per-operation
-    /// work ceiling.
+    /// The longest canonical composed rotation is within the per-operation work ceiling.
     pub composed_rotation_work_ceiling_met: bool,
     /// Canonical CKS/RKG/share proof sizes have been implemented and certified.
     pub contribution_proof_sizes_certified: bool,
@@ -77,8 +76,7 @@ pub struct ZkAmsMkheResourceCertificateV1 {
     pub release_peak_memory_measured: bool,
 }
 impl ZkAmsMkheResourceCertificateV1 {
-    /// Return true only when both static accounting and measured release
-    /// evidence are complete.
+    /// Return true only when both static accounting and measured release evidence are complete.
     #[must_use]
     pub const fn is_release_ready(self) -> bool {
         self.ciphertext_ceiling_met

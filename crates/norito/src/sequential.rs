@@ -1,9 +1,8 @@
 //! Sequential (feature-independent) Norito helpers.
 //!
-//! These utilities provide a deterministic, compact layout for common
-//! collections without depending on compile-time feature flags. They always
-//! emit little-endian 64-bit length headers followed by element payloads
-//! encoded with [`NoritoSerialize`], and decode the inverse layout.
+//! These utilities provide a deterministic, compact layout for common collections without depending
+//! on compile-time feature flags. They always emit little-endian 64-bit length headers followed by
+//! element payloads encoded with [`NoritoSerialize`], and decode the inverse layout.
 use crate::core::{Error, NoritoDeserialize, NoritoSerialize, decode_field_canonical};
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::{

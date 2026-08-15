@@ -18,8 +18,7 @@ mod model {
     use norito::codec::{Decode, Encode};
     /// Peer's identification.
     ///
-    /// Equality is tested by `public_key` field only.
-    /// Each peer should have a unique public key.
+    /// Equality is tested by `public_key` field only. Each peer should have a unique public key.
     #[derive(
         derive_more::Debug,
         derive_more::Display,

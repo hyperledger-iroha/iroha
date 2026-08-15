@@ -1,9 +1,8 @@
 //! Authenticated Torii boundary for the SoraFS proof-of-personhood service.
 //!
-//! This module never accepts plaintext enrollment, credential, issuance-draft,
-//! holder-secret, or Merkle-witness material over HTTP. Those values are
-//! supplied only by runtime-owned adapters and remain behind the authority and
-//! durability checks in [`sorafs_node::pop_credentials`].
+//! This module never accepts plaintext enrollment, credential, issuance-draft, holder-secret, or
+//! Merkle-witness material over HTTP. Those values are supplied only by runtime-owned adapters and
+//! remain behind the authority and durability checks in [`sorafs_node::pop_credentials`].
 use crate::{JsonBody, SharedAppState, utils::extractors::NoritoJson};
 use axum::{
     extract::State,
@@ -389,10 +388,9 @@ pub enum PopCredentialRuntimeProviderRegistryErrorV1 {
 }
 /// Deployment-owned factory for all PoP private runtime dependencies.
 ///
-/// Implementations must change `qualification` whenever any signer, KMS,
-/// authentication, enrollment-recipient, wallet, witness, finalized-query, or
-/// transaction adapter identity/policy changes. `resolve` receives only public
-/// bindings and must never persist or log private material.
+/// Implementations must change `qualification` whenever any signer, KMS, authentication,
+/// enrollment-recipient, wallet, witness, finalized-query, or transaction adapter identity/policy
+/// changes. `resolve` receives only public bindings and must never persist or log private material.
 pub trait PopCredentialRuntimeProviderRegistryV1: Send + Sync + fmt::Debug {
     /// Exact stable non-secret registry handle.
     fn handle(&self) -> &str;

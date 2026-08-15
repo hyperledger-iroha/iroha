@@ -138,7 +138,7 @@ pub(crate) fn complete_tip_restart_activation_fixture() -> (
 }
 #[cfg(all(test, feature = "bls"))]
 /// Build the exact retired H/H+1 inputs for lifecycle clean-shutdown tests.
-pub(crate) fn complete_tip_lifecycle_shutdown_fixture() -> (
+pub(in crate::sumeragi) fn complete_tip_lifecycle_shutdown_fixture() -> (
     std::sync::Arc<crate::kura::Kura>,
     super::v2::VerifiedHeightContext,
     iroha_crypto::KeyPair,

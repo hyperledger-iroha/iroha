@@ -47,8 +47,7 @@ pub struct ZkAmsMkheNoiseCertificateV1 {
     pub collective_rkg_residual_bits: u16,
     /// Residual introduced by one streamed hybrid key switch.
     pub hybrid_key_switch_residual_bits: u16,
-    /// Maximum number of constituent key switches in one canonical signed-
-    /// binary packed rotation.
+    /// Maximum number of constituent key switches in one canonical signed- binary packed rotation.
     pub max_composed_rotation_key_switch_count: u8,
     /// Residual after the longest canonical signed-binary packed rotation.
     pub composed_rotation_residual_bits: u16,

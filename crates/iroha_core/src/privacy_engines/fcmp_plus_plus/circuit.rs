@@ -2,10 +2,9 @@
 //!
 //! This is a concrete, allocation-bounded port of the circuit abstraction and
 //! EC discrete-log gadgets used by the pinned FCMP++ implementation.  The
-//! verifier builds the exact same constraints as the prover: hidden points
-//! are proved on their embedded curve, divisor evaluations bind every
-//! discrete logarithm, public rerandomizations are checked with incomplete
-//! addition, and every tree layer is checked with set membership.
+//! verifier builds the exact same constraints as the prover: hidden points are proved on their
+//! embedded curve, divisor evaluations bind every discrete logarithm, public rerandomizations are
+//! checked with incomplete addition, and every tree layer is checked with set membership.
 #[cfg(test)]
 use super::proof_math::FcmpProofRandomSource;
 use super::{
@@ -260,9 +259,8 @@ struct ZeroizingScalarVec<F: ProofScalar> {
     logical_capacity: usize,
     allocation_capacity: usize,
 }
-/// Owns one secret-derived discrete-log coefficient until its field-scalar
-/// owner has been constructed. This type is intentionally neither `Copy` nor
-/// `Clone`.
+/// Owns one secret-derived discrete-log coefficient until its field-scalar owner has been
+/// constructed. This type is intentionally neither `Copy` nor `Clone`.
 struct SecretDlogCoefficientV1(u64);
 #[cfg(test)]
 std::thread_local! {

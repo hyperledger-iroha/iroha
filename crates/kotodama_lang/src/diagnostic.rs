@@ -1497,10 +1497,9 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
 /// Preserve resolver ownership when a later typed-analysis adapter surfaces a
 /// diagnostic whose canonical registry entry belongs to resolution.
 ///
-/// The semantic analyzer consumes resolved HIR and can therefore detect a
-/// stale or inconsistent resolver result. Other semantic failures retain their
-/// actual semantic phase, including cross-phase fanout diagnostics such as
-/// `K0004`.
+/// The semantic analyzer consumes resolved HIR and can therefore detect a stale or inconsistent
+/// resolver result. Other semantic failures retain their actual semantic phase, including
+/// cross-phase fanout diagnostics such as `K0004`.
 pub(crate) fn phase_for_semantic_failure(code: &str) -> DiagnosticPhase {
     match diagnostic_explanation(code) {
         Some(explanation) if explanation.phase == DiagnosticPhase::Resolve => {
@@ -1538,9 +1537,8 @@ pub struct SourceSpan {
     pub end: SourcePosition,
     /// Exact half-open UTF-8 byte range when the source text is available.
     ///
-    /// Line and column positions are retained for humans and SARIF consumers,
-    /// while this range makes diagnostics unambiguous in the presence of
-    /// multi-byte Unicode text.
+    /// Line and column positions are retained for humans and SARIF consumers, while this range
+    /// makes diagnostics unambiguous in the presence of multi-byte Unicode text.
     pub byte_range: Option<TextRange>,
 }
 impl SourceSpan {

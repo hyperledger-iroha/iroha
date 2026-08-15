@@ -794,12 +794,7 @@ pub struct StarkFriVerifyingKeyV1 {
     /// Hash function selector (`1 = SHA-256`, `2 = Poseidon2`).
     pub hash_fn: u8,
 }
-/// Maximum canonical encoding accepted for a STARK/FRI V1 verifying key.
-///
-/// The payload contains one bounded circuit identifier and a fixed set of
-/// scalar parameters, so 4 KiB leaves ample format headroom without allowing
-/// registry input to inherit a caller-sized decode budget.
-pub const STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES: usize = 4 * 1024;
+pub use crate::zk::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES;
 const STARK_FRI_VERIFYING_KEY_V1_MAX_NESTING_DEPTH: usize = 8;
 /// Decode one exact canonical STARK/FRI V1 verifying-key payload under a
 /// schema-specific resource budget.

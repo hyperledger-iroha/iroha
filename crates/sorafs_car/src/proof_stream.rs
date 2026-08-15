@@ -21,9 +21,8 @@ pub use sorafs_manifest::ProofStreamKind as ProofKind;
 pub use sorafs_manifest::ProofStreamTier as ProofTier;
 /// Return the canonical digest of every field in an exact proof-stream request.
 ///
-/// Optional fields use an explicit presence byte before their fixed-width value. This transcript
-/// is independent of host layout and binds the client nonce as well as every proof-specific
-/// selector.
+/// Optional fields use an explicit presence byte before their fixed-width value. This transcript is
+/// independent of host layout and binds the client nonce as well as every proof-specific selector.
 pub fn proof_stream_request_digest_v1(request: &ProofStreamRequestV1) -> Result<[u8; 32], String> {
     request
         .validate()

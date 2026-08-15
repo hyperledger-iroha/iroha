@@ -16464,10 +16464,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 self.timeout_recovery_episode = None;
                 self.retransmit_owner = None;
                 self.retransmit_owner_physical_cut = None;
-                self.dormant_fresh_lifecycle_owners.retain(|_, owner| {
-                    let root = owner.causal_origin().root_tag;
-                    root.height() == tag.height() && root.view() == tag.view()
-                });
+                self.dormant_fresh_lifecycle_owners
+                    .retain(|_, owner| owner.causal_origin().root_tag == tag);
                 self.active_view_producer = Some(ActiveViewProducerReservation { tag, ownership });
                 self.schedule = ScheduleState::default();
             }

@@ -175,16 +175,14 @@ where
 const HOT_LEAVES_PER_SEGMENT_USIZE_V1: usize = PDP_HOT_LEAVES_PER_SEGMENT_V1 as usize;
 /// Estimate the retained heap capacity of a canonical PDP tree.
 ///
-/// The estimate covers the two exact boxed node slabs retained by the finished
-/// tree. The builder's temporary 256 KiB segment buffer and the bounded
-/// temporary local tree used during proof extraction are not retained by the
-/// finished tree and are therefore excluded.
+/// The estimate covers the two exact boxed node slabs retained by the finished tree. The builder's
+/// temporary 256 KiB segment buffer and the bounded temporary local tree used during proof
+/// extraction are not retained by the finished tree and are therefore excluded.
 ///
 /// This function performs no allocation. An empty payload returns
-/// [`PdpMerkleTreeError::EmptyPayload`], geometry or `usize` arithmetic
-/// overflow returns [`PdpMerkleTreeError::GeometryOverflow`], and a single
-/// required allocation larger than the host's `isize` allocation limit returns
-/// [`PdpMerkleTreeError::AllocationFailed`].
+/// [`PdpMerkleTreeError::EmptyPayload`], geometry or `usize` arithmetic overflow returns
+/// [`PdpMerkleTreeError::GeometryOverflow`], and a single required allocation larger than the
+/// host's `isize` allocation limit returns [`PdpMerkleTreeError::AllocationFailed`].
 pub fn estimated_heap_bytes(payload_len: u64) -> Result<usize, PdpMerkleTreeError> {
     if payload_len == 0 {
         return Err(PdpMerkleTreeError::EmptyPayload);
@@ -224,12 +222,11 @@ pub struct PdpMerkleTreeV1 {
 }
 /// Incremental constructor for a canonical Sora-PDP v1 Merkle tree.
 ///
-/// The builder retains at most one 256 KiB payload segment while ingesting
-/// bytes. Final trees retain only two exact global Merkle node slabs; all byte
-/// geometry is derived from `payload_len` and a sampled segment's bounded
-/// 64-leaf local tree is rebuilt when a proof is extracted. All allocations
-/// made while constructing the tree are fallible; callers must discard the
-/// builder after an error.
+/// The builder retains at most one 256 KiB payload segment while ingesting bytes. Final trees
+/// retain only two exact global Merkle node slabs; all byte geometry is derived from `payload_len`
+/// and a sampled segment's bounded 64-leaf local tree is rebuilt when a proof is extracted. All
+/// allocations made while constructing the tree are fallible; callers must discard the builder
+/// after an error.
 #[derive(Debug, Default)]
 pub struct PdpMerkleTreeBuilderV1 {
     payload_len: u64,
@@ -500,13 +497,12 @@ impl PdpMerkleTreeV1 {
     }
     /// Construct exact PDP witnesses using bounded random-access payload reads.
     ///
-    /// The callback is invoked exactly once for each requested hot leaf, after
-    /// the entire sample set and every requested leaf's geometry have been
-    /// validated. `offset` is an absolute payload offset and `buffer` has the
-    /// exact committed leaf length (at most 4 KiB). The callback must attempt a
-    /// single positional read into `buffer` and return the number of bytes it
-    /// supplied. Any value other than `buffer.len()` is rejected as a short or
-    /// otherwise invalid read; proof construction never retries it.
+    /// The callback is invoked exactly once for each requested hot leaf, after the entire sample
+    /// set and every requested leaf's geometry have been validated. `offset` is an absolute payload
+    /// offset and `buffer` has the exact committed leaf length (at most 4 KiB). The callback must
+    /// attempt a single positional read into `buffer` and return the number of bytes it supplied.
+    /// Any value other than `buffer.len()` is rejected as a short or otherwise invalid read; proof
+    /// construction never retries it.
     ///
     /// This API lets storage backends serve witnesses without materializing the
     /// committed payload. It caps segment and leaf counts to the v1 protocol

@@ -1,9 +1,8 @@
-//! Instruction opcode constants, field extractors and helpers for the canonical
-//! IVM wide instruction format. Each 32-bit word encodes an 8-bit primary
-//! opcode followed by three 8-bit operand slots. The nested modules enumerate
-//! opcode families (arithmetic, memory, control-flow, crypto and zero-knowledge
-//! helpers) and provide convenience extractors for working with raw instruction
-//! words. ISO20022 opcode values remain reserved for future releases.
+//! Instruction opcode constants, field extractors and helpers for the canonical IVM wide
+//! instruction format. Each 32-bit word encodes an 8-bit primary opcode followed by three 8-bit
+//! operand slots. The nested modules enumerate opcode families (arithmetic, memory, control-flow,
+//! crypto and zero-knowledge helpers) and provide convenience extractors for working with raw
+//! instruction words. ISO20022 opcode values remain reserved for future releases.
 /// Helpers for the canonical wide encoding (8-bit opcode + three 8-bit operands).
 pub mod wide {
     /// Arithmetic and logic operations (register-register).

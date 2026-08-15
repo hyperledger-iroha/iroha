@@ -15655,13 +15655,6 @@ pub(crate) mod valid {
                 );
             };
         }
-        macro_rules! setup_axt_validation_state {
-            ($kura:ident, $query:ident, $state:ident) => {
-                let $kura = Kura::blank_kura_for_testing();
-                let $query = LiveQueryStore::start_test();
-                let mut $state = State::new_for_testing(World::new(), $kura, $query);
-            };
-        }
         macro_rules! validate_signed_voting_test_block {
             ($signed:ident, $topology:ident, $state:ident, $voting_block:ident, $time_source:ident, $result:ident) => {
                 let mut $voting_block = None;
@@ -15754,29 +15747,6 @@ pub(crate) mod valid {
                     .sign(&$leader_private)
                     .unpack(|_| {});
                 let $signed_block: SignedBlock = SignedBlock::from(new_block);
-            };
-        }
-        macro_rules! install_axt_policy {
-            ($state:ident, $dsid:ident, $lane:ident, $policy:ident, $dsid_value:expr, $lane_value:expr, $manifest_root:expr, $current_slot:expr) => {
-                let $dsid = DataSpaceId::new($dsid_value);
-                let $lane = LaneId::new($lane_value);
-                let $policy = AxtPolicyEntry {
-                    manifest_root: $manifest_root,
-                    target_lane: $lane,
-                    active_handle_era: 1,
-                    next_handle_counter: 1,
-                    current_slot: $current_slot,
-                };
-                $state.set_axt_policy($dsid, $policy);
-            };
-        }
-        macro_rules! expect_axt_envelope_error {
-            ($state:ident, $envelope:ident, $reason:expr, $message:expr) => {
-                let snapshot = axt_policy_snapshot_for_validation_test(&$state);
-                let block = build_block_with_envelopes($envelope, snapshot);
-                let state_block = $state.block(block.header());
-                let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-                expect_axt_error(err, $reason, $message);
             };
         }
         #[test]

@@ -195,10 +195,9 @@ pub async fn read_bounded_file_async(
 }
 /// Read a successful HTTP response with Content-Length admission and a streamed hard ceiling.
 ///
-/// Missing lengths are accepted and bounded while streaming. A declared
-/// length above the ceiling is rejected before reading a body; a chunked or
-/// misreported response is rejected as soon as its observed bytes exceed the
-/// same ceiling.
+/// Missing lengths are accepted and bounded while streaming. A declared length above the ceiling is
+/// rejected before reading a body; a chunked or misreported response is rejected as soon as its
+/// observed bytes exceed the same ceiling.
 pub async fn read_http_body_bounded(
     mut response: reqwest::Response,
     max_bytes: usize,

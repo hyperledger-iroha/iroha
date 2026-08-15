@@ -14,12 +14,10 @@ use crate::vega::sponge::keccak256;
 /// for the containing context ill-formed in safe Rust.
 struct ContextAxisDigestV1([u8; 32]);
 
-/// Opaque binding of every immutable context axis that precedes an RNS-Link
-/// commitment.
+/// Opaque binding of every immutable context axis that precedes an RNS-Link commitment.
 ///
-/// The type is visible at the existing MKHE-private scope, while its fields
-/// remain visible only in this leaf. Production deliberately has no way to
-/// construct or duplicate a value.
+/// The type is visible at the existing MKHE-private scope, while its fields remain visible only in
+/// this leaf. Production deliberately has no way to construct or duplicate a value.
 pub(in super::super) struct ZkAmsPhase23RnsLinkContextV1 {
     profile_digest: ContextAxisDigestV1,
     algorithm_manifest_digest: ContextAxisDigestV1,

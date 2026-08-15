@@ -76,9 +76,8 @@ const VALIDATION_FEE_MULTISIG_MARKER_RESERVED_PREFIX: &str = "iroha:validation_f
 /// Return whether a custom parameter identifier belongs to the consensus-owned
 /// validation-fee governance surface.
 ///
-/// These parameters are enacted atomically by SORA Parliament and must never be
-/// writable through the generic `SetParameter` instruction, including at
-/// genesis.
+/// These parameters are enacted atomically by SORA Parliament and must never be writable through
+/// the generic `SetParameter` instruction, including at genesis.
 #[must_use]
 pub fn is_reserved_validation_fee_parameter_id(id: &CustomParameterId) -> bool {
     id == &ValidationFeePolicyRegistryV1::parameter_id()
@@ -1071,8 +1070,7 @@ impl ValidationFeePolicyRegistryV1 {
         }
         Ok(())
     }
-    /// Return the latest enacted entry, including a policy scheduled for a
-    /// future height.
+    /// Return the latest enacted entry, including a policy scheduled for a future height.
     #[must_use]
     pub fn head(&self) -> Option<&ValidationFeePolicyRegistryEntryV1> {
         self.registered_policies.last()

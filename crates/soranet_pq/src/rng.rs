@@ -66,8 +66,7 @@ impl HedgedRngSeed {
     /// Draw a fresh seed from a caller-supplied cryptographic RNG.
     ///
     /// # Errors
-    /// Returns [`RngError`] when the supplied RNG cannot provide nonzero seed
-    /// material.
+    /// Returns [`RngError`] when the supplied RNG cannot provide nonzero seed material.
     pub fn from_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<Self, RngError> {
         let mut buf = Zeroizing::new([0_u8; 32]);
         rng.try_fill_bytes(buf.as_mut()).map_err(|_| RngError)?;
@@ -125,21 +124,18 @@ pub fn deterministic_chacha20_rng(
 /// [`hedged_chacha20_rng`] with an explicit [`HedgedRngSeed`].
 ///
 /// # Errors
-/// Returns [`RngError`] when the initial OS seed draw fails or returns all-zero
-/// material.
+/// Returns [`RngError`] when the initial OS seed draw fails or returns all-zero material.
 pub fn hedged_chacha20_rng_from_os(personalization: &[u8]) -> Result<HedgedChaCha20Rng, RngError> {
     let mut os = OsRng;
     hedged_chacha20_rng_from_rng(personalization, &mut os)
 }
 /// Construct a hedged RNG from caller-supplied seed entropy.
 ///
-/// This helper is for production embedders and tests that need the same
-/// fail-closed seed boundary as [`hedged_chacha20_rng_from_os`] without tying
-/// the required seed draw to the process OS RNG.
+/// This helper is for production embedders and tests that need the same fail-closed seed boundary
+/// as [`hedged_chacha20_rng_from_os`] without tying the required seed draw to the process OS RNG.
 ///
 /// # Errors
-/// Returns [`RngError`] when the required seed draw fails or returns all-zero
-/// material.
+/// Returns [`RngError`] when the required seed draw fails or returns all-zero material.
 pub fn hedged_chacha20_rng_from_rng<R: TryCryptoRng + ?Sized>(
     personalization: &[u8],
     rng: &mut R,

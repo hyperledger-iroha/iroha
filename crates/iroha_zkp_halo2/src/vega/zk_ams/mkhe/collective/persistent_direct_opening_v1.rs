@@ -95,29 +95,22 @@ pub(super) struct PostCpkPersistentDirectOpeningGuardV1<'a> {
 }
 
 impl<'a> PostCpkPersistentDirectOpeningGuardV1<'a> {
-    pub(super) fn new(
+    pub(super) fn from_installed_binding_v1(
         owner: &'a mut PersistentDirectOpeningOwnerV1,
         public_error: &'a SecretPolynomial,
         creation_mask_digit_burn: (&'a u64, u64),
-        expected_identity: [u8; 32],
-        expected_commitments: [Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         let binding = owner
             .verified_binding
             .as_ref()
             .ok_or(ZkAmsMkheErrorV1::ReleaseUnavailable)?;
-        if binding.identity_digest() != expected_identity
-            || binding.commitments() != &expected_commitments
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
         let coefficients =
             ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&owner.secret)?;
         let commitments = commit_persistent_secret_opening_v1(
             coefficients.as_slice(),
             owner.blindings.as_array(),
         )?;
-        if commitments != expected_commitments
+        if binding.commitments() != &commitments
             || encode_persistent_opening_commitments_v1(&commitments)?
                 != owner.retained_commitment_wire
         {
@@ -129,6 +122,17 @@ impl<'a> PostCpkPersistentDirectOpeningGuardV1<'a> {
             public_error,
             creation_mask_digit_burn,
         })
+    }
+
+    pub(in crate::vega::zk_ams::mkhe::collective) fn checked_commitments_v1(
+        &self,
+    ) -> Result<&[Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1], ZkAmsMkheErrorV1> {
+        Ok(self
+            .owner
+            .verified_binding
+            .as_ref()
+            .ok_or(ZkAmsMkheErrorV1::ReleaseUnavailable)?
+            .commitments())
     }
 
     pub(in crate::vega::zk_ams::mkhe::collective) fn into_compacted_post_seal_v1(

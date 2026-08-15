@@ -7,8 +7,7 @@ use iroha_primitives::{
 };
 use iroha_schema::IntoSchema;
 use std::collections::BTreeMap;
-/// Metadata key storing Norito-encoded [`TransferTranscript`] collections for
-/// FASTPQ gadgets.
+/// Metadata key storing Norito-encoded [`TransferTranscript`] collections for FASTPQ gadgets.
 pub const TRANSFER_TRANSCRIPTS_METADATA_KEY: &str = "transfer_transcripts";
 /// Transcript describing one or more deterministic asset transfers within a transaction.
 #[derive(

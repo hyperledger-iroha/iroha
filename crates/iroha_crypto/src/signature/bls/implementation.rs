@@ -598,9 +598,8 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         Ok(agg_sig_bytes)
     }
-    /// Verify a pre-aggregated signature for the case where all signers signed the
-    /// same message. Public keys are aggregated inside this function and a single pairing
-    /// check is performed.
+    /// Verify a pre-aggregated signature for the case where all signers signed the same message.
+    /// Public keys are aggregated inside this function and a single pairing check is performed.
     pub(crate) fn verify_preaggregated_same_message(
         message: &[u8],
         aggregated_signature: &[u8],

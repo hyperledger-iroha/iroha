@@ -188,10 +188,9 @@ impl SourceFile {
     }
     /// Construct a source file owned by one exact locked package.
     ///
-    /// Package identity is intentionally separate from the portable logical
-    /// path: two dependencies may both contain `src/lib.ko`, while diagnostics
-    /// and source maps must still identify their owners without rewriting the
-    /// source-visible path.
+    /// Package identity is intentionally separate from the portable logical path: two dependencies
+    /// may both contain `src/lib.ko`, while diagnostics and source maps must still identify their
+    /// owners without rewriting the source-visible path.
     #[must_use]
     pub fn new_in_package(
         id: SourceId,

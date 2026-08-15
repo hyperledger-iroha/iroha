@@ -444,11 +444,10 @@ fn read_active_policy_for_current(
 /// Return the complete active recorder-policy predecessor chain in ascending
 /// revision order from one immutable world view.
 ///
-/// This is a crate-internal capture primitive for the finalized reputation
-/// archive. It never substitutes current state for the supplied view and
-/// fails closed when the active record, any predecessor artifact, or the
-/// direct revision/digest/activation ordering is malformed. `maximum_records`
-/// is a hard allocation and traversal bound.
+/// This is a crate-internal capture primitive for the finalized reputation archive. It never
+/// substitutes current state for the supplied view and fails closed when the active record, any
+/// predecessor artifact, or the direct revision/digest/activation ordering is malformed.
+/// `maximum_records` is a hard allocation and traversal bound.
 pub(crate) fn read_reputation_authority_policy_history(
     world: &impl WorldReadOnly,
     maximum_records: usize,
@@ -1622,9 +1621,8 @@ fn opened_dispute_entry(
     }
     Ok(Some(opened.entry))
 }
-/// Validate an exact `RegisterCapacityDispute` replay against the already
-/// committed journal lifecycle without manufacturing missing authoritative
-/// state.
+/// Validate an exact `RegisterCapacityDispute` replay against the already committed journal
+/// lifecycle without manufacturing missing authoritative state.
 pub(super) fn validate_capacity_dispute_opened_replay(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,

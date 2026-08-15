@@ -10,11 +10,10 @@
 //!
 //! The source/algebra/replay seal is production-uninhabited.  This slice does
 //! not itself perform the LDE or initial Merkle pass.  A private child can
-//! prepare those artifacts only behind three uninhabited production
-//! authorities. A second independently uninhabited child can retain `S`,
-//! derive the post-root points, and freeze the opening-quotient root. Batching,
-//! FRI, cross-field binding, and proof emission remain absent; every
-//! completion gate remains false.
+//! prepare those artifacts only behind three uninhabited production authorities. A second
+//! independently uninhabited child can retain `S`, derive the post-root points, and freeze the
+//! opening-quotient root. Batching, FRI, cross-field binding, and proof emission remain absent;
+//! every completion gate remains false.
 use super::*;
 use core::{convert::Infallible, fmt, sync::atomic};
 use std::path::Path;

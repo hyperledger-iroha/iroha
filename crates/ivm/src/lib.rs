@@ -224,10 +224,9 @@ mod ptx_tests;
 pub mod vrf;
 /// Optional acceleration policy applied at runtime by hosts.
 ///
-/// By default, the VM will use all available hardware backends (SIMD, Metal, CUDA)
-/// subject to golden-vector self-tests. Hosts may call
-/// `set_acceleration_config` to override the availability of certain backends or
-/// to cap the number of GPUs.
+/// By default, the VM will use all available hardware backends (SIMD, Metal, CUDA) subject to
+/// golden-vector self-tests. Hosts may call `set_acceleration_config` to override the availability
+/// of certain backends or to cap the number of GPUs.
 #[derive(Clone, Copy, Debug)]
 pub struct AccelerationConfig {
     /// Enable SIMD acceleration (NEON/AVX/SSE) when available. When false, force scalar execution.

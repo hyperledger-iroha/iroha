@@ -18,8 +18,7 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 /// Maximum governed IVM heap size in bytes for ABI V1.
 ///
-/// The ABI V1 address map reserves the half-open range
-/// `0x0010_0000..0x0020_0000` for the heap.
+/// The ABI V1 address map reserves the half-open range `0x0010_0000..0x0020_0000` for the heap.
 pub const IVM_HEAP_MAX_BYTES: u64 = 0x0010_0000;
 /// Raw 32-byte consensus fingerprint with one canonical JSON representation.
 #[derive(

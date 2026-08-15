@@ -3,9 +3,8 @@
 //! The reducer itself remains serialized on the Sumeragi thread. Potentially
 //! blocking signing, body fsync/validation, state application, and certified
 //! body serving execute on one ordered I/O worker and return tagged
-//! completions. Control messages use the bounded committee topology: proposal
-//! manifests and phase votes reach the full committee, first-send body chunks
-//! reach Set A, and timeout/QC recovery remains committee-wide.
+//! completions. Control and recovery remain committee-wide, while first-send
+//! body chunks are limited to Set A.
 use super::v2_core::{
     CanonicalIdentityProjection, Committee, EventTag, IDENTITY_DOMAIN_PAYLOAD,
     IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_PROCESS_LOCAL, IDENTITY_KIND_MERGE_ENTRY,
@@ -15909,27 +15908,6 @@ fn durable_history_source_covers(
         _ => Err("Sumeragi v2 durable response claim changed output kind".to_owned()),
     }
 }
-fn autonomous_new_view_body_matches_durable_payload(
-    body: &crate::lane_consensus::LaneBlockNewViewBodyV1,
-    payload: &crate::lane_consensus::LaneExecutablePayloadV1,
-    expected_network_id: iroha_data_model::NetworkId,
-    expected_epoch: u64,
-) -> bool {
-    let Ok(source) = crate::lane_consensus::retarget_lane_block_proposal_exact_view(
-        &payload.origin_proposal,
-        body.from_view,
-    ) else {
-        return false;
-    };
-    crate::lane_consensus::LaneBlockNewViewBodyV1::for_transition(
-        &source,
-        payload,
-        body.target_view,
-        expected_network_id,
-        expected_epoch,
-    )
-    .is_ok_and(|expected| expected == *body)
-}
 fn autonomous_lane_output_has_durable_reconstruction_source(
     messages: &[NetworkMessage],
     artifact: &wire::finality::V2FinalityArtifact,
@@ -16053,9 +16031,26 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                 );
             }
         };
-        let canonical_payload = canonical_payloads.get(&route).ok_or_else(|| {
-            "autonomous-lane output is not owned by the canonical Kura carrier".to_owned()
-        })?;
+        let Some(canonical_payload) = canonical_payloads.get(&route).filter(|payload| {
+            autonomous_lane_output_matches_payload_identity(envelope.as_message(), payload)
+        }) else {
+            if proposal_height != artifact.height {
+                return Err(
+                    "autonomous-lane output is not owned by the canonical Kura carrier".to_owned(),
+                );
+            }
+            autonomous_lane_output_has_exact_retirement_source(
+                envelope.as_message(),
+                artifact,
+                durable_lane_authority,
+                kura,
+                local_peer,
+                proposal_height,
+                network_id,
+                epoch,
+            )?;
+            continue;
+        };
         let proposal_hash = canonical_payload.origin_proposal.proposal_hash;
         if proposal_height == artifact.height
             && !durable_lane_authority.winning_proposal_hash(proposal_hash)
@@ -17917,8 +17912,7 @@ impl ProductionV2Services {
         ))
     }
     /// Start the ordered I/O adapter for one immutable height context.
-    #[allow(dead_code)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn start(
         context: wire::HeightContext,
         initial_tag: EventTag,

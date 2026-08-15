@@ -14,9 +14,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(test)]
-use std::collections::BTreeSet;
-
 use super::v2_core::{
     CanonicalIdentityProjection, EventTag, Generation, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
     IDENTITY_KIND_FINALITY_ARTIFACT, ProductionSuccessorPredecessorBindingProjection,

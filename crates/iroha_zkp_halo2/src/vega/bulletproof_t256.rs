@@ -13,6 +13,7 @@ use crate::generalized_bulletproof::{
     ArithmeticCircuitStatement, ArithmeticCircuitWitness, GeneralizedBulletproofErrorV1, LinComb,
     ProofGenerators, ProofPoint, ProofRandomSource, ProofScalar, ProofSuite, ProverTranscript,
     SecretMultiexpBuilder, Variable, VectorCommitmentOpening, VerifierTranscript,
+    exact_small_coefficient_source_v1 as exact_small,
 };
 use core::{
     marker::PhantomData,
@@ -1111,11 +1112,19 @@ fn verify_prepared_membership_chunk_for_suite<S>(
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
 {
-    let (padded_gates, constraints) =
-        membership_constraints(expected_coefficient_count, expected_bound)?;
-    if padded_gates != prepared.padded_gates {
-        return Err(ZkAmsT256MembershipErrorV1::CoefficientCount);
-    }
+    let source_bound = match expected_bound {
+        ZkAmsT256MembershipBoundV1::One => exact_small::ExactSmallCoefficientBoundV1::One,
+        ZkAmsT256MembershipBoundV1::Two => exact_small::ExactSmallCoefficientBoundV1::Two,
+    };
+    let source = exact_small::ExactSmallCoefficientConstraintSourceV1::new(
+        expected_coefficient_count,
+        source_bound,
+    )?;
+    let statement = exact_small::ExactSmallCoefficientVerifierStatementV1::new(
+        S::generators().reduce(prepared.padded_gates)?,
+        source,
+        prepared.commitment,
+    )?;
     let mut transcript = T256BulletproofVerifierTranscriptV1::<S>::new(
         context_digest,
         generator_basis_digest,
@@ -1124,13 +1133,7 @@ where
         prepared.commitment,
         prepared.proof,
     )?;
-    ArithmeticCircuitStatement::new(
-        S::generators().reduce(padded_gates)?,
-        constraints,
-        vec![prepared.commitment],
-        Vec::new(),
-    )?
-    .verify(&mut transcript)?;
+    statement.verify(&mut transcript)?;
     Ok(transcript.finish()?)
 }
 fn verify_membership_input_for_suite_with_lease_v1<S>(
@@ -2993,4 +2996,5 @@ mod tests {
             assert!(result.is_err());
         }
     }
+    include!("bulletproof_t256_streaming_constraint_tests.rs");
 }

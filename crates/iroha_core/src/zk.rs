@@ -264,6 +264,12 @@ const MAX_PROOF_LEN: usize = 8 * 1024 * 1024; // 8 MiB
 /// before any Halo2 decoder or parameter construction is reached.
 pub const HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES: usize =
     iroha_data_model::proof::VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1;
+/// Maximum canonical encoding accepted for a STARK/FRI V1 verifying key.
+///
+/// The payload contains one bounded circuit identifier and a fixed set of
+/// scalar parameters, so 4 KiB leaves ample format headroom without allowing
+/// registry input to inherit a caller-sized decode budget.
+pub const STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES: usize = 4 * 1024;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Upper bound for parsed public instance columns. This covers current IVM and
 /// confidential-transfer proof layouts while keeping malformed envelopes bounded.
@@ -986,9 +992,7 @@ pub(crate) fn validate_and_prepare_verifying_key_record_v1(
     }
     let max_payload_bytes = match record.backend {
         iroha_data_model::zk::BackendTag::Halo2IpaPasta => HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES,
-        iroha_data_model::zk::BackendTag::Stark => {
-            crate::zk_stark::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES
-        }
+        iroha_data_model::zk::BackendTag::Stark => STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES,
     };
     if u64::from(record.vk_len) > max_payload_bytes as u64 {
         return Err(format!(
@@ -1035,6 +1039,23 @@ mod strict_verifying_key_preparation_tests {
             u32::try_from(HALO2_IPA_VERIFYING_KEY_V1_MAX_BYTES + 1).expect("test length fits u32");
         let error = validate_and_prepare_verifying_key_record_v1(&id, &record)
             .expect_err("an off-ledger key declaration must obey the backend container bound");
+        assert!(error.contains("declared"), "unexpected error: {error}");
+    }
+    #[test]
+    fn record_preparation_rejects_oversized_stark_off_ledger_declaration() {
+        let id = VerifyingKeyId::new(ZK_BACKEND_STARK_FRI_V1, "generic-binding-air");
+        let mut record = VerifyingKeyRecord::new(
+            1,
+            "generic-binding-air",
+            iroha_data_model::zk::BackendTag::Stark,
+            "goldilocks",
+            [0x51; 32],
+            [0x52; 32],
+        );
+        record.vk_len =
+            u32::try_from(STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES + 1).expect("test length fits u32");
+        let error = validate_and_prepare_verifying_key_record_v1(&id, &record)
+            .expect_err("an off-ledger STARK key declaration must obey the backend bound");
         assert!(error.contains("declared"), "unexpected error: {error}");
     }
     #[test]
@@ -3471,6 +3492,45 @@ pub mod zk1_test_helpers {
         super::zk1::wrap_append_instances_pasta_fp_cols(cols, buf)
     }
 }
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+macro_rules! advice {
+    (@call $region:ident, $annotation:expr, $column:expr, $offset:expr, $value:expr) => {
+        crate::zk::assign_advice_compat(
+            &mut $region,
+            $annotation,
+            $column,
+            $offset,
+            $value,
+        )
+    };
+    ($region:ident, $label:literal, $column:expr => $value:expr) => {
+        advice!(
+            @call $region,
+            || $label,
+            $column,
+            0,
+            || halo2_proofs::circuit::Value::known($value)
+        )
+    };
+    ($region:ident, $label:literal, $column:expr, $offset:expr => $value:expr) => {
+        advice!(
+            @call $region,
+            || $label,
+            $column,
+            $offset,
+            || halo2_proofs::circuit::Value::known($value)
+        )
+    };
+    ($region:ident, move $label:literal, $column:expr => $value:expr) => {
+        advice!(
+            @call $region,
+            move || format!($label),
+            $column,
+            0,
+            || halo2_proofs::circuit::Value::known($value)
+        )
+    };
+}
 // Generic, fixed-depth variants consolidated here to enable easy parameterization
 // and future chip-backed swaps under the `zk-halo2-ipa-poseidon` feature flag.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -3487,7 +3547,7 @@ pub mod depth {
     #[allow(unused_imports)]
     use crate::zk::pasta_tiny::poseidon_compress2_native;
     use halo2_proofs::{
-        circuit::{Layouter, SimpleFloorPlanner, Value},
+        circuit::{Layouter, SimpleFloorPlanner},
         halo2curves::pasta::Fp as Scalar,
         plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
         poly::Rotation,
@@ -3598,28 +3658,10 @@ pub mod depth {
                 || "vote_commit_merkle_depth",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "v",
-                        v,
-                        0,
-                        || Value::known(Scalar::from(1)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "rho",
-                        rho,
-                        0,
-                        || Value::known(Scalar::from(12345)),
-                    )?;
+                    advice!(region, "v", v => Scalar::from(1))?;
+                    advice!(region, "rho", rho => Scalar::from(12345))?;
                     for (i, col) in sibs.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(20 + i as u64)),
-                        )?;
+                        advice!(region, move "sib{i}", *col => Scalar::from(20 + i as u64))?;
                     }
                     let mut acc = compress(Scalar::one(), Scalar::from(12345));
                     for (i, col) in ws.iter().enumerate() {
@@ -3629,13 +3671,7 @@ pub mod depth {
                         {
                             println!("vote_merkle witness w{i} = {acc:?}");
                         }
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("w{i}"),
-                            *col,
-                            0,
-                            || Value::known(acc),
-                        )?;
+                        advice!(region, move "w{i}", *col => acc)?;
                     }
                     Ok(())
                 },
@@ -3839,133 +3875,37 @@ pub mod depth {
                 || "anon_transfer_commit_merkle_depth",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in0",
-                        in0,
-                        0,
-                        || Value::known(Scalar::from(7)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in1",
-                        in1,
-                        0,
-                        || Value::known(Scalar::from(5)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out0",
-                        out0,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out1",
-                        out1,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r0",
-                        r0,
-                        0,
-                        || Value::known(Scalar::from(11)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r1",
-                        r1,
-                        0,
-                        || Value::known(Scalar::from(13)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r2",
-                        r2,
-                        0,
-                        || Value::known(Scalar::from(17)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r3",
-                        r3,
-                        0,
-                        || Value::known(Scalar::from(19)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sk",
-                        sk,
-                        0,
-                        || Value::known(Scalar::from(1_234_567)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "serial",
-                        serial,
-                        0,
-                        || Value::known(Scalar::from(42)),
-                    )?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    advice!(region, "r0", r0 => Scalar::from(11))?;
+                    advice!(region, "r1", r1 => Scalar::from(13))?;
+                    advice!(region, "r2", r2 => Scalar::from(17))?;
+                    advice!(region, "r3", r3 => Scalar::from(19))?;
+                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
+                    advice!(region, "serial", serial => Scalar::from(42))?;
                     for (i, col) in sib_a.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib_a{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(20 + i as u64)),
-                        )?;
+                        advice!(region, move "sib_a{i}", *col => Scalar::from(20 + i as u64))?;
                     }
                     for (i, col) in dir_a.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir_a{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(0)),
-                        )?;
+                        advice!(region, move "dir_a{i}", *col => Scalar::from(0))?;
                     }
                     let mut acc = Scalar::from(0);
                     for (i, col) in w_a.iter().enumerate() {
                         acc += Scalar::from(20 + i as u64);
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("w_a{i}"),
-                            *col,
-                            0,
-                            || Value::known(acc),
-                        )?;
+                        advice!(region, move "w_a{i}", *col => acc)?;
                     }
                     for (i, col) in sib_b.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib_b{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(30 + i as u64)),
-                        )?;
+                        advice!(region, move "sib_b{i}", *col => Scalar::from(30 + i as u64))?;
                     }
                     for (i, col) in dir_b.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir_b{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(0)),
-                        )?;
+                        advice!(region, move "dir_b{i}", *col => Scalar::from(0))?;
                     }
                     let mut acc_b = Scalar::from(0);
                     for (i, col) in w_b.iter().enumerate() {
                         acc_b += Scalar::from(30 + i as u64);
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("w_b{i}"),
-                            *col,
-                            0,
-                            || Value::known(acc_b),
-                        )?;
+                        advice!(region, move "w_b{i}", *col => acc_b)?;
                     }
                     Ok(())
                 },
@@ -4090,48 +4030,18 @@ pub mod poseidon_depth {
                 || "vote_commit_merkle_poseidon",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "v",
-                        v,
-                        0,
-                        || halo2_proofs::circuit::Value::known(Scalar::from(1u64)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "rho",
-                        rho,
-                        0,
-                        || halo2_proofs::circuit::Value::known(Scalar::from(12345u64)),
-                    )?;
+                    advice!(region, "v", v => Scalar::from(1u64))?;
+                    advice!(region, "rho", rho => Scalar::from(12345u64))?;
                     for (i, col) in sibs.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib{i}"),
-                            *col,
-                            0,
-                            || halo2_proofs::circuit::Value::known(Scalar::from(20 + i as u64)),
-                        )?;
+                        advice!(region, move "sib{i}", *col => Scalar::from(20 + i as u64))?;
                     }
                     for (i, col) in dirs.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir{i}"),
-                            *col,
-                            0,
-                            || halo2_proofs::circuit::Value::known(Scalar::from(0)),
-                        )?;
+                        advice!(region, move "dir{i}", *col => Scalar::from(0))?;
                     }
                     let mut acc = Scalar::from(0);
                     for (i, col) in ws.iter().enumerate() {
                         acc += Scalar::from(20 + i as u64);
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("w{i}"),
-                            *col,
-                            0,
-                            || halo2_proofs::circuit::Value::known(acc),
-                        )?;
+                        advice!(region, move "w{i}", *col => acc)?;
                     }
                     Ok(())
                 },
@@ -4296,41 +4206,13 @@ pub mod poseidon_depth {
                 || "vote_commit_merkle_poseidon_depth",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "v",
-                        v,
-                        0,
-                        || Value::known(v_val),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "rho",
-                        rho,
-                        0,
-                        || Value::known(rho_val),
-                    )?;
-                    let commit_left_cell = crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "commit_left",
-                        commit_left,
-                        0,
-                        || Value::known(v_val),
-                    )?;
-                    let commit_right_cell = crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "commit_right",
-                        commit_right,
-                        0,
-                        || Value::known(rho_val),
-                    )?;
-                    let commit_hash_cell = crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "commit_hash",
-                        commit_hash,
-                        0,
-                        || Value::known(commit_digest),
-                    )?;
+                    advice!(region, "v", v => v_val)?;
+                    advice!(region, "rho", rho => rho_val)?;
+                    let commit_left_cell = advice!(region, "commit_left", commit_left => v_val)?;
+                    let commit_right_cell =
+                        advice!(region, "commit_right", commit_right => rho_val)?;
+                    let commit_hash_cell =
+                        advice!(region, "commit_hash", commit_hash => commit_digest)?;
                     let mut sib_cells = Vec::with_capacity(DEPTH);
                     let mut dir_cells = Vec::with_capacity(DEPTH);
                     let mut w_cells = Vec::with_capacity(DEPTH);
@@ -4344,47 +4226,25 @@ pub mod poseidon_depth {
                         } else {
                             Scalar::one()
                         };
-                        sib_cells.push(crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib{i}"),
-                            sibs[i],
-                            0,
-                            || Value::known(sib_val),
-                        )?);
-                        dir_cells.push(crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir{i}"),
-                            dirs[i],
-                            0,
-                            || Value::known(dir_val),
-                        )?);
+                        sib_cells.push(advice!(region, move "sib{i}", sibs[i] => sib_val)?);
+                        dir_cells.push(advice!(region, move "dir{i}", dirs[i] => dir_val)?);
                         let (left_val, right_val) = if dir_val == Scalar::one() {
                             (sib_val, prev_val)
                         } else {
                             (prev_val, sib_val)
                         };
-                        left_cells.push(crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("poseidon_left{i}"),
-                            poseidon_left[i],
-                            0,
-                            || Value::known(left_val),
+                        left_cells.push(advice!(
+                            region,
+                            move "poseidon_left{i}",
+                            poseidon_left[i] => left_val
                         )?);
-                        right_cells.push(crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("poseidon_right{i}"),
-                            poseidon_right[i],
-                            0,
-                            || Value::known(right_val),
+                        right_cells.push(advice!(
+                            region,
+                            move "poseidon_right{i}",
+                            poseidon_right[i] => right_val
                         )?);
                         let digest_val = poseidon_compress2_native(left_val, right_val);
-                        w_cells.push(crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("w{i}"),
-                            ws[i],
-                            0,
-                            || Value::known(digest_val),
-                        )?);
+                        w_cells.push(advice!(region, move "w{i}", ws[i] => digest_val)?);
                         prev_val = digest_val;
                     }
                     Ok((
@@ -4595,135 +4455,38 @@ pub mod poseidon_depth {
             layouter.assign_region(
                 || "anon_transfer_commit_merkle_poseidon",
                 |mut region| {
-                    use halo2_proofs::circuit::Value;
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in0",
-                        in0,
-                        0,
-                        || Value::known(Scalar::from(7)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in1",
-                        in1,
-                        0,
-                        || Value::known(Scalar::from(5)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out0",
-                        out0,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out1",
-                        out1,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r0",
-                        r0,
-                        0,
-                        || Value::known(Scalar::from(11)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r1",
-                        r1,
-                        0,
-                        || Value::known(Scalar::from(13)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r2",
-                        r2,
-                        0,
-                        || Value::known(Scalar::from(17)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r3",
-                        r3,
-                        0,
-                        || Value::known(Scalar::from(19)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sk",
-                        sk,
-                        0,
-                        || Value::known(Scalar::from(1_234_567)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "serial",
-                        serial,
-                        0,
-                        || Value::known(Scalar::from(42)),
-                    )?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    advice!(region, "r0", r0 => Scalar::from(11))?;
+                    advice!(region, "r1", r1 => Scalar::from(13))?;
+                    advice!(region, "r2", r2 => Scalar::from(17))?;
+                    advice!(region, "r3", r3 => Scalar::from(19))?;
+                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
+                    advice!(region, "serial", serial => Scalar::from(42))?;
                     for (i, col) in sib_a.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib_a{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(20 + i as u64)),
-                        )?;
+                        advice!(region, move "sib_a{i}", *col => Scalar::from(20 + i as u64))?;
                     }
                     for (i, col) in dir_a.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir_a{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(0)),
-                        )?;
+                        advice!(region, move "dir_a{i}", *col => Scalar::from(0))?;
                     }
                     let mut acc = Scalar::from(0);
                     for (i, col) in w_a.iter().enumerate() {
                         acc += Scalar::from(20 + i as u64);
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("w_a{i}"),
-                            *col,
-                            0,
-                            || Value::known(acc),
-                        )?;
+                        advice!(region, move "w_a{i}", *col => acc)?;
                     }
                     for (i, col) in sib_b.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib_b{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(30 + i as u64)),
-                        )?;
+                        advice!(region, move "sib_b{i}", *col => Scalar::from(30 + i as u64))?;
                     }
                     for (i, col) in dir_b.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir_b{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(0)),
-                        )?;
+                        advice!(region, move "dir_b{i}", *col => Scalar::from(0))?;
                     }
                     let mut acc_b = Scalar::from(0);
                     for (i, col) in w_b.iter().enumerate() {
                         acc_b += Scalar::from(30 + i as u64);
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("w_b{i}"),
-                            *col,
-                            0,
-                            || Value::known(acc_b),
-                        )?;
+                        advice!(region, move "w_b{i}", *col => acc_b)?;
                     }
                     Ok(())
                 },
@@ -4921,111 +4684,27 @@ pub mod poseidon_depth {
                 || "anon_transfer_commit_merkle_poseidon",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in0",
-                        in0,
-                        0,
-                        || Value::known(Scalar::from(7)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in1",
-                        in1,
-                        0,
-                        || Value::known(Scalar::from(5)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out0",
-                        out0,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out1",
-                        out1,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r0",
-                        r0,
-                        0,
-                        || Value::known(Scalar::from(11)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r1",
-                        r1,
-                        0,
-                        || Value::known(Scalar::from(13)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r2",
-                        r2,
-                        0,
-                        || Value::known(Scalar::from(17)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r3",
-                        r3,
-                        0,
-                        || Value::known(Scalar::from(19)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sk",
-                        sk,
-                        0,
-                        || Value::known(Scalar::from(1_234_567)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "serial",
-                        serial,
-                        0,
-                        || Value::known(Scalar::from(42)),
-                    )?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    advice!(region, "r0", r0 => Scalar::from(11))?;
+                    advice!(region, "r1", r1 => Scalar::from(13))?;
+                    advice!(region, "r2", r2 => Scalar::from(17))?;
+                    advice!(region, "r3", r3 => Scalar::from(19))?;
+                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
+                    advice!(region, "serial", serial => Scalar::from(42))?;
                     for (i, col) in sib_a.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib_a{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(20 + i as u64)),
-                        )?;
+                        advice!(region, move "sib_a{i}", *col => Scalar::from(20 + i as u64))?;
                     }
                     for (i, col) in dir_a.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir_a{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(0)),
-                        )?;
+                        advice!(region, move "dir_a{i}", *col => Scalar::from(0))?;
                     }
                     for (i, col) in sib_b.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib_b{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(30 + i as u64)),
-                        )?;
+                        advice!(region, move "sib_b{i}", *col => Scalar::from(30 + i as u64))?;
                     }
                     for (i, col) in dir_b.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir_b{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(0)),
-                        )?;
+                        advice!(region, move "dir_b{i}", *col => Scalar::from(0))?;
                     }
                     Ok(())
                 },
@@ -5058,15 +4737,7 @@ pub mod poseidon_depth {
                 let w_val = poseidon_compress2_native(prev_a, sib_val);
                 let w_cell = layouter.assign_region(
                     || format!("w_a_{i}"),
-                    |mut region| {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            || "w_a",
-                            *w_col,
-                            0,
-                            || Value::known(w_val),
-                        )
-                    },
+                    |mut region| advice!(region, "w_a", *w_col => w_val),
                 )?;
                 layouter.constrain_equal(digest.cell(), w_cell.cell())?;
                 prev_a = w_val;
@@ -5085,15 +4756,7 @@ pub mod poseidon_depth {
                 let w_val = poseidon_compress2_native(prev_b, sib_val);
                 let w_cell = layouter.assign_region(
                     || format!("w_b_{i}"),
-                    |mut region| {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            || "w_b",
-                            *w_col,
-                            0,
-                            || Value::known(w_val),
-                        )
-                    },
+                    |mut region| advice!(region, "w_b", *w_col => w_val),
                 )?;
                 layouter.constrain_equal(digest.cell(), w_cell.cell())?;
                 prev_b = w_val;
@@ -5356,7 +5019,7 @@ use rand_core_06::OsRng;
 fn halo2_verify_with_instance_noncanonical_ipa() {
     // Generate a valid proof, then wrap a non-canonical instance scalar in ZK1.
     use halo2_proofs::{
-        circuit::{Layouter, SimpleFloorPlanner, Value},
+        circuit::{Layouter, SimpleFloorPlanner},
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
         plonk::{
             Circuit, ConstraintSystem, Error as PlonkError, VerifyingKey, keygen_pk, keygen_vk,
@@ -5405,27 +5068,9 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
                 || "tiny_pub",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "a",
-                        a,
-                        0,
-                        || Value::known(Scalar::from(2)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "b",
-                        b,
-                        0,
-                        || Value::known(Scalar::from(2)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "c",
-                        c,
-                        0,
-                        || Value::known(Scalar::from(4)),
-                    )?;
+                    advice!(region, "a", a => Scalar::from(2))?;
+                    advice!(region, "b", b => Scalar::from(2))?;
+                    advice!(region, "c", c => Scalar::from(4))?;
                     Ok(())
                 },
             )
@@ -7177,6 +6822,21 @@ mod stark_backend_tag_tests {
     }
 }
 #[cfg(all(test, feature = "zk-stark"))]
+macro_rules! consensus_stark_vk {
+    ($circuit_id:expr, $hash_fn:expr $(,)?) => {
+        $crate::zk_stark::StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: $circuit_id,
+            n_log2: $crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: $crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: $crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+            merkle_arity: 2,
+            hash_fn: $hash_fn,
+        }
+    };
+}
+#[cfg(all(test, feature = "zk-stark"))]
 mod stark_prover_tests {
     use super::{
         STARK_BINDING_AIR_CONSTANT, STARK_BINDING_AIR_Z_COEFF, STARK_GOLDILOCKS_MODULUS,
@@ -7204,16 +6864,7 @@ mod stark_prover_tests {
     fn sample_stark_open_verify_proof() -> (&'static str, String, VerifyingKeyBox, ProofBox) {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:tiny-open");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
+        let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
         let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
         let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
         let proof = prove_stark_fri_open_verify_envelope(
@@ -7408,16 +7059,7 @@ mod stark_prover_tests {
     fn prove_stark_open_verify_envelope_rejects_verifying_key_backend_mismatch() {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:backend-mismatch");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
+        let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
         let vk_box = VerifyingKeyBox::new(
             "stark/fri".to_owned(),
             norito::to_bytes(&vk_payload).expect("encode backend-mismatched STARK VK payload"),
@@ -7439,16 +7081,7 @@ mod stark_prover_tests {
     fn verify_stark_open_verify_envelope_rejects_verifying_key_backend_mismatch() {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:backend-mismatch");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
+        let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
         let vk_box = VerifyingKeyBox::new(
             "stark/fri".to_owned(),
             norito::to_bytes(&vk_payload).expect("encode backend-mismatched STARK VK payload"),
@@ -7525,16 +7158,7 @@ mod stark_prover_tests {
                 "stark/fri/sha256-goldilocks:structured-reference-string",
             ),
         ] {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.to_owned(),
-                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
+            let vk_payload = consensus_stark_vk!(circuit_id.to_owned(), STARK_HASH_SHA256_V1);
             let vk_box = VerifyingKeyBox::new(
                 backend.to_owned(),
                 norito::to_bytes(&vk_payload)
@@ -7613,16 +7237,7 @@ mod stark_prover_tests {
                 "stark/fri/sha256-goldilocks:structured-reference-string",
             ),
         ] {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.to_owned(),
-                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
+            let vk_payload = consensus_stark_vk!(circuit_id.to_owned(), STARK_HASH_SHA256_V1);
             let vk_box = VerifyingKeyBox::new(
                 backend.to_owned(),
                 norito::to_bytes(&vk_payload)
@@ -7649,16 +7264,7 @@ mod stark_prover_tests {
         let prefixed_alias = format!("{backend}:{canonical}");
         let slash_alias = format!("{backend}/{canonical}");
         for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.clone(),
-                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
+            let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
             let vk_box = VerifyingKeyBox::new(
                 backend.to_owned(),
                 norito::to_bytes(&vk_payload).expect("encode ZK-ACE alias STARK VK payload"),
@@ -7684,16 +7290,7 @@ mod stark_prover_tests {
         let prefixed_alias = format!("{backend}:{canonical}");
         let slash_alias = format!("{backend}/{canonical}");
         for circuit_id in [prefixed_alias, slash_alias] {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.clone(),
-                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
+            let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
             let vk_box = VerifyingKeyBox::new(
                 backend.to_owned(),
                 norito::to_bytes(&vk_payload).expect("encode ZK-ACE alias STARK VK payload"),
@@ -7719,16 +7316,7 @@ mod stark_prover_tests {
         let prefixed_alias = format!("{backend}:{canonical}");
         let slash_alias = format!("{backend}/{canonical}");
         for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.clone(),
-                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
+            let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
             let vk_box = VerifyingKeyBox::new(
                 backend.to_owned(),
                 norito::to_bytes(&vk_payload).expect("encode IVM alias STARK VK payload"),
@@ -7754,16 +7342,7 @@ mod stark_prover_tests {
         let prefixed_alias = format!("{backend}:{canonical}");
         let slash_alias = format!("{backend}/{canonical}");
         for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.clone(),
-                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
+            let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
             let vk_box = VerifyingKeyBox::new(
                 backend.to_owned(),
                 norito::to_bytes(&vk_payload).expect("encode IVM alias STARK VK payload"),
@@ -7793,20 +7372,14 @@ mod stark_prover_tests {
             let prefixed_alias = format!("{backend}:{canonical}");
             let slash_alias = format!("{backend}/{canonical}");
             for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
-                let vk_payload = StarkFriVerifyingKeyV1 {
-                    version: 1,
-                    circuit_id: circuit_id.clone(),
-                    n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                    blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                    fold_arity: 2,
-                    queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-                    merkle_arity: 2,
-                    hash_fn: if backend.contains("/poseidon2-") {
+                let vk_payload = consensus_stark_vk!(
+                    circuit_id.clone(),
+                    if backend.contains("/poseidon2-") {
                         STARK_HASH_POSEIDON2_V1
                     } else {
                         STARK_HASH_SHA256_V1
-                    },
-                };
+                    }
+                );
                 let vk_box = VerifyingKeyBox::new(
                     backend.to_owned(),
                     norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
@@ -7837,20 +7410,14 @@ mod stark_prover_tests {
             let prefixed_alias = format!("{backend}:{canonical}");
             let slash_alias = format!("{backend}/{canonical}");
             for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
-                let vk_payload = StarkFriVerifyingKeyV1 {
-                    version: 1,
-                    circuit_id: circuit_id.clone(),
-                    n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                    blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                    fold_arity: 2,
-                    queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-                    merkle_arity: 2,
-                    hash_fn: if backend.contains("/poseidon2-") {
+                let vk_payload = consensus_stark_vk!(
+                    circuit_id.clone(),
+                    if backend.contains("/poseidon2-") {
                         STARK_HASH_POSEIDON2_V1
                     } else {
                         STARK_HASH_SHA256_V1
-                    },
-                };
+                    }
+                );
                 let vk_box = VerifyingKeyBox::new(
                     backend.to_owned(),
                     norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
@@ -7909,16 +7476,7 @@ mod stark_prover_tests {
                 format!("{backend}:{canonical}"),
                 format!("{backend}/{canonical}"),
             ] {
-                let vk_payload = StarkFriVerifyingKeyV1 {
-                    version: 1,
-                    circuit_id: circuit_id.clone(),
-                    n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                    blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                    fold_arity: 2,
-                    queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-                    merkle_arity: 2,
-                    hash_fn: STARK_HASH_SHA256_V1,
-                };
+                let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
                 let vk_box = VerifyingKeyBox::new(
                     backend.to_owned(),
                     norito::to_bytes(&vk_payload).expect("encode Soracloud STARK VK payload"),
@@ -7942,16 +7500,7 @@ mod stark_prover_tests {
     fn generic_stark_verifier_rejects_public_metadata_only_soracloud_fhe_proofs() {
         let backend = "stark/fri/sha256-goldilocks";
         for (circuit_id, schema) in soracloud_fhe_proof_relations() {
-            let vk_payload = StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: circuit_id.to_owned(),
-                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                fold_arity: 2,
-                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-                merkle_arity: 2,
-                hash_fn: STARK_HASH_SHA256_V1,
-            };
+            let vk_payload = consensus_stark_vk!(circuit_id.to_owned(), STARK_HASH_SHA256_V1);
             let vk_box = VerifyingKeyBox::new(
                 backend.to_owned(),
                 norito::to_bytes(&vk_payload).expect("encode Soracloud STARK VK payload"),
@@ -8037,16 +7586,7 @@ mod stark_prover_tests {
     fn prove_stark_open_verify_envelope_rejects_alternate_layout_verifying_key() {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:alternate-layout-vk");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
+        let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
         let canonical_vk =
             norito::encode_canonical(&vk_payload).expect("encode canonical STARK VK");
         let alternate_flags =
@@ -8284,16 +7824,7 @@ mod stark_prover_tests {
     fn prove_stark_ivm_execution_envelope_emits_binding_air_proof() {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:ivm-execution-v1");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
+        let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
         let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
         let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
         let proof = prove_stark_fri_ivm_execution_envelope(
@@ -8313,16 +7844,7 @@ mod stark_prover_tests {
     fn prove_stark_ivm_execution_envelope_rejects_non_ivm_circuit_with_matching_vk() {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:not-ivm-execution-v1");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
+        let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
         let vk_box = VerifyingKeyBox::new(
             backend.to_owned(),
             norito::to_bytes(&vk_payload).expect("encode non-IVM STARK VK payload"),
@@ -8370,6 +7892,10 @@ pub struct VerifyReport {
     /// Time spent verifying.
     pub elapsed: Duration,
 }
+const REJECTED_VERIFY_REPORT: VerifyReport = VerifyReport {
+    ok: false,
+    elapsed: Duration::ZERO,
+};
 /// Configuration guardrails for proof verification (enabled flags + payload size caps).
 ///
 /// This struct is intentionally scalar-only so it can be sourced both from node configuration
@@ -8430,40 +7956,28 @@ pub fn verify_backend_with_timing_guardrails(
             backend,
             "production-claim proof backends are not admitted by node verifier guardrails"
         );
-        return VerifyReport {
-            ok: false,
-            elapsed: Duration::ZERO,
-        };
+        return REJECTED_VERIFY_REPORT;
     }
     if is_trusted_setup_backend_label(backend) {
         iroha_logger::debug!(
             backend,
             "trusted-setup proof backends are not admitted by node verifier guardrails"
         );
-        return VerifyReport {
-            ok: false,
-            elapsed: Duration::ZERO,
-        };
+        return REJECTED_VERIFY_REPORT;
     }
     if is_developer_only_backend_label(backend) {
         iroha_logger::debug!(
             backend,
             "developer-only proof backends are not admitted by node verifier guardrails"
         );
-        return VerifyReport {
-            ok: false,
-            elapsed: Duration::ZERO,
-        };
+        return REJECTED_VERIFY_REPORT;
     }
     if !is_production_verify_backend_label(backend) {
         iroha_logger::debug!(
             backend,
             "unsupported proof backends are not admitted by node verifier guardrails"
         );
-        return VerifyReport {
-            ok: false,
-            elapsed: Duration::ZERO,
-        };
+        return REJECTED_VERIFY_REPORT;
     }
     if proof.backend.as_str() != backend {
         iroha_logger::debug!(
@@ -8471,10 +7985,7 @@ pub fn verify_backend_with_timing_guardrails(
             proof_backend = proof.backend.as_str(),
             "proof backend label does not match requested verifier backend"
         );
-        return VerifyReport {
-            ok: false,
-            elapsed: Duration::ZERO,
-        };
+        return REJECTED_VERIFY_REPORT;
     }
     if let Some(vk_box) = vk
         && vk_box.backend.as_str() != backend
@@ -8484,10 +7995,7 @@ pub fn verify_backend_with_timing_guardrails(
             vk_backend = vk_box.backend.as_str(),
             "verifying key backend label does not match requested verifier backend"
         );
-        return VerifyReport {
-            ok: false,
-            elapsed: Duration::ZERO,
-        };
+        return REJECTED_VERIFY_REPORT;
     }
     if production_verify_backend_tag(backend)
         == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
@@ -8497,20 +8005,14 @@ pub fn verify_backend_with_timing_guardrails(
                 backend,
                 "halo2 verification is disabled in node configuration"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         if proof.bytes.len() > guardrails.halo2_max_envelope_bytes {
             iroha_logger::debug!(
                 backend,
                 "halo2 payload exceeds node-configured max_envelope_bytes"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         // V1 Halo2 proof inputs are always canonical `OpenVerifyEnvelope` frames.
         // Raw backend-native payloads are accepted only after this boundary has
@@ -8525,10 +8027,7 @@ pub fn verify_backend_with_timing_guardrails(
                     error = %err,
                     "halo2 proof payload is not a canonical OpenVerifyEnvelope"
                 );
-                return VerifyReport {
-                    ok: false,
-                    elapsed: Duration::ZERO,
-                };
+                return REJECTED_VERIFY_REPORT;
             }
         };
         if env.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
@@ -8536,10 +8035,7 @@ pub fn verify_backend_with_timing_guardrails(
                 backend,
                 "halo2 OpenVerifyEnvelope backend tag does not match verifier backend"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         if let Err(err) = env.validate_with_bounds(iroha_data_model::zk::OpenVerifyEnvelopeBounds {
             max_proof_bytes: guardrails.halo2_max_proof_bytes,
@@ -8550,10 +8046,7 @@ pub fn verify_backend_with_timing_guardrails(
                 error = %err,
                 "halo2 OpenVerifyEnvelope failed guardrail validation"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         if !halo2_open_verify_circuit_id_matches_backend(backend, &env.circuit_id) {
             iroha_logger::debug!(
@@ -8561,10 +8054,7 @@ pub fn verify_backend_with_timing_guardrails(
                 circuit_id = env.circuit_id.as_str(),
                 "halo2 OpenVerifyEnvelope circuit id does not match verifier backend"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
     }
     if is_stark_fri_v1_backend(backend) {
@@ -8573,20 +8063,14 @@ pub fn verify_backend_with_timing_guardrails(
                 backend,
                 "stark verification is disabled in node configuration"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         if proof.bytes.len() > guardrails.stark_max_envelope_bytes {
             iroha_logger::debug!(
                 backend,
                 "stark payload exceeds node-configured max_envelope_bytes"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         let env = match norito::decode_canonical::<iroha_data_model::zk::OpenVerifyEnvelope>(
             &proof.bytes,
@@ -8598,10 +8082,7 @@ pub fn verify_backend_with_timing_guardrails(
                     error = %err,
                     "stark proof payload is not an OpenVerifyEnvelope"
                 );
-                return VerifyReport {
-                    ok: false,
-                    elapsed: Duration::ZERO,
-                };
+                return REJECTED_VERIFY_REPORT;
             }
         };
         if env.backend != iroha_data_model::zk::BackendTag::Stark {
@@ -8609,10 +8090,7 @@ pub fn verify_backend_with_timing_guardrails(
                 backend,
                 "stark OpenVerifyEnvelope backend tag does not match verifier backend"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         if let Err(err) = env.validate_with_bounds(iroha_data_model::zk::OpenVerifyEnvelopeBounds {
             max_proof_bytes: guardrails.stark_max_envelope_bytes,
@@ -8623,10 +8101,7 @@ pub fn verify_backend_with_timing_guardrails(
                 error = %err,
                 "stark OpenVerifyEnvelope failed guardrail validation"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         if !stark_open_verify_circuit_id_matches_backend(backend, &env.circuit_id) {
             iroha_logger::debug!(
@@ -8634,10 +8109,7 @@ pub fn verify_backend_with_timing_guardrails(
                 circuit_id = env.circuit_id.as_str(),
                 "stark OpenVerifyEnvelope circuit id does not match verifier backend"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         let open = match norito::decode_canonical::<iroha_data_model::zk::StarkFriOpenProofV1>(
             &env.proof_bytes,
@@ -8649,10 +8121,7 @@ pub fn verify_backend_with_timing_guardrails(
                     error = %err,
                     "stark OpenVerifyEnvelope wrapper payload is malformed"
                 );
-                return VerifyReport {
-                    ok: false,
-                    elapsed: Duration::ZERO,
-                };
+                return REJECTED_VERIFY_REPORT;
             }
         };
         if open.version != 1 {
@@ -8661,30 +8130,21 @@ pub fn verify_backend_with_timing_guardrails(
                 version = open.version,
                 "stark OpenVerifyEnvelope wrapper version is unsupported"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         if open.envelope_bytes.is_empty() {
             iroha_logger::debug!(
                 backend,
                 "stark OpenVerifyEnvelope wrapper has empty native proof bytes"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         if open.envelope_bytes.len() > guardrails.stark_max_proof_bytes {
             iroha_logger::debug!(
                 backend,
                 "stark envelope proof bytes exceed node-configured max_proof_bytes"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
         #[cfg(feature = "zk-stark")]
         {
@@ -8703,10 +8163,7 @@ pub fn verify_backend_with_timing_guardrails(
                 backend,
                 "stark/fri backend requested but binary was built without `zk-stark`"
             );
-            return VerifyReport {
-                ok: false,
-                elapsed: Duration::ZERO,
-            };
+            return REJECTED_VERIFY_REPORT;
         }
     }
     verify_backend_with_timing(backend, proof, vk)
@@ -8727,6 +8184,22 @@ pub fn verify_backend_with_timing_checked(
 mod guardrails_tests {
     use super::*;
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+    const ENABLED_GUARDRAILS: ZkVerifyGuardrails = ZkVerifyGuardrails {
+        halo2_enabled: true,
+        halo2_max_envelope_bytes: 1024,
+        halo2_max_proof_bytes: 1024,
+        stark_enabled: true,
+        stark_max_envelope_bytes: 1024,
+        stark_max_proof_bytes: 1024,
+    };
+    macro_rules! assert_guardrails_reject {
+        ($backend:expr, $proof:expr, $vk:expr, $guardrails:expr $(, $message:literal)? $(,)?) => {{
+            let report =
+                verify_backend_with_timing_guardrails($backend, $proof, $vk, $guardrails);
+            assert!(!report.ok $(, $message)?);
+            assert_eq!(report.elapsed, Duration::ZERO $(, $message)?);
+        }};
+    }
     fn halo2_guardrail_envelope() -> OpenVerifyEnvelope {
         OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
@@ -8740,21 +8213,15 @@ mod guardrails_tests {
     #[test]
     fn guardrails_disable_halo2_returns_zero_duration() {
         let proof = ProofBox::new("halo2/ipa".into(), vec![0xAA; 8]);
-        let report = verify_backend_with_timing_guardrails(
+        assert_guardrails_reject!(
             "halo2/ipa",
             &proof,
             None,
             ZkVerifyGuardrails {
                 halo2_enabled: false,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
-                stark_max_envelope_bytes: 1024,
-                stark_max_proof_bytes: 1024,
+                ..ENABLED_GUARDRAILS
             },
         );
-        assert!(!report.ok);
-        assert_eq!(report.elapsed, Duration::ZERO);
     }
     #[test]
     fn guardrails_reject_trusted_setup_backends_before_dispatch() {
@@ -8811,21 +8278,7 @@ mod guardrails_tests {
             "groth16/bn254",
         ] {
             let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
-            let report = verify_backend_with_timing_guardrails(
-                backend,
-                &proof,
-                None,
-                ZkVerifyGuardrails {
-                    halo2_enabled: true,
-                    halo2_max_envelope_bytes: 1024,
-                    halo2_max_proof_bytes: 1024,
-                    stark_enabled: true,
-                    stark_max_envelope_bytes: 1024,
-                    stark_max_proof_bytes: 1024,
-                },
-            );
-            assert!(!report.ok, "case {backend}");
-            assert_eq!(report.elapsed, Duration::ZERO, "case {backend}");
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {backend}",);
         }
     }
     #[test]
@@ -8868,21 +8321,7 @@ mod guardrails_tests {
             "zk-trace/mock-proof",
         ] {
             let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
-            let report = verify_backend_with_timing_guardrails(
-                backend,
-                &proof,
-                None,
-                ZkVerifyGuardrails {
-                    halo2_enabled: true,
-                    halo2_max_envelope_bytes: 1024,
-                    halo2_max_proof_bytes: 1024,
-                    stark_enabled: true,
-                    stark_max_envelope_bytes: 1024,
-                    stark_max_proof_bytes: 1024,
-                },
-            );
-            assert!(!report.ok, "case {backend}");
-            assert_eq!(report.elapsed, Duration::ZERO, "case {backend}");
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {backend}",);
         }
     }
     #[test]
@@ -8900,21 +8339,7 @@ mod guardrails_tests {
             "sis-with-hints",
         ] {
             let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
-            let report = verify_backend_with_timing_guardrails(
-                backend,
-                &proof,
-                None,
-                ZkVerifyGuardrails {
-                    halo2_enabled: true,
-                    halo2_max_envelope_bytes: 1024,
-                    halo2_max_proof_bytes: 1024,
-                    stark_enabled: true,
-                    stark_max_envelope_bytes: 1024,
-                    stark_max_proof_bytes: 1024,
-                },
-            );
-            assert!(!report.ok, "case {backend}");
-            assert_eq!(report.elapsed, Duration::ZERO, "case {backend}");
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {backend}",);
         }
     }
     #[test]
@@ -8938,21 +8363,7 @@ mod guardrails_tests {
             "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
         ] {
             let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
-            let report = verify_backend_with_timing_guardrails(
-                backend,
-                &proof,
-                None,
-                ZkVerifyGuardrails {
-                    halo2_enabled: true,
-                    halo2_max_envelope_bytes: 1024,
-                    halo2_max_proof_bytes: 1024,
-                    stark_enabled: true,
-                    stark_max_envelope_bytes: 1024,
-                    stark_max_proof_bytes: 1024,
-                },
-            );
-            assert!(!report.ok, "case {backend}");
-            assert_eq!(report.elapsed, Duration::ZERO, "case {backend}");
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {backend}",);
         }
     }
     #[test]
@@ -8976,21 +8387,7 @@ mod guardrails_tests {
             "zk/open-verify-unregistered",
         ] {
             let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
-            let report = verify_backend_with_timing_guardrails(
-                backend,
-                &proof,
-                None,
-                ZkVerifyGuardrails {
-                    halo2_enabled: true,
-                    halo2_max_envelope_bytes: 1024,
-                    halo2_max_proof_bytes: 1024,
-                    stark_enabled: true,
-                    stark_max_envelope_bytes: 1024,
-                    stark_max_proof_bytes: 1024,
-                },
-            );
-            assert!(!report.ok, "case {backend}");
-            assert_eq!(report.elapsed, Duration::ZERO, "case {backend}");
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {backend}",);
         }
     }
     #[test]
@@ -8999,42 +8396,19 @@ mod guardrails_tests {
             norito::to_bytes(&halo2_guardrail_envelope()).expect("encode halo2 envelope");
         let wrong_proof_backend =
             ProofBox::new("halo2/ipa:ivm-execution-v1".into(), envelope_bytes);
-        let report = verify_backend_with_timing_guardrails(
-            "halo2/ipa",
-            &wrong_proof_backend,
-            None,
-            ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
-                stark_max_envelope_bytes: 1024,
-                stark_max_proof_bytes: 1024,
-            },
-        );
-        assert!(!report.ok);
-        assert_eq!(report.elapsed, Duration::ZERO);
+        assert_guardrails_reject!("halo2/ipa", &wrong_proof_backend, None, ENABLED_GUARDRAILS,);
         let proof = ProofBox::new(
             "halo2/ipa".into(),
             norito::to_bytes(&halo2_guardrail_envelope()).expect("encode halo2 envelope"),
         );
         let wrong_vk_backend =
             VerifyingKeyBox::new("halo2/ipa:ivm-execution-v1".into(), vec![0x55]);
-        let report = verify_backend_with_timing_guardrails(
+        assert_guardrails_reject!(
             "halo2/ipa",
             &proof,
             Some(&wrong_vk_backend),
-            ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
-                stark_max_envelope_bytes: 1024,
-                stark_max_proof_bytes: 1024,
-            },
+            ENABLED_GUARDRAILS,
         );
-        assert!(!report.ok);
-        assert_eq!(report.elapsed, Duration::ZERO);
     }
     #[test]
     fn guardrails_reject_halo2_open_verify_circuit_mismatch_before_dispatch() {
@@ -9101,62 +8475,36 @@ mod guardrails_tests {
                 backend.to_owned(),
                 norito::to_bytes(&env).expect("encode halo2 envelope"),
             );
-            let report = verify_backend_with_timing_guardrails(
-                backend,
-                &proof,
-                None,
-                ZkVerifyGuardrails {
-                    halo2_enabled: true,
-                    halo2_max_envelope_bytes: 1024,
-                    halo2_max_proof_bytes: 1024,
-                    stark_enabled: true,
-                    stark_max_envelope_bytes: 1024,
-                    stark_max_proof_bytes: 1024,
-                },
-            );
-            assert!(!report.ok, "case {case}");
-            assert_eq!(report.elapsed, Duration::ZERO, "case {case}");
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {case}",);
         }
     }
     #[test]
     fn guardrails_enforce_halo2_max_envelope_bytes() {
         let proof = ProofBox::new("halo2/ipa".into(), vec![0xAA; 9]);
-        let report = verify_backend_with_timing_guardrails(
+        assert_guardrails_reject!(
             "halo2/ipa",
             &proof,
             None,
             ZkVerifyGuardrails {
-                halo2_enabled: true,
                 halo2_max_envelope_bytes: 8,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
-                stark_max_envelope_bytes: 1024,
-                stark_max_proof_bytes: 1024,
+                ..ENABLED_GUARDRAILS
             },
         );
-        assert!(!report.ok);
-        assert_eq!(report.elapsed, Duration::ZERO);
     }
     #[test]
     fn guardrails_enforce_halo2_max_proof_bytes_for_open_verify_envelopes() {
         let env = halo2_guardrail_envelope();
         let bytes = norito::to_bytes(&env).expect("encode envelope");
         let proof = ProofBox::new("halo2/ipa".into(), bytes);
-        let report = verify_backend_with_timing_guardrails(
+        assert_guardrails_reject!(
             "halo2/ipa",
             &proof,
             None,
             ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
                 halo2_max_proof_bytes: 5,
-                stark_enabled: true,
-                stark_max_envelope_bytes: 1024,
-                stark_max_proof_bytes: 1024,
+                ..ENABLED_GUARDRAILS
             },
         );
-        assert!(!report.ok);
-        assert_eq!(report.elapsed, Duration::ZERO);
     }
     #[test]
     fn guardrails_reject_open_verify_shape_failures_before_dispatch() {
@@ -9174,21 +8522,13 @@ mod guardrails_tests {
                 "halo2/ipa".into(),
                 norito::to_bytes(&env).expect("encode envelope"),
             );
-            let report = verify_backend_with_timing_guardrails(
+            assert_guardrails_reject!(
                 "halo2/ipa",
                 &proof,
                 None,
-                ZkVerifyGuardrails {
-                    halo2_enabled: true,
-                    halo2_max_envelope_bytes: 1024,
-                    halo2_max_proof_bytes: 1024,
-                    stark_enabled: true,
-                    stark_max_envelope_bytes: 1024,
-                    stark_max_proof_bytes: 1024,
-                },
+                ENABLED_GUARDRAILS,
+                "case {label}",
             );
-            assert!(!report.ok, "case {label}");
-            assert_eq!(report.elapsed, Duration::ZERO, "case {label}");
         }
         let mut env = halo2_guardrail_envelope();
         env.public_inputs =
@@ -9197,21 +8537,19 @@ mod guardrails_tests {
             "halo2/ipa".into(),
             norito::to_bytes(&env).expect("encode envelope"),
         );
-        let report = verify_backend_with_timing_guardrails(
+        assert_guardrails_reject!(
             "halo2/ipa",
             &proof,
             None,
             ZkVerifyGuardrails {
-                halo2_enabled: true,
                 halo2_max_envelope_bytes: usize::MAX,
                 halo2_max_proof_bytes: usize::MAX,
-                stark_enabled: true,
                 stark_max_envelope_bytes: usize::MAX,
                 stark_max_proof_bytes: usize::MAX,
+                ..ENABLED_GUARDRAILS
             },
+            "oversized public inputs",
         );
-        assert!(!report.ok, "oversized public inputs");
-        assert_eq!(report.elapsed, Duration::ZERO, "oversized public inputs");
     }
     #[test]
     fn guardrails_reject_open_verify_backend_tag_mismatch_before_dispatch() {
@@ -9221,21 +8559,7 @@ mod guardrails_tests {
             "halo2/ipa".into(),
             norito::to_bytes(&halo2_env).expect("encode mismatched halo2 envelope"),
         );
-        let halo2_report = verify_backend_with_timing_guardrails(
-            "halo2/ipa",
-            &halo2_proof,
-            None,
-            ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
-                stark_max_envelope_bytes: 1024,
-                stark_max_proof_bytes: 1024,
-            },
-        );
-        assert!(!halo2_report.ok);
-        assert_eq!(halo2_report.elapsed, Duration::ZERO);
+        assert_guardrails_reject!("halo2/ipa", &halo2_proof, None, ENABLED_GUARDRAILS,);
         let open = StarkFriOpenProofV1 {
             version: 1,
             public_inputs: Vec::new(),
@@ -9253,78 +8577,43 @@ mod guardrails_tests {
             ZK_BACKEND_STARK_FRI_V1.into(),
             norito::to_bytes(&stark_env).expect("encode mismatched stark envelope"),
         );
-        let stark_report = verify_backend_with_timing_guardrails(
+        assert_guardrails_reject!(
             ZK_BACKEND_STARK_FRI_V1,
             &stark_proof,
             None,
-            ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
-                stark_max_envelope_bytes: 1024,
-                stark_max_proof_bytes: 1024,
-            },
+            ENABLED_GUARDRAILS,
         );
-        assert!(!stark_report.ok);
-        assert_eq!(stark_report.elapsed, Duration::ZERO);
     }
     #[test]
     fn guardrails_disable_stark_returns_zero_duration() {
         let proof = ProofBox::new(ZK_BACKEND_STARK_FRI_V1.into(), vec![0xAA; 8]);
-        let report = verify_backend_with_timing_guardrails(
+        assert_guardrails_reject!(
             ZK_BACKEND_STARK_FRI_V1,
             &proof,
             None,
             ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
                 stark_enabled: false,
-                stark_max_envelope_bytes: 1024,
-                stark_max_proof_bytes: 1024,
+                ..ENABLED_GUARDRAILS
             },
         );
-        assert!(!report.ok);
-        assert_eq!(report.elapsed, Duration::ZERO);
     }
     #[test]
     fn guardrails_enforce_stark_max_envelope_bytes() {
         let proof = ProofBox::new(ZK_BACKEND_STARK_FRI_V1.into(), vec![0xAA; 9]);
-        let report = verify_backend_with_timing_guardrails(
+        assert_guardrails_reject!(
             ZK_BACKEND_STARK_FRI_V1,
             &proof,
             None,
             ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
                 stark_max_envelope_bytes: 8,
-                stark_max_proof_bytes: 1024,
+                ..ENABLED_GUARDRAILS
             },
         );
-        assert!(!report.ok);
-        assert_eq!(report.elapsed, Duration::ZERO);
     }
     #[test]
     fn guardrails_reject_malformed_stark_outer_envelope_before_dispatch() {
         let proof = ProofBox::new(ZK_BACKEND_STARK_FRI_V1.into(), vec![0xAA, 0xBB, 0xCC]);
-        let report = verify_backend_with_timing_guardrails(
-            ZK_BACKEND_STARK_FRI_V1,
-            &proof,
-            None,
-            ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
-                stark_max_envelope_bytes: 1024,
-                stark_max_proof_bytes: 1024,
-            },
-        );
-        assert!(!report.ok);
-        assert_eq!(report.elapsed, Duration::ZERO);
+        assert_guardrails_reject!(ZK_BACKEND_STARK_FRI_V1, &proof, None, ENABLED_GUARDRAILS,);
     }
     #[test]
     fn guardrails_enforce_stark_max_proof_bytes_inside_open_verify_envelope() {
@@ -9345,21 +8634,15 @@ mod guardrails_tests {
             ZK_BACKEND_STARK_FRI_V1.into(),
             norito::to_bytes(&env).expect("encode envelope"),
         );
-        let report = verify_backend_with_timing_guardrails(
+        assert_guardrails_reject!(
             ZK_BACKEND_STARK_FRI_V1,
             &proof,
             None,
             ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
-                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 8,
+                ..ENABLED_GUARDRAILS
             },
         );
-        assert!(!report.ok);
-        assert_eq!(report.elapsed, Duration::ZERO);
     }
     #[test]
     fn guardrails_reject_malformed_stark_wrapper_before_dispatch() {
@@ -9397,21 +8680,13 @@ mod guardrails_tests {
                 ZK_BACKEND_STARK_FRI_V1.into(),
                 norito::to_bytes(&env).expect("encode envelope"),
             );
-            let report = verify_backend_with_timing_guardrails(
+            assert_guardrails_reject!(
                 ZK_BACKEND_STARK_FRI_V1,
                 &proof,
                 None,
-                ZkVerifyGuardrails {
-                    halo2_enabled: true,
-                    halo2_max_envelope_bytes: 1024,
-                    halo2_max_proof_bytes: 1024,
-                    stark_enabled: true,
-                    stark_max_envelope_bytes: 1024,
-                    stark_max_proof_bytes: 1024,
-                },
+                ENABLED_GUARDRAILS,
+                "case {case}",
             );
-            assert!(!report.ok, "case {case}");
-            assert_eq!(report.elapsed, Duration::ZERO, "case {case}");
         }
     }
     #[test]
@@ -9475,42 +8750,16 @@ mod guardrails_tests {
                 backend.to_owned(),
                 norito::to_bytes(&env).expect("encode envelope"),
             );
-            let report = verify_backend_with_timing_guardrails(
-                backend,
-                &proof,
-                None,
-                ZkVerifyGuardrails {
-                    halo2_enabled: true,
-                    halo2_max_envelope_bytes: 1024,
-                    halo2_max_proof_bytes: 1024,
-                    stark_enabled: true,
-                    stark_max_envelope_bytes: 1024,
-                    stark_max_proof_bytes: 1024,
-                },
-            );
-            assert!(!report.ok, "case {case}");
-            assert_eq!(report.elapsed, Duration::ZERO, "case {case}");
+            assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {case}",);
         }
     }
     #[cfg(feature = "zk-stark")]
     #[test]
     fn guardrails_stark_proof_limit_applies_to_inner_envelope_not_outer_wrapper() {
-        use crate::zk_stark::{
-            STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            STARK_FRI_CONSENSUS_MIN_QUERIES, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
-        };
+        use crate::zk_stark::STARK_HASH_SHA256_V1;
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:guardrail-split");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
+        let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
         let vk_box = VerifyingKeyBox::new(
             backend.to_owned(),
             norito::to_bytes(&vk_payload).expect("encode STARK verifying key"),
@@ -9536,12 +8785,9 @@ mod guardrails_tests {
             &proof,
             Some(&vk_box),
             ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
                 stark_max_envelope_bytes: proof.bytes.len(),
                 stark_max_proof_bytes: open.envelope_bytes.len(),
+                ..ENABLED_GUARDRAILS
             },
         );
         assert!(report.ok);
@@ -9549,22 +8795,10 @@ mod guardrails_tests {
     #[cfg(feature = "zk-stark")]
     #[test]
     fn guardrails_reject_stark_proof_backend_alias_mismatch_before_dispatch() {
-        use crate::zk_stark::{
-            STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            STARK_FRI_CONSENSUS_MIN_QUERIES, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
-        };
+        use crate::zk_stark::STARK_HASH_SHA256_V1;
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:guardrail-backend-mismatch");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
+        let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
         let vk_box = VerifyingKeyBox::new(
             backend.to_owned(),
             norito::to_bytes(&vk_payload).expect("encode STARK verifying key"),
@@ -9582,21 +8816,16 @@ mod guardrails_tests {
         let open: StarkFriOpenProofV1 =
             norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
         proof.backend = ZK_BACKEND_STARK_FRI_V1.into();
-        let report = verify_backend_with_timing_guardrails(
+        assert_guardrails_reject!(
             backend,
             &proof,
             Some(&vk_box),
             ZkVerifyGuardrails {
-                halo2_enabled: true,
-                halo2_max_envelope_bytes: 1024,
-                halo2_max_proof_bytes: 1024,
-                stark_enabled: true,
                 stark_max_envelope_bytes: proof.bytes.len(),
                 stark_max_proof_bytes: open.envelope_bytes.len(),
+                ..ENABLED_GUARDRAILS
             },
         );
-        assert!(!report.ok);
-        assert_eq!(report.elapsed, Duration::ZERO);
     }
 }
 #[cfg(test)]
@@ -10354,7 +9583,7 @@ fn extract_pasta_fp_instances_impl(
 mod pasta_tiny {
     #![cfg_attr(not(test), allow(dead_code))]
     use halo2_proofs::{
-        circuit::{Layouter, SimpleFloorPlanner, Value},
+        circuit::{Layouter, SimpleFloorPlanner},
         halo2curves::pasta::Fp as Scalar,
         plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
         poly::Rotation,
@@ -10396,27 +9625,9 @@ mod pasta_tiny {
                 || "tiny_add",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "a",
-                        a,
-                        0,
-                        || Value::known(Scalar::from(2)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "b",
-                        b,
-                        0,
-                        || Value::known(Scalar::from(2)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "c",
-                        c,
-                        0,
-                        || Value::known(Scalar::from(4)),
-                    )?;
+                    advice!(region, "a", a => Scalar::from(2))?;
+                    advice!(region, "b", b => Scalar::from(2))?;
+                    advice!(region, "c", c => Scalar::from(4))?;
                     Ok(())
                 },
             )
@@ -10459,27 +9670,9 @@ mod pasta_tiny {
                 || "tiny_mul",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "a",
-                        a,
-                        0,
-                        || Value::known(Scalar::from(3)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "b",
-                        b,
-                        0,
-                        || Value::known(Scalar::from(3)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "c",
-                        c,
-                        0,
-                        || Value::known(Scalar::from(9)),
-                    )?;
+                    advice!(region, "a", a => Scalar::from(3))?;
+                    advice!(region, "b", b => Scalar::from(3))?;
+                    advice!(region, "c", c => Scalar::from(9))?;
                     Ok(())
                 },
             )
@@ -10525,27 +9718,9 @@ mod pasta_tiny {
                 || "tiny_add_pub",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "a",
-                        a,
-                        0,
-                        || Value::known(Scalar::from(2)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "b",
-                        b,
-                        0,
-                        || Value::known(Scalar::from(2)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "c",
-                        c,
-                        0,
-                        || Value::known(Scalar::from(4)),
-                    )?;
+                    advice!(region, "a", a => Scalar::from(2))?;
+                    advice!(region, "b", b => Scalar::from(2))?;
+                    advice!(region, "c", c => Scalar::from(4))?;
                     Ok(())
                 },
             )
@@ -10591,27 +9766,9 @@ mod pasta_tiny {
                 || "tiny_mul_pub",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "a",
-                        a,
-                        0,
-                        || Value::known(Scalar::from(3)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "b",
-                        b,
-                        0,
-                        || Value::known(Scalar::from(3)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "c",
-                        c,
-                        0,
-                        || Value::known(Scalar::from(9)),
-                    )?;
+                    advice!(region, "a", a => Scalar::from(3))?;
+                    advice!(region, "b", b => Scalar::from(3))?;
+                    advice!(region, "c", c => Scalar::from(9))?;
                     Ok(())
                 },
             )
@@ -10651,13 +9808,7 @@ mod pasta_tiny {
                 || "id_pub",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "c",
-                        c,
-                        0,
-                        || Value::known(Scalar::from(7)),
-                    )?;
+                    advice!(region, "c", c => Scalar::from(7))?;
                     Ok(())
                 },
             )
@@ -10701,50 +9852,14 @@ mod pasta_tiny {
                 |mut region| {
                     // Row 0: 2 + 2 = 4
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "a0",
-                        a,
-                        0,
-                        || Value::known(Scalar::from(2)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "b0",
-                        b,
-                        0,
-                        || Value::known(Scalar::from(2)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "c0",
-                        c,
-                        0,
-                        || Value::known(Scalar::from(4)),
-                    )?;
+                    advice!(region, "a0", a => Scalar::from(2))?;
+                    advice!(region, "b0", b => Scalar::from(2))?;
+                    advice!(region, "c0", c => Scalar::from(4))?;
                     // Row 1: 5 + 7 = 12
                     s.enable(&mut region, 1)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "a1",
-                        a,
-                        1,
-                        || Value::known(Scalar::from(5)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "b1",
-                        b,
-                        1,
-                        || Value::known(Scalar::from(7)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "c1",
-                        c,
-                        1,
-                        || Value::known(Scalar::from(12)),
-                    )?;
+                    advice!(region, "a1", a, 1 => Scalar::from(5))?;
+                    advice!(region, "b1", b, 1 => Scalar::from(7))?;
+                    advice!(region, "c1", c, 1 => Scalar::from(12))?;
                     Ok(())
                 },
             )
@@ -10790,34 +9905,10 @@ mod pasta_tiny {
                 || "tiny_add3",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "a",
-                        a,
-                        0,
-                        || Value::known(Scalar::from(1)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "b",
-                        b,
-                        0,
-                        || Value::known(Scalar::from(2)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "d",
-                        d,
-                        0,
-                        || Value::known(Scalar::from(3)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "c",
-                        c,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
+                    advice!(region, "a", a => Scalar::from(1))?;
+                    advice!(region, "b", b => Scalar::from(2))?;
+                    advice!(region, "d", d => Scalar::from(3))?;
+                    advice!(region, "c", c => Scalar::from(6))?;
                     Ok(())
                 },
             )
@@ -10871,27 +9962,9 @@ mod pasta_tiny {
                 || "tiny_add2inst_pub",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "a",
-                        a,
-                        0,
-                        || Value::known(Scalar::from(5)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "b",
-                        b,
-                        0,
-                        || Value::known(Scalar::from(8)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "c",
-                        c,
-                        0,
-                        || Value::known(Scalar::from(13)),
-                    )?;
+                    advice!(region, "a", a => Scalar::from(5))?;
+                    advice!(region, "b", b => Scalar::from(8))?;
+                    advice!(region, "c", c => Scalar::from(13))?;
                     Ok(())
                 },
             )
@@ -10955,13 +10028,7 @@ mod pasta_tiny {
                 |mut region| {
                     s.enable(&mut region, 0)?;
                     for (i, column) in adv.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("a{i}"),
-                            *column,
-                            0,
-                            || Value::known(values[i]),
-                        )?;
+                        advice!(region, move "a{i}", *column => values[i])?;
                     }
                     Ok(())
                 },
@@ -11025,13 +10092,7 @@ mod pasta_tiny {
                 |mut region| {
                     s.enable(&mut region, 0)?;
                     for (i, column) in adv.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("a{i}"),
-                            *column,
-                            0,
-                            || Value::known(values[i]),
-                        )?;
+                        advice!(region, move "a{i}", *column => values[i])?;
                     }
                     Ok(())
                 },
@@ -11078,34 +10139,10 @@ mod pasta_tiny {
                 |mut region| {
                     // Example transfer: 7 + 5 = 6 + 6
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in0",
-                        in0,
-                        0,
-                        || Value::known(Scalar::from(7)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in1",
-                        in1,
-                        0,
-                        || Value::known(Scalar::from(5)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out0",
-                        out0,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out1",
-                        out1,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
                     Ok(())
                 },
             )
@@ -11145,13 +10182,7 @@ mod pasta_tiny {
                 |mut region| {
                     s.enable(&mut region, 0)?;
                     // Example vote: 1 (YES)
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "v",
-                        v,
-                        0,
-                        || Value::known(Scalar::from(1u64)),
-                    )?;
+                    advice!(region, "v", v => Scalar::from(1u64))?;
                     Ok(())
                 },
             )
@@ -11196,20 +10227,8 @@ mod pasta_tiny {
                 || "commit_open",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "m",
-                        m,
-                        0,
-                        || Value::known(Scalar::from(11)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r",
-                        r,
-                        0,
-                        || Value::known(Scalar::from(31)),
-                    )?;
+                    advice!(region, "m", m => Scalar::from(11))?;
+                    advice!(region, "r", r => Scalar::from(31))?;
                     Ok(())
                 },
             )
@@ -11272,41 +10291,11 @@ mod pasta_tiny {
                     let s1 = Scalar::from(7);
                     let w0v = poseidon_pair(l, s0);
                     let w1v = poseidon_pair(w0v, s1);
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "leaf",
-                        leaf,
-                        0,
-                        || Value::known(l),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sib0",
-                        sib0,
-                        0,
-                        || Value::known(s0),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sib1",
-                        sib1,
-                        0,
-                        || Value::known(s1),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "w0",
-                        w0,
-                        0,
-                        || Value::known(w0v),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "w1",
-                        w1,
-                        0,
-                        || Value::known(w1v),
-                    )?;
+                    advice!(region, "leaf", leaf => l)?;
+                    advice!(region, "sib0", sib0 => s0)?;
+                    advice!(region, "sib1", sib1 => s1)?;
+                    advice!(region, "w0", w0 => w0v)?;
+                    advice!(region, "w1", w1 => w1v)?;
                     Ok(())
                 },
             )
@@ -11436,27 +10425,10 @@ mod pasta_tiny {
                 let (a_cell, b_cell, digest_cell) = layouter.assign_region(
                     || "poseidon2_inputs",
                     |mut region| {
-                        let a_cell = crate::zk::assign_advice_compat(
-                            &mut region,
-                            || "a",
-                            poseidon_cfg.state[0],
-                            0,
-                            || a,
-                        )?;
-                        let b_cell = crate::zk::assign_advice_compat(
-                            &mut region,
-                            || "b",
-                            poseidon_cfg.state[1],
-                            0,
-                            || b,
-                        )?;
-                        let digest_cell = crate::zk::assign_advice_compat(
-                            &mut region,
-                            || "digest",
-                            poseidon_cfg.state[2],
-                            0,
-                            || digest,
-                        )?;
+                        let a_cell = advice!(region, "a", poseidon_cfg.state[0] => value a)?;
+                        let b_cell = advice!(region, "b", poseidon_cfg.state[1] => value b)?;
+                        let digest_cell =
+                            advice!(region, "digest", poseidon_cfg.state[2] => value digest)?;
                         Ok((a_cell, b_cell, digest_cell))
                     },
                 )?;
@@ -11549,29 +10521,11 @@ mod pasta_tiny {
                         let m_v = F::from(11u64);
                         let r_v = F::from(31u64);
                         // assign inputs
-                        let _m_cell = crate::zk::assign_advice_compat(
-                            &mut region,
-                            || "m",
-                            m,
-                            0,
-                            || Value::known(m_v),
-                        )?;
-                        let _r_cell = crate::zk::assign_advice_compat(
-                            &mut region,
-                            || "r",
-                            r,
-                            0,
-                            || Value::known(r_v),
-                        )?;
+                        let _m_cell = advice!(region, "m", m => m_v)?;
+                        let _r_cell = advice!(region, "r", r => r_v)?;
                         // assign s0 via native helper for constraints, then constrain equal to gadget digest
                         let s0_v = compress2_native(m_v, r_v);
-                        let s0_cell = crate::zk::assign_advice_compat(
-                            &mut region,
-                            || "s0",
-                            s0,
-                            0,
-                            || Value::known(s0_v),
-                        )?;
+                        let s0_cell = advice!(region, "s0", s0 => s0_v)?;
                         // s1 remains secondary mix value for the circuit
                         let t0 = m_v + F::from(7u64);
                         let t1 = r_v + F::from(13u64);
@@ -11582,13 +10536,7 @@ mod pasta_tiny {
                         let t1_4 = t1_2 * t1_2;
                         let t1_5 = t1_4 * t1;
                         let s1_v = F::from(3u64) * t0_5 + F::from(5u64) * t1_5;
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            || "s1",
-                            s1,
-                            0,
-                            || Value::known(s1_v),
-                        )?;
+                        advice!(region, "s1", s1 => s1_v)?;
                         // Compute gadget digest and constrain equality to s0
                         let hash_cells = Poseidon2ChipWrapper::new().hash2_chip(
                             &mut layouter,
@@ -11723,44 +10671,17 @@ mod pasta_tiny {
                             let left_val = current + dir_val * (sib_val - current);
                             let right_val = sib_val + dir_val * (current - sib_val);
                             let hash_val = compress2_native(left_val, right_val);
-                            let node_cell = crate::zk::assign_advice_compat(
-                                &mut region,
-                                || format!("node_{row}"),
-                                node,
-                                row,
-                                || Value::known(current),
-                            )?;
+                            let node_cell =
+                                advice!(region, format "node_{row}", node, row => current)?;
                             if let Some(ref prev) = previous_output {
                                 layouter.constrain_equal(node_cell.cell(), prev.cell())?;
                             }
-                            crate::zk::assign_advice_compat(
-                                &mut region,
-                                || format!("sibling_{row}"),
-                                sibling,
-                                row,
-                                || Value::known(sib_val),
-                            )?;
-                            crate::zk::assign_advice_compat(
-                                &mut region,
-                                || format!("dir_{row}"),
-                                dir,
-                                row,
-                                || Value::known(dir_val),
-                            )?;
-                            let left_cell = crate::zk::assign_advice_compat(
-                                &mut region,
-                                || format!("left_{row}"),
-                                left,
-                                row,
-                                || Value::known(left_val),
-                            )?;
-                            let right_cell = crate::zk::assign_advice_compat(
-                                &mut region,
-                                || format!("right_{row}"),
-                                right,
-                                row,
-                                || Value::known(right_val),
-                            )?;
+                            advice!(region, format "sibling_{row}", sibling, row => sib_val)?;
+                            advice!(region, format "dir_{row}", dir, row => dir_val)?;
+                            let left_cell =
+                                advice!(region, format "left_{row}", left, row => left_val)?;
+                            let right_cell =
+                                advice!(region, format "right_{row}", right, row => right_val)?;
                             sel.enable(&mut region, row)?;
                             let hash_cells = chip.hash2_chip(
                                 &mut layouter,
@@ -11770,13 +10691,8 @@ mod pasta_tiny {
                             )?;
                             layouter.constrain_equal(left_cell.cell(), hash_cells.left.cell())?;
                             layouter.constrain_equal(right_cell.cell(), hash_cells.right.cell())?;
-                            let out_cell = crate::zk::assign_advice_compat(
-                                &mut region,
-                                || format!("out_{row}"),
-                                out,
-                                row,
-                                || Value::known(hash_val),
-                            )?;
+                            let out_cell =
+                                advice!(region, format "out_{row}", out, row => hash_val)?;
                             layouter.constrain_equal(out_cell.cell(), hash_cells.digest.cell())?;
                             previous_output = Some(out_cell.clone());
                             current = hash_val;
@@ -11859,20 +10775,8 @@ mod pasta_tiny {
                 || "vote_bool_commit",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "v",
-                        v,
-                        0,
-                        || Value::known(Scalar::from(1)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "rho",
-                        rho,
-                        0,
-                        || Value::known(Scalar::from(12345)),
-                    )?;
+                    advice!(region, "v", v => Scalar::from(1))?;
+                    advice!(region, "rho", rho => Scalar::from(12345))?;
                     Ok(())
                 },
             )
@@ -11986,76 +10890,16 @@ mod pasta_tiny {
                 || "anon_transfer_commit",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in0",
-                        in0,
-                        0,
-                        || Value::known(Scalar::from(7)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in1",
-                        in1,
-                        0,
-                        || Value::known(Scalar::from(5)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out0",
-                        out0,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out1",
-                        out1,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r_in0",
-                        r_in0,
-                        0,
-                        || Value::known(Scalar::from(11)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r_in1",
-                        r_in1,
-                        0,
-                        || Value::known(Scalar::from(13)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r_out0",
-                        r_out0,
-                        0,
-                        || Value::known(Scalar::from(17)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r_out1",
-                        r_out1,
-                        0,
-                        || Value::known(Scalar::from(19)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sk",
-                        sk,
-                        0,
-                        || Value::known(Scalar::from(1_234_567)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "serial",
-                        serial,
-                        0,
-                        || Value::known(Scalar::from(42)),
-                    )?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    advice!(region, "r_in0", r_in0 => Scalar::from(11))?;
+                    advice!(region, "r_in1", r_in1 => Scalar::from(13))?;
+                    advice!(region, "r_out0", r_out0 => Scalar::from(17))?;
+                    advice!(region, "r_out1", r_out1 => Scalar::from(19))?;
+                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
+                    advice!(region, "serial", serial => Scalar::from(42))?;
                     Ok(())
                 },
             )
@@ -12135,48 +10979,12 @@ mod pasta_tiny {
                     let commit_v = poseidon_pair(v_v, rho_v);
                     let w0_v = poseidon_pair(commit_v, sib0_v);
                     let w1_v = poseidon_pair(w0_v, sib1_v);
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "v",
-                        v,
-                        0,
-                        || Value::known(v_v),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "rho",
-                        rho,
-                        0,
-                        || Value::known(rho_v),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sib0",
-                        sib0,
-                        0,
-                        || Value::known(sib0_v),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sib1",
-                        sib1,
-                        0,
-                        || Value::known(sib1_v),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "w0",
-                        w0,
-                        0,
-                        || Value::known(w0_v),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "w1",
-                        w1,
-                        0,
-                        || Value::known(w1_v),
-                    )?;
+                    advice!(region, "v", v => v_v)?;
+                    advice!(region, "rho", rho => rho_v)?;
+                    advice!(region, "sib0", sib0 => sib0_v)?;
+                    advice!(region, "sib1", sib1 => sib1_v)?;
+                    advice!(region, "w0", w0 => w0_v)?;
+                    advice!(region, "w1", w1 => w1_v)?;
                     Ok(())
                 },
             )
@@ -12313,104 +11121,20 @@ mod pasta_tiny {
                 || "anon_transfer_commit_merkle2",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in0",
-                        in0,
-                        0,
-                        || Value::known(Scalar::from(7)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in1",
-                        in1,
-                        0,
-                        || Value::known(Scalar::from(5)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out0",
-                        out0,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out1",
-                        out1,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r_in0",
-                        r_in0,
-                        0,
-                        || Value::known(Scalar::from(11)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r_in1",
-                        r_in1,
-                        0,
-                        || Value::known(Scalar::from(13)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r_out0",
-                        r_out0,
-                        0,
-                        || Value::known(Scalar::from(17)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r_out1",
-                        r_out1,
-                        0,
-                        || Value::known(Scalar::from(19)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sk",
-                        sk,
-                        0,
-                        || Value::known(Scalar::from(1_234_567)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "serial",
-                        serial,
-                        0,
-                        || Value::known(Scalar::from(42)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sib0_0",
-                        sib0_0,
-                        0,
-                        || Value::known(Scalar::from(23)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sib0_1",
-                        sib0_1,
-                        0,
-                        || Value::known(Scalar::from(29)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sib1_0",
-                        sib1_0,
-                        0,
-                        || Value::known(Scalar::from(31)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sib1_1",
-                        sib1_1,
-                        0,
-                        || Value::known(Scalar::from(37)),
-                    )?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    advice!(region, "r_in0", r_in0 => Scalar::from(11))?;
+                    advice!(region, "r_in1", r_in1 => Scalar::from(13))?;
+                    advice!(region, "r_out0", r_out0 => Scalar::from(17))?;
+                    advice!(region, "r_out1", r_out1 => Scalar::from(19))?;
+                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
+                    advice!(region, "serial", serial => Scalar::from(42))?;
+                    advice!(region, "sib0_0", sib0_0 => Scalar::from(23))?;
+                    advice!(region, "sib0_1", sib0_1 => Scalar::from(29))?;
+                    advice!(region, "sib1_0", sib1_0 => Scalar::from(31))?;
+                    advice!(region, "sib1_1", sib1_1 => Scalar::from(37))?;
                     Ok(())
                 },
             )
@@ -12585,49 +11309,19 @@ mod pasta_tiny {
                         vote_bool_commit_merkle8_sample_inputs();
                     let (_commit, witness_vals, _root) =
                         vote_bool_commit_merkle8_witnesses(v_val, rho_val, sibling_vals, dir_vals);
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "v",
-                        v,
-                        0,
-                        || Value::known(v_val),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "rho",
-                        rho,
-                        0,
-                        || Value::known(rho_val),
-                    )?;
+                    advice!(region, "v", v => v_val)?;
+                    advice!(region, "rho", rho => rho_val)?;
                     for (i, col) in sibs.iter().enumerate() {
                         let sib_val = sibling_vals[i];
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib{i}"),
-                            *col,
-                            0,
-                            || Value::known(sib_val),
-                        )?;
+                        advice!(region, move "sib{i}", *col => sib_val)?;
                     }
                     for (i, col) in dirs.iter().enumerate() {
                         let dir_val = dir_vals[i];
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir{i}"),
-                            *col,
-                            0,
-                            || Value::known(dir_val),
-                        )?;
+                        advice!(region, move "dir{i}", *col => dir_val)?;
                     }
                     for (i, col) in ws.iter().enumerate() {
                         let w_val = witness_vals[i];
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("w{i}"),
-                            *col,
-                            0,
-                            || Value::known(w_val),
-                        )?;
+                        advice!(region, move "w{i}", *col => w_val)?;
                     }
                     Ok(())
                 },
@@ -12745,49 +11439,19 @@ mod pasta_tiny {
                 || "vote_commit_merkle8",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "v",
-                        v,
-                        0,
-                        || Value::known(v_val),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "rho",
-                        rho,
-                        0,
-                        || Value::known(rho_val),
-                    )?;
+                    advice!(region, "v", v => v_val)?;
+                    advice!(region, "rho", rho => rho_val)?;
                     for (i, col) in sibs.iter().enumerate() {
                         let sib_val = sibling_vals[i];
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib{i}"),
-                            *col,
-                            0,
-                            || Value::known(sib_val),
-                        )?;
+                        advice!(region, move "sib{i}", *col => sib_val)?;
                     }
                     for (i, col) in dirs.iter().enumerate() {
                         let dir_val = dir_vals[i];
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir{i}"),
-                            *col,
-                            0,
-                            || Value::known(dir_val),
-                        )?;
+                        advice!(region, move "dir{i}", *col => dir_val)?;
                     }
                     for (i, col) in ws.iter().enumerate() {
                         let w_val = witness_vals[i];
-                        let cell = crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("w{i}"),
-                            *col,
-                            0,
-                            || Value::known(w_val),
-                        )?;
+                        let cell = advice!(region, move "w{i}", *col => w_val)?;
                         w_cells.push(cell);
                     }
                     Ok(())
@@ -12979,104 +11643,26 @@ mod pasta_tiny {
                 || "anon_transfer_commit_merkle8",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in0",
-                        in0,
-                        0,
-                        || Value::known(Scalar::from(7)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "in1",
-                        in1,
-                        0,
-                        || Value::known(Scalar::from(5)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out0",
-                        out0,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "out1",
-                        out1,
-                        0,
-                        || Value::known(Scalar::from(6)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r0",
-                        r0,
-                        0,
-                        || Value::known(Scalar::from(11)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r1",
-                        r1,
-                        0,
-                        || Value::known(Scalar::from(13)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r2",
-                        r2,
-                        0,
-                        || Value::known(Scalar::from(17)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "r3",
-                        r3,
-                        0,
-                        || Value::known(Scalar::from(19)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "sk",
-                        sk,
-                        0,
-                        || Value::known(Scalar::from(1_234_567)),
-                    )?;
-                    crate::zk::assign_advice_compat(
-                        &mut region,
-                        || "serial",
-                        serial,
-                        0,
-                        || Value::known(Scalar::from(42)),
-                    )?;
+                    advice!(region, "in0", in0 => Scalar::from(7))?;
+                    advice!(region, "in1", in1 => Scalar::from(5))?;
+                    advice!(region, "out0", out0 => Scalar::from(6))?;
+                    advice!(region, "out1", out1 => Scalar::from(6))?;
+                    advice!(region, "r0", r0 => Scalar::from(11))?;
+                    advice!(region, "r1", r1 => Scalar::from(13))?;
+                    advice!(region, "r2", r2 => Scalar::from(17))?;
+                    advice!(region, "r3", r3 => Scalar::from(19))?;
+                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
+                    advice!(region, "serial", serial => Scalar::from(42))?;
                     for (i, col) in sib.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("sib{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(20 + i as u64)),
-                        )?;
+                        advice!(region, move "sib{i}", *col => Scalar::from(20 + i as u64))?;
                     }
                     for (i, col) in dir.iter().enumerate() {
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("dir{i}"),
-                            *col,
-                            0,
-                            || Value::known(Scalar::from(0)),
-                        )?;
+                        advice!(region, move "dir{i}", *col => Scalar::from(0))?;
                     }
                     let mut acc = Scalar::from(0);
                     for (i, col) in w.iter().enumerate() {
                         acc += Scalar::from(20 + i as u64);
-                        crate::zk::assign_advice_compat(
-                            &mut region,
-                            move || format!("w{i}"),
-                            *col,
-                            0,
-                            || Value::known(acc),
-                        )?;
+                        advice!(region, move "w{i}", *col => acc)?;
                     }
                     Ok(())
                 },
@@ -13466,109 +12052,81 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
     }
     // For IPA, we normalize backend tag to reuse circuit mapping
     let normalized = backend.replace("/ipa/", "/");
+    #[cfg(test)]
+    macro_rules! verify_test_circuit {
+        ($circuit:expr, $mode:ident $(, $reject:expr)?) => {{
+            let circuit = $circuit;
+            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            $(if $reject {
+                return false;
+            })?
+            verify_test_circuit!(@verify $mode, vk_h2.as_ref())
+        }};
+        (using $circuit:ident, $mode:ident $(, $reject:expr)?) => {{
+            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &$circuit) {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
+            $(if $reject {
+                return false;
+            })?
+            verify_test_circuit!(@verify $mode, vk_h2.as_ref())
+        }};
+        (@verify no_instances, $vk:expr) => {
+            verify_halo2_ipa_payload_no_instances(&params, $vk, proof_payload.as_slice())
+        };
+        (@verify optional_columns, $vk:expr) => {
+            verify_halo2_ipa_payload_optional_columns(
+                &params,
+                $vk,
+                proof_payload.as_slice(),
+                &col_refs,
+            )
+        };
+        (@verify columns, $vk:expr) => {
+            verify_halo2_ipa_payload_columns(
+                &params,
+                $vk,
+                proof_payload.as_slice(),
+                &col_refs,
+            )
+        };
+    }
     match normalized.as_str() {
         #[cfg(test)]
         "halo2/pasta/tiny-add" => {
-            let circuit = pasta_tiny::Add;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
+            verify_test_circuit!(pasta_tiny::Add, no_instances)
         }
         #[cfg(test)]
         "halo2/pasta/tiny-mul" => {
-            let circuit = pasta_tiny::Mul;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            verify_halo2_ipa_payload_optional_columns(
-                &params,
-                vk_h2.as_ref(),
-                proof_payload.as_slice(),
-                &col_refs,
-            )
+            verify_test_circuit!(pasta_tiny::Mul, optional_columns)
         }
         #[cfg(test)]
         "halo2/pasta/tiny-add-2rows" => {
-            let circuit = pasta_tiny::AddTwoRows;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
+            verify_test_circuit!(pasta_tiny::AddTwoRows, no_instances)
         }
         #[cfg(test)]
         "halo2/pasta/tiny-add-public" => {
-            let circuit = pasta_tiny::AddPublic;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            verify_halo2_ipa_payload_optional_columns(
-                &params,
-                vk_h2.as_ref(),
-                proof_payload.as_slice(),
-                &col_refs,
-            )
+            verify_test_circuit!(pasta_tiny::AddPublic, optional_columns)
         }
         #[cfg(test)]
         "halo2/pasta/tiny-mul-public" => {
-            let circuit = pasta_tiny::MulPublic;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            verify_halo2_ipa_payload_optional_columns(
-                &params,
-                vk_h2.as_ref(),
-                proof_payload.as_slice(),
-                &col_refs,
-            )
+            verify_test_circuit!(pasta_tiny::MulPublic, optional_columns)
         }
         #[cfg(test)]
         "halo2/pasta/tiny-id-public" => {
-            let circuit = pasta_tiny::IdPublic;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            if col_refs.is_empty() {
-                return false;
-            }
-            verify_halo2_ipa_payload_columns(
-                &params,
-                vk_h2.as_ref(),
-                proof_payload.as_slice(),
-                &col_refs,
-            )
+            verify_test_circuit!(pasta_tiny::IdPublic, columns, col_refs.is_empty())
         }
         #[cfg(test)]
         "halo2/pasta/tiny-add3" => {
-            let circuit = pasta_tiny::AddThree;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
+            verify_test_circuit!(pasta_tiny::AddThree, no_instances)
         }
         #[cfg(test)]
         "halo2/pasta/tiny-add2inst-public" => {
-            let circuit = pasta_tiny::AddTwoInstPublic;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            if col_refs.len() < 2 {
-                return false;
-            }
-            verify_halo2_ipa_payload_columns(
-                &params,
-                vk_h2.as_ref(),
-                proof_payload.as_slice(),
-                &col_refs,
-            )
+            verify_test_circuit!(pasta_tiny::AddTwoInstPublic, columns, col_refs.len() < 2)
         }
         #[cfg(test)]
         "halo2/pasta/ivm-overlay-bind" => {
@@ -13576,17 +12134,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.len() != 8 || col_refs.iter().any(|col| col.len() != 1) {
                 return false;
             }
-            let circuit = pasta_tiny::IvmOverlayBind::default();
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            verify_halo2_ipa_payload_columns(
-                &params,
-                vk_h2.as_ref(),
-                proof_payload.as_slice(),
-                &col_refs,
-            )
+            verify_test_circuit!(pasta_tiny::IvmOverlayBind::default(), columns)
         }
         "halo2/pasta/ivm-execution-v1" => {
             // Instances: 16 columns (code_hash limbs + overlay_hash limbs + events_commitment limbs + gas_policy_commitment limbs), 1 row each.
@@ -13610,12 +12158,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         }
         #[cfg(test)]
         "halo2/pasta/tiny-anon-transfer-2x2" => {
-            let circuit = pasta_tiny::AnonTransfer2x2;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
+            verify_test_circuit!(pasta_tiny::AnonTransfer2x2, no_instances)
         }
         #[cfg(test)]
         "halo2/pasta/anon-transfer-2x2" => {
@@ -13664,45 +12207,22 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             // Use depth-8 generic with dual membership; select algorithm by backend suffix
             let use_poseidon = backend.ends_with("-poseidon");
             if use_poseidon {
-                let circuit = poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>;
-                let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                    Ok(v) => v,
-                    Err(_) => return false,
-                };
-                if col_refs.len() < 6 {
-                    return false;
-                }
-                verify_halo2_ipa_payload_columns(
-                    &params,
-                    vk_h2.as_ref(),
-                    proof_payload.as_slice(),
-                    &col_refs,
+                verify_test_circuit!(
+                    poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>,
+                    columns,
+                    col_refs.len() < 6
                 )
             } else {
-                let circuit = depth::AnonTransfer2x2CommitMerkle::<8>;
-                let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                    Ok(v) => v,
-                    Err(_) => return false,
-                };
-                if col_refs.len() < 6 {
-                    return false;
-                }
-                verify_halo2_ipa_payload_columns(
-                    &params,
-                    vk_h2.as_ref(),
-                    proof_payload.as_slice(),
-                    &col_refs,
+                verify_test_circuit!(
+                    depth::AnonTransfer2x2CommitMerkle::<8>,
+                    columns,
+                    col_refs.len() < 6
                 )
             }
         }
         #[cfg(test)]
         "halo2/pasta/tiny-vote-bool" => {
-            let circuit = pasta_tiny::VoteBool;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
+            verify_test_circuit!(pasta_tiny::VoteBool, no_instances)
         }
         #[cfg(test)]
         "halo2/pasta/tiny-commit-open" => {
@@ -13711,19 +12231,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             let circuit = pasta_tiny::poseidon::CommitOpenPoseidon;
             #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
             let circuit = pasta_tiny::CommitOpen;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            if col_refs.is_empty() {
-                return false;
-            }
-            verify_halo2_ipa_payload_columns(
-                &params,
-                vk_h2.as_ref(),
-                proof_payload.as_slice(),
-                &col_refs,
-            )
+            verify_test_circuit!(using circuit, columns, col_refs.is_empty())
         }
         #[cfg(test)]
         "halo2/pasta/tiny-merkle2" => {
@@ -13732,54 +12240,20 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             let circuit = pasta_tiny::poseidon::Merkle2Poseidon;
             #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
             let circuit = pasta_tiny::Merkle2;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            if col_refs.is_empty() {
-                return false;
-            }
-            verify_halo2_ipa_payload_columns(
-                &params,
-                vk_h2.as_ref(),
-                proof_payload.as_slice(),
-                &col_refs,
-            )
+            verify_test_circuit!(using circuit, columns, col_refs.is_empty())
         }
         #[cfg(test)]
         "halo2/pasta/vote-bool-commit" => {
             // Instances: [commit], 1 row
-            let circuit = pasta_tiny::VoteBoolCommit;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            if col_refs.is_empty() {
-                return false;
-            }
-            verify_halo2_ipa_payload_columns(
-                &params,
-                vk_h2.as_ref(),
-                proof_payload.as_slice(),
-                &col_refs,
-            )
+            verify_test_circuit!(pasta_tiny::VoteBoolCommit, columns, col_refs.is_empty())
         }
         #[cfg(test)]
         "halo2/pasta/vote-bool-commit-merkle2" => {
             // Instances: [commit, root], 1 row
-            let circuit = pasta_tiny::VoteBoolCommitMerkle2;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            if col_refs.len() < 2 {
-                return false;
-            }
-            verify_halo2_ipa_payload_columns(
-                &params,
-                vk_h2.as_ref(),
-                proof_payload.as_slice(),
-                &col_refs,
+            verify_test_circuit!(
+                pasta_tiny::VoteBoolCommitMerkle2,
+                columns,
+                col_refs.len() < 2
             )
         }
         #[cfg(test)]
@@ -13787,34 +12261,16 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             // Use depth-8 generic; select algorithm by backend suffix
             let use_poseidon = backend.ends_with("-poseidon");
             if use_poseidon {
-                let circuit = poseidon_depth::VoteBoolCommitMerklePoseidon::<8>;
-                let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                    Ok(v) => v,
-                    Err(_) => return false,
-                };
-                if col_refs.len() < 2 {
-                    return false;
-                }
-                verify_halo2_ipa_payload_columns(
-                    &params,
-                    vk_h2.as_ref(),
-                    proof_payload.as_slice(),
-                    &col_refs,
+                verify_test_circuit!(
+                    poseidon_depth::VoteBoolCommitMerklePoseidon::<8>,
+                    columns,
+                    col_refs.len() < 2
                 )
             } else {
-                let circuit = depth::VoteBoolCommitMerkle::<8>;
-                let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                    Ok(v) => v,
-                    Err(_) => return false,
-                };
-                if col_refs.len() < 2 {
-                    return false;
-                }
-                verify_halo2_ipa_payload_columns(
-                    &params,
-                    vk_h2.as_ref(),
-                    proof_payload.as_slice(),
-                    &col_refs,
+                verify_test_circuit!(
+                    depth::VoteBoolCommitMerkle::<8>,
+                    columns,
+                    col_refs.len() < 2
                 )
             }
         }
@@ -13823,34 +12279,16 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         "halo2/pasta/anon-transfer-2x2-merkle16" => {
             let use_poseidon = backend.ends_with("-poseidon");
             if use_poseidon {
-                let circuit = poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>;
-                let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                    Ok(v) => v,
-                    Err(_) => return false,
-                };
-                if col_refs.len() < 6 {
-                    return false;
-                }
-                verify_halo2_ipa_payload_columns(
-                    &params,
-                    vk_h2.as_ref(),
-                    proof_payload.as_slice(),
-                    &col_refs,
+                verify_test_circuit!(
+                    poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>,
+                    columns,
+                    col_refs.len() < 6
                 )
             } else {
-                let circuit = depth::AnonTransfer2x2CommitMerkle::<16>;
-                let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                    Ok(v) => v,
-                    Err(_) => return false,
-                };
-                if col_refs.len() < 6 {
-                    return false;
-                }
-                verify_halo2_ipa_payload_columns(
-                    &params,
-                    vk_h2.as_ref(),
-                    proof_payload.as_slice(),
-                    &col_refs,
+                verify_test_circuit!(
+                    depth::AnonTransfer2x2CommitMerkle::<16>,
+                    columns,
+                    col_refs.len() < 6
                 )
             }
         }
@@ -13858,34 +12296,16 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         "halo2/pasta/vote-bool-commit-merkle16" => {
             let use_poseidon = backend.ends_with("-poseidon");
             if use_poseidon {
-                let circuit = poseidon_depth::VoteBoolCommitMerklePoseidon::<16>;
-                let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                    Ok(v) => v,
-                    Err(_) => return false,
-                };
-                if col_refs.len() < 2 {
-                    return false;
-                }
-                verify_halo2_ipa_payload_columns(
-                    &params,
-                    vk_h2.as_ref(),
-                    proof_payload.as_slice(),
-                    &col_refs,
+                verify_test_circuit!(
+                    poseidon_depth::VoteBoolCommitMerklePoseidon::<16>,
+                    columns,
+                    col_refs.len() < 2
                 )
             } else {
-                let circuit = depth::VoteBoolCommitMerkle::<16>;
-                let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                    Ok(v) => v,
-                    Err(_) => return false,
-                };
-                if col_refs.len() < 2 {
-                    return false;
-                }
-                verify_halo2_ipa_payload_columns(
-                    &params,
-                    vk_h2.as_ref(),
-                    proof_payload.as_slice(),
-                    &col_refs,
+                verify_test_circuit!(
+                    depth::VoteBoolCommitMerkle::<16>,
+                    columns,
+                    col_refs.len() < 2
                 )
             }
         }
@@ -13980,7 +12400,6 @@ mod trace_proof_queue_tests {
 #[cfg(all(test, feature = "zk-preverify"))]
 mod trace_proving_queue_tests {
     use super::*;
-    use iroha_crypto::Hash;
     use ivm::encoding;
     use std::{num::NonZeroU64, sync::Arc};
     fn assemble_zk(code: &[u8], max_cycles: u64) -> Vec<u8> {
@@ -14080,7 +12499,57 @@ mod trace_proving_queue_tests {
 #[cfg(test)]
 mod preverify_tests {
     use super::*;
+    use PreverifyResult::*;
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+    macro_rules! assert_preverify {
+        (
+            $proof:ident,
+            $vk:ident,
+            $dedup:ident,
+            $vk_hash:ident,
+            $result:expr
+            $(, $message:expr)?
+        ) => {
+            assert_eq!(
+                preverify_with_budget(
+                    &$proof,
+                    Some(&$vk),
+                    &mut $dedup,
+                    0,
+                    Some($vk_hash),
+                    Some($vk_hash),
+                    true,
+                ),
+                $result
+                $(, $message)?
+            )
+        };
+        (
+            $proof:ident,
+            $vk:ident,
+            $dedup:ident,
+            $budget:expr,
+            $resolved:expr,
+            $expected:expr,
+            $active:expr,
+            $result:expr
+            $(, $message:expr)?
+        ) => {
+            assert_eq!(
+                preverify_with_budget(
+                    &$proof,
+                    Some(&$vk),
+                    &mut $dedup,
+                    $budget,
+                    $resolved,
+                    $expected,
+                    $active,
+                ),
+                $result
+                $(, $message)?
+            )
+        };
+    }
     fn preverify_enveloped_proof(vk_hash: [u8; 32]) -> ProofBox {
         preverify_enveloped_proof_for_backend(
             ZK_BACKEND_HALO2_IPA,
@@ -14181,235 +12650,121 @@ mod preverify_tests {
         let expected = hash_vk(&vk);
         let proof = preverify_enveloped_proof(expected);
         let mut budget_dedup = DedupCache::new();
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut budget_dedup,
-                1,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::PreverifyBudgetExceeded
+        assert_preverify!(
+            proof,
+            vk,
+            budget_dedup,
+            1,
+            Some(expected),
+            Some(expected),
+            true,
+            PreverifyBudgetExceeded
         );
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut budget_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::Accepted
-        );
+        assert_preverify!(proof, vk, budget_dedup, expected, Accepted);
         let mut resolved_commitment_dedup = DedupCache::new();
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut resolved_commitment_dedup,
-                0,
-                None,
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::Accepted
+        assert_preverify!(
+            proof,
+            vk,
+            resolved_commitment_dedup,
+            0,
+            None,
+            Some(expected),
+            true,
+            Accepted
         );
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut resolved_commitment_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::Duplicate
-        );
+        assert_preverify!(proof, vk, resolved_commitment_dedup, expected, Duplicate);
         let mut missing_expected_dedup = DedupCache::new();
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut missing_expected_dedup,
-                0,
-                None,
-                None,
-                true,
-            ),
-            PreverifyResult::VerifyingKeyMissing
+        assert_preverify!(
+            proof,
+            vk,
+            missing_expected_dedup,
+            0,
+            None,
+            None,
+            true,
+            VerifyingKeyMissing
         );
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut missing_expected_dedup,
-                0,
-                Some(expected),
-                None,
-                true,
-            ),
-            PreverifyResult::VerifyingKeyMissing
+        assert_preverify!(
+            proof,
+            vk,
+            missing_expected_dedup,
+            0,
+            Some(expected),
+            None,
+            true,
+            VerifyingKeyMissing
         );
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut missing_expected_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::Accepted
-        );
+        assert_preverify!(proof, vk, missing_expected_dedup, expected, Accepted);
         let mut zero_commitment_dedup = DedupCache::new();
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut zero_commitment_dedup,
-                0,
-                Some([0u8; 32]),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::VerifyingKeyMismatch
+        assert_preverify!(
+            proof,
+            vk,
+            zero_commitment_dedup,
+            0,
+            Some([0u8; 32]),
+            Some(expected),
+            true,
+            VerifyingKeyMismatch
         );
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut zero_commitment_dedup,
-                0,
-                Some(expected),
-                Some([0u8; 32]),
-                true,
-            ),
-            PreverifyResult::VerifyingKeyMismatch
+        assert_preverify!(
+            proof,
+            vk,
+            zero_commitment_dedup,
+            0,
+            Some(expected),
+            Some([0u8; 32]),
+            true,
+            VerifyingKeyMismatch
         );
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut zero_commitment_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::Accepted
-        );
+        assert_preverify!(proof, vk, zero_commitment_dedup, expected, Accepted);
         let mut wrong_backend_dedup = DedupCache::new();
         let wrong_backend_vk = VerifyingKeyBox::new("stark/fri".into(), vk.bytes.clone());
         let wrong_backend_expected = hash_vk(&wrong_backend_vk);
         let wrong_backend_proof = preverify_enveloped_proof(wrong_backend_expected);
-        assert_eq!(
-            preverify_with_budget(
-                &wrong_backend_proof,
-                Some(&wrong_backend_vk),
-                &mut wrong_backend_dedup,
-                0,
-                Some(wrong_backend_expected),
-                Some(wrong_backend_expected),
-                true,
-            ),
-            PreverifyResult::VerifyingKeyMismatch
+        assert_preverify!(
+            wrong_backend_proof,
+            wrong_backend_vk,
+            wrong_backend_dedup,
+            wrong_backend_expected,
+            VerifyingKeyMismatch
         );
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut wrong_backend_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::Accepted
-        );
+        assert_preverify!(proof, vk, wrong_backend_dedup, expected, Accepted);
         let mut mismatch_dedup = DedupCache::new();
         let mut wrong = expected;
         wrong[0] ^= 0x80;
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut mismatch_dedup,
-                0,
-                Some(wrong),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::VerifyingKeyMismatch
+        assert_preverify!(
+            proof,
+            vk,
+            mismatch_dedup,
+            0,
+            Some(wrong),
+            Some(expected),
+            true,
+            VerifyingKeyMismatch
         );
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut mismatch_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::Accepted
-        );
+        assert_preverify!(proof, vk, mismatch_dedup, expected, Accepted);
         let mut wrong_vk_dedup = DedupCache::new();
         let wrong_vk = VerifyingKeyBox::new("halo2/ipa".into(), vec![8, 7, 6, 5]);
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&wrong_vk),
-                &mut wrong_vk_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::VerifyingKeyMismatch
+        assert_preverify!(
+            proof,
+            wrong_vk,
+            wrong_vk_dedup,
+            expected,
+            VerifyingKeyMismatch
         );
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut wrong_vk_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::Accepted
-        );
+        assert_preverify!(proof, vk, wrong_vk_dedup, expected, Accepted);
         let mut inactive_dedup = DedupCache::new();
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut inactive_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                false,
-            ),
-            PreverifyResult::VerifyingKeyInactive
+        assert_preverify!(
+            proof,
+            vk,
+            inactive_dedup,
+            0,
+            Some(expected),
+            Some(expected),
+            false,
+            VerifyingKeyInactive
         );
-        assert_eq!(
-            preverify_with_budget(
-                &proof,
-                Some(&vk),
-                &mut inactive_dedup,
-                0,
-                Some(expected),
-                Some(expected),
-                true,
-            ),
-            PreverifyResult::Accepted
-        );
+        assert_preverify!(proof, vk, inactive_dedup, expected, Accepted);
     }
     #[test]
     fn preverify_rejects_noncanonical_envelope_metadata_before_dedup() {
@@ -14532,30 +12887,20 @@ mod preverify_tests {
             ),
         ] {
             let mut dedup = DedupCache::new();
-            assert_eq!(
-                preverify_with_budget(
-                    &tampered,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
+            assert_preverify!(
+                tampered,
+                vk,
+                dedup,
+                expected,
                 expected_result,
                 "case {case}"
             );
-            assert_eq!(
-                preverify_with_budget(
-                    &proof,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::Accepted,
+            assert_preverify!(
+                proof,
+                vk,
+                dedup,
+                expected,
+                Accepted,
                 "case {case} should not poison dedup cache"
             );
         }
@@ -14605,30 +12950,13 @@ mod preverify_tests {
             ("slash-form BFV circuit id", slash),
         ] {
             let mut dedup = DedupCache::new();
-            assert_eq!(
-                preverify_with_budget(
-                    &proof,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::MalformedProof,
-                "case {case}"
-            );
-            assert_eq!(
-                preverify_with_budget(
-                    &accepted,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::Accepted,
+            assert_preverify!(proof, vk, dedup, expected, MalformedProof, "case {case}");
+            assert_preverify!(
+                accepted,
+                vk,
+                dedup,
+                expected,
+                Accepted,
                 "case {case} must not poison dedup"
             );
         }
@@ -14668,30 +12996,20 @@ mod preverify_tests {
                     expected,
                 );
                 let mut dedup = DedupCache::new();
-                assert_eq!(
-                    preverify_with_budget(
-                        &proof,
-                        Some(&vk),
-                        &mut dedup,
-                        0,
-                        Some(expected),
-                        Some(expected),
-                        true,
-                    ),
-                    PreverifyResult::MalformedProof,
+                assert_preverify!(
+                    proof,
+                    vk,
+                    dedup,
+                    expected,
+                    MalformedProof,
                     "generic Soracloud relation alias {circuit_id}"
                 );
-                assert_eq!(
-                    preverify_with_budget(
-                        &accepted,
-                        Some(&vk),
-                        &mut dedup,
-                        0,
-                        Some(expected),
-                        Some(expected),
-                        true,
-                    ),
-                    PreverifyResult::Accepted,
+                assert_preverify!(
+                    accepted,
+                    vk,
+                    dedup,
+                    expected,
+                    Accepted,
                     "rejected alias {circuit_id} must not poison dedup"
                 );
             }
@@ -14727,30 +13045,13 @@ mod preverify_tests {
                 expected,
             );
             let mut dedup = DedupCache::new();
-            assert_eq!(
-                preverify_with_budget(
-                    &proof,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::MalformedProof,
-                "case {case}"
-            );
-            assert_eq!(
-                preverify_with_budget(
-                    &accepted,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::Accepted,
+            assert_preverify!(proof, vk, dedup, expected, MalformedProof, "case {case}");
+            assert_preverify!(
+                accepted,
+                vk,
+                dedup,
+                expected,
+                Accepted,
                 "case {case} must not poison dedup"
             );
         }
@@ -14854,30 +13155,13 @@ mod preverify_tests {
             ),
         ] {
             let mut dedup = DedupCache::new();
-            assert_eq!(
-                preverify_with_budget(
-                    &proof,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::MalformedProof,
-                "case {case}"
-            );
-            assert_eq!(
-                preverify_with_budget(
-                    &accepted,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::Accepted,
+            assert_preverify!(proof, vk, dedup, expected, MalformedProof, "case {case}");
+            assert_preverify!(
+                accepted,
+                vk,
+                dedup,
+                expected,
+                Accepted,
                 "case {case} must not poison dedup"
             );
         }
@@ -14931,30 +13215,20 @@ mod preverify_tests {
                 expected,
             );
             let mut dedup = DedupCache::new();
-            assert_eq!(
-                preverify_with_budget(
-                    &mismatched,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::MalformedProof,
+            assert_preverify!(
+                mismatched,
+                vk,
+                dedup,
+                expected,
+                MalformedProof,
                 "case {case}"
             );
-            assert_eq!(
-                preverify_with_budget(
-                    &accepted,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::Accepted,
+            assert_preverify!(
+                accepted,
+                vk,
+                dedup,
+                expected,
+                Accepted,
                 "case {case} must not poison dedup"
             );
         }
@@ -15032,30 +13306,20 @@ mod preverify_tests {
                 expected,
             );
             let mut dedup = DedupCache::new();
-            assert_eq!(
-                preverify_with_budget(
-                    &mismatched,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::MalformedProof,
+            assert_preverify!(
+                mismatched,
+                vk,
+                dedup,
+                expected,
+                MalformedProof,
                 "case {case}"
             );
-            assert_eq!(
-                preverify_with_budget(
-                    &accepted,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::Accepted,
+            assert_preverify!(
+                accepted,
+                vk,
+                dedup,
+                expected,
+                Accepted,
                 "case {case} must not poison dedup"
             );
         }
@@ -15103,32 +13367,22 @@ mod preverify_tests {
                 expected,
             );
             let mut dedup = DedupCache::new();
-            assert_eq!(
-                preverify_with_budget(
-                    &proof,
-                    Some(&vk),
-                    &mut dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::Accepted,
+            assert_preverify!(
+                proof,
+                vk,
+                dedup,
+                expected,
+                Accepted,
                 "registry backend {backend} should preverify with a matching envelope"
             );
             let mut raw_dedup = DedupCache::new();
             let raw = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
-            assert_eq!(
-                preverify_with_budget(
-                    &raw,
-                    Some(&vk),
-                    &mut raw_dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::MalformedProof,
+            assert_preverify!(
+                raw,
+                vk,
+                raw_dedup,
+                expected,
+                MalformedProof,
                 "registry backend {backend} must require OpenVerifyEnvelope metadata"
             );
             let wrong_envelope_backend = match envelope_backend {
@@ -15139,30 +13393,20 @@ mod preverify_tests {
                 envelope.backend = wrong_envelope_backend;
             });
             let mut wrong_backend_dedup = DedupCache::new();
-            assert_eq!(
-                preverify_with_budget(
-                    &wrong_backend_proof,
-                    Some(&vk),
-                    &mut wrong_backend_dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::MalformedProof,
+            assert_preverify!(
+                wrong_backend_proof,
+                vk,
+                wrong_backend_dedup,
+                expected,
+                MalformedProof,
                 "registry backend {backend} must reject mismatched envelope backend tags"
             );
-            assert_eq!(
-                preverify_with_budget(
-                    &proof,
-                    Some(&vk),
-                    &mut wrong_backend_dedup,
-                    0,
-                    Some(expected),
-                    Some(expected),
-                    true,
-                ),
-                PreverifyResult::Accepted,
+            assert_preverify!(
+                proof,
+                vk,
+                wrong_backend_dedup,
+                expected,
+                Accepted,
                 "mismatched envelope backend for {backend} must not poison dedup"
             );
         }

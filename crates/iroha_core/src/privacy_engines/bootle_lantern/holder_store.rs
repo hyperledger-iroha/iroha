@@ -659,9 +659,8 @@ impl BootleLanternFileHolderStoreV1 {
     }
     /// Prepare and durably retain one holder P1 state before releasing `ILQ1`.
     ///
-    /// Repeating the same authorization/context/policy/attributes returns the
-    /// exact already-durable request without consuming RNG. Every substituted
-    /// replay fails closed.
+    /// Repeating the same authorization/context/policy/attributes returns the exact already-durable
+    /// request without consuming RNG. Every substituted replay fails closed.
     pub fn prepare_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
         &self,
         context: &PrivacyStatementContextV1,
@@ -777,9 +776,8 @@ impl BootleLanternFileHolderStoreV1 {
     /// Cache one exact, correctly bound `ILR1` before attempting finalization.
     ///
     /// Once this returns, process loss cannot require another issuer response:
-    /// [`Self::resume_cached_response_v1`] can complete the transition after
-    /// reopen. Canonical but substituted response bindings fail without
-    /// changing an existing pending record.
+    /// [`Self::resume_cached_response_v1`] can complete the transition after reopen. Canonical but
+    /// substituted response bindings fail without changing an existing pending record.
     pub fn cache_issuer_response_v1(
         &self,
         handle: BootleLanternHolderHandleV1,

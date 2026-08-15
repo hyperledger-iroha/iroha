@@ -40,10 +40,9 @@
 //!   signature or witness; bare account headers are rejected on caller-scoped
 //!   read paths.
 //!
-//! Some endpoints carry the same auth envelope inside a JSON body instead of
-//! HTTP headers. Those callers provide `account_id`, `timestamp_ms`, `nonce`,
-//! and exactly one proof field in the body, while the canonical message hashes
-//! the endpoint-defined unsigned body bytes.
+//! Some endpoints carry the same auth envelope inside a JSON body instead of HTTP headers. Those
+//! callers provide `account_id`, `timestamp_ms`, `nonce`, and exactly one proof field in the body,
+//! while the canonical message hashes the endpoint-defined unsigned body bytes.
 use crate::bounded_replay_cache::{InsertError as ReplayInsertError, ReplayCache};
 use axum::http::HeaderMap;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -102,10 +101,9 @@ pub(crate) const CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1: usize = 64 * 1024;
 const CANONICAL_REQUEST_MAX_METHOD_BYTES_V1: usize = 32;
 /// Maximum percent-encoded path bytes covered by one canonical V1 request.
 ///
-/// Network listeners impose a finite HTTP-head envelope, but `http::Uri` can
-/// also be constructed directly from an arbitrarily large `PathAndQuery`.
-/// This explicit protocol ceiling protects in-process verifier callers before
-/// the canonical message destination is allocated.
+/// Network listeners impose a finite HTTP-head envelope, but `http::Uri` can also be constructed
+/// directly from an arbitrarily large `PathAndQuery`. This explicit protocol ceiling protects
+/// in-process verifier callers before the canonical message destination is allocated.
 const CANONICAL_REQUEST_MAX_PATH_BYTES_V1: usize = 64 * 1024;
 /// Maximum bytes in a canonical account identity or alias carried by V1 auth.
 ///
@@ -115,21 +113,19 @@ const CANONICAL_REQUEST_MAX_PATH_BYTES_V1: usize = 64 * 1024;
 pub(crate) const CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1: usize = 36 * 1024;
 /// Maximum bytes in the catalog-free ASCII alias exception accepted by auth.
 ///
-/// An account alias contains at most three [`iroha_data_model::name::Name`]
-/// segments plus the `@` and optional `.` separators. Apply this structural
-/// ceiling before normalization or catalog lookup; the wider account limit is
-/// reserved for canonical controller hex.
+/// An account alias contains at most three [`iroha_data_model::name::Name`] segments plus the `@`
+/// and optional `.` separators. Apply this structural ceiling before normalization or catalog
+/// lookup; the wider account limit is reserved for canonical controller hex.
 const CANONICAL_REQUEST_MAX_ALIAS_LITERAL_BYTES_V1: usize =
     3 * iroha_data_model::name::MAX_NAME_BYTES + 2;
 /// Maximum number of signatures carried by one canonical V1 witness.
 const CANONICAL_REQUEST_WITNESS_MAX_SIGNATURES_V1: usize = 64;
 /// Maximum decoded size of one canonical V1 witness (768 KiB).
 ///
-/// Canonical base64 expands this to exactly 1 MiB, the transport's maximum
-/// complete HTTP-head envelope. The explicit ceiling also protects direct
-/// in-process verifier callers which bypass the HTTP parser, while the outer
-/// routed-read admission owns the overlapping header, decoded frame, and
-/// verification scratch high-water.
+/// Canonical base64 expands this to exactly 1 MiB, the transport's maximum complete HTTP-head
+/// envelope. The explicit ceiling also protects direct in-process verifier callers which bypass the
+/// HTTP parser, while the outer routed-read admission owns the overlapping header, decoded frame,
+/// and verification scratch high-water.
 pub(crate) const CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1: usize = 3 * 1024 * 1024 / 4;
 /// Largest detached signature payload supported by the canonical V1 verifier.
 pub(crate) const CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1: usize =
@@ -141,8 +137,7 @@ pub use axum::http::{Method, Uri};
 pub struct CanonicalRequestAuthConfig {
     /// Maximum allowed clock skew for signed requests.
     pub max_clock_skew: Duration,
-    /// TTL for nonces retained for replay detection; must exceed twice
-    /// `max_clock_skew`.
+    /// TTL for nonces retained for replay detection; must exceed twice `max_clock_skew`.
     pub nonce_ttl: Duration,
     /// Maximum number of nonce entries held in memory for replay detection.
     pub replay_cache_capacity: NonZeroUsize,

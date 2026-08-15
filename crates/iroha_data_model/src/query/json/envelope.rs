@@ -1,9 +1,8 @@
 //! JSON envelope helpers for the query DSL.
 //!
-//! These structures mirror the payloads accepted by Torii query endpoints. The
-//! helpers convert between Norito JSON values and strongly-typed query objects,
-//! ensuring field ordering stays deterministic and validation errors surface
-//! with precise context.
+//! These structures mirror the payloads accepted by Torii query endpoints. The helpers convert
+//! between Norito JSON values and strongly-typed query objects, ensuring field ordering stays
+//! deterministic and validation errors surface with precise context.
 use crate::{
     name::Name,
     query::{
@@ -1154,10 +1153,9 @@ fn params_optional_string(
 impl QueryEnvelopeJson {
     /// Convert the envelope into a raw [`QueryRequest`].
     ///
-    /// Network identity, authority, creation time, lifetime, nonce, and
-    /// signature belong to the online client boundary. Keeping those fields
-    /// out of this JSON conversion prevents callers from accidentally signing
-    /// replayable requests with fabricated defaults.
+    /// Network identity, authority, creation time, lifetime, nonce, and signature belong to the
+    /// online client boundary. Keeping those fields out of this JSON conversion prevents callers
+    /// from accidentally signing replayable requests with fabricated defaults.
     ///
     /// # Errors
     /// Returns an error when the envelope payload cannot be converted into a query.

@@ -20,9 +20,8 @@ pub const MAX_PRIVATE_INPUT_RECORD_BYTES_V1: usize = 512;
 pub const MAX_PRIVATE_INPUTS_V1: usize = 64;
 /// Maximum encoded private-input bytes retained by one V1 host invocation.
 ///
-/// This transport bound is checked before the host retains any caller-owned
-/// record bytes. It is intentionally derived from consensus-visible V1 limits
-/// rather than allocator behaviour.
+/// This transport bound is checked before the host retains any caller-owned record bytes. It is
+/// intentionally derived from consensus-visible V1 limits rather than allocator behaviour.
 pub const MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1: usize =
     MAX_PRIVATE_INPUTS_V1 * MAX_PRIVATE_INPUT_RECORD_BYTES_V1;
 /// Domain separator for the opaque, still-private numeric projection.

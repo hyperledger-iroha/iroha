@@ -308,8 +308,7 @@ impl<'a> VeRangeType1StatementV1<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error for an invalid commitment or mismatched transcript
-    /// binding.
+    /// Returns an error for an invalid commitment or mismatched transcript binding.
     pub fn new(
         profile: VeRangeBitLengthV1,
         commitment: CompressedPointV1,
@@ -375,9 +374,8 @@ impl<'a> VeRangeType1BatchStatementV1<'a> {
     ///
     /// Every child proof binds the full ordered commitment digest, its exact
     /// position, and the batch count.  Proofs therefore cannot be reordered or
-    /// transplanted even though this conservative wrapper uses independent
-    /// Figure-1 challenges instead of the paper's separate aggregation
-    /// protocol.
+    /// transplanted even though this conservative wrapper uses independent Figure-1 challenges
+    /// instead of the paper's separate aggregation protocol.
     ///
     /// # Errors
     ///
@@ -428,8 +426,7 @@ impl<'a> VeRangeType1BatchStatementV1<'a> {
     }
     /// Return whether this batch is empty.
     ///
-    /// A constructed batch is never empty; this method exists to accompany
-    /// [`Self::len`].
+    /// A constructed batch is never empty; this method exists to accompany [`Self::len`].
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.commitments.is_empty()

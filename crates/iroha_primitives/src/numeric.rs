@@ -2666,12 +2666,10 @@ impl core::str::FromStr for Numeric {
         if trimmed.is_empty() {
             return Err(NumericError::Malformed);
         }
-        let (negative, digits) = if let Some(digits) = trimmed.strip_prefix('-') {
-            (true, digits)
-        } else if let Some(digits) = trimmed.strip_prefix('+') {
-            (false, digits)
-        } else {
-            (false, trimmed)
+        let (negative, digits) = match trimmed.as_bytes().first() {
+            Some(b'-') => (true, &trimmed[1..]),
+            Some(b'+') => (false, &trimmed[1..]),
+            _ => (false, trimmed),
         };
         let mut scale = 0u32;
         let mut mantissa_str = String::new();

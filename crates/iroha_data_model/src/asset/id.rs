@@ -14,9 +14,8 @@ mod model {
     use super::*;
     /// Canonical public asset identifier.
     ///
-    /// Textual form is an unprefixed Base58 address over canonical `UUIDv4` bytes
-    /// plus a version byte and checksum. On-chain asset aliases resolve to this
-    /// identifier only.
+    /// Textual form is an unprefixed Base58 address over canonical `UUIDv4` bytes plus a version
+    /// byte and checksum. On-chain asset aliases resolve to this identifier only.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, CopyGetters, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinitionId {
@@ -208,8 +207,7 @@ impl AssetDefinitionId {
     /// Construct an identifier from canonical `UUIDv4` bytes.
     ///
     /// # Errors
-    /// Returns [`ParseError`] when `aid_bytes` do not satisfy `UUIDv4`
-    /// version/variant constraints.
+    /// Returns [`ParseError`] when `aid_bytes` do not satisfy `UUIDv4` version/variant constraints.
     pub fn from_uuid_bytes(aid_bytes: [u8; 16]) -> Result<Self, ParseError> {
         if !is_uuid_v4_bytes(&aid_bytes) {
             return Err(ParseError::new(

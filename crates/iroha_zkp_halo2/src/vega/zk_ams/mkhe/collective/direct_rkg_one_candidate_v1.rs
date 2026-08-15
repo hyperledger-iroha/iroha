@@ -83,7 +83,9 @@ impl Drop for ZeroizingDirectRkgOneCoefficientsV1 {
         let _ = core::hint::black_box(&mut *coefficients);
     }
 }
-pub(in crate::vega::zk_ams::mkhe) struct DirectRkgOneOwnerDerivedProvenanceV1<'a> {
+/// Move-only prover session; not creator provenance, extractor evidence, receipt,
+/// binding, admission, or verifier authority.
+pub(in crate::vega::zk_ams::mkhe) struct DirectRkgOneProverSessionV1<'a> {
     persistent_guard: PostCpkPersistentDirectOpeningGuardV1<'a>,
     ephemeral_owner: PartyLocalRkgEphemeralOpeningV1,
     _original_wrapper: StateOwnedDirectRkgEphemeralMembershipPrecursorV1,
@@ -96,7 +98,7 @@ pub(in crate::vega::zk_ams::mkhe) struct DirectRkgOneOwnerDerivedProvenanceV1<'a
     // This retains exactly 38 * 131_072 * 8 = 39_845_888 bytes.
     common_a_matrix: Vec<u64>,
 }
-impl<'a> DirectRkgOneOwnerDerivedProvenanceV1<'a> {
+impl<'a> DirectRkgOneProverSessionV1<'a> {
     pub(in crate::vega::zk_ams::mkhe) fn context(
         &self,
     ) -> ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
@@ -308,14 +310,14 @@ impl<'a> DirectRkgOneOwnerDerivedProvenanceV1<'a> {
         retained
     }
 }
-pub(super) fn take_ready_direct_rkg_one_owner_v1<'a, R>(
+pub(super) fn take_ready_direct_rkg_one_prover_session_v1<'a, R>(
     state: &'a mut ZkAmsMkheCollectivePartyStateV1,
     wrapper: StateOwnedDirectRkgEphemeralMembershipPrecursorV1,
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     bindings: &VerifiedPersistentWitnessBindingSetV1,
     context: ZkAmsMkheDirectCeremonyContextV1,
     random: &mut R,
-) -> Result<DirectRkgOneOwnerDerivedProvenanceV1<'a>, ZkAmsMkheErrorV1>
+) -> Result<DirectRkgOneProverSessionV1<'a>, ZkAmsMkheErrorV1>
 where
     R: MaskedRelaxedRandomSourceV1 + ProofRandomSource,
 {
@@ -333,7 +335,6 @@ where
     let binding =
         state.persistent_secret_binding_for(roster, PersistentWitnessConsumerV1::RkgRoundOne)?;
     let binding_identity = binding.identity_digest();
-    let binding_commitments = *binding.commitments();
     if binding_identity != bindings.identity_digests()[party_index] {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
@@ -361,16 +362,14 @@ where
         RkgEphemeralCommitmentBlindingsV1::sample(random)?,
         RkgEphemeralCommitmentBlindingsV1::sample(random)?,
     ];
-    let persistent_guard = PostCpkPersistentDirectOpeningGuardV1::new(
+    let persistent_guard = PostCpkPersistentDirectOpeningGuardV1::from_installed_binding_v1(
         &mut state.persistent_direct_opening,
         &state.public_error,
         (&state.party_local_rkg_ephemeral_creation_mask, digit_bit),
-        binding_identity,
-        binding_commitments,
     )?;
-    let persistent_commitments = binding_commitments;
+    let persistent_commitments = *persistent_guard.checked_commitments_v1()?;
     let ephemeral_commitments = ephemeral_owner_commitments_v1(&ephemeral_owner)?;
-    Ok(DirectRkgOneOwnerDerivedProvenanceV1 {
+    Ok(DirectRkgOneProverSessionV1 {
         persistent_guard,
         ephemeral_owner,
         _original_wrapper: wrapper,

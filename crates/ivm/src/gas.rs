@@ -154,9 +154,8 @@ pub const HOST_COMMIT_OUTPUT_GAS_PER_BYTE: u64 = SYSCALL_GAS_PER_BYTE;
 pub const HOST_PRIVATE_INPUT_GAS: u64 = 2_048;
 /// Full-width typed private numeric Pedersen commitment charge.
 ///
-/// The quote covers two maximum-size opaque TLV validations, two
-/// domain-separated projections, scalar reductions, and one full compressed
-/// BLS12-381 commitment before public output allocation.
+/// The quote covers two maximum-size opaque TLV validations, two domain-separated projections,
+/// scalar reductions, and one full compressed BLS12-381 commitment before public output allocation.
 pub const HOST_PRIVATE_NUMERIC_VALCOM_GAS: u64 = 50_000;
 /// Maximum pointer payload accepted by response-producing codec helpers.
 pub const HOST_CODEC_MAX_INPUT_BYTES: usize = 32 * 1024;
@@ -337,9 +336,8 @@ pub fn zk_verify_gas(payload_bytes: usize) -> u64 {
 }
 /// Deterministic gas for a ZK batch request.
 ///
-/// The request bytes cover archive validation and decoding. Each proof pays a
-/// separate verification base plus the bounded archive/status material created
-/// while dispatching the batch.
+/// The request bytes cover archive validation and decoding. Each proof pays a separate verification
+/// base plus the bounded archive/status material created while dispatching the batch.
 #[must_use]
 pub fn zk_verify_batch_gas(proof_count: usize, payload_bytes: usize) -> u64 {
     ZkGasScheduleV1::default().conservative_batch_gas(proof_count, payload_bytes)
@@ -353,8 +351,7 @@ pub(crate) fn scaled_vector_cost(base_cost: u64, vector_len: usize) -> u64 {
 }
 /// Canonical opcode set covered by the gas schedule.
 ///
-/// Keep this list in opcode order so `schedule_hash` remains deterministic
-/// across platforms.
+/// Keep this list in opcode order so `schedule_hash` remains deterministic across platforms.
 pub const SCHEDULE_OPCODES: &[u8] = &[
     // Arithmetic + logic
     wide::arithmetic::ADD,
@@ -1017,10 +1014,9 @@ fn encode_gas_schedule_descriptor(descriptor: &GasScheduleDescriptor) -> Vec<u8>
 }
 /// Deterministic digest of the canonical gas schedule.
 ///
-/// The descriptor binds the opcode-cost table, every named formula parameter,
-/// every staged-metering phase name/tag, and the exhaustive ABI-v1 syscall
-/// metering registry so validators can assert the active schedule matches
-/// consensus configuration.
+/// The descriptor binds the opcode-cost table, every named formula parameter, every staged-metering
+/// phase name/tag, and the exhaustive ABI-v1 syscall metering registry so validators can assert the
+/// active schedule matches consensus configuration.
 #[must_use]
 pub fn schedule_hash() -> Hash {
     Hash::new(encode_gas_schedule_descriptor(

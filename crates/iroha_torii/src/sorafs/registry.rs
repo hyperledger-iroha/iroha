@@ -1609,10 +1609,9 @@ pub(crate) fn collect_alias_page(
 }
 /// Collect one replication-order page without decoding the full registry.
 ///
-/// Status and digest filters are evaluated on the stored typed record. Only
-/// matching records inside the requested page are decoded and projected, so a
-/// small response cannot allocate work proportional to every canonical order
-/// payload retained by the ledger.
+/// Status and digest filters are evaluated on the stored typed record. Only matching records inside
+/// the requested page are decoded and projected, so a small response cannot allocate work
+/// proportional to every canonical order payload retained by the ledger.
 pub(crate) fn collect_replication_order_page<F>(
     world: &WorldView<'_>,
     offset: usize,

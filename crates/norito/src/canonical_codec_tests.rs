@@ -14,6 +14,27 @@ mod canonical_codec_tests {
         decode_canonical_with_limits::<()>(&unit, canonical_decode_limits(unit.len()))
             .expect("decode canonical unit");
     }
+
+    #[test]
+    fn framed_limits_separate_structural_expansion_from_allocation() {
+        const FRAME_BYTES: usize = 128;
+        const UNCOMPRESSED_PAYLOAD_BYTES: usize = 1024;
+        let limits = framed_decode_limits(FRAME_BYTES, UNCOMPRESSED_PAYLOAD_BYTES);
+        let frame_limits = canonical_decode_limits(FRAME_BYTES);
+
+        assert_eq!(
+            limits.max_sequence_elements(),
+            UNCOMPRESSED_PAYLOAD_BYTES * 8
+        );
+        assert_eq!(limits.max_field_bytes(), UNCOMPRESSED_PAYLOAD_BYTES);
+        assert_eq!(limits.max_total_elements(), UNCOMPRESSED_PAYLOAD_BYTES * 8);
+        assert_eq!(
+            limits.max_total_allocated_bytes(),
+            frame_limits.max_total_allocated_bytes(),
+            "declared expansion must not enlarge the allocation envelope"
+        );
+    }
+
     #[test]
     fn exact_slice_writer_tracks_mismatch_overrun_and_final_length() {
         let expected = b"canonical frame";

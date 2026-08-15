@@ -60,7 +60,7 @@ use norito::{
 };
 #[cfg(unix)]
 use std::ffi::{OsStr, OsString};
-#[cfg(unix)]
+#[cfg(any(unix, test))]
 use std::io::Write as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -9350,7 +9350,7 @@ mod tests {
     use sorafs_manifest::deal::XorQuantity;
     use std::{
         collections::VecDeque,
-        io::{Read as _, Seek, SeekFrom, Write as _},
+        io::{Seek, SeekFrom},
         sync::{Arc, Barrier, Mutex},
         thread,
     };

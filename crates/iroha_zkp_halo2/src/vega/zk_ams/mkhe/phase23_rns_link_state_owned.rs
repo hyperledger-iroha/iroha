@@ -58,24 +58,19 @@ struct CanonicalOpeningPositionV1 {
 }
 /// Move-only streaming verifier for one canonical packed accumulator owner.
 ///
-/// `new` accepts no family, plaintext, or chunk-index labels. The only
-/// accepted sequence is derived from `packed_owner` as
-/// `X/U/E/rE/W/rW`, in ascending within-family chunk order. The exact
-/// ciphertext-reference array fixes the corresponding public ciphertext
-/// owner at every ordinal, while `common_key` fixes one public-key owner for
-/// the complete stream.
+/// `new` accepts no family, plaintext, or chunk-index labels. The only accepted sequence is derived
+/// from `packed_owner` as `X/U/E/rE/W/rW`, in ascending within-family chunk order. The exact
+/// ciphertext-reference array fixes the corresponding public ciphertext owner at every ordinal,
+/// while `common_key` fixes one public-key owner for the complete stream.
 ///
-/// Residual provenance: the caller still assembles the ciphertext-reference
-/// array. This boundary proves pointer uniqueness and exact ordered opening to
-/// canonical-owner binding, but not that one upstream state-owned encryption
-/// producer handed over that array as a set.
+/// Residual provenance: the caller still assembles the ciphertext-reference array. This boundary
+/// proves pointer uniqueness and exact ordered opening to canonical-owner binding, but not that one
+/// upstream state-owned encryption producer handed over that array as a set.
 ///
-/// Each call to `absorb_next_opening_v1` takes one owned secret opening. It
-/// verifies and drops that opening before returning, advances only a concrete
-/// topology/count sink, and retains neither an opening nor a checked
-/// capability. A failed or unwinding call poisons and destroys the live
-/// stream; it cannot be retried. Deliberately neither `Clone`, `Copy`, `Debug`,
-/// nor serializable.
+/// Each call to `absorb_next_opening_v1` takes one owned secret opening. It verifies and drops that
+/// opening before returning, advances only a concrete topology/count sink, and retains neither an
+/// opening nor a checked capability. A failed or unwinding call poisons and destroys the live
+/// stream; it cannot be retried. Deliberately neither `Clone`, `Copy`, `Debug`, nor serializable.
 #[must_use = "dropping this stream produces no RNS-Link equation"]
 pub(in super::super) struct StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
     live: Option<Box<StateOwnedRnsLinkAccumulatorOpeningStreamV1<'a>>>,

@@ -1,9 +1,8 @@
 //! Helpers for resolving SoraFS manifests by their blinded CID representations.
 //!
-//! The gateway ingests daily salt announcements published by the SoraNet Salt
-//! Council. Requests can then reference manifests using a BLAKE3 digest derived
-//! from the salt and canonical CID instead of exposing the raw identifier on
-//! the wire.
+//! The gateway ingests daily salt announcements published by the SoraNet Salt Council. Requests can
+//! then reference manifests using a BLAKE3 digest derived from the salt and canonical CID instead
+//! of exposing the raw identifier on the wire.
 use dashmap::DashMap;
 use hex::FromHex;
 use iroha_crypto::soranet::blinding::canonical_cache_key;
@@ -194,8 +193,7 @@ impl BlindedCidResolver {
             filters: DashMap::new(),
         }
     }
-    /// Resolve a blinded CID into a manifest identifier using the gateway's
-    /// stored manifests.
+    /// Resolve a blinded CID into a manifest identifier using the gateway's stored manifests.
     ///
     /// The resolver caches successful lookups for the lifetime of the process.
     ///

@@ -1,5 +1,4 @@
-//! Exact one-subtraction reduction from a 256-bit word into the P-256 scalar
-//! field.
+//! Exact one-subtraction reduction from a 256-bit word into the P-256 scalar field.
 //!
 //! SHA-256 digests and affine P-256 x-coordinates are 256-bit integers, while
 //! ECDSA arithmetic is modulo the slightly smaller P-256 group order. Since
@@ -44,8 +43,7 @@ pub(crate) const P256_REDUCTION_STARK_AUX_WIDTH_V1: usize = 1;
 pub(crate) const P256_REDUCTION_STARK_FIXED_WIDTH_V1: usize = 36;
 /// Exact residue count for one reduction opening.
 pub(crate) const P256_REDUCTION_STARK_CONSTRAINT_COUNT_V1: usize = 122;
-/// Maximum total degree in committed and verifier-preprocessed reduction
-/// columns.
+/// Maximum total degree in committed and verifier-preprocessed reduction columns.
 pub(crate) const P256_REDUCTION_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
 /// Challenge-dependent aggregate width for one wallet low-S trace.
 ///
@@ -56,8 +54,7 @@ pub(crate) const P256_LOW_S_STARK_AUX_WIDTH_V1: usize = 1;
 pub(crate) const P256_LOW_S_STARK_FIXED_WIDTH_V1: usize = 36;
 /// Exact residue count for one wallet low-S opening.
 pub(crate) const P256_LOW_S_STARK_CONSTRAINT_COUNT_V1: usize = 77;
-/// Maximum total degree in committed and verifier-preprocessed wallet low-S
-/// columns.
+/// Maximum total degree in committed and verifier-preprocessed wallet low-S columns.
 pub(crate) const P256_LOW_S_STARK_CONSTRAINT_DEGREE_V1: u8 = 3;
 const LIMBS: usize = 16;
 const LIMB_BITS: usize = 16;
@@ -441,11 +438,10 @@ pub(crate) fn evaluate_p256_reduction_row_constraints_v1(
 }
 /// Compile verifier-owned numeric rows for the aggregate reduction STARK.
 ///
-/// The schedule is derived solely from the protocol constant `LIMBS` and the
-/// verifier-selected native domain. It is compiled into polynomial one-hot
-/// limb selectors, all scalar-modulus limbs, boundary selectors, and the sole
-/// canonical padding suffix. No witness row or value from a proof can select
-/// this topology.
+/// The schedule is derived solely from the protocol constant `LIMBS` and the verifier-selected
+/// native domain. It is compiled into polynomial one-hot limb selectors, all scalar-modulus limbs,
+/// boundary selectors, and the sole canonical padding suffix. No witness row or value from a proof
+/// can select this topology.
 #[cfg(test)]
 pub(crate) fn compile_p256_reduction_stark_fixed_rows_v1(
     trace_size: usize,
@@ -468,12 +464,10 @@ pub(crate) fn compile_p256_low_s_stark_fixed_rows_v1(
         trace_size,
     )
 }
-/// Constant-memory verifier preprocessing for one reduction or low-S
-/// comparison adapter.
+/// Constant-memory verifier preprocessing for one reduction or low-S comparison adapter.
 ///
-/// The selected limb constants are constructor-owned, never proof metadata.
-/// All numeric rows and the canonical padding suffix are regenerated on
-/// demand.
+/// The selected limb constants are constructor-owned, never proof metadata. All numeric rows and
+/// the canonical padding suffix are regenerated on demand.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct P256ComparisonStarkFixedProviderV1 {
     limb_constants: [u16; LIMBS],

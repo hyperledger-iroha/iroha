@@ -4,8 +4,7 @@
 //! arithmetic profile used by its known-answer tests.  A profile is admitted
 //! only after every modulus/root, byte bound, work bound, and decryption-noise
 //! inequality has been checked.  In particular, none of these routines fall
-//! back to plaintext execution when an evaluated key or decryption share is
-//! absent.
+//! back to plaintext execution when an evaluated key or decryption share is absent.
 use super::super::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1, VegaT256ScalarV1 as Scalar,
     derive_t256_generators_v1,
@@ -867,10 +866,9 @@ impl BgvProfile {
     /// Digest only the algebraic and distribution parameters consumed by the
     /// concrete RLWE security analysis.
     ///
-    /// Operational byte, memory, and work ceilings are deliberately excluded:
-    /// changing a deployment limit must not invalidate an estimator result for
-    /// unchanged mathematics. The complete wire/profile identity remains
-    /// [`Self::digest`].
+    /// Operational byte, memory, and work ceilings are deliberately excluded: changing a deployment
+    /// limit must not invalidate an estimator result for unchanged mathematics. The complete
+    /// wire/profile identity remains [`Self::digest`].
     fn security_parameters_digest(&self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.validate()?;
         let mut frame = Vec::with_capacity(192 + self.moduli.len() * 16);

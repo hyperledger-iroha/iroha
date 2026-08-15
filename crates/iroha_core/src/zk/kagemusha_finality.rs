@@ -40,10 +40,9 @@ use thiserror::Error;
 /// Consensus execution-commitment material for a block containing one
 /// finalized Kagemusha top-up anchor and no unrelated writes.
 ///
-/// This narrow producer-side projection deliberately reuses the live
-/// Sumeragi commitment builder. Release qualification and portable SDK
-/// acceptance generators can therefore construct a real QC-authenticated
-/// anchor without duplicating the consensus leaf tag, sparse-tree rules, or
+/// This narrow producer-side projection deliberately reuses the live Sumeragi commitment builder.
+/// Release qualification and portable SDK acceptance generators can therefore construct a real
+/// QC-authenticated anchor without duplicating the consensus leaf tag, sparse-tree rules, or
 /// balanced top-up tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KagemushaSingleTopUpExecutionCommitmentV2 {
@@ -189,11 +188,10 @@ impl VerifiedKagemushaTopUpFinalityV2 {
 }
 /// Stateful verifier with a bounded exact-roster PoP-validation cache.
 ///
-/// Cache entries are inserted only after the canonical roster bytes match an
-/// authenticated manifest reference. They retain the valid/invalid result of
-/// one full PoP pass, so a broken immutable release cannot repeatedly consume
-/// pairings. The cache stores only SHA-256 identities and booleans, never
-/// peer-controlled archives.
+/// Cache entries are inserted only after the canonical roster bytes match an authenticated manifest
+/// reference. They retain the valid/invalid result of one full PoP pass, so a broken immutable
+/// release cannot repeatedly consume pairings. The cache stores only SHA-256 identities and
+/// booleans, never peer-controlled archives.
 #[derive(Debug, Default)]
 pub struct KagemushaTopUpFinalityVerifier {
     roster_cache: Mutex<VecDeque<([u8; 32], bool)>>,

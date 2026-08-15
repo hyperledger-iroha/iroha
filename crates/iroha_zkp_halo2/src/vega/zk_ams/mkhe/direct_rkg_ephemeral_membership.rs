@@ -1,12 +1,11 @@
 //! Exact public membership evidence for direct RKG ephemerals.
 //!
-//! One party-local `u_i` is committed in eight canonical T256 chunks under a
-//! role which is disjoint from persistent CPK secrets and CPK public errors.
-//! The public 12,291-byte evidence is bound to the complete direct ceremony
-//! context and the same party's already verified secret-lineage identity.
-//! This module creates no verified binding or retained secret owner. The
-//! party-local collective state owns the opening, and only a future complete
-//! direct-relation verifier may mint binding authority from this evidence.
+//! One party-local `u_i` is committed in eight canonical T256 chunks under a role which is disjoint
+//! from persistent CPK secrets and CPK public errors. The public 12,291-byte evidence is bound to
+//! the complete direct ceremony context and the same party's already verified secret-lineage
+//! identity. This module creates no verified binding or retained secret owner. The party-local
+//! collective state owns the opening, and only a future complete direct-relation verifier may mint
+//! binding authority from this evidence.
 
 use super::{
     MKHE_VERSION_V1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,

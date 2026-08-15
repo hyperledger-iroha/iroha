@@ -1160,6 +1160,32 @@ fn archived_from_slice_propagates_realign_allocation_limit() {
         } if attempted == core::mem::size_of::<u128>() as u64
     ));
 }
+
+#[test]
+fn archived_from_slice_does_not_overalign_borrowed_payload() {
+    let type_align = archived_payload_align::<u64>();
+    let excessive_align = core::mem::align_of::<u128>();
+    if excessive_align <= type_align {
+        return;
+    }
+    let mut storage = vec![0_u8; core::mem::size_of::<u64>() + excessive_align];
+    let base = storage.as_mut_ptr() as usize;
+    let offset = (0..excessive_align)
+        .find(|offset| {
+            (base + offset).is_multiple_of(type_align)
+                && !(base + offset).is_multiple_of(excessive_align)
+        })
+        .expect("find payload aligned for u64 but not u128");
+    let end = offset + core::mem::size_of::<u64>();
+    let payload = &storage[offset..end];
+    let archived = archived_from_slice::<u64>(payload).expect("borrow type-aligned payload");
+    assert_eq!(
+        archived.bytes().as_ptr(),
+        payload.as_ptr(),
+        "type-aligned payload should not be copied solely for u128 alignment"
+    );
+}
+
 #[test]
 fn archived_from_slice_realigns_payload() {
     #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]

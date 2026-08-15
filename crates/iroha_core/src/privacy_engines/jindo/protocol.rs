@@ -402,9 +402,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if the statement, binding, witnesses, commitments, or
-/// openings are invalid, or if proof generation or its mandatory self-check
-/// fails.
+/// Returns an error if the statement, binding, witnesses, commitments, or openings are invalid, or
+/// if proof generation or its mandatory self-check fails.
 pub fn prove_batched_evaluation_v1(
     statement: &IrohaJindoPolynomialCommitmentStatementV1,
     witness_polynomials: &[Vec<PrivacyJindoFieldElementV1>],
@@ -1248,10 +1247,9 @@ fn verify_evaluation_relation(
 }
 /// Apply the paper/oracle `Pow2Cutter.CutTo` map coefficient-wise.
 ///
-/// For a centered integer `x`, the upstream algebra subtracts the canonical
-/// residue modulo `2^exponent` and divides the result by `2^exponent`. This is
-/// exactly Euclidean floor division, including for negative coefficients; it
-/// is deliberately not nearest-integer rounding.
+/// For a centered integer `x`, the upstream algebra subtracts the canonical residue modulo
+/// `2^exponent` and divides the result by `2^exponent`. This is exactly Euclidean floor division,
+/// including for negative coefficients; it is deliberately not nearest-integer rounding.
 fn cut_power_of_two_and_change_basis(
     p: &JindoRnsPolynomialV1,
     source: [JindoPrimeModulusV1; 2],

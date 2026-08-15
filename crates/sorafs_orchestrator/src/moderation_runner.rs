@@ -407,9 +407,8 @@ impl LoadedModerationSigningRunnerV1 {
     pub fn signer_public_key(&self) -> &PublicKey {
         &self.signer_public_key
     }
-    /// Infer and sign one manifest-, policy-, payload-, and timestamp-bound
-    /// result. The caller must supply trusted wall-clock time, not a client-
-    /// controlled timestamp.
+    /// Infer and sign one manifest-, policy-, payload-, and timestamp-bound result. The caller must
+    /// supply trusted wall-clock time, not a client- controlled timestamp.
     pub fn screen_signed(
         &self,
         payload: &[u8],

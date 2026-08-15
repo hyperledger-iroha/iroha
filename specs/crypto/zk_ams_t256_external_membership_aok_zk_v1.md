@@ -23,14 +23,24 @@ identify source inputs; they are not evidence that any theorem has been proved.
 | Artifact | SHA-256 |
 | --- | --- |
 | `Cargo.lock` | `0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222` |
-| `crates/iroha_zkp_halo2/src/generalized_bulletproof.rs` | `0d20ee5c5cca0b0f75d9ec02b54fe4e875b6a8826f7eee60a03a50b115265387` |
-| `crates/iroha_zkp_halo2/src/vega/bulletproof_t256.rs` | `23399573b38fecf641004dff7219d42eb72b10bb35063fefb1b7fb48c440007f` |
-| `crates/iroha_zkp_halo2/src/vega/curve.rs` | `c61fba4c0bb88c12b29380fe9589721e894cc4774e48d97ce8cb975114041c61` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/exact_eight_chunk_membership.rs` | `45035dd5f0e4ce8b7cf3e928100a82f515ebfc68e12a48036f9ae65ba462be23` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/direct_rkg_ephemeral_membership.rs` | `97a402017d8f34b650e3ebe7fd7021c791a21c26e4887aee082658cdebe19853` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1.rs` | `d570871a0747378bf3f50c81b5214de3d5914edac8106b18cfc769fff3be6a7e` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/predecode_v1.rs` | `a8efe9eb555491430975d7660609ee0e1f3ae93ee92db0baa5ef829e8592688c` |
-| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/predecode_v1/rkg_one_semantic_verifier_v1.rs` | `7bfd0586fd2bd76b89610357b9c5b04cf94cac3b0dca02b3660ad982a3a99841` |
+| `crates/iroha_zkp_halo2/src/generalized_bulletproof.rs` | `1a50651277cb0125256ad8f7fd2c81c5fb02cd853772dc0d7771b4410713eacb` |
+| `crates/iroha_zkp_halo2/src/generalized_bulletproof/exact_small_coefficient_source_v1.rs` | `635689b54f71d0936af07f392ebd220ff58da26ea444ee805da038f64fee59db` |
+| `crates/iroha_zkp_halo2/src/vega/bulletproof_t256.rs` | `9336fb09601a5135fbabba21d7e5c71e420650f406dd0bc60a9c3d0174450f88` |
+| `crates/iroha_zkp_halo2/src/vega/curve.rs` | `c60e0be42aadb6715e203129a0c5d12e8d212cf71235812cbdbdcfdbc07cfce2` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/exact_eight_chunk_membership.rs` | `11de1995183838dc560dabe3ca91550fc3639b5f1a0617338e74ff7663f9d2db` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective.rs` | `77eff18381f7860cba5571e4708b63ddac8527718794d376328f96c626363042` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/persistent_direct_opening_v1.rs` | `12e6c8f388798149eca120ed4df9174ad526f1804ceafcd72d015b323886ba61` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/party_local_rkg_ephemeral_v1.rs` | `4fa6c140ce64499ddff01f3cb28501703b3c3132eade1784d9516df7eb7ec619` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/direct_rkg_one_candidate_v1.rs` | `58c49c41a3e819348cb535d1f53ca06ed96233e77d34bffb1ef9b67217df6f66` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/direct_rkg_ephemeral_membership.rs` | `d001681b891574a124783951133a069954f96c07a66346ca93df2bb69cf4c5be` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1.rs` | `e719cb268cdf0be394272db4c13fbd5be82e90814e6d494c5abedca386b4ce74` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/rkg_one_creator_membership_v1.rs` | `990f1eadb3f9199a0c33f627bb942cfd1fdf267de269b0806860b6c8271d81c0` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/rkg_one_creator_prover_v1.rs` | `6e3c437cc92b5b65dd2e5fbc5a71b81b25ceb2e7eb373395739c6b2f961bd293` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_rkg_one_creator_adapter_v1.rs` | `5d0e4f671ad0ba31bfc781a8892565f03c30f36f57ff27274f863e26e7e46ea7` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/predecode_v1.rs` | `43eb5fa77d9985c92a5f7fc8d7b7e2c73834ee5600b20b786f811a8dd5b4c7b1` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding/direct_relation_wire_v1/predecode_v1/rkg_one_semantic_verifier_v1.rs` | `25be7c86805756a1855421a2350c4c509afcd9d8633e70b5f4dde115ec9b99b9` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/direct_collective_eval_ceremony.rs` | `b569555f674cb1ed1787efc7690993c77b4067b4e2666087b019f7a9aa99ebef` |
+| `crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active_exact_binding.rs` | `e038ce8090ffcc2674eb726be6521f38e56d2df513916af8c3eeb4070d80e086` |
 
 `Cargo.lock` pins `halo2curves` 0.9.0, `keccak` 0.1.6,
 `sha3` 0.10.9, and `tiny-keccak` 2.0.2. It does not pin an upstream
@@ -225,14 +235,159 @@ which one globally algebraic adversary creates every challenged commitment
 and later produces its membership and direct-relation proofs. The game must
 retain algebraic representations across the complete commitment lifecycle,
 including persistent commitments created in an earlier protocol phase. The
-extractor must consume those global representations and the proof transcript
-without rewinding, and must return all required openings or a full-basis
-relation.
+provenance extractor must consume those global representations without
+rewinding and expose CRS-closed representations for every challenged
+commitment. Only a separate membership-extraction theorem may turn those
+representations and the proof transcript into required openings or a
+full-basis relation.
 
 Calling only the later proof algorithm “algebraic” is not enough. The theorem
 must define representation validity for the SHAKE/hash-to-curve CRS, every
 group input and output, state handoff, corruption timing, and any honest-party
 commitment that enters the game.
+
+#### Six commitment-creation events
+
+The candidate game `G_JCP-RKG1-Prov` is restricted to the pinned local,
+single-session RKG1 creator corridor. Each row below denotes eight distinct
+per-chunk creation records. A slot/chunk key is unique even if two resulting
+points happen to be equal.
+
+| Slot | Opening | Bound | First creation event | Required later link |
+| ---: | --- | --- | --- | --- |
+| 0 | persistent `s` | one | After the CPK share proof, when the persistent blindings are sampled and `PersistentDirectOpeningOwnerV1::new_unverified` computes and retains the eight canonical points. | The installed CPK binding, retained wire, direct membership frame, and logged points must agree exactly. |
+| 1 | ephemeral `u` | one | During party-local ephemeral preparation, before its membership proof, when `u`, its eight blindings, points, and retained wire are created. | The retained owner, preparation evidence, direct membership frame, and logged points must agree exactly. |
+| 2 | `e_0` | two | When the direct bound-two membership evidence first materializes each chunk commitment. | The membership frame and outer response reconstruction use that exact point. |
+| 3 | `e_1` | two | When the direct bound-two membership evidence first materializes each chunk commitment. | The membership frame and outer response reconstruction use that exact point. |
+| 4 | forced-zero vector | two | When its direct bound-two membership evidence first materializes each chunk commitment with its own blinding. | The membership frame, forced-zero equation, and outer reconstruction use that exact point. |
+| 5 | forced-zero vector | two | When its distinct direct bound-two membership evidence first materializes each chunk commitment with its own blinding. | The membership frame, forced-zero equation, and outer reconstruction use that exact point. |
+
+For slots two through five, chunk creation is sequential: a chunk point need
+only be logged before the challenges of its own membership transcript, not
+before challenges for an earlier chunk. Slots zero and one are earlier points
+recomputed from the same retained openings. Their later contexts and proof
+frames do not constitute new creation events.
+
+#### Typed extractor log and CRS closure
+
+The log below is reduction-only ghost state. It is not a Rust field, runtime
+audit facility, serialized receipt, verifier input, or wire extension.
+
+```text
+B = (g, h, G_0, ..., G_65535, H_0, ..., H_65535)
+
+PersistentCpkKey = (
+    profile, security_certificate, roster, key_material, epoch,
+    cpk_transcript, party_index, party, public_share
+)
+
+EphemeralKey = (
+    PersistentCpkKey, persistent_binding_identity, direct_context,
+    evaluated_key_ordinal, digit, record_index, secret_lineage_identity
+)
+
+DirectMembershipKey = (
+    EphemeralKey, relation, statement_core, slot
+)
+
+CreationRecord = (
+    typed_lifecycle_key, slot, chunk, bound, exact_canonical_point,
+    crs_representation, creation_ordinal, predecessor_state, successor_state
+)
+```
+
+A record for `P` is valid only if its representation `rho` satisfies
+
+```text
+P = <rho, B>.
+```
+
+If an algebraic representation refers to earlier point handles, the extractor
+must recursively substitute their logged representations until only elements
+of `B` remain. An unknown or opaque root handle, a cycle, a missing predecessor,
+or a representation that does not flatten to `B` invalidates provenance. An
+honestly computed membership commitment has the sparse representation given by
+its coefficients on the first 16,384 `G` points and its coefficient on `h`, but
+that opening remains ghost state and is never exported by the implementation.
+The log need not choose a unique representation, and it must not assume CRS or
+commitment points are pairwise distinct.
+
+The persistent key deliberately contains no future direct-context or digit
+axis: slot zero is created before those axes exist. The later `EphemeralKey`
+links it to one direct session through the installed binding identity and exact
+point equality. Digests may locate typed records, but they cannot substitute
+for exact point equality without an explicit collision bad event.
+
+#### Game `G_JCP-RKG1-Prov`
+
+1. The challenger fixes the exact CRS, hash-to-curve suite, random oracles,
+   governed roster, CPK axes, and direct-ceremony axes from the pinned snapshot.
+2. One globally algebraic creator/prover controls the target party continuously
+   from persistent-commitment creation through the final direct proof. Every
+   adversarial group output is accompanied by an algebraic representation; an
+   honestly computed group output is recorded with its known sparse
+   representation.
+3. The challenger records the slot-zero points at persistent CPK-owner creation,
+   the slot-one points at ephemeral preparation, and slot-two through slot-five
+   points as their membership chunks are created. Each record precedes the
+   corresponding membership transcript's first challenge.
+4. The pinned move-only state transitions assemble one
+   `DirectRkgOneProverSessionV1`. Slots zero and one must equal their earlier
+   records point for point; later direct frames, outer responses, and semantic
+   replay must retain the fixed six-slot/eight-chunk ordering.
+5. The game accepts only if the exact pinned semantic verifier accepts the
+   completed proof. Define `BadProv` as acceptance with any decoded membership
+   point lacking one unique, valid, pre-challenge, CRS-closed creation record.
+6. The candidate provenance theorem must bound `Pr[BadProv]` under the stated
+   global-algebraicity, lifecycle, corruption, hash, and source-refinement
+   assumptions. This precursor supplies the game, not that bound or its proof.
+
+Given a successful provenance game, a later extractor may read the 48
+CRS-closed representations. Only a separately proved membership extractor can
+turn acceptance into bounded openings and satisfying gate wires. Comparing
+those openings with the creator representations may then yield the full-basis
+multi-representation relation required by the outer reduction.
+
+#### Corruption, abort, and source-refinement rules
+
+The minimal game uses static corruption. Adaptive corruption is admissible only
+if the extractor retains every pre-corruption honest creation record, or the
+challenger itself records the honest sparse representation. Corruption must not
+turn an earlier opaque point into a retrospectively algebraic output.
+
+Only one uninterrupted local session is in scope. The persistent owner may
+cross the CPK-to-RKG phase boundary, but its ghost record must cross that same
+boundary. The ephemeral owner is consumed once. An error, panic, failed local
+check, or aborted proof marks every partial successor/log segment unusable and
+emits no accepted candidate; it cannot be restored, spliced into a later
+session, or used to satisfy `BadProv`'s record predicate.
+
+The pinned source-refinement obligation is limited to these data-flow facts:
+
+- persistent construction retains exact canonical points, and binding
+  admission and the post-CPK guard recompute and compare those points;
+- ephemeral preparation retains an owner and canonical wire, and compares its
+  first membership evidence to them before installing the one-use state;
+- the prover session consumes that owner, rechecks the persistent binding and
+  both retained wires, and uses the same openings and blindings for membership
+  and outer responses;
+- the creator emits six ordered membership frames, while predecode compares
+  slots zero and one to the capability's exact point arrays; and
+- semantic verification consumes all 48 membership proofs and uses their exact
+  points in the outer commitment reconstruction.
+
+These are implementation/refinement obligations, not cryptographic evidence.
+In particular, `DirectRkgOneProverSessionV1`, the verified binding, retained
+wire, commitment-set digest, semantic handoff, and move-only ownership are not
+creator provenance, extractor metadata, receipts, admissions, or security
+certificates.
+
+The restricted claim is only that a successful execution of this pinned local
+single-session corridor in `G_JCP-RKG1-Prov` gives the extractor one exact,
+pre-challenge, CRS-closed record for each of the 48 membership commitments. It
+does not establish bounded-opening or gate-wire extraction, membership AoK,
+membership ZK, CRS/MRep security, composite-ROM forking, full-ceremony
+composition, security bits, verifier authority, or release admission.
 
 ### Opaque external commitment and later independent prover game
 
@@ -244,6 +399,52 @@ blocked unless a separate proof extracts relative to an opaque `C`, the
 commitment protocol exports an independently justified extractable state, or
 the protocol is replaced. A theorem for the joint creator/prover game must not
 be cited for this independent-prover game.
+
+This is a structural blocker for the public verifier, which accepts proof bytes
+that need not have traversed the pinned local creator corridor. Closing that
+broader claim requires one of:
+
+1. a separate proof that extracts relative to an opaque external `C`;
+2. a persistent, independently trusted algebraic attestation with its new trust
+   and corruption assumptions stated explicitly; or
+3. a protocol or membership-backend redesign with an extractable commitment or
+   independently established commitment-creation proof.
+
+Slot zero is the hardest temporal boundary because it predates RKG1, and slot
+one also predates the direct proof. The existing CPK membership/binding
+capability cannot bootstrap their provenance by citing the same still-unproved
+membership AoK; that would be circular. A runtime log containing only points or
+hashes is not extractor metadata, while a runtime log containing the actual
+openings leaks secrets and changes the threat model.
+
+### Excluded executions and required negative cases
+
+A later theorem must reject, exclude from its statement, or account for each of
+the following without silently mapping it into the joint game:
+
+- an independent prover that receives an opaque commitment or raw proof bytes;
+- imported or restarted state containing only points, encodings, or digests;
+- creator/prover separation without one persistent extractor-visible algebraic
+  log;
+- adaptive corruption for which earlier representations are unavailable;
+- an algebraic expression rooted in an opaque handle or not flattenable to the
+  full pinned CRS;
+- a digest-only record, or use of a commitment-set/lineage digest as if it were
+  an algebraic representation;
+- cross-profile, roster, key, epoch, transcript, party, digit, record, slot, or
+  chunk splicing, reordering, duplication, or replay;
+- reuse of a partial log after error, panic, failed proof generation, or owner
+  burn;
+- test-only injection or fixture corridors;
+- treating a verified binding, semantic completion, move-only session, receipt,
+  admission, or release gate as provenance;
+- circular use of the current membership proof's desired AoK to certify the
+  commitment that is its external input;
+- coalescing slots four and five because both coefficient vectors are zero, or
+  assuming independently keyed commitments must have distinct point values;
+- assuming honest sampling in the adversarial game; and
+- either hashes of secret openings, which do not expose a CRS representation,
+  or actual runtime openings, which violate the intended secrecy boundary.
 
 ### Plain-ROM black-box route
 

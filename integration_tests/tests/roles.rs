@@ -78,12 +78,11 @@ fn register_empty_role() -> Result<()> {
     )?;
     Ok(())
 }
-/// Test meant to mirror the test of the same name in the Iroha Kotlin
-/// SDK. This doesn't actually test the functionality of the role
-/// granted, merely that the role can be constructed and
-/// registered. Once @appetrosyan (me) is onboarded into the Kotlin
-/// SDK, I'll update both tests to actually verify functionality. We now ensure
-/// metadata edits are rejected prior to the grant so the permission check is exercised.
+/// Test meant to mirror the test of the same name in the Iroha Kotlin SDK. This doesn't actually
+/// test the functionality of the role granted, merely that the role can be constructed and
+/// registered. Once @appetrosyan (me) is onboarded into the Kotlin SDK, I'll update both tests to
+/// actually verify functionality. We now ensure metadata edits are rejected prior to the grant so
+/// the permission check is exercised.
 ///
 /// @s8sato added: This test represents #2081 case.
 #[test]

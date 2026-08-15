@@ -1,10 +1,9 @@
 //! Bounded authenticated `SoraFS` archive fetching for exact Musubi lock nodes.
 //!
-//! The registry supplies finalized archive commitments and renewable provider
-//! locations. A runtime transport supplies only bounded storage plans and
-//! authenticated CAR readers; it never returns credentials to this module.
-//! Every successful stream still crosses [`MusubiCache::install`], so provider
-//! authentication cannot replace commitment, CAR, `PoR`, bundle, or source-tree
+//! The registry supplies finalized archive commitments and renewable provider locations. A runtime
+//! transport supplies only bounded storage plans and authenticated CAR readers; it never returns
+//! credentials to this module. Every successful stream still crosses [`MusubiCache::install`], so
+//! provider authentication cannot replace commitment, CAR, `PoR`, bundle, or source-tree
 //! verification.
 use crate::{
     cache::{CacheError, InstallOutcome, MusubiCache},
@@ -55,10 +54,9 @@ pub enum ArchiveFetchIntegritySurfaceV1 {
 }
 /// Deployment-owned observer for authoritative consumer-fetch integrity attempts.
 ///
-/// The one-shot CLI intentionally installs no observer. A long-lived host may map
-/// these closed values to its telemetry registry without exposing package,
-/// provider, archive, URL, token, or raw-error labels. Implementations must not
-/// block, panic, or affect fetch selection.
+/// The one-shot CLI intentionally installs no observer. A long-lived host may map these closed
+/// values to its telemetry registry without exposing package, provider, archive, URL, token, or
+/// raw-error labels. Implementations must not block, panic, or affect fetch selection.
 pub trait ArchiveFetchIntegrityObserverV1: Send + Sync {
     /// Record one failed provider attempt admitted into deterministic failover.
     fn record_integrity_failure(&self, surface: ArchiveFetchIntegritySurfaceV1);
@@ -422,11 +420,10 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
     }
     /// Fetch one exact archive with deterministic location/provider failover.
     ///
-    /// Healthy locations must still have the V1 quorum. Degraded locations are
-    /// accepted only for exact locked fetches, preserving already-locked builds
-    /// while at least one attested provider remains. Pending and retired
-    /// locations are never used. Within each health rank, distinct providers
-    /// are tried before an alternate pin assigned to an already-tried provider.
+    /// Healthy locations must still have the V1 quorum. Degraded locations are accepted only for
+    /// exact locked fetches, preserving already-locked builds while at least one attested provider
+    /// remains. Pending and retired locations are never used. Within each health rank, distinct
+    /// providers are tried before an alternate pin assigned to an already-tried provider.
     ///
     /// # Errors
     ///
@@ -602,9 +599,8 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
     ///
     /// # Errors
     ///
-    /// Returns a stable redacted error when finalized registry evidence is
-    /// unavailable or invalid, or no provider supplies an authenticated plan
-    /// matching the exact archive commitment.
+    /// Returns a stable redacted error when finalized registry evidence is unavailable or invalid,
+    /// or no provider supplies an authenticated plan matching the exact archive commitment.
     pub fn prepare_exact(
         &self,
         archive_id: ArchiveId,

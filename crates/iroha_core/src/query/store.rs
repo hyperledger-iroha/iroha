@@ -346,8 +346,7 @@ impl LiveQueryStore {
             shutdown_signal,
         }
     }
-    /// Construct [`LiveQueryStore`] for tests.
-    /// Default configuration will be used.
+    /// Construct [`LiveQueryStore`] for tests. Default configuration will be used.
     ///
     /// Not marked as `#[cfg(test)]` because it is used in benches as well.
     pub fn start_test() -> LiveQueryStoreHandle {
@@ -932,10 +931,9 @@ impl LiveQueryStoreHandle {
     }
     /// Return the weighted bytes retained by an ordinary stored cursor.
     ///
-    /// The lookup validates the opaque query ID, authority, expected cursor,
-    /// completed revalidation binding, and presence of a server-owned lease.
-    /// No map guard escapes this synchronous method, so callers may acquire
-    /// continuation headroom asynchronously after it returns.
+    /// The lookup validates the opaque query ID, authority, expected cursor, completed revalidation
+    /// binding, and presence of a server-owned lease. No map guard escapes this synchronous method,
+    /// so callers may acquire continuation headroom asynchronously after it returns.
     ///
     /// # Errors
     /// Returns [`QueryExecutionFail::Expired`] for every absent, foreign,
@@ -949,10 +947,9 @@ impl LiveQueryStoreHandle {
     }
     /// Return the retained-memory and archived-policy binding for a cursor.
     ///
-    /// This validates the same opaque ID, authority, exact cursor position,
-    /// completed Start archive, and ordinary-memory ownership as
-    /// [`Self::ordinary_cursor_retained_bytes`]. The returned value is copyable,
-    /// so no map guard survives into execution.
+    /// This validates the same opaque ID, authority, exact cursor position, completed Start
+    /// archive, and ordinary-memory ownership as [`Self::ordinary_cursor_retained_bytes`]. The
+    /// returned value is copyable, so no map guard survives into execution.
     pub(crate) fn ordinary_cursor_binding(
         &self,
         cursor: &ForwardCursor,

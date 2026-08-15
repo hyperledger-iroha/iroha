@@ -1289,10 +1289,10 @@ _SERVICED_CANDIDATE_PRODUCTION_ITEM_SHA256 = {
         "6d78f9cdb1e3fe81e4e4c1b619985044eef53e87e288d133d10a986cda1b0250"
     ),
     "open_with_capacity_geometry": (
-        "42d86efe92417da13ef59dcd3c2d8b82514ce1f8504e167299743269e18431c1"
+        "42a35d83d69940bbf7d92da8075c5c42516d93396c24b4661917a2417cae4e1c"
     ),
     "open_deferred_status_with_capacity_geometry": (
-        "2762f10d6cf6f6d9d90418d25fdb5019e4a6de872fe9b9ffcdb0f6e20dd6a770"
+        "609ac6927368b3c869f083fac425ebba12631345cfd2eba3f28e189a70c5cb1a"
     ),
     "open_with_aggregator_and_publication": (
         "b65815cfabc0ed8407c65adba6012c84de9f4b69db0bf021eab09738f54c9329"
@@ -1518,7 +1518,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "077c4e35cad9015abafc3bf41988b1852ff71a91ae240f772e1052cd859c66ae"
+        "288424fb05c59c35ab662e7ef17e5a09b3c69e9e63071cafd73baa960e42a59f"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"

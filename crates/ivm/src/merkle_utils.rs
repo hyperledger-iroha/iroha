@@ -85,9 +85,8 @@ pub fn make_compact_from_path_bytes(
         .collect();
     CompactMerkleProof::from_parts(depth as u8, dirs, siblings)
 }
-/// Compute the SHA-256 digest used as a memory leaf from a 32-byte chunk.
-/// The memory leaf is `SHA-256(chunk)` where the last partial chunk is
-/// zero-padded to 32 bytes before hashing.
+/// Compute the SHA-256 digest used as a memory leaf from a 32-byte chunk. The memory leaf is
+/// `SHA-256(chunk)` where the last partial chunk is zero-padded to 32 bytes before hashing.
 pub fn compute_memory_leaf_digest(chunk: &[u8; 32]) -> [u8; 32] {
     let mut out = [0u8; 32];
     out.copy_from_slice(&sha2::Sha256::digest(chunk));
@@ -123,8 +122,7 @@ pub struct CompactProofBundle {
     pub root: [u8; 32],
 }
 impl CompactProofBundle {
-    /// Convert this bundle back into a typed `CompactMerkleProof` using
-    /// `None` for zero-siblings.
+    /// Convert this bundle back into a typed `CompactMerkleProof` using `None` for zero-siblings.
     pub fn to_compact_proof(&self) -> CompactMerkleProof<[u8; 32]> {
         let siblings = self
             .siblings
@@ -158,8 +156,7 @@ impl CompactProofBundle {
     }
 }
 // Norito encoding/decoding derives are used so bundles can be passed via INPUT/OUTPUT.
-/// Build a `CompactProofBundle` for a memory address using the in‑process
-/// compact builder.
+/// Build a `CompactProofBundle` for a memory address using the in‑process compact builder.
 pub fn memory_compact_bundle(
     mem: &mut Memory,
     addr: u64,
@@ -187,8 +184,7 @@ pub fn memory_compact_bundle(
         root: root_bytes,
     }
 }
-/// Build a `CompactProofBundle` for a register index using the in‑process
-/// compact builder.
+/// Build a `CompactProofBundle` for a register index using the in‑process compact builder.
 pub fn registers_compact_bundle(
     regs: &Registers,
     idx: usize,

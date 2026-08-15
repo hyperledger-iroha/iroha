@@ -520,11 +520,10 @@ struct ExactMembershipVerificationReceiptV1 {
 /// Opaque proof-verified capability for one persistent witness commitment.
 ///
 /// There is no decoder and no visible constructor.  Consumers can inspect an
-/// identity only after role-specific validation has checked the complete
-/// source context. The identity excludes randomized membership-proof and
-/// consumer-purpose metadata. A secret-epoch identity therefore remains
-/// stable across every consumer; an RKG-ephemeral identity additionally binds
-/// the verifier-certified direct context and wrapper statement.
+/// identity only after role-specific validation has checked the complete source context. The
+/// identity excludes randomized membership-proof and consumer-purpose metadata. A secret-epoch
+/// identity therefore remains stable across every consumer; an RKG-ephemeral identity additionally
+/// binds the verifier-certified direct context and wrapper statement.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct VerifiedPersistentWitnessBindingV1 {
     version: u8,
@@ -920,9 +919,8 @@ impl VerifiedPersistentWitnessBindingSetV1 {
         }
         Ok(())
     }
-    /// Copy one party's public commitment material out of this consumed,
-    /// proof-verified set. The sibling decryption module retains the authority;
-    /// this tuple is never accepted from a caller.
+    /// Copy one party's public commitment material out of this consumed, proof-verified set. The
+    /// sibling decryption module retains the authority; this tuple is never accepted from a caller.
     #[allow(
         clippy::type_complexity,
         reason = "fixed decryption material tuple preserves reviewed digest and commitment order"
@@ -1098,8 +1096,7 @@ impl PersistentDirectRelationV1 {
 ///
 /// Every digest is computed from a validated polynomial statement or stream
 /// receipt by the direct ceremony.  Prior-round digests are context only and
-/// are never accepted as substitutes for the explicit aggregate-polynomial
-/// statement digests below.
+/// are never accepted as substitutes for the explicit aggregate-polynomial statement digests below.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PersistentDirectRelationUseSelectorV1 {
     relation: PersistentDirectRelationV1,
@@ -1220,10 +1217,9 @@ pub(super) fn mint_rkg_round_one_selector_v1(
 }
 /// Mint the only production Galois selector from exact CPK authority.
 ///
-/// The target-`a` seed, schedule coordinates, and prior-round digest are
-/// inherited from the reconstructed ceremony context. Only the two
-/// party-local statement digests remain caller inputs, and no derived digest
-/// or authority object leaves the private target-`a` module.
+/// The target-`a` seed, schedule coordinates, and prior-round digest are inherited from the
+/// reconstructed ceremony context. Only the two party-local statement digests remain caller inputs,
+/// and no derived digest or authority object leaves the private target-`a` module.
 pub(super) fn mint_galois_selector_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     bindings: &VerifiedPersistentWitnessBindingSetV1,
@@ -1242,8 +1238,7 @@ pub(super) fn mint_galois_selector_v1(
 /// Non-serializable, single-use authorization for one exact direct relation.
 ///
 /// This type is deliberately not `Clone`.  It retains the actual commitment
-/// points so the proof adapter cannot replace them with caller-selected
-/// lineage metadata.
+/// points so the proof adapter cannot replace them with caller-selected lineage metadata.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct VerifiedPersistentWitnessDirectRelationUseV1 {
     binding_set_root: [u8; 32],

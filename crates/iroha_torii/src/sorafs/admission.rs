@@ -81,9 +81,8 @@ impl AdmissionRegistry {
     ///
     /// # Errors
     ///
-    /// Returns an [`AdmissionRegistryError`] when the directory cannot be read,
-    /// an envelope fails to decode, or multiple envelopes declare the same
-    /// provider identifier.
+    /// Returns an [`AdmissionRegistryError`] when the directory cannot be read, an envelope fails
+    /// to decode, or multiple envelopes declare the same provider identifier.
     pub fn load_from_dir(
         dir: &Path,
         policy: ProviderAdmissionCouncilPolicy,
@@ -356,8 +355,7 @@ fn prepare_entry(
 ///
 /// # Errors
 ///
-/// Returns [`AdmissionCheckError`] when the advert metadata does not match the
-/// admission record.
+/// Returns [`AdmissionCheckError`] when the advert metadata does not match the admission record.
 pub fn verify_advert_against_envelope(
     advert: &ProviderAdvertV1,
     record: &AdmissionRecord,

@@ -1,9 +1,8 @@
 //! Transparent (untrusted-setup) Halo2-style proof system skeleton.
 //!
-//! This crate provides a from-scratch, transparent polynomial-commitment and
-//! Inner-Product Argument (IPA) based opening scheme suitable as the backbone
-//! for Halo2/PLONKish arithmetizations. It focuses on determinism and
-//! portability, and avoids any trusted setup by deriving generators
+//! This crate provides a from-scratch, transparent polynomial-commitment and Inner-Product Argument
+//! (IPA) based opening scheme suitable as the backbone for Halo2/PLONKish arithmetizations. It
+//! focuses on determinism and portability, and avoids any trusted setup by deriving generators
 //! deterministically from a transcript domain separation tag (DST).
 //!
 //! Notes
@@ -83,9 +82,8 @@ pub use norito_types::{
 pub use transcript::Transcript;
 /// Resource limits for standalone `OpenVerifyEnvelope` decoding.
 ///
-/// Limits are always finite. Runtime callers should construct this value from
-/// their configured ZK policy; convenience APIs use the conservative V1
-/// defaults.
+/// Limits are always finite. Runtime callers should construct this value from their configured ZK
+/// policy; convenience APIs use the conservative V1 defaults.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OpenVerifyLimits {
     /// Maximum allowed circuit/domain size exponent (`n <= 2^max_k`).
@@ -419,17 +417,14 @@ pub mod norito_helpers {
     }
     /// Derive a Pallas verifier witness with explicit envelope resource limits.
     ///
-    /// This is the bounded form of
-    /// [`derive_pallas_ipa_verifier_witness_from_envelope`]. It applies the
-    /// same decoding and final verifier-equality checks, but rejects envelopes
-    /// exceeding the supplied limits before backend-specific parameter/proof
-    /// reconstruction.
+    /// This is the bounded form of [`derive_pallas_ipa_verifier_witness_from_envelope`]. It applies
+    /// the same decoding and final verifier-equality checks, but rejects envelopes exceeding the
+    /// supplied limits before backend-specific parameter/proof reconstruction.
     ///
     /// # Errors
     ///
-    /// Returns an error when the envelope exceeds the supplied limits, is
-    /// malformed, is not a Pallas opening, or does not verify under the
-    /// transparent IPA verifier.
+    /// Returns an error when the envelope exceeds the supplied limits, is malformed, is not a
+    /// Pallas opening, or does not verify under the transparent IPA verifier.
     pub fn derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
         env: &OpenVerifyEnvelope,
         limits: OpenVerifyLimits,

@@ -98,8 +98,7 @@ impl MlDsaSuite {
     /// Reconstruct the public key committed by a secret key.
     ///
     /// # Errors
-    /// Returns an error when the secret key is malformed or internally
-    /// inconsistent.
+    /// Returns an error when the secret key is malformed or internally inconsistent.
     pub fn public_key_from_secret_key(self, bytes: &[u8]) -> Result<Vec<u8>, MlDsaError> {
         validate_mldsa_secret_key_len(self, bytes)?;
         validate_mldsa_material_not_all_zero(self, self.secret_key_kind(), bytes)?;
@@ -291,13 +290,11 @@ pub fn generate_mldsa_keypair(
     rng.fill_bytes(coins.as_mut());
     generate_mldsa_keypair_from_fips_seed(suite, &coins)
 }
-/// Deterministically generate an ML-DSA keypair from the 32-byte seed input
-/// defined by FIPS 204.
+/// Deterministically generate an ML-DSA keypair from the 32-byte seed input defined by FIPS 204.
 ///
-/// This is the lowest-level deterministic key-generation entry point. Callers
-/// that start with arbitrary-length secret material should first run a
-/// domain-separated KDF and zeroize the derived seed after this function
-/// returns.
+/// This is the lowest-level deterministic key-generation entry point. Callers that start with
+/// arbitrary-length secret material should first run a domain-separated KDF and zeroize the derived
+/// seed after this function returns.
 ///
 /// # Errors
 /// Returns an error when `seed` is all zero, or when generated material fails
@@ -484,8 +481,7 @@ pub fn validate_mldsa_secret_key(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), 
 /// Reconstruct the public key committed by an ML-DSA secret key.
 ///
 /// # Errors
-/// Returns an error when the secret key is malformed or internally
-/// inconsistent.
+/// Returns an error when the secret key is malformed or internally inconsistent.
 pub fn mldsa_public_key_from_secret_key(
     suite: MlDsaSuite,
     bytes: &[u8],

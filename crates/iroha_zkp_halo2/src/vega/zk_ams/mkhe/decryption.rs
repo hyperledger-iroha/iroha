@@ -7,20 +7,18 @@
 //! share_i = c_1 * s_i + t * z_i      in R_Q.
 //! ```
 //!
-//! `s_i` is ternary, `e_i` is bounded by the profile's centered-binomial
-//! parameter, and `z_i` is an exact signed, fixed-width smudging quotient.
-//! The proof is a Fiat--Shamir-with-aborts lattice proof over both equations;
-//! the verifier reconstructs both masked RNS commitments from the responses.
-//! Consequently neither a signature nor a digest is accepted as a substitute
-//! for the native polynomial relations.
+//! `s_i` is ternary, `e_i` is bounded by the profile's centered-binomial parameter, and `z_i` is an
+//! exact signed, fixed-width smudging quotient. The proof is a Fiat--Shamir-with-aborts lattice
+//! proof over both equations; the verifier reconstructs both masked RNS commitments from the
+//! responses. Consequently neither a signature nor a digest is accepted as a substitute for the
+//! native polynomial relations.
 //!
-//! The sole first-release transport is a small authenticated `ZDSM` manifest
-//! followed by two ordered, content-addressed objects: the existing canonical
-//! count-prefixed limb-major polynomial bytes and the standalone native `ZADP`
-//! proof bytes. Both objects fit their unchanged 64 MiB and 32 MiB ceilings.
-//! Reconstruction authenticates the manifest and every statement axis before
-//! hashing or decoding either large object. A private tiny-profile codec exists
-//! only for exhaustive algebra tests and is not part of the public transport.
+//! The sole first-release transport is a small authenticated `ZDSM` manifest followed by two
+//! ordered, content-addressed objects: the existing canonical count-prefixed limb-major polynomial
+//! bytes and the standalone native `ZADP` proof bytes. Both objects fit their unchanged 64 MiB and
+//! 32 MiB ceilings. Reconstruction authenticates the manifest and every statement axis before
+//! hashing or decoding either large object. A private tiny-profile codec exists only for exhaustive
+//! algebra tests and is not part of the public transport.
 use super::{
     ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
     MaskedRelaxedRandomSourceV1, PlaintextModulus, RnsPolynomial, WideUint, ZkAmsMkheErrorV1,
@@ -112,9 +110,8 @@ pub const ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1: usize = 4
 pub const ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1: [u8; 32] = [0; 32];
 /// Digest pinned only by an authenticated release-native peak-residency run.
 ///
-/// Wire lengths and allocator-independent source accounting cannot populate
-/// this pin. It remains zero until the exact governed runtime topology is
-/// measured under the release workspace ceiling.
+/// Wire lengths and allocator-independent source accounting cannot populate this pin. It remains
+/// zero until the exact governed runtime topology is measured under the release workspace ceiling.
 pub const ZK_AMS_MKHE_DECRYPTION_NATIVE_RESIDENCY_CERTIFICATE_DIGEST_V1: [u8; 32] = [0; 32];
 // tag, version, profile, roster, epoch, transcript, ciphertext, key context,
 // exact public statement binding, sample index, party index, party, level, and
@@ -192,9 +189,8 @@ pub struct ZkAmsMkheDecryptionResourceEvidenceV1 {
     pub native_peak_residency_certified: bool,
     /// Pinned authenticated manifest digest from the exact release-size split KAT.
     pub split_release_kat_digest: [u8; 32],
-    /// The exact release-size native prove/verify path, canonical split
-    /// reconstruction, and native peak-residency audit have closed the
-    /// transport-implementation gate.
+    /// The exact release-size native prove/verify path, canonical split reconstruction, and native
+    /// peak-residency audit have closed the transport-implementation gate.
     ///
     /// This is not a knowledge-soundness claim for the sparse proof and does
     /// not close the global decryption admission/readiness gate.
@@ -1711,10 +1707,9 @@ pub(super) fn decryption_wire_ciphertext_digest_v1(
     }
     Ok(digest)
 }
-/// Compact validated ciphertext axes shared by the persistent binding and the
-/// source-backed decryption corridor. The record index is an explicit release
-/// record identifier; it is intentionally independent of any packed-plaintext
-/// chunk or encryption sample index.
+/// Compact validated ciphertext axes shared by the persistent binding and the source-backed
+/// decryption corridor. The record index is an explicit release record identifier; it is
+/// intentionally independent of any packed-plaintext chunk or encryption sample index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct DecryptionCiphertextAxesV1 {
     profile_digest: [u8; 32],
@@ -2815,9 +2810,8 @@ pub fn split_zk_ams_mkhe_decryption_share_v1(
 }
 /// Authenticate addresses, preflight exact lengths, reconstruct, and verify one native share.
 ///
-/// `components` must contain exactly the polynomial object followed by the
-/// proof envelope. The manifest signature is verified before either large
-/// component is hashed or decoded.
+/// `components` must contain exactly the polynomial object followed by the proof envelope. The
+/// manifest signature is verified before either large component is hashed or decoded.
 #[cfg(test)]
 #[expect(
     dead_code,

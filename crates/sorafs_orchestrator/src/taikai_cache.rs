@@ -1,11 +1,10 @@
 //! Taikai cache hierarchy primitives used by the SoraNet distribution plane.
 //!
-//! This module implements roadmap item **SNNet-14 – Taikai cache hierarchy &
-//! QoS enforcement**: a deterministic three-tier cache, QoS token buckets,
-//! shard placement, signed cache-admission gossip, bounded pull orchestration,
-//! exit hedging, and cache/queue telemetry. These transport-local structures
-//! influence retrieval policy only; they never replace committed ledger or
-//! governed manifest authority.
+//! This module implements roadmap item **SNNet-14 – Taikai cache hierarchy & QoS enforcement**: a
+//! deterministic three-tier cache, QoS token buckets, shard placement, signed cache-admission
+//! gossip, bounded pull orchestration, exit hedging, and cache/queue telemetry. These
+//! transport-local structures influence retrieval policy only; they never replace committed ledger
+//! or governed manifest authority.
 use blake3::hash as blake3_hash;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::taikai::{

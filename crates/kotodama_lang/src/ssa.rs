@@ -1,11 +1,9 @@
-//! Strict SSA MIR construction, optimization, verification, and deterministic
-//! destruction.
+//! Strict SSA MIR construction, optimization, verification, and deterministic destruction.
 //!
-//! Kotodama's lowering IR deliberately retains mutable temporary names because
-//! those names are a compact de-SSA transport for the existing code generator.
-//! This module makes the intervening compiler invariant explicit: every
-//! instruction definition is assigned a unique [`Value`], control-flow joins
-//! receive explicit [`Phi`] nodes, and every use is checked against dominance
+//! Kotodama's lowering IR deliberately retains mutable temporary names because those names are a
+//! compact de-SSA transport for the existing code generator. This module makes the intervening
+//! compiler invariant explicit: every instruction definition is assigned a unique [`Value`],
+//! control-flow joins receive explicit [`Phi`] nodes, and every use is checked against dominance
 //! before the transport form can reach register allocation.
 //!
 //! This is the canonical optimization authority. Sparse conditional constant
@@ -13,10 +11,9 @@
 //! traps, and dead-value removal recognizes only explicitly non-trapping
 //! operations. Whole-program pruning runs on the simplified SSA call graph.
 //!
-//! SSA deliberately reuses the exhaustive lowering opcode enum inside private
-//! [`ValueInstruction`] and [`ValueTerminator`] brands. This is an
-//! implementation choice, not a mixed representation: raw lowering operands
-//! are rewritten before branding, no parallel operation is retained, and the
+//! SSA deliberately reuses the exhaustive lowering opcode enum inside private [`ValueInstruction`]
+//! and [`ValueTerminator`] brands. This is an implementation choice, not a mixed representation:
+//! raw lowering operands are rewritten before branding, no parallel operation is retained, and the
 //! opaque SSA API exposes only verified construction and consuming de-SSA.
 use crate::{
     ir::{self, Label, Temp},
@@ -63,10 +60,9 @@ struct Phi {
 }
 /// One canonical opcode branded as using the SSA value namespace.
 ///
-/// The payload reuses the exhaustive lowering opcode family so checked and
-/// effectful operation kinds cannot drift. Construction is private to this
-/// module; unlike lowering [`Temp`]s, every payload register is a [`Value`]
-/// encoded by [`Value::encoded`].
+/// The payload reuses the exhaustive lowering opcode family so checked and effectful operation
+/// kinds cannot drift. Construction is private to this module; unlike lowering [`Temp`]s, every
+/// payload register is a [`Value`] encoded by [`Value::encoded`].
 #[derive(Debug, PartialEq)]
 struct ValueInstruction(ir::Instr);
 impl ValueInstruction {
@@ -141,11 +137,10 @@ impl Program {
     }
     /// Optimize the strict SSA program and retain only executable functions.
     ///
-    /// Constant propagation is driven by executable CFG edges and explicit
-    /// Phi inputs. Checked operations are folded only when evaluation
-    /// succeeds; an overflow or division-by-zero operation remains in the MIR
-    /// so its deterministic trap cannot be optimized away. The final direct
-    /// call graph is validated before any function is discarded.
+    /// Constant propagation is driven by executable CFG edges and explicit Phi inputs. Checked
+    /// operations are folded only when evaluation succeeds; an overflow or division-by-zero
+    /// operation remains in the MIR so its deterministic trap cannot be optimized away. The final
+    /// direct call graph is validated before any function is discarded.
     pub(crate) fn optimize_and_retain(&mut self, roots: &BTreeSet<String>) -> Result<(), String> {
         self.verify()?;
         for function in &mut self.functions {
@@ -1801,9 +1796,8 @@ fn verify_use(
 }
 /// Compact deterministic bit set used by dominance analysis.
 ///
-/// A dense representation avoids cloning thousands of tree nodes per block
-/// while retaining hardware-independent integer operations and iteration
-/// order.
+/// A dense representation avoids cloning thousands of tree nodes per block while retaining
+/// hardware-independent integer operations and iteration order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DominatorSet {
     words: Vec<u64>,

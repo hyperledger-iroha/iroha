@@ -2201,8 +2201,7 @@ where
     verify_payment(statement, &proof).map_err(|_| AnonymousPgcError::ProverSelfCheckFailed)?;
     Ok(proof)
 }
-/// Verify every payment sub-language and return the complete atomic encrypted
-/// account effect.
+/// Verify every payment sub-language and return the complete atomic encrypted account effect.
 ///
 /// # Errors
 ///

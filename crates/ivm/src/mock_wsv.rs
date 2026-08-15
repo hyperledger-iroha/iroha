@@ -1889,8 +1889,7 @@ impl WsvHost {
     ///
     /// # Errors
     ///
-    /// Returns [`AxtPolicySnapshotValidationError`] when the supplied snapshot
-    /// is not canonical.
+    /// Returns [`AxtPolicySnapshotValidationError`] when the supplied snapshot is not canonical.
     pub fn with_axt_policy_snapshot(
         mut self,
         snapshot: AxtPolicySnapshot,
@@ -2336,9 +2335,8 @@ impl WsvHost {
     /// Decode a canonical AccountId from a register which may contain either an
     /// index into `account_map` (older tests) or a provenance-valid AccountId TLV pointer.
     ///
-    /// Unlike `decode_account_reg`, this rejects AccountId payloads in
-    /// the TLV body so the mock matches the current core host ABI surface for
-    /// account-targeting syscalls.
+    /// Unlike `decode_account_reg`, this rejects AccountId payloads in the TLV body so the mock
+    /// matches the current core host ABI surface for account-targeting syscalls.
     fn decode_account_subject_reg(&self, vm: &IVM, reg: usize) -> Result<AccountId, VMError> {
         let v = vm.register(reg);
         if crate::dev_env::debug_wsv_enabled() {
@@ -2808,8 +2806,7 @@ impl WsvHost {
         Ok((path, tlv.payload.len()))
     }
 }
-/// Parse a permission token from a compact Name string.
-/// Supported formats:
+/// Parse a permission token from a compact Name string. Supported formats:
 /// - "register_domain"
 /// - "register_account"
 /// - "register_asset_definition"

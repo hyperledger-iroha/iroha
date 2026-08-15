@@ -30,13 +30,12 @@ const TAG_MERKLE_INTERNAL_V1: &[u8] = b"iroha:merkle:internal:v1\x00";
 /// Array representation of [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree)
 /// for verifying elements of type `T`.
 ///
-/// In memory, the hashing scheme is retained alongside nodes cached in
-/// breadth-first order. The canonical wire never serializes derived parents or
-/// the root: it carries the retained V1 hash-scheme discriminant and bounded
-/// canonical leaf-node hashes, then deterministically rebuilds the entire cache
-/// on decode. Internal nodes may be `None` only for rightmost padding in
-/// incomplete trees (where both children are missing). Missing nodes in proofs
-/// belong only in `MerkleProof` audit paths.
+/// In memory, the hashing scheme is retained alongside nodes cached in breadth-first order. The
+/// canonical wire never serializes derived parents or the root: it carries the retained V1
+/// hash-scheme discriminant and bounded canonical leaf-node hashes, then deterministically rebuilds
+/// the entire cache on decode. Internal nodes may be `None` only for rightmost padding in
+/// incomplete trees (where both children are missing). Missing nodes in proofs belong only in
+/// `MerkleProof` audit paths.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, TypeId)]
 pub struct MerkleTree<T> {
     hash_scheme: MerkleHashScheme,
@@ -64,10 +63,9 @@ impl MerkleHashScheme {
 }
 /// Authenticated commitment to a Merkle tree root and its exact leaf count.
 ///
-/// A root alone does not authenticate the proof depth or the geometry of a
-/// ragged right edge. Verifiers must use this pair as one indivisible
-/// commitment and obtain it from the protocol object that authenticates the
-/// tree.
+/// A root alone does not authenticate the proof depth or the geometry of a ragged right edge.
+/// Verifiers must use this pair as one indivisible commitment and obtain it from the protocol
+/// object that authenticates the tree.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 pub struct MerkleTreeCommitment<T> {
     root: HashOf<MerkleTree<T>>,
@@ -1203,10 +1201,9 @@ impl<T> MerkleTree<T> {
 impl<T> MerkleProof<T> {
     /// Construct a Merkle proof from a leaf index and an audit path.
     ///
-    /// This constructor does not validate the path; it is primarily intended
-    /// for tests and interoperability scenarios where the sibling list is
-    /// produced externally (e.g., from another crate) and needs to be wrapped
-    /// into a proof structure.
+    /// This constructor does not validate the path; it is primarily intended for tests and
+    /// interoperability scenarios where the sibling list is produced externally (e.g., from another
+    /// crate) and needs to be wrapped into a proof structure.
     pub fn from_audit_path(leaf_index: u32, audit_path: Vec<Option<HashOf<T>>>) -> Self {
         MerkleProof {
             leaf_index,
@@ -1255,9 +1252,8 @@ impl<T> MerkleProof<T> {
     }
 }
 impl<T> CompactMerkleProof<T> {
-    /// Construct a compact proof from raw parts. Depth is limited to 32 by
-    /// the encoding used in VM syscalls, and `siblings.len()` should be equal
-    /// to `depth`.
+    /// Construct a compact proof from raw parts. Depth is limited to 32 by the encoding used in VM
+    /// syscalls, and `siblings.len()` should be equal to `depth`.
     pub fn from_parts(depth: u8, dirs: u32, siblings: Vec<Option<HashOf<T>>>) -> Self {
         CompactMerkleProof {
             depth,
@@ -1449,8 +1445,7 @@ impl CompactMerkleProof<[u8; 32]> {
     /// Verify a compact proof where inner nodes are combined using SHA-256 of
     /// left||right and leaves are SHA-256 digests.
     ///
-    /// The proof encoding and ragged-tree geometry must exactly match the
-    /// authenticated leaf count.
+    /// The proof encoding and ragged-tree geometry must exactly match the authenticated leaf count.
     pub fn verify_sha256(
         &self,
         leaf: &HashOf<[u8; 32]>,
@@ -1473,8 +1468,7 @@ impl MerkleTree<[u8; 32]> {
     /// Build a Merkle tree from an iterator of pre-hashed 32-byte leaves.
     /// Each leaf is assumed to be the SHA-256 digest of a chunk, and inner
     /// nodes are computed as SHA-256 of left||right. If a right child is
-    /// missing, the left child is promoted unchanged.
-    /// Empty input yields an empty tree (no root).
+    /// missing, the left child is promoted unchanged. Empty input yields an empty tree (no root).
     pub fn from_hashed_leaves_sha256<I>(leaves: I) -> Self
     where
         I: IntoIterator<Item = [u8; 32]>,
@@ -1521,10 +1515,9 @@ impl MerkleTree<[u8; 32]> {
         }
         Ok(Self::from_hashed_leaves_sha256(leaves))
     }
-    /// Build a Merkle tree from an owned vector of pre-hashed 32-byte leaves,
-    /// computing internal nodes in parallel. Semantics match
-    /// `from_hashed_leaves_sha256` exactly and remain deterministic. Empty input
-    /// yields an empty tree (no root).
+    /// Build a Merkle tree from an owned vector of pre-hashed 32-byte leaves, computing internal
+    /// nodes in parallel. Semantics match `from_hashed_leaves_sha256` exactly and remain
+    /// deterministic. Empty input yields an empty tree (no root).
     #[cfg(feature = "rayon")]
     pub fn from_hashed_leaves_sha256_parallel(leaves: Vec<[u8; 32]>) -> Self {
         use crate::Hash;

@@ -711,8 +711,7 @@ fn read_policy(
 ) -> Result<Option<ReserveAuthorityPolicyRecordV1>, InstructionExecutionError> {
     Ok(read_reserve_state(world)?.map(|state| state.policy))
 }
-/// Return whether `asset_id` is the exact asset held by active SoraFS reserve
-/// custody.
+/// Return whether `asset_id` is the exact asset held by active SoraFS reserve custody.
 pub(super) fn is_reserve_custody_asset(
     world: &impl WorldReadOnly,
     asset_id: &AssetId,

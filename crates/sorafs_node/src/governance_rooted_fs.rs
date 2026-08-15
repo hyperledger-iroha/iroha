@@ -1,11 +1,10 @@
 //! Handle-rooted filesystem operations for durable local node state.
 //!
-//! Production mutations are resolved component-by-component below a retained
-//! directory handle. The primitives back Governance DAG stores and the inert
-//! Musubi provider-attestation journal store. Linux and macOS use the `*at`
-//! family. Windows uses `NtCreateFile` for root-directory-relative opens and
-//! `SetFileInformationByHandle` for rename/disposition. Other targets fail
-//! closed because they are not V1 native release targets.
+//! Production mutations are resolved component-by-component below a retained directory handle. The
+//! primitives back Governance DAG stores and the inert Musubi provider-attestation journal store.
+//! Linux and macOS use the `*at` family. Windows uses `NtCreateFile` for root-directory-relative
+//! opens and `SetFileInformationByHandle` for rename/disposition. Other targets fail closed because
+//! they are not V1 native release targets.
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;

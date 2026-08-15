@@ -1,10 +1,9 @@
 //! Rebuildable Proof-of-Retrievability projection used by Torii.
 //!
-//! The storage node checkpoint is the sole authority for PoR challenge lifecycle
-//! state. Torii installs that projection at startup, then advances its maps and
-//! indexes in place with exact node-authoritative generation updates. Coordinator
-//! persistence retains only exact report publication state once the projection
-//! has been installed.
+//! The storage node checkpoint is the sole authority for PoR challenge lifecycle state. Torii
+//! installs that projection at startup, then advances its maps and indexes in place with exact
+//! node-authoritative generation updates. Coordinator persistence retains only exact report
+//! publication state once the projection has been installed.
 #[cfg(feature = "app_api")]
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -196,8 +195,7 @@ impl PorStatusPageLimits {
 pub(crate) enum PorStatusPageCursor {
     /// Start a new snapshot traversal.
     First,
-    /// Continue strictly after one consumed index candidate from an exact
-    /// generation and selection.
+    /// Continue strictly after one consumed index candidate from an exact generation and selection.
     After {
         /// Coordinator generation issued with the cursor.
         snapshot_generation: u64,
@@ -253,8 +251,7 @@ pub struct PorStatusPageV1 {
     /// Sparse filter intersections may therefore return no statuses together
     /// with `has_more = true` and a non-empty continuation cursor.
     pub has_more: bool,
-    /// Opaque continuation bound to this generation, selection, and last
-    /// consumed candidate.
+    /// Opaque continuation bound to this generation, selection, and last consumed candidate.
     #[norito(default)]
     pub next_cursor: Option<String>,
     /// Challenge status records in canonical index order.
@@ -1396,8 +1393,7 @@ impl PorCoordinatorRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`PorAutomationError`] when the timestamp cannot be converted
-    /// into a valid ISO week.
+    /// Returns [`PorAutomationError`] when the timestamp cannot be converted into a valid ISO week.
     fn compute_completed_iso_marker(
         now_secs: u64,
     ) -> Result<(PorReportIsoWeek, u64), PorAutomationError> {

@@ -56,11 +56,10 @@ pub struct LaneLifecyclePlan {
 }
 /// Versioned, optimistic-concurrency envelope for a consensus-replayed lane lifecycle update.
 ///
-/// The envelope is carried in a [`crate::isi::SetParameter`] instruction. The
-/// expected catalog and active-incarnation root bind an operator request to the
-/// exact topology it was reviewed against, so a delayed or concurrently
-/// reordered request fails closed instead of mutating a newer topology or a
-/// replacement lane that happens to reuse identical metadata.
+/// The envelope is carried in a [`crate::isi::SetParameter`] instruction. The expected catalog and
+/// active-incarnation root bind an operator request to the exact topology it was reviewed against,
+/// so a delayed or concurrently reordered request fails closed instead of mutating a newer topology
+/// or a replacement lane that happens to reuse identical metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct LaneLifecycleParameterV1 {
     /// Payload layout version. This must be [`Self::VERSION`].
@@ -82,9 +81,8 @@ pub struct LaneLifecycleIncarnationEntry {
 }
 /// Read-only snapshot used to construct an optimistic lane lifecycle transaction.
 ///
-/// The status carries the exact canonical lane catalog and its domain-separated
-/// commitment. Clients must validate the snapshot before embedding
-/// [`Self::catalog_hash`] as
+/// The status carries the exact canonical lane catalog and its domain-separated commitment. Clients
+/// must validate the snapshot before embedding [`Self::catalog_hash`] as
 /// [`LaneLifecycleParameterV1::expected_catalog_hash`].
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct LaneLifecycleStatusV1 {

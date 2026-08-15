@@ -1,13 +1,11 @@
 //! ISO 20022 reference-data ingestion and telemetry helpers.
 //!
-//! This module loads regulated identifier crosswalks (ISIN↔CUSIP, BIC↔LEI, MIC)
-//! and securities ledger crosswalks from operator-provided snapshots, captures
-//! provenance metadata, and exposes ready-to-query maps for the Torii ISO bridge
-//! runtime. Each dataset is tagged with refresh metadata and emits Prometheus
-//! metrics so operators can monitor staleness or ingestion failures. Loading is
-//! record-streamed under fixed source-byte, record, string, and retained-index
-//! budgets so malformed operator snapshots cannot scale startup memory without
-//! bound.
+//! This module loads regulated identifier crosswalks (ISIN↔CUSIP, BIC↔LEI, MIC) and securities
+//! ledger crosswalks from operator-provided snapshots, captures provenance metadata, and exposes
+//! ready-to-query maps for the Torii ISO bridge runtime. Each dataset is tagged with refresh
+//! metadata and emits Prometheus metrics so operators can monitor staleness or ingestion failures.
+//! Loading is record-streamed under fixed source-byte, record, string, and retained-index budgets
+//! so malformed operator snapshots cannot scale startup memory without bound.
 use super::profiles::ReferenceDatasetRequirement;
 use core::convert::TryFrom;
 use eyre::{self, WrapErr as _};

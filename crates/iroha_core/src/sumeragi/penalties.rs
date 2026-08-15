@@ -38,6 +38,15 @@ struct ValidatorLocator {
     lane_id: LaneId,
     validator: AccountId,
 }
+fn consensus_penalty_is_due(
+    recorded_at_height: u64,
+    slashing_delay: u64,
+    current_height: u64,
+) -> bool {
+    recorded_at_height
+        .checked_add(slashing_delay)
+        .is_some_and(|eligible_height| eligible_height <= current_height)
+}
 pub struct PenaltyApplier<'a> {
     state: &'a State,
 }
@@ -256,7 +265,8 @@ impl<'a> PenaltyApplier<'a> {
                 // penalty attachments.
                 continue;
             }
-            if record.recorded_at_height.saturating_add(slashing_delay) > current_height {
+            if !consensus_penalty_is_due(record.recorded_at_height, slashing_delay, current_height)
+            {
                 continue;
             }
             pending.push((key.clone(), record.clone()));
@@ -1263,6 +1273,13 @@ mod tests {
         };
         parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
         parameters.commit();
+    }
+    #[test]
+    fn consensus_penalty_delay_does_not_saturate_into_early_eligibility() {
+        assert!(consensus_penalty_is_due(u64::MAX, 0, u64::MAX));
+        assert!(consensus_penalty_is_due(u64::MAX - 1, 1, u64::MAX));
+        assert!(!consensus_penalty_is_due(u64::MAX, 1, u64::MAX));
+        assert!(!consensus_penalty_is_due(u64::MAX - 1, 2, u64::MAX));
     }
     fn test_censorship_receipt(height: u64) -> TransactionSubmissionReceipt {
         let tx_hash =

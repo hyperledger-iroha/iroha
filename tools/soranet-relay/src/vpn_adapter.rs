@@ -189,8 +189,7 @@ impl VpnAdapter {
         send_scheduled_frames_with_adapter(&schedule, writer, Some(self), Some(&self.session)).await
     }
 }
-/// Outcome of a bridge send operation.
-/// Outcome of a bridge send operation.
+/// Outcome of a bridge send operation. Outcome of a bridge send operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VpnBridgeSendOutcome {
     /// Number of user data frames emitted.

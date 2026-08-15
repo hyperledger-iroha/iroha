@@ -1,9 +1,8 @@
 //! Minimal Keccak-f[1600] sponge constructions required by canonical Vega.
 //!
-//! `tiny-keccak` already supplies the audited permutation under the crate's
-//! existing `sha3` feature. Vega needs the original Keccak-256 delimiter and
-//! SHAKE256 XOF, so this module applies their standardized sponge padding
-//! directly without adding or changing dependencies.
+//! `tiny-keccak` already supplies the audited permutation under the crate's existing `sha3`
+//! feature. Vega needs the original Keccak-256 delimiter and SHAKE256 XOF, so this module applies
+//! their standardized sponge padding directly without adding or changing dependencies.
 use tiny_keccak::keccakf;
 const KECCAK_256_RATE: usize = 136;
 fn clear_sensitive_bytes_v1(bytes: &mut [u8]) {
@@ -95,10 +94,9 @@ impl Keccak256 {
     }
     /// Finalize directly into caller-owned storage.
     ///
-    /// The caller retains the owner so secret-derived users can keep the
-    /// sponge in a stable allocation from first absorption through explicit
-    /// drop. `Drop` optimizer-resistantly erases the state and pending rate
-    /// bytes on success, error, or unwind, while this method avoids an
+    /// The caller retains the owner so secret-derived users can keep the sponge in a stable
+    /// allocation from first absorption through explicit drop. `Drop` optimizer-resistantly erases
+    /// the state and pending rate bytes on success, error, or unwind, while this method avoids an
     /// intermediate returned digest array.
     pub(super) fn finalize_into(&mut self, output: &mut [u8; 32]) {
         self.pending[self.pending_len] ^= 0x01;

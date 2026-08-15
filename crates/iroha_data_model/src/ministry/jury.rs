@@ -2,9 +2,8 @@
 //!
 //! This module implements the data-level deliverables for roadmap item
 //! **MINFO-5 — Policy jury voting toolkit**.  It provides deterministic
-//! sortition manifests plus sealed commit / reveal ballots so governance
-//! clients can prove juror selection and ballot integrity before admitting
-//! policy votes to the ledger.
+//! sortition manifests plus sealed commit / reveal ballots so governance clients can prove juror
+//! selection and ballot integrity before admitting policy votes to the ledger.
 use crate::{Decode, Encode};
 use blake2::digest::Digest;
 use iroha_crypto::Blake2b256;
@@ -320,9 +319,8 @@ impl PolicyJurySortitionV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`PolicyJurySortitionError`] when the manifest violates any of
-    /// the structural constraints (version mismatch, duplicate jurors, and so
-    /// on).
+    /// Returns [`PolicyJurySortitionError`] when the manifest violates any of the structural
+    /// constraints (version mismatch, duplicate jurors, and so on).
     pub fn validate(&self) -> Result<(), PolicyJurySortitionError> {
         if self.version != POLICY_JURY_SORTITION_VERSION_V1 {
             return Err(PolicyJurySortitionError::UnsupportedVersion {

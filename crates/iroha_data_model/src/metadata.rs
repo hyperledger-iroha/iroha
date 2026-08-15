@@ -322,9 +322,8 @@ impl Metadata {
 }
 #[cfg(feature = "transparent_api")]
 impl Metadata {
-    /// Removes a key from the map, returning the owned
-    /// `Some(value)` at the key if the key was previously in the
-    /// map, else `None`.
+    /// Removes a key from the map, returning the owned `Some(value)` at the key if the key was
+    /// previously in the map, else `None`.
     #[inline]
     pub fn remove<K: Ord + ?Sized>(&mut self, key: &K) -> Option<Json>
     where

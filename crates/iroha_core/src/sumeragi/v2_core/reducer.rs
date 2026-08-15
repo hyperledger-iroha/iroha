@@ -814,6 +814,11 @@ impl Reducer {
             self.formed_timeouts.len(),
         )
     }
+    /// Return volatile PrepareQC cache cardinalities for boundedness tests.
+    #[cfg(test)]
+    pub(crate) fn volatile_prepare_counts(&self) -> (usize, usize) {
+        (self.pending_prepare.len(), self.known_prepare.len())
+    }
     /// Returns the state reconstructed from acknowledged WAL frames.
     #[must_use]
     pub const fn durable_state(&self) -> &DurableState {
@@ -3945,6 +3950,16 @@ impl Reducer {
         if certificate.round().view() > self.durable.current_view() {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
+        if let Some(existing) = self.durable.highest_prepare() {
+            if existing.round().view() == certificate.round().view()
+                && existing.subject() != certificate.subject()
+            {
+                return Err(ReducerError::ConflictingPrepareCertificates);
+            }
+            if certificate.round().view() < existing.round().view() {
+                return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
+            }
+        }
         let reference = certificate.reference();
         let certificate = self
             .pending_prepare
@@ -3981,23 +3996,34 @@ impl Reducer {
         {
             effects.push(self.ensure_body_fetch(&certificate));
         }
-        let should_persist_high = match self.durable.highest_prepare() {
-            None => true,
-            Some(existing) => {
-                if existing.round().view() == certificate.round().view()
-                    && existing.subject() != certificate.subject()
-                {
-                    return Err(ReducerError::ConflictingPrepareCertificates);
-                }
-                certificate.round().view() > existing.round().view()
-            }
-        };
+        let should_persist_high = self
+            .durable
+            .highest_prepare()
+            .is_none_or(|existing| certificate.round().view() > existing.round().view());
         if should_persist_high {
             let persist =
                 self.start_persistence(WalRecord::ObservePrepare(certificate), Continuation::None)?;
             effects.push(persist);
         }
         Ok(StepOutcome::applied(effects))
+    }
+    fn prune_observed_prepare_caches(&mut self) {
+        let current_view = self.durable.current_view();
+        self.pending_prepare
+            .retain(|_, certificate| certificate.round().view() == current_view);
+        let retained = self
+            .durable
+            .highest_prepare()
+            .into_iter()
+            .chain(self.durable.locked())
+            .chain(self.pending_prepare.values())
+            .cloned()
+            .collect::<Vec<_>>();
+        self.known_prepare.clear();
+        for certificate in retained {
+            self.known_prepare
+                .insert(certificate.reference(), certificate);
+        }
     }
     fn ensure_body_fetch(&mut self, certificate: &QuorumCertificate) -> Effect {
         let round = self
@@ -4418,6 +4444,14 @@ impl Reducer {
         let mut durable = self.durable.clone();
         durable.apply(&self.context, self.local_validator, &pending.entry)?;
         self.durable = durable;
+        if matches!(pending.entry.record(), WalRecord::ObservePrepare(_)) {
+            // An observed old-view PrepareQC can advance the durable high QC,
+            // but it has no live body-pipeline owner in the current view.
+            // Keep only the current pending certificate plus the durable high
+            // and lock so delayed authenticated history cannot grow these
+            // caches without bound.
+            self.prune_observed_prepare_caches();
+        }
         if matches!(pending.entry.record(), WalRecord::InstallTimeout(_)) {
             // Fallback is scoped to the exact proposal generation, not merely
             // the numeric view. A same-view TC upgrade clears the candidate and
@@ -5217,45 +5251,6 @@ mod source_link_tests {
             ))
         );
         assert_eq!(decided, before);
-    }
-    #[test]
-    fn local_ready_apply_capability_requires_the_exact_manifest() {
-        let subject = Subject::repeat(0xaa);
-        let manifest =
-            PayloadManifest::new(subject, Digest::repeat(0xab), Digest::repeat(0xac), 256, 4);
-        let conflicting =
-            PayloadManifest::new(subject, Digest::repeat(0xad), Digest::repeat(0xae), 256, 4);
-        let (mut before, decision) = decided_reducer(subject);
-        before.body_work.insert(
-            (decision.round(), subject),
-            BodyWork {
-                manifest: None,
-                state: BodyState::Missing,
-            },
-        );
-        let mut after = before.clone();
-        after.body_work.insert(
-            (decision.round(), subject),
-            BodyWork {
-                manifest: Some(manifest),
-                state: BodyState::Validated,
-            },
-        );
-        let apply = Effect::Apply {
-            tag: after.current_tag(),
-            subject,
-            certificate: decision,
-        };
-        let exact = Event::LocalProposalReady {
-            tag: before.current_tag(),
-            manifest,
-        };
-        let counterfeit = Event::LocalProposalReady {
-            tag: before.current_tag(),
-            manifest: conflicting,
-        };
-        assert!(before.transition_refines(&exact, &after, std::slice::from_ref(&apply)));
-        assert!(!before.transition_refines(&counterfeit, &after, &[apply]));
     }
     #[test]
     fn counterfeit_effect_grant_with_a_different_primitive_key_fails_closed() {

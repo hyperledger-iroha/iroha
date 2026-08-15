@@ -3,11 +3,12 @@
 use super::super::{
     MKHE_VERSION_V1, ZkAmsMkheErrorV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
-    collective::DirectRkgOneOwnerDerivedProvenanceV1,
+    collective::DirectRkgOneProverSessionV1,
     direct_collective_eval_ceremony::{
         ZkAmsMkheDirectCeremonyContextV1, ZkAmsMkheDirectPolynomialStreamReceiptV1,
         direct_rkg_one_creator_contribution_statement_v1,
     },
+    direct_object_transport::ZkAmsMkheDirectObjectReadAtProviderV1,
     exact_eight_chunk_membership::{
         DirectRelationBoundOneMembershipRoleV1, DirectRelationBoundTwoMembershipRoleV1,
         ExactEightChunkMembershipContextV1, ExactEightChunkMembershipEvidenceV1,
@@ -22,6 +23,10 @@ use super::{
         DirectCommonACreatorH0ReplayV1, DirectCommonACreatorH1ReadyV1,
         DirectCommonACreatorH1ReplayV1, consume_completed_creator_authority_v1,
         prepare_direct_common_a_creator_h0_v1,
+    },
+    direct_relation_wire_v1::{
+        DirectRelationPublicObjectsV1,
+        verify_direct_rkg_one_semantic_candidate_v1 as verify_semantic_candidate_v1,
     },
     persistent_commitment_set_digest, persistent_direct_relation_use_digest,
 };
@@ -43,7 +48,7 @@ struct DirectRkgOneCreatorAuthorityV1<'a> {
     ephemeral_source_context_digest: [u8; 32],
     ephemeral_source_statement_digest: [u8; 32],
     ephemeral_record_index: u32,
-    provenance: DirectRkgOneOwnerDerivedProvenanceV1<'a>,
+    prover_session: DirectRkgOneProverSessionV1<'a>,
 }
 pub(in crate::vega::zk_ams::mkhe) struct DirectRkgOneCreatorH0ReadyV1<'a> {
     authority: DirectRkgOneCreatorAuthorityV1<'a>,
@@ -86,18 +91,18 @@ pub(in crate::vega::zk_ams::mkhe::active_exact_binding) struct DirectRkgOneFinal
     proof_commitment_transcript_digest: [u8; 32],
 }
 pub(in crate::vega::zk_ams::mkhe) struct FinalizedDirectRkgOneCapabilityV1<'a> {
-    _provenance: DirectRkgOneOwnerDerivedProvenanceV1<'a>,
+    _prover_session: DirectRkgOneProverSessionV1<'a>,
     capability: VerifiedPersistentWitnessDirectRelationUseV1,
 }
 pub(in crate::vega::zk_ams::mkhe) fn prepare_direct_rkg_one_creator_h0_v1<'a>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     bindings: &VerifiedPersistentWitnessBindingSetV1,
     context: ZkAmsMkheDirectCeremonyContextV1,
-    provenance: DirectRkgOneOwnerDerivedProvenanceV1<'a>,
+    prover_session: DirectRkgOneProverSessionV1<'a>,
 ) -> Result<DirectRkgOneCreatorH0ReadyV1<'a>, ZkAmsMkheErrorV1> {
     bindings.validate_for_consumer(roster, PersistentWitnessConsumerV1::RkgRoundOne)?;
     context.validate_rkg_ephemeral_membership_axes(roster, bindings)?;
-    let ephemeral_context = provenance.context();
+    let ephemeral_context = prover_session.context();
     let party_index = ephemeral_context.party_index();
     let party_index_u8 =
         u8::try_from(party_index).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
@@ -105,13 +110,13 @@ pub(in crate::vega::zk_ams::mkhe) fn prepare_direct_rkg_one_creator_h0_v1<'a>(
         bindings.decryption_party_material(party_index)?;
     if ephemeral_context.direct_context_digest() != context.digest()
         || context.direct_secret_lineage_digest(party_index_u8)? != secret_identity_digest
-        || provenance.persistent_commitments() != &points
+        || prover_session.persistent_commitments() != &points
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let ephemeral_commitment_set_digest = persistent_commitment_set_digest(
         generator_basis_digest,
-        provenance.ephemeral_commitments(),
+        prover_session.ephemeral_commitments(),
     )?;
     if ephemeral_commitment_set_digest == secret_commitment_set_digest {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -141,7 +146,7 @@ pub(in crate::vega::zk_ams::mkhe) fn prepare_direct_rkg_one_creator_h0_v1<'a>(
             ephemeral_source_context_digest: ephemeral_context.direct_context_digest(),
             ephemeral_source_statement_digest: ephemeral_context.statement_digest(),
             ephemeral_record_index: ephemeral_context.record_index(),
-            provenance,
+            prover_session,
         },
         common,
     })
@@ -169,10 +174,10 @@ impl<'a> DirectRkgOneCreatorH0ReplayV1<'a> {
     ) -> Result<Vec<u64>, ZkAmsMkheErrorV1> {
         self.common.derive_next_limb_into(common_a)?;
         self.authority
-            .provenance
+            .prover_session
             .retain_common_a_limb_v1(limb, common_a)?;
         self.authority
-            .provenance
+            .prover_session
             .relation_limb_v1(0, limb, common_a)
     }
     pub(in crate::vega::zk_ams::mkhe) fn finish_h0_v1(
@@ -206,11 +211,11 @@ impl<'a> DirectRkgOneCreatorH1ReplayV1<'a> {
         common_a: &mut [u64],
     ) -> Result<Vec<u64>, ZkAmsMkheErrorV1> {
         self.common.derive_next_limb_into(common_a)?;
-        if self.authority.provenance.common_a_limb_v1(limb)? != common_a {
+        if self.authority.prover_session.common_a_limb_v1(limb)? != common_a {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
         self.authority
-            .provenance
+            .prover_session
             .relation_limb_v1(1, limb, common_a)
     }
     pub(in crate::vega::zk_ams::mkhe) fn finish_h1_v1(
@@ -297,7 +302,6 @@ impl PreparedDirectRkgOneCreatorPermitV1<'_> {
         put(bytes, 512, &self.contribution_statement_digest);
         Ok(())
     }
-
     pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn prove_bound_one_v1<
         R: ProofRandomSource,
     >(
@@ -311,10 +315,9 @@ impl PreparedDirectRkgOneCreatorPermitV1<'_> {
     > {
         self.completed
             .authority
-            .provenance
+            .prover_session
             .prove_bound_one_v1(slot, context, random)
     }
-
     pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn prove_bound_two_v1<
         R: ProofRandomSource,
     >(
@@ -328,10 +331,9 @@ impl PreparedDirectRkgOneCreatorPermitV1<'_> {
     > {
         self.completed
             .authority
-            .provenance
+            .prover_session
             .prove_bound_two_v1(slot, context, random)
     }
-
     pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn response_coefficient_v1(
         &self,
         slot: usize,
@@ -339,14 +341,11 @@ impl PreparedDirectRkgOneCreatorPermitV1<'_> {
         mask: i64,
         challenge: u32,
     ) -> Result<i64, ZkAmsMkheErrorV1> {
-        self.completed.authority.provenance.response_coefficient_v1(
-            slot,
-            coefficient,
-            mask,
-            challenge,
-        )
+        self.completed
+            .authority
+            .prover_session
+            .response_coefficient_v1(slot, coefficient, mask, challenge)
     }
-
     pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn response_blinding_v1(
         &self,
         slot: usize,
@@ -354,21 +353,20 @@ impl PreparedDirectRkgOneCreatorPermitV1<'_> {
         mask_blinding: &Scalar,
         challenge: u32,
     ) -> Result<Scalar, ZkAmsMkheErrorV1> {
-        self.completed.authority.provenance.response_blinding_v1(
-            slot,
-            chunk,
-            mask_blinding,
-            challenge,
-        )
+        self.completed
+            .authority
+            .prover_session
+            .response_blinding_v1(slot, chunk, mask_blinding, challenge)
     }
-
     pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn common_a_limb_v1(
         &self,
         limb: usize,
     ) -> Result<&[u64], ZkAmsMkheErrorV1> {
-        self.completed.authority.provenance.common_a_limb_v1(limb)
+        self.completed
+            .authority
+            .prover_session
+            .common_a_limb_v1(limb)
     }
-
     pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn finalize_request_v1(
         &self,
         proof_commitment_transcript_digest: [u8; 32],
@@ -383,7 +381,6 @@ impl PreparedDirectRkgOneCreatorPermitV1<'_> {
         })
     }
 }
-
 pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn finalize_direct_rkg_one_capability_v1<
     'a,
 >(
@@ -416,19 +413,19 @@ pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn finalize_direct_rkg_o
         ephemeral_source_context_digest: authority.ephemeral_source_context_digest,
         ephemeral_source_statement_digest: authority.ephemeral_source_statement_digest,
         ephemeral_record_index: authority.ephemeral_record_index,
-        ephemeral_commitments: Some(*authority.provenance.ephemeral_commitments()),
+        ephemeral_commitments: Some(*authority.prover_session.ephemeral_commitments()),
         selector,
         use_digest: [0; 32],
     };
     capability.use_digest = persistent_direct_relation_use_digest(&capability)?;
     capability.validate()?;
     Ok(FinalizedDirectRkgOneCapabilityV1 {
-        _provenance: authority.provenance,
+        _prover_session: authority.prover_session,
         capability,
     })
 }
 
-impl<'a> FinalizedDirectRkgOneCapabilityV1<'a> {
+impl FinalizedDirectRkgOneCapabilityV1<'_> {
     pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn write_statement_trailer_v1(
         &self,
         destination: &mut [u8; 64],
@@ -439,15 +436,28 @@ impl<'a> FinalizedDirectRkgOneCapabilityV1<'a> {
             .copy_from_slice(&self.capability.selector.proof_commitment_transcript_digest);
         Ok(())
     }
+}
 
-    pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn into_compacted_post_seal_v1(
-        self,
-    ) -> impl Sized + 'a {
-        (
-            self._provenance.into_compacted_post_seal_v1(),
-            self.capability,
-        )
-    }
+pub(in crate::vega::zk_ams::mkhe::active_exact_binding) fn verify_finalized_direct_rkg_one_semantic_candidate_v1<
+    'a,
+    P,
+>(
+    finalized: FinalizedDirectRkgOneCapabilityV1<'a>,
+    context: ZkAmsMkheDirectCeremonyContextV1,
+    objects: DirectRelationPublicObjectsV1,
+    proof_bytes: &[u8],
+    provider: &mut P,
+) -> Result<impl Sized + use<'a, P>, ZkAmsMkheErrorV1>
+where
+    P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
+{
+    let FinalizedDirectRkgOneCapabilityV1 {
+        _prover_session,
+        capability,
+    } = finalized;
+    let semantic =
+        verify_semantic_candidate_v1(context, capability, objects, proof_bytes, provider)?;
+    Ok((_prover_session.into_compacted_post_seal_v1(), semantic))
 }
 
 fn prospective_ephemeral_identity_v1(

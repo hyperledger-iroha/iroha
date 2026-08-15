@@ -1650,9 +1650,8 @@ impl Iso20022BridgeRuntime {
             embedded_signature_detected,
         ))
     }
-    /// Perform a deduplication check for the provided message identifier.
-    /// Returns `true` when the identifier is new (and records it), or `false`
-    /// when a still-active entry already exists.
+    /// Perform a deduplication check for the provided message identifier. Returns `true` when the
+    /// identifier is new (and records it), or `false` when a still-active entry already exists.
     pub fn check_and_record_message(&self, message_id: &str) -> bool {
         self.check_and_record_inbound(message_id, IsoMessageMetadata::default())
     }

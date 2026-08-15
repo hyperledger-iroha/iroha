@@ -1,10 +1,9 @@
 //! Canonical wire types for externally signed SoraFS moderation recovery.
 //!
-//! Preparing a dead-letter resolution returns one opaque canonical Norito
-//! frame and its signing message. The attestor signs that message outside
-//! Torii, then submits the original frame and detached Ed25519 signature to
-//! the apply route. No field-by-field or alternate binary representation is
-//! part of the V1 contract.
+//! Preparing a dead-letter resolution returns one opaque canonical Norito frame and its signing
+//! message. The attestor signs that message outside Torii, then submits the original frame and
+//! detached Ed25519 signature to the apply route. No field-by-field or alternate binary
+//! representation is part of the V1 contract.
 //!
 //! The DTO validators enforce the transport representation and size bounds.
 //! The apply handler must additionally decode the embedded core resolution
@@ -191,9 +190,8 @@ impl SorafsModerationDeadLetterApplyRequestV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error when the resolution is empty, non-canonical, or over
-    /// the V1 bound, or when the signature is not one non-zero lowercase
-    /// 64-byte hexadecimal value.
+    /// Returns an error when the resolution is empty, non-canonical, or over the V1 bound, or when
+    /// the signature is not one non-zero lowercase 64-byte hexadecimal value.
     pub fn validate(&self) -> Result<(), String> {
         validate_resolution_base64(&self.resolution_norito_b64)?;
         validate_lower_hex("signature_hex", &self.signature_hex, 64, true)
@@ -224,8 +222,7 @@ impl SorafsModerationDeadLetterApplyResponseV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for substituted schema/status labels or a malformed
-    /// dead-letter identity.
+    /// Returns an error for substituted schema/status labels or a malformed dead-letter identity.
     pub fn validate(&self) -> Result<(), String> {
         validate_exact(
             "schema",

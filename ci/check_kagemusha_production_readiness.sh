@@ -32,6 +32,8 @@ mode = sys.argv[2]
 self_test = sys.argv[3] == "true"
 
 MODEL = "crates/iroha_data_model/src/offline/mod.rs"
+MODEL_FRAGMENT = "crates/iroha_data_model/src/offline/kagemusha_model.rs"
+MODEL_INCLUDE = 'include!("kagemusha_model.rs");'
 PRIVACY = "crates/iroha_data_model/src/privacy.rs"
 PRIVACY_PROTOCOL = "crates/iroha_data_model/src/privacy/protocol.rs"
 BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
@@ -171,6 +173,27 @@ def read(relative: str, errors: list[str]) -> str:
         errors.append(f"missing corridor file: {relative}")
         return ""
     return path.read_text(encoding="utf-8")
+
+
+def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
+    """Read the parent and its authenticated model fragment as one source."""
+
+    # Preserve the existing negative-test API: a MODEL override is already a
+    # complete logical source, while MODEL_FRAGMENT can exercise the split.
+    if MODEL in overrides:
+        return overrides[MODEL]
+    parent = read(MODEL, errors)
+    fragment = (
+        overrides[MODEL_FRAGMENT]
+        if MODEL_FRAGMENT in overrides
+        else read(MODEL_FRAGMENT, errors)
+    )
+    if parent.count(MODEL_INCLUDE) != 1:
+        errors.append(
+            f"{MODEL}: expected exactly one reviewed {Path(MODEL_FRAGMENT).name} include"
+        )
+        return parent
+    return parent.replace(MODEL_INCLUDE, fragment, 1)
 
 
 def read_regular_bounded(path: Path, maximum_bytes: int, label: str) -> bytes:
@@ -348,7 +371,6 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     texts = {
         path: overrides.get(path, read(path, errors))
         for path in (
-            MODEL,
             PRIVACY,
             PRIVACY_PROTOCOL,
             BRIDGE,
@@ -367,6 +389,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             WORKFLOW,
         )
     }
+    texts[MODEL] = read_reviewed_model(errors, overrides)
     model = texts[MODEL]
     require(
         model,
@@ -378,6 +401,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "reviewed_source_closure_descriptor_sha256",
         "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4: [&str; 8]",
         "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4",
+        "pub enum KagemushaPastaCycleArtifactKindV4",
         "ParamsIpa",
         "BootstrapWitness",
         "KagemushaRecursiveSpendReleaseActivationV4",
@@ -1033,7 +1057,8 @@ if mode == "promotion":
 
 if self_test:
     baseline = {
-        MODEL: read(MODEL, []),
+        MODEL: read_reviewed_model([], {}),
+        MODEL_FRAGMENT: read(MODEL_FRAGMENT, []),
         PRIVACY: read(PRIVACY, []),
         PRIVACY_PROTOCOL: read(PRIVACY_PROTOCOL, []),
         CATALOG: read(CATALOG, []),
@@ -1046,6 +1071,13 @@ if self_test:
     )
     if not static_errors({MODEL: mutated}):
         errors.append("self-test failed to reject ABI-21 substitution")
+    detached_model_fragment = baseline[MODEL_FRAGMENT].replace(
+        "pub enum KagemushaPastaCycleArtifactKindV4",
+        "pub enum DetachedKagemushaPastaCycleArtifactKindV4",
+        1,
+    )
+    if not static_errors({MODEL_FRAGMENT: detached_model_fragment}):
+        errors.append("self-test failed to authenticate the split model fragment")
     shared_bridge_abi_drift = baseline[PRIVACY_PROTOCOL].replace(
         "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;",
         "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",

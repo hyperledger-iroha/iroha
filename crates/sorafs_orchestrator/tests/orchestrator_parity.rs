@@ -1,9 +1,8 @@
 //! Deterministic parity suite for the Rust SoraFS orchestrator client.
 //!
-//! The suite executes a multi-provider fetch twice and asserts that the
-//! resulting assignments, receipts, and provider reports remain identical.
-//! Instrumentation captures concurrency limits so the resulting metrics can be
-//! recorded in the GA parity report shared with other SDKs.
+//! The suite executes a multi-provider fetch twice and asserts that the resulting assignments,
+//! receipts, and provider reports remain identical. Instrumentation captures concurrency limits so
+//! the resulting metrics can be recorded in the GA parity report shared with other SDKs.
 use blake3::hash as blake3_hash;
 use norito::json::{self, Value};
 use sorafs_car::{

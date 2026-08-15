@@ -62,11 +62,9 @@ pub struct Args {
     bound_manifest_out: Option<PathBuf>,
     /// Write the exact signed consensus-header hash as one lowercase line.
     ///
-    /// This also atomically publishes a sibling `*.identity.toml` containing
-    /// the same exact value as both client `network_id` and
-    /// `genesis.expected_hash`. Deployment tooling must consume that paired
-    /// identity artifact rather than assembling the two trust domains
-    /// independently.
+    /// This also atomically publishes a sibling `*.identity.toml` containing the same exact value
+    /// as both client `network_id` and `genesis.expected_hash`. Deployment tooling must consume
+    /// that paired identity artifact rather than assembling the two trust domains independently.
     #[clap(long, value_name = "PATH")]
     expected_hash_out: Option<PathBuf>,
     /// Use this topology instead of specified in genesis.json.
@@ -597,9 +595,8 @@ pub(crate) fn bind_and_sign_staged_sumeragi_v2_context(
     )?;
     Ok((bound_manifest, block))
 }
-/// Stage a raw genesis transaction and return its exact Nexus/AMX consensus
-/// and execution-policy commitments without committing state or touching
-/// persistent node storage.
+/// Stage a raw genesis transaction and return its exact Nexus/AMX consensus and execution-policy
+/// commitments without committing state or touching persistent node storage.
 fn staged_sumeragi_v2_context_hashes(
     genesis: &RawGenesisTransaction,
     genesis_key_pair: &KeyPair,

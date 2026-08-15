@@ -1,9 +1,8 @@
 //! Low-cardinality operational metrics for the Musubi V1 package ecosystem.
 //!
-//! Every label is selected from a closed Rust enum. Package identities,
-//! namespaces, accounts, aliases, archive IDs, provider IDs, transaction
-//! hashes, operation IDs, URLs, and raw error strings therefore cannot enter
-//! the Prometheus cardinality surface through this API.
+//! Every label is selected from a closed Rust enum. Package identities, namespaces, accounts,
+//! aliases, archive IDs, provider IDs, transaction hashes, operation IDs, URLs, and raw error
+//! strings therefore cannot enter the Prometheus cardinality surface through this API.
 use prometheus::{
     IntCounterVec, Opts, Registry,
     core::{AtomicU64, Collector, GenericGauge, GenericGaugeVec},

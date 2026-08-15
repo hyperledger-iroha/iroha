@@ -1,16 +1,14 @@
 //! Shared transparent STARK substrate for proof-managed private-note pools.
 //!
-//! This module owns proof-system mechanics and relation-neutral note chips:
-//! canonical byte range checks, a three-lane byte-copy permutation, masked
-//! trace LDEs, verifier-fixed preprocessing, quotient composition, SHA-256
-//! vector-row commitments, binary FRI, grinding, and the exact aggregate
-//! proof codec. Protocol adapters retain their statement policy, ordered hash
-//! schedule, profile-only rows, public-input digest, and error mapping.
+//! This module owns proof-system mechanics and relation-neutral note chips: canonical byte range
+//! checks, a three-lane byte-copy permutation, masked trace LDEs, verifier-fixed preprocessing,
+//! quotient composition, SHA-256 vector-row commitments, binary FRI, grinding, and the exact
+//! aggregate proof codec. Protocol adapters retain their statement policy, ordered hash schedule,
+//! profile-only rows, public-input digest, and error mapping.
 //!
-//! The substrate deliberately has no activation or ledger-effect API. A
-//! profile is not safe to expose until its extension-domain residue evaluator,
-//! strict proof adversaries, native differential tests, and typed state
-//! transition are all complete.
+//! The substrate deliberately has no activation or ledger-effect API. A profile is not safe to
+//! expose until its extension-domain residue evaluator, strict proof adversaries, native
+//! differential tests, and typed state transition are all complete.
 use super::{
     aggregate_stark::{self as aggregate, AggregateOpenedRowEvaluatorV1},
     transparent_stark::{
@@ -239,10 +237,9 @@ fn map_aggregate_error_v1(error: aggregate::AggregateStarkErrorV1) -> ProofManag
 }
 /// Closed protocol data supplied by one compiled private-note profile.
 ///
-/// The generic driver fixes every cryptographic primitive and security
-/// dimension. A profile may only choose its exact wire magic/version, bounded
-/// trace range, widths, byte ceiling, transcript domains, and compiled
-/// descriptor/digest.
+/// The generic driver fixes every cryptographic primitive and security dimension. A profile may
+/// only choose its exact wire magic/version, bounded trace range, widths, byte ceiling, transcript
+/// domains, and compiled descriptor/digest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProofManagedNoteStarkProtocolV1 {
     /// Exact aggregate proof dimensions and wire limits.

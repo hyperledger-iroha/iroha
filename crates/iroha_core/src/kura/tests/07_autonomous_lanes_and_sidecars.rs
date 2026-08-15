@@ -1,3 +1,120 @@
+/// Exact autonomous attempt shared with Sumeragi handoff regressions.
+pub(crate) struct AutonomousLaneAttemptFixture {
+    /// Kura containing the immutable attempt and its terminal view state.
+    pub(crate) kura: Arc<Kura>,
+    /// Producer-authenticated payload stored in the exact attempt namespace.
+    pub(crate) payload: LaneExecutablePayloadV1,
+    /// Locally signed vote retained by the durable NewView certificate.
+    pub(crate) new_view_vote: crate::lane_consensus::LaneBlockNewViewVoteV1,
+    /// Exact NewView certificate retained in the durable attempt.
+    pub(crate) new_view_certificate: crate::lane_consensus::LaneBlockNewViewCertificateV1,
+    /// Keeps the isolated Kura root alive for the fixture lifetime.
+    _root: TempDir,
+}
+
+/// Persist and retire one proposal-height-one autonomous attempt.
+fn autonomous_lane_attempt_fixture(signer: &KeyPair, retire: bool) -> AutonomousLaneAttemptFixture {
+    let root = TempDir::new().expect("create retired autonomous attempt root");
+    let config = kura_config_for_dir(&root, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let lane_id = LaneId::new(1);
+    let lane_entry = lane_config.entry(lane_id).expect("configured fixture lane");
+    let (_, _, seed_payload) =
+        autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, signer);
+    let payload = repropose_autonomous_lane_payload_for_kura(&seed_payload, 1, signer);
+    let network_id = payload.network_id;
+    let epoch = payload.epoch;
+    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize retired-attempt Kura");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
+        .expect("persist retired-attempt payload");
+    let durable_new_view = next_durable_lane_view_certificate_for_kura(
+        &payload.origin_proposal,
+        &payload,
+        signer,
+        network_id,
+        epoch,
+    );
+    let new_view_certificate = durable_new_view.certificate.clone();
+    let new_view_vote = crate::lane_consensus::LaneBlockNewViewVoteV1::new_signed(
+        new_view_certificate.body.clone(),
+        PeerId::new(signer.public_key().clone()),
+        signer.private_key(),
+    )
+    .expect("sign exact retired-attempt NewView vote");
+    kura.persist_lane_new_view_certificate(
+        lane_id,
+        payload.origin_proposal.descriptor.lane_block_height,
+        durable_new_view,
+        network_id,
+        epoch,
+    )
+    .expect("persist retired-attempt NewView certificate");
+    if retire {
+        let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
+        kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
+            .expect("persist exact autonomous attempt retirement");
+    }
+    AutonomousLaneAttemptFixture {
+        kura,
+        payload,
+        new_view_vote,
+        new_view_certificate,
+        _root: root,
+    }
+}
+
+/// Persist and retire one exact autonomous attempt for a handoff test.
+pub(crate) fn retired_autonomous_lane_attempt_fixture(
+    signer: &KeyPair,
+) -> AutonomousLaneAttemptFixture {
+    autonomous_lane_attempt_fixture(signer, true)
+}
+
+/// Persist one exact autonomous attempt without a terminal retirement.
+pub(crate) fn unretired_autonomous_lane_attempt_fixture(
+    signer: &KeyPair,
+) -> AutonomousLaneAttemptFixture {
+    autonomous_lane_attempt_fixture(signer, false)
+}
+
+#[test]
+fn exact_retired_autonomous_attempt_accessor_uses_proposal_height_namespace() {
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let fixture = retired_autonomous_lane_attempt_fixture(&signer);
+    let descriptor = &fixture.payload.origin_proposal.descriptor;
+    let exact = fixture
+        .kura
+        .read_autonomous_lane_retired_attempt(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+            fixture.payload.network_id,
+            fixture.payload.epoch,
+        )
+        .expect("revalidate exact retired attempt")
+        .expect("exact retired attempt exists");
+    assert_eq!(exact.artifact.executable_payload, fixture.payload);
+    assert_eq!(exact.current_proposal.descriptor.lane_block_view, 1);
+    assert_eq!(
+        exact.retirement,
+        AutonomousLaneSlotRetirementV1::from_payload(&exact.artifact.executable_payload)
+    );
+    assert!(
+        fixture
+            .kura
+            .read_autonomous_lane_retired_attempt(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                descriptor.proposal_height.saturating_add(1),
+                fixture.payload.network_id,
+                fixture.payload.epoch,
+            )
+            .expect("wrong exact attempt coordinate is a clean miss")
+            .is_none()
+    );
+}
+
 #[test]
 fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
     let temp_dir = TempDir::new().expect("temp dir");

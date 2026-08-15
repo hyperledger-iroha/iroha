@@ -1,9 +1,8 @@
 //! Smoke tests that exercise the compiled `iroha` binary directly.
 //!
-//! These tests provide basic coverage that the CLI binary starts up,
-//! renders help text, and reports the current version string. They help
-//! catch regression where the clap command tree fails to build or the
-//! binary cannot launch in automated environments.
+//! These tests provide basic coverage that the CLI binary starts up, renders help text, and reports
+//! the current version string. They help catch regression where the clap command tree fails to
+//! build or the binary cannot launch in automated environments.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::hash;

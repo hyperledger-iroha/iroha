@@ -377,10 +377,9 @@ impl ConsensusMessageControl {
     }
     /// Replace the initial command before the daemon starts.
     ///
-    /// The staged rules remain revision 1, so daemon initialization applies and
-    /// acknowledges them before authenticated consensus ingress can run. This
-    /// fails closed once an acknowledgement exists or another initial command
-    /// has already been staged.
+    /// The staged rules remain revision 1, so daemon initialization applies and acknowledges them
+    /// before authenticated consensus ingress can run. This fails closed once an acknowledgement
+    /// exists or another initial command has already been staged.
     pub(crate) fn stage_initial_rules(
         &mut self,
         rules: &[ConsensusMessageControlRule],
@@ -518,9 +517,8 @@ impl ConsensusMessageControl {
     /// `source_id` is the 32-byte digest of the exact signed source transaction,
     /// not its external-entrypoint projection.
     ///
-    /// The feature-isolated daemon fsyncs an acknowledgement at the named
-    /// phase and then aborts. Restart sees the acknowledgement and will not
-    /// repeat the same revision.
+    /// The feature-isolated daemon fsyncs an acknowledgement at the named phase and then aborts.
+    /// Restart sees the acknowledgement and will not repeat the same revision.
     pub fn arm_native_amx_fault(
         &self,
         phase: NativeAmxFaultPhase,

@@ -1,8 +1,7 @@
 //! FCMP++ use of the shared generalized-Bulletproof backend.
 //!
-//! The implementation lives in `iroha_zkp_halo2`; this module retains the
-//! FCMP-focused compatibility and adversarial tests against its frozen
-//! Blake2b transcript adapter.
+//! The implementation lives in `iroha_zkp_halo2`; this module retains the FCMP-focused
+//! compatibility and adversarial tests against its frozen Blake2b transcript adapter.
 #[cfg(test)]
 use super::proof_math::FcmpProofRandomSource;
 pub(super) use iroha_zkp_halo2::generalized_bulletproof::{

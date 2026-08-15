@@ -90,8 +90,7 @@ impl IncentiveLogConfig {
             self.max_measurements_per_epoch = Self::default_max_measurements_per_epoch();
         }
     }
-    /// Applies defaults and validates the first-release retained-memory
-    /// geometry.
+    /// Applies defaults and validates the first-release retained-memory geometry.
     pub fn validate(&mut self) -> Result<(), IncentiveLogError> {
         self.apply_defaults();
         if self.max_active_epochs > INCENTIVE_MAX_ACTIVE_EPOCHS_V1 {

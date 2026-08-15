@@ -1,11 +1,10 @@
 //! Verification of drand BLS12-381 randomness beacons.
 //!
 //! The first-release SoraFS PoR coordinator consumes the production drand
-//! `bls-unchained-g1-rfc9380` scheme. That scheme signs the SHA-256 digest of
-//! the eight-byte big-endian round number with a signature in G1 and a public
-//! key in G2. The published randomness is SHA-256 of the canonical compressed
-//! signature. This module deliberately performs no network I/O and accepts no
-//! remotely supplied chain metadata; callers must pin the chain identity and
+//! `bls-unchained-g1-rfc9380` scheme. That scheme signs the SHA-256 digest of the eight-byte
+//! big-endian round number with a signature in G1 and a public key in G2. The published randomness
+//! is SHA-256 of the canonical compressed signature. This module deliberately performs no network
+//! I/O and accepts no remotely supplied chain metadata; callers must pin the chain identity and
 //! public key in configuration before invoking the verifier.
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared};
 use group::{Curve as _, Group as _, prime::PrimeCurveAffine as _};
@@ -52,9 +51,8 @@ pub fn is_valid_unchained_g1_rfc9380_public_key(public_key: &[u8]) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`DrandVerificationError`] for a zero round, malformed or
-/// non-canonical curve encodings, an invalid pairing, or mismatched advertised
-/// randomness.
+/// Returns [`DrandVerificationError`] for a zero round, malformed or non-canonical curve encodings,
+/// an invalid pairing, or mismatched advertised randomness.
 pub fn verify_unchained_g1_rfc9380(
     public_key: &[u8],
     round: u64,

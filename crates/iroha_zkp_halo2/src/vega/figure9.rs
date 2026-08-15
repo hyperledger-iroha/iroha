@@ -1,10 +1,9 @@
 //! Closed first-release Vega Figure 9 mDL relation.
 //!
 //! The circuit proves the authenticated bytes themselves.  Native preflight in
-//! `iroha_core` is only an early rejection path and is not part of the
-//! relation's soundness argument. Both ES256 checks reconstruct the unique
-//! P1363 `s` scalar from the inverse witness and enforce the canonical low-s
-//! representative inside the proof relation.
+//! `iroha_core` is only an early rejection path and is not part of the relation's soundness
+//! argument. Both ES256 checks reconstruct the unique P1363 `s` scalar from the inverse witness and
+//! enforce the canonical low-s representative inside the proof relation.
 #[cfg(test)]
 use super::{
     VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
@@ -62,8 +61,7 @@ pub enum VegaMdlFigure9ErrorV1 {
         /// Required length.
         expected: usize,
     },
-    /// A supposedly fixed byte differs from the one released deterministic
-    /// CBOR encoding.
+    /// A supposedly fixed byte differs from the one released deterministic CBOR encoding.
     #[error("Vega Figure 9 witness field `{field}` is not the released deterministic encoding")]
     NonCanonicalWitnessEncoding {
         /// Stable field label.
@@ -75,10 +73,9 @@ pub enum VegaMdlFigure9ErrorV1 {
 }
 /// Borrowed private inputs for the one released Figure 9 mDL relation.
 ///
-/// The caller retains ownership so document bytes and signature witnesses do
-/// not acquire another long-lived secret copy in the proof-system crate.
-/// `s^-1` is only an assignment representation: the circuit reconstructs `s`,
-/// proves the ECDSA group equation, and admits only the low-s P1363
+/// The caller retains ownership so document bytes and signature witnesses do not acquire another
+/// long-lived secret copy in the proof-system crate. `s^-1` is only an assignment representation:
+/// the circuit reconstructs `s`, proves the ECDSA group equation, and admits only the low-s P1363
 /// representative for both signatures.
 #[derive(Clone, Copy)]
 pub struct VegaMdlFigure9WitnessV1<'a> {
@@ -94,9 +91,8 @@ impl<'a> VegaMdlFigure9WitnessV1<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`VegaMdlFigure9ErrorV1::InvalidWitnessLength`] unless the
-    /// issuer COSE `Sig_structure` and Tag-24 birth item have their one
-    /// canonical released widths.
+    /// Returns [`VegaMdlFigure9ErrorV1::InvalidWitnessLength`] unless the issuer COSE
+    /// `Sig_structure` and Tag-24 birth item have their one canonical released widths.
     pub fn new(
         issuer_authentication_sig_structure: &'a [u8],
         birth_date_issuer_signed_item: &'a [u8],
@@ -169,9 +165,8 @@ impl fmt::Debug for VegaMdlFigure9WitnessV1<'_> {
 ///
 /// # Errors
 ///
-/// Returns [`VegaMdlFigure9ErrorV1::UnsatisfiedRelation`] if any authenticated
-/// byte, hash, P-256 signature, date, expiry, or completed-age constraint
-/// fails.
+/// Returns [`VegaMdlFigure9ErrorV1::UnsatisfiedRelation`] if any authenticated byte, hash, P-256
+/// signature, date, expiry, or completed-age constraint fails.
 pub fn validate_vega_mdl_figure9_relation_v1(
     public_inputs: &[Scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
     witness: &VegaMdlFigure9WitnessV1<'_>,

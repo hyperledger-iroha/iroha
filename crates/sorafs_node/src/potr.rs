@@ -1,12 +1,11 @@
 //! Durable PoTR receipt tracking for the embedded storage node.
 //!
-//! A receipt is accepted only after both mandatory signatures have been
-//! verified against the configured gateway key and a council-verified provider
-//! admission. The exact final signed receipt is committed before any repair
-//! callback. Terminal callbacks use the signed receipt digest as their
-//! exactly-once source identity and must return the canonical proof-outcome
-//! operation or repair-task identity. A substituted acknowledgement is never
-//! checkpointed, so a crash or rejected acknowledgement remains safe to replay.
+//! A receipt is accepted only after both mandatory signatures have been verified against the
+//! configured gateway key and a council-verified provider admission. The exact final signed receipt
+//! is committed before any repair callback. Terminal callbacks use the signed receipt digest as
+//! their exactly-once source identity and must return the canonical proof-outcome operation or
+//! repair-task identity. A substituted acknowledgement is never checkpointed, so a crash or
+//! rejected acknowledgement remains safe to replay.
 use crate::proof_outcome_forwarder::{ProofOutcomeOutboxError, potr_proof_outcome_operation_id_v1};
 use iroha_data_model::sorafs::moderation_ledger::sorafs_repair_task_id_v1;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
@@ -53,11 +52,10 @@ static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static CHECKPOINT_PROCESS_LOCK: Mutex<()> = Mutex::new(());
 /// Exact finalized provider-admission policy accepted for one PoTR receipt.
 ///
-/// The binding is persisted with the final signed receipt before any ledger or
-/// repair handoff. `policy_identity` names one governance-controlled policy
-/// series, while `policy_digest` and `policy_sequence` identify the exact
-/// revision in that series. The finalized cursor prevents a stale fork or
-/// same-height substitution from being admitted after restart.
+/// The binding is persisted with the final signed receipt before any ledger or repair handoff.
+/// `policy_identity` names one governance-controlled policy series, while `policy_digest` and
+/// `policy_sequence` identify the exact revision in that series. The finalized cursor prevents a
+/// stale fork or same-height substitution from being admitted after restart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PotrAdmissionPolicyBindingV1 {
     /// Provider governed by this admission revision.
@@ -115,8 +113,7 @@ impl PotrAdmissionPolicyBindingV1 {
         }
         Ok(())
     }
-    /// Require this binding to be the same revision as, or a finalized
-    /// successor of, `floor`.
+    /// Require this binding to be the same revision as, or a finalized successor of, `floor`.
     pub fn ensure_at_or_after(self, floor: Self) -> Result<(), PotrAdmissionPolicyProgressError> {
         if self.provider_id != floor.provider_id {
             return Err(PotrAdmissionPolicyProgressError::ProviderChanged);
@@ -221,8 +218,7 @@ pub struct PotrRepairHandoffError(pub String);
 pub trait PotrLatencyRepairHandoff: Send + Sync + std::fmt::Debug {
     /// Enqueue the exact governed receipt for authoritative ledger submission.
     ///
-    /// Success must return
-    /// [`potr_proof_outcome_operation_id_v1`] for the supplied receipt and
+    /// Success must return [`potr_proof_outcome_operation_id_v1`] for the supplied receipt and
     /// admission-envelope digest.
     fn enqueue_proof_outcome(
         &self,
@@ -232,8 +228,7 @@ pub trait PotrLatencyRepairHandoff: Send + Sync + std::fmt::Debug {
     ) -> Result<[u8; 32], PotrRepairHandoffError>;
     /// Enqueue a latency repair using the final signed receipt digest as identity.
     ///
-    /// Success must return
-    /// [`sorafs_repair_task_id_v1`] for `source_identity`.
+    /// Success must return [`sorafs_repair_task_id_v1`] for `source_identity`.
     fn enqueue_latency_repair(
         &self,
         source_identity: [u8; 32],

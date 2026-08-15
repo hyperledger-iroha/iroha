@@ -44,10 +44,9 @@ pub fn decode_wide(memory: &Memory, pc: u64) -> Result<(u32, u32), VMError> {
 }
 /// Decode one instruction directly from a code slice.
 ///
-/// This is the allocation-free admission/predecode path. It deliberately has
-/// the same alignment, bounds, byte order, errors, and fixed width as
-/// [`decode_wide`], without constructing the VM's multi-megabyte memory and
-/// Merkle image merely to inspect immutable code.
+/// This is the allocation-free admission/predecode path. It deliberately has the same alignment,
+/// bounds, byte order, errors, and fixed width as [`decode_wide`], without constructing the VM's
+/// multi-megabyte memory and Merkle image merely to inspect immutable code.
 pub fn decode_slice(code: &[u8], pc: u64) -> Result<(u32, u32), VMError> {
     #[cfg(test)]
     {
