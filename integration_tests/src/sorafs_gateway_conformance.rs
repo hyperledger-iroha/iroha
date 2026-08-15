@@ -1164,9 +1164,8 @@ pub fn generate_attestation(
 ///
 /// # Errors
 ///
-/// Returns an error when the envelope is malformed, the payload hash does not
-/// match the embedded report, the signer metadata is invalid, or the signature
-/// fails verification.
+/// Returns an error when the envelope is malformed, the payload hash does not match the embedded
+/// report, the signer metadata is invalid, or the signature fails verification.
 pub fn verify_attestation_envelope(
     envelope_bytes: &[u8],
 ) -> EyreResult<VerifiedGatewayAttestation> {

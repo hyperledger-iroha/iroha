@@ -1,12 +1,9 @@
-//! Trigger logic. Instead of defining a Trigger as an entity, we
-//! provide a collection of triggers as the smallest unit, which is an
-//! idea borrowed from lisp hooks.
+//! Trigger logic. Instead of defining a Trigger as an entity, we provide a collection of triggers
+//! as the smallest unit, which is an idea borrowed from lisp hooks.
 //!
-//! The point of the idea is to create an ordering (or hash function)
-//! which maps the event filter and the event that triggers it to the
-//! same approximate location in the hierarchy, thus using Binary
-//! search trees (common lisp) or hash tables (racket) to quickly
-//! trigger hooks.
+//! The point of the idea is to create an ordering (or hash function) which maps the event filter
+//! and the event that triggers it to the same approximate location in the hierarchy, thus using
+//! Binary search trees (common lisp) or hash tables (racket) to quickly trigger hooks.
 use super::trigger_is_enabled;
 use crate::smartcontracts::isi::triggers::specialized::{
     LoadedAction, LoadedActionTrait, SpecializedAction, SpecializedTrigger, TimeTriggerRetryState,
@@ -117,8 +114,7 @@ pub struct Set {
     active_time_trigger_ids: ActiveTriggerIdStore,
     /// Active by-call trigger ids.
     active_by_call_trigger_ids: ActiveTriggerIdStore,
-    /// [`IvmBytecode`]s map by contract blob hash.
-    /// This map serves multiple purposes:
+    /// [`IvmBytecode`]s map by contract blob hash. This map serves multiple purposes:
     /// 1. Querying original contract blob of trigger
     /// 2. Deduplicating triggers with the same contract blob
     contracts: TriggerContractStore,
@@ -672,8 +668,7 @@ pub trait SetReadOnly {
     fn active_by_call_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
     /// Mapping from code hash to bytecode entry.
     fn contracts(&self) -> &impl StorageReadOnly<HashOf<IvmBytecode>, IvmBytecodeEntry>;
-    /// Get original [`IvmBytecode`] for [`TriggerId`].
-    /// Returns `None` if there's no [`Trigger`]
+    /// Get original [`IvmBytecode`] for [`TriggerId`]. Returns `None` if there's no [`Trigger`]
     /// with specified `id` that has IVM executable
     #[inline]
     fn get_original_contract(&self, hash: &HashOf<IvmBytecode>) -> Option<&IvmBytecode> {
@@ -926,9 +921,8 @@ pub trait SetReadOnly {
     }
     /// Returns a bounded iterator of trigger ids matching a given time event.
     ///
-    /// Retry attempts are selected first. Scheduled matches beyond
-    /// `max_invocations` are discarded with the elapsed interval and are not
-    /// carried into a later block.
+    /// Retry attempts are selected first. Scheduled matches beyond `max_invocations` are discarded
+    /// with the elapsed interval and are not carried into a later block.
     fn match_time_event(
         &self,
         event: TimeEvent,
@@ -998,8 +992,7 @@ pub trait SetReadOnly {
             .filter(move |(_, action)| action.filter.matches(event))
             .map(move |(id, action)| (id.clone(), action.clone()))
     }
-    /// Get [`ExecutableRef`] for given [`TriggerId`].
-    /// Returns `None` if `id` is not in the set.
+    /// Get [`ExecutableRef`] for given [`TriggerId`]. Returns `None` if `id` is not in the set.
     fn get_executable(&self, id: &TriggerId) -> Option<&ExecutableRef> {
         let event_type = self.ids().get(id)?;
         let executable = match event_type {
@@ -1626,9 +1619,8 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             })
             .is_some()
     }
-    /// Decrease the counter of the original [`IvmBytecode`] by `blob_hash`
-    /// or remove it if the counter reaches zero.
-    /// Logs and skips removal if the bytecode entry is missing.
+    /// Decrease the counter of the original [`IvmBytecode`] by `blob_hash` or remove it if the
+    /// counter reaches zero. Logs and skips removal if the bytecode entry is missing.
     fn remove_original_trigger(
         contracts: &mut TriggerContractStoreTransaction,
         blob_hash: HashOf<IvmBytecode>,
@@ -1774,9 +1766,8 @@ fn replace_by_call_authority(
     }
     updated
 }
-/// Same as [`Executable`], but instead of
-/// [`Ivm`](iroha_data_model::transaction::Executable::Ivm) contains hash of the IVM blob
-/// Hash of the bytecode used by the trigger
+/// Same as [`Executable`], but instead of [`Ivm`](iroha_data_model::transaction::Executable::Ivm)
+/// contains hash of the IVM blob Hash of the bytecode used by the trigger
 #[derive(Clone)]
 pub enum ExecutableRef {
     /// Loaded IVM
@@ -2320,9 +2311,8 @@ impl From<ModRepeatsError> for InstructionExecutionError {
     }
 }
 // --- Norito DTO for Set (Phase 1 scaffolding) ---
-/// Norito-encoded Data Transfer Object for serializing/deserializing the
-/// `Set` of triggers and associated entries. Used in scaffolding paths where a
-/// compact binary representation is required.
+/// Norito-encoded Data Transfer Object for serializing/deserializing the `Set` of triggers and
+/// associated entries. Used in scaffolding paths where a compact binary representation is required.
 #[derive(Encode, Decode)]
 pub struct SetDto {
     data: Vec<(TriggerId, LoadedActionDto<DataEventFilter>)>,

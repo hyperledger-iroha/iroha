@@ -11,10 +11,12 @@ use curve25519_dalek::{
     traits::Identity,
 };
 use p256::elliptic_curve::bigint::{
-    CtChoice, Encoding, U256, impl_modulus,
+    CtChoice, Encoding, Limb, U256, Word, impl_modulus,
     modular::constant_mod::{Residue, ResidueParams},
 };
-use p256::elliptic_curve::subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
+use p256::elliptic_curve::subtle::{
+    Choice, ConditionallySelectable, ConstantTimeEq, ConstantTimeLess as _,
+};
 use sha3::{Digest as _, Keccak256};
 use std::{
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
@@ -55,6 +57,7 @@ impl<T: Copy + Zeroize> SecretCopyValueV1<T> {
     fn as_mut(&mut self) -> &mut T {
         &mut self.0
     }
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn expose_copy(&self) -> T {
         self.0
     }
@@ -97,6 +100,13 @@ impl<F: Copy + Zeroize> SecretCycleScalarV1<F> {
     pub(super) fn as_ref(&self) -> &F {
         self.0.as_ref()
     }
+    /// Move this private scalar directly into caller-owned erasing storage.
+    /// The previous destination and the emptied source are both cleared.
+    pub(super) fn move_into(mut self, destination: &mut F) {
+        destination.zeroize();
+        core::mem::swap(destination, self.0.as_mut());
+        drop(self);
+    }
     #[cfg(test)]
     pub(super) fn expose_ref(&self) -> &F {
         self.as_ref()
@@ -117,7 +127,33 @@ impl<F: Copy + Zeroize> SecretCycleCoordinatesV1<F> {
         self.0.as_ref()
     }
 }
+impl SecretCycleCoordinatesV1<Field25519> {
+    fn from_secret_coordinate_owners_v1(
+        mut wei_x: SecretCopyValueV1<Field25519>,
+        mut wei_y: SecretCopyValueV1<Field25519>,
+    ) -> Self {
+        let mut coordinates = Self(SecretCopyValueV1::new((Field25519::ZERO, Field25519::ZERO)));
+        let (destination_x, destination_y) = &mut coordinates.0.0;
+        core::mem::swap(destination_x, &mut wei_x.0);
+        core::mem::swap(destination_y, &mut wei_y.0);
+        drop(wei_x);
+        drop(wei_y);
+        coordinates
+    }
+}
 struct SecretU256V1(U256);
+impl SecretU256V1 {
+    fn from_borrowed_le_bytes_v1(bytes: &[u8; 32]) -> Self {
+        let mut integer = Self(U256::ZERO);
+        let mut index = 0;
+        while index < bytes.len() {
+            integer.0.as_words_mut()[index / Limb::BYTES] |=
+                Word::from(bytes[index]) << ((index % Limb::BYTES) * 8);
+            index += 1;
+        }
+        integer
+    }
+}
 impl Drop for SecretU256V1 {
     fn drop(&mut self) {
         self.0 = U256::ZERO;
@@ -133,6 +169,111 @@ impl Drop for SecretU256V1 {
 std::thread_local! {
     static SECRET_U256_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+}
+static FIELD25519_MODULUS_LE_V1: [u8; 32] = [
+    0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+static HELIOSELENE_MODULUS_LE_V1: [u8; 32] = [
+    0x9f, 0xc7, 0x27, 0x79, 0x72, 0xd2, 0xb6, 0x6e, 0x58, 0x6b, 0x65, 0xb7, 0x2c, 0x78, 0x7f, 0xbf,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+struct SecretCycleScalarCanonicalityStateV1 {
+    less: Choice,
+    greater: Choice,
+    byte_less: Choice,
+    byte_greater: Choice,
+    prefix_decided: Choice,
+    prefix_equal: Choice,
+    less_update: Choice,
+    greater_update: Choice,
+}
+impl SecretCycleScalarCanonicalityStateV1 {
+    fn new_v1() -> Self {
+        Self {
+            less: Choice::from(0),
+            greater: Choice::from(0),
+            byte_less: Choice::from(0),
+            byte_greater: Choice::from(0),
+            prefix_decided: Choice::from(0),
+            prefix_equal: Choice::from(0),
+            less_update: Choice::from(0),
+            greater_update: Choice::from(0),
+        }
+    }
+    fn observe_byte_v1(&mut self, byte: &u8, modulus_byte: &u8) {
+        self.prefix_decided = self.less | self.greater;
+        self.prefix_equal = !self.prefix_decided;
+        self.byte_less = byte.ct_lt(modulus_byte);
+        self.byte_greater = modulus_byte.ct_lt(byte);
+        self.less_update = self.prefix_equal & self.byte_less;
+        self.greater_update = self.prefix_equal & self.byte_greater;
+        self.less |= self.less_update;
+        self.greater |= self.greater_update;
+    }
+}
+impl Drop for SecretCycleScalarCanonicalityStateV1 {
+    fn drop(&mut self) {
+        self.less = Choice::from(0);
+        self.greater = Choice::from(0);
+        self.byte_less = Choice::from(0);
+        self.byte_greater = Choice::from(0);
+        self.prefix_decided = Choice::from(0);
+        self.prefix_equal = Choice::from(0);
+        self.less_update = Choice::from(0);
+        self.greater_update = Choice::from(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.less);
+        let _ = core::hint::black_box(&mut self.greater);
+        let _ = core::hint::black_box(&mut self.byte_less);
+        let _ = core::hint::black_box(&mut self.byte_greater);
+        let _ = core::hint::black_box(&mut self.prefix_decided);
+        let _ = core::hint::black_box(&mut self.prefix_equal);
+        let _ = core::hint::black_box(&mut self.less_update);
+        let _ = core::hint::black_box(&mut self.greater_update);
+        #[cfg(test)]
+        let _ = SECRET_CYCLE_SCALAR_CANONICALITY_STATE_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
+    }
+}
+#[cfg(test)]
+std::thread_local! {
+    static SECRET_CYCLE_SCALAR_CANONICALITY_STATE_DROPS_V1: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+fn validate_secret_cycle_scalar_encoding_v1(
+    bytes: &[u8; 32],
+    modulus: &[u8; 32],
+) -> Result<(), FcmpNativeErrorV1> {
+    let mut canonicality = SecretCycleScalarCanonicalityStateV1::new_v1();
+    let mut index = bytes.len();
+    while index != 0 {
+        index -= 1;
+        let byte = &bytes[index];
+        let modulus_byte = &modulus[index];
+        canonicality.observe_byte_v1(byte, modulus_byte);
+    }
+    let is_canonical = bool::from(canonicality.less);
+    drop(canonicality);
+    if !is_canonical {
+        return Err(FcmpNativeErrorV1::ScalarEncoding);
+    }
+    Ok(())
+}
+#[cfg(test)]
+pub(super) fn reset_secret_cycle_scalar_decoder_owner_drops_v1() {
+    SECRET_CYCLE_SCALAR_CANONICALITY_STATE_DROPS_V1.with(|drops| drops.set(0));
+    SECRET_U256_DROPS_V1.with(|drops| drops.set(0));
+    SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+}
+#[cfg(test)]
+pub(super) fn secret_cycle_scalar_decoder_owner_drops_v1() -> (usize, usize, usize) {
+    (
+        SECRET_CYCLE_SCALAR_CANONICALITY_STATE_DROPS_V1.with(std::cell::Cell::get),
+        SECRET_U256_DROPS_V1.with(std::cell::Cell::get),
+        SECRET_COPY_VALUE_DROPS_V1.with(std::cell::Cell::get),
+    )
 }
 impl_modulus!(
     Field25519Modulus,
@@ -150,9 +291,8 @@ macro_rules! define_local_field {
     ($name:ident, $residue:ty) => {
         /// Local transparent field boundary used by the reusable proof backend.
         ///
-        /// Keeping the newtype local makes its cryptographic trait
-        /// implementations coherent while every operation continues to
-        /// delegate to the same constant-modulus residue arithmetic.
+        /// Keeping the newtype local makes its cryptographic trait implementations coherent while
+        /// every operation continues to delegate to the same constant-modulus residue arithmetic.
         #[repr(transparent)]
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
         pub(super) struct $name($residue);
@@ -181,6 +321,10 @@ macro_rules! define_local_field {
             pub(super) fn sub_ref(&self, rhs: &Self) -> Self {
                 Self(self.0 - rhs.0)
             }
+            #[allow(
+                dead_code,
+                reason = "the cycle-generic negation seam is used only by the Field25519 equation"
+            )]
             pub(super) fn neg_ref(&self) -> Self {
                 Self(-self.0)
             }
@@ -336,8 +480,7 @@ pub(super) fn with_secret_field25519_scalar_encoding_v1<T>(
     drop(encoded);
     result
 }
-/// Helioselene counterpart of
-/// [`with_secret_field25519_scalar_encoding_v1`].
+/// Helioselene counterpart of [`with_secret_field25519_scalar_encoding_v1`].
 pub(super) fn with_secret_helioselene_scalar_encoding_v1<T>(
     value: &HelioseleneField,
     use_encoding: impl FnOnce(&[u8; 32]) -> T,
@@ -476,6 +619,27 @@ macro_rules! define_cycle_point {
                 }
                 Some((self.x * inverse, self.y * inverse))
             }
+            /// Convert a secret-derived owned projective point to the two
+            /// intentional witness coordinates while erasing both the point
+            /// slot and its projective inverse on every exit path.
+            #[cfg(test)]
+            pub(super) fn secret_coordinates_v1(
+                mut self,
+            ) -> Option<SecretCycleCoordinatesV1<$field>> {
+                let point = BorrowedZeroizingCopySlot(&mut self);
+                let (mut inverse, is_some) = point.as_ref().z.invert();
+                let inverse = BorrowedZeroizingCopySlot(&mut inverse);
+                if !bool::from(is_some) {
+                    return None;
+                }
+                let coordinates = SecretCycleCoordinatesV1(SecretCopyValueV1::new((
+                    point.as_ref().x.mul_ref(inverse.as_ref()),
+                    point.as_ref().y.mul_ref(inverse.as_ref()),
+                )));
+                drop(inverse);
+                drop(point);
+                Some(coordinates)
+            }
             /// Borrowed counterpart used while an upstream secret-point owner
             /// remains live. Only the returned coordinate owners escape; the
             /// inverse and all arithmetic scratch are erased locally.
@@ -494,10 +658,9 @@ macro_rules! define_cycle_point {
                 drop(inverse);
                 Some(coordinates)
             }
-            /// Extract a private affine x-coordinate by borrowing a point
-            /// retained in an upstream erasing owner. The projective point is
-            /// never copied by value; inverse and coordinate scratch remain
-            /// in local move-only erasing owners on every exit path.
+            /// Extract a private affine x-coordinate by borrowing a point retained in an upstream
+            /// erasing owner. The projective point is never copied by value; inverse and coordinate
+            /// scratch remain in local move-only erasing owners on every exit path.
             pub(super) fn secret_x_ref_v1(&self) -> Option<SecretCycleScalarV1<$field>> {
                 let (mut inverse, is_some) = self.z.invert();
                 let inverse = BorrowedZeroizingCopySlot(&mut inverse);
@@ -530,10 +693,9 @@ macro_rules! define_cycle_point {
                 drop(point);
                 Some(encoded)
             }
-            /// Encode a borrowed secret-derived projective point while its
-            /// upstream owner remains responsible for erasing the point.
-            /// Every inverse, affine coordinate, integer, and byte scratch
-            /// value created here remains in an erasing owner.
+            /// Encode a borrowed secret-derived projective point while its upstream owner remains
+            /// responsible for erasing the point. Every inverse, affine coordinate, integer, and
+            /// byte scratch value created here remains in an erasing owner.
             pub(super) fn secret_encode_ref_v1(&self) -> Option<SecretEncodedScalarV1> {
                 let (mut inverse, is_some) = self.z.invert();
                 let inverse = BorrowedZeroizingCopySlot(&mut inverse);
@@ -667,28 +829,6 @@ define_cycle_point!(
     helioselene_is_odd,
     SELENE_B
 );
-#[cfg(test)]
-impl SelenePoint {
-    /// Convert an owned secret-derived Selene point to its two intentional
-    /// witness coordinates, erasing the point and inverse on every exit path.
-    pub(super) fn secret_coordinates_v1(
-        mut self,
-    ) -> Option<SecretCycleCoordinatesV1<HelioseleneField>> {
-        let point = BorrowedZeroizingCopySlot(&mut self);
-        let (mut inverse, is_some) = point.as_ref().z.invert();
-        let inverse = BorrowedZeroizingCopySlot(&mut inverse);
-        if !bool::from(is_some) {
-            return None;
-        }
-        let coordinates = SecretCycleCoordinatesV1(SecretCopyValueV1::new((
-            point.as_ref().x.mul_ref(inverse.as_ref()),
-            point.as_ref().y.mul_ref(inverse.as_ref()),
-        )));
-        drop(inverse);
-        drop(point);
-        Some(coordinates)
-    }
-}
 /// Lend a borrowed Selene point's owner-confined canonical encoding to one
 /// publication boundary. Projective, affine, integer, and byte scratch are
 /// erased after success, returned error, or unwind.
@@ -793,10 +933,10 @@ fn secret_sqrt_field25519_v1(value: &Field25519) -> Option<SecretCopyValueV1<Fie
 }
 /// Secret-safe Edwards-to-Weierstrass conversion for prover blind points.
 /// Every named compressed-point, point, field, inverse, and coordinate slot is
-/// owned until the final intentional coordinate tuple is returned.
+/// owned until the final move-only coordinate owner is returned.
 pub(super) fn secret_edwards_to_wei25519_v1(
     bytes: &[u8; 32],
-) -> Result<(Field25519, Field25519), FcmpNativeErrorV1> {
+) -> Result<SecretCycleCoordinatesV1<Field25519>, FcmpNativeErrorV1> {
     let compressed = SecretCopyValueV1::new(CompressedEdwardsY(*bytes));
     let point = SecretCopyValueV1::new(
         compressed
@@ -861,7 +1001,9 @@ pub(super) fn secret_edwards_to_wei25519_v1(
         c.mul_ref(y_plus_one.as_ref())
             .mul_ref(wei_y_inverse.as_ref()),
     );
-    Ok((wei_x.expose_copy(), wei_y.expose_copy()))
+    Ok(SecretCycleCoordinatesV1::from_secret_coordinate_owners_v1(
+        wei_x, wei_y,
+    ))
 }
 pub(super) fn monero_varint(mut value: u32) -> Vec<u8> {
     let mut encoded = Vec::with_capacity(5);
@@ -974,29 +1116,26 @@ pub(super) fn decode_helioselene_scalar(
 ) -> Result<HelioseleneField, FcmpNativeErrorV1> {
     decode_helioselene(bytes).ok_or(FcmpNativeErrorV1::ScalarEncoding)
 }
-/// Decode a private Field25519 scalar without creating a by-value encoded
-/// input slot or leaving the decoded integer outside an erasing owner.
+/// Decode a private Field25519 scalar into a move-only owner without creating
+/// a by-value encoded input, bigint parser scratch, or returned field slot.
 pub(super) fn decode_secret_field25519_scalar_v1(
     bytes: &[u8; 32],
-) -> Result<Field25519, FcmpNativeErrorV1> {
-    let integer = SecretU256V1(U256::from_le_slice(bytes));
-    if integer.0 >= FIELD25519_MODULUS {
-        return Err(FcmpNativeErrorV1::ScalarEncoding);
-    }
-    let scalar = SecretCopyValueV1::new(Field25519::new(&integer.0));
-    Ok(scalar.expose_copy())
+) -> Result<SecretCycleScalarV1<Field25519>, FcmpNativeErrorV1> {
+    validate_secret_cycle_scalar_encoding_v1(bytes, &FIELD25519_MODULUS_LE_V1)?;
+    let integer = SecretU256V1::from_borrowed_le_bytes_v1(bytes);
+    let scalar = SecretCycleScalarV1(SecretCopyValueV1::new(Field25519::new(&integer.0)));
+    drop(integer);
+    Ok(scalar)
 }
-/// Decode a private Helioselene scalar without creating a by-value encoded
-/// input slot or leaving the decoded integer outside an erasing owner.
+/// Decode a private Helioselene scalar into the same move-only owner boundary.
 pub(super) fn decode_secret_helioselene_scalar_v1(
     bytes: &[u8; 32],
-) -> Result<HelioseleneField, FcmpNativeErrorV1> {
-    let integer = SecretU256V1(U256::from_le_slice(bytes));
-    if integer.0 >= HELIOSELENE_MODULUS {
-        return Err(FcmpNativeErrorV1::ScalarEncoding);
-    }
-    let scalar = SecretCopyValueV1::new(HelioseleneField::new(&integer.0));
-    Ok(scalar.expose_copy())
+) -> Result<SecretCycleScalarV1<HelioseleneField>, FcmpNativeErrorV1> {
+    validate_secret_cycle_scalar_encoding_v1(bytes, &HELIOSELENE_MODULUS_LE_V1)?;
+    let integer = SecretU256V1::from_borrowed_le_bytes_v1(bytes);
+    let scalar = SecretCycleScalarV1(SecretCopyValueV1::new(HelioseleneField::new(&integer.0)));
+    drop(integer);
+    Ok(scalar)
 }
 pub(super) fn validate_edwards_scalar(bytes: [u8; 32]) -> Result<(), FcmpNativeErrorV1> {
     Option::<curve25519_dalek::scalar::Scalar>::from(
@@ -1103,6 +1242,18 @@ mod tests {
         assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 1);
 
         let helios = hash_helios(&[HelioseleneField::ONE]).expect("nonidentity Helios point");
+        let expected_helios = helios
+            .coordinates()
+            .expect("public Helios affine coordinates");
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        let helios_coordinates = helios
+            .secret_coordinates_v1()
+            .expect("owned secret Helios affine coordinates");
+        assert_eq!(helios_coordinates.component_pair_ref(), &expected_helios);
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 0);
+        drop(helios_coordinates);
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 1);
+
         SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
         let borrowed_unwind = std::panic::catch_unwind(|| {
             let coordinates = helios
@@ -1137,6 +1288,118 @@ mod tests {
                 !owner.contains(forbidden),
                 "forbidden owner API: {forbidden}"
             );
+        }
+    }
+    #[test]
+    fn secret_edwards_conversion_returns_one_coordinate_owner_on_every_exit() {
+        let encoded = ED25519_BASEPOINT_POINT.compress().to_bytes();
+        let expected = edwards_to_wei25519(encoded).expect("public Edwards conversion");
+
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        let coordinates =
+            secret_edwards_to_wei25519_v1(&encoded).expect("owned Edwards conversion");
+        assert_eq!(coordinates.component_pair_ref(), &expected);
+        let success_scratch_drops = SECRET_COPY_VALUE_DROPS_V1.with(Cell::get);
+        drop(coordinates);
+        assert_eq!(
+            SECRET_COPY_VALUE_DROPS_V1.with(Cell::get),
+            success_scratch_drops + 1
+        );
+
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        let identity = EdwardsPoint::identity().compress().to_bytes();
+        assert!(matches!(
+            secret_edwards_to_wei25519_v1(&identity),
+            Err(FcmpNativeErrorV1::EdwardsPointIdentity)
+        ));
+        assert_eq!(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get), 3);
+
+        SECRET_COPY_VALUE_DROPS_V1.with(|drops| drops.set(0));
+        let live_scratch_drops = Cell::new(0_usize);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let coordinates = secret_edwards_to_wei25519_v1(&encoded)
+                .expect("owned Edwards conversion before unwind");
+            assert_eq!(coordinates.component_pair_ref(), &expected);
+            live_scratch_drops.set(SECRET_COPY_VALUE_DROPS_V1.with(Cell::get));
+            let _ = core::hint::black_box(coordinates.component_pair_ref());
+            panic!("exercise Edwards coordinate owner unwind");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            SECRET_COPY_VALUE_DROPS_V1.with(Cell::get),
+            live_scratch_drops.get() + 1
+        );
+
+        let production = include_str!("field.rs")
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("production field boundary")
+            .0;
+        let constructor = production
+            .split_once("impl SecretCycleCoordinatesV1<Field25519> {")
+            .expect("specialized coordinate owner constructor")
+            .1
+            .split_once("struct SecretU256V1")
+            .expect("coordinate owner constructor boundary")
+            .0;
+        for step in [
+            "mut wei_x: SecretCopyValueV1<Field25519>",
+            "mut wei_y: SecretCopyValueV1<Field25519>",
+            "Field25519::ZERO",
+            "let (destination_x, destination_y) = &mut coordinates.0.0",
+            "core::mem::swap(destination_x, &mut wei_x.0)",
+            "core::mem::swap(destination_y, &mut wei_y.0)",
+            "drop(wei_x)",
+            "drop(wei_y)",
+            "\n        coordinates\n",
+        ] {
+            assert!(
+                constructor.contains(step),
+                "missing constructor step {step}"
+            );
+        }
+        assert_eq!(constructor.matches("core::mem::swap(").count(), 2);
+        assert_eq!(constructor.matches("Field25519::ZERO").count(), 2);
+        for forbidden in [
+            "expose_copy",
+            "Result<(Field25519, Field25519)",
+            "callback",
+            "getter",
+            "FnOnce",
+            "FnMut",
+            "Deref",
+            "Clone",
+            ".clone(",
+            ".copied(",
+        ] {
+            assert!(!constructor.contains(forbidden), "retained {forbidden}");
+        }
+        let conversion = production
+            .split_once("pub(super) fn secret_edwards_to_wei25519_v1(")
+            .expect("secret Edwards conversion")
+            .1
+            .split_once("pub(super) fn monero_varint(")
+            .expect("secret Edwards conversion boundary")
+            .0;
+        assert!(
+            conversion
+                .contains(") -> Result<SecretCycleCoordinatesV1<Field25519>, FcmpNativeErrorV1>")
+        );
+        assert!(
+            conversion.contains("Ok(SecretCycleCoordinatesV1::from_secret_coordinate_owners_v1(")
+        );
+        assert!(conversion.contains("wei_x, wei_y,"));
+        for forbidden in [
+            "Result<(Field25519, Field25519)",
+            "Ok((",
+            "wei_x.expose_copy()",
+            "wei_y.expose_copy()",
+            "callback",
+            "FnOnce",
+            "FnMut",
+            "Deref",
+            "Clone",
+        ] {
+            assert!(!conversion.contains(forbidden), "retained {forbidden}");
         }
     }
     #[test]
@@ -1352,16 +1615,135 @@ mod tests {
         }
     }
     #[test]
-    fn private_scalar_decoders_borrow_bytes_and_own_integer_scratch() {
+    fn private_scalar_decoders_keep_comparison_parse_and_result_in_erasing_owners() {
         let source = include_str!("field.rs");
-        let field_decoder = source
+        let production = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("production field boundary")
+            .0;
+        let support = production
+            .split_once("static FIELD25519_MODULUS_LE_V1: [u8; 32] = [")
+            .expect("cycle scalar decoder support")
+            .1
+            .split_once("impl_modulus!(")
+            .expect("cycle scalar decoder support boundary")
+            .0;
+        let support_steps = [
+            "struct SecretCycleScalarCanonicalityStateV1 {",
+            "fn observe_byte_v1(&mut self, byte: &u8, modulus_byte: &u8)",
+            "self.prefix_decided = self.less | self.greater",
+            "self.prefix_equal = !self.prefix_decided",
+            "self.byte_less = byte.ct_lt(modulus_byte)",
+            "self.byte_greater = modulus_byte.ct_lt(byte)",
+            "self.less_update = self.prefix_equal & self.byte_less",
+            "self.greater_update = self.prefix_equal & self.byte_greater",
+            "let mut index = bytes.len()",
+            "index -= 1",
+            "let byte = &bytes[index]",
+            "let modulus_byte = &modulus[index]",
+            "let is_canonical = bool::from(canonicality.less)",
+            "drop(canonicality)",
+            "if !is_canonical",
+        ];
+        let support_positions = support_steps.map(|step| {
+            support
+                .find(step)
+                .unwrap_or_else(|| panic!("missing support step {step}"))
+        });
+        assert!(support_positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(support.matches("= Choice::from(0);").count(), 8);
+        assert_eq!(
+            support.matches("core::hint::black_box(&mut self.").count(),
+            8
+        );
+        assert_eq!(support.matches("compiler_fence(").count(), 1);
+        assert_eq!(support.matches("bool::from(").count(), 1);
+        for forbidden in [
+            "#[derive(",
+            "impl Clone",
+            "impl Copy",
+            "U256::from_le_slice",
+            "U256::from_le_bytes",
+            "let mut res",
+            "let mut buf",
+            "callback",
+            "FnOnce",
+            "Deref",
+        ] {
+            assert!(!support.contains(forbidden), "retained support {forbidden}");
+        }
+        assert_eq!(FIELD25519_MODULUS_LE_V1, FIELD25519_MODULUS.to_le_bytes());
+        assert_eq!(HELIOSELENE_MODULUS_LE_V1, HELIOSELENE_MODULUS.to_le_bytes());
+
+        let integer_parser = production
+            .split_once("impl SecretU256V1 {")
+            .expect("owned integer parser")
+            .1
+            .split_once("impl Drop for SecretU256V1")
+            .expect("owned integer parser boundary")
+            .0;
+        assert!(integer_parser.contains("let mut integer = Self(U256::ZERO)"));
+        assert!(integer_parser.contains("integer.0.as_words_mut()[index / Limb::BYTES] |="));
+        assert!(integer_parser.contains("Word::from(bytes[index])"));
+        let integer_steps = [
+            "let mut integer = Self(U256::ZERO)",
+            "let mut index = 0",
+            "while index < bytes.len()",
+            "integer.0.as_words_mut()[index / Limb::BYTES] |=",
+            "Word::from(bytes[index])",
+            "index += 1",
+            "\n        integer\n",
+        ];
+        let integer_positions = integer_steps.map(|step| {
+            integer_parser
+                .find(step)
+                .unwrap_or_else(|| panic!("missing owned integer step {step}"))
+        });
+        assert!(integer_positions.windows(2).all(|pair| pair[0] < pair[1]));
+        for forbidden in [
+            "from_le_slice",
+            "from_le_bytes",
+            "let mut res",
+            "let mut buf",
+            "[Word::",
+            "[Limb::",
+        ] {
+            assert!(!integer_parser.contains(forbidden));
+        }
+
+        let scalar_owner = production
+            .split_once("impl<F: Copy + Zeroize> SecretCycleScalarV1<F> {")
+            .expect("cycle scalar owner")
+            .1
+            .split_once("/// Move-only owner for both private affine coordinates")
+            .expect("cycle scalar owner boundary")
+            .0;
+        let clear_destination = scalar_owner
+            .find("destination.zeroize()")
+            .expect("destination clear");
+        let transfer = scalar_owner
+            .find("core::mem::swap(destination, self.0.as_mut())")
+            .expect("direct scalar transfer");
+        let source_drop = scalar_owner.find("drop(self)").expect("source owner drop");
+        assert!(clear_destination < transfer && transfer < source_drop);
+        for forbidden in [
+            "*destination =",
+            "expose_copy",
+            "callback",
+            "FnOnce",
+            "Deref",
+        ] {
+            assert!(!scalar_owner.contains(forbidden));
+        }
+
+        let field_decoder = production
             .split_once("pub(super) fn decode_secret_field25519_scalar_v1(")
             .expect("secret Field25519 decoder")
             .1
             .split_once("/// Decode a private Helioselene scalar")
             .expect("Field25519 decoder boundary")
             .0;
-        let helios_decoder = source
+        let helios_decoder = production
             .split_once("pub(super) fn decode_secret_helioselene_scalar_v1(")
             .expect("secret Helioselene decoder")
             .1
@@ -1370,28 +1752,150 @@ mod tests {
             .0;
         for decoder in [field_decoder, helios_decoder] {
             assert!(decoder.contains("bytes: &[u8; 32]"));
-            assert!(decoder.contains("SecretU256V1(U256::from_le_slice(bytes))"));
-            assert!(decoder.contains("SecretCopyValueV1::new("));
-            assert!(decoder.contains("Ok(scalar.expose_copy())"));
-            assert!(!decoder.contains("from_le_bytes"));
+            assert!(decoder.contains("SecretU256V1::from_borrowed_le_bytes_v1(bytes)"));
+            assert!(decoder.contains("SecretCycleScalarV1(SecretCopyValueV1::new("));
+            assert!(decoder.contains("drop(integer)"));
+            assert!(decoder.contains("Ok(scalar)"));
+            let decoder_steps = [
+                "validate_secret_cycle_scalar_encoding_v1(bytes,",
+                "let integer = SecretU256V1::from_borrowed_le_bytes_v1(bytes)",
+                "let scalar = SecretCycleScalarV1(SecretCopyValueV1::new(",
+                "drop(integer)",
+                "Ok(scalar)",
+            ];
+            let decoder_positions = decoder_steps.map(|step| {
+                decoder
+                    .find(step)
+                    .unwrap_or_else(|| panic!("missing private decoder step {step}"))
+            });
+            assert!(decoder_positions.windows(2).all(|pair| pair[0] < pair[1]));
+            for forbidden in [
+                "Result<Field25519",
+                "Result<HelioseleneField",
+                "from_le_slice",
+                "from_le_bytes",
+                "expose_copy",
+                "Option<",
+                "CtOption",
+                "callback",
+                "FnOnce",
+                "Deref",
+            ] {
+                assert!(!decoder.contains(forbidden), "retained decoder {forbidden}");
+            }
         }
-        let one = U256::ONE.to_le_bytes();
-        assert_eq!(
-            decode_secret_field25519_scalar_v1(&one).expect("canonical Field25519"),
-            decode_field25519_scalar(one).expect("public Field25519 decoder")
-        );
-        assert_eq!(
-            decode_secret_helioselene_scalar_v1(&one).expect("canonical Helioselene"),
-            decode_helioselene_scalar(one).expect("public Helioselene decoder")
-        );
-        assert_eq!(
-            decode_secret_field25519_scalar_v1(&FIELD25519_MODULUS.to_le_bytes()),
-            Err(FcmpNativeErrorV1::ScalarEncoding)
-        );
-        assert_eq!(
-            decode_secret_helioselene_scalar_v1(&HELIOSELENE_MODULUS.to_le_bytes()),
-            Err(FcmpNativeErrorV1::ScalarEncoding)
-        );
+
+        let field_accepted = [
+            ("zero", U256::ZERO.to_le_bytes()),
+            ("one", U256::ONE.to_le_bytes()),
+            (
+                "p-1",
+                FIELD25519_MODULUS.wrapping_sub(&U256::ONE).to_le_bytes(),
+            ),
+        ];
+        for (label, bytes) in field_accepted {
+            reset_secret_cycle_scalar_decoder_owner_drops_v1();
+            let expected = decode_field25519_scalar(bytes).expect("public canonical Field25519");
+            let scalar = decode_secret_field25519_scalar_v1(&bytes)
+                .unwrap_or_else(|_| panic!("private canonical Field25519 {label}"));
+            assert_eq!(scalar.expose_ref(), &expected, "{label}");
+            assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 1, 0));
+            drop(scalar);
+            assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 1, 1));
+        }
+        for (label, bytes) in [
+            ("p", FIELD25519_MODULUS.to_le_bytes()),
+            (
+                "p+1",
+                FIELD25519_MODULUS.wrapping_add(&U256::ONE).to_le_bytes(),
+            ),
+            ("maximum", U256::MAX.to_le_bytes()),
+        ] {
+            reset_secret_cycle_scalar_decoder_owner_drops_v1();
+            assert!(
+                matches!(
+                    decode_secret_field25519_scalar_v1(&bytes),
+                    Err(FcmpNativeErrorV1::ScalarEncoding)
+                ),
+                "{label}"
+            );
+            assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 0, 0));
+        }
+
+        let helios_accepted = [
+            ("zero", U256::ZERO.to_le_bytes()),
+            ("one", U256::ONE.to_le_bytes()),
+            (
+                "p-1",
+                HELIOSELENE_MODULUS.wrapping_sub(&U256::ONE).to_le_bytes(),
+            ),
+        ];
+        for (label, bytes) in helios_accepted {
+            reset_secret_cycle_scalar_decoder_owner_drops_v1();
+            let expected = decode_helioselene_scalar(bytes).expect("public canonical Helioselene");
+            let scalar = decode_secret_helioselene_scalar_v1(&bytes)
+                .unwrap_or_else(|_| panic!("private canonical Helioselene {label}"));
+            assert_eq!(scalar.expose_ref(), &expected, "{label}");
+            assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 1, 0));
+            drop(scalar);
+            assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 1, 1));
+        }
+        for (label, bytes) in [
+            ("p", HELIOSELENE_MODULUS.to_le_bytes()),
+            (
+                "p+1",
+                HELIOSELENE_MODULUS.wrapping_add(&U256::ONE).to_le_bytes(),
+            ),
+            ("maximum", U256::MAX.to_le_bytes()),
+        ] {
+            reset_secret_cycle_scalar_decoder_owner_drops_v1();
+            assert!(
+                matches!(
+                    decode_secret_helioselene_scalar_v1(&bytes),
+                    Err(FcmpNativeErrorV1::ScalarEncoding)
+                ),
+                "{label}"
+            );
+            assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 0, 0));
+        }
+
+        reset_secret_cycle_scalar_decoder_owner_drops_v1();
+        let scalar = decode_secret_field25519_scalar_v1(&U256::ONE.to_le_bytes())
+            .expect("owned Field25519 transfer");
+        let mut destination = Field25519::ZERO;
+        scalar.move_into(&mut destination);
+        assert_eq!(destination, Field25519::ONE);
+        assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 1, 1));
+        destination.zeroize();
+
+        reset_secret_cycle_scalar_decoder_owner_drops_v1();
+        let unwind = std::panic::catch_unwind(|| {
+            let scalar = decode_secret_helioselene_scalar_v1(&U256::ONE.to_le_bytes())
+                .expect("owned Helioselene before unwind");
+            assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 1, 0));
+            let _ = core::hint::black_box(scalar.expose_ref());
+            panic!("exercise decoded cycle scalar owner unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 1, 1));
+
+        reset_secret_cycle_scalar_decoder_owner_drops_v1();
+        let comparison_unwind = std::panic::catch_unwind(|| {
+            let mut canonicality = SecretCycleScalarCanonicalityStateV1::new_v1();
+            canonicality.observe_byte_v1(&7_u8, &11_u8);
+            panic!("exercise active cycle scalar comparison unwind");
+        });
+        assert!(comparison_unwind.is_err());
+        assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 0, 0));
+
+        reset_secret_cycle_scalar_decoder_owner_drops_v1();
+        let integer_unwind = std::panic::catch_unwind(|| {
+            let integer = SecretU256V1::from_borrowed_le_bytes_v1(&U256::ONE.to_le_bytes());
+            let _ = core::hint::black_box(&integer.0);
+            panic!("exercise active cycle scalar integer unwind");
+        });
+        assert!(integer_unwind.is_err());
+        assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (0, 1, 0));
     }
     fn vector(encoded: &str) -> [u8; 32] {
         assert_eq!(encoded.len(), 64);

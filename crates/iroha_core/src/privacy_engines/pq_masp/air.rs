@@ -1402,8 +1402,7 @@ fn build_pq_masp_trace_v1(
         rows: builder.rows,
     })
 }
-/// Compile the complete prover trace after checking the native differential
-/// oracle.
+/// Compile the complete prover trace after checking the native differential oracle.
 pub(super) fn build_pq_masp_base_trace_v1(
     statement: &PqMaspStarkStatementV1,
     witness: &PqMaspWitnessV1,

@@ -481,8 +481,7 @@ impl ProofRandomnessV1 {
     ///
     /// # Errors
     ///
-    /// Propagates RNG failure and rejects constant or short-period
-    /// catastrophic-health sentinels.
+    /// Propagates RNG failure and rejects constant or short-period catastrophic-health sentinels.
     pub(crate) fn from_rng<R: CryptoRng + RngCore>(rng: &mut R) -> Result<Self, SamplingErrorV1> {
         let mut checked_rng = HealthCheckedCryptoRngV1::new(rng).map_err(|error| match error {
             ProverRandomnessErrorV1::Unavailable => SamplingErrorV1::RandomnessUnavailable,

@@ -3,27 +3,27 @@ import CryptoKit
 @testable import IrohaSwift
 
 final class ToriiCanonicalRequestTests: XCTestCase {
-    func testCanonicalQuerySorting() {
-        let rendered = ToriiCanonicalRequest.canonicalQueryString(from: "b=2&a=3&b=1&space=a+b")
+    func testCanonicalQuerySorting() throws {
+        let rendered = try ToriiCanonicalRequest.canonicalQueryString(from: "b=2&a=3&b=1&space=a+b")
         XCTAssertEqual(rendered, "a=3&b=1&b=2&space=a+b")
-        XCTAssertEqual(ToriiCanonicalRequest.canonicalQueryString(from: "&&b=2&&a=1&"), "a=1&b=2")
+        XCTAssertEqual(try ToriiCanonicalRequest.canonicalQueryString(from: "&&b=2&&a=1&"), "a=1&b=2")
     }
 
-    func testCanonicalQueryMatchesRustFormEncodingAndUtf8Ordering() {
+    func testCanonicalQueryMatchesRustFormEncodingAndUtf8Ordering() throws {
         XCTAssertEqual(
-            ToriiCanonicalRequest.canonicalQueryString(from: "b=!*()~'&a=1"),
+            try ToriiCanonicalRequest.canonicalQueryString(from: "b=!*()~'&a=1"),
             "a=1&b=%21*%28%29%7E%27"
         )
         XCTAssertEqual(
-            ToriiCanonicalRequest.canonicalQueryString(from: "x=%41%zz%FF"),
+            try ToriiCanonicalRequest.canonicalQueryString(from: "x=%41%zz%FF"),
             "x=A%25zz%EF%BF%BD"
         )
         XCTAssertEqual(
-            ToriiCanonicalRequest.canonicalQueryString(from: "\u{E000}=bmp&\u{10000}=supplementary"),
+            try ToriiCanonicalRequest.canonicalQueryString(from: "\u{E000}=bmp&\u{10000}=supplementary"),
             "%EE%80%80=bmp&%F0%90%80%80=supplementary"
         )
         XCTAssertEqual(
-            ToriiCanonicalRequest.canonicalQueryString(from: "k=\u{10000}&k=\u{E000}"),
+            try ToriiCanonicalRequest.canonicalQueryString(from: "k=\u{10000}&k=\u{E000}"),
             "k=%EE%80%80&k=%F0%90%80%80"
         )
     }
@@ -127,6 +127,12 @@ final class ToriiCanonicalRequestTests: XCTestCase {
         let exactPairs = (0..<ToriiCanonicalRequest.maxQueryPairsV1)
             .map { "k\($0)=v" }
             .joined(separator: "&")
+        _ = try ToriiCanonicalRequest.canonicalQueryString(from: exactPairs)
+        XCTAssertThrowsError(
+            try ToriiCanonicalRequest.canonicalQueryString(from: "\(exactPairs)&overflow=v")
+        ) { error in
+            XCTAssertEqual(error as? ToriiCanonicalRequestError, .tooManyQueryPairs)
+        }
         _ = try ToriiCanonicalRequest.signatureMessage(
             networkId: TestNetworkIds.canonical,
             method: "get",
@@ -148,6 +154,12 @@ final class ToriiCanonicalRequestTests: XCTestCase {
 
         let exactBytes = String(repeating: "x", count: ToriiCanonicalRequest.maxRawQueryBytesV1)
         XCTAssertEqual(exactBytes.utf8.count, ToriiCanonicalRequest.maxRawQueryBytesV1)
+        _ = try ToriiCanonicalRequest.canonicalQueryString(from: exactBytes)
+        XCTAssertThrowsError(
+            try ToriiCanonicalRequest.canonicalQueryString(from: exactBytes + "x")
+        ) { error in
+            XCTAssertEqual(error as? ToriiCanonicalRequestError, .queryTooLarge)
+        }
         _ = try ToriiCanonicalRequest.signatureMessage(
             networkId: TestNetworkIds.canonical,
             method: "get",
@@ -188,6 +200,17 @@ final class ToriiCanonicalRequestTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? ToriiCanonicalRequestError, .methodTooLarge)
         }
+
+        for method in ["", "po st", "post/get", "méthod", "get\n"] {
+            XCTAssertThrowsError(
+                try ToriiCanonicalRequest.canonicalRequestMessage(
+                    method: method,
+                    url: url
+                )
+            ) { error in
+                XCTAssertEqual(error as? ToriiCanonicalRequestError, .invalidMethod)
+            }
+        }
     }
 
     func testV1PathLimitAcceptsExactAndRejectsPlusOne() throws {
@@ -218,30 +241,83 @@ final class ToriiCanonicalRequestTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? ToriiCanonicalRequestError, .pathTooLarge)
         }
+
+        let invalidTargets = [
+            "v1/test",
+            "//evil.example/v1/test",
+            "ftp://example.com/v1/test",
+            "https://example.com//evil/v1/test",
+            "https://example.com/v1/test#fragment",
+        ]
+        for literal in invalidTargets {
+            let invalidURL = try XCTUnwrap(URL(string: literal), literal)
+            XCTAssertThrowsError(
+                try ToriiCanonicalRequest.canonicalRequestMessage(
+                    method: "get",
+                    url: invalidURL
+                ),
+                literal
+            ) { error in
+                XCTAssertEqual(error as? ToriiCanonicalRequestError, .invalidPath)
+            }
+        }
+
+        for (raw, encoded) in [
+            (" ", "%20"), ("<", "%3C"), (">", "%3E"),
+            ("[", "%5B"), ("]", "%5D"), ("^", "%5E"),
+            ("`", "%60"), ("{", "%7B"), ("|", "%7C"), ("}", "%7D"),
+        ] {
+            let url = try XCTUnwrap(URL(string: "https://example.com/v1/a\(raw)b"))
+            let request = URLRequest(url: url)
+            XCTAssertEqual(request.url?.absoluteString, "https://example.com/v1/a\(encoded)b")
+            let message = try ToriiCanonicalRequest.canonicalRequestMessage(
+                method: "get",
+                url: url
+            )
+            XCTAssertTrue(
+                String(decoding: message, as: UTF8.self)
+                    .hasPrefix("GET\n/v1/a\(encoded)b\n")
+            )
+        }
     }
 
     func testV1AccountAndNonceLimitsAcceptExactAndRejectPlusOne() throws {
         let seed = Data(repeating: 10, count: 32)
         let url = try XCTUnwrap(URL(string: "https://example.com/v1/accounts"))
-        let exactAccount = String(
-            repeating: "a",
-            count: ToriiCanonicalRequest.maxAccountLiteralBytesV1 - 2
-        ) + "@a"
-        XCTAssertEqual(exactAccount.utf8.count, ToriiCanonicalRequest.maxAccountLiteralBytesV1)
+        let validAlias = String(repeating: "a", count: 63) + "@universal"
         _ = try ToriiCanonicalRequest.buildHeaders(
             method: "get",
             url: url,
-            accountId: exactAccount,
+            accountId: validAlias,
             privateKey: seed,
             networkId: TestNetworkIds.canonical,
             timestampMs: 1,
             nonce: "account-limit"
         )
+
+        let oversizedAlias = String(
+            repeating: "a",
+            count: ToriiCanonicalRequest.maxAccountLiteralBytesV1 - 2
+        ) + "@a"
+        XCTAssertEqual(oversizedAlias.utf8.count, ToriiCanonicalRequest.maxAccountLiteralBytesV1)
         XCTAssertThrowsError(
             try ToriiCanonicalRequest.buildHeaders(
                 method: "get",
                 url: url,
-                accountId: "a" + exactAccount,
+                accountId: oversizedAlias,
+                privateKey: seed,
+                networkId: TestNetworkIds.canonical,
+                timestampMs: 1,
+                nonce: "oversized-alias"
+            )
+        ) { error in
+            XCTAssertEqual(error as? ToriiCanonicalRequestError, .invalidAccountId)
+        }
+        XCTAssertThrowsError(
+            try ToriiCanonicalRequest.buildHeaders(
+                method: "get",
+                url: url,
+                accountId: "a" + oversizedAlias,
                 privateKey: seed,
                 networkId: TestNetworkIds.canonical,
                 timestampMs: 1,
@@ -274,6 +350,63 @@ final class ToriiCanonicalRequestTests: XCTestCase {
         }
     }
 
+    func testHeadersUseStructuralAliasPreflight() throws {
+        let seed = Data(repeating: 10, count: 32)
+        let url = try XCTUnwrap(URL(string: "https://example.com/v1/accounts"))
+        for alias in [
+            "xn--alice@universal",
+            "xn--a@universal",
+            "alice@xn--ab-uuba211bca8057b",
+            "alice@xn--ab-j1t",
+            "alice@xn--11b2er09f",
+            "alice@xn--4u8c",
+            "alice@xn--pq1d",
+            "alice@xn--kx7e",
+            "alice@xn--5h0f",
+            "alice@xn--zo5h",
+            "alice@xn--fi3d",
+            "alice@xn--d4f",
+        ] {
+            _ = try ToriiCanonicalRequest.buildHeaders(
+                method: "get",
+                url: url,
+                accountId: alias,
+                privateKey: seed,
+                networkId: TestNetworkIds.canonical,
+                timestampMs: 1,
+                nonce: "structural-alias"
+            )
+        }
+        let invalidAliases = [
+            "alice",
+            "Alice@universal",
+            "alice@Universal",
+            "alice@bank.universal.extra",
+            "alice@univérsal",
+            "ab--invalid@universal",
+            "alice@xn--",
+            "\(String(repeating: "a", count: 64))@universal",
+            "alice@\(String(repeating: "a", count: 64))",
+        ]
+
+        for alias in invalidAliases {
+            XCTAssertThrowsError(
+                try ToriiCanonicalRequest.buildHeaders(
+                    method: "get",
+                    url: url,
+                    accountId: alias,
+                    privateKey: seed,
+                    networkId: TestNetworkIds.canonical,
+                    timestampMs: 1,
+                    nonce: "invalid-alias"
+                ),
+                alias
+            ) { error in
+                XCTAssertEqual(error as? ToriiCanonicalRequestError, .invalidAccountId)
+            }
+        }
+    }
+
     func testHeadersRejectPaddedAccountAndNonce() throws {
         let seed = Data(repeating: 8, count: 32)
         let url = URL(string: "https://example.com/v1/accounts")!
@@ -296,7 +429,7 @@ final class ToriiCanonicalRequestTests: XCTestCase {
             try ToriiCanonicalRequest.buildHeaders(
                 method: "get",
                 url: url,
-                accountId: "account",
+                accountId: "alice@universal",
                 privateKey: seed,
                 networkId: TestNetworkIds.canonical,
                 timestampMs: 1,

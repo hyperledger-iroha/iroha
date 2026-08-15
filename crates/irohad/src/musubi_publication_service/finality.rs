@@ -624,11 +624,12 @@ mod tests {
         kura.store_block(Arc::new(canonical_block.clone()))
             .expect("store fixture Kura block");
         if store_finality {
-            kura.store_v2_finality_artifact(&finality_artifact(
-                &canonical_block,
-                material.network_id,
-            ))
-            .expect("store fixture V2 finality artifact");
+            let _ = kura
+                .store_v2_finality_artifact(&finality_artifact(
+                    &canonical_block,
+                    material.network_id,
+                ))
+                .expect("store fixture V2 finality artifact");
         }
         let _ = state_block.apply_without_execution(&committed, Vec::new());
         state_block.commit().expect("commit fixture state block");

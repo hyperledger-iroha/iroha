@@ -2275,6 +2275,20 @@ mod tests {
     }
     #[test]
     fn validates_paths_and_bounds() {
+        assert_eq!(secure_private_file_abi_version(), 1);
+        assert!(secure_private_directory_ensure("relative".to_owned()).is_err());
+        assert!(
+            secure_private_file_read("relative".to_owned(), "state.json".to_owned(), 1).is_err()
+        );
+        assert!(
+            secure_private_file_write_atomic(
+                "relative".to_owned(),
+                "state.json".to_owned(),
+                Buffer::from(vec![1]),
+                1,
+            )
+            .is_err()
+        );
         assert!(validate_root_path(Path::new("relative")).is_err());
         assert!(validate_root_path(Path::new("/")).is_err());
         assert!(validate_filename("").is_err());
@@ -2289,30 +2303,36 @@ mod tests {
         use std::os::unix::fs::MetadataExt as _;
         let parent = tempfile::tempdir().expect("temporary parent");
         let root = private_root(&canonical_parent(&parent));
-        ensure_private_root(&root).expect("create private root");
+        let root_path = root.to_string_lossy().into_owned();
+        secure_private_directory_ensure(root_path.clone()).expect("create private root");
         let root_metadata = fs::symlink_metadata(&root).expect("root metadata");
         assert_eq!(root_metadata.mode() & 0o777, 0o700);
         assert_eq!(root_metadata.uid(), rustix::process::geteuid().as_raw());
-        assert_eq!(
-            read_private_file(&root, "state.json", 1024).expect("read missing"),
-            None
-        );
+        let missing = secure_private_file_read(root_path.clone(), "state.json".to_owned(), 1024)
+            .expect("read missing");
+        assert!(missing.is_none());
         let first = br#"{"version":1}"#;
-        assert_eq!(
-            write_private_file(&root, "state.json", first, 1024).expect("first write"),
-            first
-        );
+        let written = secure_private_file_write_atomic(
+            root_path.clone(),
+            "state.json".to_owned(),
+            Buffer::from(first.to_vec()),
+            1024,
+        )
+        .expect("first write");
+        assert_eq!(written.as_ref(), first);
         let second = br#"{"version":2,"records":[1,2,3]}"#;
-        assert_eq!(
-            write_private_file(&root, "state.json", second, 1024).expect("replace"),
-            second
-        );
-        assert_eq!(
-            read_private_file(&root, "state.json", 1024)
-                .expect("read replacement")
-                .expect("present"),
-            second
-        );
+        let written = secure_private_file_write_atomic(
+            root_path.clone(),
+            "state.json".to_owned(),
+            Buffer::from(second.to_vec()),
+            1024,
+        )
+        .expect("replace");
+        assert_eq!(written.as_ref(), second);
+        let readback = secure_private_file_read(root_path, "state.json".to_owned(), 1024)
+            .expect("read replacement")
+            .expect("present");
+        assert_eq!(readback.as_ref(), second);
         let file_metadata = fs::symlink_metadata(root.join("state.json")).expect("file metadata");
         assert_eq!(file_metadata.mode() & 0o777, 0o600);
         assert_eq!(file_metadata.nlink(), 1);

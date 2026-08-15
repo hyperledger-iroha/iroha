@@ -220,8 +220,7 @@ fn expose_ffi(attrs: Vec<syn::Attribute>, item: &TokenStream) -> TokenStream {
         #item
     }
 }
-/// Extract the `ffi_type` helper attribute consumed by the generated
-/// `FfiType` derive.
+/// Extract the `ffi_type` helper attribute consumed by the generated `FfiType` derive.
 ///
 /// Model declarations gate this helper with `cfg_attr` so it is not visible
 /// when FFI generation is disabled. The model macro owns that feature split,

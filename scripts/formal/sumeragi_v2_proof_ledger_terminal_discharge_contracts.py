@@ -961,10 +961,10 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "5a5ac264475341dbae708893cea4aebbc079a1d0c02b8b62bd297aa72d7cc733"
+        "aa06911b636a9c048ea61d0819271bc15f111eefa5d90c553280fb8a030c0caa"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "78a7ea401f595b7e8a8eee94b4d193229bc53494b4798594bc011d24cb277f80"
+        "b305ebd20382b369ef39c805e56f6ccbe78b4a77a68241b0dc4f1f3b8e2c3d30"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "0f614047f766802dd95ffb30e73a748c9cc0520f077527959b1ea99648f52197"
@@ -990,7 +990,7 @@ _INSTALLED_TC_SELECTOR_PROOF_SHA256 = (
 )
 _PREPARE_CACHE_REGRESSION_TEST_SHA256 = {
     "delayed_lower_prepare_qc_cannot_downgrade_retransmitted_progress": (
-        "12d3bf10b9c49921dcd5625c67cd3c6f20f1aa34055d94ccd4469c3f00e0878f"
+        "8ac545fffe427b15ca11970ac0202291ae6946d4ba4b34194aa7c555ee106314"
     ),
 }
 
@@ -1861,16 +1861,19 @@ if facts.install_view_unchanged {
         prepare_regression,
         """
 let before_older = reducer.clone();
-let event = Event::QuorumCertificateReceived {
-    tag: reducer.current_tag(),
-    certificate: older,
-};
-let ignored = reducer.step(event).expect("ignore old PrepareQC");
-assert!(
-    ignored.disposition() == StepDisposition::Ignored(IgnoreReason::IrrelevantView)
-        && ignored.effects().is_empty()
-        && reducer == before_older
+let ignored = reducer
+    .step(Event::QuorumCertificateReceived {
+        tag: reducer.current_tag(),
+        certificate: older,
+    })
+    .expect("an old PrepareQC is valid but cannot regress progress");
+assert_eq!(
+    ignored.disposition(),
+    StepDisposition::Ignored(IgnoreReason::IrrelevantView)
 );
+assert!(ignored.effects().is_empty());
+assert_eq!(reducer, before_older);
+assert_eq!(reducer.volatile_prepare_counts(), (0, 1));
 """,
         "the delayed lower PrepareQC regression must prove a complete ignored stutter with no effects",
         errors,

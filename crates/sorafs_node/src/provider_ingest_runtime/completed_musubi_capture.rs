@@ -41,10 +41,9 @@ impl ProviderIngestCompletedMusubiCaptureSourceRowV1 {
 }
 /// One unsealed, replayable page supplied to the capture scanner.
 ///
-/// The private fields and lack of a codec keep this projection distinct from
-/// opaque finalized evidence. The scanner commits no cursor progress until it
-/// has checked the page identity, bounds, ordering, every row, and every claim
-/// that it seals from the raw bindings.
+/// The private fields and lack of a codec keep this projection distinct from opaque finalized
+/// evidence. The scanner commits no cursor progress until it has checked the page identity, bounds,
+/// ordering, every row, and every claim that it seals from the raw bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletedMusubiCaptureSourcePageV1 {
     network_id: NetworkId,
@@ -90,12 +89,11 @@ impl ProviderIngestCompletedMusubiCaptureSourcePageV1 {
 }
 /// Immutable public verifier identity for one daemon-owned capture session.
 ///
-/// This private-field value is untrusted transport data, has no wire codec,
-/// and confers no finalized authority by itself. A capture scanner pins one
-/// exact binding before its first read and verifies every response with the
-/// bound Ed25519 key. The reader generation is an immutable epoch derived for
-/// the ephemeral signer session; it is distinct from both archive health and
-/// the scanner-owned request generation.
+/// This private-field value is untrusted transport data, has no wire codec, and confers no
+/// finalized authority by itself. A capture scanner pins one exact binding before its first read
+/// and verifies every response with the bound Ed25519 key. The reader generation is an immutable
+/// epoch derived for the ephemeral signer session; it is distinct from both archive health and the
+/// scanner-owned request generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletedMusubiCaptureVerifierBindingV1 {
     session_id: [u8; 32],
@@ -107,10 +105,9 @@ pub struct ProviderIngestCompletedMusubiCaptureVerifierBindingV1 {
 impl ProviderIngestCompletedMusubiCaptureVerifierBindingV1 {
     /// Construct untrusted reader binding material for cross-crate transport.
     ///
-    /// This helper validates structure and derives the session identifier, but
-    /// does not prove that the supplied key belongs to an authoritative
-    /// reader. Only the crate-private scanner construction path may decide
-    /// which exact binding to pin.
+    /// This helper validates structure and derives the session identifier, but does not prove that
+    /// the supplied key belongs to an authoritative reader. Only the crate-private scanner
+    /// construction path may decide which exact binding to pin.
     ///
     /// # Errors
     ///
@@ -185,11 +182,10 @@ impl ProviderIngestCompletedMusubiCaptureVerifierBindingV1 {
 }
 /// Exact bounded read request authenticated by one signed capture response.
 ///
-/// The scanner owns `generation`. It prepares the current non-zero value
-/// before awaiting the reader and advances it only after signature and full
-/// page validation succeed. Thus cancellation or validation failure retries
-/// the exact request, while an old successful response cannot be replayed into
-/// a later scanner step.
+/// The scanner owns `generation`. It prepares the current non-zero value before awaiting the reader
+/// and advances it only after signature and full page validation succeed. Thus cancellation or
+/// validation failure retries the exact request, while an old successful response cannot be
+/// replayed into a later scanner step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletedMusubiCaptureRequestV1 {
     binding: ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
@@ -287,10 +283,9 @@ impl ProviderIngestCompletedMusubiCaptureRequestV1 {
 }
 /// Untrusted signed response from one completed-Musubi capture reader.
 ///
-/// The envelope and contained projection have no wire codec and no public raw
-/// page accessor. Construction does not validate the signature or confer
-/// authority; the scanner verifies the exact request-bound transcript against
-/// its pinned binding before inspecting or sealing the projection.
+/// The envelope and contained projection have no wire codec and no public raw page accessor.
+/// Construction does not validate the signature or confer authority; the scanner verifies the exact
+/// request-bound transcript against its pinned binding before inspecting or sealing the projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletedMusubiSignedCapturePageV1 {
     request: ProviderIngestCompletedMusubiCaptureRequestV1,
@@ -315,10 +310,9 @@ impl ProviderIngestCompletedMusubiSignedCapturePageV1 {
 }
 /// Request-bound signed finalized-ledger boundary used only by the capture scanner.
 ///
-/// Implementations receive no claim factory and return no opaque claim. An
-/// exact retry must reconstruct and sign the same immutable page without
-/// consuming adapter-local continuation state. The scanner pins
-/// [`Self::capture_verifier_binding`] once, verifies the canonical transcript,
+/// Implementations receive no claim factory and return no opaque claim. An exact retry must
+/// reconstruct and sign the same immutable page without consuming adapter-local continuation state.
+/// The scanner pins [`Self::capture_verifier_binding`] once, verifies the canonical transcript,
 /// validates every unsealed field, and only then seals completed-row claims.
 pub trait ProviderIngestCompletedMusubiSignedCaptureLedgerV1: Send + Sync + 'static {
     /// Return this reader's immutable ephemeral session verifier binding.
@@ -621,9 +615,8 @@ fn validate_completed_musubi_capture_transcript_bounds(
 ///
 /// # Errors
 ///
-/// Rejects malformed or over-limit request/page material, noncanonical nested
-/// values, length overflow, or any component that cannot be canonically
-/// encoded within the V1 memory bound.
+/// Rejects malformed or over-limit request/page material, noncanonical nested values, length
+/// overflow, or any component that cannot be canonically encoded within the V1 memory bound.
 #[doc(hidden)]
 pub fn provider_ingest_completed_musubi_capture_transcript_digest_v1(
     request: &ProviderIngestCompletedMusubiCaptureRequestV1,
@@ -677,11 +670,10 @@ pub fn provider_ingest_completed_musubi_capture_transcript_digest_v1(
 }
 /// One validated completed-Musubi candidate emitted by the capture scanner.
 ///
-/// The value has no public constructor or wire codec. Its authorization and
-/// opaque completed-row claim were derived together from one validated row of
-/// a single finalized page.
-/// Equality is semantic and excludes the private process-local authority marker;
-/// reconciliation performs a separate exact-instance check.
+/// The value has no public constructor or wire codec. Its authorization and opaque completed-row
+/// claim were derived together from one validated row of a single finalized page. Equality is
+/// semantic and excludes the private process-local authority marker; reconciliation performs a
+/// separate exact-instance check.
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderIngestCompletedMusubiCaptureCandidateV1 {
     authorization: FinalizedProviderIngestAuthorizationV1,
@@ -717,11 +709,10 @@ impl ProviderIngestCompletedMusubiCaptureCandidateV1 {
 }
 /// One bounded page emitted by the completed-Musubi capture scanner.
 ///
-/// `scan_complete` means this page exhausted the exact finalized snapshot.
-/// The next scanner call then starts a new snapshot and may observe a later
-/// finalized head. When that probe still resolves to the last completely
-/// scanned head, every bounded row is revalidated but candidates are
-/// suppressed and an empty terminal page is returned.
+/// `scan_complete` means this page exhausted the exact finalized snapshot. The next scanner call
+/// then starts a new snapshot and may observe a later finalized head. When that probe still
+/// resolves to the last completely scanned head, every bounded row is revalidated but candidates
+/// are suppressed and an empty terminal page is returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProviderIngestCompletedMusubiCapturePageV1 {
     finalized_cursor: ProviderIngestFinalizedCursorV1,
@@ -797,16 +788,14 @@ pub(crate) enum ProviderIngestCompletedMusubiReconcileErrorV1 {
 }
 /// Take-once daemon tenure for completed-Musubi finalized capture.
 ///
-/// [`crate::NodeHandle`] reserves this opaque value once for one exact
-/// process-local storage/outbox incarnation. Construction retains one erased
-/// signed reader without consulting it, so a valid height-zero bootstrap can
-/// remain pending until genesis exists. Lazy binding always retries that same
-/// retained reader; dropping this value never resets the shared reservation.
+/// [`crate::NodeHandle`] reserves this opaque value once for one exact process-local storage/outbox
+/// incarnation. Construction retains one erased signed reader without consulting it, so a valid
+/// height-zero bootstrap can remain pending until genesis exists. Lazy binding always retries that
+/// same retained reader; dropping this value never resets the shared reservation.
 ///
-/// This first-release slice deliberately exposes no page, claim, approval, or
-/// effect-driving operation. The private daemon composer may retain the tenure,
-/// but cannot use it to start signing, journal mutation, inventory mutation,
-/// transaction submission, or registry mutation.
+/// This first-release slice deliberately exposes no page, claim, approval, or effect-driving
+/// operation. The private daemon composer may retain the tenure, but cannot use it to start
+/// signing, journal mutation, inventory mutation, transaction submission, or registry mutation.
 #[doc(hidden)]
 #[must_use = "dropping the capture tenure permanently consumes this store instance's reservation"]
 pub struct ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
@@ -862,10 +851,9 @@ impl ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
     }
     /// Try to bind the retained reader without permitting reader substitution.
     ///
-    /// Unavailability leaves the exact pending reader and all static identity
-    /// material in place for a later retry. This method remains crate-private
-    /// until the qualified journal/inventory coordinator can consume scanner
-    /// output without exposing claims or requests.
+    /// Unavailability leaves the exact pending reader and all static identity material in place for
+    /// a later retry. This method remains crate-private until the qualified journal/inventory
+    /// coordinator can consume scanner output without exposing claims or requests.
     // The opaque attestation driver is the sole production caller and invokes
     // this after binding its journal, signer, and inventory. Stock daemon
     // startup retains that driver inert until supervision is qualified.
@@ -937,15 +925,13 @@ fn validate_completed_musubi_capture_scanner_identity(
 }
 /// Opaque bounded scanner for finalized local-provider Musubi completions.
 ///
-/// Only [`crate::NodeHandle`] can construct this scanner. The signed reader
-/// never receives a claim factory or opaque claim. The scanner first verifies
-/// the request-bound transcript under its pinned session key, then validates
-/// the complete unsealed projection, privately creates the factory, seals and
-/// revalidates every assignment, owns its continuation cursor, and exposes
-/// only the authorization plus opaque completed claim needed by a later
-/// capture-only verifier. It performs no storage, signing, journal, inventory,
-/// or registry mutation. After a complete scan it performs only one bounded
-/// validating probe at an unchanged finalized head and resumes ordinary
+/// Only [`crate::NodeHandle`] can construct this scanner. The signed reader never receives a claim
+/// factory or opaque claim. The scanner first verifies the request-bound transcript under its
+/// pinned session key, then validates the complete unsealed projection, privately creates the
+/// factory, seals and revalidates every assignment, owns its continuation cursor, and exposes only
+/// the authorization plus opaque completed claim needed by a later capture-only verifier. It
+/// performs no storage, signing, journal, inventory, or registry mutation. After a complete scan it
+/// performs only one bounded validating probe at an unchanged finalized head and resumes ordinary
 /// paging once the head advances.
 pub(crate) struct ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>
 where
@@ -973,11 +959,10 @@ pub(crate) struct ProviderIngestCompletedMusubiCaptureProgressV1 {
 }
 /// Cancellation-safe rollback guard for one reconciled capture page.
 ///
-/// The scanner commits a fully authenticated page before inventory and journal
-/// admission begin. Retaining this guard across those later awaits restores the
-/// exact prior generation and cursors whenever the reconciliation future is
-/// dropped or returns early. Call [`Self::commit`] only after every candidate
-/// has been durably reconciled.
+/// The scanner commits a fully authenticated page before inventory and journal admission begin.
+/// Retaining this guard across those later awaits restores the exact prior generation and cursors
+/// whenever the reconciliation future is dropped or returns early. Call [`Self::commit`] only after
+/// every candidate has been durably reconciled.
 #[must_use = "dropping the guard restores the scanner's prior progress"]
 pub(crate) struct ProviderIngestCompletedMusubiCaptureProgressRollbackV1<'a, Ledger>
 where
@@ -1168,10 +1153,9 @@ where
     }
     /// Read and validate the next bounded page from the pinned finalized scan.
     ///
-    /// A terminal page resets only the private continuation state. The
-    /// monotonic finalized high-water remains retained, so the next fresh scan
-    /// may stay at the same head or advance but can never regress or switch an
-    /// equal-height hash.
+    /// A terminal page resets only the private continuation state. The monotonic finalized
+    /// high-water remains retained, so the next fresh scan may stay at the same head or advance but
+    /// can never regress or switch an equal-height hash.
     ///
     /// # Errors
     ///
@@ -1465,9 +1449,8 @@ struct ProviderIngestCompletedMusubiPreparedApprovalV1 {
 }
 /// One page transaction whose drop restores the fresh capture request.
 ///
-/// The guard remains live through approval signing and its durable CAS. It may
-/// commit scanner progress only after every retained request is approved or is
-/// already in a post-approval state.
+/// The guard remains live through approval signing and its durable CAS. It may commit scanner
+/// progress only after every retained request is approved or is already in a post-approval state.
 struct ProviderIngestCompletedMusubiPreparedPageV1<'a, Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -1736,10 +1719,9 @@ impl ProviderIngestCompletedMusubiAttestationDriveErrorV1 {
 }
 /// Opaque take-once capture, signing, and inventory effect pump.
 ///
-/// This type exposes no requests, claims, journal entries, signers, or
-/// inventory effects. One call drains at most one bounded handoff page before
-/// preparing one bounded capture page. Scanner progress remains rollback-armed
-/// until every fresh request has reached durable approval.
+/// This type exposes no requests, claims, journal entries, signers, or inventory effects. One call
+/// drains at most one bounded handoff page before preparing one bounded capture page. Scanner
+/// progress remains rollback-armed until every fresh request has reached durable approval.
 #[doc(hidden)]
 pub struct ProviderIngestCompletedMusubiAttestationDriverV1 {
     node: crate::NodeHandle,

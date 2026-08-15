@@ -1,13 +1,11 @@
 //! Deterministic, non-shipping native privacy release evidence.
 //!
-//! This module is deliberately behind the non-default
-//! `privacy-release-evidence` feature. It is compiled only into explicit
-//! release runners and opt-in integration gates, never into `irohad`. The
-//! deterministic entropy below is suitable only for reproducible release
-//! fixtures; neither its seed nor any witness byte is exposed by the public
-//! evidence types. Canonical proof bytes do cross the release-evidence boundary
-//! so release gates can authenticate, persist, and exact-compare what
-//! production verified.
+//! This module is deliberately behind the non-default `privacy-release-evidence` feature. It is
+//! compiled only into explicit release runners and opt-in integration gates, never into `irohad`.
+//! The deterministic entropy below is suitable only for reproducible release fixtures; neither its
+//! seed nor any witness byte is exposed by the public evidence types. Canonical proof bytes do
+//! cross the release-evidence boundary so release gates can authenticate, persist, and
+//! exact-compare what production verified.
 mod network_actions;
 mod retained_native;
 mod vega;
@@ -312,11 +310,10 @@ impl fmt::Display for PrivacyReleaseRayonPoolErrorV1 {
 impl std::error::Error for PrivacyReleaseRayonPoolErrorV1 {}
 /// Initialize and attest the one process-global pool used by release proofs.
 ///
-/// This must be the first Rayon operation in a freshly executed hidden stage.
-/// A second call fails closed even when the first call used the correct width,
-/// preventing a caller from treating an inherited or preinitialized pool as
-/// canonical. Successful return proves that all four distinct workers reached
-/// a barrier and that the stage leader is outside the worker set.
+/// This must be the first Rayon operation in a freshly executed hidden stage. A second call fails
+/// closed even when the first call used the correct width, preventing a caller from treating an
+/// inherited or preinitialized pool as canonical. Successful return proves that all four distinct
+/// workers reached a barrier and that the stage leader is outside the worker set.
 pub fn initialize_privacy_release_rayon_pool_v1() -> Result<(), PrivacyReleaseRayonPoolErrorV1> {
     let expected_threads = usize::from(PRIVACY_RELEASE_RAYON_THREAD_COUNT_V1);
     rayon::ThreadPoolBuilder::new()
@@ -435,10 +432,9 @@ const fn privacy_release_stage_coordinate_v1(
 }
 /// Sole explicit declaration of the canonical 48-stage release schedule.
 ///
-/// The declaration is intentionally written out rather than reconstructed at
-/// runtime. `validate_privacy_release_stage_coordinates_v1` independently
-/// derives the protocol-by-case product from the closed enums and rejects any
-/// drift in this frozen list.
+/// The declaration is intentionally written out rather than reconstructed at runtime.
+/// `validate_privacy_release_stage_coordinates_v1` independently derives the protocol-by-case
+/// product from the closed enums and rejects any drift in this frozen list.
 pub const PRIVACY_RELEASE_STAGE_COORDINATES_V1: [PrivacyReleaseStageCoordinateV1;
     PRIVACY_RELEASE_STAGE_COUNT_V1] = [
     privacy_release_stage_coordinate_v1(
@@ -712,8 +708,7 @@ pub fn validate_privacy_release_stage_coordinates_v1(
     }
     index == coordinates.len()
 }
-/// Stable classification of the expected verifier failure exercised by a
-/// successful evidence stage.
+/// Stable classification of the expected verifier failure exercised by a successful evidence stage.
 #[derive(
     Clone,
     Copy,
@@ -768,9 +763,8 @@ impl PrivacyReleaseResourceFactsV1 {
 }
 /// Return the frozen resource facts for one implemented release stage.
 ///
-/// `None` is reserved for a protocol whose closed implementation does not
-/// define the selected stage. Every exact-12 first-release coordinate has a
-/// frozen resource profile.
+/// `None` is reserved for a protocol whose closed implementation does not define the selected
+/// stage. Every exact-12 first-release coordinate has a frozen resource profile.
 #[must_use]
 pub fn privacy_release_resource_facts_v1(
     protocol_id: PrivacyProtocolIdV1,
@@ -1001,9 +995,8 @@ mod privacy_release_base64_bytes_v1 {
         Ok(bytes)
     }
 }
-/// One complete native stage result. It contains exact canonical proofs,
-/// their hashes, and public resource facts; witness material never crosses
-/// this API.
+/// One complete native stage result. It contains exact canonical proofs, their hashes, and public
+/// resource facts; witness material never crosses this API.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct PrivacyReleaseStageEvidenceV1 {
     /// Evidence schema version.
@@ -1247,9 +1240,8 @@ pub fn validate_privacy_release_proof_artifacts_v1(
 }
 /// Execute one mandatory native prove/verify or adversarial stage.
 ///
-/// The selected engine must perform its public production prover and verifier
-/// path. Missing complete implementations fail closed; no placeholder result
-/// can be encoded as passing evidence.
+/// The selected engine must perform its public production prover and verifier path. Missing
+/// complete implementations fail closed; no placeholder result can be encoded as passing evidence.
 pub fn run_privacy_release_stage_v1(
     protocol_id: PrivacyProtocolIdV1,
     case_kind: PrivacyReleaseCaseKindV1,

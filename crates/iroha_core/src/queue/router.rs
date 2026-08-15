@@ -1,10 +1,9 @@
 //! Lane and dataspace routing utilities for the transaction queue.
 //!
-//! These helpers translate pending transactions into the lane/dataspace
-//! identifiers that the Nexus scheduler expects, based on the runtime
-//! configuration. The router abstraction keeps the queue decoupled from the
-//! exact routing policy while allowing metrics to reflect the real
-//! assignments instead of collapsing metrics to the primary lane.
+//! These helpers translate pending transactions into the lane/dataspace identifiers that the Nexus
+//! scheduler expects, based on the runtime configuration. The router abstraction keeps the queue
+//! decoupled from the exact routing policy while allowing metrics to reflect the real assignments
+//! instead of collapsing metrics to the primary lane.
 use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
     tx::AcceptedTransaction,

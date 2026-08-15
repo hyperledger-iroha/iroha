@@ -1,14 +1,12 @@
 //! Ethereum consensus BLS12-381 proof-of-possession verification.
 //!
-//! Ethereum uses the IETF BLS min-pk proof-of-possession ciphersuite directly.
-//! This is deliberately separate from Iroha's contextual BLS signatures: the
-//! message is hashed to G2 with Ethereum's standard ciphersuite DST and is not
-//! wrapped in an Iroha message context.
+//! Ethereum uses the IETF BLS min-pk proof-of-possession ciphersuite directly. This is deliberately
+//! separate from Iroha's contextual BLS signatures: the message is hashed to G2 with Ethereum's
+//! standard ciphersuite DST and is not wrapped in an Iroha message context.
 use crate::Error;
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Projective, pairing};
 use group::{Curve as _, Group as _, prime::PrimeCurveAffine as _};
-/// IETF BLS min-pk proof-of-possession signature ciphersuite DST used by
-/// Ethereum consensus.
+/// IETF BLS min-pk proof-of-possession signature ciphersuite DST used by Ethereum consensus.
 pub const ETHEREUM_BLS_POP_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 /// Validate one compressed Ethereum BLS min-pk public key.
 ///
@@ -25,15 +23,13 @@ pub fn ethereum_bls_pop_validate_public_key(public_key: &[u8; 48]) -> Result<(),
 }
 /// Verify an Ethereum BLS fast aggregate signature over one message.
 ///
-/// `public_keys` contains one entry for every participating sync-committee
-/// position. Repeated keys are intentionally retained: Ethereum sync
-/// committees are sampled with replacement, so one validator can occupy
-/// multiple positions and contributes once per set participation bit.
+/// `public_keys` contains one entry for every participating sync-committee position. Repeated keys
+/// are intentionally retained: Ethereum sync committees are sampled with replacement, so one
+/// validator can occupy multiple positions and contributes once per set participation bit.
 ///
-/// This function implements the standard min-pk proof-of-possession
-/// `FastAggregateVerify` operation. It rejects an empty participant set,
-/// malformed/non-canonical points, subgroup-invalid points, identity inputs,
-/// and public-key aggregates that cancel to the identity.
+/// This function implements the standard min-pk proof-of-possession `FastAggregateVerify`
+/// operation. It rejects an empty participant set, malformed/non-canonical points, subgroup-invalid
+/// points, identity inputs, and public-key aggregates that cancel to the identity.
 ///
 /// # Errors
 ///

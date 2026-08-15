@@ -601,7 +601,7 @@ fn compact_authority_source_surface_is_move_only_ordered_and_fail_closed() {
         .find("ensure_state_owned_cpk_commitments_v1(")
         .expect("state-owned commitment validation");
     let state_assignment = staged_state
-        .find("self.persistent_secret_binding = Some(binding)")
+        .find("self.persistent_direct_opening.verified_binding = Some(binding)")
         .expect("sole state mutation");
     assert!(binding_validation < state_assignment);
     assert!(commitment_validation < state_assignment);

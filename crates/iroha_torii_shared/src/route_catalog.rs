@@ -51,10 +51,9 @@ pub enum ApiSurface {
 }
 /// Listener on which a route is eligible to be mounted.
 ///
-/// Torii currently exposes one HTTP listener. Audience and authentication are
-/// therefore modeled separately by [`ApiSurface`] and [`AuthenticationPolicy`]
-/// instead of pretending that operator or diagnostic routes have a network
-/// boundary which does not exist.
+/// Torii currently exposes one HTTP listener. Audience and authentication are therefore modeled
+/// separately by [`ApiSurface`] and [`AuthenticationPolicy`] instead of pretending that operator or
+/// diagnostic routes have a network boundary which does not exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Listener {
     /// The single configured Torii HTTP listener.
@@ -62,9 +61,8 @@ pub enum Listener {
 }
 /// Authentication contract enforced by the route boundary.
 ///
-/// Most policies are middleware-backed. Protocol exchanges and explicitly
-/// reviewed handlers may enforce their credential at the handler boundary,
-/// before invoking a protected capability.
+/// Most policies are middleware-backed. Protocol exchanges and explicitly reviewed handlers may
+/// enforce their credential at the handler boundary, before invoking a protected capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthenticationPolicy {
     /// The listener's configured API-token policy applies.
@@ -73,9 +71,8 @@ pub enum AuthenticationPolicy {
     OnboardingToken,
     /// Require canonical `X-Iroha-*` authentication bound to an on-ledger account.
     CanonicalAccountSignature,
-    /// The handler verifies a canonical signed transaction, query, or typed
-    /// intent after bounded framing/shape parsing and before fee, state, or
-    /// expensive principal-owned work.
+    /// The handler verifies a canonical signed transaction, query, or typed intent after bounded
+    /// framing/shape parsing and before fee, state, or expensive principal-owned work.
     CanonicalSignedBody,
     /// Access is selected by the authenticated content manifest.
     ///
@@ -90,11 +87,10 @@ pub enum AuthenticationPolicy {
     OperatorSignature,
     /// The operator credential exchange authenticates inside the handler.
     ///
-    /// `WebAuthn` registration and login cannot require an already-established
-    /// operator signature: registration accepts the configured bootstrap
-    /// credential until enrollment, while login verifies a `WebAuthn` challenge.
-    /// The handlers still enforce mTLS, rate limits, lockout, bootstrap/session
-    /// policy, and challenge verification as appropriate.
+    /// `WebAuthn` registration and login cannot require an already-established operator signature:
+    /// registration accepts the configured bootstrap credential until enrollment, while login
+    /// verifies a `WebAuthn` challenge. The handlers still enforce mTLS, rate limits, lockout,
+    /// bootstrap/session policy, and challenge verification as appropriate.
     OperatorCredentialExchange,
     /// The protocol performs authentication inside its own handshake.
     ProtocolHandshake,
@@ -105,10 +101,9 @@ pub enum AuthenticationPolicy {
     /// Listener-wide controls can still restrict this route.
     Unauthenticated,
 }
-/// Deterministic effect class for one Torii route.
-/// The classification describes the strongest server-side effect reachable
-/// through the route. A handler which can both read and mutate is therefore a
-/// [`Mutation`](Self::Mutation), while a transport which remains open is a
+/// Deterministic effect class for one Torii route. The classification describes the strongest
+/// server-side effect reachable through the route. A handler which can both read and mutate is
+/// therefore a [`Mutation`](Self::Mutation), while a transport which remains open is a
 /// [`LongLivedStream`](Self::LongLivedStream).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RouteEffect {
@@ -134,9 +129,8 @@ pub enum AdmissionPolicy {
     ValidatorRosterMember,
     /// A node operator principal is required.
     Operator,
-    /// The exact nested target route admits its own account, validator,
-    /// operator, signed-body, or public-read principal before any target
-    /// effect is performed.
+    /// The exact nested target route admits its own account, validator, operator, signed-body, or
+    /// public-read principal before any target effect is performed.
     TargetRoute,
 }
 /// Router path normalization accepted by a route.
@@ -317,9 +311,8 @@ pub struct RouteDescriptor {
     cors_options: bool,
 }
 impl RouteDescriptor {
-    /// Construct a route with explicit effect and admission metadata.
-    /// No effect or admission default exists: every descriptor must state both
-    /// security axes at its declaration site.
+    /// Construct a route with explicit effect and admission metadata. No effect or admission
+    /// default exists: every descriptor must state both security axes at its declaration site.
     #[must_use]
     pub const fn new(
         stable_route_id: &'static str,
@@ -510,9 +503,8 @@ impl<'a> RouteCatalog<'a> {
     pub const fn routes(self) -> &'a [RouteDescriptor] {
         self.routes
     }
-    /// Validate uniqueness, grammar, listener boundaries, and projection policy.
-    /// All violations are returned in declaration order so CI can report a
-    /// complete catalog failure in one run.
+    /// Validate uniqueness, grammar, listener boundaries, and projection policy. All violations are
+    /// returned in declaration order so CI can report a complete catalog failure in one run.
     ///
     /// # Errors
     ///
@@ -585,8 +577,7 @@ pub enum CatalogValidationErrorKind {
         /// Stable ID of the first descriptor with this method and path.
         existing_route_id: &'static str,
     },
-    /// Another descriptor uses the same router shape with different parameter
-    /// names.
+    /// Another descriptor uses the same router shape with different parameter names.
     DuplicateMethodAndShape {
         /// Stable ID of the first descriptor with this method and shape.
         existing_route_id: &'static str,
@@ -605,8 +596,7 @@ pub enum CatalogValidationErrorKind {
     EmptyFeatureExpression,
     /// Diagnostic routes cannot be projected into SDKs or MCP.
     DiagnosticToolingProjection,
-    /// A protocol-handshake route cannot be represented as an ordinary MCP
-    /// request/response tool.
+    /// A protocol-handshake route cannot be represented as an ordinary MCP request/response tool.
     ProtocolHandshakeMcpProjection,
     /// Operator-surface routes must enforce an operator authentication policy.
     OperatorSurfaceRequiresAuthentication,
@@ -647,10 +637,9 @@ pub enum CatalogValidationErrorKind {
     /// Catch-all method routing cannot be projected into generated tooling.
     AnyMethodToolingProjection,
 }
-/// Validate a complete route catalog.
-/// This function reports all detected violations rather than stopping at the
-/// first one. An empty slice is valid so feature-composed catalogs can be
-/// checked uniformly.
+/// Validate a complete route catalog. This function reports all detected violations rather than
+/// stopping at the first one. An empty slice is valid so feature-composed catalogs can be checked
+/// uniformly.
 ///
 /// # Errors
 ///
@@ -4350,9 +4339,8 @@ pub mod content_directory {
     /// Canonical raw-content and directory route set.
     pub const ROUTES: &[RouteDescriptor] = &[CONTENT, SORADNS_LATEST, SORADNS_EVENTS];
 }
-/// Canonical descriptors enforced by Torii's mounted-route registry.
-/// Router assembly fails when any enabled descriptor is missing or when a
-/// registration does not match this catalog exactly.
+/// Canonical descriptors enforced by Torii's mounted-route registry. Router assembly fails when any
+/// enabled descriptor is missing or when a registration does not match this catalog exactly.
 const CATALOGED_ROUTE_FAMILIES: &[&[RouteDescriptor]] = &[
     aliases::ROUTES,
     fees::ROUTES,

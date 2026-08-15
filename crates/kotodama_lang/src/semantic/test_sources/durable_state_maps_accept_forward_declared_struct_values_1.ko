@@ -1,0 +1,20 @@
+seiyaku Demo {
+                struct Request {
+                    int status,
+                    bytes alias_blob,
+                    bytes requested_by_actor_id,
+                    Json requested_by_actor
+                }
+                state StateMap<Name, Request> Requests;
+                kotoage fn create_request(Name proposal_id,
+                                          bytes alias_literal,
+                                          bytes requested_by_actor_id,
+                                          Json requested_by_actor) authorize("CreateRequest") {
+                    Requests[proposal_id] = Request {
+                        status: 1,
+                        alias_blob: alias_literal,
+                        requested_by_actor_id,
+                        requested_by_actor,
+                    };
+                }
+            }

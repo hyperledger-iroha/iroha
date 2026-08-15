@@ -1,12 +1,10 @@
 //! Cargo-style workspace discovery and deterministic Musubi V1 metadata.
 //!
-//! Workspace loading is deliberately filesystem-aware. On qualified Unix,
-//! every manifest final component is opened as one bounded, singly linked
-//! regular file beneath a canonically validated root; other targets return an
-//! unsupported error before reading. Every local dependency is normalized
-//! before it becomes part of the effective package graph. Ancestor validation
-//! remains path-based and does not claim protection from a deliberately timed
-//! ABA.
+//! Workspace loading is deliberately filesystem-aware. On qualified Unix, every manifest final
+//! component is opened as one bounded, singly linked regular file beneath a canonically validated
+//! root; other targets return an unsupported error before reading. Every local dependency is
+//! normalized before it becomes part of the effective package graph. Ancestor validation remains
+//! path-based and does not claim protection from a deliberately timed ABA.
 use crate::{
     local_file::read_bounded_single_link_regular_file_v1,
     manifest::{
@@ -220,9 +218,8 @@ impl Workspace {
     }
     /// Select members using Cargo-style default/all/package/exclude semantics.
     ///
-    /// `packages` contains canonical namespaced package selectors. Exclusions
-    /// always apply last. With neither `all` nor explicit packages, the root's
-    /// default-member set is selected.
+    /// `packages` contains canonical namespaced package selectors. Exclusions always apply last.
+    /// With neither `all` nor explicit packages, the root's default-member set is selected.
     ///
     /// # Errors
     ///
@@ -312,19 +309,17 @@ impl Workspace {
     }
     /// Load a validated local path package below this workspace root.
     ///
-    /// Active workspace members are returned from the already materialized
-    /// member set, preserving workspace inheritance. A non-member path package
-    /// is parsed as a standalone package: it may refer to other packages below
-    /// the same workspace root, but it may not inherit workspace fields or
-    /// dependencies. This gives graph construction a single filesystem-safe
-    /// entry point for recursively reachable path dependencies.
+    /// Active workspace members are returned from the already materialized member set, preserving
+    /// workspace inheritance. A non-member path package is parsed as a standalone package: it may
+    /// refer to other packages below the same workspace root, but it may not inherit workspace
+    /// fields or dependencies. This gives graph construction a single filesystem-safe entry point
+    /// for recursively reachable path dependencies.
     ///
     /// # Errors
     ///
-    /// Returns an error if `manifest_path` is outside the workspace root, is
-    /// not the canonical `Musubi.toml` of a non-symlink directory, declares a
-    /// nested workspace, uses unavailable workspace inheritance, or contains
-    /// an invalid dependency.
+    /// Returns an error if `manifest_path` is outside the workspace root, is not the canonical
+    /// `Musubi.toml` of a non-symlink directory, declares a nested workspace, uses unavailable
+    /// workspace inheritance, or contains an invalid dependency.
     pub fn load_path_package(
         &self,
         manifest_path: &Path,
@@ -418,8 +413,7 @@ impl Workspace {
 }
 /// Discover the nearest ancestor `Musubi.toml` without following symlinks.
 ///
-/// `start` may name a directory, an ordinary file within a package, or the
-/// manifest itself.
+/// `start` may name a directory, an ordinary file within a package, or the manifest itself.
 ///
 /// # Errors
 ///
@@ -489,9 +483,8 @@ pub fn discover_manifest(start: &Path) -> Result<PathBuf, WorkspaceError> {
 }
 /// Discover the root manifest of the workspace owning `start`.
 ///
-/// A package with no ancestor workspace is its own synthetic workspace. A
-/// manifest nested beneath a workspace must be an explicit, non-excluded
-/// member; it is never silently treated as standalone.
+/// A package with no ancestor workspace is its own synthetic workspace. A manifest nested beneath a
+/// workspace must be an explicit, non-excluded member; it is never silently treated as standalone.
 ///
 /// # Errors
 ///
@@ -569,9 +562,8 @@ pub fn discover_workspace_manifest(start: &Path) -> Result<PathBuf, WorkspaceErr
 ///
 /// # Errors
 ///
-/// Returns an error for discovery, strict parsing, missing/default membership,
-/// path escape, symlinks, package collisions, or mismatched path-dependency
-/// identity/ranges.
+/// Returns an error for discovery, strict parsing, missing/default membership, path escape,
+/// symlinks, package collisions, or mismatched path-dependency identity/ranges.
 pub fn load_workspace(start: &Path) -> Result<Workspace, WorkspaceError> {
     let nearest_manifest_path = discover_manifest(start)?;
     let root_manifest_path = discover_workspace_manifest(start)?;

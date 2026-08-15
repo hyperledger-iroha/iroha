@@ -1,9 +1,8 @@
 //! GPU stubs for CPU-only builds.
 //!
-//! When the `fastpq-gpu` feature is disabled the runtime still attempts to
-//! negotiate GPU execution. These helpers provide deterministic fallbacks that
-//! surface a consistent unsupported error so the planner can return to the CPU
-//! path without linking GPU backends.
+//! When the `fastpq-gpu` feature is disabled the runtime still attempts to negotiate GPU execution.
+//! These helpers provide deterministic fallbacks that surface a consistent unsupported error so the
+//! planner can return to the CPU path without linking GPU backends.
 use crate::backend::GpuBackend;
 use core::marker::PhantomData;
 use std::fmt;

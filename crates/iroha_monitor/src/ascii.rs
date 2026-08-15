@@ -1,11 +1,10 @@
 #![allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
 //! Animated ASCII art for `iroha_monitor`.
 //!
-//! The art is intentionally hand-crafted to evoke a lively matsuri scene:
-//! a torii gate with lanterns, Mt. Fuji in the background, gentle waves, and
-//! koi shimmering across the waterline. Rendering is done entirely with text
-//! so it works on any terminal, including the `TERM=dumb` that our tests use.
-//! The header also sketches the current hyōshi breath contour from the Etenraku
+//! The art is intentionally hand-crafted to evoke a lively matsuri scene: a torii gate with
+//! lanterns, Mt. Fuji in the background, gentle waves, and koi shimmering across the waterline.
+//! Rendering is done entirely with text so it works on any terminal, including the `TERM=dumb` that
+//! our tests use. The header also sketches the current hyōshi breath contour from the Etenraku
 //! transcription so the animation mirrors the music’s phrasing.
 use crate::etenraku::{self, hyoshi_breath_scalar};
 use std::convert::TryFrom;
@@ -156,8 +155,7 @@ impl AsciiAnimator {
     pub fn frame(&self, width: u16) -> Vec<String> {
         self.frame_with_height(width, None)
     }
-    /// Render a frame sized for the provided terminal width and capped to
-    /// `max_lines` if supplied.
+    /// Render a frame sized for the provided terminal width and capped to `max_lines` if supplied.
     pub fn frame_with_height(&self, width: u16, max_lines: Option<usize>) -> Vec<String> {
         let width = usize::from(width.max(1));
         let mut lines = Vec::new();

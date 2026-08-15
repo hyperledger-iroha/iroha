@@ -1698,7 +1698,6 @@ async fn connect_session_status_requires_management_token() {
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_session_delete_rejects_ws_attach() {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let cfg = minimal_actual_config(true);
@@ -1786,7 +1785,6 @@ async fn connect_session_delete_rejects_ws_attach() {
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_handshake_succeeds_when_enabled() {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     // Build enabled config and Torii router

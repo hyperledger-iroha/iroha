@@ -73,8 +73,8 @@ const RKG_ONE_PROVIDER_READ_BYTES_V1: usize =
 
 // This ledger is deliberately narrow: it accounts only for the exact live
 // payload requested by this module's retained replay matrices and RNS
-// reconstruction buffers. It excludes the borrowed proof, predecoded owned
-// membership evidence, response-MSM transient allocations, allocator
+// reconstruction buffers. It excludes the borrowed proof and six membership
+// views, response-MSM transient allocations, allocator
 // overhead, replay transaction metadata, and stack frames. It is neither a
 // whole-verifier RSS claim nor a release resource certification.
 const RKG_ONE_ROW_ZERO_BASE_BYTES_V1: usize = RKG_ONE_RETAINED_REPLAY_MATRIX_BYTES_V1
@@ -116,11 +116,10 @@ const _: () = {
     assert!(RKG_ONE_INVERSE_NTTS_V1 == 304);
     assert!(RKG_ONE_RNS_ROW_COEFFICIENTS_V1 == 79_691_776);
     assert!(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 == 8_192);
-    assert!(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 % core::mem::size_of::<u64>() == 0);
+    assert!(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1.is_multiple_of(core::mem::size_of::<u64>()));
     assert!(
         RELEASE_RING_COEFFICIENTS_V1
-            % (ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 / core::mem::size_of::<u64>())
-            == 0
+            .is_multiple_of(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 / core::mem::size_of::<u64>())
     );
     assert!(RKG_ONE_PROVIDER_READ_CALLS_V1 == 9_728);
     assert!(RKG_ONE_PROVIDER_READ_BYTES_V1 == 79_691_776);
@@ -151,6 +150,10 @@ where
     verify_predecoded_direct_rkg_one_semantic_candidate_v1(context, objects, proof, provider)
 }
 
+#[allow(
+    clippy::drop_non_drop,
+    reason = "membership-view and post-comparison completion drops are source-contract pinned"
+)]
 fn verify_predecoded_direct_rkg_one_semantic_candidate_v1<P>(
     context: ZkAmsMkheDirectCeremonyContextV1,
     objects: DirectRelationPublicObjectsV1,
@@ -160,36 +163,37 @@ fn verify_predecoded_direct_rkg_one_semantic_candidate_v1<P>(
 where
     P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
 {
+    let PredecodedDirectRelationProofV1 {
+        capability,
+        relation,
+        statement_digest,
+        transcript_context,
+        membership_frames,
+        responses,
+        blind_responses,
+        challenge_seed,
+    } = proof;
     validate_rns_live_payload_accounting()?;
-    if proof.relation != PersistentDirectRelationV1::RkgRoundOne
-        || proof.statement_digest == [0; 32]
-        || proof.transcript_context.round_tag != PersistentDirectRelationV1::RkgRoundOne as u8
+    if relation != PersistentDirectRelationV1::RkgRoundOne
+        || statement_digest == [0; 32]
+        || transcript_context.round_tag != PersistentDirectRelationV1::RkgRoundOne as u8
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let DirectRelationPublicObjectsV1::RkgRoundOne { .. } = objects else {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     };
-    proof.capability.validate()?;
-    let challenges = provisional_challenges(proof.challenge_seed);
+    capability.validate()?;
+    let challenges = provisional_challenges(challenge_seed);
 
-    for evidence in &proof.bound_one_membership {
-        evidence
-            .verify()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-    }
-    for evidence in &proof.bound_two_membership {
-        evidence
-            .verify()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-    }
-
+    membership_frames.verify_replayable()?;
+    let membership_commitments = membership_frames.copied_commitments();
+    drop(membership_frames);
     let commitment_digests = reconstruct_commitment_first_messages(
-        proof.relation,
-        &proof.bound_one_membership,
-        &proof.bound_two_membership,
-        proof.responses,
-        proof.blind_responses,
+        relation,
+        &membership_commitments,
+        responses,
+        blind_responses,
         challenges,
     )?;
 
@@ -198,17 +202,16 @@ where
         core::array::from_fn(|_| {
             DirectRelationRnsFirstMessageHasherV1::new(PersistentDirectRelationV1::RkgRoundOne)
         });
-    let mut common_a =
-        direct_common_a_v1::DirectCommonAReplayV1::begin(context, &proof.capability)?;
+    let mut common_a = direct_common_a_v1::DirectCommonAReplayV1::begin(context, &capability)?;
     let mut public =
-        DirectRkgOneH0H1StatementReplayV1::begin(context, &proof.capability, objects, provider)?;
+        DirectRkgOneH0H1StatementReplayV1::begin(context, &capability, objects, provider)?;
     replay_rkg_one_retained_matrices(
         context,
         provider,
         &mut common_a,
         &mut public,
         &mut retained_replay_matrices,
-        proof.responses,
+        responses,
         challenges,
         &mut rns_hashers,
     )?;
@@ -217,13 +220,17 @@ where
     // comparison. Neither authority object or snapshot identity escapes.
     let completed_replays = (common_a.finish()?, public.finish(provider)?);
     let rns_digests = reconstruct_rkg_one_rns_first_messages(
-        proof.responses,
+        responses,
         challenges,
         &retained_replay_matrices,
         &mut rns_hashers,
     )?;
     let first_messages = DirectRelationFirstMessageDigestsV1::new(rns_digests, commitment_digests)?;
-    let reconstructed_challenges = proof.validate_reconstructed_challenge(first_messages)?;
+    let reconstructed_challenges = super::validate_reconstructed_challenge(
+        transcript_context,
+        challenge_seed,
+        first_messages,
+    )?;
     if reconstructed_challenges != challenges {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
@@ -246,28 +253,23 @@ fn provisional_challenges(challenge_seed: [u8; 32]) -> [u32; CHALLENGE_REPETITIO
     })
 }
 
-fn reconstruct_commitment_first_messages<BoundOne, BoundTwo>(
+#[allow(
+    clippy::needless_range_loop,
+    reason = "fixed protocol chunk indices are source-contract pinned"
+)]
+fn reconstruct_commitment_first_messages(
     relation: PersistentDirectRelationV1,
-    bound_one: &[BoundOne; 2],
-    bound_two: &[BoundTwo; 4],
+    membership_commitments: &[[Point; CHUNKS_PER_WITNESS_V1]; WITNESS_COUNT_V1],
     responses: &[u8],
     blind_responses: &[u8],
     challenges: [u32; CHALLENGE_REPETITIONS_V1],
-) -> Result<[[u8; 32]; CHALLENGE_REPETITIONS_V1], ZkAmsMkheErrorV1>
-where
-    BoundOne: MembershipCommitmentsV1,
-    BoundTwo: MembershipCommitmentsV1,
-{
+) -> Result<[[u8; 32]; CHALLENGE_REPETITIONS_V1], ZkAmsMkheErrorV1> {
     let mut digests = [[0_u8; 32]; CHALLENGE_REPETITIONS_V1];
     for repetition in 0..CHALLENGE_REPETITIONS_V1 {
         let mut encoded = [0_u8; RECONSTRUCTED_COMMITMENT_BYTES_V1];
         let mut cursor: usize = 0;
         for slot in 0..WITNESS_COUNT_V1 {
-            let commitments = if slot < 2 {
-                bound_one[slot].commitments()
-            } else {
-                bound_two[slot - 2].commitments()
-            };
+            let commitments = &membership_commitments[slot];
             for chunk in 0..CHUNKS_PER_WITNESS_V1 {
                 let coefficient_start = chunk * super::super::super::WITNESS_CHUNK_COEFFICIENTS_V1;
                 let response_start = response_offset(repetition, slot, coefficient_start)
@@ -315,24 +317,6 @@ where
         digests[repetition] = commitment_first_message_digest(relation, &encoded)?;
     }
     Ok(digests)
-}
-
-trait MembershipCommitmentsV1 {
-    fn commitments(&self) -> [Point; CHUNKS_PER_WITNESS_V1];
-}
-
-impl<R> MembershipCommitmentsV1
-    for crate::vega::zk_ams::mkhe::exact_eight_chunk_membership::ExactEightChunkMembershipEvidenceV1<
-        R,
-    >
-where
-    R: crate::vega::zk_ams::mkhe::exact_eight_chunk_membership::ExactEightChunkMembershipRoleV1,
-{
-    fn commitments(&self) -> [Point; CHUNKS_PER_WITNESS_V1] {
-        crate::vega::zk_ams::mkhe::exact_eight_chunk_membership::ExactEightChunkMembershipEvidenceV1::<
-            R,
-        >::commitments(self)
-    }
 }
 
 fn decode_response_chunk(
@@ -414,6 +398,10 @@ where
     Ok(())
 }
 
+#[allow(
+    clippy::needless_range_loop,
+    reason = "fixed challenge repetition indices are source-contract pinned"
+)]
 fn reconstruct_rkg_one_rns_first_messages(
     responses: &[u8],
     challenges: [u32; CHALLENGE_REPETITIONS_V1],

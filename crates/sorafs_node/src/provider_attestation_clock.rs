@@ -1,18 +1,16 @@
 //! Qualified rollback-resistant durability for the Musubi attestation journal.
 //!
-//! The clock samples only the host UNIX clock and returns a value only after a
-//! small, payload-free high-water record is authoritative in a deployment-
-//! supplied monotonic compare-and-swap seal. Initialization and restart open
-//! are separate: ordinary open never recreates missing state. Every sample
-//! fences the configured adapter qualification and exact authoritative record
-//! before and after advancement, so rollback, substitution, and unresolved
-//! compare-and-swap outcomes fail closed.
+//! The clock samples only the host UNIX clock and returns a value only after a small, payload-free
+//! high-water record is authoritative in a deployment- supplied monotonic compare-and-swap seal.
+//! Initialization and restart open are separate: ordinary open never recreates missing state. Every
+//! sample fences the configured adapter qualification and exact authoritative record before and
+//! after advancement, so rollback, substitution, and unresolved compare-and-swap outcomes fail
+//! closed.
 //!
-//! The same qualified provider also exposes an independent journal-checkpoint
-//! namespace. Exact canonical checkpoint bytes are stored as immutable,
-//! content-addressed blobs before a small predecessor-linked head is advanced.
-//! This separation makes a lost provider response safely recoverable without
-//! putting private journal DTOs in the public provider contract.
+//! The same qualified provider also exposes an independent journal-checkpoint namespace. Exact
+//! canonical checkpoint bytes are stored as immutable, content-addressed blobs before a small
+//! predecessor-linked head is advanced. This separation makes a lost provider response safely
+//! recoverable without putting private journal DTOs in the public provider contract.
 use crate::provider_attestation_journal::{
     MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1,
     MusubiProviderAttestationJournalPolicyV1,
@@ -91,8 +89,7 @@ impl MusubiProviderAttestationClockScopeV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if a decoded scope is invalid or canonical encoding
-    /// unexpectedly fails.
+    /// Returns an error if a decoded scope is invalid or canonical encoding unexpectedly fails.
     pub fn scope_digest(&self) -> Result<[u8; 32], MusubiProviderAttestationClockErrorV1> {
         self.validate()?;
         domain_hash_norito(CLOCK_SCOPE_DOMAIN_V1, self)
@@ -163,8 +160,7 @@ impl MusubiProviderAttestationJournalCheckpointScopeV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error when a decoded scope is invalid or cannot be encoded
-    /// canonically.
+    /// Returns an error when a decoded scope is invalid or cannot be encoded canonically.
     pub fn scope_digest(
         &self,
     ) -> Result<[u8; 32], MusubiProviderAttestationJournalCheckpointSealErrorV1> {
@@ -702,24 +698,21 @@ pub enum MusubiProviderAttestationJournalCheckpointSealErrorV1 {
 }
 /// Deployment boundary for rollback-resistant journal clock and checkpoint state.
 ///
-/// Implementations must provide authenticated, linearizable compare-and-swap
-/// storage in two independent small-record namespaces: the clock high-water
-/// record and the journal checkpoint head. They must also provide authenticated
-/// immutable content-addressed blob storage for exact checkpoint bytes. The
-/// qualification covers all three namespaces as one deployment policy.
+/// Implementations must provide authenticated, linearizable compare-and-swap storage in two
+/// independent small-record namespaces: the clock high-water record and the journal checkpoint
+/// head. They must also provide authenticated immutable content-addressed blob storage for exact
+/// checkpoint bytes. The qualification covers all three namespaces as one deployment policy.
 ///
 /// Blob operations must independently recompute
-/// [`musubi_provider_attestation_journal_checkpoint_blob_revision_v1`] and
-/// reject a mismatched identity. A successful put is durable and exact-current
-/// retries are idempotent. Head compare-and-swap is linearizable and durable;
-/// an exact-current `next` is an idempotent success even with a stale expected
-/// digest, while a differing head at the same predecessor is never overwritten.
-/// Before acknowledging a head CAS, the provider must bind the named exact blob
-/// to durable retention so it cannot disappear while that head or a retained
-/// descendant can reference it. Orphaned candidate blobs may be collected only
-/// under authenticated rules that prove no retained head can reference them.
-/// None of these operations may persist credentials, paths, nonces, or provider
-/// URLs.
+/// [`musubi_provider_attestation_journal_checkpoint_blob_revision_v1`] and reject a mismatched
+/// identity. A successful put is durable and exact-current retries are idempotent. Head
+/// compare-and-swap is linearizable and durable; an exact-current `next` is an idempotent success
+/// even with a stale expected digest, while a differing head at the same predecessor is never
+/// overwritten. Before acknowledging a head CAS, the provider must bind the named exact blob to
+/// durable retention so it cannot disappear while that head or a retained descendant can reference
+/// it. Orphaned candidate blobs may be collected only under authenticated rules that prove no
+/// retained head can reference them. None of these operations may persist credentials, paths,
+/// nonces, or provider URLs.
 ///
 /// Returning a valid qualification attests to the exact fixed orphan count,
 /// byte, and age ceilings exported above. Deployment qualification must cover
@@ -803,10 +796,9 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
     }
     /// Load one retained checkpoint-head record by its exact record digest.
     ///
-    /// The provider must retain the latest record and its exact direct
-    /// predecessor. Older records may be collected once they are no longer the
-    /// direct predecessor of the authoritative latest head. The default
-    /// rejects the operation so clock-only providers remain fail-closed.
+    /// The provider must retain the latest record and its exact direct predecessor. Older records
+    /// may be collected once they are no longer the direct predecessor of the authoritative latest
+    /// head. The default rejects the operation so clock-only providers remain fail-closed.
     fn load_journal_checkpoint_head_record<'a>(
         &'a self,
         _scope_digest: [u8; 32],
@@ -822,10 +814,9 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
     }
     /// Install `next` only when the checkpoint-head digest equals `expected`.
     ///
-    /// This is a separate namespace from [`Self::compare_and_swap`]. The
-    /// default rejects the operation so clock-only providers remain
-    /// fail-closed. A successful CAS must make both `next` and the exact record
-    /// named by its predecessor digest available through
+    /// This is a separate namespace from [`Self::compare_and_swap`]. The default rejects the
+    /// operation so clock-only providers remain fail-closed. A successful CAS must make both `next`
+    /// and the exact record named by its predecessor digest available through
     /// [`Self::load_journal_checkpoint_head_record`].
     fn compare_and_swap_journal_checkpoint_head<'a>(
         &'a self,
@@ -838,9 +829,8 @@ pub trait MusubiProviderAttestationClockSealV1: Send + Sync + fmt::Debug + 'stat
 }
 /// Derive the existing journal checkpoint revision for bounded blob bytes.
 ///
-/// This exposes only the content-addressed identity already used by the
-/// private journal store; it does not decode or expose the private checkpoint
-/// DTO.
+/// This exposes only the content-addressed identity already used by the private journal store; it
+/// does not decode or expose the private checkpoint DTO.
 ///
 /// # Errors
 ///
@@ -899,10 +889,9 @@ pub(crate) async fn initialize_musubi_provider_attestation_journal_checkpoint_se
 }
 /// Seal one exact canonical journal checkpoint after `expected`.
 ///
-/// The immutable blob is durably installed and read back before the separate
-/// monotonic head CAS. Exact blob/head readback resolves lost provider
-/// responses, so a retry with the same predecessor and checkpoint is
-/// idempotent. The head sequence must advance by exactly one and its observed
+/// The immutable blob is durably installed and read back before the separate monotonic head CAS.
+/// Exact blob/head readback resolves lost provider responses, so a retry with the same predecessor
+/// and checkpoint is idempotent. The head sequence must advance by exactly one and its observed
 /// time must not exceed the authoritative sealed clock floor.
 ///
 /// # Errors
@@ -983,9 +972,8 @@ pub(crate) async fn seal_musubi_provider_attestation_journal_checkpoint_v1(
 ///
 /// # Errors
 ///
-/// Fails closed for absent H0, malformed or noncanonical state, policy/scope
-/// disagreement, an observed time above the sealed clock floor, provider
-/// timeout, or qualification drift.
+/// Fails closed for absent H0, malformed or noncanonical state, policy/scope disagreement, an
+/// observed time above the sealed clock floor, provider timeout, or qualification drift.
 pub(crate) async fn load_musubi_provider_attestation_journal_checkpoint_v1(
     scope: &MusubiProviderAttestationJournalCheckpointScopeV1,
     policy: MusubiProviderAttestationJournalPolicyV1,

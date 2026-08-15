@@ -1,9 +1,8 @@
 //! Region-based memory manager implementing the IVM memory model.
 //!
-//! The memory subsystem enforces permissions, alignment and region bounds for
-//! all loads and stores. Heap allocation is supported and vector accesses are
-//! checked for 16‑byte alignment as required by the specification. Memory is
-//! divided into disjoint regions:
+//! The memory subsystem enforces permissions, alignment and region bounds for all loads and stores.
+//! Heap allocation is supported and vector accesses are checked for 16‑byte alignment as required
+//! by the specification. Memory is divided into disjoint regions:
 //!
 //! * **Code** – loaded at address `0x0000_0000` and marked read/execute only.
 //! * **Heap** – starts at `0x0010_0000` and grows upward via `SYSCALL_ALLOC`.
@@ -50,12 +49,11 @@ pub struct WriteLogEntry {
 }
 /// Memory manager for the VM, with fixed regions for code, heap, and stack.
 ///
-/// In accordance with the updated architecture the entire memory image is
-/// committed via a Merkle tree.  Writes mark ranges dirty and the [`root`]
-/// is recomputed lazily on `commit()` by hashing only the modified chunks.
-/// This avoids re-hashing untouched memory while still enabling inclusion
-/// paths to be produced after a commit.
-/// Zero‑knowledge mode can request inclusion paths for any address.
+/// In accordance with the updated architecture the entire memory image is committed via a Merkle
+/// tree. Writes mark ranges dirty and the [`root`] is recomputed lazily on `commit()` by hashing
+/// only the modified chunks. This avoids re-hashing untouched memory while still enabling inclusion
+/// paths to be produced after a commit. Zero‑knowledge mode can request inclusion paths for any
+/// address.
 pub struct Memory {
     data: Vec<u8>,
     stack_limit: u64,
@@ -191,9 +189,8 @@ impl Memory {
     pub(crate) fn dirty_for_testing(&self) -> bool {
         self.dirty
     }
-    /// Generate the Merkle authentication path for the 32-byte chunk containing
-    /// `addr`. Pending writes are committed before sampling so the returned
-    /// path matches the latest memory image.
+    /// Generate the Merkle authentication path for the 32-byte chunk containing `addr`. Pending
+    /// writes are committed before sampling so the returned path matches the latest memory image.
     pub fn merkle_path(&mut self, addr: u64) -> Vec<[u8; 32]> {
         self.commit();
         const CHUNK: usize = 32;
@@ -201,9 +198,8 @@ impl Memory {
         self.tree.path(index)
     }
     /// Return both the current Merkle root (typed `HashOf<MerkleTree<[u8; 32]>>`)
-    /// and the authentication path for the 32-byte chunk containing `addr` in a
-    /// single operation. Pending writes are committed first to keep the root/path
-    /// in sync.
+    /// and the authentication path for the 32-byte chunk containing `addr` in a single operation.
+    /// Pending writes are committed first to keep the root/path in sync.
     pub fn merkle_root_and_path(
         &mut self,
         addr: u64,
@@ -215,10 +211,9 @@ impl Memory {
     }
     /// Build a compact Merkle proof for the memory chunk containing `addr`.
     ///
-    /// Pending writes are committed before construction. Without truncation
-    /// the returned root is the full memory-tree root. When `depth_cap`
-    /// truncates the path, the returned root commits only to that path fragment
-    /// and is not a membership commitment.
+    /// Pending writes are committed before construction. Without truncation the returned root is
+    /// the full memory-tree root. When `depth_cap` truncates the path, the returned root commits
+    /// only to that path fragment and is not a membership commitment.
     pub fn merkle_compact(
         &mut self,
         addr: u64,
@@ -281,10 +276,9 @@ impl Memory {
     }
     /// Current typed Merkle root, recomputing pending dirty ranges if needed.
     ///
-    /// This helper mirrors [`root`](Self::root) but keeps the method name used
-    /// by callers that sample the root during execution (e.g., step logs). It
-    /// forces a `commit()` so that in-flight writes are reflected in the
-    /// returned digest.
+    /// This helper mirrors [`root`](Self::root) but keeps the method name used by callers that
+    /// sample the root during execution (e.g., step logs). It forces a `commit()` so that in-flight
+    /// writes are reflected in the returned digest.
     pub fn current_root(&mut self) -> HashOf<MerkleTree<[u8; 32]>> {
         self.commit();
         self.root
@@ -450,9 +444,8 @@ impl Memory {
     }
     /// Set the absolute per-instance heap ceiling and clamp the active limit to it.
     ///
-    /// Unlike [`Self::set_heap_limit`], this limit cannot be bypassed by
-    /// [`Self::grow_heap`]. Hosts use it to apply deterministic governance
-    /// limits before guest execution.
+    /// Unlike [`Self::set_heap_limit`], this limit cannot be bypassed by [`Self::grow_heap`]. Hosts
+    /// use it to apply deterministic governance limits before guest execution.
     pub fn set_heap_max_limit(&mut self, limit: u64) -> Result<(), VMError> {
         if limit < self.heap_alloc || limit > Memory::HEAP_MAX_SIZE {
             return Err(VMError::OutOfMemory);
@@ -663,16 +656,14 @@ impl Memory {
     }
     /// Inspect `len` bytes without recording a guest-visible memory access.
     ///
-    /// This is reserved for side-effect-free host quote preparation. Actual
-    /// syscall execution must use [`Self::load_region`] so access tracing
-    /// remains complete.
+    /// This is reserved for side-effect-free host quote preparation. Actual syscall execution must
+    /// use [`Self::load_region`] so access tracing remains complete.
     #[inline]
     pub(crate) fn inspect_region(&self, addr: u64, len: u64) -> Result<&[u8], VMError> {
         let (start, end) = self.checked_region_bounds(addr, len)?;
         Ok(&self.data[start..end])
     }
-    /// Load `len` bytes starting at `addr` and return a slice referencing the
-    /// underlying memory.
+    /// Load `len` bytes starting at `addr` and return a slice referencing the underlying memory.
     #[inline]
     pub fn load_region(&self, addr: u64, len: u64) -> Result<&[u8], VMError> {
         let (start, end) = self.checked_region_bounds(addr, len)?;

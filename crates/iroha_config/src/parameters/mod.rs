@@ -51,10 +51,9 @@ pub enum WebAuthnOriginV1Error {
 }
 /// Validate one canonical WebAuthn relying-party ID under the public V1 policy.
 ///
-/// V1 accepts only exact lowercase multi-label ASCII DNS names. IP address
-/// literals, single-label development names, trailing dots, and DNS labels
-/// with non-LDH bytes are rejected. This is a hard cut: callers must not trim,
-/// lowercase, or otherwise repair an input before validation.
+/// V1 accepts only exact lowercase multi-label ASCII DNS names. IP address literals, single-label
+/// development names, trailing dots, and DNS labels with non-LDH bytes are rejected. This is a hard
+/// cut: callers must not trim, lowercase, or otherwise repair an input before validation.
 ///
 /// # Errors
 ///
@@ -107,10 +106,9 @@ pub fn is_canonical_webauthn_rp_id_v1(value: &str) -> bool {
 }
 /// Validate one canonical WebAuthn origin for `rp_id` under the public V1 policy.
 ///
-/// The exact URL serialization must be HTTPS with no credentials, path,
-/// query, fragment, or explicit default/non-canonical port. A canonical
-/// explicit non-default port is allowed. The DNS host must equal `rp_id` or
-/// be its label-bound subdomain.
+/// The exact URL serialization must be HTTPS with no credentials, path, query, fragment, or
+/// explicit default/non-canonical port. A canonical explicit non-default port is allowed. The DNS
+/// host must equal `rp_id` or be its label-bound subdomain.
 ///
 /// # Errors
 ///

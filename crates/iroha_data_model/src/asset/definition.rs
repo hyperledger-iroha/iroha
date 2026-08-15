@@ -213,9 +213,8 @@ mod model {
         #[registrable_builder(skip, init = AssetConfidentialPolicy::default())]
         pub confidential_policy: AssetConfidentialPolicy,
     }
-    /// An assets mintability scheme. `Infinitely` means elastic
-    /// supply. `Once` is what you want to use. Don't use `Not` explicitly
-    /// outside of smartcontracts.
+    /// An assets mintability scheme. `Infinitely` means elastic supply. `Once` is what you want to
+    /// use. Don't use `Not` explicitly outside of smartcontracts.
     #[derive(
         Debug,
         Display,

@@ -1624,12 +1624,6 @@ _TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
     ),
 }
 
-_TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
-    "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier": (
-        "394810ab62d382e3016e5a6c88660778c34beca86d0804b567a74be47f8694d5"
-    ),
-}
-
 _TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {
     "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier": (
         "6b66126a0ae12666093b2126bfadf1149738c9e19c3cd3ff9990fe0be46587bf"

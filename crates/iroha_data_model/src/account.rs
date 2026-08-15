@@ -384,8 +384,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountId {
         Ok((Self { controller }, used))
     }
 }
-/// Read-only reference to [`Account`].
-/// Used in query filters to avoid copying.
+/// Read-only reference to [`Account`]. Used in query filters to avoid copying.
 pub type AccountEntry<'world> = Ref<'world, AccountId, AccountValue>;
 /// Canonical account data stored in the world state without duplicating the identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -475,9 +474,8 @@ impl Default for AccountDetails {
         Self::new(Metadata::default(), None, None, Vec::new())
     }
 }
-/// [`Account`] without `id`.
-/// Needed only for the world-state account map to reduce memory usage.
-/// In other places use [`Account`] directly.
+/// [`Account`] without `id`. Needed only for the world-state account map to reduce memory usage. In
+/// other places use [`Account`] directly.
 pub type AccountValue = Owned<AccountDetails>;
 const ERR_ACCOUNT_LITERAL_FORMAT: &str = "AccountId must use a canonical I105 literal";
 impl AccountId {
@@ -582,10 +580,9 @@ impl AccountId {
     ///
     /// Returns [`AccountAddressError`] when address encoding fails.
     ///
-    /// The literal is derived for each call rather than retained in a process-wide
-    /// cache. Account controllers are externally supplied and can be large, so
-    /// caching both their encoded keys and rendered literals would turn a bounded
-    /// request into persistent memory growth.
+    /// The literal is derived for each call rather than retained in a process-wide cache. Account
+    /// controllers are externally supplied and can be large, so caching both their encoded keys and
+    /// rendered literals would turn a bounded request into persistent memory growth.
     #[inline]
     pub fn canonical_i105(&self) -> Result<String, AccountAddressError> {
         let prefix = address::chain_discriminant();
@@ -604,9 +601,8 @@ impl AccountId {
     ///
     /// Canonical I105 literals are accepted.
     /// Legacy forms such as `<identifier>@<domain>`, canonical hex, dotted/non-canonical
-    /// i105 literals, aliases, UAID, opaque account literals, and historical
-    /// non-i105 envelopes are rejected.
-    /// The returned canonical string always matches the canonical I105 representation.
+    /// i105 literals, aliases, UAID, opaque account literals, and historical non-i105 envelopes are
+    /// rejected. The returned canonical string always matches the canonical I105 representation.
     ///
     /// # Errors
     ///

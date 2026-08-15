@@ -143,8 +143,7 @@ impl NexusAppConfig {
 /// Options for creating a Connect session.
 #[derive(Debug, Clone, Default)]
 pub struct NexusConnectOptions {
-    /// Optional deterministic session id. Transport implementations may
-    /// generate one when omitted.
+    /// Optional deterministic session id. Transport implementations may generate one when omitted.
     pub sid: Option<String>,
     /// Optional node hint overriding [`NexusAppConfig::node`].
     pub node: Option<String>,
@@ -253,8 +252,7 @@ pub trait NexusConnectTransport {
     /// Register a Connect session and return launch metadata.
     ///
     /// # Errors
-    /// Returns an error if the transport is unavailable or cannot register the
-    /// Connect session.
+    /// Returns an error if the transport is unavailable or cannot register the Connect session.
     fn start_connect(
         &self,
         config: &NexusAppConfig,
@@ -272,8 +270,7 @@ pub trait NexusConnectTransport {
     /// Request a wallet signature for the canonical payload bytes.
     ///
     /// # Errors
-    /// Returns an error if the transport cannot request or receive a wallet
-    /// signature.
+    /// Returns an error if the transport cannot request or receive a wallet signature.
     fn request_signature(
         &self,
         session: &NexusConnectSession,
@@ -294,8 +291,7 @@ pub trait NexusToriiSubmitter {
     /// Submit the signed transaction and optionally wait for final status.
     ///
     /// # Errors
-    /// Returns an error if Torii submission fails or waiting for terminal status
-    /// fails.
+    /// Returns an error if Torii submission fails or waiting for terminal status fails.
     fn submit_and_wait(
         &self,
         transaction: &SignedTransaction,
@@ -409,8 +405,7 @@ where
     /// Register an app-role Connect session and return wallet launch metadata.
     ///
     /// # Errors
-    /// Returns an error if the configured Connect transport cannot register a
-    /// session.
+    /// Returns an error if the configured Connect transport cannot register a session.
     pub fn start_connect(
         &self,
         options: NexusConnectOptions,
@@ -466,9 +461,8 @@ where
     /// and optionally wait for a terminal pipeline status.
     ///
     /// # Errors
-    /// Returns an error if the wallet signature is unsupported or malformed, if
-    /// signed transaction verification fails, or if Torii submission/status
-    /// waiting fails.
+    /// Returns an error if the wallet signature is unsupported or malformed, if signed transaction
+    /// verification fails, or if Torii submission/status waiting fails.
     pub fn finalize_and_submit(
         &self,
         signable: NexusSignableTransaction,

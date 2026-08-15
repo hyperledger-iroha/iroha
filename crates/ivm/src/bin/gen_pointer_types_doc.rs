@@ -1,5 +1,4 @@
-//! Generate or check the generated pointer-ABI sections in docs.
-//! Usage:
+//! Generate or check the generated pointer-ABI sections in docs. Usage:
 //!   cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --write
 //!   cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --check
 //!   cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --write --root /tmp/ivm-doc-stage

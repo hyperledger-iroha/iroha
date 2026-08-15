@@ -1,18 +1,16 @@
 //! Source-attached cross-trace product bus for the P-256 ECDSA relation.
 //!
-//! An aggregate STARK cannot bind an arbitrary value-bus writer to an
-//! arbitrary window or reduction row by passing native arrays into a row
-//! evaluator. This module instead gives every source and sink cell a
-//! verifier-fixed tagged factor and proves multiset equality with four
-//! independent products.
+//! An aggregate STARK cannot bind an arbitrary value-bus writer to an arbitrary window or reduction
+//! row by passing native arrays into a row evaluator. This module instead gives every source and
+//! sink cell a verifier-fixed tagged factor and proves multiset equality with four independent
+//! products.
 //!
-//! Writer source factors are attached to the committed value-bus execution
-//! rows. Repeated uses have the exact first-release multiplicities
-//! `{1, 64, 65, 129}` and are exponentiated with a fixed eight-square addition
-//! chain, keeping the maximum constraint degree at three. The binder sink
-//! consumes its committed writer/external copies directly. Window, reduction,
-//! and low-s source products use the generic six-slot product evaluator below
-//! and must be appended to their respective source commitments through:
+//! Writer source factors are attached to the committed value-bus execution rows. Repeated uses have
+//! the exact first-release multiplicities `{1, 64, 65, 129}` and are exponentiated with a fixed
+//! eight-square addition chain, keeping the maximum constraint degree at three. The binder sink
+//! consumes its committed writer/external copies directly. Window, reduction, and low-s source
+//! products use the generic six-slot product evaluator below and must be appended to their
+//! respective source commitments through:
 //!
 //! - `p256_window_opened_external_cells_v1(&[F; 61]) -> [F; 3]`;
 //! - `p256_reduction_opened_binding_cells_v1(&[F; 56]) -> [F; 2]`;
@@ -22,17 +20,14 @@
 //! two-factor-packed value-writer source adds 86 columns (98 together with the
 //! existing twelve value-bus products), and the binder sink adds 38. Segment terminal columns
 //! are constant and chain value bus -> all windows -> both reductions ->
-//! optional low-s. Each linked adapter uses its smallest supported native
-//! domain. The 128 window instances are verifier-fixed vertical blocks in
-//! exactly `128 * 512 = 65,536` rows, so their product continues through block
-//! boundaries. Cross-domain starts and terminals are explicit transcript-bound
-//! claims, constrained at each source's own first/final row before verifier
-//! equality checks. No standalone copied-source trace or unconstrained host
-//! terminal lift is sound.
+//! optional low-s. Each linked adapter uses its smallest supported native domain. The 128 window
+//! instances are verifier-fixed vertical blocks in exactly `128 * 512 = 65,536` rows, so their
+//! product continues through block boundaries. Cross-domain starts and terminals are explicit
+//! transcript-bound claims, constrained at each source's own first/final row before verifier
+//! equality checks. No standalone copied-source trace or unconstrained host terminal lift is sound.
 //!
-//! The tagged-product core is intentionally channel-generic. Its arithmetic
-//! and window-bit channel tags can also bind the scalar-bit bus without a
-//! second permutation construction.
+//! The tagged-product core is intentionally channel-generic. Its arithmetic and window-bit channel
+//! tags can also bind the scalar-bit bus without a second permutation construction.
 //!
 //! The aggregate adapter registers these source-attached auxiliary columns and
 //! terminal chain in the production verifier.
@@ -109,8 +104,7 @@ pub(crate) const P256_CROSS_TRACE_WRITER_AUX_WIDTH_V1: usize =
 /// Cross-product auxiliary columns added to a binder sink trace.
 pub(crate) const P256_CROSS_TRACE_SINK_AUX_WIDTH_V1: usize = P256_CROSS_TRACE_EVENT_SLOTS_V1
     + P256_CROSS_TRACE_LANES_V1 * (P256_CROSS_TRACE_EVENT_SLOTS_V1 + 2);
-/// Required cross-product auxiliary columns for the vertically packed window
-/// adapter.
+/// Required cross-product auxiliary columns for the vertically packed window adapter.
 pub(crate) const P256_CROSS_TRACE_WINDOW_AUX_WIDTH_V1: usize = 3 + P256_CROSS_TRACE_LANES_V1 * 5;
 /// Required cross-product auxiliary columns for each reduction instance.
 pub(crate) const P256_CROSS_TRACE_REDUCTION_AUX_WIDTH_V1: usize = 2 + P256_CROSS_TRACE_LANES_V1 * 4;
@@ -190,8 +184,7 @@ pub(crate) enum P256CrossTraceEndpointV1 {
     /// Arithmetic `c`-bit endpoint reserved for scalar-bit source binding.
     #[cfg(test)]
     ScalarArithmetic,
-    /// Canonical per-window bit endpoint reserved for scalar-bit source
-    /// binding.
+    /// Canonical per-window bit endpoint reserved for scalar-bit source binding.
     #[cfg(test)]
     ScalarWindow,
 }
@@ -371,11 +364,10 @@ pub(crate) struct P256CrossTraceRegularAuxRowV1 {
 }
 /// Test-only materialization of one ordinary source/sink product segment.
 ///
-/// `source_values` must be the actual cells from the committed base rows that
-/// share this segment's native layout. Inactive event slots are algebraically
-/// gated to zero and contribute the product identity. Production adapters
-/// should call [`build_regular_row_v1`] while streaming directly into their
-/// commitment/LDE pipeline instead of retaining a million-row `Vec`.
+/// `source_values` must be the actual cells from the committed base rows that share this segment's
+/// native layout. Inactive event slots are algebraically gated to zero and contribute the product
+/// identity. Production adapters should call [`build_regular_row_v1`] while streaming directly into
+/// their commitment/LDE pipeline instead of retaining a million-row `Vec`.
 #[cfg(test)]
 pub(crate) fn build_zk_x509_p256_cross_trace_regular_aux_v1(
     fixed: &[P256CrossTraceRegularFixedRowV1],
@@ -551,9 +543,8 @@ pub(crate) struct P256CrossTraceSinkFixedRowV1 {
 }
 /// Compact verifier-owned sink schedule.
 ///
-/// Only logical binding rows are retained. Native-domain padding and boundary
-/// selectors are regenerated on demand, avoiding a wide fixed-table
-/// allocation.
+/// Only logical binding rows are retained. Native-domain padding and boundary selectors are
+/// regenerated on demand, avoiding a wide fixed-table allocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256CrossTraceSinkFixedV1 {
     logical: Vec<[Option<P256ExternalBindingCrossSourceV1>; P256_EXTERNAL_BINDINGS_PER_ROW_V1]>,
@@ -660,10 +651,9 @@ pub(crate) fn compile_zk_x509_p256_cross_trace_sink_fixed_v1(
 }
 /// Constant-memory deterministic provider for the minimal padded sink domain.
 ///
-/// Construction makes one compact logical-row pass to validate local
-/// equalities and compute the terminal. Consumers then pull the exact padded
-/// row sequence in a second pass. No million-row auxiliary or fixed `Vec` is
-/// retained.
+/// Construction makes one compact logical-row pass to validate local equalities and compute the
+/// terminal. Consumers then pull the exact padded row sequence in a second pass. No million-row
+/// auxiliary or fixed `Vec` is retained.
 #[derive(Debug)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256CrossTraceSinkStreamV1<'a> {
@@ -877,8 +867,7 @@ fn validate_binding_fixed_schedule_v1(
     }
     Ok(())
 }
-/// Verifier-fixed writer multiplicity selectors at one flattened value-bus
-/// source row.
+/// Verifier-fixed writer multiplicity selectors at one flattened value-bus source row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256CrossTraceWriterFixedRowV1 {
     /// Two writer factors, each independently identity-padded.
@@ -916,8 +905,7 @@ pub(crate) struct P256CrossTraceWriterAuxRowV1 {
     /// Source terminal repeated as a degree-zero column.
     pub(crate) terminal: [F; P256_CROSS_TRACE_LANES_V1],
 }
-/// Constant-memory deterministic provider for the `2^19` writer-source
-/// auxiliary rows.
+/// Constant-memory deterministic provider for the `2^19` writer-source auxiliary rows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256CrossTraceWriterSourceStreamV1<'a> {
     value_bus: &'a P256ValueBusBaseEndpointTraceV1,
@@ -928,8 +916,7 @@ pub(crate) struct P256CrossTraceWriterSourceStreamV1<'a> {
     next_row: usize,
 }
 impl P256CrossTraceWriterSourceFixedV1 {
-    /// Compile exact writer multiplicities from the verifier-only binding
-    /// schedule.
+    /// Compile exact writer multiplicities from the verifier-only binding schedule.
     pub(crate) fn compile_v1(role: P256EcdsaRoleV1) -> Result<Self, P256CrossTraceBusErrorV1> {
         let rows = compile_zk_x509_p256_external_cross_sources_v1(role)?;
         let mut multiplicities = vec![0_u16; P256_CROSS_TRACE_VALUE_CELLS_V1];
@@ -1043,8 +1030,7 @@ impl P256CrossTraceWriterSourceFixedV1 {
             .sum()
     }
 }
-/// Prepare a streamed value-writer source product directly from committed
-/// execution values.
+/// Prepare a streamed value-writer source product directly from committed execution values.
 ///
 /// A first pass validates every selected source and computes the terminal. The
 /// returned provider then regenerates all `2^20` rows sequentially without
@@ -1134,8 +1120,7 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
         self.terminal
     }
 }
-/// Pure degree-three writer-source residues over the actual committed
-/// value-bus source cell.
+/// Pure degree-three writer-source residues over the actual committed value-bus source cell.
 pub(crate) fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1(
     fixed: P256CrossTraceWriterFixedRowV1,
     source_values: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
@@ -1261,8 +1246,7 @@ fn build_writer_row_v1(
         terminal: [F::ZERO; P256_CROSS_TRACE_LANES_V1],
     }
 }
-/// Four final residues equating the fully chained source product to the
-/// independent sink product.
+/// Four final residues equating the fully chained source product to the independent sink product.
 pub(crate) fn evaluate_zk_x509_p256_cross_trace_terminal_constraints_v1(
     final_source: [F; P256_CROSS_TRACE_LANES_V1],
     sink: [F; P256_CROSS_TRACE_LANES_V1],

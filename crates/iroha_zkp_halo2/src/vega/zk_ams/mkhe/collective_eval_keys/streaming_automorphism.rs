@@ -574,14 +574,12 @@ where
     }
     Ok(())
 }
-/// Apply one frozen Galois automorphism directly to a consuming 38-limb
-/// ciphertext manifest and compactly switch the linear component back to the
-/// governed collective key.
+/// Apply one frozen Galois automorphism directly to a consuming 38-limb ciphertext manifest and
+/// compactly switch the linear component back to the governed collective key.
 ///
-/// Both providers are externally owned. Their opaque caches and backend
-/// residency are deliberately outside managed-memory accounting; every byte
-/// owned by this function, the retained runtime/key handle, and the consuming
-/// input manifest is enumerated by the companion accounting function.
+/// Both providers are externally owned. Their opaque caches and backend residency are deliberately
+/// outside managed-memory accounting; every byte owned by this function, the retained runtime/key
+/// handle, and the consuming input manifest is enumerated by the companion accounting function.
 pub fn automorphism_switch_zk_ams_mkhe_collective_streaming_v1<K, D>(
     runtime: &ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1,
     schedule_index: usize,

@@ -1,9 +1,8 @@
 //! Stable human and machine output contracts for the Musubi V1 CLI.
 //!
-//! Human success is routed to stdout and human failure to stderr. JSON mode
-//! always emits exactly one versioned document on stdout and leaves stderr
-//! empty, including for command failures. Exit status remains independent of
-//! the selected presentation mode.
+//! Human success is routed to stdout and human failure to stderr. JSON mode always emits exactly
+//! one versioned document on stdout and leaves stderr empty, including for command failures. Exit
+//! status remains independent of the selected presentation mode.
 use norito::json::{Map, Value};
 use std::{collections::BTreeMap, io::Write};
 /// Stable schema name for one-document Musubi CLI output.
@@ -154,9 +153,8 @@ impl Diagnostic {
     }
     /// Add deterministic key/value context.
     ///
-    /// Secret-named fields are replaced in full. Other values still pass
-    /// through inline credential, bearer-token, private-key-block, and control
-    /// character redaction.
+    /// Secret-named fields are replaced in full. Other values still pass through inline credential,
+    /// bearer-token, private-key-block, and control character redaction.
     #[must_use]
     pub fn with_context(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         let key = sanitize_diagnostic_text(&key.into());
@@ -270,8 +268,7 @@ impl CommandOutput {
     ///
     /// # Errors
     ///
-    /// Returns a Norito JSON error only if the already constructed JSON value
-    /// cannot be serialized.
+    /// Returns a Norito JSON error only if the already constructed JSON value cannot be serialized.
     pub fn render(&self, format: OutputFormat) -> Result<RenderedOutput, norito::json::Error> {
         match format {
             OutputFormat::Human => Ok(self.render_human()),

@@ -439,10 +439,9 @@ mod tests {
 impl Client {
     /// Bind, sign, encode, and execute an arbitrary raw query request.
     ///
-    /// The client supplies the configured network identity and authority plus
-    /// a fresh creation time, nonzero lifetime, and operating-system nonce.
-    /// This is the canonical boundary for callers that construct a dynamic
-    /// [`QueryRequest`] rather than using a typed query builder.
+    /// The client supplies the configured network identity and authority plus a fresh creation
+    /// time, nonzero lifetime, and operating-system nonce. This is the canonical boundary for
+    /// callers that construct a dynamic [`QueryRequest`] rather than using a typed query builder.
     ///
     /// # Errors
     /// Returns an error if request binding or signing fails, the HTTP request

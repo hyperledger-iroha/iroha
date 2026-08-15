@@ -466,9 +466,9 @@ Arc::clone(&output_guard),
 Arc::clone(&block_rx),
 Arc::clone(&kura_replica_advert_refresh),
 leader_wire_recovery_authority,
-exact_output_service_owner,
-)
-.map_err(V2RunnerError::Service)?;
+    exact_output_service_owner,
+    )
+    .map_err(V2RunnerError::Service)?;
 """,
 "historical_body_guard": """
 let served = serve_block_sync_while_guarded(
@@ -597,5 +597,11 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
     "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (
         "9fdace5f2d7203c48221a9ea47be4bf0522a126403cb3dfd6d9397fefd63e989"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
+    "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier": (
+        "394810ab62d382e3016e5a6c88660778c34beca86d0804b567a74be47f8694d5"
     ),
 }

@@ -493,8 +493,7 @@ impl MusubiSeedIngressCarPlanV1 {
     ///
     /// # Errors
     ///
-    /// Returns a stable permanent error for any malformed geometry, profile, or commitment
-    /// binding.
+    /// Returns a stable permanent error for any malformed geometry, profile, or commitment binding.
     pub fn validate(
         &self,
         commitment: &MusubiArchiveCommitmentV1,
@@ -707,10 +706,9 @@ fn seed_ingress_plan_digest(
 }
 /// Finalized immutable archive-registration evidence sent to the storage coordinator.
 ///
-/// The named registry snapshot proves when the immutable registration became
-/// observable. A backend may reproduce `registration` from any later finalized
-/// archive read because Core permits only the omitted location directory to
-/// change after registration.
+/// The named registry snapshot proves when the immutable registration became observable. A backend
+/// may reproduce `registration` from any later finalized archive read because Core permits only the
+/// omitted location directory to change after registration.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiFinalizedArchiveRegistrationEvidenceV1 {
     /// Closed schema version; must equal one.
@@ -2052,10 +2050,9 @@ impl MusubiPublicationServiceJournalV1 for InMemoryMusubiPublicationServiceJourn
 /// Deployment-owned signing boundary for one exact seed-ingress receipt payload.
 ///
 /// Implementations may call an HSM, KMS, or threshold collection service. They return only
-/// controller approvals: the publication service constructs the payload and lifetime, then
-/// verifies the assembled receipt before committing it to the replay journal. This prevents a
-/// signer implementation from substituting any chain, publisher, archive, body, nonce, or expiry
-/// field.
+/// controller approvals: the publication service constructs the payload and lifetime, then verifies
+/// the assembled receipt before committing it to the replay journal. This prevents a signer
+/// implementation from substituting any chain, publisher, archive, body, nonce, or expiry field.
 pub trait MusubiSeedIngressReceiptSigningProviderV1: Send {
     /// Exact broker account controlled by this signing provider.
     fn broker(&self) -> &AccountId;

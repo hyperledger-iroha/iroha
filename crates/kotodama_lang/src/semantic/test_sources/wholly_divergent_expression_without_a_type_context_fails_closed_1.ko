@@ -1,0 +1,5 @@
+
+            fn ambiguous(bool flag) {
+                let unreachable = if flag { return; } else { return; };
+            }
+            

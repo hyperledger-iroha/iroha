@@ -15591,6 +15591,164 @@ pub(crate) mod valid {
             sync::Arc,
             time::Duration,
         };
+        macro_rules! validate_static_test_block {
+            ($block:expr, $topology:expr, $view:expr, $time_source:expr) => {
+                ValidBlock::validate_static_state_dependent(
+                    $block,
+                    $topology,
+                    &ALICE_ID,
+                    $view,
+                    false,
+                    $time_source,
+                    false,
+                    ConsensusValidationProfile::LegacyLive,
+                )
+            };
+        }
+        macro_rules! validate_voting_test_block {
+            ($block:expr, $topology:expr, $time_source:expr, $state:expr, $voting_block:expr) => {
+                ValidBlock::validate_keep_voting_block(
+                    $block,
+                    $topology,
+                    &ALICE_ID,
+                    $time_source,
+                    $state,
+                    $voting_block,
+                    false,
+                )
+            };
+        }
+        macro_rules! setup_single_leader_world {
+            ($kura:ident, $query:ident, $key_pairs:ident, $topology:ident, $leader:ident, $world:ident) => {
+                let $kura = Arc::new(Kura::blank_kura_for_testing());
+                let $query = LiveQueryStore::start_test();
+                let $key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                    Algorithm::BlsNormal,
+                )];
+                let $topology = test_topology_with_keys(&$key_pairs);
+                let $leader = &$key_pairs[0];
+                let mut $world = World::new();
+                insert_consensus_key(
+                    &mut $world,
+                    "leader",
+                    $leader,
+                    0,
+                    None,
+                    ConsensusKeyStatus::Active,
+                );
+            };
+        }
+        macro_rules! setup_da_validation_world {
+            ($kura:ident, $query:ident, $leader:ident, $topology:ident, $world:ident) => {
+                let $kura = Arc::new(Kura::blank_kura_for_testing());
+                let $query = LiveQueryStore::start_test();
+                let $leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+                let $topology = Topology::new(vec![PeerId::new($leader.public_key().clone())]);
+                let mut $world = World::new();
+                insert_consensus_key(
+                    &mut $world,
+                    "validator",
+                    &$leader,
+                    0,
+                    None,
+                    ConsensusKeyStatus::Active,
+                );
+            };
+        }
+        macro_rules! validate_signed_voting_test_block {
+            ($signed:ident, $topology:ident, $state:ident, $voting_block:ident, $time_source:ident, $result:ident) => {
+                let mut $voting_block = None;
+                let (_handle, $time_source) =
+                    TimeSource::new_mock($signed.header().creation_time());
+                let $result = validate_voting_test_block!(
+                    $signed,
+                    &$topology,
+                    &$time_source,
+                    &$state,
+                    &mut $voting_block
+                )
+                .unpack(|_| {});
+            };
+        }
+        macro_rules! setup_elastic_lane_validation_state {
+            ($kura:ident, $key_pairs:ident, $topology:ident, $leader:ident, $state:ident) => {
+                let $kura = Arc::new(Kura::blank_kura_for_testing());
+                let query = LiveQueryStore::start_test();
+                let $key_pairs = core::iter::repeat_with(|| {
+                    crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+                })
+                .take(4)
+                .collect::<Vec<_>>();
+                let $topology = test_topology_with_keys(&$key_pairs);
+                let $leader = &$key_pairs[0];
+                let mut world = World::new();
+                insert_active_consensus_keys(&mut world, &$key_pairs);
+                let $state = State::new_for_testing(world, Arc::clone(&$kura), query);
+                install_live_test_elastic_lane(&$state);
+                install_test_lane_manifests_for_keypairs(&$state, &$key_pairs);
+                let _prev_hash = commit_block_with_applied_lane_predecessors(
+                    &$state,
+                    &$kura,
+                    &$topology,
+                    $leader.private_key(),
+                    &[
+                        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                        (LaneId::new(1), DataSpaceId::UNIVERSAL),
+                    ],
+                );
+            };
+        }
+        macro_rules! setup_stateless_cache_state {
+            ($kura:ident, $state:ident, $leader_private:ident, $topology:ident) => {
+                let $kura = Arc::new(Kura::blank_kura_for_testing());
+                let query = LiveQueryStore::start_test();
+                let mut $state = State::new(World::new(), Arc::clone(&$kura), query);
+                let mut pipeline = $state.view().pipeline().clone();
+                pipeline.stateless_cache_cap = 64;
+                $state.set_pipeline(pipeline);
+                let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+                let (leader_public, $leader_private) = leader.into_parts();
+                let $topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+                let _ = commit_block_at_height(
+                    &$state,
+                    &$kura,
+                    &$topology,
+                    &$leader_private,
+                    1,
+                    None,
+                    0,
+                );
+            };
+        }
+        macro_rules! setup_cacheable_transaction {
+            ($state:ident, $tx_handle:ident, $tx_time_source:ident, $tx_hash:ident, $accepted:ident) => {
+                let ($tx_handle, $tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
+                let (authority, signer) = gen_account_in("cache-test");
+                let tx = TransactionBuilder::new_with_time_source(
+                    $state.network_id,
+                    authority,
+                    &$tx_time_source,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
+                .sign(signer.private_key());
+                let $tx_hash = tx.hash();
+                let $accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+            };
+        }
+        macro_rules! build_cacheable_block {
+            ($state:ident, $leader_private:ident, $accepted:ident, $block_handle:ident, $block_time_source:ident, $signed_block:ident) => {
+                let ($block_handle, $block_time_source) =
+                    TimeSource::new_mock(Duration::from_millis(10));
+                let builder =
+                    BlockBuilder::new_with_time_source(vec![$accepted], $block_time_source.clone());
+                let builder = builder.chain(0, $state.view().latest_block().as_deref());
+                let new_block = with_current_state_da_sidecars(builder, &$state)
+                    .sign(&$leader_private)
+                    .unpack(|_| {});
+                let $signed_block: SignedBlock = SignedBlock::from(new_block);
+            };
+        }
         #[test]
         fn autonomous_merge_carrier_content_gate_accepts_only_exact_empty_carrier() {
             let policy_only_block = raw_block_with_da_sidecars(None, None);
@@ -18180,22 +18338,7 @@ pub(crate) mod valid {
                 Hash,
             ) -> BlockExecutionContextBundle,
         ) -> (State, Topology, TimeSource, SignedBlock) {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                Algorithm::BlsNormal,
-            )];
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "leader",
-                leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -19058,22 +19201,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_snapshot_accepts_valid_block() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                Algorithm::BlsNormal,
-            )];
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "leader",
-                leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -19091,17 +19219,8 @@ pub(crate) mod valid {
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
             let static_data = {
                 let view = state.query_view();
-                ValidBlock::validate_static_state_dependent(
-                    &signed,
-                    &topology,
-                    &ALICE_ID,
-                    &view,
-                    false,
-                    &time_source,
-                    false,
-                    ConsensusValidationProfile::LegacyLive,
-                )
-                .expect("static state-dependent validation should succeed")
+                validate_static_test_block!(&signed, &topology, &view, &time_source)
+                    .expect("static state-dependent validation should succeed")
             };
             let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
             let committed_heights = {
@@ -19618,22 +19737,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_snapshot_rejects_invalid_signature() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                Algorithm::BlsNormal,
-            )];
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "leader",
-                leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -19659,17 +19763,8 @@ pub(crate) mod valid {
             let signed: SignedBlock = new_block.into();
             let static_data = {
                 let view = state.query_view();
-                ValidBlock::validate_static_state_dependent(
-                    &signed,
-                    &topology,
-                    &ALICE_ID,
-                    &view,
-                    false,
-                    &time_source,
-                    false,
-                    ConsensusValidationProfile::LegacyLive,
-                )
-                .expect("static state-dependent validation should succeed")
+                validate_static_test_block!(&signed, &topology, &view, &time_source)
+                    .expect("static state-dependent validation should succeed")
             };
             let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
             let committed_heights = {
@@ -19702,22 +19797,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_snapshot_rejects_duplicate_signed_transaction_hashes() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                Algorithm::BlsNormal,
-            )];
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "leader",
-                leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -19744,17 +19824,8 @@ pub(crate) mod valid {
             let signed: SignedBlock = new_block.into();
             let static_data = {
                 let view = state.query_view();
-                ValidBlock::validate_static_state_dependent(
-                    &signed,
-                    &topology,
-                    &ALICE_ID,
-                    &view,
-                    false,
-                    &time_source,
-                    false,
-                    ConsensusValidationProfile::LegacyLive,
-                )
-                .expect("static state-dependent validation should succeed")
+                validate_static_test_block!(&signed, &topology, &view, &time_source)
+                    .expect("static state-dependent validation should succeed")
             };
             let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
             let committed_heights = {
@@ -19811,22 +19882,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_rejects_missing_execution_context() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                Algorithm::BlsNormal,
-            )];
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "leader",
-                leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -19850,16 +19906,7 @@ pub(crate) mod valid {
             signed.set_execution_context(None);
             let err = {
                 let view = state.query_view();
-                match ValidBlock::validate_static_state_dependent(
-                    &signed,
-                    &topology,
-                    &ALICE_ID,
-                    &view,
-                    false,
-                    &time_source,
-                    false,
-                    ConsensusValidationProfile::LegacyLive,
-                ) {
+                match validate_static_test_block!(&signed, &topology, &view, &time_source) {
                     Ok(_) => panic!("live block without execution context must be rejected"),
                     Err(err) => err,
                 }
@@ -19872,22 +19919,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_rejects_execution_context_route_mismatch() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                Algorithm::BlsNormal,
-            )];
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "leader",
-                leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -19931,16 +19963,7 @@ pub(crate) mod valid {
             let signed: SignedBlock = new_block.into();
             let err = {
                 let view = state.query_view();
-                match ValidBlock::validate_static_state_dependent(
-                    &signed,
-                    &topology,
-                    &ALICE_ID,
-                    &view,
-                    false,
-                    &time_source,
-                    false,
-                    ConsensusValidationProfile::LegacyLive,
-                ) {
+                match validate_static_test_block!(&signed, &topology, &view, &time_source) {
                     Ok(_) => {
                         panic!("live block with mismatched execution context must be rejected")
                     }
@@ -19982,17 +20005,8 @@ pub(crate) mod valid {
                     },
                 );
             let view = state.query_view();
-            ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect("matching lane payload ownership must validate");
+            validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect("matching lane payload ownership must validate");
         }
         #[test]
         fn validate_static_state_dependent_accepts_single_lane_context_when_nexus_disabled() {
@@ -20019,17 +20033,8 @@ pub(crate) mod valid {
                 None,
             );
             let view = state.query_view();
-            ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect("disabled Nexus must retain the canonical single-lane route");
+            validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect("disabled Nexus must retain the canonical single-lane route");
         }
         #[test]
         fn validate_static_state_dependent_rejects_nonzero_planner_origin_lane_view() {
@@ -20062,17 +20067,8 @@ pub(crate) mod valid {
                     },
                 );
             let view = state.query_view();
-            let error = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("planner-origin lane payloads must start at lane view zero");
+            let error = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("planner-origin lane payloads must start at lane view zero");
             assert!(
                 matches!(
                     error,
@@ -20121,17 +20117,8 @@ pub(crate) mod valid {
                 None,
             );
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &second,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("reused lane-local artifact height must be rejected");
+            let err = validate_static_test_block!(&second, &topology, &view, &time_source)
+                .expect_err("reused lane-local artifact height must be rejected");
             assert!(
                 matches!(
                     err,
@@ -20353,17 +20340,8 @@ pub(crate) mod valid {
                     },
                 );
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("tampered lane payload ownership must be rejected");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("tampered lane payload ownership must be rejected");
             assert!(
                 matches!(
                     err,
@@ -20447,17 +20425,8 @@ pub(crate) mod valid {
                     },
                 );
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("validator-set drift in lane descriptor must be rejected");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("validator-set drift in lane descriptor must be rejected");
             assert!(
                 matches!(
                     err,
@@ -20565,17 +20534,8 @@ pub(crate) mod valid {
                     },
                 );
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("candidate-hash drift must be rejected");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("candidate-hash drift must be rejected");
             assert!(
                 matches!(
                     err,
@@ -20628,17 +20588,8 @@ pub(crate) mod valid {
                     },
                 );
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("ownership lane/dataspace drift must be rejected");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("ownership lane/dataspace drift must be rejected");
             assert!(
                 matches!(
                     err,
@@ -20683,17 +20634,8 @@ pub(crate) mod valid {
                     },
                 );
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("partial lane payload ownership coverage must be rejected");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("partial lane payload ownership coverage must be rejected");
             assert!(
                 matches!(
                 err,
@@ -20730,17 +20672,8 @@ pub(crate) mod valid {
                     },
                 );
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("out-of-range lane ownership indices must be rejected");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("out-of-range lane ownership indices must be rejected");
             assert!(matches!(
                 err,
                 BlockValidationError::ExecutionContextInvalid(ref message)
@@ -20841,17 +20774,10 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("default-routed transactions must not accept arbitrary durable routing");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err(
+                    "default-routed transactions must not accept arbitrary durable routing",
+                );
             assert!(
                 matches!(
                     err,
@@ -21003,17 +20929,8 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("stale Native AMX participant leg must be rejected");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("stale Native AMX participant leg must be rejected");
             assert!(matches!(
                 err,
                 BlockValidationError::ExecutionContextInvalid(ref message)
@@ -21022,30 +20939,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_rejects_stale_default_context_for_elastic_route() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = core::iter::repeat_with(|| {
-                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-            })
-            .take(4)
-            .collect::<Vec<_>>();
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_active_consensus_keys(&mut world, &key_pairs);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&state);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let _prev_hash = commit_block_with_applied_lane_predecessors(
-                &state,
-                &kura,
-                &topology,
-                leader.private_key(),
-                &[
-                    (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                    (LaneId::new(1), DataSpaceId::UNIVERSAL),
-                ],
-            );
+            setup_elastic_lane_validation_state!(kura, key_pairs, topology, leader, state);
             let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             let mut selected = None;
             for attempt in 0..128 {
@@ -21107,17 +21001,8 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("elastic-routed transactions must reject stale default-lane context");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("elastic-routed transactions must reject stale default-lane context");
             assert!(
                 matches!(
                     err,
@@ -21131,30 +21016,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_accepts_live_autoscale_elastic_context() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = core::iter::repeat_with(|| {
-                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-            })
-            .take(4)
-            .collect::<Vec<_>>();
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_active_consensus_keys(&mut world, &key_pairs);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&state);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let _prev_hash = commit_block_with_applied_lane_predecessors(
-                &state,
-                &kura,
-                &topology,
-                leader.private_key(),
-                &[
-                    (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                    (LaneId::new(1), DataSpaceId::UNIVERSAL),
-                ],
-            );
+            setup_elastic_lane_validation_state!(kura, key_pairs, topology, leader, state);
             let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             let mut selected = None;
             for attempt in 0..128 {
@@ -21225,36 +21087,12 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
             let view = state.query_view();
-            ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect("live autoscale elastic execution context must validate");
+            validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect("live autoscale elastic execution context must validate");
         }
         #[test]
         fn validate_static_state_dependent_rejects_stale_geometry_da_proof_policy_hash() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                Algorithm::BlsNormal,
-            )];
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "leader",
-                leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -21297,17 +21135,10 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("stale derived geometry must not satisfy DA proof-policy hash validation");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err(
+                    "stale derived geometry must not satisfy DA proof-policy hash validation",
+                );
             assert!(matches!(
                 err,
                 BlockValidationError::ProofPolicyHashMismatch { expected, actual }
@@ -21360,22 +21191,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_rejects_future_created_autoscale_da_policy_hash() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                Algorithm::BlsNormal,
-            )];
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "leader",
-                leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -21408,17 +21224,8 @@ pub(crate) mod valid {
             let signed: SignedBlock = new_block.into();
             assert_eq!(signed.header().height().get(), candidate_height);
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("heightless future-created autoscale policy hash must be rejected");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("heightless future-created autoscale policy hash must be rejected");
             assert!(matches!(
                 err,
                 BlockValidationError::ProofPolicyHashMismatch { expected, actual }
@@ -21427,22 +21234,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_accepts_height_aware_da_policy_hash() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                Algorithm::BlsNormal,
-            )];
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "leader",
-                leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -21474,44 +21266,12 @@ pub(crate) mod valid {
                 expected_policy_hash
             );
             let view = state.query_view();
-            ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect("height-aware DA policy hash must validate before autoscale lane creation");
+            validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect("height-aware DA policy hash must validate before autoscale lane creation");
         }
         #[test]
         fn validate_static_state_dependent_rejects_elastic_context_when_nexus_disabled() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = core::iter::repeat_with(|| {
-                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-            })
-            .take(4)
-            .collect::<Vec<_>>();
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_active_consensus_keys(&mut world, &key_pairs);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&state);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let _prev_hash = commit_block_with_applied_lane_predecessors(
-                &state,
-                &kura,
-                &topology,
-                leader.private_key(),
-                &[
-                    (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                    (LaneId::new(1), DataSpaceId::UNIVERSAL),
-                ],
-            );
+            setup_elastic_lane_validation_state!(kura, key_pairs, topology, leader, state);
             let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             let mut selected = None;
             for attempt in 0..128 {
@@ -21595,17 +21355,8 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err("disabled Nexus must reject stale elastic execution context");
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err("disabled Nexus must reject stale elastic execution context");
             assert!(
                 matches!(
                     err,
@@ -21619,30 +21370,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_state_dependent_rejects_elastic_context_when_range_corrupt() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = core::iter::repeat_with(|| {
-                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
-            })
-            .take(4)
-            .collect::<Vec<_>>();
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_active_consensus_keys(&mut world, &key_pairs);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&state);
-            install_test_lane_manifests_for_keypairs(&state, &key_pairs);
-            let _prev_hash = commit_block_with_applied_lane_predecessors(
-                &state,
-                &kura,
-                &topology,
-                leader.private_key(),
-                &[
-                    (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                    (LaneId::new(1), DataSpaceId::UNIVERSAL),
-                ],
-            );
+            setup_elastic_lane_validation_state!(kura, key_pairs, topology, leader, state);
             let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             let mut selected = None;
             for attempt in 0..128 {
@@ -21724,19 +21452,10 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
             let view = state.query_view();
-            let err = ValidBlock::validate_static_state_dependent(
-                &signed,
-                &topology,
-                &ALICE_ID,
-                &view,
-                false,
-                &time_source,
-                false,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect_err(
-                "corrupted active elastic range must reject stale elastic execution context",
-            );
+            let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
+                .expect_err(
+                    "corrupted active elastic range must reject stale elastic execution context",
+                );
             assert!(
                 matches!(
                     err,
@@ -21750,22 +21469,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_static_snapshot_rejects_missing_previous_roster_evidence_after_height_two() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
-                Algorithm::BlsNormal,
-            )];
-            let topology = test_topology_with_keys(&key_pairs);
-            let leader = &key_pairs[0];
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "leader",
-                leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let genesis_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -21788,16 +21492,7 @@ pub(crate) mod valid {
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(3));
             let err = {
                 let view = state.query_view();
-                match ValidBlock::validate_static_state_dependent(
-                    &signed,
-                    &topology,
-                    &ALICE_ID,
-                    &view,
-                    false,
-                    &time_source,
-                    false,
-                    ConsensusValidationProfile::LegacyLive,
-                ) {
+                match validate_static_test_block!(&signed, &topology, &view, &time_source) {
                     Ok(_) => panic!("height > 2 blocks must carry previous-roster evidence"),
                     Err(err) => err,
                 }
@@ -21877,19 +21572,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_unknown_da_lane() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -21915,18 +21598,14 @@ pub(crate) mod valid {
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected DA commitment bundle rejection");
             };
@@ -21944,19 +21623,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_stale_geometry_da_commitment_lane() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -22002,18 +21669,14 @@ pub(crate) mod valid {
                 .sign(leader.private_key())
                 .unpack(|_| {})
                 .into();
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected stale-geometry DA commitment rejection");
             };
@@ -22026,19 +21689,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_stale_geometry_da_pin_intent_lane() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -22078,18 +21729,14 @@ pub(crate) mod valid {
                     .sign(leader.private_key())
                     .unpack(|_| {})
                     .into();
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected stale-geometry DA pin-intent rejection");
             };
@@ -22102,19 +21749,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_future_created_autoscale_da_pin_intent_lane() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -22162,18 +21797,14 @@ pub(crate) mod valid {
                 signed.header().height().get() < 7,
                 "fixture block must precede the autoscale lane creation height"
             );
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected future-created autoscale DA pin-intent rejection");
             };
@@ -22186,19 +21817,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_duplicate_da_manifest() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -22226,18 +21845,14 @@ pub(crate) mod valid {
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected DA commitment duplicate-manifest rejection");
             };
@@ -22250,19 +21865,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_duplicate_da_storage_ticket() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -22290,18 +21893,14 @@ pub(crate) mod valid {
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected DA commitment duplicate-storage-ticket rejection");
             };
@@ -22314,19 +21913,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_da_commitment_hash_mismatch() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -22355,18 +21942,14 @@ pub(crate) mod valid {
             let mut chained = with_current_state_da_sidecars(chained, &state);
             chained.0.header.set_da_commitments_hash(forged);
             let signed: SignedBlock = chained.sign(leader.private_key()).unpack(|_| {}).into();
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected DA commitment hash mismatch rejection");
             };
@@ -22378,19 +21961,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_da_pin_intent_hash_mismatch() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -22430,18 +22001,14 @@ pub(crate) mod valid {
                     npos_consensus_effects: chained.0.npos_consensus_effects,
                 },
             );
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected DA pin-intent hash mismatch rejection");
             };
@@ -22455,19 +22022,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_duplicate_da_pin_intent_ticket() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             insert_test_da_owner(&mut world);
             let state = State::new_with_chain_and_network_id_for_testing(
                 world,
@@ -22501,18 +22056,14 @@ pub(crate) mod valid {
                     .sign(leader.private_key())
                     .unpack(|_| {})
                     .into();
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected DA pin-intent duplicate-ticket rejection");
             };
@@ -22532,19 +22083,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_enforces_consensus_da_ingest_quota() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             insert_test_da_owner(&mut world);
             let state = State::new_with_chain_and_network_id_for_testing(
                 world,
@@ -22581,18 +22120,14 @@ pub(crate) mod valid {
                     .sign(leader.private_key())
                     .unpack(|_| {})
                     .into();
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected consensus DA ingest quota rejection");
             };
@@ -22609,19 +22144,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_committed_da_pin_intent_identity_reuse() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let da_owner = iroha_data_model::account::AccountId::new(
                 test_da_owner_keypair().public_key().clone(),
             );
@@ -22683,14 +22206,12 @@ pub(crate) mod valid {
                         .into();
                 let mut voting_block = None;
                 let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-                let result = ValidBlock::validate_keep_voting_block(
+                let result = validate_voting_test_block!(
                     signed,
                     &topology,
-                    &ALICE_ID,
                     &time_source,
                     &state,
-                    &mut voting_block,
-                    false,
+                    &mut voting_block
                 )
                 .unpack(|_| {});
                 let Err((_, err)) = result else {
@@ -22743,19 +22264,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_unsupported_da_pin_intent_version() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -22776,18 +22285,14 @@ pub(crate) mod valid {
                     .sign(leader.private_key())
                     .unpack(|_| {})
                     .into();
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected DA pin-intent version rejection");
             };
@@ -22800,19 +22305,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_rejects_da_cursor_regression() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -22867,18 +22360,14 @@ pub(crate) mod valid {
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
-            let mut voting_block = None;
-            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
-            let result = ValidBlock::validate_keep_voting_block(
+            validate_signed_voting_test_block!(
                 signed,
-                &topology,
-                &ALICE_ID,
-                &time_source,
-                &state,
-                &mut voting_block,
-                false,
-            )
-            .unpack(|_| {});
+                topology,
+                state,
+                voting_block,
+                time_source,
+                result
+            );
             let Err((_, err)) = result else {
                 panic!("expected DA shard cursor regression rejection");
             };
@@ -22944,14 +22433,12 @@ pub(crate) mod valid {
                 .expect("proxy tail signature");
             assert_eq!(signed.external_transactions().count(), 0);
             let mut voting_block = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = validate_voting_test_block!(
                 signed,
                 &topology,
-                &ALICE_ID,
                 &time_source,
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {});
             let Err((_, err)) = result else {
@@ -23028,14 +22515,12 @@ pub(crate) mod valid {
                 .expect("proxy tail signature");
             assert_eq!(signed.external_transactions().count(), 1);
             let mut voting_block = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = validate_voting_test_block!(
                 signed,
                 &topology,
-                &ALICE_ID,
                 &time_source,
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {});
             if let Err((_, err)) = result {
@@ -23083,14 +22568,12 @@ pub(crate) mod valid {
             );
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
             let mut voting_block = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = validate_voting_test_block!(
                 signed,
                 &topology,
-                &ALICE_ID,
                 &time_source,
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {});
             let Err((_, err)) = result else {
@@ -23409,14 +22892,12 @@ pub(crate) mod valid {
             };
             assert!(matches!(error.1.as_ref(), BlockValidationError::EmptyBlock));
             let mut voting_block: Option<super::super::VotingBlock> = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = validate_voting_test_block!(
                 candidate_block,
                 &topology,
-                &ALICE_ID,
                 &time_source,
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {});
             let err = match result {
@@ -23481,14 +22962,12 @@ pub(crate) mod valid {
             assert!(candidate.previous_roster_evidence().is_none());
             let (_clock, local_time) = TimeSource::new_mock(Duration::ZERO);
             let mut legacy_voting_block = None;
-            let legacy = ValidBlock::validate_keep_voting_block(
+            let legacy = validate_voting_test_block!(
                 candidate.clone(),
                 &topology,
-                &ALICE_ID,
                 &local_time,
                 &state,
-                &mut legacy_voting_block,
-                false,
+                &mut legacy_voting_block
             )
             .unpack(|_| {});
             assert!(matches!(
@@ -23701,19 +23180,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn da_only_block_is_not_rejected_as_empty() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let mut world = World::new();
-            insert_consensus_key(
-                &mut world,
-                "validator",
-                &leader,
-                0,
-                None,
-                ConsensusKeyStatus::Active,
-            );
+            setup_da_validation_world!(kura, query, leader, topology, world);
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
@@ -23772,14 +23239,12 @@ pub(crate) mod valid {
             }
             {
                 let mut voting_block: Option<super::super::VotingBlock> = None;
-                ValidBlock::validate_keep_voting_block(
+                validate_voting_test_block!(
                     signed_block.clone(),
                     &topology,
-                    &ALICE_ID,
                     &validation_time_source,
                     &state,
-                    &mut voting_block,
-                    false,
+                    &mut voting_block
                 )
                 .unpack(|_| {})
                 .expect("DA-only block should be accepted");
@@ -23842,14 +23307,12 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
             let mut voting_block: Option<super::super::VotingBlock> = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
-                &ALICE_ID,
                 &time_source,
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {});
             let (valid_block, state_block) =
@@ -23918,14 +23381,12 @@ pub(crate) mod valid {
                 .expect("fixture result roots match external entrypoint");
             signed_block.set_committed_fragment_count(99);
             let mut voting_block: Option<super::super::VotingBlock> = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
-                &ALICE_ID,
                 &time_source,
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {});
             let Err((_, err)) = result else {
@@ -23998,14 +23459,12 @@ pub(crate) mod valid {
             signed_block.set_committed_fragment_count(0);
             assert_eq!(signed_block.committed_fragment_count(), Some(0));
             let mut voting_block: Option<super::super::VotingBlock> = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
-                &ALICE_ID,
                 &time_source,
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {});
             let (valid_block, state_block) =
@@ -24053,14 +23512,12 @@ pub(crate) mod valid {
             // Validate using a clock far in the future; TTL should be evaluated at block time.
             let (_handle, validation_time_source) = TimeSource::new_mock(Duration::from_secs(10));
             let mut voting_block: Option<super::super::VotingBlock> = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
-                &ALICE_ID,
                 &validation_time_source,
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {});
             assert!(
@@ -24070,46 +23527,23 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_populates_stateless_cache() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new(World::new(), Arc::clone(&kura), query);
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.stateless_cache_cap = 64;
-            state.set_pipeline(pipeline);
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
-            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
-            let (authority, signer) = gen_account_in("cache-test");
-            let tx = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                authority,
-                &tx_time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
-            .sign(signer.private_key());
-            let tx_hash = tx.hash();
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-            let (_block_handle, block_time_source) =
-                TimeSource::new_mock(Duration::from_millis(10));
-            let builder =
-                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let builder = builder.chain(0, state.view().latest_block().as_deref());
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(&leader_private)
-                .unpack(|_| {});
-            let signed_block: SignedBlock = SignedBlock::from(new_block);
+            setup_stateless_cache_state!(kura, state, leader_private, topology);
+            setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
+            build_cacheable_block!(
+                state,
+                leader_private,
+                accepted,
+                _block_handle,
+                block_time_source,
+                signed_block
+            );
             let mut voting_block: Option<super::super::VotingBlock> = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
-                &ALICE_ID,
                 &block_time_source,
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {});
             assert!(
@@ -24124,16 +23558,7 @@ pub(crate) mod valid {
         }
         #[test]
         fn block_validation_rejects_invalid_signature_despite_warmed_stateless_cache() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new(World::new(), Arc::clone(&kura), query);
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.stateless_cache_cap = 64;
-            state.set_pipeline(pipeline);
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+            setup_stateless_cache_state!(kura, state, leader_private, topology);
             let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
             let (authority, signer) = gen_account_in("cache-signature-test");
             let (other_authority, _) = gen_account_in("cache-signature-test");
@@ -24156,14 +23581,12 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let valid_signed_block: SignedBlock = valid_block.into();
             let mut voting_block: Option<super::super::VotingBlock> = None;
-            ValidBlock::validate_keep_voting_block(
+            validate_voting_test_block!(
                 valid_signed_block,
                 &topology,
-                &ALICE_ID,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {})
             .expect("valid block should warm stateless cache");
@@ -24223,14 +23646,12 @@ pub(crate) mod valid {
                 )
             ));
             let mut voting_block: Option<super::super::VotingBlock> = None;
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = validate_voting_test_block!(
                 invalid_signed_block,
                 &topology,
-                &ALICE_ID,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {});
             let Err(err) = result else {
@@ -24282,37 +23703,16 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_keep_voting_block_with_events_populates_stateless_cache() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new(World::new(), Arc::clone(&kura), query);
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.stateless_cache_cap = 64;
-            state.set_pipeline(pipeline);
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
-            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
-            let (authority, signer) = gen_account_in("cache-test");
-            let tx = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                authority,
-                &tx_time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
-            .sign(signer.private_key());
-            let tx_hash = tx.hash();
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-            let (_block_handle, block_time_source) =
-                TimeSource::new_mock(Duration::from_millis(10));
-            let builder =
-                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let builder = builder.chain(0, state.view().latest_block().as_deref());
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(&leader_private)
-                .unpack(|_| {});
-            let signed_block: SignedBlock = SignedBlock::from(new_block);
+            setup_stateless_cache_state!(kura, state, leader_private, topology);
+            setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
+            build_cacheable_block!(
+                state,
+                leader_private,
+                accepted,
+                _block_handle,
+                block_time_source,
+                signed_block
+            );
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
             let mut timings = ValidationTimings::new();
@@ -24380,14 +23780,12 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
             let mut full_voting_block: Option<super::super::VotingBlock> = None;
-            let full_result = ValidBlock::validate_keep_voting_block(
+            let full_result = validate_voting_test_block!(
                 signed_block.clone(),
                 &topology,
-                &ALICE_ID,
                 &block_time_source,
                 &state,
-                &mut full_voting_block,
-                false,
+                &mut full_voting_block
             )
             .unpack(|_| {});
             assert!(
@@ -24507,37 +23905,16 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_populates_stateless_cache() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new(World::new(), Arc::clone(&kura), query);
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.stateless_cache_cap = 64;
-            state.set_pipeline(pipeline);
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
-            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
-            let (authority, signer) = gen_account_in("cache-test");
-            let tx = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                authority,
-                &tx_time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
-            .sign(signer.private_key());
-            let tx_hash = tx.hash();
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-            let (_block_handle, block_time_source) =
-                TimeSource::new_mock(Duration::from_millis(10));
-            let builder =
-                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let builder = builder.chain(0, state.view().latest_block().as_deref());
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(&leader_private)
-                .unpack(|_| {});
-            let signed_block: SignedBlock = SignedBlock::from(new_block);
+            setup_stateless_cache_state!(kura, state, leader_private, topology);
+            setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
+            build_cacheable_block!(
+                state,
+                leader_private,
+                accepted,
+                _block_handle,
+                block_time_source,
+                signed_block
+            );
             let mut state_block = state.block(signed_block.header());
             let result = ValidBlock::validate(
                 signed_block,
@@ -24557,37 +23934,16 @@ pub(crate) mod valid {
         }
         #[test]
         fn validate_with_events_populates_stateless_cache() {
-            let kura = Arc::new(Kura::blank_kura_for_testing());
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new(World::new(), Arc::clone(&kura), query);
-            let mut pipeline = state.view().pipeline().clone();
-            pipeline.stateless_cache_cap = 64;
-            state.set_pipeline(pipeline);
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let (leader_public, leader_private) = leader.into_parts();
-            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
-            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
-            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
-            let (authority, signer) = gen_account_in("cache-test");
-            let tx = TransactionBuilder::new_with_time_source(
-                state.network_id,
-                authority,
-                &tx_time_source,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
-            .sign(signer.private_key());
-            let tx_hash = tx.hash();
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-            let (_block_handle, block_time_source) =
-                TimeSource::new_mock(Duration::from_millis(10));
-            let builder =
-                BlockBuilder::new_with_time_source(vec![accepted], block_time_source.clone());
-            let builder = builder.chain(0, state.view().latest_block().as_deref());
-            let new_block = with_current_state_da_sidecars(builder, &state)
-                .sign(&leader_private)
-                .unpack(|_| {});
-            let signed_block: SignedBlock = SignedBlock::from(new_block);
+            setup_stateless_cache_state!(kura, state, leader_private, topology);
+            setup_cacheable_transaction!(state, _tx_handle, tx_time_source, tx_hash, accepted);
+            build_cacheable_block!(
+                state,
+                leader_private,
+                accepted,
+                _block_handle,
+                block_time_source,
+                signed_block
+            );
             let mut state_block = state.block(signed_block.header());
             let events = std::cell::RefCell::new(Vec::new());
             let result = ValidBlock::validate_with_events(
@@ -24661,14 +24017,12 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             let signed_block = SignedBlock::from(new_block);
             let mut voting_block: Option<super::super::VotingBlock> = None;
-            let (valid_block, _) = ValidBlock::validate_keep_voting_block(
+            let (valid_block, _) = validate_voting_test_block!(
                 signed_block,
                 &topology,
-                &ALICE_ID,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
-                false,
+                &mut voting_block
             )
             .unpack(|_| {})
             .expect("block validation should complete and record transaction result");
@@ -25605,19 +24959,8 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_handle_clock_skew_above_config() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(99);
-            let lane = LaneId::new(0);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x42; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 10,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 99, 0, [0x42; 32], 10);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -25679,31 +25022,17 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                err,
+            expect_axt_envelope_error!(
+                state,
+                envelope,
                 AxtRejectReason::Expiry,
-                "max_clock_skew_ms exceeds configured bound",
+                "max_clock_skew_ms exceeds configured bound"
             );
         }
         #[test]
         fn axt_validation_rejects_duplicate_handle_fragment_key() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(7);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x11; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 7, 1, [0x11; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -25732,21 +25061,16 @@ mod commit {
                 handles: vec![handle.clone(), handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                err,
+            expect_axt_envelope_error!(
+                state,
+                envelope,
                 AxtRejectReason::Duplicate,
-                "handle fragments are not strictly ordered by producer key",
+                "handle fragments are not strictly ordered by producer key"
             );
         }
         #[test]
         fn axt_validation_accepts_cross_lane_handles() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
+            setup_axt_validation_state!(kura, query, state);
             let dsid_a = DataSpaceId::new(7);
             let dsid_b = DataSpaceId::new(8);
             let lane_a = LaneId::new(1);
@@ -25811,19 +25135,8 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_handle_amount_mismatch() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(7);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x11; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 7, 1, [0x11; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -25853,27 +25166,12 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Budget, "amount");
+            expect_axt_envelope_error!(state, envelope, AxtRejectReason::Budget, "amount");
         }
         #[test]
         fn axt_validation_accepts_authenticated_hidden_amount() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(17);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x31; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 17, 1, [0x31; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -25918,19 +25216,8 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_two_copy_attacker_amount_commitment() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(18);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x32; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 18, 1, [0x32; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -25981,19 +25268,8 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_stale_fragment_commitment() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(19);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x33; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 19, 1, [0x33; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -26043,19 +25319,8 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_missing_touch_manifest() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(7);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x11; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 7, 1, [0x11; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -26084,27 +25349,17 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Descriptor, "missing touch manifest");
+            expect_axt_envelope_error!(
+                state,
+                envelope,
+                AxtRejectReason::Descriptor,
+                "missing touch manifest"
+            );
         }
         #[test]
         fn axt_validation_rejects_handle_without_touch_manifest() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(9);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x23; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 9, 1, [0x23; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -26127,27 +25382,17 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Descriptor, "missing touch manifest");
+            expect_axt_envelope_error!(
+                state,
+                envelope,
+                AxtRejectReason::Descriptor,
+                "missing touch manifest"
+            );
         }
         #[test]
         fn axt_validation_rejects_touch_manifest_prefix_violation() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(7);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x11; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 7, 1, [0x11; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -26176,31 +25421,17 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                err,
+            expect_axt_envelope_error!(
+                state,
+                envelope,
                 AxtRejectReason::Descriptor,
-                "touch manifest read entry",
+                "touch manifest read entry"
             );
         }
         #[test]
         fn axt_validation_rejects_descriptor_binding_mismatch() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(7);
-            let lane = LaneId::new(1);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x11; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 7, 1, [0x11; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26222,21 +25453,16 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                err,
+            expect_axt_envelope_error!(
+                state,
+                envelope,
                 AxtRejectReason::Descriptor,
-                "descriptor binding does not match envelope binding",
+                "descriptor binding does not match envelope binding"
             );
         }
         #[test]
         fn axt_validation_rejects_duplicate_handle_use_across_dataspaces() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
+            setup_axt_validation_state!(kura, query, state);
             let dsid_a = DataSpaceId::new(7);
             let dsid_b = DataSpaceId::new(8);
             let lane = LaneId::new(1);
@@ -26276,31 +25502,17 @@ mod commit {
                 handles: vec![handle, other],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                err,
+            expect_axt_envelope_error!(
+                state,
+                envelope,
                 AxtRejectReason::ReplayCache,
-                "duplicate handle usage in block",
+                "duplicate handle usage in block"
             );
         }
         #[test]
         fn axt_validation_rejects_budget_overspend_across_sub_nonces() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(20);
-            let lane = LaneId::new(5);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x11; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 20, 5, [0x11; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26328,27 +25540,12 @@ mod commit {
                 handles: vec![first, second],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Budget, "budget");
+            expect_axt_envelope_error!(state, envelope, AxtRejectReason::Budget, "budget");
         }
         #[test]
         fn axt_validation_rejects_missing_proof_for_dataspace() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(21);
-            let lane = LaneId::new(8);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x44; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 2,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 21, 8, [0x44; 32], 2);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26364,27 +25561,12 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Proof, "missing proof");
+            expect_axt_envelope_error!(state, envelope, AxtRejectReason::Proof, "missing proof");
         }
         #[test]
         fn axt_validation_rejects_raw_manifest_root_proof() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(21);
-            let lane = LaneId::new(8);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x44; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 2,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 21, 8, [0x44; 32], 2);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26405,28 +25587,18 @@ mod commit {
                 handles: Vec::new(),
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Proof, "not an AXT proof envelope");
+            expect_axt_envelope_error!(
+                state,
+                envelope,
+                AxtRejectReason::Proof,
+                "not an AXT proof envelope"
+            );
         }
         #[test]
         fn axt_validation_rejects_expired_proof() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
+            setup_axt_validation_state!(kura, query, state);
             state.nexus.get_mut().axt.max_clock_skew_ms = 0;
-            let dsid = DataSpaceId::new(22);
-            let lane = LaneId::new(9);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x45; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 70_000,
-            };
-            state.set_axt_policy(dsid, policy);
+            install_axt_policy!(state, dsid, lane, policy, 22, 9, [0x45; 32], 70_000);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26456,19 +25628,8 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_zero_proof_expiry_slot() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(23);
-            let lane = LaneId::new(10);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x46; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 1,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 23, 10, [0x46; 32], 1);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26487,28 +25648,18 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Proof, "proof expiry slot is zero");
+            expect_axt_envelope_error!(
+                state,
+                envelope,
+                AxtRejectReason::Proof,
+                "proof expiry slot is zero"
+            );
         }
         #[test]
         fn axt_validation_rejects_proof_expiry_before_handle_with_skew() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
+            setup_axt_validation_state!(kura, query, state);
             state.nexus.get_mut().axt.max_clock_skew_ms = 1;
-            let dsid = DataSpaceId::new(23);
-            let lane = LaneId::new(10);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x55; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 1,
-            };
-            state.set_axt_policy(dsid, policy);
+            install_axt_policy!(state, dsid, lane, policy, 23, 10, [0x55; 32], 1);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26530,27 +25681,17 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Expiry, "proof expires before handle");
+            expect_axt_envelope_error!(
+                state,
+                envelope,
+                AxtRejectReason::Expiry,
+                "proof expires before handle"
+            );
         }
         #[test]
         fn axt_validation_rejects_manifest_mismatch_in_proof() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(23);
-            let lane = LaneId::new(10);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x77; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 3,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 23, 10, [0x77; 32], 3);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26582,27 +25723,12 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Manifest, "manifest");
+            expect_axt_envelope_error!(state, envelope, AxtRejectReason::Manifest, "manifest");
         }
         #[test]
         fn axt_validation_rejects_proof_dsid_mismatch() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(24);
-            let lane = LaneId::new(11);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x78; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 4,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 24, 11, [0x78; 32], 4);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26634,27 +25760,12 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Manifest, "manifest");
+            expect_axt_envelope_error!(state, envelope, AxtRejectReason::Manifest, "manifest");
         }
         #[test]
         fn axt_validation_rejects_budget_overspend_in_block() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(23);
-            let lane = LaneId::new(10);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x46; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 1,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 23, 10, [0x46; 32], 1);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26677,17 +25788,11 @@ mod commit {
                 handles: vec![handle_one, handle_two],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Budget, "budget");
+            expect_axt_envelope_error!(state, envelope, AxtRejectReason::Budget, "budget");
         }
         #[test]
         fn axt_validation_rejects_handle_era_below_policy() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
+            setup_axt_validation_state!(kura, query, state);
             let dsid = DataSpaceId::new(9);
             let lane = LaneId::new(2);
             let policy = AxtPolicyEntry {
@@ -26716,31 +25821,17 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                err,
+            expect_axt_envelope_error!(
+                state,
+                envelope,
                 AxtRejectReason::HandleEra,
-                "handle era differs from the exact active policy era",
+                "handle era differs from the exact active policy era"
             );
         }
         #[test]
         fn axt_validation_rejects_zero_handle_expiry_slot() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(9);
-            let lane = LaneId::new(2);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x22; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 9, 2, [0x22; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26759,27 +25850,17 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Expiry, "expiry slot is zero");
+            expect_axt_envelope_error!(
+                state,
+                envelope,
+                AxtRejectReason::Expiry,
+                "expiry slot is zero"
+            );
         }
         #[test]
         fn axt_validation_rejects_zero_manifest_root() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(10);
-            let lane = LaneId::new(3);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 1,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 10, 3, [0; 32], 1);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26802,27 +25883,17 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Manifest, "manifest root is zeroed");
+            expect_axt_envelope_error!(
+                state,
+                envelope,
+                AxtRejectReason::Manifest,
+                "manifest root is zeroed"
+            );
         }
         #[test]
         fn axt_validation_rejects_zero_manifest_root_in_policy() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(10);
-            let lane = LaneId::new(3);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 10, 3, [0; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26845,27 +25916,17 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Manifest, "manifest root is zeroed");
+            expect_axt_envelope_error!(
+                state,
+                envelope,
+                AxtRejectReason::Manifest,
+                "manifest root is zeroed"
+            );
         }
         #[test]
         fn axt_validation_rejects_zero_manifest_root_in_handle() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(11);
-            let lane = LaneId::new(4);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x33; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 11, 4, [0x33; 32], 0);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
@@ -26885,11 +25946,12 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Manifest, "manifest root is zeroed");
+            expect_axt_envelope_error!(
+                state,
+                envelope,
+                AxtRejectReason::Manifest,
+                "manifest root is zeroed"
+            );
         }
         #[test]
         fn axt_validation_accepts_block_snapshot_when_state_cache_empty() {
@@ -26937,9 +25999,7 @@ mod commit {
         }
         #[test]
         fn axt_validation_uses_policy_slot_per_dataspace() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
+            setup_axt_validation_state!(kura, query, state);
             let dsid_a = DataSpaceId::new(50);
             let dsid_b = DataSpaceId::new(51);
             let lane = LaneId::new(6);
@@ -27102,19 +26162,8 @@ mod commit {
         }
         #[test]
         fn axt_validation_accepts_hidden_amount_commitment() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(61);
-            let lane = LaneId::new(8);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x61; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 2,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 61, 8, [0x61; 32], 2);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -27165,19 +26214,8 @@ mod commit {
         }
         #[test]
         fn axt_validation_rejects_hidden_amount_commitment_mismatch() {
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::new(), kura, query);
-            let dsid = DataSpaceId::new(62);
-            let lane = LaneId::new(9);
-            let policy = AxtPolicyEntry {
-                manifest_root: [0x62; 32],
-                target_lane: lane,
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 2,
-            };
-            state.set_axt_policy(dsid, policy);
+            setup_axt_validation_state!(kura, query, state);
+            install_axt_policy!(state, dsid, lane, policy, 62, 9, [0x62; 32], 2);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: vec![AxtTouchSpec {
@@ -27214,14 +26252,11 @@ mod commit {
                 handles: vec![handle],
                 commit_height: 1,
             };
-            let snapshot = axt_policy_snapshot_for_validation_test(&state);
-            let block = build_block_with_envelopes(envelope, snapshot);
-            let state_block = state.block(block.header());
-            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(
-                err,
+            expect_axt_envelope_error!(
+                state,
+                envelope,
                 AxtRejectReason::Budget,
-                "amount commitment does not match",
+                "amount commitment does not match"
             );
         }
     }

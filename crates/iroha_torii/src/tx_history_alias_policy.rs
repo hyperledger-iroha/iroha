@@ -63,11 +63,10 @@ impl From<io::Error> for PolicyLoadError {
 }
 /// Load the configured mandatory-alias policy under its complete startup envelope.
 ///
-/// The file is opened without following its final path component and must keep
-/// the same identity, type, length, and metadata through the read. JSON is
-/// lexically admitted before a streaming typed parser reserves exact flat
-/// arrays, so no recursive `Value` graph or collect-before-cap representation
-/// is constructed.
+/// The file is opened without following its final path component and must keep the same identity,
+/// type, length, and metadata through the read. JSON is lexically admitted before a streaming typed
+/// parser reserves exact flat arrays, so no recursive `Value` graph or collect-before-cap
+/// representation is constructed.
 pub(crate) fn load_mandatory_alias_policy(
     path: &Path,
     catalog: &DataSpaceCatalog,

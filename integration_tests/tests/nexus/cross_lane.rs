@@ -4,13 +4,12 @@ use eyre::{Result, WrapErr};
 use iroha::nexus;
 use iroha_config::parameters::actual::{GovernanceCatalog, GovernanceModule, LaneRegistry};
 use iroha_core::governance::manifest::{GovernanceGuardReason, LaneManifestRegistry};
-use iroha_crypto::{Hash, HashOf, LaneCommitmentId};
+use iroha_crypto::{Hash, HashOf, LaneCommitmentId, MerkleProof};
 use iroha_data_model::{
-    block::consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
-    consensus::{CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+    block::{consensus::LaneBlockCommitment, consensus_v2::finality::V2FinalityArtifact},
     nexus::{
-        DataSpaceId, LaneCatalog, LaneConfig, LaneId, LanePrivacyProof, LaneRelayEnvelope,
-        LaneRelayError, LaneStorageProfile, compute_settlement_hash,
+        DataSpaceId, LaneCatalog, LaneConfig, LaneFinalityAuthorityV1, LaneId, LanePrivacyProof,
+        LaneRelayEnvelope, LaneRelayError, LaneStorageProfile, compute_settlement_hash,
     },
     peer::PeerId,
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
@@ -25,29 +24,6 @@ use std::{
     time::Duration,
 };
 use tempfile::tempdir;
-fn sample_commit_qc(header: &iroha_data_model::block::BlockHeader) -> Qc {
-    let validator_set: Vec<PeerId> = Vec::new();
-    Qc {
-        phase: CertPhase::Commit,
-        subject_block_hash: header.hash(),
-        parent_state_root: Hash::new([0x22; 4]),
-        post_state_root: Hash::new([0x11, 0x22, 0x33, 0x44]),
-        height: header.height().get(),
-        view: header.view_change_index(),
-        epoch: 0,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
-        aggregate: QcAggregate {
-            signers_bitmap: vec![0b1010_0001],
-            bls_aggregate_signature: vec![0x01; 48],
-        },
-    }
-}
 #[test]
 fn commitment_only_lane_without_privacy_commitments_is_gated() -> Result<()> {
     let alias = "private-lane";
@@ -130,72 +106,39 @@ fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
     Ok(())
 }
 #[test]
-#[allow(clippy::unnecessary_wraps)]
-fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
-    let height = NonZeroU64::new(7).expect("nonzero");
-    let lane_id = LaneId::new(3);
-    let dataspace_id = iroha_data_model::nexus::DataSpaceId::new(2);
-    let settlement = LaneBlockCommitment {
-        block_height: height.get(),
-        lane_id,
-        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id,
-        tx_count: 1,
-        total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let mut header =
-        iroha_data_model::block::BlockHeader::new(height, None, None, None, 1_700_000_000_000, 0);
-    let da_hash = Hash::new([0xAA, 0xBB, 0xCC, 0xDD]);
-    let da_commitment_hash = Some(HashOf::from_untyped_unchecked(da_hash));
-    header.set_da_commitments_hash(da_commitment_hash);
-    let mut qc = sample_commit_qc(&header);
-    // Tamper with the QC so the builder surfaces the mismatch.
-    qc.subject_block_hash = HashOf::from_untyped_unchecked(Hash::new([0xFF; 4]));
-    let err = nexus::CrossLaneTransferBuilder::new(
-        header,
-        Some(qc),
-        da_commitment_hash,
-        settlement.clone(),
-    )
-    .build()
-    .expect_err("expected QC subject mismatch");
+fn lane_relay_envelope_must_have_consistent_finality_authority_reference() {
+    let mut envelope = sample_relay_envelope();
+    let global_block_height = envelope.block_header.height().get();
+    envelope = envelope.with_finality_authority(Some(LaneFinalityAuthorityV1 {
+        version: 1,
+        global_block_height,
+        finality_artifact_hash: HashOf::<V2FinalityArtifact>::from_untyped_unchecked(Hash::new(
+            b"cross-lane-finality-artifact",
+        )),
+        statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
+    }));
+    envelope
+        .validate_finality_authority_ref()
+        .expect("matching compact finality authority reference");
+    envelope
+        .finality_authority
+        .as_mut()
+        .expect("fixture carries finality authority")
+        .global_block_height += 1;
     assert!(matches!(
-        err,
-        nexus::CrossLaneProofError::Relay(LaneRelayError::QcSubjectMismatch)
+        envelope.validate_finality_authority_ref(),
+        Err(LaneRelayError::FinalityAuthorityHeightMismatch)
     ));
-    // Height mismatch should also be rejected.
-    let mut height_mismatch_qc = sample_commit_qc(&header);
-    height_mismatch_qc.height = header.height().get() + 1;
-    let err = nexus::CrossLaneTransferBuilder::new(
-        header,
-        Some(height_mismatch_qc),
-        da_commitment_hash,
-        settlement.clone(),
-    )
-    .build()
-    .expect_err("expected QC height mismatch");
+    let authority = envelope
+        .finality_authority
+        .as_mut()
+        .expect("fixture carries finality authority");
+    authority.global_block_height -= 1;
+    authority.version = 2;
     assert!(matches!(
-        err,
-        nexus::CrossLaneProofError::Relay(LaneRelayError::QcHeightMismatch)
+        envelope.validate_finality_authority_ref(),
+        Err(LaneRelayError::UnsupportedFinalityAuthorityVersion(2))
     ));
-    // Untampered QC should build a verifiable envelope.
-    let proof = nexus::CrossLaneTransferBuilder::new(
-        header,
-        Some(sample_commit_qc(&header)),
-        da_commitment_hash,
-        settlement,
-    )
-    .build()
-    .expect("valid envelope");
-    proof.verify().expect("verification should succeed");
-    Ok(())
 }
 #[test]
 #[allow(clippy::unnecessary_wraps)]
@@ -225,7 +168,7 @@ fn cross_lane_builder_accepts_independent_lane_local_settlement_height() -> Resu
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let proof = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+    let proof = nexus::CrossLaneTransferBuilder::new(header, None, settlement)
         .build()
         .expect("lane-local settlement height may differ from global proposal height");
     assert_eq!(proof.envelope().block_height, 9);
@@ -268,7 +211,7 @@ fn cross_lane_builder_rejects_da_hash_mismatch_at_construction() -> Result<()> {
     let mismatched_da_hash = Some(HashOf::from_untyped_unchecked(Hash::new([
         0x27, 0x18, 0x28, 0x18,
     ])));
-    let err = nexus::CrossLaneTransferBuilder::new(header, None, mismatched_da_hash, settlement)
+    let err = nexus::CrossLaneTransferBuilder::new(header, mismatched_da_hash, settlement)
         .build()
         .expect_err("da hash mismatch should fail");
     assert!(matches!(
@@ -305,7 +248,7 @@ fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
         1_700_000_010_000,
         0,
     );
-    let proof = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+    let proof = nexus::CrossLaneTransferBuilder::new(header, None, settlement)
         .build()
         .expect("builder should succeed");
     let envelope = proof.envelope().clone();
@@ -357,7 +300,7 @@ fn lane_relay_envelope_rejects_settlement_tampering() -> Result<()> {
         1_700_000_020_000,
         0,
     );
-    let proof = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+    let proof = nexus::CrossLaneTransferBuilder::new(header, None, settlement)
         .build()
         .expect("builder should succeed");
     let mut envelope = proof.envelope().clone();
@@ -423,215 +366,6 @@ fn lane_relay_envelope_rejects_da_commitment_tamper() {
     ));
 }
 #[test]
-fn lane_relay_quorum_rejects_out_of_range_signer() {
-    let lane_id = LaneId::new(13);
-    let dataspace_id = DataSpaceId::new(6);
-    let settlement = LaneBlockCommitment {
-        block_height: 5,
-        lane_id,
-        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id,
-        tx_count: 2,
-        total_local_amount: "0.000015".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.00001".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000009".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(5).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_040_000,
-        0,
-    );
-    let mut qc = sample_commit_qc(&header);
-    qc.aggregate.signers_bitmap = vec![0b0010_0000]; // bit 5 set -> exceeds 5 validators
-    qc.aggregate.bls_aggregate_signature = vec![0x11; 48];
-    let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
-        .build()
-        .expect("proof");
-    let quorum = nexus::LaneRelayQuorumContext::new(5, 3).expect("quorum context");
-    let err = proof
-        .verify_with_quorum(quorum)
-        .expect_err("out-of-range signer");
-    assert!(matches!(
-        err,
-        nexus::CrossLaneProofError::Relay(LaneRelayError::InvalidSignerIndex { .. })
-    ));
-}
-#[test]
-fn lane_relay_quorum_rejects_zero_signature() {
-    let lane_id = LaneId::new(15);
-    let dataspace_id = DataSpaceId::new(7);
-    let settlement = LaneBlockCommitment {
-        block_height: 6,
-        lane_id,
-        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id,
-        tx_count: 1,
-        total_local_amount: "0.00002".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000012".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.00001".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000002".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(6).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_050_000,
-        0,
-    );
-    let mut qc = sample_commit_qc(&header);
-    qc.aggregate.signers_bitmap = vec![0b0000_0011];
-    qc.aggregate.bls_aggregate_signature = vec![0; 48];
-    let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
-        .build()
-        .expect("proof");
-    let quorum = nexus::LaneRelayQuorumContext::new(4, 2).expect("quorum context");
-    let err = proof
-        .verify_with_quorum(quorum)
-        .expect_err("zero signature should fail");
-    assert!(matches!(
-        err,
-        nexus::CrossLaneProofError::Relay(LaneRelayError::AggregateSignatureInvalid)
-    ));
-}
-#[test]
-fn lane_relay_quorum_requires_quorum_bitmap() {
-    let lane_id = LaneId::new(17);
-    let dataspace_id = DataSpaceId::new(8);
-    let settlement = LaneBlockCommitment {
-        block_height: 7,
-        lane_id,
-        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id,
-        tx_count: 3,
-        total_local_amount: "0.00003".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000018".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000016".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000002".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(7).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_060_000,
-        0,
-    );
-    let mut qc = sample_commit_qc(&header);
-    qc.aggregate.signers_bitmap = vec![0b0000_0010]; // single signer
-    qc.aggregate.bls_aggregate_signature = vec![0x22; 48];
-    let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
-        .build()
-        .expect("proof");
-    let quorum = nexus::LaneRelayQuorumContext::new(5, 3).expect("quorum context");
-    let err = proof
-        .verify_with_quorum(quorum)
-        .expect_err("quorum should fail");
-    assert!(matches!(
-        err,
-        nexus::CrossLaneProofError::Relay(LaneRelayError::InsufficientQuorum { .. })
-    ));
-}
-#[test]
-fn lane_relay_quorum_accepts_exact_min_quorum() {
-    let lane_id = LaneId::new(19);
-    let dataspace_id = DataSpaceId::new(11);
-    let settlement = LaneBlockCommitment {
-        block_height: 9,
-        lane_id,
-        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id,
-        tx_count: 1,
-        total_local_amount: "0.000012".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000008".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000007".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(9).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_065_000,
-        0,
-    );
-    let mut qc = sample_commit_qc(&header);
-    qc.aggregate.signers_bitmap = vec![0b0000_0111];
-    qc.aggregate.bls_aggregate_signature = vec![0x66; 48];
-    let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
-        .build()
-        .expect("proof");
-    let quorum = nexus::LaneRelayQuorumContext::new(5, 3).expect("quorum context");
-    proof
-        .verify_with_quorum(quorum)
-        .expect("exact min quorum should pass");
-}
-#[test]
-fn lane_relay_quorum_rejects_signer_bitmap_length_mismatch() {
-    let lane_id = LaneId::new(18);
-    let dataspace_id = DataSpaceId::new(10);
-    let settlement = LaneBlockCommitment {
-        block_height: 8,
-        lane_id,
-        lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
-        dataspace_id,
-        tx_count: 1,
-        total_local_amount: "0.000011".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000007".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000006".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(8).expect("height"),
-        None,
-        None,
-        None,
-        1_700_000_070_000,
-        0,
-    );
-    let mut qc = sample_commit_qc(&header);
-    qc.aggregate.signers_bitmap = vec![0b0000_0011, 0b0000_0001];
-    qc.aggregate.bls_aggregate_signature = vec![0x55; 48];
-    let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
-        .build()
-        .expect("proof");
-    let quorum = nexus::LaneRelayQuorumContext::new(4, 2).expect("quorum context");
-    let err = proof
-        .verify_with_quorum(quorum)
-        .expect_err("bitmap length mismatch should fail");
-    assert!(matches!(
-        err,
-        nexus::CrossLaneProofError::Relay(LaneRelayError::SignerBitmapLengthMismatch {
-            expected: 1,
-            actual: 2
-        })
-    ));
-}
-#[test]
 fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_height() {
     let first = sample_relay_envelope();
     let settlement = LaneBlockCommitment {
@@ -657,7 +391,7 @@ fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_height() {
         1_700_000_080_000,
         0,
     );
-    let second = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+    let second = nexus::CrossLaneTransferBuilder::new(header, None, settlement)
         .build()
         .expect("valid second envelope")
         .envelope()
@@ -691,7 +425,7 @@ fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_dataspace_and_heigh
         1_700_000_082_000,
         0,
     );
-    let second = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+    let second = nexus::CrossLaneTransferBuilder::new(header, None, settlement)
         .build()
         .expect("valid second envelope")
         .envelope()
@@ -725,7 +459,7 @@ fn verify_lane_relay_envelopes_allows_distinct_dataspaces_on_same_lane_and_heigh
         1_700_000_085_000,
         0,
     );
-    let second = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+    let second = nexus::CrossLaneTransferBuilder::new(header, None, settlement)
         .build()
         .expect("valid second envelope")
         .envelope()
@@ -760,7 +494,7 @@ fn verify_lane_relay_envelopes_allows_same_lane_across_heights() {
         1_700_000_090_000,
         0,
     );
-    let second = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
+    let second = nexus::CrossLaneTransferBuilder::new(header, None, settlement)
         .build()
         .expect("valid second envelope")
         .envelope()
@@ -927,7 +661,7 @@ fn sample_relay_envelope() -> LaneRelayEnvelope {
     );
     let da_hash = HashOf::from_untyped_unchecked(Hash::new([0x22, 0x33, 0x44, 0x55]));
     header.set_da_commitments_hash(Some(da_hash));
-    nexus::CrossLaneTransferBuilder::new(header, None, Some(da_hash), settlement)
+    nexus::CrossLaneTransferBuilder::new(header, Some(da_hash), settlement)
         .build()
         .expect("valid envelope")
         .envelope()

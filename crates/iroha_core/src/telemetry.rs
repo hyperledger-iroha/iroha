@@ -1,10 +1,9 @@
 //! Metrics and status reporting.
 //!
-//! This module still exposes the single-lane TEU gauges used before the
-//! Nexus scheduler becomes active. The wiring mirrors the future Nexus layout
-//! (lanes and data-spaces) so callers can adopt the eventual multi-lane feeds
-//! by swapping in the real scheduler hooks once they land; until then we keep
-//! the fallback values in this module to avoid breaking operator dashboards.
+//! This module still exposes the single-lane TEU gauges used before the Nexus scheduler becomes
+//! active. The wiring mirrors the future Nexus layout (lanes and data-spaces) so callers can adopt
+//! the eventual multi-lane feeds by swapping in the real scheduler hooks once they land; until then
+//! we keep the fallback values in this module to avoid breaking operator dashboards.
 pub mod capability;
 #[cfg(feature = "telemetry")]
 use crate::pipeline::access::AccessSetSource;

@@ -3753,3 +3753,35 @@ def _normalized_rust_contract(source: str) -> str:
     """Normalize one code-owned Rust/Verus contract to its token stream."""
 
     return " ".join(rust_code_tokens(source))
+
+
+def _first_json_mismatch(
+    expected: Any, observed: Any, path: str = "$"
+) -> str | None:
+    """Return the first path at which two evidence values differ."""
+
+    if type(expected) is not type(observed):
+        return path
+    if isinstance(expected, dict):
+        if set(expected) != set(observed):
+            return path
+        for key in sorted(expected):
+            mismatch = _first_json_mismatch(
+                expected[key], observed[key], f"{path}.{key}"
+            )
+            if mismatch is not None:
+                return mismatch
+        return None
+    if isinstance(expected, list):
+        if len(expected) != len(observed):
+            return path
+        # Exact lengths were checked above; plain zip keeps this verifier
+        # compatible with the repository's Python 3.9 floor.
+        for index, (expected_item, observed_item) in enumerate(zip(expected, observed)):
+            mismatch = _first_json_mismatch(
+                expected_item, observed_item, f"{path}[{index}]"
+            )
+            if mismatch is not None:
+                return mismatch
+        return None
+    return None if expected == observed else path

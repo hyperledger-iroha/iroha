@@ -2,9 +2,8 @@
 #![allow(non_upper_case_globals)]
 //! # Computations modulo q = 12289
 //!
-//! External callers should only see polynomials modulo `X^n+1` and
-//! modulo q. Such polynomials use slices of `u16`. There are three
-//! distinct representations:
+//! External callers should only see polynomials modulo `X^n+1` and modulo q. Such polynomials use
+//! slices of `u16`. There are three distinct representations:
 //!
 //!   - External representation: plain coefficients, in the `[0,q-1]` range.
 //!
@@ -14,8 +13,7 @@
 //!   - NTT representation: NTT format, coefficients may also have an
 //!     internal range that differs from the external representation.
 //!
-//! Appropriate functions are provided to convert between these
-//! representations.
+//! Appropriate functions are provided to convert between these representations.
 use super::super::table_assets::read_u16_le;
 // In the code below, the internal representation uses the q range,
 // and Montgomery multiplications use R = 2^32 instead of the usual
@@ -152,8 +150,7 @@ fn mq_div(x: u32, y: u32) -> u32 {
     // x is not, so the product is in normal (internal) representation.
     mq_mmul(x, iy)
 }
-/// Given a polynomial with small coefficients, convert it to internal
-/// representation.
+/// Given a polynomial with small coefficients, convert it to internal representation.
 ///
 /// Converted polynomial is written into `d`.
 pub fn mqpoly_small_to_int(logn: u32, f: &[i8], d: &mut [u16]) {
@@ -162,14 +159,12 @@ pub fn mqpoly_small_to_int(logn: u32, f: &[i8], d: &mut [u16]) {
         d[i] = (Q - x.wrapping_add((x >> 16) & Q)) as u16;
     }
 }
-/// Given a polynomial in internal representation, convert it to small
-/// coefficients.
+/// Given a polynomial in internal representation, convert it to small coefficients.
 ///
-/// Converted polynomial is written into `f`. If all coefficients, when
-/// converted to minimal signed representation, are in `[-127,+127]`,
-/// then the function succeeds and returns `true`. Otherwise, the
-/// function fails and returns `false`; values obtained for out-of-range
-/// coefficients are unspecified.
+/// Converted polynomial is written into `f`. If all coefficients, when converted to minimal signed
+/// representation, are in `[-127,+127]`, then the function succeeds and returns `true`. Otherwise,
+/// the function fails and returns `false`; values obtained for out-of-range coefficients are
+/// unspecified.
 pub fn mqpoly_int_to_small(logn: u32, d: &[u16], f: &mut [i8]) -> bool {
     // Internal representation is in [1,q]. If the value is in the
     // correct range, then adding 128 will yield a value in the [1,255]
@@ -182,8 +177,7 @@ pub fn mqpoly_int_to_small(logn: u32, d: &[u16], f: &mut [i8]) -> bool {
     }
     ov == 0
 }
-/// Given a polynomial in external representation, convert it to internal
-/// representation (in-place).
+/// Given a polynomial in external representation, convert it to internal representation (in-place).
 pub fn mqpoly_ext_to_int(logn: u32, a: &mut [u16]) {
     for i in 0..(1usize << logn) {
         // Internal representation is the same as external, except that
@@ -192,8 +186,7 @@ pub fn mqpoly_ext_to_int(logn: u32, a: &mut [u16]) {
         a[i] = (x + (Q & (x.wrapping_sub(1) >> 16))) as u16;
     }
 }
-/// Given a polynomial in internal representation, convert it to external
-/// representation (in-place).
+/// Given a polynomial in internal representation, convert it to external representation (in-place).
 pub fn mqpoly_int_to_ext(logn: u32, a: &mut [u16]) {
     for i in 0..(1usize << logn) {
         // External representation is the same as internal, except that
@@ -252,15 +245,13 @@ pub fn mqpoly_NTT_to_int(logn: u32, a: &mut [u16]) {
         t = dt;
     }
 }
-/// Multiply polynomial `a` by polynomial `b`; both must be in NTT
-/// representation.
+/// Multiply polynomial `a` by polynomial `b`; both must be in NTT representation.
 pub fn mqpoly_mul_ntt(logn: u32, a: &mut [u16], b: &[u16]) {
     for i in 0..(1usize << logn) {
         a[i] = mq_mmul(mq_mmul(a[i] as u32, b[i] as u32), R2) as u16;
     }
 }
-/// Divide polynomial `a` by polynomial `b`; both must be in NTT
-/// representation.
+/// Divide polynomial `a` by polynomial `b`; both must be in NTT representation.
 ///
 /// If `b` is invertible (none of its NTT coefficients are zero), then
 /// this returns `true`; otherwise, this returns false and the impacted

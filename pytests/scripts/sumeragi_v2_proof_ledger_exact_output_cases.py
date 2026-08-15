@@ -882,8 +882,8 @@
             "durable lane response effect identity must include its distinct tag, peer, and certificate",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-            "fn drain_v2_ingress(",
+            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+            "fn consume_prepared_dequeued_v2_ingress(",
             "services.post_durable_history_response_on_reply_routes_with_permit(",
             "services.post_durable_history_response_with_permit(",
             "historical global responses preserve the complete prevalidated route set",
@@ -2141,22 +2141,19 @@
         (
             "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
             "fn drain_v2_ingress(",
-            "prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));",
+            "Some(ProductionPreparedCertifiedServeV1::Admitted(admission));",
             "drop(admission);",
-            (
-                "exact Serve ingress must validate identity and reserve/coalesce its lifecycle atomically before the selected head can drain",
-                "exact Serve ingress must validate complete transport ownership",
-            ),
+            "exact Serve ingress must validate complete transport ownership",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-            "fn drain_v2_ingress(",
+            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+            "fn consume_prepared_dequeued_v2_ingress(",
             "None => {\n"
             "                            return Err(V2RunnerError::Service(",
             "None => {\n"
             "                            continue;\n"
             "                            return Err(V2RunnerError::Service(",
-            "a current-height exact request may cross ingress removal only with its already-prepared lifecycle admission",
+            "a Decision-superseded exact request may cross ingress removal only with its durable negative outcome",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -2286,14 +2283,51 @@
             "runner pruning must retain every live source attempt and its tombstones",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-            "fn drain_v2_ingress(",
-            "        if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {\n"
-            "            admit_kura_replica_advert_ingress(receiver, kura, inbound)?;\n"
-            "            continue;\n"
-            "        }\n",
+            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+            "fn consume_prepared_dequeued_v2_ingress(",
+            "    if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {\n"
+            "        admit_kura_replica_advert_ingress(receiver, kura, inbound)?;\n"
+            "        finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);\n"
+            "    }\n",
             "",
             "KuraReplicaAdvert ingress must bypass both consensus reducers",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "const ATOMIC_PROPOSAL_FANOUT_COUNT: usize = 2;",
+            "const ATOMIC_PROPOSAL_FANOUT_COUNT: usize = 2;",
+            "const ATOMIC_PROPOSAL_FANOUT_COUNT: usize = 1;",
+            "one atomic Proposal admission may drive exactly its proposal and chunk fanouts",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn new(\n"
+            "        shared_ownership_unit_capacity: usize,\n"
+            "        max_messages_per_fanout: usize,",
+            ".checked_mul(ATOMIC_PROPOSAL_FANOUT_COUNT)",
+            ".saturating_mul(ATOMIC_PROPOSAL_FANOUT_COUNT)",
+            "exact-output construction must deterministically checked-multiply the two-fanout atomic Proposal drive budget by the larger protocol service bound",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_bounded_with_ack<Attempt>(",
+            "self.drive_with_budget_ack(self.drive_attempt_budget, attempt)",
+            "self.drive_with_budget_ack(usize::MAX, attempt)",
+            "the production exact-output driver must consume the checked atomic Proposal drive budget",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn start(\n",
+            "            body_store,\n            None,\n            state,",
+            "            body_store,\n            Some(body_store.instance_identity()),\n            state,",
+            "ordinary startup must explicitly omit recovered Certified-Serve payload-store identity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn start_inner(\n",
+            "            lifecycle_payload_store_identity,\n            fetches: BTreeMap::new(),",
+            "            lifecycle_payload_store_identity: None,\n            fetches: BTreeMap::new(),",
+            "the live worker must retain both exact recovered lifecycle store identities",
         ),
     ),
 )

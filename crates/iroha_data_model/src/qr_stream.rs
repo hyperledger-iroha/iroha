@@ -1,9 +1,8 @@
 //! Animated QR stream framing for offline payload handoff.
 //!
-//! The QR stream protocol splits a binary payload into fixed-size chunks, adds
-//! optional XOR parity frames, and wraps each chunk in a CRC32-protected frame.
-//! The format matches the existing Swift/Android/JS SDK implementations to
-//! ensure cross-platform parity for the first release.
+//! The QR stream protocol splits a binary payload into fixed-size chunks, adds optional XOR parity
+//! frames, and wraps each chunk in a CRC32-protected frame. The format matches the existing
+//! Swift/Android/JS SDK implementations to ensure cross-platform parity for the first release.
 use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},

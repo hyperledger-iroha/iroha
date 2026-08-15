@@ -274,10 +274,9 @@ impl StorageSchedulersRuntime {
     }
     /// Attempt a fetch and conservatively charge the requested bytes when verified work fails.
     ///
-    /// Use this boundary when the inner operation can consume bytes before discovering an
-    /// integrity failure but cannot safely expose a partial buffer. Charging the complete
-    /// admitted request prevents repeated corrupt reads from refunding and bypassing the local
-    /// byte-rate budget.
+    /// Use this boundary when the inner operation can consume bytes before discovering an integrity
+    /// failure but cannot safely expose a partial buffer. Charging the complete admitted request
+    /// prevents repeated corrupt reads from refunding and bypassing the local byte-rate budget.
     ///
     /// # Errors
     ///

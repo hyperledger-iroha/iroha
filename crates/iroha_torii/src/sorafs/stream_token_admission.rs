@@ -1,12 +1,10 @@
 //! Deployment-owned stream-token quota, sequencing, and reputation-callback admission.
 //!
-//! Production gateways must inject an implementation of
-//! [`StreamTokenGatewayAdmissionProviderV1`]. The provider owns the atomic
-//! quota decision, sealed monotonic gateway sequence, and durable ordered
-//! callback outbox. Torii never reconstructs or rewrites the returned typed
-//! outcome; [`StreamTokenAdmissionCaptureV1`] passes it unchanged to the
-//! committed reputation runtime and acknowledges the external row only after
-//! that callback succeeds.
+//! Production gateways must inject an implementation of [`StreamTokenGatewayAdmissionProviderV1`].
+//! The provider owns the atomic quota decision, sealed monotonic gateway sequence, and durable
+//! ordered callback outbox. Torii never reconstructs or rewrites the returned typed outcome;
+//! [`StreamTokenAdmissionCaptureV1`] passes it unchanged to the committed reputation runtime and
+//! acknowledges the external row only after that callback succeeds.
 use iroha_config::parameters::is_production_runtime_handle;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
@@ -180,8 +178,7 @@ pub struct StreamTokenGatewayAdmissionRecordV1 {
     pub lease_id: Option<[u8; 32]>,
     /// Lease expiry in milliseconds since Unix epoch, present with `lease_id`.
     pub lease_expires_at_unix_ms: Option<u64>,
-    /// Signed token expiry used to derive the lease deadline, present only
-    /// with an accepted lease.
+    /// Signed token expiry used to derive the lease deadline, present only with an accepted lease.
     pub lease_token_expires_at_epoch: Option<u64>,
 }
 impl StreamTokenGatewayAdmissionRecordV1 {
@@ -251,8 +248,7 @@ impl StreamTokenGatewayAdmissionRecordV1 {
         }
         Ok(())
     }
-    /// Verify that an external record is the exact result of `request` under
-    /// `qualification`.
+    /// Verify that an external record is the exact result of `request` under `qualification`.
     ///
     /// # Errors
     ///
@@ -345,8 +341,7 @@ pub enum StreamTokenGatewayAdmissionDeliveryStateV1 {
     },
     /// This exact request was already acknowledged by another replica.
     AcknowledgedExactReplay {
-        /// Authenticated contiguous acknowledgement high-water covering the
-        /// returned row.
+        /// Authenticated contiguous acknowledgement high-water covering the returned row.
         acknowledged_through_sequence: u64,
     },
 }
@@ -511,9 +506,8 @@ pub trait StreamTokenGatewayAdmissionProviderV1: Send + Sync + fmt::Debug {
     ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1>;
     /// Idempotently release one accepted cross-replica concurrency lease.
     ///
-    /// A crashed caller need not run this method: the deployment provider must
-    /// expire the lease at `lease_expires_at_unix_ms` before admitting another
-    /// stream against the signed ceiling.
+    /// A crashed caller need not run this method: the deployment provider must expire the lease at
+    /// `lease_expires_at_unix_ms` before admitting another stream against the signed ceiling.
     fn release_lease(
         &self,
         record: StreamTokenGatewayAdmissionRecordV1,

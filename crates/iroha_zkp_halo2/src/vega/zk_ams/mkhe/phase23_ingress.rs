@@ -1,12 +1,11 @@
 //! Full-roster commit/reveal freshness for encrypted ZK-AMS Phase II/III ingress.
 //!
-//! The release protocol admits exactly eight authenticated commitments before
-//! any reveal can be opened. Every commitment and reveal is bound to the
-//! governed authentication-key roster, epoch, phase, transcript, session, and
-//! canonical party slot. The public beacon absorbs the complete ordered, signed
-//! transcript, so one honest reveal keeps it unpredictable until the reveal
-//! round. This receipt supplies freshness only; it is not evidence that the
-//! encrypted Phase-II/III equations were evaluated correctly.
+//! The release protocol admits exactly eight authenticated commitments before any reveal can be
+//! opened. Every commitment and reveal is bound to the governed authentication-key roster, epoch,
+//! phase, transcript, session, and canonical party slot. The public beacon absorbs the complete
+//! ordered, signed transcript, so one honest reveal keeps it unpredictable until the reveal round.
+//! This receipt supplies freshness only; it is not evidence that the encrypted Phase-II/III
+//! equations were evaluated correctly.
 use super::{
     ArtifactAuthentication, MKHE_VERSION_V1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     active::{ZkAmsMkheActivePartySecretV1, ZkAmsMkheGovernedActiveRosterV1},
@@ -55,10 +54,9 @@ pub const ZK_AMS_PHASE23_FRESHNESS_RECEIPT_WIRE_BYTES_V1: usize = RECEIPT_CONTEX
     + 32;
 /// Freshness receipts do not certify hidden encrypted party mask shares.
 ///
-/// The public beacon is suitable only for transcript challenges and domain
-/// separation. Phase-II/III ingress privacy remains fail-closed until a
-/// separate full-roster protocol proves independently sampled encrypted mask
-/// shares and their aggregation.
+/// The public beacon is suitable only for transcript challenges and domain separation. Phase-II/III
+/// ingress privacy remains fail-closed until a separate full-roster protocol proves independently
+/// sampled encrypted mask shares and their aggregation.
 pub const ZK_AMS_PHASE23_FRESHNESS_CERTIFIES_HIDDEN_MASK_SHARES_V1: bool = false;
 /// Phase whose public session freshness beacon is certified by a receipt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -445,9 +443,8 @@ impl Drop for SecretRevealV1 {
 }
 /// Opaque local reveal state returned with a commitment.
 ///
-/// It is deliberately neither cloneable nor serializable and is redacted from
-/// debug output. A signed reveal can be opened only against a fully verified
-/// exact commitment set.
+/// It is deliberately neither cloneable nor serializable and is redacted from debug output. A
+/// signed reveal can be opened only against a fully verified exact commitment set.
 pub struct ZkAmsPhase23PendingRevealV1 {
     context_digest: [u8; 32],
     commit_statement_digest: [u8; 32],

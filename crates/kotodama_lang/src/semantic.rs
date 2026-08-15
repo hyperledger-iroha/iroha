@@ -51,10 +51,9 @@ use std::{
 pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
 /// Maximum number of recursively expanded type nodes retained by semantic analysis.
 ///
-/// The limit shares the fixed V1 token budget: a compact DAG of named value
-/// types cannot make the compiler allocate more expanded type nodes than a
-/// source could contain lexical tokens. Expansion is measured with saturating
-/// arithmetic before any recursive type materialization occurs.
+/// The limit shares the fixed V1 token budget: a compact DAG of named value types cannot make the
+/// compiler allocate more expanded type nodes than a source could contain lexical tokens. Expansion
+/// is measured with saturating arithmetic before any recursive type materialization occurs.
 pub const MAX_EXPANDED_TYPE_NODES: usize = MAX_TOKENS;
 /// Canonical nominal name for the structurally-specialized V1 query page.
 const QUERY_PAGE_TYPE_NAME: &str = "QueryPage";
@@ -147,11 +146,10 @@ pub const V1_DYNAMIC_ACCESS_REQUIRES_DECLARED_STATE_MAP: bool = true;
 pub const V1_DYNAMIC_ACCESS_SCHEDULER_AUTHORITATIVE: bool = false;
 /// Retired pre-release numeric type spellings that remain reserved in V1.
 ///
-/// Keeping these names unavailable to source-unit identities and declared
-/// types prevents authenticated metadata from reinterpreting a known retired
-/// type spelling. Except for exact spellings in
-/// `V1_FORBIDDEN_SOURCE_IDENTIFIERS`, they remain ordinary names in value and
-/// function namespaces, including entrypoints.
+/// Keeping these names unavailable to source-unit identities and declared types prevents
+/// authenticated metadata from reinterpreting a known retired type spelling. Except for exact
+/// spellings in `V1_FORBIDDEN_SOURCE_IDENTIFIERS`, they remain ordinary names in value and function
+/// namespaces, including entrypoints.
 pub const V1_RETIRED_NUMERIC_TYPE_NAMES: &[&str] = &[
     "i8",
     "i16",
@@ -679,9 +677,8 @@ pub enum ExprKind {
     /// A named call whose arguments remain stored in declaration order while
     /// `evaluation_order` records parameter slots in source evaluation order.
     ///
-    /// Lowering evaluates the recorded slots first and only permutes the
-    /// resulting temporary references into ABI order. No runtime permutation
-    /// instructions are required.
+    /// Lowering evaluates the recorded slots first and only permutes the resulting temporary
+    /// references into ABI order. No runtime permutation instructions are required.
     NamedCall {
         name: String,
         args: Vec<TypedExpr>,
@@ -833,10 +830,9 @@ pub struct TypedProgram {
     pub source_files: BTreeMap<crate::source::SourceId, crate::source::SourceFile>,
     /// Whether this HIR was analyzed with local test capabilities enabled.
     ///
-    /// Production artifact builders reject test-capable HIR even when a
-    /// caller removes the source-level test declarations after analysis. This
-    /// provenance bit keeps the mode boundary fail-closed across typed-module
-    /// linking and compiler-internal typed-HIR builds.
+    /// Production artifact builders reject test-capable HIR even when a caller removes the
+    /// source-level test declarations after analysis. This provenance bit keeps the mode boundary
+    /// fail-closed across typed-module linking and compiler-internal typed-HIR builds.
     pub test_support_enabled: bool,
 }
 /// Graph-stable identity of one typed HIR node.
@@ -938,11 +934,10 @@ impl SemanticContext {
     }
     /// Analyze one source unit with explicitly resolved imported functions.
     ///
-    /// The external names must be fully qualified source names such as
-    /// `math::add`. They participate in ordinary type checking but are not
-    /// treated as local definitions for recursion or effect analysis. The
-    /// typed-HIR linker reruns those whole-program analyses after resolving all
-    /// calls to their final linked symbols.
+    /// The external names must be fully qualified source names such as `math::add`. They
+    /// participate in ordinary type checking but are not treated as local definitions for recursion
+    /// or effect analysis. The typed-HIR linker reruns those whole-program analyses after resolving
+    /// all calls to their final linked symbols.
     pub fn analyze_with_external_functions(
         &self,
         program: &Program,
@@ -969,8 +964,7 @@ impl SemanticContext {
         self.external_states.replace(external_states.clone());
         analyze_with_context(self, program)
     }
-    /// Resolve the function interface of one source unit without inspecting
-    /// function bodies.
+    /// Resolve the function interface of one source unit without inspecting function bodies.
     ///
     /// This is the resolution pass used to make locked module exports
     /// available while every module is still analyzed independently.
@@ -1692,11 +1686,10 @@ impl SemanticContext {
         // binding cannot collide with a user local in any nested scope.
         format!("\0aggregate_capture#{index}")
     }
-    /// Check whether one expression can initialize `expected` without letting
-    /// a speculative error replace the diagnostic for the enclosing invalid
-    /// construct. Typed expression analysis is otherwise side-effect free; a
-    /// cloned local environment plus restored diagnostic/capacity scratch state
-    /// makes this suitable for deciding whether a fix recipe will type-check.
+    /// Check whether one expression can initialize `expected` without letting a speculative error
+    /// replace the diagnostic for the enclosing invalid construct. Typed expression analysis is
+    /// otherwise side-effect free; a cloned local environment plus restored diagnostic/capacity
+    /// scratch state makes this suitable for deciding whether a fix recipe will type-check.
     fn expression_is_assignable(
         &self,
         expression: &Expr,
@@ -2141,11 +2134,10 @@ fn measure_expanded_type(
 }
 /// Prove that materializing the acyclic named-type graph fits fixed V1 limits.
 ///
-/// The dependency graph is processed leaf-first. Each named shape is measured
-/// once and memoized; neither a deep chain nor an exponentially branching DAG
-/// is recursively expanded during this proof. The existing materializer runs
-/// only after the proof, when its output depth and aggregate allocation are
-/// known to be bounded.
+/// The dependency graph is processed leaf-first. Each named shape is measured once and memoized;
+/// neither a deep chain nor an exponentially branching DAG is recursively expanded during this
+/// proof. The existing materializer runs only after the proof, when its output depth and aggregate
+/// allocation are known to be bounded.
 fn validate_struct_resolution_budget(
     context: &SemanticContext,
     local_struct_names: &[String],
@@ -2499,10 +2491,9 @@ fn reject_test_surface_without_test_mode(
 /// Revalidate whole-program invariants after independently typed modules have
 /// been linked into one HIR program.
 ///
-/// Module analysis deliberately cannot trust an imported callee's body. This
-/// pass rebuilds the complete call graph from final linked symbols, rejects
-/// cross-module recursion, and propagates view/authorization effects through
-/// every linked helper before code generation.
+/// Module analysis deliberately cannot trust an imported callee's body. This pass rebuilds the
+/// complete call graph from final linked symbols, rejects cross-module recursion, and propagates
+/// view/authorization effects through every linked helper before code generation.
 pub fn validate_linked_program(
     program: &TypedProgram,
     zk_enabled: bool,
@@ -2573,11 +2564,10 @@ pub fn validate_linked_program(
 }
 /// Derive the production HIR from a test-capable target without returning to AST.
 ///
-/// Only declarations originating in the deployable target are supplied here;
-/// standalone test-module HIR is linked into the suite separately. The
-/// projection removes inline `#[test]` functions, proves that every retained
-/// call still resolves, rejects retained test-only builtins, and only then
-/// clears test provenance.
+/// Only declarations originating in the deployable target are supplied here; standalone test-module
+/// HIR is linked into the suite separately. The projection removes inline `#[test]` functions,
+/// proves that every retained call still resolves, rejects retained test-only builtins, and only
+/// then clears test provenance.
 pub(crate) fn project_test_target_to_production(
     mut target: TypedProgram,
     zk_enabled: bool,
@@ -4982,8 +4972,7 @@ fn list_element_contains_resource_handle(ty: &Type) -> bool {
         _ => false,
     }
 }
-/// Return the recursively flattened V1 function-ABI word count, capped at one
-/// more than `limit`.
+/// Return the recursively flattened V1 function-ABI word count, capped at one more than `limit`.
 ///
 /// Product fields are visited only until the caller's fixed ABI window is
 /// exceeded. This is important for canonical named-struct DAGs: repeatedly
@@ -9989,8 +9978,7 @@ fn typed_block_value_type(block: &TypedBlock) -> Type {
         .as_ref()
         .map_or(Type::Unit, |expression| expression.ty.clone())
 }
-/// Return whether evaluating `block` can never reach its enclosing expression
-/// continuation.
+/// Return whether evaluating `block` can never reach its enclosing expression continuation.
 ///
 /// Divergent expression branches behave like a bottom type: they do not need
 /// to synthesize a placeholder value merely to agree with a sibling branch.

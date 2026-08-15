@@ -98,11 +98,10 @@ pub fn derive_execute(input: TokenStream) -> TokenStream {
     let result = default::impl_derive_execute(&mut emitter, &input);
     emitter.finish_token_stream_with(result)
 }
-/// Implements the `iroha_executor::prelude::Visit` trait on a given `Executor` struct.
-/// Users can supply custom overrides for any of the visit functions as freestanding functions
-/// in the same module via the `#[visit(custom(...))]` attribute by
-/// supplying corresponding visit function names inside of it, otherwise a default
-/// implementation from `iroha_executor::default` module is used.
+/// Implements the `iroha_executor::prelude::Visit` trait on a given `Executor` struct. Users can
+/// supply custom overrides for any of the visit functions as freestanding functions in the same
+/// module via the `#[visit(custom(...))]` attribute by supplying corresponding visit function names
+/// inside of it, otherwise a default implementation from `iroha_executor::default` module is used.
 ///
 /// Emits a compile error if the struct didn't have all the expected fields with corresponding types.
 ///

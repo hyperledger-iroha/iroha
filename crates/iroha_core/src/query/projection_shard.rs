@@ -1,10 +1,9 @@
 //! Immutable archive contract for DA-backed query projection partitions.
 //!
-//! The projection worker itself is still pending, but the shard payload shape,
-//! deterministic blob identifiers, and metadata contract can already be fixed.
-//! This lets future DA upload code publish cold query snapshots without
-//! inventing per-call conventions for compression, digests, or checkpoint
-//! references.
+//! The projection worker itself is still pending, but the shard payload shape, deterministic blob
+//! identifiers, and metadata contract can already be fixed. This lets future DA upload code publish
+//! cold query snapshots without inventing per-call conventions for compression, digests, or
+//! checkpoint references.
 use crate::query::{
     index_status::QueryIndexStatus,
     projection_checkpoint::{QueryProjectionCheckpointShard, QueryProjectionResourceKind},

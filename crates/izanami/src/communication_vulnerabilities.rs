@@ -2,9 +2,8 @@
 //!
 //! The catalog is derived from "Blockchain Communication Vulnerabilities" by
 //! Andrei Lebedev and Vincent Gramoli, arXiv:2603.02661v1.  It lets Izanami
-//! runs report Iroha results next to the paper's Algorand, Aptos, Avalanche,
-//! Redbelly, and Solana baseline without baking the comparison into ad hoc
-//! shell output.
+//! runs report Iroha results next to the paper's Algorand, Aptos, Avalanche, Redbelly, and Solana
+//! baseline without baking the comparison into ad hoc shell output.
 /// Paper title used in generated reports.
 pub const PAPER_TITLE: &str = "Blockchain Communication Vulnerabilities";
 /// Paper arXiv identifier.

@@ -1,9 +1,8 @@
 //! BN254 field arithmetic with optional SIMD acceleration.
 //!
-//! Field elements are represented as four little-endian 64-bit limbs.
-//! At runtime [`field_dispatch::field_impl`] selects an implementation
-//! based on the host CPU features (SSE2, AVX2, AVX-512 or NEON).
-//! The scalar routines serve as a portable fallback.
+//! Field elements are represented as four little-endian 64-bit limbs. At runtime
+//! [`field_dispatch::field_impl`] selects an implementation based on the host CPU features (SSE2,
+//! AVX2, AVX-512 or NEON). The scalar routines serve as a portable fallback.
 use crate::field_dispatch::field_impl;
 use halo2curves::{bn256::Fr, ff::PrimeField};
 /// BN254 field modulus in little-endian limb form.

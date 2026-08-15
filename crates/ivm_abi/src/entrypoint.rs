@@ -1,9 +1,8 @@
 //! Canonical ABI records used at public Kotodama entrypoint boundaries.
 //!
-//! The data model owns these types because the same exact recursive schema is
-//! embedded in CNTR metadata, copied into signed manifests, and consumed by
-//! clients. Re-exporting it here keeps VM and compiler call sites concise while
-//! preventing a second ABI model from drifting.
+//! The data model owns these types because the same exact recursive schema is embedded in CNTR
+//! metadata, copied into signed manifests, and consumed by clients. Re-exporting it here keeps VM
+//! and compiler call sites concise while preventing a second ABI model from drifting.
 pub use iroha_data_model::smart_contract::entrypoint::*;
 #[cfg(test)]
 mod tests {

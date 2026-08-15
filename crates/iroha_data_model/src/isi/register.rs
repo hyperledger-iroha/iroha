@@ -8,9 +8,8 @@ isi! {
     ///
     /// Dev note: naming
     /// `RegisterBox` below is an enum that groups concrete `Register<T>` variants
-    /// (e.g., `Peer`, `Domain`, `Account`, ...). It is not a heap `Box`; the
-    /// "Box" suffix means "boxed-up family of variants" for easy visiting and
-    /// serialization.
+    /// (e.g., `Peer`, `Domain`, `Account`, ...). It is not a heap `Box`; the "Box" suffix means
+    /// "boxed-up family of variants" for easy visiting and serialization.
     pub struct Register<O: Registered> {
         /// The object that should be registered, should be uniquely identifiable by its id.
         pub object: O::With,

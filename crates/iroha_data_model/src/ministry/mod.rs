@@ -1,9 +1,8 @@
 //! Ministry of Information transparency data structures.
 //!
-//! This module hosts payloads shared between the Ministry transparency tooling
-//! (dashboards, release automation) and the governance ledger. The
-//! `TransparencyReleaseV1` struct captures the canonical metadata required to
-//! anchor a quarterly transparency bundle in the governance DAG.
+//! This module hosts payloads shared between the Ministry transparency tooling (dashboards, release
+//! automation) and the governance ledger. The `TransparencyReleaseV1` struct captures the canonical
+//! metadata required to anchor a quarterly transparency bundle in the governance DAG.
 #![allow(clippy::module_name_repetitions)]
 mod jury;
 use crate::{Decode, Encode};
@@ -16,11 +15,10 @@ use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 /// Governance payload describing a Ministry transparency release bundle.
 ///
-/// Releases refer to the signed `transparency_manifest.json` artefact emitted by
-/// the publishing pipeline. The manifest digest is recorded using BLAKE2b-256 so
-/// governance can recompute and verify the manifest locally before accepting
-/// the release. The `SoraFS` CID references the published CAR bundle that
-/// contains the sanitized metrics and dashboards.
+/// Releases refer to the signed `transparency_manifest.json` artefact emitted by the publishing
+/// pipeline. The manifest digest is recorded using BLAKE2b-256 so governance can recompute and
+/// verify the manifest locally before accepting the release. The `SoraFS` CID references the
+/// published CAR bundle that contains the sanitized metrics and dashboards.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TransparencyReleaseV1 {

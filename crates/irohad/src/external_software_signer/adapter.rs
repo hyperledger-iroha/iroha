@@ -32,9 +32,8 @@ impl ExternalSoftwareSignerNativeAdapterV1 {
     ///
     /// # Errors
     ///
-    /// Rejects promotion-role services, drift between adjacent probes, revoked
-    /// services, or public identity that cannot form the existing native
-    /// transaction signer binding.
+    /// Rejects promotion-role services, drift between adjacent probes, revoked services, or public
+    /// identity that cannot form the existing native transaction signer binding.
     pub fn try_new(
         client: SoftwareSignerClientV1,
     ) -> Result<Self, ExternalSoftwareSignerAdapterErrorV1> {

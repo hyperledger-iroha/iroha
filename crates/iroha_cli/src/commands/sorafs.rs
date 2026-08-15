@@ -17260,7 +17260,7 @@ mod tests {
     use std::{
         fmt::{self, Display},
         fs,
-        io::{Read as _, Write},
+        io::Write,
         path::Path,
         str::FromStr,
         time::{Duration, SystemTime},

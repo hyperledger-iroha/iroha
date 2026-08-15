@@ -1,7 +1,16 @@
 "use strict";
 
+import {
+  BASE58_ALPHABET_TEXT,
+  ED25519_ALGORITHM,
+  JS_TYPE_BIGINT,
+  JS_TYPE_NUMBER,
+  JS_TYPE_OBJECT,
+  JS_TYPE_STRING,
+} from "./commonLiterals.js";
 import { blake2b256 } from "./blake2b.js";
 import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
+import { satisfiesIdnaBidiRule } from "./idnaBidi.js";
 import {
   canonicalCurveAlgorithm,
   CURVE_PUBLIC_KEY_LENGTH,
@@ -19,6 +28,15 @@ const I105_SENTINEL_TEST = "test";
 const I105_SENTINEL_DEV = "dev";
 const I105_SENTINEL_NUMERIC_PREFIX = "n";
 const I105_CHECKSUM_LEN = 6;
+const INVALID_ADDRESS_LENGTH_MESSAGE = "invalid length for address payload";
+const CANONICAL_I105_REQUIRED_MESSAGE = "account address literals must use canonical I105 form";
+const DOMAIN_WHITESPACE_MESSAGE = "domain label must not contain surrounding whitespace";
+const DOMAIN_UTS46_MESSAGE = "domain label failed UTS-46 ASCII canonicalization";
+const DOMAIN_NON_EMPTY_MESSAGE = "domain label must be a non-empty string";
+const EMPTY_MULTISIG_POLICY_MESSAGE = "invalid multisig policy: EmptyMembers";
+const I105_STRING_MESSAGE = "i105 address must be a string";
+const DOMAIN_STRING_MESSAGE = "domain label must be a string";
+const PUNYCODE_OVERFLOW_MESSAGE = "punycode label overflow";
 const BECH32M_CONST = 0x2bc830a3;
 const encoder = new TextEncoder();
 const I105_WARNING =
@@ -31,7 +49,7 @@ const MULTISIG_DIGEST_PERSONALIZATION = (() => {
 })();
 
 const BASE58_ALPHABET = Array.from(
-  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
+  BASE58_ALPHABET_TEXT,
 );
 const IROHA_POEM_KANA_HALFWIDTH = [
   "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ",
@@ -371,7 +389,7 @@ function invalidMultisigPolicy(policyError, message, extraDetails) {
 
 function normalizePolicyU16(value, context) {
   if (
-    typeof value !== "number" ||
+    typeof value !== JS_TYPE_NUMBER ||
     !Number.isFinite(value) ||
     !Number.isInteger(value) ||
     value < 0 ||
@@ -384,7 +402,7 @@ function normalizePolicyU16(value, context) {
 
 function normalizeMultisigMembers(members) {
   if (!Array.isArray(members) || members.length === 0) {
-    invalidMultisigPolicy("EmptyMembers", "invalid multisig policy: EmptyMembers");
+    invalidMultisigPolicy("EmptyMembers", EMPTY_MULTISIG_POLICY_MESSAGE);
   }
   const normalized = members.map((member, index) => {
     const curve = member.curve ?? CurveId.ED25519;
@@ -433,7 +451,7 @@ function validateAndNormalizeMultisigController(controller) {
   }
   const memberEntries = controller.members ?? [];
   if (memberEntries.length === 0) {
-    invalidMultisigPolicy("EmptyMembers", "invalid multisig policy: EmptyMembers");
+    invalidMultisigPolicy("EmptyMembers", EMPTY_MULTISIG_POLICY_MESSAGE);
   }
   if (memberEntries.length > MULTISIG_MEMBER_MAX) {
     throw new AccountAddressError(
@@ -482,7 +500,7 @@ function normalizeBytes(value) {
     for (let index = 0; index < value.length; index += 1) {
       const byte = value[index];
       if (
-        typeof byte !== "number" ||
+        typeof byte !== JS_TYPE_NUMBER ||
         !Number.isFinite(byte) ||
         !Number.isInteger(byte) ||
         byte < 0 ||
@@ -494,7 +512,7 @@ function normalizeBytes(value) {
     }
     return out;
   }
-  if (typeof value === "string") {
+  if (typeof value === JS_TYPE_STRING) {
     const trimmed = value.trim();
     const body =
       trimmed.startsWith("0x") || trimmed.startsWith("0X") ? trimmed.slice(2) : trimmed;
@@ -638,25 +656,25 @@ function encodeController(controller) {
 
 function decodeController(bytes, cursor) {
   if (cursor >= bytes.length) {
-    throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+    throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
   }
   const tag = bytes[cursor];
   cursor += 1;
   if (tag === CONTROLLER_TAG_SINGLE) {
     if (cursor >= bytes.length) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     const curve = bytes[cursor];
     cursor += 1;
     const curveId = curveIdFromByte(curve);
     if (cursor >= bytes.length) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     const length = bytes[cursor];
     cursor += 1;
     const end = cursor + length;
     if (end > bytes.length) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     const publicKey = bytes.slice(cursor, end);
     validatePublicKeyForCurve(curveId, publicKey, "controller public key");
@@ -665,20 +683,20 @@ function decodeController(bytes, cursor) {
 
   if (tag === CONTROLLER_TAG_MULTISIG) {
     if (cursor >= bytes.length) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     const version = bytes[cursor];
     cursor += 1;
     if (cursor + 1 >= bytes.length) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     const threshold = (bytes[cursor] << 8) | bytes[cursor + 1];
     cursor += 2;
     if (cursor >= bytes.length) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     if (cursor + 1 >= bytes.length) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     const memberCount = (bytes[cursor] << 8) | bytes[cursor + 1];
     cursor += 2;
@@ -692,23 +710,23 @@ function decodeController(bytes, cursor) {
     const members = [];
     for (let index = 0; index < memberCount; index += 1) {
       if (cursor >= bytes.length) {
-        throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+        throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
       }
       const curve = curveIdFromByte(bytes[cursor]);
       cursor += 1;
       if (cursor + 1 >= bytes.length) {
-        throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+        throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
       }
       const weight = (bytes[cursor] << 8) | bytes[cursor + 1];
       cursor += 2;
       if (cursor + 1 >= bytes.length) {
-        throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+        throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
       }
       const keyLength = (bytes[cursor] << 8) | bytes[cursor + 1];
       cursor += 2;
       const end = cursor + keyLength;
       if (end > bytes.length) {
-        throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+        throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
       }
       const publicKey = bytes.slice(cursor, end);
       cursor = end;
@@ -842,24 +860,92 @@ function computeMultisigPolicyDigest(bytes) {
   return blake2b256Personalized(bytes, MULTISIG_DIGEST_PERSONALIZATION, true);
 }
 
+function decodePunycodeLabel(input) {
+  const output = [];
+  const delimiter = input.lastIndexOf("-");
+  let cursor = 0;
+  if (delimiter >= 0) {
+    for (const character of input.slice(0, delimiter)) {
+      if (character.codePointAt(0) >= 0x80) {
+        throw new Error("punycode basic segment is not ASCII");
+      }
+      output.push(character.codePointAt(0));
+    }
+    cursor = delimiter + 1;
+  }
+  let codePoint = 128;
+  let bias = 72;
+  let accumulator = 0;
+  const adapt = (delta, length, first) => {
+    let value = first ? Math.floor(delta / 700) : Math.floor(delta / 2);
+    value += Math.floor(value / length);
+    let scale = 0;
+    while (value > 455) {
+      value = Math.floor(value / 35);
+      scale += 36;
+    }
+    return scale + Math.floor((36 * value) / (value + 38));
+  };
+  const digit = (character) => {
+    const value = character.codePointAt(0);
+    if (value >= 0x30 && value <= 0x39) return value - 0x30 + 26;
+    if (value >= 0x41 && value <= 0x5a) return value - 0x41;
+    if (value >= 0x61 && value <= 0x7a) return value - 0x61;
+    throw new Error("invalid punycode digit");
+  };
+  while (cursor < input.length) {
+    const previous = accumulator;
+    let weight = 1;
+    for (let thresholdIndex = 36; ; thresholdIndex += 36) {
+      if (cursor >= input.length) throw new Error("truncated punycode label");
+      const value = digit(input[cursor]);
+      cursor += 1;
+      if (value > Math.floor((Number.MAX_SAFE_INTEGER - accumulator) / weight)) {
+        throw new Error(PUNYCODE_OVERFLOW_MESSAGE);
+      }
+      accumulator += value * weight;
+      const threshold =
+        thresholdIndex <= bias + 1 ? 1 : thresholdIndex >= bias + 26 ? 26 : thresholdIndex - bias;
+      if (value < threshold) break;
+      const factor = 36 - threshold;
+      if (weight > Math.floor(Number.MAX_SAFE_INTEGER / factor)) {
+        throw new Error(PUNYCODE_OVERFLOW_MESSAGE);
+      }
+      weight *= factor;
+    }
+    const length = output.length + 1;
+    bias = adapt(accumulator - previous, length, previous === 0);
+    const increment = Math.floor(accumulator / length);
+    if (increment > 0x10ffff - codePoint) throw new Error("punycode code point overflow");
+    codePoint += increment;
+    const insertion = accumulator % length;
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+      throw new Error("punycode decoded a surrogate");
+    }
+    output.splice(insertion, 0, codePoint);
+    accumulator = insertion + 1;
+  }
+  return String.fromCodePoint(...output);
+}
+
 export function canonicalizeDomainLabel(domain) {
-  if (typeof domain !== "string") {
+  if (typeof domain !== JS_TYPE_STRING) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must be a string",
+      DOMAIN_STRING_MESSAGE,
     );
   }
   const trimmed = domain.trim();
   if (trimmed !== domain) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must not contain surrounding whitespace",
+      DOMAIN_WHITESPACE_MESSAGE,
     );
   }
   if (trimmed.length === 0) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must be a non-empty string",
+      DOMAIN_NON_EMPTY_MESSAGE,
     );
   }
   if (/\s/.test(trimmed)) {
@@ -918,14 +1004,14 @@ export function canonicalizeDomainLabel(domain) {
   } catch (error) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label failed UTS-46 ASCII canonicalization",
+      DOMAIN_UTS46_MESSAGE,
       { cause: error },
     );
   }
-  if (typeof ascii !== "string" || ascii.length === 0) {
+  if (typeof ascii !== JS_TYPE_STRING || ascii.length === 0) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label failed UTS-46 ASCII canonicalization",
+      DOMAIN_UTS46_MESSAGE,
     );
   }
 
@@ -953,6 +1039,23 @@ export function canonicalizeDomainLabel(domain) {
       "domain label must not contain a double hyphen in the third and fourth position",
     );
   }
+  if (canonical.startsWith("xn--")) {
+    try {
+      const decoded = decodePunycodeLabel(canonical.slice(4));
+      if (!satisfiesIdnaBidiRule(decoded)) {
+        throw new Error("punycode label violates the UTS-46 Bidi rule");
+      }
+      if (new URL(`http://${decoded}/`).hostname.toLowerCase() !== canonical) {
+        throw new Error("punycode label does not round-trip through UTS-46");
+      }
+    } catch (error) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+        "domain label contains invalid ACE punycode",
+        { cause: error },
+      );
+    }
+  }
   for (let index = 0; index < canonical.length; index += 1) {
     const code = canonical.charCodeAt(index);
     const isDigit = code >= 0x30 && code <= 0x39;
@@ -970,23 +1073,23 @@ export function canonicalizeDomainLabel(domain) {
 }
 
 function canonicalizeDomainName(domain) {
-  if (typeof domain !== "string") {
+  if (typeof domain !== JS_TYPE_STRING) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must be a string",
+      DOMAIN_STRING_MESSAGE,
     );
   }
   const trimmed = domain.trim();
   if (trimmed !== domain) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must not contain surrounding whitespace",
+      DOMAIN_WHITESPACE_MESSAGE,
     );
   }
   if (trimmed.length === 0) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must be a non-empty string",
+      DOMAIN_NON_EMPTY_MESSAGE,
     );
   }
   const labels = trimmed.split(".");
@@ -1016,7 +1119,7 @@ export class AccountAddress {
         `AccountAddress.fromAccount options contains unsupported fields: ${extras.join(", ")}`,
       );
     }
-    const { publicKey, algorithm = "ed25519" } = options;
+    const { publicKey, algorithm = ED25519_ALGORITHM } = options;
     const header = {
       version: HEADER_VERSION_V1,
       classId: AddressClass.SINGLE_KEY,
@@ -1031,14 +1134,14 @@ export class AccountAddress {
 
   static fromCanonicalBytes(bytes) {
     if (bytes == null) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
-    if (typeof bytes === "string") {
+    if (typeof bytes === JS_TYPE_STRING) {
       throw new TypeError("canonical address bytes must be binary data or a numeric byte array");
     }
     const data = normalizeBytes(bytes);
     if (data.length === 0) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     const header = decodeHeader(data[0]);
     let controllerCursor = 1;
@@ -1054,7 +1157,7 @@ export class AccountAddress {
   }
 
   static fromI105(encoded, expectedPrefix) {
-    const literal = typeof encoded === "string" ? encoded.trim() : encoded;
+    const literal = typeof encoded === JS_TYPE_STRING ? encoded.trim() : encoded;
     const normalizedExpectedDiscriminant =
       expectedPrefix === undefined
         ? undefined
@@ -1076,12 +1179,12 @@ export class AccountAddress {
   }
 
   static parseEncoded(input, expectedPrefix) {
-    if (typeof input !== "string") {
+    if (typeof input !== JS_TYPE_STRING) {
       throw new TypeError("account address literal must be a string");
     }
     const trimmed = input.trim();
     if (trimmed.length === 0) {
-      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
     }
     if (trimmed.includes("@")) {
       throw new AccountAddressError(
@@ -1188,21 +1291,63 @@ export class AccountAddress {
   }
 }
 
+/**
+ * Validate one exact canonical I105 account literal without retaining the
+ * complete AccountAddress class surface in leaf authentication bundles.
+ *
+ * @param {string} input exact I105 account literal.
+ * @returns {{canonicalHex: string, chainDiscriminant: number}}
+ */
+export function parseCanonicalI105AccountLiteral(input) {
+  if (typeof input !== JS_TYPE_STRING) {
+    throw new TypeError("account address literal must be a string");
+  }
+  const [chainDiscriminant, canonical] = decodeSupportedI105String(input);
+  if (canonical.length === 0) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_LENGTH,
+      INVALID_ADDRESS_LENGTH_MESSAGE,
+    );
+  }
+  const header = decodeHeader(canonical[0]);
+  const [controller, cursor] = decodeController(canonical, 1);
+  if (cursor !== canonical.length) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
+      "unexpected trailing bytes in canonical payload",
+    );
+  }
+  const normalized = concatBytes([
+    Uint8Array.of(encodeHeader(header)),
+    encodeController(controller),
+  ]);
+  if (encodeI105String(chainDiscriminant, normalized) !== input) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      CANONICAL_I105_REQUIRED_MESSAGE,
+    );
+  }
+  return {
+    canonicalHex: `0x${bytesToHex(normalized).toLowerCase()}`,
+    chainDiscriminant,
+  };
+}
+
 function assertCanonicalI105Literal(input, address) {
-  if (typeof input !== "string") {
+  if (typeof input !== JS_TYPE_STRING) {
     return;
   }
   const discriminant = tryExtractI105Discriminant(input);
   if (discriminant === undefined) {
     throw new AccountAddressError(
       AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-      "account address literals must use canonical I105 form",
+      CANONICAL_I105_REQUIRED_MESSAGE,
     );
   }
   if (address.toI105(discriminant) !== input) {
     throw new AccountAddressError(
       AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-      "account address literals must use canonical I105 form",
+      CANONICAL_I105_REQUIRED_MESSAGE,
     );
   }
 }
@@ -1232,8 +1377,8 @@ export function encodeI105AccountAddress(canonicalBytes, options = {}) {
 }
 
 export function decodeI105AccountAddress(encoded, options = {}) {
-  if (typeof encoded !== "string") {
-    throw new TypeError("i105 address must be a string");
+  if (typeof encoded !== JS_TYPE_STRING) {
+    throw new TypeError(I105_STRING_MESSAGE);
   }
   const normalizedOptions = normalizeI105DecodeOptions(options);
   const [, canonical] = decodeSupportedI105String(
@@ -1260,7 +1405,7 @@ function classifyDetectedFormat(literal, inputKind, chainDiscriminant) {
       return {
         kind: "i105",
         chainDiscriminant:
-          typeof chainDiscriminant === "number"
+          typeof chainDiscriminant === JS_TYPE_NUMBER
             ? chainDiscriminant
             : tryExtractI105Discriminant(literal),
       };
@@ -1283,7 +1428,7 @@ function classifyDetectedFormat(literal, inputKind, chainDiscriminant) {
  * }}
  */
 export function inspectAccountId(literal, options = {}) {
-  if (typeof literal !== "string") {
+  if (typeof literal !== JS_TYPE_STRING) {
     throw new TypeError("accountId must be a string");
   }
   const trimmed = literal.trim();
@@ -1389,7 +1534,7 @@ function normalizeInspectAccountOptions(options) {
 }
 
 function isPlainObject(value) {
-  if (value === null || typeof value !== "object") {
+  if (value === null || typeof value !== JS_TYPE_OBJECT) {
     return false;
   }
   const prototype = Object.getPrototypeOf(value);
@@ -1404,11 +1549,11 @@ function normalizeI105DiscriminantInput(value, context = "i105 chain discriminan
     );
   }
   let numeric;
-  if (typeof value === "number") {
+  if (typeof value === JS_TYPE_NUMBER) {
     numeric = value;
-  } else if (typeof value === "bigint") {
+  } else if (typeof value === JS_TYPE_BIGINT) {
     numeric = Number(value);
-  } else if (typeof value === "string") {
+  } else if (typeof value === JS_TYPE_STRING) {
     if (value.trim().length === 0) {
       throw new AccountAddressError(
         AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
@@ -1451,7 +1596,7 @@ function i105SentinelForDiscriminant(discriminant) {
 }
 
 function parseI105SentinelAndPayload(encoded) {
-  if (typeof encoded !== "string") {
+  if (typeof encoded !== JS_TYPE_STRING) {
     return null;
   }
   if (encoded.startsWith(I105_SENTINEL_SORA)) {
@@ -1563,8 +1708,8 @@ function decodeI105Payload(payload) {
 }
 
 function decodeI105String(encoded, expectedDiscriminant) {
-  if (typeof encoded !== "string") {
-    throw new TypeError("i105 address must be a string");
+  if (typeof encoded !== JS_TYPE_STRING) {
+    throw new TypeError(I105_STRING_MESSAGE);
   }
   const parsed = parseI105SentinelAndPayload(encoded);
   if (!parsed) {
@@ -1635,7 +1780,7 @@ function decodeBaseN(digits, base) {
     );
   }
   if (digits.length === 0) {
-    throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+    throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, INVALID_ADDRESS_LENGTH_MESSAGE);
   }
   const value = Array.from(digits);
   for (const digit of value) {

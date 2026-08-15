@@ -2555,9 +2555,8 @@ impl ToriiMetricsSnapshot {
     }
     /// Ratio (0–1) representing how full the consensus queue is.
     ///
-    /// Returns `None` when either the depth or capacity gauges were missing or
-    /// the backend reported a zero/negative capacity (should never happen on
-    /// healthy Torii deployments).
+    /// Returns `None` when either the depth or capacity gauges were missing or the backend reported
+    /// a zero/negative capacity (should never happen on healthy Torii deployments).
     #[must_use]
     pub fn queue_utilization(&self) -> Option<f64> {
         let depth = self.sumeragi_tx_queue_depth?;
@@ -2569,9 +2568,8 @@ impl ToriiMetricsSnapshot {
     }
     /// Boolean saturation flag derived from the exporter gauge.
     ///
-    /// Returns `None` when the exporter did not emit the flag or reported an
-    /// unexpected value (non-zero/non-one) so UI surfaces can retain a
-    /// tri-state indicator.
+    /// Returns `None` when the exporter did not emit the flag or reported an unexpected value
+    /// (non-zero/non-one) so UI surfaces can retain a tri-state indicator.
     #[must_use]
     pub fn queue_saturation_flag(&self) -> Option<bool> {
         let value = self.sumeragi_tx_queue_saturated?;
@@ -2813,9 +2811,8 @@ fn lag_to_usize(skipped: u64) -> usize {
 /// Decode a Norito payload, retrying with an aligned copy if the caller hands us
 /// misaligned bytes (a common artefact of mock HTTP servers and FFI bindings).
 ///
-/// Every attempt uses limits derived from the complete frame, so an untrusted
-/// header or nested length cannot allocate outside the encoded payload's
-/// conservative first-release envelope.
+/// Every attempt uses limits derived from the complete frame, so an untrusted header or nested
+/// length cannot allocate outside the encoded payload's conservative first-release envelope.
 ///
 /// The helper is exported so downstream crates (or language bindings) can share
 /// the same alignment guard instead of cloning the `unsafe` retry logic.
@@ -3084,10 +3081,9 @@ impl ToriiClient {
     }
     /// Probe `/status` until the chain has committed its genesis block.
     ///
-    /// A responsive height-zero peer is still bootstrapping and cannot yet
-    /// admit transactions against committed validator authority. Transient
-    /// status failures and height-zero responses share one bounded
-    /// [`ReadinessOptions`] deadline and exponential backoff.
+    /// A responsive height-zero peer is still bootstrapping and cannot yet admit transactions
+    /// against committed validator authority. Transient status failures and height-zero responses
+    /// share one bounded [`ReadinessOptions`] deadline and exponential backoff.
     pub async fn wait_for_genesis_commit(
         &self,
         options: ReadinessOptions,

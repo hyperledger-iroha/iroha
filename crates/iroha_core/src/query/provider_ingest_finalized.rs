@@ -1,23 +1,20 @@
 //! Durable provider-indexed archive for finalized SoraFS replication orders.
 //!
-//! The archive is a committed projection, never a source of finality or
-//! mutation authority. A commit-owned caller supplies one immutable
-//! [`StateReadOnly`] view and the matching non-forgeable Kura receipt. Each
-//! immutable record stores only changed provider projections, links the exact
+//! The archive is a committed projection, never a source of finality or mutation authority. A
+//! commit-owned caller supplies one immutable [`StateReadOnly`] view and the matching non-forgeable
+//! Kura receipt. Each immutable record stores only changed provider projections, links the exact
 //! preceding height, and commits to the complete provider-indexed state.
 //!
-//! The first record for a network is an explicit activation floor. Authenticated
-//! retention may replace a prefix with a content-addressed virtual base while
-//! preserving the exact page and cursor bytes at the new floor. Queries below
-//! an activation or retention floor fail with distinct typed errors; no
-//! current-head fallback or inferred historical coverage exists. Runtime
-//! credentials, grants, endpoints, private keys, and payload bytes are absent
-//! from every public and durable type.
+//! The first record for a network is an explicit activation floor. Authenticated retention may
+//! replace a prefix with a content-addressed virtual base while preserving the exact page and
+//! cursor bytes at the new floor. Queries below an activation or retention floor fail with distinct
+//! typed errors; no current-head fallback or inferred historical coverage exists. Runtime
+//! credentials, grants, endpoints, private keys, and payload bytes are absent from every public and
+//! durable type.
 //!
-//! First-release records always encode the optional consensus Musubi archive
-//! binding, including an explicit `None` for generic orders. Pre-release
-//! archive bytes that lack that field also use a retired state-root domain and
-//! cannot pass canonical decode/validation; operators must reset that
+//! First-release records always encode the optional consensus Musubi archive binding, including an
+//! explicit `None` for generic orders. Pre-release archive bytes that lack that field also use a
+//! retired state-root domain and cannot pass canonical decode/validation; operators must reset that
 //! disposable archive namespace rather than migrate it.
 use crate::{
     kura::{Kura, KuraV2CommitReceipt},
@@ -111,8 +108,7 @@ impl ProviderIngestFinalizedArchiveBoundsV1 {
     ///
     /// # Errors
     ///
-    /// Rejects zero, internally inconsistent, or target-unrepresentable
-    /// ceilings.
+    /// Rejects zero, internally inconsistent, or target-unrepresentable ceilings.
     pub fn try_new(
         max_record_bytes: u64,
         max_archive_entries: usize,
@@ -501,8 +497,7 @@ pub struct ProviderIngestFinalizedArchiveRetentionFenceV1 {
     expected_archive_generation: u64,
 }
 impl ProviderIngestFinalizedArchiveRetentionFenceV1 {
-    /// Construct one exact non-zero retention fence at the caller-observed
-    /// archive generation.
+    /// Construct one exact non-zero retention fence at the caller-observed archive generation.
     ///
     /// # Errors
     ///
@@ -589,8 +584,7 @@ impl ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1 {
     ///
     /// # Errors
     ///
-    /// Rejects credential-bearing, test-marked, malformed, stale, or zero
-    /// public identity material.
+    /// Rejects credential-bearing, test-marked, malformed, stale, or zero public identity material.
     pub fn try_new(
         handle: String,
         revision: u64,
@@ -888,8 +882,7 @@ pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt:
         Option<ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>,
         ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1,
     >;
-    /// Install `next` only when the authoritative revision is exactly
-    /// `expected_revision`.
+    /// Install `next` only when the authoritative revision is exactly `expected_revision`.
     ///
     /// A write whose commit outcome is unknown must return
     /// [`ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1::Ambiguous`].
@@ -1275,9 +1268,8 @@ impl ProviderIngestFinalizedArchiveV1 {
     ///
     /// # Errors
     ///
-    /// Rejects unsafe filesystem topology, unknown objects, malformed or
-    /// noncanonical Norito, digest mismatch, gaps, forks, rollback, provider
-    /// substitution, and exceeded bounds.
+    /// Rejects unsafe filesystem topology, unknown objects, malformed or noncanonical Norito,
+    /// digest mismatch, gaps, forks, rollback, provider substitution, and exceeded bounds.
     pub fn try_open(
         root: impl Into<PathBuf>,
         bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -1296,12 +1288,10 @@ impl ProviderIngestFinalizedArchiveV1 {
     }
     /// Open an archive whose retention state is sealed by `authority`.
     ///
-    /// Startup installs or finishes only the exact checkpoint durably named by
-    /// the authority's canonical CAS record. A checkpoint file without that
-    /// approval is rejected without unlinking records or checkpoints. If the
-    /// CAS committed before local checkpoint publication, recovery
-    /// deterministically reconstructs and publishes the approved bytes before
-    /// cleanup.
+    /// Startup installs or finishes only the exact checkpoint durably named by the authority's
+    /// canonical CAS record. A checkpoint file without that approval is rejected without unlinking
+    /// records or checkpoints. If the CAS committed before local checkpoint publication, recovery
+    /// deterministically reconstructs and publishes the approved bytes before cleanup.
     ///
     /// # Errors
     ///
@@ -1621,13 +1611,11 @@ impl ProviderIngestFinalizedArchiveV1 {
         }
         Ok(entry.record.material.key.clone())
     }
-    /// Return the monotonic in-process generation of the validated immutable
-    /// record index.
+    /// Return the monotonic in-process generation of the validated immutable record index.
     ///
     /// # Errors
     ///
-    /// Returns an integrity error if the archive lock or filesystem boundary
-    /// is no longer valid.
+    /// Returns an integrity error if the archive lock or filesystem boundary is no longer valid.
     pub fn health_generation(&self) -> Result<u64, ProviderIngestFinalizedArchiveErrorV1> {
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
@@ -1635,10 +1623,9 @@ impl ProviderIngestFinalizedArchiveV1 {
     }
     /// Return whether the complete bound archive namespace has no records.
     ///
-    /// This is the only state accepted when a fresh height-zero node enables
-    /// the archive before genesis capture. The durable namespace is rescanned
-    /// so an archive for another network cannot be mistaken for an empty
-    /// current-network activation floor.
+    /// This is the only state accepted when a fresh height-zero node enables the archive before
+    /// genesis capture. The durable namespace is rescanned so an archive for another network cannot
+    /// be mistaken for an empty current-network activation floor.
     ///
     /// # Errors
     ///
@@ -1665,9 +1652,8 @@ impl ProviderIngestFinalizedArchiveV1 {
     ///
     /// # Errors
     ///
-    /// Rejects empty/incomplete coverage, a forked or timestamp-substituted
-    /// record, archive state ahead of Kura, excessive lag, or a changing
-    /// qualification boundary.
+    /// Rejects empty/incomplete coverage, a forked or timestamp-substituted record, archive state
+    /// ahead of Kura, excessive lag, or a changing qualification boundary.
     pub fn qualify_against_kura_tip(
         &self,
         network_id: &NetworkId,
@@ -1789,14 +1775,12 @@ impl ProviderIngestFinalizedArchiveV1 {
             generation,
         })
     }
-    /// Reconcile one replayed startup state tip using Kura's recovered
-    /// non-forgeable receipt, then require that exact State key to be the
-    /// zero-lag archive and Kura tip.
+    /// Reconcile one replayed startup state tip using Kura's recovered non-forgeable receipt, then
+    /// require that exact State key to be the zero-lag archive and Kura tip.
     ///
-    /// An empty archive establishes an explicit activation floor at the
-    /// replayed tip. A non-empty archive accepts only its exact tip replay or
-    /// one exact successor; a larger gap requires authenticated per-height
-    /// replay and fails instead of manufacturing history.
+    /// An empty archive establishes an explicit activation floor at the replayed tip. A non-empty
+    /// archive accepts only its exact tip replay or one exact successor; a larger gap requires
+    /// authenticated per-height replay and fails instead of manufacturing history.
     ///
     /// # Errors
     ///
@@ -1855,9 +1839,8 @@ impl ProviderIngestFinalizedArchiveV1 {
     ///
     /// # Errors
     ///
-    /// Fails closed for any Kura/view mismatch, malformed authoritative state,
-    /// gap, fork, rollback, substitution, resource exhaustion, or publication
-    /// failure.
+    /// Fails closed for any Kura/view mismatch, malformed authoritative state, gap, fork, rollback,
+    /// substitution, resource exhaustion, or publication failure.
     pub fn capture_kura_authenticated_view(
         &self,
         state_ro: &impl StateReadOnly,
@@ -1871,16 +1854,14 @@ impl ProviderIngestFinalizedArchiveV1 {
     }
     /// Prepare the exact canonical checkpoint proposed for sealed retention.
     ///
-    /// Preparation is read-only. Every physical prefix anchor and the fence's
-    /// finality artifact are reauthenticated against one frozen Kura boundary,
-    /// then the complete canonical checkpoint bytes are digested into the
-    /// returned proposal.
+    /// Preparation is read-only. Every physical prefix anchor and the fence's finality artifact are
+    /// reauthenticated against one frozen Kura boundary, then the complete canonical checkpoint
+    /// bytes are digested into the returned proposal.
     ///
     /// # Errors
     ///
-    /// Rejects an absent, stale, forked, unauthenticated, or non-advancing
-    /// fence, any archive/Kura boundary change, resource exhaustion, or a
-    /// damaged archive.
+    /// Rejects an absent, stale, forked, unauthenticated, or non-advancing fence, any archive/Kura
+    /// boundary change, resource exhaustion, or a damaged archive.
     pub fn prepare_kura_authenticated_compaction(
         &self,
         fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
@@ -1899,11 +1880,10 @@ impl ProviderIngestFinalizedArchiveV1 {
     }
     /// Durably approve and install one previously prepared compaction.
     ///
-    /// This is the only production compaction entry point. It repeats all
-    /// archive and Kura qualification while holding the archive write lock,
-    /// installs a monotonic canonical record through the deployment-owned CAS
-    /// authority, and requires exact authoritative readback before publishing
-    /// a checkpoint or unlinking any prefix object.
+    /// This is the only production compaction entry point. It repeats all archive and Kura
+    /// qualification while holding the archive write lock, installs a monotonic canonical record
+    /// through the deployment-owned CAS authority, and requires exact authoritative readback before
+    /// publishing a checkpoint or unlinking any prefix object.
     ///
     /// # Errors
     ///
@@ -2076,9 +2056,8 @@ impl ProviderIngestFinalizedArchiveV1 {
     }
     /// Durably publish one exact typed projection.
     ///
-    /// This lower-level entry point is useful to authenticated replay and
-    /// deterministic tests. Production fresh capture should use
-    /// [`Self::capture_kura_authenticated_view`].
+    /// This lower-level entry point is useful to authenticated replay and deterministic tests.
+    /// Production fresh capture should use [`Self::capture_kura_authenticated_view`].
     ///
     /// # Errors
     ///
@@ -2245,10 +2224,9 @@ impl ProviderIngestFinalizedArchiveV1 {
     }
     /// Read one bounded provider-indexed page at an exact finalized anchor.
     ///
-    /// `cursor` is exclusive and must belong to the same network, block,
-    /// timestamp, provider, and committed provider-state root. Missing provider
-    /// state returns an empty terminal page; another provider is never scanned
-    /// or returned.
+    /// `cursor` is exclusive and must belong to the same network, block, timestamp, provider, and
+    /// committed provider-state root. Missing provider state returns an empty terminal page;
+    /// another provider is never scanned or returned.
     ///
     /// # Errors
     ///

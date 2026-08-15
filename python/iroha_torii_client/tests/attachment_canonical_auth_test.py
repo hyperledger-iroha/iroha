@@ -41,11 +41,16 @@ TIMESTAMP_MS = 4_102_444_801_000
 NONCE = "python-zk-attachment-auth"
 
 
-class RecordingSession:
+class RecordingSession(requests.Session):
     """Minimal requests session recording exact transport inputs."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.calls: List[Dict[str, Any]] = []
+
+    @staticmethod
+    def get_adapter(_url: str) -> requests.adapters.HTTPAdapter:
+        return requests.adapters.HTTPAdapter(max_retries=0)
 
     def request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
         self.calls.append({"method": method, "url": url, **kwargs})
@@ -68,6 +73,21 @@ class RecordingSession:
         else:
             response.status_code = 204
             response._content = b""
+        return response
+
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        response = self.request(
+            request.method or "",
+            request.url or "",
+            headers=dict(request.headers),
+            data=request.body,
+            **kwargs,
+        )
+        response.request = request
         return response
 
 

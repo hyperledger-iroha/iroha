@@ -1,10 +1,9 @@
 //! Verify one PK2 bridge-finality proof against a live Sumeragi-v2 status snapshot.
 //!
-//! This binary is deliberately a narrow deployment boundary. It accepts only
-//! the current typed JSON schemas, pins the PK2 chain, protocol, `NPoS` mode,
-//! exact reporting-node identity, ordered validator keys, and count threshold,
-//! and delegates the complete header/context/PoP/BLS verification to
-//! `iroha_core::bridge`.
+//! This binary is deliberately a narrow deployment boundary. It accepts only the current typed JSON
+//! schemas, pins the PK2 chain, protocol, `NPoS` mode, exact reporting-node identity, ordered
+//! validator keys, and count threshold, and delegates the complete header/context/PoP/BLS
+//! verification to `iroha_core::bridge`.
 use iroha_core::{
     bridge::{FinalityProofVerificationConfig, verify_finality_proof},
     validate_genesis_block,

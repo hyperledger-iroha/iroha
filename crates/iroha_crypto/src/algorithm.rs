@@ -121,9 +121,8 @@ impl Algorithm {
     }
     /// Exact byte length of a canonical detached signature payload.
     ///
-    /// Keeping this geometry with the feature-dependent enum prevents
-    /// downstream crates from matching variants whose presence can change
-    /// through Cargo feature unification.
+    /// Keeping this geometry with the feature-dependent enum prevents downstream crates from
+    /// matching variants whose presence can change through Cargo feature unification.
     pub const fn signature_payload_len(self) -> usize {
         match self {
             Self::Ed25519 | Self::Secp256k1 => 64,

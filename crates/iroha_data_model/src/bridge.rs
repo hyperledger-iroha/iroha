@@ -1,5 +1,4 @@
-//! Bridge-related data types for wrapped assets and receipts.
-//! Feature-gated behind `bridge`.
+//! Bridge-related data types for wrapped assets and receipts. Feature-gated behind `bridge`.
 use crate::{NetworkId, nexus::LaneId, proof::ProofBox};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
@@ -175,10 +174,9 @@ pub struct BridgeTransparentProof {
 }
 /// Closed protocol-native backend identifiers for first-release SCCP proofs.
 ///
-/// Unlike a transparent proof backend, this identifier is not a caller-chosen
-/// string. Each value selects one concrete native consensus and inclusion
-/// verifier, so an unknown value fails decoding instead of being routed by a
-/// node-local naming convention.
+/// Unlike a transparent proof backend, this identifier is not a caller-chosen string. Each value
+/// selects one concrete native consensus and inclusion verifier, so an unknown value fails decoding
+/// instead of being routed by a node-local naming convention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -257,10 +255,9 @@ pub struct SccpNativeTrustAnchorV1 {
     pub anchor_hash: [u8; 32],
     /// Backend-specific consensus-progress coordinate committed by `anchor_hash`.
     ///
-    /// Ethereum lanes use a finalized beacon slot, Solana lanes use a rooted
-    /// Agave slot, and BSC/TRON lanes use a finalized block height. This is
-    /// intentionally distinct from an Ethereum execution-block height carried
-    /// by an admitted event proof.
+    /// Ethereum lanes use a finalized beacon slot, Solana lanes use a rooted Agave slot, and
+    /// BSC/TRON lanes use a finalized block height. This is intentionally distinct from an Ethereum
+    /// execution-block height carried by an admitted event proof.
     pub checkpoint_height: u64,
 }
 impl SccpNativeTrustAnchorV1 {
@@ -272,10 +269,9 @@ impl SccpNativeTrustAnchorV1 {
     /// Return whether an authenticated consensus-progress coordinate belongs
     /// to this anchor's governance interval.
     ///
-    /// The next retained checkpoint is an inclusive upper boundary. The
-    /// one-coordinate overlap lets BSC/TRON prove the boundary block and
-    /// Solana prove the boundary rooted slot while the successor checkpoint
-    /// itself becomes usable. Without a successor the current checkpoint
+    /// The next retained checkpoint is an inclusive upper boundary. The one-coordinate overlap lets
+    /// BSC/TRON prove the boundary block and Solana prove the boundary rooted slot while the
+    /// successor checkpoint itself becomes usable. Without a successor the current checkpoint
     /// remains open-ended.
     #[must_use]
     pub fn admits_anchor_interval_height(
@@ -289,11 +285,10 @@ impl SccpNativeTrustAnchorV1 {
 }
 /// Canonically encoded SCCP protocol-native admission envelope.
 ///
-/// The SCCP crate owns and validates the typed envelope because it owns the
-/// chain-specific verifier DTOs. The data model stores that canonical encoding
-/// once, paired with a closed backend identifier; it does not disguise native
-/// consensus evidence as a transparent ZK proof or place it inside a
-/// caller-labelled [`ProofBox`].
+/// The SCCP crate owns and validates the typed envelope because it owns the chain-specific verifier
+/// DTOs. The data model stores that canonical encoding once, paired with a closed backend
+/// identifier; it does not disguise native consensus evidence as a transparent ZK proof or place it
+/// inside a caller-labelled [`ProofBox`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -320,9 +315,8 @@ impl BridgeNativeProtocolProofV1 {
 }
 /// Closed production destination verifier selected for an SCCP artifact.
 ///
-/// An unknown or caller-labelled backend is unrepresentable. The SCCP
-/// cryptographic implementation additionally verifies that the canonical
-/// artifact's inner family agrees with this outer tag.
+/// An unknown or caller-labelled backend is unrepresentable. The SCCP cryptographic implementation
+/// additionally verifies that the canonical artifact's inner family agrees with this outer tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -541,10 +535,9 @@ pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha:bridge-finality-attestation:v1\0";
 /// Exact Sumeragi-v2 finality proof for one Iroha block.
 ///
-/// The durable finality artifact is the single source of consensus context,
-/// height, block hash, roster powers, quorum, subject, and commit certificate.
-/// No legacy certificate projection or duplicate proof-controlled consensus
-/// field is carried alongside it.
+/// The durable finality artifact is the single source of consensus context, height, block hash,
+/// roster powers, quorum, subject, and commit certificate. No legacy certificate projection or
+/// duplicate proof-controlled consensus field is carried alongside it.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -553,8 +546,7 @@ pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeFinalityProof {
-    /// Proof schema version. The first release requires
-    /// [`BRIDGE_FINALITY_PROOF_VERSION_V2`].
+    /// Proof schema version. The first release requires [`BRIDGE_FINALITY_PROOF_VERSION_V2`].
     pub version: u8,
     /// Block header for the finalized block.
     pub block_header: crate::block::BlockHeader,
@@ -941,11 +933,10 @@ pub enum BridgeFinalityBundleVerifyError {
 }
 /// Stateful verifier for bridge finality proofs.
 ///
-/// The first proof must match an explicitly trusted Sumeragi-v2 height-context
-/// id. Every later proof must be the immediate, cryptographically linked
-/// successor of the last accepted artifact. This preserves the exact
-/// equal-vote quorum, epoch transitions, and parent finality without trusting a
-/// proof-controlled roster.
+/// The first proof must match an explicitly trusted Sumeragi-v2 height-context id. Every later
+/// proof must be the immediate, cryptographically linked successor of the last accepted artifact.
+/// This preserves the exact equal-vote quorum, epoch transitions, and parent finality without
+/// trusting a proof-controlled roster.
 #[derive(Debug, Clone)]
 pub struct BridgeFinalityVerifier {
     expected_network_id: NetworkId,
@@ -1030,9 +1021,8 @@ impl BridgeFinalityVerifier {
     ///
     /// # Errors
     ///
-    /// Returns [`BridgeFinalityBundleVerifyError`] when either the commitment
-    /// tuple or the embedded proof is invalid. Verifier progress is unchanged
-    /// on every error path.
+    /// Returns [`BridgeFinalityBundleVerifyError`] when either the commitment tuple or the embedded
+    /// proof is invalid. Verifier progress is unchanged on every error path.
     pub fn verify_bundle(
         &mut self,
         bundle: &BridgeFinalityBundle,
@@ -1046,11 +1036,10 @@ impl BridgeFinalityVerifier {
 ///
 /// # Errors
 ///
-/// Returns [`BridgeFinalityVerifyError`] when the version, network, header,
-/// durable artifact, powered quorum, roster `PoPs`, or aggregate signature is
-/// invalid. Callers must separately pin the artifact's
-/// [`crate::block::consensus_v2::finality::V2FinalityArtifact::context_id`]
-/// or use [`BridgeFinalityVerifier`] when establishing trust.
+/// Returns [`BridgeFinalityVerifyError`] when the version, network, header, durable artifact,
+/// powered quorum, roster `PoPs`, or aggregate signature is invalid. Callers must separately pin
+/// the artifact's [`crate::block::consensus_v2::finality::V2FinalityArtifact::context_id`] or use
+/// [`BridgeFinalityVerifier`] when establishing trust.
 pub fn verify_bridge_finality_proof(
     proof: &BridgeFinalityProof,
     expected_network_id: &NetworkId,
@@ -1063,14 +1052,12 @@ pub fn verify_bridge_finality_proof(
 }
 /// Verify one complete bridge finality bundle without maintaining successor state.
 ///
-/// This checks the exact commitment/proof bindings, expected network identity,
-/// header/artifact bindings, powered quorum, roster `PoPs`, and aggregate
-/// signature.
+/// This checks the exact commitment/proof bindings, expected network identity, header/artifact
+/// bindings, powered quorum, roster `PoPs`, and aggregate signature.
 ///
 /// # Errors
 ///
-/// Returns [`BridgeFinalityBundleVerifyError`] when the commitment or embedded
-/// proof is invalid.
+/// Returns [`BridgeFinalityBundleVerifyError`] when the commitment or embedded proof is invalid.
 pub fn verify_bridge_finality_bundle(
     bundle: &BridgeFinalityBundle,
     expected_network_id: &NetworkId,

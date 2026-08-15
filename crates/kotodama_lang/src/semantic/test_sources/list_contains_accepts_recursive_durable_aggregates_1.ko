@@ -1,0 +1,19 @@
+
+                struct Envelope {
+                    List<Option<int>, 2> labels,
+                    Result<(int, bool), int> outcome,
+                }
+
+                fn contains_nested() -> bool {
+                    let List<Envelope, 2> values = [
+                        Envelope {
+                            labels: [Option::none, Option::some(7)],
+                            outcome: Result::ok((9, true)),
+                        },
+                    ];
+                    values.contains(Envelope {
+                        labels: [Option::none, Option::some(7)],
+                        outcome: Result::ok((9, true)),
+                    })
+                }
+            

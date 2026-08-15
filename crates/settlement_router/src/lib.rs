@@ -4,10 +4,9 @@
 //! router outlined in `roadmap.md`.  The goal is to keep all arithmetic and
 //! accounting logic deterministic so the same inputs always produce the same
 //! XOR liability regardless of hardware or thread scheduling.  It packages the
-//! shadow-price calculator, buffer guard rails, volatility handling, swap-line
-//! health checks, and receipt helpers consumed by `iroha_core`'s
-//! `SettlementEngine`; treasury automation and AMM/RFQ execution hook into
-//! these deterministic primitives.
+//! shadow-price calculator, buffer guard rails, volatility handling, swap-line health checks, and
+//! receipt helpers consumed by `iroha_core`'s `SettlementEngine`; treasury automation and AMM/RFQ
+//! execution hook into these deterministic primitives.
 #![deny(
     missing_docs,
     clippy::all,

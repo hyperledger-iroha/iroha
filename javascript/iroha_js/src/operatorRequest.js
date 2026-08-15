@@ -1,7 +1,8 @@
 import { Buffer } from "buffer";
 import { randomBytes } from "node:crypto";
 
-import { canonicalRequestMessage } from "./canonicalRequest.js";
+import { canonicalRequestMessage } from "./canonicalMessage.js";
+import { preparedTransportQuery } from "./canonicalTransport.js";
 import { networkIdBytes } from "./networkId.js";
 
 const OPERATOR_REQUEST_DOMAIN_V1 = Buffer.from(
@@ -167,7 +168,12 @@ export async function buildOperatorRequestHeaders({
     throw new TypeError("operator timestampMs must be a non-negative safe integer");
   }
   const checkedNonce = requireExactAscii(nonce, "operator nonce", 256);
-  const request = canonicalRequestMessage({ method, path, query, body });
+  const request = canonicalRequestMessage({
+    method,
+    path,
+    query: preparedTransportQuery(query),
+    body,
+  });
   const message = Buffer.concat([
     OPERATOR_REQUEST_DOMAIN_V1,
     Buffer.from(networkIdBytes(signingContext.networkId, "operatorSigningContext.networkId")),

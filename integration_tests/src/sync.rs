@@ -51,8 +51,7 @@ pub fn get_status_with_retry(client: &Client) -> Result<Status> {
 ///
 /// # Errors
 ///
-/// Returns the final status error when retries are exhausted and no storage
-/// snapshot is available.
+/// Returns the final status error when retries are exhausted and no storage snapshot is available.
 pub fn get_status_with_retry_or_storage(
     network: &Network,
     client: &Client,
@@ -177,9 +176,12 @@ fn read_env_duration(var: &str, default: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha::client::Client;
     use iroha::config::{AnonymityPolicy, Config, default_connect_queue_root};
-    use iroha::data_model::ChainId;
+    use iroha::data_model::{ChainId, NetworkId};
+    use iroha::{
+        client::Client,
+        crypto::{Hash, HashOf},
+    };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use std::{
@@ -231,6 +233,9 @@ mod tests {
         let ttl = Duration::from_secs(1);
         let config = Config {
             chain: ChainId::from("test"),
+            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                b"integration_tests::sync::dummy_client",
+            ))),
             key_pair: ALICE_KEYPAIR.clone(),
             account: ALICE_ID.clone(),
             account_chain_discriminant:

@@ -294,10 +294,9 @@ pub fn alias_merkle_root(
 }
 /// Compute the digest that council members sign for an alias-registry root.
 ///
-/// Council signatures deliberately authorize the root and its lifetime rather
-/// than each leaf independently. [`verify_alias_proof_bundle`] authenticates a
-/// particular binding by recomputing its leaf-to-root Merkle path before it
-/// verifies the trusted council quorum over this digest.
+/// Council signatures deliberately authorize the root and its lifetime rather than each leaf
+/// independently. [`verify_alias_proof_bundle`] authenticates a particular binding by recomputing
+/// its leaf-to-root Merkle path before it verifies the trusted council quorum over this digest.
 #[must_use]
 pub fn alias_proof_signature_digest(bundle: &AliasProofBundleV1) -> [u8; 32] {
     alias_signature_message(bundle)
@@ -319,10 +318,9 @@ pub fn verify_alias_proof_bundle(
 }
 /// Verify alias-proof integrity without establishing signer trust.
 ///
-/// This helper is reserved for fixture generation, language-neutral reference
-/// validation, and cache-freshness tooling. A node or gateway making an
-/// admission decision must use [`verify_alias_proof_bundle`] with an
-/// operator-controlled [`ProviderAdmissionCouncilPolicy`].
+/// This helper is reserved for fixture generation, language-neutral reference validation, and
+/// cache-freshness tooling. A node or gateway making an admission decision must use
+/// [`verify_alias_proof_bundle`] with an operator-controlled [`ProviderAdmissionCouncilPolicy`].
 ///
 /// # Errors
 ///

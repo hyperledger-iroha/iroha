@@ -1,8 +1,7 @@
 //! Simple segmented memory model with fixed-size segments.
 //!
-//! Addresses are flat u64 values where the high 16 bits select the
-//! segment and the low 16 bits are an offset within that segment.
-//! The address ranges are:
+//! Addresses are flat u64 values where the high 16 bits select the segment and the low 16 bits are
+//! an offset within that segment. The address ranges are:
 //!   0x0000_0000..0x003F_FFFF -> Code (read-only)
 //!   0x0040_0000..0x007F_FFFF -> Stack
 //!   0x0080_0000..0x00BF_FFFF -> Heap

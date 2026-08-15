@@ -1,18 +1,16 @@
 //! Confidential-asset helpers shared across host and VM components.
 //!
-//! The routines in this module intentionally avoid depending on the wider
-//! data-model crates so they remain usable from lightweight environments
-//! (e.g., wallets or signing services) while still matching the canonical
-//! on-chain derivations.
+//! The routines in this module intentionally avoid depending on the wider data-model crates so they
+//! remain usable from lightweight environments (e.g., wallets or signing services) while still
+//! matching the canonical on-chain derivations.
 use crate::poseidon;
 /// Domain-separation tag for confidential nullifier derivation.
 const NULLIFIER_DST: &[u8] = b"iroha:conf:nullifier:v1";
 /// Derive a canonical 32-byte nullifier from the nullifier key `nk`,
 /// per-note randomness `rho`, the asset identifier, and the exact network ID.
 ///
-/// Inputs follow the design captured in `specs/confidential_assets.md`.
-/// Callers supply the canonical asset identifier and the exact 32-byte
-/// genesis-header-derived network identity.
+/// Inputs follow the design captured in `specs/confidential_assets.md`. Callers supply the
+/// canonical asset identifier and the exact 32-byte genesis-header-derived network identity.
 ///
 /// The derivation is:
 /// ```text

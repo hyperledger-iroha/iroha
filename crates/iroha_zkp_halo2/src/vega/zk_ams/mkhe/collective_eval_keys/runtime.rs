@@ -18,11 +18,10 @@ pub struct ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
 }
 /// One canonical seekable evaluated key validated for one reusable runtime.
 ///
-/// This wrapper never owns a wire payload. It retains only the authenticated
-/// header, provider/snapshot binding, and fixed offset/digest records for every
-/// digit and residue limb. It cannot be constructed without incrementally
-/// hashing and parsing the complete canonical entry and proving that each ZARK
-/// digit matches the expected compact output committed by the consumed CKS
+/// This wrapper never owns a wire payload. It retains only the authenticated header,
+/// provider/snapshot binding, and fixed offset/digest records for every digit and residue limb. It
+/// cannot be constructed without incrementally hashing and parsing the complete canonical entry and
+/// proving that each ZARK digit matches the expected compact output committed by the consumed CKS
 /// evidence receipts.
 #[derive(PartialEq, Eq)]
 pub struct ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
@@ -179,10 +178,9 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
     }
     /// Incrementally authenticate and index one exact manifest entry.
     ///
-    /// The move-only evidence capability is consumed and fully checked before
-    /// the provider is inspected. The scan then proves that every streamed
-    /// ZARK digit equals the corresponding expected CKS compact output before
-    /// this validated handle is returned.
+    /// The move-only evidence capability is consumed and fully checked before the provider is
+    /// inspected. The scan then proves that every streamed ZARK digit equals the corresponding
+    /// expected CKS compact output before this validated handle is returned.
     ///
     /// The full entry is read exactly once in bounded chunks. No complete wire,
     /// encoded copy, or decoded digit vector is ever allocated.

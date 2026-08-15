@@ -2,10 +2,9 @@
 //!
 //! This module is the non-algebraic specification against which AIR witness
 //! execution must be differentially tested.  It does not delegate path
-//! validation to a platform trust API: the exact DER grammar, extension
-//! allow-list, name linking, validity arithmetic, P-256 signatures, compact
-//! CA membership, complete CRL, projections, and holder ownership are checked
-//! here.
+//! validation to a platform trust API: the exact DER grammar, extension allow-list, name linking,
+//! validity arithmetic, P-256 signatures, compact CA membership, complete CRL, projections, and
+//! holder ownership are checked here.
 //!
 //! The reference relation is not itself a privacy proof. The purpose-built AIR
 //! proves the same predicates without exposing this private witness, while
@@ -143,8 +142,7 @@ pub(crate) enum ZkX509RelationErrorV1 {
     #[error("zk-X509 wallet ownership proof failed")]
     InvalidWalletOwnership,
 }
-/// Execute the complete strict native relation over one public statement and
-/// private witness.
+/// Execute the complete strict native relation over one public statement and private witness.
 ///
 /// This function is deterministic and side-effect free.  Its successful
 /// output is suitable for native/AIR differential tests, but it must never be

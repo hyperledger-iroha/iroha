@@ -1,8 +1,7 @@
 //! Norito serialization framework.
 //!
-//! Provides deterministic serialization and zero-copy deserialization for
-//! common Rust data structures. Derive macros are always available through
-//! [`norito::derive`].
+//! Provides deterministic serialization and zero-copy deserialization for common Rust data
+//! structures. Derive macros are always available through [`norito::derive`].
 //!
 //! Layout selection
 //! - Norito primarily uses an Array-of-Structs (AoS) layout via derives.
@@ -12,11 +11,10 @@
 //!   helpers use compact, ad-hoc AoS formats that honor runtime decode flags
 //!   (`COMPACT_LEN` varints when enabled; u64 otherwise).
 //!
-//! Checksum: payloads carry a CRC64-XZ checksum (ECMA polynomial `0x42F0E1EBA9EA3693`,
-//! reflected with init/xor all ones) computed using the `crc64fast` crate.
-//! [`hardware_crc64`] enables the
-//! SIMD-accelerated path when available, while [`crc64_fallback`] forces the
-//! portable table implementation.
+//! Checksum: payloads carry a CRC64-XZ checksum (ECMA polynomial `0x42F0E1EBA9EA3693`, reflected
+//! with init/xor all ones) computed using the `crc64fast` crate. [`hardware_crc64`] enables the
+//! SIMD-accelerated path when available, while [`crc64_fallback`] forces the portable table
+//! implementation.
 //!
 //! Compatibility
 //! - Header-framed decoders (`deserialize_stream`, `decode_from_bytes`,
@@ -176,8 +174,7 @@ pub mod derive {
 }
 pub use derive::*;
 pub mod sequential;
-/// Bare Norito `Encode` and `Decode` traits used for compact payloads without a
-/// Norito header.
+/// Bare Norito `Encode` and `Decode` traits used for compact payloads without a Norito header.
 pub mod codec {
     pub use super::Error;
     use super::{NoritoDeserialize, NoritoSerialize, core};
@@ -711,11 +708,10 @@ pub mod codec {
     }
     /// Bare decode from an exact slice using a type-provided slice decoder.
     ///
-    /// Unlike [`Decode::decode`], this avoids copying when the caller already
-    /// has the full payload in memory. The type's [`core::DecodeFromSlice`]
-    /// implementation must prove that all bytes are consumed. Payload-derived
-    /// resource limits are always active, so an encoded sequence length cannot
-    /// request more elements or allocation than the complete input can justify.
+    /// Unlike [`Decode::decode`], this avoids copying when the caller already has the full payload
+    /// in memory. The type's [`core::DecodeFromSlice`] implementation must prove that all bytes are
+    /// consumed. Payload-derived resource limits are always active, so an encoded sequence length
+    /// cannot request more elements or allocation than the complete input can justify.
     pub fn decode_exact_from_slice<T>(bytes: &[u8]) -> Result<T, Error>
     where
         T: for<'de> NoritoDeserialize<'de> + for<'de> core::DecodeFromSlice<'de>,
@@ -728,10 +724,9 @@ pub mod codec {
     }
     /// Bare decode from an exact slice under additional schema-specific limits.
     ///
-    /// The caller-provided limits compose with the payload-derived defaults by
-    /// taking the stricter bound in every dimension. This lets protocol
-    /// boundaries constrain their exact maximum vector counts without losing
-    /// the generic allocation-bomb protection.
+    /// The caller-provided limits compose with the payload-derived defaults by taking the stricter
+    /// bound in every dimension. This lets protocol boundaries constrain their exact maximum vector
+    /// counts without losing the generic allocation-bomb protection.
     pub fn decode_exact_from_slice_with_limits<T>(
         bytes: &[u8],
         limits: crate::DecodeLimits,
@@ -939,10 +934,9 @@ pub mod json {
     };
     /// Maximum structural nesting accepted while constructing a JSON [`Value`].
     ///
-    /// A Kotodama boundary value may use the complete 256-level public type
-    /// budget beneath its required parameter object. The one extra structural
-    /// level covers that boundary envelope without relaxing the 256-level guard
-    /// used by recursively owned typed decoders.
+    /// A Kotodama boundary value may use the complete 256-level public type budget beneath its
+    /// required parameter object. The one extra structural level covers that boundary envelope
+    /// without relaxing the 256-level guard used by recursively owned typed decoders.
     pub const MAX_JSON_VALUE_NESTING_DEPTH: usize = crate::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1;
     thread_local! {
         static OWNED_VALUE_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
@@ -1406,12 +1400,11 @@ pub mod json {
         }
         /// One owned native JSON value.
         ///
-        /// Parsing and parse-error cleanup are iterative, but the public
-        /// derived `Clone`, `Debug`, equality, and ordinary owner drop surfaces
-        /// remain recursive. Callers handling adversarial values near
-        /// [`super::MAX_JSON_VALUE_NESTING_DEPTH`] on a constrained stack must
-        /// consume or dismantle them with an iterative walker or enforce their
-        /// own shallower depth guard.
+        /// Parsing and parse-error cleanup are iterative, but the public derived `Clone`, `Debug`,
+        /// equality, and ordinary owner drop surfaces remain recursive. Callers handling
+        /// adversarial values near [`super::MAX_JSON_VALUE_NESTING_DEPTH`] on a constrained stack
+        /// must consume or dismantle them with an iterative walker or enforce their own shallower
+        /// depth guard.
         #[derive(Debug, Clone, PartialEq)]
         pub enum Value {
             Null,
@@ -2067,11 +2060,10 @@ pub mod json {
     }
     /// Compute a compile-time key hash for JSON object field dispatch.
     ///
-    /// The hash function mirrors `TapeWalker::read_key_hash` on plain ASCII keys
-    /// without escapes. For typical field identifiers (letters, digits, `_`),
-    /// this matches exactly. When the `crc-key-hash` feature is enabled we use a
-    /// software CRC32C update and widen to 64 bits using a fixed avalanche to
-    /// minimize collisions. Otherwise we default to 64-bit FNV-1a.
+    /// The hash function mirrors `TapeWalker::read_key_hash` on plain ASCII keys without escapes.
+    /// For typical field identifiers (letters, digits, `_`), this matches exactly. When the
+    /// `crc-key-hash` feature is enabled we use a software CRC32C update and widen to 64 bits using
+    /// a fixed avalanche to minimize collisions. Otherwise we default to 64-bit FNV-1a.
     pub const fn key_hash_const(s: &str) -> u64 {
         #[cfg(feature = "crc-key-hash")]
         {
@@ -2318,8 +2310,7 @@ pub mod json {
         }
         Ok(value.take())
     }
-    /// Validate one complete JSON document without constructing an owned
-    /// recursive [`Value`] tree.
+    /// Validate one complete JSON document without constructing an owned recursive [`Value`] tree.
     ///
     /// This uses the same bounded grammar as [`parse_value`], including strict
     /// number, escape, surrogate, duplicate-key, and trailing-byte checks.
@@ -2329,10 +2320,9 @@ pub mod json {
     /// Validate one complete JSON document whose root will be embedded at
     /// `root_depth` in a larger document.
     ///
-    /// The root of a standalone document has depth 1. Callers that splice a
-    /// validated fragment into an already-open object or array pass the
-    /// fragment's eventual root depth so the global V1 nesting limit remains
-    /// enforceable without allocating the enclosing document.
+    /// The root of a standalone document has depth 1. Callers that splice a validated fragment into
+    /// an already-open object or array pass the fragment's eventual root depth so the global V1
+    /// nesting limit remains enforceable without allocating the enclosing document.
     #[doc(hidden)]
     pub fn validate_json_at_depth(s: &str, root_depth: usize) -> Result<(), Error> {
         if root_depth == 0 {
@@ -3989,8 +3979,7 @@ pub mod json {
         ///
         /// # Panics
         ///
-        /// Panics when `pos` is outside the input or is not a UTF-8 character
-        /// boundary.
+        /// Panics when `pos` is outside the input or is not a UTF-8 character boundary.
         pub fn new_at(s: &'a str, pos: usize) -> Self {
             assert!(
                 pos <= s.len() && s.is_char_boundary(pos),
@@ -4378,9 +4367,8 @@ pub mod json {
         /// Parse and skip a JSON string while enforcing its exact decoded
         /// UTF-8 byte length before any owned string allocation.
         ///
-        /// Returns the decoded byte length. JSON escapes and surrogate pairs
-        /// count as the bytes of their decoded Unicode scalar value rather
-        /// than their source spelling.
+        /// Returns the decoded byte length. JSON escapes and surrogate pairs count as the bytes of
+        /// their decoded Unicode scalar value rather than their source spelling.
         pub fn skip_string_bounded(
             &mut self,
             maximum_decoded_bytes: usize,
@@ -4565,10 +4553,9 @@ pub mod json {
         }
         /// Borrow the exact source spelling of the next JSON value.
         ///
-        /// The value boundary is found with the allocation-free bounded
-        /// lexical scanner. This is intended for typed dispatch (notably
-        /// tagged enums) that immediately parses the borrowed fragment and
-        /// therefore must not copy an attacker-sized `content` subtree first.
+        /// The value boundary is found with the allocation-free bounded lexical scanner. This is
+        /// intended for typed dispatch (notably tagged enums) that immediately parses the borrowed
+        /// fragment and therefore must not copy an attacker-sized `content` subtree first.
         pub fn raw_value_slice(&mut self) -> Result<&'a str, Error> {
             self.skip_ws();
             let start = self.i;
@@ -4625,14 +4612,12 @@ pub mod json {
         /// Skip over the next exact JSON value without constructing an owned
         /// recursive [`Value`] tree.
         ///
-        /// The walk is iterative and enforces the same structural depth,
-        /// number, string, surrogate, and duplicate-key rules as
-        /// [`parse_value`].
+        /// The walk is iterative and enforces the same structural depth, number, string, surrogate,
+        /// and duplicate-key rules as [`parse_value`].
         pub fn skip_value(&mut self) -> Result<(), Error> {
             self.skip_value_at_depth(1)
         }
-        /// Skip an exact JSON value that will appear at `root_depth` in its
-        /// enclosing document.
+        /// Skip an exact JSON value that will appear at `root_depth` in its enclosing document.
         #[doc(hidden)]
         pub fn skip_value_at_depth(&mut self, root_depth: usize) -> Result<(), Error> {
             if root_depth == 0 {
@@ -4929,10 +4914,9 @@ pub mod json {
         /// Parse a JSON object key and return a borrowed `&str` when no escapes are present,
         /// or an owned `String` otherwise. This avoids allocating in the common fast path.
         ///
-        /// After reading the key string, this function also consumes the mandatory
-        /// colon `:` delimiter (with optional surrounding whitespace), positioning
-        /// the parser at the start of the value. This matches the typical caller
-        /// contract used across tests and benches.
+        /// After reading the key string, this function also consumes the mandatory colon `:`
+        /// delimiter (with optional surrounding whitespace), positioning the parser at the start of
+        /// the value. This matches the typical caller contract used across tests and benches.
         pub fn parse_key(&mut self) -> Result<KeyRef<'a>, Error> {
             self.skip_ws();
             let pre = self.i;
@@ -7264,10 +7248,9 @@ pub mod json {
         }
         /// Read the next object key and return a 64-bit hash (FNV‑1a by default).
         ///
-        /// When the `crc-key-hash` feature is enabled and the CPU supports CRC32C
-        /// instructions (aarch64 `crc` or x86_64 SSE4.2), a CRC32C‑based key hash
-        /// is used for faster dispatch. Collisions must be guarded by a
-        /// string‑equality fallback at call sites.
+        /// When the `crc-key-hash` feature is enabled and the CPU supports CRC32C instructions
+        /// (aarch64 `crc` or x86_64 SSE4.2), a CRC32C‑based key hash is used for faster dispatch.
+        /// Collisions must be guarded by a string‑equality fallback at call sites.
         pub fn read_key_hash(&mut self) -> Result<u64, Error> {
             let (open_off, ch) = match self.next_struct() {
                 Some(v) => v,
@@ -7937,8 +7920,7 @@ pub mod json {
             self.skip_ws();
             Ok(val)
         }
-        /// Fast inline parse of an f64 at the current raw position.
-        /// Advances `raw` past the number.
+        /// Fast inline parse of an f64 at the current raw position. Advances `raw` past the number.
         pub fn parse_f64_inline(&mut self) -> Result<f64, Error> {
             self.skip_ws_raw();
             let b = self.input.as_bytes();
@@ -9537,10 +9519,17 @@ const CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES: usize = 256 * 1024 * 1024;
 const CANONICAL_DECODE_FIXED_ALLOCATION_BYTES: usize = 64 * 1024;
 /// Return conservative decode limits derived from one complete encoded value.
 ///
-/// Packed booleans may carry eight logical elements per encoded byte, so sequence and cumulative element budgets use an eightfold allowance.
-/// Allocation includes the encoded length, up to 63 further encoded lengths for heterogeneous owned graphs and nested canonical values, plus a 64 KiB floor.
-/// The amplified extra is capped at 256 MiB: small frames retain the `64 * length + 64 KiB` envelope, while large archives cannot multiply their size by 64.
-/// Independent field, element, and nesting limits remain in force; saturating arithmetic prevents wrap, and archive/frame limits reject excessive inputs first.
+/// Packed boolean sequences may carry eight logical elements per encoded byte, so sequence and
+/// cumulative element budgets use an eightfold allowance. Allocation includes the encoded length,
+/// up to 63 further encoded lengths for heterogeneous owned object graphs and nested canonical
+/// values, and a fixed 64 KiB floor for small structural values. The amplified extra is capped at
+/// 256 MiB, so small reviewed frames retain the `64 * length + 64 KiB` envelope while large
+/// configured archives cannot multiply their complete size by 64. Independent field, element, and
+/// nesting limits remain in force.
+///
+/// Saturating arithmetic prevents integer wrap; safety also relies on the
+/// archive maximum and protocol frame-size limits rejecting excessive encoded
+/// inputs before this decoder policy is applied.
 #[must_use]
 pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
     let amplified_extra = payload_len.saturating_mul(CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER);
@@ -9561,39 +9550,7 @@ pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
     )
 }
 
-/// Derive default limits for a validated frame header. Structural limits cover the uncompressed payload while cumulative allocation remains tied to caller bytes.
-/// This prevents a small compressed frame from authorizing arbitrary expansion; [`deserialize_stream`] charges the declared payload before allocation or decompression.
-fn framed_decode_limits(frame_len: usize, uncompressed_payload_len: usize) -> DecodeLimits {
-    let frame_limits = canonical_decode_limits(frame_len);
-    let structural_len = frame_len.max(uncompressed_payload_len);
-    DecodeLimits::new(
-        structural_len.saturating_mul(8),
-        structural_len,
-        structural_len.saturating_mul(8),
-        frame_limits.max_total_allocated_bytes(),
-        frame_limits.max_nesting_depth(),
-    )
-}
-
-/// Decode an object from Norito-encoded bytes, compressed or not, under a payload-derived resource budget.
-///
-/// Structural byte and element limits cover the validated header's declared uncompressed payload length.
-/// Cumulative allocation remains derived from the complete frame, so a short input cannot force allocation from only an attacker-declared uncompressed length.
-/// Callers with narrower schema limits, or trusted compressed data whose legitimate expansion exceeds the default envelope,
-/// can use [`decode_from_bytes_with_limits`] with an explicit budget.
-pub fn decode_from_bytes<T>(bytes: &[u8]) -> Result<T, Error>
-where
-    for<'de> T: NoritoDeserialize<'de>,
-{
-    let header = core::Header::read(std::io::Cursor::new(bytes))?;
-    if header.schema != T::schema_hash() {
-        return Err(Error::SchemaMismatch);
-    }
-    let payload_len = core::payload_len_to_usize(header.length)?;
-    with_decode_limits(framed_decode_limits(bytes.len(), payload_len), || {
-        decode_from_bytes_inner(bytes)
-    })
-}
+include!("framed_decode.rs");
 fn decode_from_bytes_inner<T>(bytes: &[u8]) -> Result<T, Error>
 where
     for<'de> T: NoritoDeserialize<'de>,
@@ -9613,8 +9570,9 @@ where
 }
 /// Decode a Norito archive with explicit per-value and cumulative resource limits.
 ///
-/// This enters the private decoder directly instead of recursively invoking [`decode_from_bytes`],
-/// allowing a larger but finite budget for trusted high-compression data while nested bounded decodes inherit the stricter limit.
+/// This enters the private decoder directly rather than recursively invoking [`decode_from_bytes`],
+/// so a caller can provide a larger, still-finite budget for trusted high-compression data. Nested
+/// bounded decodes continue to inherit the stricter of the inner and outer limits.
 ///
 /// # Errors
 /// Returns an archive-validation, deserialization, or resource-budget error.
@@ -9626,9 +9584,8 @@ where
 }
 /// Decode one exact canonical V1 frame under payload-derived resource limits.
 ///
-/// In addition to ordinary validation, this rejects compression, alternate
-/// layout flags, and any byte representation that does not exactly match
-/// [`encode_canonical`].
+/// In addition to ordinary validation, this rejects compression, alternate layout flags, and any
+/// byte representation that does not exactly match [`encode_canonical`].
 pub fn decode_canonical<T>(bytes: &[u8]) -> Result<T, Error>
 where
     T: NoritoSerialize,
@@ -9682,9 +9639,10 @@ impl Write for ExactSliceWriter<'_> {
 }
 /// Verify that `value` encodes to exactly `expected` under the active layout.
 ///
-/// The comparison streams the complete header, alignment padding, and payload directly over `expected`;
-/// it does not allocate a second frame-sized buffer and preserves [`core::to_bytes`] layout behavior.
-/// Callers requiring the fixed canonical V1 layout should use [`decode_canonical_with_limits`] instead.
+/// The comparison streams the complete header, alignment padding, and payload directly over
+/// `expected`; it does not allocate a second frame-sized buffer. This preserves the ambient layout
+/// behavior of [`core::to_bytes`]. Callers that require the fixed canonical V1 layout should use
+/// [`decode_canonical_with_limits`] instead.
 ///
 /// # Errors
 ///
@@ -9708,9 +9666,8 @@ where
 }
 /// Decode one exact canonical V1 frame under default and schema-specific limits.
 ///
-/// Nested Norito limit scopes compose by taking the stricter value in every
-/// dimension, so the payload-derived default remains active when `limits` is
-/// looser.
+/// Nested Norito limit scopes compose by taking the stricter value in every dimension, so the
+/// payload-derived default remains active when `limits` is looser.
 pub fn decode_canonical_with_limits<T>(bytes: &[u8], limits: DecodeLimits) -> Result<T, Error>
 where
     T: NoritoSerialize,
@@ -9776,8 +9733,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns an I/O, archive-validation, deserialization, or resource-budget
-/// error.
+/// Returns an I/O, archive-validation, deserialization, or resource-budget error.
 pub fn decode_from_reader_with_limits<R: Read, T>(
     reader: R,
     limits: DecodeLimits,
@@ -9836,8 +9792,7 @@ where
         }
     }
 }
-/// Run a type-erased field decoder with the same panic policy as
-/// [`guarded_try_deserialize`].
+/// Run a type-erased field decoder with the same panic policy as [`guarded_try_deserialize`].
 ///
 /// Keeping this executor non-generic lets field decoding share the panic and
 /// error machinery while retaining the concrete type name in diagnostics.
@@ -10000,17 +9955,15 @@ where
 }
 /// Inspect the element count of a top-level `Vec<T>` under an exact semantic cap.
 ///
-/// This uses the same header, compression, layout-flag, and sequence-length
-/// decoder as [`stream_vec_collect_from_reader`]. It stops after the sequence
-/// plan, so it is suitable only for resource-admission preflight: callers must
-/// still perform a complete decode to validate element bytes, the payload
-/// checksum, and trailing data.
+/// This uses the same header, compression, layout-flag, and sequence-length decoder as
+/// [`stream_vec_collect_from_reader`]. It stops after the sequence plan, so it is suitable only for
+/// resource-admission preflight: callers must still perform a complete decode to validate element
+/// bytes, the payload checksum, and trailing data.
 ///
 /// # Errors
 ///
-/// Returns a header, schema, layout, length, decompression, or resource-limit
-/// error. A count above `max_elements` is rejected before packed-sequence
-/// offsets or output storage are allocated.
+/// Returns a header, schema, layout, length, decompression, or resource-limit error. A count above
+/// `max_elements` is rejected before packed-sequence offsets or output storage are allocated.
 pub fn inspect_stream_vec_len_bounded_from_reader<R, T>(
     reader: R,
     max_elements: usize,
@@ -10650,8 +10603,7 @@ where
             _marker: std::marker::PhantomData,
         })
     }
-    /// Construct an iterator that owns and reapplies `limits` for its complete
-    /// lazy lifetime.
+    /// Construct an iterator that owns and reapplies `limits` for its complete lazy lifetime.
     ///
     /// # Errors
     ///
@@ -11170,8 +11122,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the archive metadata is invalid or exceeds
-    /// `limits`.
+    /// Returns an error when the archive metadata is invalid or exceeds `limits`.
     pub fn new_hash_with_limits<R: Read + 'static>(
         reader: R,
         limits: DecodeLimits,
@@ -11196,8 +11147,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the archive metadata is invalid or exceeds
-    /// `limits`.
+    /// Returns an error when the archive metadata is invalid or exceeds `limits`.
     pub fn new_btree_with_limits<R: Read + 'static>(
         reader: R,
         limits: DecodeLimits,

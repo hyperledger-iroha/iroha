@@ -1,7 +1,4 @@
 // Test body included from the parent module to keep its production source budget bounded.
-use std::time::Duration;
-use hex::FromHex;
-use tempfile::NamedTempFile;
 use super::*;
 use crate::{
     incentive_log::IncentiveLogError,
@@ -11,6 +8,9 @@ use crate::{
     },
     vpn::VpnOverlay,
 };
+use hex::FromHex;
+use std::time::Duration;
+use tempfile::NamedTempFile;
 fn write_config(json: &str) -> PathBuf {
     let file = NamedTempFile::new().expect("create temp file");
     std::fs::write(file.path(), json).expect("write config");
@@ -84,6 +84,18 @@ fn relay_config_rejects_path_replacement_race() {
         matches!(error, ConfigError::Io(ref source) if source.kind() == std::io::ErrorKind::InvalidData),
         "unexpected error: {error:?}"
     );
+}
+#[cfg(unix)]
+#[test]
+fn private_file_reader_rejects_group_permissions_inside_the_identity_chain() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let file = NamedTempFile::new().expect("create private input");
+    std::fs::write(file.path(), b"private material").expect("write private input");
+    std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o640))
+        .expect("set unsafe private input permissions");
+    let error = read_bounded_private_regular_file(file.path(), 64, "private test input")
+        .expect_err("group-readable private input must fail in the bounded reader");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
 }
 #[test]
 fn relay_config_preflight_rejects_depth_count_and_string_budgets() {

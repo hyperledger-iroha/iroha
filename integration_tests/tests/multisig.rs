@@ -336,7 +336,6 @@ fn wait_for_multisig_cancel_action(
             &MultisigCancelRequestDto {
                 selector: selector.clone(),
                 signer_account_id: signer_account_id.clone(),
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: None,
@@ -578,7 +577,6 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         &MultisigCancelRequestDto {
             selector: selector.clone(),
             signer_account_id: BOB_ID.clone(),
-            private_key: None,
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: None,

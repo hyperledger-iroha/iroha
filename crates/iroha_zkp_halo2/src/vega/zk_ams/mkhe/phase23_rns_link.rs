@@ -277,9 +277,8 @@ pub(super) struct ZkAmsPhase23RnsLinkFamilyGeometryV1 {
 }
 /// Geometry derived from the canonical native relation and packing map.
 ///
-/// This descriptor is public statement metadata only. It is deliberately not
-/// a proof, a receipt, or release evidence, and there is no conversion from it
-/// to any verified RNS-Link capability.
+/// This descriptor is public statement metadata only. It is deliberately not a proof, a receipt, or
+/// release evidence, and there is no conversion from it to any verified RNS-Link capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkReleaseGeometryV1 {
     profile_digest: [u8; 32],
@@ -468,9 +467,8 @@ fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
         digest,
     })
 }
-/// Allocation-bounded, parent-private result of checking the exact native
-/// packed accumulator family geometry and recomputing every packed/RNS chunk
-/// binding.
+/// Allocation-bounded, parent-private result of checking the exact native packed accumulator family
+/// geometry and recomputing every packed/RNS chunk binding.
 ///
 /// This type intentionally carries `Unverified` in its name: ciphertext
 /// openings, radix/CRT carries, negacyclic quotients, and Hyrax equality are
@@ -782,85 +780,14 @@ fn immutable_algorithm_manifest_digest_from_inputs_v1(
 fn immutable_algorithm_manifest_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     immutable_algorithm_manifest_digest_from_inputs_v1(&canonical_algorithm_manifest_inputs_v1()?)
 }
-/// Every immutable context axis bound before any RNS-Link commitment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ZkAmsPhase23RnsLinkContextV1 {
-    profile_digest: [u8; 32],
-    algorithm_manifest_digest: [u8; 32],
-    network_context_digest: [u8; 32],
-    statement_context_digest: [u8; 32],
-    transcript_digest: [u8; 32],
-    batch_digest: [u8; 32],
-    roster_digest: [u8; 32],
-    direct_key_admission_digest: [u8; 32],
-    canonical_map_set_digest: [u8; 32],
-}
-impl ZkAmsPhase23RnsLinkContextV1 {
-    /// Construct a test-only release-profile context fixture. Production must
-    /// instead receive a context through a future state-owned authority path.
-    #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn new(
-        network_context_digest: [u8; 32],
-        statement_context_digest: [u8; 32],
-        transcript_digest: [u8; 32],
-        batch_digest: [u8; 32],
-        roster_digest: [u8; 32],
-        direct_key_admission_digest: [u8; 32],
-        canonical_map_set_digest: [u8; 32],
-    ) -> Result<Self, ZkAmsMkheErrorV1> {
-        let supplied = [
-            network_context_digest,
-            statement_context_digest,
-            transcript_digest,
-            batch_digest,
-            roster_digest,
-            direct_key_admission_digest,
-            canonical_map_set_digest,
-        ];
-        if supplied
-            .iter()
-            .copied()
-            .any(|digest| !is_nonzero_digest(digest))
-            || canonical_map_set_digest != zk_ams_phase23_release_map_set_digest_v1()?
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-        }
-        Ok(Self {
-            profile_digest: release_profile_v1().digest()?,
-            algorithm_manifest_digest: immutable_algorithm_manifest_digest_v1()?,
-            network_context_digest,
-            statement_context_digest,
-            transcript_digest,
-            batch_digest,
-            roster_digest,
-            direct_key_admission_digest,
-            canonical_map_set_digest,
-        })
-    }
-    fn digest(self) -> [u8; 32] {
-        let mut frame = Vec::with_capacity(CONTEXT_DOMAIN_V1.len() + 2 + 9 * 32);
-        frame.extend_from_slice(CONTEXT_DOMAIN_V1);
-        frame.push(RNS_LINK_VERSION_V1);
-        frame.extend_from_slice(&self.profile_digest);
-        frame.extend_from_slice(&self.algorithm_manifest_digest);
-        frame.extend_from_slice(&self.network_context_digest);
-        frame.extend_from_slice(&self.statement_context_digest);
-        frame.extend_from_slice(&self.transcript_digest);
-        frame.extend_from_slice(&self.batch_digest);
-        frame.extend_from_slice(&self.roster_digest);
-        frame.extend_from_slice(&self.direct_key_admission_digest);
-        frame.extend_from_slice(&self.canonical_map_set_digest);
-        keccak256(&frame)
-    }
-}
-/// Producer-claimed roots of tables that must exist before Fiat--Shamir
-/// sampling.
+#[path = "phase23_rns_link_context_authority_v1.rs"]
+mod context_authority_v1;
+pub(super) use context_authority_v1::ZkAmsPhase23RnsLinkContextV1;
+/// Producer-claimed roots of tables that must exist before Fiat--Shamir sampling.
 ///
-/// The type remains part of the private structural checkpoint, but production
-/// has no digest-only constructor. Tests can build hostile shells; a release
-/// prover must instead gain a constructor that consumes state-owned openings
-/// and actual committed tables.
+/// The type remains part of the private structural checkpoint, but production has no digest-only
+/// constructor. Tests can build hostile shells; a release prover must instead gain a constructor
+/// that consumes state-owned openings and actual committed tables.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
     layout_digest: [u8; 32],
@@ -1043,7 +970,7 @@ pub(super) struct ZkAmsPhase23RnsLinkPrechallengeV1 {
 }
 impl ZkAmsPhase23RnsLinkPrechallengeV1 {
     pub(super) fn from_ordered_commitments(
-        context: ZkAmsPhase23RnsLinkContextV1,
+        context: &ZkAmsPhase23RnsLinkContextV1,
         commitments: &[ZkAmsPhase23RnsLinkChunkCommitmentV1],
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         if commitments.len() != RNS_LINK_RELEASE_COMMITMENTS_V1 {
@@ -1157,11 +1084,10 @@ fn derive_release_evaluation_points_v1(
 /// Verifier-owned binding between the canonical whole-proof transport and the
 /// real release relation inputs.
 ///
-/// `statement_digest` is the digest of the complete challenge set derived from
-/// the context and all ordered commitments. It is never accepted from the
-/// proof producer. The wire decoder may use this value to reject a digest shell
-/// or a structurally valid envelope carrying commitments from another proof.
-/// This binding deliberately makes no claim that the relation responses verify.
+/// `statement_digest` is the digest of the complete challenge set derived from the context and all
+/// ordered commitments. It is never accepted from the proof producer. The wire decoder may use this
+/// value to reject a digest shell or a structurally valid envelope carrying commitments from
+/// another proof. This binding deliberately makes no claim that the relation responses verify.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkWholeProofBindingV1 {
     pub(super) profile_digest: [u8; 32],
@@ -1175,14 +1101,12 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
     /// Recompute every transport-binding field from verifier-owned native
     /// relation types. No digest supplied by a proof producer is an input.
     pub(super) fn derive(
-        context: ZkAmsPhase23RnsLinkContextV1,
+        context: &ZkAmsPhase23RnsLinkContextV1,
         commitments: &[ZkAmsPhase23RnsLinkChunkCommitmentV1],
     ) -> Result<Self, ZkAmsMkheErrorV1> {
-        if context.profile_digest != release_profile_v1().digest()?
-            || context.algorithm_manifest_digest != immutable_algorithm_manifest_digest_v1()?
-            || release_profile_v1().moduli.len()
-                != ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1
-        {
+        let (profile_digest, algorithm_manifest_digest) =
+            context.validated_release_binding_digests_v1()?;
+        if release_profile_v1().moduli.len() != ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1 {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
         let prechallenge =
@@ -1210,8 +1134,8 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
             );
         }
         Ok(Self {
-            profile_digest: context.profile_digest,
-            algorithm_manifest_digest: context.algorithm_manifest_digest,
+            profile_digest,
+            algorithm_manifest_digest,
             context_digest: context.digest(),
             statement_digest: challenge_set.digest,
             ordered_commitment_root: prechallenge.ordered_commitment_root,
@@ -1329,11 +1253,9 @@ fn validate_native_bgv_public_artifacts_v1(
     }
     Ok(rns_binding_digest)
 }
-/// Verify one real release-profile encryption opening and advance only the
-/// concrete, topology-only relation-prerequisite sink while the opening is
-/// live.
-/// No checked token, callback, witness reference, or transferable authority is
-/// returned.
+/// Verify one real release-profile encryption opening and advance only the concrete, topology-only
+/// relation-prerequisite sink while the opening is live. No checked token, callback, witness
+/// reference, or transferable authority is returned.
 #[cfg(test)]
 fn verify_zk_ams_phase23_native_bgv_opening_v1(
     key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -2012,9 +1934,8 @@ fn rns_link_wire_length_v1(bytes: &[u8], offset: usize) -> Result<usize, ZkAmsMk
     usize::try_from(rns_link_wire_u64_v1(bytes, offset)?)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-/// Allocation-light structural pass. It completes exact length arithmetic and
-/// canonical scalar/point validation before proof vectors or IPA generators
-/// can be allocated.
+/// Allocation-light structural pass. It completes exact length arithmetic and canonical
+/// scalar/point validation before proof vectors or IPA generators can be allocated.
 fn preflight_rns_link_bitness_wire_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
     bytes: &[u8],
@@ -2736,6 +2657,27 @@ mod tests {
     const TINY_E_ABS_BOUND: i64 = 2;
     const TINY_H_ABS_BOUND: i64 = 8 * (TINY_Q as i64 - 1);
     const TINY_CARRY_ABS_BOUND: i64 = 32;
+    const CONTEXT_AUTHORITY_SOURCE_V1: &str =
+        include_str!("phase23_rns_link_context_authority_v1.rs");
+    const CONTEXT_AUTHORITY_SOURCE_KECCAK_V1: [u8; 32] = [
+        0xef, 0xf4, 0x20, 0xfb, 0xc8, 0xd1, 0x4b, 0x68, 0x24, 0x95, 0x23, 0x18, 0x60, 0xd9, 0xe4,
+        0xc2, 0xd9, 0xf9, 0xc1, 0x0a, 0x93, 0x46, 0x86, 0x24, 0xe6, 0x9a, 0xf8, 0x14, 0x40, 0xaa,
+        0xf6, 0xa0,
+    ];
+    const _: fn() = || {
+        trait AmbiguousIfCloneOrCopyV1<AdversarialImplV1> {
+            fn marker() {}
+        }
+        impl<T: ?Sized> AmbiguousIfCloneOrCopyV1<()> for T {}
+        struct CloneImplV1;
+        impl<T: ?Sized + Clone> AmbiguousIfCloneOrCopyV1<CloneImplV1> for T {}
+        struct CopyImplV1;
+        impl<T: ?Sized + Copy> AmbiguousIfCloneOrCopyV1<CopyImplV1> for T {}
+
+        // An external Clone or Copy implementation makes this inferred trait
+        // argument ambiguous and therefore fails the test build statically.
+        let _ = <ZkAmsPhase23RnsLinkContextV1 as AmbiguousIfCloneOrCopyV1<_>>::marker;
+    };
     struct TinyRnsLinkWitnessV1 {
         a: Vec<u64>,
         r: Vec<i64>,
@@ -2780,6 +2722,33 @@ mod tests {
             zk_ams_phase23_release_map_set_digest_v1().unwrap(),
         )
         .unwrap()
+    }
+    #[test]
+    fn context_authority_leaf_is_small_private_and_exact() {
+        // Rust privacy is the graph-wide authority boundary. The exact small
+        // leaf pin makes any new descendant, expansion, unsafe, or construction
+        // surface a direct review event instead of approximating Rust syntax.
+        assert!(CONTEXT_AUTHORITY_SOURCE_V1.lines().count() <= 180);
+        assert!(CONTEXT_AUTHORITY_SOURCE_V1.len() <= 8_192);
+        assert!(
+            CONTEXT_AUTHORITY_SOURCE_V1
+                .lines()
+                .any(|line| line == "struct ContextAxisDigestV1([u8; 32]);")
+        );
+        assert_eq!(
+            CONTEXT_AUTHORITY_SOURCE_V1
+                .lines()
+                .filter(|line| line.ends_with(": ContextAxisDigestV1,"))
+                .count(),
+            9
+        );
+        assert!(!CONTEXT_AUTHORITY_SOURCE_V1.contains("#[derive("));
+        assert!(!CONTEXT_AUTHORITY_SOURCE_V1.contains("impl Clone for ContextAxisDigestV1"));
+        assert!(!CONTEXT_AUTHORITY_SOURCE_V1.contains("impl Copy for ContextAxisDigestV1"));
+        assert_eq!(
+            keccak256(CONTEXT_AUTHORITY_SOURCE_V1.as_bytes()),
+            CONTEXT_AUTHORITY_SOURCE_KECCAK_V1
+        );
     }
     fn commitment_digests(
         family: ZkAmsPhase23RnsLinkFamilyV1,
@@ -2843,7 +2812,7 @@ mod tests {
     }
     fn test_prechallenge() -> ZkAmsPhase23RnsLinkPrechallengeV1 {
         ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(
-            test_context(b"network"),
+            &test_context(b"network"),
             &ordered_commitments(),
         )
         .unwrap()
@@ -3086,8 +3055,11 @@ mod tests {
         let prechallenge = test_prechallenge();
         let baseline = derive_release_evaluation_points_v1(&prechallenge).unwrap();
         let context = test_context(b"network");
+        let (_, algorithm_manifest_digest) = context
+            .validated_release_binding_digests_v1()
+            .expect("release context binding");
         assert_eq!(
-            context.algorithm_manifest_digest,
+            algorithm_manifest_digest,
             immutable_algorithm_manifest_digest_v1().unwrap()
         );
         let mut readiness = super::super::manifest::zk_ams_mkhe_readiness_digest_v1().unwrap();
@@ -3106,8 +3078,8 @@ mod tests {
             baseline,
             derive_release_evaluation_points_v1(&prechallenge).unwrap()
         );
-        assert_ne!(context.algorithm_manifest_digest, readiness);
-        assert_ne!(context.algorithm_manifest_digest, release_kat);
+        assert_ne!(algorithm_manifest_digest, readiness);
+        assert_ne!(algorithm_manifest_digest, release_kat);
     }
     #[test]
     fn production_challenge_source_has_no_readiness_or_kat_reference() {
@@ -3905,25 +3877,25 @@ mod tests {
         let mut reordered = baseline.clone();
         reordered.swap(0, 1);
         assert_eq!(
-            ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(context, &reordered),
+            ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(&context, &reordered),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
         let mut duplicate = baseline.clone();
         duplicate[1] = duplicate[0];
         assert_eq!(
-            ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(context, &duplicate),
+            ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(&context, &duplicate),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
         let mut omitted = baseline.clone();
         omitted.pop();
         assert_eq!(
-            ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(context, &omitted),
+            ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(&context, &omitted),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
         let mut trailing = baseline;
         trailing.push(chunk_commitment(ZkAmsPhase23RnsLinkFamilyV1::RW, 0));
         assert_eq!(
-            ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(context, &trailing),
+            ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(&context, &trailing),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
@@ -3932,42 +3904,17 @@ mod tests {
         let baseline_commitments = ordered_commitments();
         let baseline_context = test_context(b"network");
         let baseline_pre = ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(
-            baseline_context,
+            &baseline_context,
             &baseline_commitments,
         )
         .unwrap();
         let baseline = derive_evaluation_points_for_moduli_v1(&baseline_pre, &[TINY_Q]).unwrap();
-        let mut context_variants = Vec::new();
-        let mut changed = baseline_context;
-        changed.profile_digest[0] ^= 1;
-        context_variants.push(changed);
-        let mut changed = baseline_context;
-        changed.algorithm_manifest_digest[0] ^= 1;
-        context_variants.push(changed);
-        let mut changed = baseline_context;
-        changed.network_context_digest[0] ^= 1;
-        context_variants.push(changed);
-        let mut changed = baseline_context;
-        changed.statement_context_digest[0] ^= 1;
-        context_variants.push(changed);
-        let mut changed = baseline_context;
-        changed.transcript_digest[0] ^= 1;
-        context_variants.push(changed);
-        let mut changed = baseline_context;
-        changed.batch_digest[0] ^= 1;
-        context_variants.push(changed);
-        let mut changed = baseline_context;
-        changed.roster_digest[0] ^= 1;
-        context_variants.push(changed);
-        let mut changed = baseline_context;
-        changed.direct_key_admission_digest[0] ^= 1;
-        context_variants.push(changed);
-        let mut changed = baseline_context;
-        changed.canonical_map_set_digest[0] ^= 1;
-        context_variants.push(changed);
-        for changed_context in context_variants {
+        for axis in 0..9 {
+            let changed_context = baseline_context
+                .with_test_axis_byte_flipped_v1(axis, 0)
+                .expect("one of nine bounded context axes");
             let changed_pre = ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(
-                changed_context,
+                &changed_context,
                 &baseline_commitments,
             )
             .unwrap();
@@ -3982,6 +3929,16 @@ mod tests {
                 Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
             );
         }
+        assert!(
+            baseline_context
+                .with_test_axis_byte_flipped_v1(9, 0)
+                .is_none()
+        );
+        assert!(
+            baseline_context
+                .with_test_axis_byte_flipped_v1(0, 32)
+                .is_none()
+        );
         let mut commitment_variants = Vec::new();
         let mut changed = baseline_commitments.clone();
         // X is exactly one native chunk. Mutating a prefix of eight would now
@@ -4021,7 +3978,7 @@ mod tests {
         commitment_variants.push(changed);
         for changed_commitments in commitment_variants {
             let changed_pre = ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(
-                baseline_context,
+                &baseline_context,
                 &changed_commitments,
             )
             .unwrap();
@@ -4042,21 +3999,21 @@ mod tests {
         for index in 0..axes.len() {
             let original = axes[index];
             axes[index] = [0; 32];
-            assert_eq!(
+            assert!(matches!(
                 ZkAmsPhase23RnsLinkContextV1::new(
                     axes[0], axes[1], axes[2], axes[3], axes[4], axes[5], axes[6],
                 ),
                 Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
-            );
+            ));
             axes[index] = original;
         }
         axes[6] = digest(b"caller-nominated-map-set");
-        assert_eq!(
+        assert!(matches!(
             ZkAmsPhase23RnsLinkContextV1::new(
                 axes[0], axes[1], axes[2], axes[3], axes[4], axes[5], axes[6],
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
-        );
+        ));
     }
     #[test]
     fn commitment_shape_identity_and_absent_chunk_metadata_fail_closed() {

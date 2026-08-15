@@ -1,8 +1,7 @@
 //! Compliance logging for relay handshake events.
 //!
-//! Logs are emitted in JSON Lines format, one event per line. Remote addresses
-//! are hashed with an optional salt so operators can correlate events without
-//! leaking raw client information.
+//! Logs are emitted in JSON Lines format, one event per line. Remote addresses are hashed with an
+//! optional salt so operators can correlate events without leaking raw client information.
 use crate::{
     capability::NegotiatedCapabilities,
     config::{ComplianceConfig, RelayMode},
@@ -50,8 +49,7 @@ impl ComplianceLogger {
     /// Construct a logger from the validated configuration.
     ///
     /// # Errors
-    /// Returns an error if the log file cannot be opened or the parent
-    /// directory cannot be created.
+    /// Returns an error if the log file cannot be opened or the parent directory cannot be created.
     pub fn from_config(config: &ComplianceConfig) -> Result<Option<Self>, ComplianceError> {
         if !config.enable {
             return Ok(None);

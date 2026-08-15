@@ -1,8 +1,7 @@
 //! Actor responsible for configuration state and its dynamic updates.
 //!
-//! Currently the API exposed by [`KisoHandle`] works only with [`ConfigGetDTO`], because
-//! no any part of Iroha is interested in the whole state. However, the API could be extended
-//! in future.
+//! Currently the API exposed by [`KisoHandle`] works only with [`ConfigGetDTO`], because no any
+//! part of Iroha is interested in the whole state. However, the API could be extended in future.
 //!
 //! Mutable node-local settings are relayed through [`tokio::sync::watch`] channels.
 //! Consensus-relevant settings, including confidential gas, are deliberately absent

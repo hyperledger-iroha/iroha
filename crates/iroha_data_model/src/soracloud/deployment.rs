@@ -99,8 +99,7 @@ impl SoraServiceRolloutStateV1 {
     /// Validate rollout sequencing and percentage constraints.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when version, traffic, or handle
-    /// invariants are violated.
+    /// Returns [`SoracloudManifestError`] when version, traffic, or handle invariants are violated.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service rollout state",
@@ -989,9 +988,8 @@ pub struct SoraServiceStateEntryV1 {
     pub fhe_public_key_digest: Option<Hash>,
     /// Public BFV residual-multiple or noise bound for FHE ciphertext rows, when known.
     ///
-    /// This is public deterministic metadata for chained validator-side FHE
-    /// jobs. Client-provided FHE rows may omit it until proof-carrying input
-    /// admission is available.
+    /// This is public deterministic metadata for chained validator-side FHE jobs. Client-provided
+    /// FHE rows may omit it until proof-carrying input admission is available.
     #[norito(default)]
     pub fhe_residual_multiple_bound: Option<u128>,
     /// Semantics of `fhe_residual_multiple_bound`.
@@ -1011,9 +1009,8 @@ impl SoraServiceStateEntryV1 {
     /// Validate deterministic service-state entry metadata.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when schema versions mismatch, the
-    /// state key is malformed, or plaintext state is exposed through the
-    /// ciphertext projection surface.
+    /// Returns [`SoracloudManifestError`] when schema versions mismatch, the state key is
+    /// malformed, or plaintext state is exposed through the ciphertext projection surface.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service state entry",
@@ -1303,9 +1300,8 @@ impl SoraTrainingJobRecordV1 {
     /// Validate training-job invariants and resource-accounting bounds.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when schema versions mismatch, the
-    /// identifiers are empty, or the recorded step/budget state is
-    /// inconsistent.
+    /// Returns [`SoracloudManifestError`] when schema versions mismatch, the identifiers are empty,
+    /// or the recorded step/budget state is inconsistent.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         self.validate_identity_fields()?;
         self.validate_progress_fields()?;
@@ -2140,8 +2136,7 @@ impl SoraPrivateModelArtifactRefV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
-    /// Schema version; must equal
-    /// [`SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1`].
+    /// Schema version; must equal [`SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1`].
     pub schema_version: u16,
     /// Deterministic receipt identifier.
     pub receipt_id: Hash,

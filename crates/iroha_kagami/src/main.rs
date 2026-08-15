@@ -1,6 +1,5 @@
-//! CLI for generating Iroha sample configuration, genesis,
-//! cryptographic key pairs and other. To be used with all compliant Iroha
-//! installations.
+//! CLI for generating Iroha sample configuration, genesis, cryptographic key pairs and other. To be
+//! used with all compliant Iroha installations.
 #![allow(
     clippy::doc_markdown,
     clippy::uninlined_format_args,
@@ -55,10 +54,9 @@ const TOP_LEVEL_HELP: &str = concat!(
 );
 /// Error requesting one deliberate non-default CLI exit status.
 ///
-/// Security-sensitive publication commands use this after the publication
-/// point when durability cannot be established. Keeping the status typed lets
-/// the top-level command preserve the ordinary error path without collapsing a
-/// commit-uncertain result into a retryable exit code.
+/// Security-sensitive publication commands use this after the publication point when durability
+/// cannot be established. Keeping the status typed lets the top-level command preserve the ordinary
+/// error path without collapsing a commit-uncertain result into a retryable exit code.
 #[derive(Debug)]
 pub(crate) struct ExplicitExitError {
     code: u8,

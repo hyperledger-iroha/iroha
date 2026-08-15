@@ -71,10 +71,9 @@ pub struct Args {
     ///
     /// Normal mode requires `genesis.json`, `peer0.toml` through `peerN.toml`,
     /// `genesis.signed.nrt`, `genesis.public_key`, and `genesis.expected_hash`. Kagami validates
-    /// their canonical wire, signer, semantic manifest binding, exact hash, validator roster,
-    /// and PoPs together. With `--seed`, only `genesis.json` is read and runtime artifact paths
-    /// are supplied explicitly through the generated manifest's `IROHA_GENESIS_*_FILE`
-    /// variables.
+    /// their canonical wire, signer, semantic manifest binding, exact hash, validator roster, and
+    /// PoPs together. With `--seed`, only `genesis.json` is read and runtime artifact paths are
+    /// supplied explicitly through the generated manifest's `IROHA_GENESIS_*_FILE` variables.
     #[arg(long, short, value_name = "DIR")]
     config_dir: PathBuf,
     /// Optional TOML file describing peer names and port mappings.
@@ -121,8 +120,7 @@ pub struct Args {
     /// To overwrite the file anyway, pass the `--force` flag.
     #[arg(long, short, value_name = "FILE")]
     out_file: PathBuf,
-    /// Print the generated configuration to stdout
-    /// instead of writing it to the target file.
+    /// Print the generated configuration to stdout instead of writing it to the target file.
     ///
     /// Note that the target path still needs to be provided, as it is used to resolve paths.
     #[arg(long, short = 'P', conflicts_with = "force")]

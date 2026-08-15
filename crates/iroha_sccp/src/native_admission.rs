@@ -1,9 +1,8 @@
 //! Typed, protocol-native SCCP inbound admission.
 //!
-//! The first-release wire format has one closed proof variant per supported
-//! source-chain verifier. Consensus evidence is never routed through an opaque
-//! byte field inside this envelope: every native DTO is decoded as its concrete
-//! Rust/Norito type before verifier dispatch.
+//! The first-release wire format has one closed proof variant per supported source-chain verifier.
+//! Consensus evidence is never routed through an opaque byte field inside this envelope: every
+//! native DTO is decoded as its concrete Rust/Norito type before verifier dispatch.
 use super::{
     BscNativeSourceError, BscNativeSourceProofV1, EthereumNativeSourceErrorV1,
     EthereumNativeSourceProofV1, H256, SccpPayloadV1, SccpSolanaAgaveSourceProofV1,
@@ -33,9 +32,8 @@ pub const SCCP_NATIVE_ADMISSION_MAX_BASE64_BYTES_V1: usize =
     4 * SCCP_NATIVE_ADMISSION_MAX_ENCODED_BYTES_V1.div_ceil(3);
 /// Maximum UTF-8 byte length accepted by native admission JSON decoders.
 ///
-/// Hex-rendered binary fields need approximately twice their binary size; the
-/// additional headroom covers field names and JSON punctuation without making
-/// the allocation bound input-dependent.
+/// Hex-rendered binary fields need approximately twice their binary size; the additional headroom
+/// covers field names and JSON punctuation without making the allocation bound input-dependent.
 pub const SCCP_NATIVE_ADMISSION_MAX_JSON_BYTES_V1: usize = 40 * 1024 * 1024;
 /// Maximum canonical SCCP application-payload size admitted by the wrapper.
 pub const SCCP_NATIVE_ADMISSION_MAX_PAYLOAD_BYTES_V1: usize =
@@ -539,8 +537,7 @@ pub fn decode_sccp_native_source_proof_envelope_v1(
 ///
 /// # Errors
 ///
-/// Returns an error for empty, oversized, malformed, noncanonical, or
-/// structurally invalid JSON.
+/// Returns an error for empty, oversized, malformed, noncanonical, or structurally invalid JSON.
 pub fn decode_sccp_native_source_proof_envelope_json_v1(
     json: &str,
 ) -> Result<SccpNativeSourceProofEnvelopeV1, SccpNativeAdmissionErrorV1> {
@@ -600,8 +597,7 @@ pub fn decode_sccp_native_inbound_message_proof_v1(
 ///
 /// # Errors
 ///
-/// Returns an error for empty, oversized, malformed, noncanonical, or
-/// structurally invalid JSON.
+/// Returns an error for empty, oversized, malformed, noncanonical, or structurally invalid JSON.
 pub fn decode_sccp_native_inbound_message_proof_json_v1(
     json: &str,
 ) -> Result<SccpNativeInboundMessageProofV1, SccpNativeAdmissionErrorV1> {
@@ -889,9 +885,8 @@ fn verify_solana_native_admission_v1(
 ///
 /// # Errors
 ///
-/// Returns an error if the statement or governed context is inconsistent, a
-/// protocol-native verifier fails, or its normalized result does not exactly
-/// match the admitted proof envelope.
+/// Returns an error if the statement or governed context is inconsistent, a protocol-native
+/// verifier fails, or its normalized result does not exactly match the admitted proof envelope.
 pub fn verify_sccp_native_inbound_message_proof_v1(
     proof: &SccpNativeInboundMessageProofV1,
     governed_source_identity: &SccpSourceIdentityV1,
@@ -933,11 +928,10 @@ pub fn verify_sccp_native_inbound_message_proof_v1(
 }
 /// Build a complete positive Ethereum native inbound fixture for one payload.
 ///
-/// The payload must be a structurally valid Ethereum-to-SORA SCCP message. The
-/// builder derives its message id and payload hash first, then rebuilds the
-/// authenticated Ethereum event receipt, receipt trie, execution header,
-/// beacon header, trusted anchor, and every outer commitment for that exact
-/// statement. It never mutates a pre-existing proof after authentication.
+/// The payload must be a structurally valid Ethereum-to-SORA SCCP message. The builder derives its
+/// message id and payload hash first, then rebuilds the authenticated Ethereum event receipt,
+/// receipt trie, execution header, beacon header, trusted anchor, and every outer commitment for
+/// that exact statement. It never mutates a pre-existing proof after authentication.
 ///
 /// # Errors
 ///

@@ -9448,13 +9448,11 @@ pub mod isi {
             Ok(())
         }
     }
-    /// Convert a plain-governance bond to the fixed integer domain used by
-    /// quadratic tallying.
+    /// Convert a plain-governance bond to the fixed integer domain used by quadratic tallying.
     ///
     /// # Errors
     ///
-    /// Rejects fractional quantities and values wider than the consensus
-    /// tally's `u128` domain.
+    /// Rejects fractional quantities and values wider than the consensus tally's `u128` domain.
     pub(crate) fn quantity_to_voting_units(amount: &Quantity) -> Result<u128, Error> {
         if amount.scale() != 0 {
             return Err(InstructionExecutionError::InvalidParameter(

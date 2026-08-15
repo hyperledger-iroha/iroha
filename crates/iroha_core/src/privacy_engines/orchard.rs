@@ -1,12 +1,11 @@
 //! First-release Orchard V3 action-bundle prover and verifier.
 //!
-//! The integration deliberately exposes no caller-selected Orchard protocol or
-//! circuit version. Every bundle is reconstructed as `orchard_v3`, every proof
-//! is verified with the `PostNu6_3` key, and the historical insecure and
-//! compatibility circuits are therefore unrepresentable. Production proving
-//! is a two-phase protocol: prepare fixes randomized actions and the Halo2
-//! proof, then a consuming authorization step signs those exact bytes together
-//! with the complete native consensus binding.
+//! The integration deliberately exposes no caller-selected Orchard protocol or circuit version.
+//! Every bundle is reconstructed as `orchard_v3`, every proof is verified with the `PostNu6_3` key,
+//! and the historical insecure and compatibility circuits are therefore unrepresentable. Production
+//! proving is a two-phase protocol: prepare fixes randomized actions and the Halo2 proof, then a
+//! consuming authorization step signs those exact bytes together with the complete native consensus
+//! binding.
 use super::prover_randomness::{HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1};
 use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
@@ -97,9 +96,8 @@ pub struct OrchardBundlePublicV1 {
 }
 /// One wallet-owned note and authentication path consumed by the native prover.
 ///
-/// The spending key is intentionally omitted from `Debug`; callers transfer
-/// ownership into the prover so the integration does not retain an additional
-/// long-lived copy.
+/// The spending key is intentionally omitted from `Debug`; callers transfer ownership into the
+/// prover so the integration does not retain an additional long-lived copy.
 pub struct OrchardSpendProverInputV1 {
     spending_key: SpendingKey,
     note: Note,
@@ -127,10 +125,9 @@ impl OrchardSpendProverInputV1 {
     }
     /// Parse one exact wallet note opening and its complete depth-32 path.
     ///
-    /// The derived note commitment must reach `expected_anchor`. This keeps
-    /// raw upstream Orchard component parsing inside native Rust and makes a
-    /// partial path, malformed field element, wrong key/address, or stale
-    /// anchor unrepresentable as a prepared prover input.
+    /// The derived note commitment must reach `expected_anchor`. This keeps raw upstream Orchard
+    /// component parsing inside native Rust and makes a partial path, malformed field element,
+    /// wrong key/address, or stale anchor unrepresentable as a prepared prover input.
     pub fn from_wallet_parts_v1(
         spending_key: [u8; 32],
         recipient: [u8; 43],
@@ -303,10 +300,9 @@ pub struct OrchardProvedBundleV1 {
 }
 /// Proof-independent public Orchard actions emitted by the prepare phase.
 ///
-/// A caller uses this exact draft to construct the canonical Iroha statement
-/// and transaction intent. It deliberately contains no consensus binding:
-/// authorization can only happen later by consuming
-/// [`OrchardPreparedBundleV1`] with the finalized binding.
+/// A caller uses this exact draft to construct the canonical Iroha statement and transaction
+/// intent. It deliberately contains no consensus binding: authorization can only happen later by
+/// consuming [`OrchardPreparedBundleV1`] with the finalized binding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrchardBundleDraftV1 {
     /// Canonical Orchard note-commitment-tree anchor.
@@ -628,8 +624,7 @@ pub(crate) fn validate_orchard_frontier_v1(
 ///
 /// # Errors
 ///
-/// Rejects malformed persisted state, non-canonical commitments, or a full
-/// depth-32 tree.
+/// Rejects malformed persisted state, non-canonical commitments, or a full depth-32 tree.
 pub(crate) fn append_orchard_commitments_v1(
     tree_size: u64,
     leaf: Option<[u8; 32]>,
@@ -726,8 +721,7 @@ fn append_field(hasher: &mut Sha256, field: &[u8]) {
 ///
 /// # Errors
 ///
-/// Rejects a malformed binding or a failure to produce its canonical Norito
-/// digest.
+/// Rejects a malformed binding or a failure to produce its canonical Norito digest.
 pub fn derive_orchard_bundle_sighash_v1(
     bundle: &OrchardBundlePublicV1,
     consensus_limits: &PrivacyConsensusLimitsV1,
@@ -1038,13 +1032,12 @@ fn parse_action(
 }
 /// Prepare one Post-NU6.3 Orchard bundle with injected fallible entropy.
 ///
-/// `minimum_action_count` is the privacy-padding floor and must be one or two.
-/// Every real spend and every wallet-controlled change consumes one action
-/// because the pinned V3 profile disables cross-address transfers.
-/// Randomized public actions and the Halo2 proof are finalized here, before a
-/// transaction intent exists. Callers must construct that intent from
-/// [`OrchardPreparedBundleV1::public_draft`] and then consume the prepared state
-/// with [`authorize_orchard_bundle_v1`].
+/// `minimum_action_count` is the privacy-padding floor and must be one or two. Every real spend and
+/// every wallet-controlled change consumes one action because the pinned V3 profile disables
+/// cross-address transfers. Randomized public actions and the Halo2 proof are finalized here,
+/// before a transaction intent exists. Callers must construct that intent from
+/// [`OrchardPreparedBundleV1::public_draft`] and then consume the prepared state with
+/// [`authorize_orchard_bundle_v1`].
 ///
 /// # Errors
 ///
@@ -1167,8 +1160,7 @@ pub fn prepare_orchard_bundle_v1_with_rng<R: rand::TryCryptoRng + ?Sized>(
 ///
 /// # Errors
 ///
-/// Returns the same closed set of typed failures as
-/// [`prepare_orchard_bundle_v1_with_rng`].
+/// Returns the same closed set of typed failures as [`prepare_orchard_bundle_v1_with_rng`].
 pub fn prepare_orchard_bundle_v1(
     anchor: [u8; 32],
     spends: Vec<OrchardSpendProverInputV1>,
@@ -1208,9 +1200,8 @@ pub fn prepare_orchard_bundle_v1(
 ///
 /// # Errors
 ///
-/// Rejects a malformed mandatory consensus binding, canonical binding-digest
-/// failure, signing/encoding failure, or any result rejected by the independent
-/// production verifier.
+/// Rejects a malformed mandatory consensus binding, canonical binding-digest failure,
+/// signing/encoding failure, or any result rejected by the independent production verifier.
 pub fn authorize_orchard_bundle_v1(
     prepared: OrchardPreparedBundleV1,
     consensus_binding: PrivacyNativeConsensusBindingV1,

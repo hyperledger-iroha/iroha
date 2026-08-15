@@ -1,9 +1,8 @@
 //! Cyclotomic FFT utilities over the Goldilocks field.
 //!
-//! This module provides minimal FFT primitives needed for the FASTPQ
-//! prover. Implementations are intentionally straightforward; they can be
-//! replaced with a production-grade backend (e.g., hedgehog/dasher) once
-//! those crates land in the workspace.
+//! This module provides minimal FFT primitives needed for the FASTPQ prover. Implementations are
+//! intentionally straightforward; they can be replaced with a production-grade backend (e.g.,
+//! hedgehog/dasher) once those crates land in the workspace.
 #![allow(dead_code)]
 use crate::poseidon::FIELD_MODULUS as GOLDILOCKS_MODULUS;
 use rayon::prelude::*;

@@ -137,11 +137,10 @@ fn single_route_plan_digest(lane_id: LaneId, dataspace_id: DataSpaceId) -> Hash 
 }
 /// Compact, globally ordered reference to a merge-committee-certified entry.
 ///
-/// The complete merge entry can contain many lane payloads and is transferred as
-/// a hash-addressed sidecar. Committed blocks carry this bounded reference so
-/// merge execution shares the same total order as ordinary block transactions
-/// without duplicating a potentially multi-megabyte transcript in consensus
-/// frames.
+/// The complete merge entry can contain many lane payloads and is transferred as a hash-addressed
+/// sidecar. Committed blocks carry this bounded reference so merge execution shares the same total
+/// order as ordinary block transactions without duplicating a potentially multi-megabyte transcript
+/// in consensus frames.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -217,11 +216,10 @@ impl CertifiedMergeLedgerReference {
 }
 /// Globally ordered commitment to one producer-authenticated autonomous lane payload.
 ///
-/// `canonical_payload` contains the exact canonical framed bytes of the
-/// hint-free lane payload. The duplicated identity fields let admission reject
-/// substitutions before making the payload eligible for lane-local execution.
-/// A finalized global block hint is attached only after this envelope has been
-/// committed, so the payload never has to contain the hash of its own carrier.
+/// `canonical_payload` contains the exact canonical framed bytes of the hint-free lane payload. The
+/// duplicated identity fields let admission reject substitutions before making the payload eligible
+/// for lane-local execution. A finalized global block hint is attached only after this envelope has
+/// been committed, so the payload never has to contain the hash of its own carrier.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",

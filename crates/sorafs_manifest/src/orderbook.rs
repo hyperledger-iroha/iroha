@@ -43,9 +43,8 @@ pub const ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
 const ORDERBOOK_DECODE_MAX_DEPTH_V1: usize = 64;
 /// Production resource limits for decoding one canonical V1 orderbook payload.
 ///
-/// Callers may intersect this budget with a tighter request-scoped budget via
-/// the `*_with_limits` decoders. No caller-provided budget can loosen these
-/// protocol ceilings.
+/// Callers may intersect this budget with a tighter request-scoped budget via the `*_with_limits`
+/// decoders. No caller-provided budget can loosen these protocol ceilings.
 pub const ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
     512,
     ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1,
@@ -232,12 +231,11 @@ impl OrderRequestV1 {
 }
 /// Derive the canonical identifier for an orderbook order.
 ///
-/// V1 hashes the SoraFS order-id domain separator, the nonce in little-endian
-/// form, and the canonical owner-account bytes. The V1 payload has no chain-id
-/// or market-domain field, so this identifier is intentionally not chain
-/// bound; authenticated request and ledger admission layers must provide that
-/// domain separation. Binding the account rather than its current controller
-/// key preserves the identifier across account-key rotation.
+/// V1 hashes the SoraFS order-id domain separator, the nonce in little-endian form, and the
+/// canonical owner-account bytes. The V1 payload has no chain-id or market-domain field, so this
+/// identifier is intentionally not chain bound; authenticated request and ledger admission layers
+/// must provide that domain separation. Binding the account rather than its current controller key
+/// preserves the identifier across account-key rotation.
 #[must_use]
 pub fn derive_orderbook_order_id_v1(owner_account: &[u8], nonce: u64) -> [u8; 32] {
     let mut hasher = Hasher::new();
@@ -280,10 +278,9 @@ impl OrderCancelV1 {
 }
 /// Derive the canonical Ed25519 message digest for an order submission.
 ///
-/// The digest is BLAKE3 over a domain separator plus the canonical Norito order
-/// bytes with only `signature.signature` cleared. This avoids a circular
-/// signature while binding the algorithm, signer public key, order owner,
-/// nonce, pricing, and quantity fields.
+/// The digest is BLAKE3 over a domain separator plus the canonical Norito order bytes with only
+/// `signature.signature` cleared. This avoids a circular signature while binding the algorithm,
+/// signer public key, order owner, nonce, pricing, and quantity fields.
 pub fn order_request_signature_digest_v1(
     order: &OrderRequestV1,
 ) -> Result<[u8; 32], OrderbookValidationError> {
@@ -634,11 +631,10 @@ pub fn match_orders_v1(
 }
 /// Match an order-book snapshot using deterministic price-time priority.
 ///
-/// Callers must supply entries in any order together with unique monotonic
-/// `sequence` values from the canonical order-admission log. The helper filters
-/// expired orders into sequence-ordered `expired_order_ids`, then matches
-/// independently by tier: bids sort by highest price, asks by lowest price, and
-/// both sides use lower sequence as the time-priority tiebreaker.
+/// Callers must supply entries in any order together with unique monotonic `sequence` values from
+/// the canonical order-admission log. The helper filters expired orders into sequence-ordered
+/// `expired_order_ids`, then matches independently by tier: bids sort by highest price, asks by
+/// lowest price, and both sides use lower sequence as the time-priority tiebreaker.
 pub fn match_order_book_v1(
     entries: &[OrderBookEntryV1],
     timestamp_unix: u64,
@@ -769,10 +765,9 @@ pub fn derive_orderbook_trade_id_v1(
 }
 /// Derive the canonical settlement-channel identifier for a trade.
 ///
-/// A valid trade has exactly one first-release channel. Keeping this derivation
-/// in the shared payload crate ensures local mirrors, ledger execution, SDKs,
-/// and reconciliation workers cannot choose different channel identifiers for
-/// the same fill.
+/// A valid trade has exactly one first-release channel. Keeping this derivation in the shared
+/// payload crate ensures local mirrors, ledger execution, SDKs, and reconciliation workers cannot
+/// choose different channel identifiers for the same fill.
 pub fn derive_orderbook_settlement_channel_id_v1(
     trade: &TradeEventV1,
 ) -> Result<[u8; 32], OrderbookValidationError> {
@@ -833,11 +828,10 @@ pub fn trade_fee_requirement_v1(
 }
 /// Return the conservative native custody required to admit one full bid.
 ///
-/// The buyer can become either maker or taker. The counterparty's applicable
-/// fee is not known at bid admission, so the bound combines the signed bid fee
-/// for each role with the governed maximum for the opposite role, then selects
-/// the larger exact basis-point charge. The entire signed quantity is priced
-/// at the bid's limit price; execution at any lower crossing price therefore
+/// The buyer can become either maker or taker. The counterparty's applicable fee is not known at
+/// bid admission, so the bound combines the signed bid fee for each role with the governed maximum
+/// for the opposite role, then selects the larger exact basis-point charge. The entire signed
+/// quantity is priced at the bid's limit price; execution at any lower crossing price therefore
 /// cannot exceed this lock.
 pub fn bid_order_escrow_requirement_v1(
     bid: &OrderRequestV1,
@@ -1377,10 +1371,9 @@ pub fn verify_settlement_receipt_signature_v1(
 }
 /// Sign a settlement receipt with the canonical SFM-2 Ed25519 digest.
 ///
-/// The helper replaces the receipt's settlement signature material with the
-/// signing key's public key and the signature over
-/// [`settlement_receipt_signature_digest_v1`], then verifies the resulting
-/// payload before returning it.
+/// The helper replaces the receipt's settlement signature material with the signing key's public
+/// key and the signature over [`settlement_receipt_signature_digest_v1`], then verifies the
+/// resulting payload before returning it.
 pub fn sign_settlement_receipt_ed25519_v1(
     mut receipt: SettlementReceiptV1,
     signing_key: &SigningKey,

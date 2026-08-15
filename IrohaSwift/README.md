@@ -619,7 +619,15 @@ Use `ToriiCanonicalRequest` to build them; it signs the canonical request plus
 the freshness metadata and auto-generates timestamp/nonce values when you do not
 pass them explicitly. I105 remains the account spelling in data and paths; the
 builder emits that identity in `X-Iroha-Account` as portable lowercase ASCII
-canonical-address hex (`0x…`). Exact printable-ASCII aliases remain unchanged:
+canonical-address hex (`0x…`). Exact canonical lowercase-ASCII account aliases
+(`label@dataspace` or `label@domain.dataspace`) remain unchanged after a bounded
+structural preflight. Torii remains authoritative for UTS-46, active-catalog
+resolution, and controller verification. String-based signing headers derive
+and bound Foundation's percent-encoded wire query; pure query canonicalizers
+continue to consume already-wire query text. Canonical signing
+reserves the `0x` prefix for canonical-address hex, and also rejects non-token
+methods, fragments, and paths that are not exact root-relative percent-encoded
+wire paths:
 
 ```swift
 let url = URL(string: "https://torii.example/v1/accounts/<account_i105>/assets?limit=5")!

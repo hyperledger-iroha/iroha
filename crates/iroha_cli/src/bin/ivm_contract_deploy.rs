@@ -64,9 +64,8 @@ struct Args {
     network_id: NetworkId,
     #[arg(long)]
     authority: String,
-    /// Owner-held mode-0600 regular file containing one exact private-key
-    /// literal. Inline key arguments are intentionally unsupported so process
-    /// listings cannot expose the signer.
+    /// Owner-held mode-0600 regular file containing one exact private-key literal. Inline key
+    /// arguments are intentionally unsupported so process listings cannot expose the signer.
     #[arg(long, value_name = "PATH")]
     private_key_file: PathBuf,
     #[arg(long)]

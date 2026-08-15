@@ -1,0 +1,9 @@
+seiyaku C {
+                struct Pair { int count, bool ready }
+                state Option<Pair> maybe;
+                state Result<Pair, Pair> outcome;
+                hajimari() {
+                    maybe = Option::none;
+                    outcome = Result::ok(Pair { count: 1, ready: true });
+                }
+            }

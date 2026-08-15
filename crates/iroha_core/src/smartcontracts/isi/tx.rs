@@ -786,15 +786,13 @@ pub(crate) struct TransactionHistoryCursor {
 }
 /// Visit committed transactions in canonical newest-first query order.
 ///
-/// Unlike [`ValidQuery`] execution, this path is fallible while walking Kura.
-/// It resolves and drops one certified merge sidecar at a time, allowing query
-/// pagination to retain only its current page (or bounded sorted prefix).
-/// `before_project` first receives the ordinary count plus the compact
-/// reference's authenticated merge count before the full sidecar is resolved.
-/// If decoded transcript arrays exceed that declaration, it receives only the
-/// reconciliation delta before merge Merkle trees/proofs or predicates are
-/// materialized. The visitor then receives every projected transaction together
-/// with whether the query predicate matched it and a compact cursor pointing
+/// Unlike [`ValidQuery`] execution, this path is fallible while walking Kura. It resolves and drops
+/// one certified merge sidecar at a time, allowing query pagination to retain only its current page
+/// (or bounded sorted prefix). `before_project` first receives the ordinary count plus the compact
+/// reference's authenticated merge count before the full sidecar is resolved. If decoded transcript
+/// arrays exceed that declaration, it receives only the reconciliation delta before merge Merkle
+/// trees/proofs or predicates are materialized. The visitor then receives every projected
+/// transaction together with whether the query predicate matched it and a compact cursor pointing
 /// after it.
 ///
 /// Returns `true` when the selected history was exhausted and `false` when the
@@ -1054,10 +1052,9 @@ pub fn committed_transactions_bounded_snapshot(
 }
 /// Materialize complete canonical transaction history in newest-first order.
 ///
-/// This includes transactions executed by globally ordered certified merge
-/// sidecars. The durable sparse carrier index and every full sidecar are
-/// revalidated before any history is returned, so callers never receive a
-/// cache-truncated or partially fabricated view.
+/// This includes transactions executed by globally ordered certified merge sidecars. The durable
+/// sparse carrier index and every full sidecar are revalidated before any history is returned, so
+/// callers never receive a cache-truncated or partially fabricated view.
 ///
 /// # Errors
 ///

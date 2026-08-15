@@ -1,9 +1,8 @@
 #![allow(unexpected_cfgs)]
 //! Capacity marketplace schemas and validators for SoraFS (SF-2c).
 //!
-//! The Norito payloads defined here allow governance, Torii, and storage
-//! operators to exchange deterministic capacity declarations, replication
-//! orders, and telemetry snapshots.
+//! The Norito payloads defined here allow governance, Torii, and storage operators to exchange
+//! deterministic capacity declarations, replication orders, and telemetry snapshots.
 use crate::{
     chunker_registry,
     provider_advert::{CapabilityType, SignatureAlgorithm, StakePointer},

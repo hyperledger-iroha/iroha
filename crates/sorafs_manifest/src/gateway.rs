@@ -193,9 +193,8 @@ impl GatewayAuthorizationRecord {
     ///
     /// # Errors
     ///
-    /// Returns [`GatewayAuthorizationError::NotYetValid`] or
-    /// [`GatewayAuthorizationError::Expired`] if the timestamp falls outside the
-    /// declared validity window.
+    /// Returns [`GatewayAuthorizationError::NotYetValid`] or [`GatewayAuthorizationError::Expired`]
+    /// if the timestamp falls outside the declared validity window.
     pub fn ensure_applicable_at(&self, now: u64) -> Result<(), GatewayAuthorizationError> {
         if now < self.valid_from_epoch {
             return Err(GatewayAuthorizationError::NotYetValid {

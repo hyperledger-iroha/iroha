@@ -5,6 +5,7 @@ use pyo3::{
     Python,
     types::{PyBytes, PyDict},
 };
+use sorafs_manifest::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1;
 fn ensure_python() {
     static INIT: OnceCell<()> = OnceCell::new();
     INIT.get_or_init(|| {

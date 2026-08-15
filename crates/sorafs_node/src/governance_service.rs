@@ -99,12 +99,11 @@ use url::Url;
 const CONFIG_MAX_BYTES: u64 = 1024 * 1024;
 /// Maximum canonical bytes accepted for one mutable service-state artifact.
 ///
-/// This is the Governance DAG service's semantic limit for checkpoint,
-/// publication-intent, and mirror state. It is intentionally narrower than
+/// This is the Governance DAG service's semantic limit for checkpoint, publication-intent, and
+/// mirror state. It is intentionally narrower than
 /// [`crate::governance_dag_sealed_state_payload_max_bytes_v1`], whose 192 MiB
-/// checkpoint/publish-intent ceiling is a generic provider transport bound.
-/// A provider's ability to carry a larger record does not authorize this
-/// service to allocate or interpret it.
+/// checkpoint/publish-intent ceiling is a generic provider transport bound. A provider's ability to
+/// carry a larger record does not authorize this service to allocate or interpret it.
 pub const GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
 const CHECKPOINT_VERSION_V1: u8 = 1;
 const PUBLISH_INTENT_VERSION_V1: u8 = 1;
@@ -215,10 +214,9 @@ pub enum GovernanceDagServiceError {
 #[derive(Clone, Default)]
 /// Deployment-owned runtime providers for the supervised Governance DAG service.
 ///
-/// An empty container is intentionally constructible for assembly and negative
-/// tests, but startup rejects it before service state is opened. Production
-/// registries attach opaque HSM/credential/checkpoint implementations through
-/// the builder methods below.
+/// An empty container is intentionally constructible for assembly and negative tests, but startup
+/// rejects it before service state is opened. Production registries attach opaque
+/// HSM/credential/checkpoint implementations through the builder methods below.
 pub struct GovernanceDagServiceRuntimeProviders {
     ipfs_authenticator: Option<Arc<dyn GovernanceDagRequestAuthenticator>>,
     head_authenticator: Option<Arc<dyn GovernanceDagRequestAuthenticator>>,
@@ -347,11 +345,10 @@ pub enum GovernanceDagServiceRuntimeProviderRegistryErrorV1 {
 }
 /// Deployment-owned factory for Governance DAG runtime providers.
 ///
-/// Implementations resolve only the stable handles in `bindings`. Credentials,
-/// private keys, tokens, and provider diagnostics must stay inside the registry
-/// and returned adapters. The service independently qualifies every returned
-/// adapter and verifies its exact configured handle before touching durable
-/// service state.
+/// Implementations resolve only the stable handles in `bindings`. Credentials, private keys,
+/// tokens, and provider diagnostics must stay inside the registry and returned adapters. The
+/// service independently qualifies every returned adapter and verifies its exact configured handle
+/// before touching durable service state.
 pub trait GovernanceDagServiceRuntimeProviderRegistryV1: Send + Sync {
     /// Resolve one coherent provider set for the exact configured bindings.
     fn resolve(
@@ -710,11 +707,10 @@ impl GovernanceDagRequestAuthenticationReplayStoreV1 for SealedRequestAuthReplay
 }
 /// Qualified receiver boundary for authenticated Governance DAG HTTP ingress.
 ///
-/// The receiver retains only public endpoint policy and one opaque, qualified
-/// sealed-store adapter. It canonicalizes and verifies a complete request with
-/// the shared V1 HTTP receiver, then uses the scope-specific sealed CAS slot as
-/// the sole replay authority. A fresh process-local cache is created for each
-/// call only because the shared signature verifier requires one; it is never
+/// The receiver retains only public endpoint policy and one opaque, qualified sealed-store adapter.
+/// It canonicalizes and verifies a complete request with the shared V1 HTTP receiver, then uses the
+/// scope-specific sealed CAS slot as the sole replay authority. A fresh process-local cache is
+/// created for each call only because the shared signature verifier requires one; it is never
 /// consulted across calls and cannot authorize backend dispatch.
 ///
 /// Independently administered Kubo/IPFS/IPNS and signed-head frontends can
@@ -752,10 +748,9 @@ impl fmt::Debug for GovernanceDagSealedHttpRequestReceiverV1 {
 impl GovernanceDagSealedHttpRequestReceiverV1 {
     /// Bind public request policy to one exact production sealed-store adapter.
     ///
-    /// Constructor inputs are limited to an endpoint scope, public request
-    /// bounds and key policy, a stable credential-free store handle, its public
-    /// qualification, and the opaque store adapter. Credentials and private
-    /// keys do not cross this boundary.
+    /// Constructor inputs are limited to an endpoint scope, public request bounds and key policy, a
+    /// stable credential-free store handle, its public qualification, and the opaque store adapter.
+    /// Credentials and private keys do not cross this boundary.
     ///
     /// # Errors
     ///
@@ -799,10 +794,9 @@ impl GovernanceDagSealedHttpRequestReceiverV1 {
     ///
     /// # Errors
     ///
-    /// Returns a payload-free request or sealed-state rejection. Every request
-    /// failure preceding replay consumption leaves sealed state unchanged;
-    /// store conflict, drift, corruption, rollback, or readback ambiguity fails
-    /// closed without authorizing backend dispatch.
+    /// Returns a payload-free request or sealed-state rejection. Every request failure preceding
+    /// replay consumption leaves sealed state unchanged; store conflict, drift, corruption,
+    /// rollback, or readback ambiguity fails closed without authorizing backend dispatch.
     pub fn verify_http_request<'h>(
         &self,
         method: &str,
@@ -1502,9 +1496,8 @@ impl GovernanceDagMirrorReadHandleV1 {
     }
     /// Read one mirror generation coherent with an exact sealed checkpoint.
     ///
-    /// Returns `Ok(None)` only for the authenticated bootstrap state where the
-    /// typed mirror is empty and both sealed checkpoint/intent slots remain
-    /// absent across the read.
+    /// Returns `Ok(None)` only for the authenticated bootstrap state where the typed mirror is
+    /// empty and both sealed checkpoint/intent slots remain absent across the read.
     ///
     /// # Errors
     ///
@@ -1779,9 +1772,8 @@ struct Service {
 ///
 /// # Errors
 ///
-/// Returns a fail-closed error for invalid configuration/source/state,
-/// unavailable providers, CAS conflicts, publication failures, or listener
-/// failures.
+/// Returns a fail-closed error for invalid configuration/source/state, unavailable providers, CAS
+/// conflicts, publication failures, or listener failures.
 pub async fn run_governance_dag_service(
     config_path: impl AsRef<Path>,
     once: bool,
@@ -1813,18 +1805,16 @@ pub async fn run_governance_dag_service_with_runtime_registry(
 }
 /// Qualify every runtime-only provider against one resolved service view.
 ///
-/// This performs the same exact handle/revision/policy checks as service
-/// construction without opening filesystem state, resolving endpoints, or
-/// starting a listener. Embedding launchers use it before starting any node
-/// subsystem so missing, substituted, stale, or test-marked adapters fail the
-/// launch rather than a later background task.
+/// This performs the same exact handle/revision/policy checks as service construction without
+/// opening filesystem state, resolving endpoints, or starting a listener. Embedding launchers use
+/// it before starting any node subsystem so missing, substituted, stale, or test-marked adapters
+/// fail the launch rather than a later background task.
 ///
 /// # Errors
 ///
-/// Returns a fail-closed configuration error when a required provider is
-/// missing, its public identity differs from configuration, its qualification
-/// is unavailable or stale, or an unexpected signed-head provider is supplied
-/// in IPNS mode.
+/// Returns a fail-closed configuration error when a required provider is missing, its public
+/// identity differs from configuration, its qualification is unavailable or stale, or an unexpected
+/// signed-head provider is supplied in IPNS mode.
 pub fn validate_governance_dag_service_runtime_providers(
     view: &SorafsGovernanceDagServiceView,
     providers: &GovernanceDagServiceRuntimeProviders,
@@ -2074,16 +2064,14 @@ fn configured_provider_qualification(
 }
 /// Run the supervised publisher from an already validated standalone view.
 ///
-/// Embedding launchers use this entrypoint so they do not need to re-read a
-/// configuration file that may also contain validator-only settings. Runtime
-/// providers are requalified during service construction and around every
-/// authenticated or sealed-store operation.
+/// Embedding launchers use this entrypoint so they do not need to re-read a configuration file that
+/// may also contain validator-only settings. Runtime providers are requalified during service
+/// construction and around every authenticated or sealed-store operation.
 ///
 /// # Errors
 ///
-/// Returns a fail-closed error for provider qualification, source/state
-/// validation, endpoint pinning, publication/readback, public-head continuity,
-/// or listener failures.
+/// Returns a fail-closed error for provider qualification, source/state validation, endpoint
+/// pinning, publication/readback, public-head continuity, or listener failures.
 pub async fn run_governance_dag_service_from_view(
     view: SorafsGovernanceDagServiceView,
     once: bool,
@@ -2127,10 +2115,9 @@ impl GovernanceDagServiceRunner {
     /// Reconcile continuously until the listener exits or the embedding
     /// supervisor requests shutdown.
     ///
-    /// Standalone launchers should use [`Self::run`]. Embedded launchers pass
-    /// their existing supervisor signal here so the service does not install a
-    /// competing operating-system signal consumer and can drain its listener
-    /// gracefully during programmatic shutdown.
+    /// Standalone launchers should use [`Self::run`]. Embedded launchers pass their existing
+    /// supervisor signal here so the service does not install a competing operating-system signal
+    /// consumer and can drain its listener gracefully during programmatic shutdown.
     ///
     /// # Errors
     ///

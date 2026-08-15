@@ -1,11 +1,10 @@
 //! Production HTTPS transport for governed SoraFS compliance feeds.
 //!
-//! The controller validates URL policy, public DNS answers, redirects, and
-//! configured trust pins. This transport enforces the runtime side of that
-//! contract: a bounded system resolver, exact address pinning, authenticated
-//! HTTPS, explicit content encodings, and bounded response buffering.
-//! Construction also seals the canonical trust inventory into the runtime
-//! identity that the controller verifies at startup and around feed use.
+//! The controller validates URL policy, public DNS answers, redirects, and configured trust pins.
+//! This transport enforces the runtime side of that contract: a bounded system resolver, exact
+//! address pinning, authenticated HTTPS, explicit content encodings, and bounded response
+//! buffering. Construction also seals the canonical trust inventory into the runtime identity that
+//! the controller verifies at startup and around feed use.
 use super::compliance::{
     GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
     GatewayComplianceContentEncoding, GatewayComplianceError, GatewayComplianceFeedTransport,
@@ -211,10 +210,9 @@ fn resolve_system_hostname(hostname: &str) -> Result<Vec<IpAddr>, ResolveFailure
 }
 /// Credential-free, address-pinned production HTTPS transport.
 ///
-/// Construction creates a fixed-size system-resolver pool. A timed-out system
-/// lookup may occupy one worker until the operating system returns, but the
-/// worker count and pending queue are fixed, so timeouts cannot create an
-/// unbounded population of lingering resolver threads or jobs.
+/// Construction creates a fixed-size system-resolver pool. A timed-out system lookup may occupy one
+/// worker until the operating system returns, but the worker count and pending queue are fixed, so
+/// timeouts cannot create an unbounded population of lingering resolver threads or jobs.
 pub struct ProductionGatewayComplianceFeedTransport {
     resolver: ResolverPool,
     accepted_spki_sha256_by_hostname: BTreeMap<String, BTreeSet<[u8; 32]>>,

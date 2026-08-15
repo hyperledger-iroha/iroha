@@ -1,11 +1,10 @@
 #![allow(unexpected_cfgs)]
 //! Provider admission schemas and validators for SoraFS.
 //!
-//! Governance-approved providers publish a `ProviderAdmissionProposalV1`
-//! capturing their advertisement key, chunker profile, stake pointer, and
-//! attested endpoints. Councillors co-sign the canonical digest inside a
-//! `ProviderAdmissionEnvelopeV1`, which Torii and gateways use to authorise
-//! incoming `ProviderAdvertV1` payloads.
+//! Governance-approved providers publish a `ProviderAdmissionProposalV1` capturing their
+//! advertisement key, chunker profile, stake pointer, and attested endpoints. Councillors co-sign
+//! the canonical digest inside a `ProviderAdmissionEnvelopeV1`, which Torii and gateways use to
+//! authorise incoming `ProviderAdvertV1` payloads.
 #[cfg(test)]
 use crate::provider_advert::TransportProtocol;
 use crate::{

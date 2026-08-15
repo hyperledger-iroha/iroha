@@ -83,6 +83,31 @@ class RecordingSession(requests.Session):
             raise AssertionError("no queued responses")
         return self._responses.pop(0)
 
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """Record a canonical request after Requests has fixed its wire target."""
+
+        self.calls.append(
+            {
+                "method": request.method,
+                "url": request.url,
+                "params": {},
+                "headers": dict(request.headers),
+                "data": request.body,
+                "allow_redirects": kwargs.get("allow_redirects"),
+                "stream": kwargs.get("stream"),
+            }
+        )
+        if not self._responses:
+            raise AssertionError("no queued responses")
+        response = self._responses.pop(0)
+        response.request = request
+        response.url = request.url
+        return response
+
 
 AdversarialResponseCase = Tuple[str, StubResponse, Type[Exception], str]
 

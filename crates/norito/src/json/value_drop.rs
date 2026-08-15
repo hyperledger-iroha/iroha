@@ -64,10 +64,9 @@ fn drop_overdeep_json_frame(frame: ValueDropFrame) {
 }
 /// Drop a recursive JSON value without an attacker-sized cleanup `Vec`.
 ///
-/// Parsed values are limited to [`MAX_JSON_VALUE_NESTING_DEPTH`], so the fixed
-/// stack covers every parser-produced value without heap allocation. The
-/// over-depth branch only supports manually constructed public [`Value`] trees
-/// and recursively partitions their remaining siblings.
+/// Parsed values are limited to [`MAX_JSON_VALUE_NESTING_DEPTH`], so the fixed stack covers every
+/// parser-produced value without heap allocation. The over-depth branch only supports manually
+/// constructed public [`Value`] trees and recursively partitions their remaining siblings.
 #[doc(hidden)]
 pub fn drop_json_value_iteratively(value: Value) {
     let mut stack = ValueDropStack::new();

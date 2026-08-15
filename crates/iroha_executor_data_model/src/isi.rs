@@ -179,8 +179,7 @@ pub mod multisig {
         /// canonical multisig controller derived from the spec after registration, so the key is
         /// never used for signing.
         pub account: AccountId,
-        /// Optional home domain used for registration authorization, linking, and RBAC
-        /// namespacing.
+        /// Optional home domain used for registration authorization, linking, and RBAC namespacing.
         pub home_domain: Option<DomainId>,
         /// Specification of the multisig account
         pub spec: MultisigSpec,
@@ -329,10 +328,9 @@ pub mod multisig {
     }
     /// Atomically invalidate every outstanding proposal owned by a multisig account.
     ///
-    /// This instruction must execute as `account` itself, normally as the
-    /// first instruction in an approved multisig policy-change proposal. The
-    /// proposal executing this instruction is already terminal before its
-    /// payload runs, so only other outstanding proposals are invalidated.
+    /// This instruction must execute as `account` itself, normally as the first instruction in an
+    /// approved multisig policy-change proposal. The proposal executing this instruction is already
+    /// terminal before its payload runs, so only other outstanding proposals are invalidated.
     #[derive(
         Debug,
         Clone,

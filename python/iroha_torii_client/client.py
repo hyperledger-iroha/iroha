@@ -97,7 +97,15 @@ from .canonical_request_v1 import (
     canonical_query_string,
     require_account_literal as _require_canonical_account_literal,
     require_nonce as _require_canonical_nonce,
+    require_signature_bytes as _require_canonical_signature_bytes,
+    split_path_query as _split_path_query,
+    validate_forwarded_witness_header as _validate_forwarded_witness_header,
     validate_target as _validate_canonical_request_target,
+)
+from .canonical_transport import (
+    CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
+    OperatorRequestHeaderPlan as _OperatorRequestHeaderPlan,
+    send_request as _send_request,
 )
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
@@ -1106,14 +1114,6 @@ def _read_header_value(
     return None
 
 
-def _split_path_query(path: str) -> Tuple[str, str]:
-    parsed = urlsplit(path)
-    if parsed.scheme or parsed.netloc:
-        return parsed.path or "/", parsed.query
-    path_part, separator, query = path.partition("?")
-    return path_part or "/", query if separator else ""
-
-
 def _canonical_body_bytes(body: Optional[Union[str, bytes, bytearray, memoryview]]) -> bytes:
     if body is None:
         return b""
@@ -1407,13 +1407,13 @@ def build_operator_request_headers(
     path: str,
     body: Optional[Union[str, bytes, bytearray, memoryview]] = None,
 ) -> Dict[str, str]:
-    """Build one fresh operator signature quartet for an exact request."""
+    """Build one fresh operator signature quartet for Requests' wire target."""
 
     if not isinstance(context, ToriiOperatorSigningContext):
         raise TypeError("operator_signing_context must be ToriiOperatorSigningContext")
     timestamp_ms = _require_u64(int(time.time() * 1000), "timestamp_ms")
     nonce = secrets.token_hex(16)
-    message = operator_network_request_signature_message(
+    operator_network_request_signature_message(
         context.network_id,
         method,
         path,
@@ -1421,12 +1421,21 @@ def build_operator_request_headers(
         timestamp_ms=timestamp_ms,
         nonce=nonce,
     )
-    signature = context.signer(message)
-    if not isinstance(signature, (bytes, bytearray, memoryview)):
-        raise TypeError("operator signer must return bytes")
-    signature_bytes = bytes(signature)
-    if not signature_bytes:
-        raise ValueError("operator signer returned an empty signature")
+    prepared_target = requests.Request(
+        method,
+        f"https://canonical.invalid{path}",
+    ).prepare().path_url
+    message = operator_network_request_signature_message(
+        context.network_id,
+        method,
+        prepared_target,
+        body,
+        timestamp_ms=timestamp_ms,
+        nonce=nonce,
+    )
+    signature_bytes = _require_canonical_signature_bytes(
+        context.signer(message), "operator signer"
+    )
     return {
         HEADER_OPERATOR_PUBLIC_KEY: context.public_key,
         HEADER_OPERATOR_TIMESTAMP_MS: str(timestamp_ms),
@@ -1446,7 +1455,7 @@ def build_canonical_request_headers(
     timestamp_ms: Optional[int] = None,
     nonce: Optional[str] = None,
 ) -> Dict[str, str]:
-    """Build exact-network headers; I105 accounts use ASCII canonical address hex."""
+    """Build exact-network headers for the target spelling Requests will send."""
 
     account = _require_canonical_account_literal(account_id, "account_id")
     if not callable(signer):
@@ -1460,20 +1469,25 @@ def build_canonical_request_headers(
         if nonce is not None
         else secrets.token_hex(16)
     )
+    # Validate the caller spelling before Requests can hide an unsafe dot
+    # segment, then sign the platform-owned prepared target used on the wire.
+    canonical_request_message(method, path, body)
+    prepared_target = requests.Request(
+        method,
+        f"https://canonical.invalid{path}",
+    ).prepare().path_url
     message = canonical_network_request_signature_message(
         network_id,
         method,
-        path,
+        prepared_target,
         body,
         timestamp_ms=effective_timestamp,
         nonce=effective_nonce,
     )
-    signature = signer(message)
-    if not isinstance(signature, (bytes, bytearray, memoryview)):
-        raise TypeError("signer must return bytes")
+    signature = _require_canonical_signature_bytes(signer(message), "signer")
     return {
         HEADER_ACCOUNT: _canonical_account_header_value(account, _decode_canonical_i105_string),
-        HEADER_SIGNATURE: base64.b64encode(bytes(signature)).decode("ascii"),
+        HEADER_SIGNATURE: base64.b64encode(signature).decode("ascii"),
         HEADER_TIMESTAMP_MS: str(effective_timestamp),
         HEADER_NONCE: effective_nonce,
     }
@@ -10036,7 +10050,6 @@ _ToriiClientGovernanceBallotMixin = create_governance_ballot_client_mixin(
     ballot_submit_result_type=BallotSubmitResult,
     offline_hash_literal=_offline_hash_literal,
     canonical_quantity=_canonical_quantity,
-    build_canonical_request_headers=build_canonical_request_headers,
 )
 _ToriiClientSpaceDirectoryMixin = create_space_directory_client_mixin(
     canonical_auth_type=ToriiCanonicalRequestAuth, local_signing_context_type=ToriiLocalSigningContext,
@@ -12753,6 +12766,7 @@ class ToriiClient(
             path,
             headers=final_headers,
             data=data,
+            allow_retry=False,
             allow_redirects=False,
         )
         self._expect_status(response, expected_status)
@@ -12779,20 +12793,15 @@ class ToriiClient(
         if has_body:
             final_headers["Content-Type"] = "application/json"
         if headers:
+            has_witness = _validate_forwarded_witness_header(headers)
+            if has_witness and canonical_auth is not None:
+                raise ValueError("canonical signature and witness authentication are exclusive")
             final_headers.update(dict(headers))
         if canonical_auth is not None:
-            final_headers.update(
-                build_canonical_request_headers(
-                    network_id=canonical_auth.network_id,
-                    account_id=canonical_auth.account_id,
-                    signer=canonical_auth.signer,
-                    method=method,
-                    path=path,
-                    body=body,
-                    timestamp_ms=canonical_auth.timestamp_ms,
-                    nonce=canonical_auth.nonce,
-                )
-            )
+            # Requests may rewrite a valid escaped path while preparing its URL.
+            # Keep signer state attached to the base headers so `_request` signs
+            # the PreparedRequest target and sends that same object exactly once.
+            return _CanonicalRequestHeaderPlan(final_headers, canonical_auth)
         return final_headers
 
     @staticmethod
@@ -13348,19 +13357,7 @@ class ToriiClient(
                     )
         if getattr(self._session, "auth", None) is not None:
             raise ValueError("operator GETs reject Session.auth token fallback")
-        try:
-            retry_total = self._session.get_adapter(
-                f"{self._base_url}{exact_target}"
-            ).max_retries.total
-        except (AttributeError, LookupError, ValueError) as exc:
-            raise ValueError(
-                "operator GET requires a verifiable one-shot HTTP transport"
-            ) from exc
-        if retry_total is not False and retry_total != 0:
-            raise ValueError("operator GET requires adapter retries to be disabled")
-        final_headers.update(
-            build_operator_request_headers(context, "GET", exact_target, b"")
-        )
+        final_headers = _OperatorRequestHeaderPlan(final_headers, context)
         return self._request(
             "GET",
             exact_target,
@@ -13383,19 +13380,21 @@ class ToriiClient(
         allow_redirects: bool = True,
         timeout: Optional[float] = None,
     ) -> requests.Response:
-        del allow_retry  # This transport never retries; keep the one-shot contract explicit.
-        url = f"{self._base_url}{path}"
-        response = self._session.request(
-            method,
-            url,
+        return _send_request(
+            session=self._session,
+            base_url=self._base_url,
+            method=method,
+            path=path,
             params=params,
             headers=headers,
             data=data,
             stream=stream,
+            allow_retry=allow_retry,
             allow_redirects=allow_redirects,
             timeout=timeout,
+            build_headers=build_canonical_request_headers,
+            build_operator_headers=build_operator_request_headers,
         )
-        return response
 
     @staticmethod
     def _expect_status(

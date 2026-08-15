@@ -1,13 +1,11 @@
 //! Small-set utilities used in the pipeline for compact u32 key sets.
 //!
-//! Provides deterministic helpers for sorting, deduplicating, and intersecting
-//! small u32 sets. A scalar baseline is always available; when the crate
-//! feature `simd` is enabled the helpers transparently switch to portable SIMD
-//! implementations with identical results.
+//! Provides deterministic helpers for sorting, deduplicating, and intersecting small u32 sets. A
+//! scalar baseline is always available; when the crate feature `simd` is enabled the helpers
+//! transparently switch to portable SIMD implementations with identical results.
 use core::cmp::Ordering;
-/// Sort a slice of `u32` and compact it in-place by removing duplicates.
-/// Returns the number of unique elements; the first `len` items are the
-/// deduplicated, sorted values.
+/// Sort a slice of `u32` and compact it in-place by removing duplicates. Returns the number of
+/// unique elements; the first `len` items are the deduplicated, sorted values.
 #[inline]
 pub fn sort_dedup_u32_in_place(slice: &mut [u32]) -> usize {
     #[cfg(feature = "simd")]

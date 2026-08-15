@@ -1,11 +1,9 @@
-//! Parallel execution components implementing the deterministic block
-//! execution engine described in the "Iroha VM Parallel Block Execution – Rust
-//! Implementation Specification".
+//! Parallel execution components implementing the deterministic block execution engine described in
+//! the "Iroha VM Parallel Block Execution – Rust Implementation Specification".
 //!
-//! This module implements the hybrid STM/HTM approach described in the
-//! architecture spec. On x86_64 hosts that advertise Intel RTM support we
-//! attempt hardware transactions; other targets (or CPUs without RTM) fall back
-//! to the deterministic mutex path.
+//! This module implements the hybrid STM/HTM approach described in the architecture spec. On x86_64
+//! hosts that advertise Intel RTM support we attempt hardware transactions; other targets (or CPUs
+//! without RTM) fall back to the deterministic mutex path.
 use crate::vector::{SimdChoice, set_thread_forced_simd};
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
@@ -129,9 +127,8 @@ mod htm_util {
 ///
 /// Matches the main VM register file size.
 pub const REGISTER_COUNT: usize = 256;
-/// Identifier for a state entry in the world state.  For the purposes of this
-/// crate it is simply a string key but in a real integration this could be a
-/// complex type.
+/// Identifier for a state entry in the world state. For the purposes of this crate it is simply a
+/// string key but in a real integration this could be a complex type.
 pub type StateKey = String;
 /// Generic state value type.
 pub type Value = u64;
@@ -155,9 +152,8 @@ impl State {
             self.0.insert(upd.key.clone(), upd.value);
         }
     }
-    /// Apply a batch of updates using hardware transactional memory when
-    /// available. If HTM is unsupported or the transaction aborts, a
-    /// fallback lock is used to ensure atomicity.
+    /// Apply a batch of updates using hardware transactional memory when available. If HTM is
+    /// unsupported or the transaction aborts, a fallback lock is used to ensure atomicity.
     pub fn apply_atomic(&self, updates: &[StateUpdate], tags: &HashSet<usize>, _use_htm: bool) {
         #[cfg(all(
             feature = "htm",
@@ -414,16 +410,13 @@ impl ResultBuffer {
 }
 /// Scheduler driving instruction-level parallelism.
 ///
-/// This type provides a very small implementation of the scheduling
-/// behaviour described in the "Iroha VM Parallel Block Execution – Rust
-/// Implementation Specification".  A dependency graph is built for the
-/// transactions in a block and tasks whose dependencies are satisfied are
-/// spawned on a thread pool whose size may grow or shrink dynamically.
-/// Results are committed in block order
-/// via a `ResultBuffer`.  If any error occurs the scheduler falls back to a
-/// sequential execution of the remaining transactions.  The thread count
-/// defaults to the number of available CPU cores but can be limited by the
-/// caller.
+/// This type provides a very small implementation of the scheduling behaviour described in the
+/// "Iroha VM Parallel Block Execution – Rust Implementation Specification". A dependency graph is
+/// built for the transactions in a block and tasks whose dependencies are satisfied are spawned on
+/// a thread pool whose size may grow or shrink dynamically. Results are committed in block order
+/// via a `ResultBuffer`. If any error occurs the scheduler falls back to a sequential execution of
+/// the remaining transactions. The thread count defaults to the number of available CPU cores but
+/// can be limited by the caller.
 const LOAD_WINDOW: usize = 8;
 /// Stack size allocated for Rayon worker threads used by the scheduler.
 ///
@@ -551,8 +544,7 @@ impl Scheduler {
             forced_simd: AtomicU8::new(0),
         }
     }
-    /// Returns `true` if hardware transactional memory is available on this
-    /// host CPU.
+    /// Returns `true` if hardware transactional memory is available on this host CPU.
     pub fn htm_available(&self) -> bool {
         self.htm
     }
@@ -843,12 +835,11 @@ impl StateAccess for Transaction {
 }
 /// Group of non-conflicting transactions executed together.
 ///
-/// A simple deterministic grouping algorithm partitions transactions so that
-/// no group contains two transactions which conflict on their read/write sets.
-/// Groups are formed in block order: if adding a transaction to the current
-/// group would introduce a conflict, the group is closed and a new one is
-/// started.  Each group can then be executed in parallel using an
-/// [`Scheduler`] and the results committed sequentially.
+/// A simple deterministic grouping algorithm partitions transactions so that no group contains two
+/// transactions which conflict on their read/write sets. Groups are formed in block order: if
+/// adding a transaction to the current group would introduce a conflict, the group is closed and a
+/// new one is started. Each group can then be executed in parallel using an [`Scheduler`] and the
+/// results committed sequentially.
 pub struct TransactionGroup {
     pub transactions: Vec<Transaction>,
 }

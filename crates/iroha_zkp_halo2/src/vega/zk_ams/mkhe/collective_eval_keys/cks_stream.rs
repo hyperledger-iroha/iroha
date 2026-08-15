@@ -1,9 +1,8 @@
 //! Bounded seekable decode and verification of one canonical CKS evidence record.
 //!
-//! The verified receipt retains no reader or canonical payload. Relation
-//! polynomials are indexed once and digest-checked on every arithmetic reread;
-//! one canonical contribution is decoded, verified, folded, and dropped before
-//! the next contribution is read.
+//! The verified receipt retains no reader or canonical payload. Relation polynomials are indexed
+//! once and digest-checked on every arithmetic reread; one canonical contribution is decoded,
+//! verified, folded, and dropped before the next contribution is read.
 use super::*;
 fn cks_residue_digests(
     profile: &BgvProfile,

@@ -1,11 +1,10 @@
 //! Durable, namespace-bound replay ledgers for `SoraNet` admission credentials.
 //!
-//! Replay records are security state rather than cache entries. Active records
-//! are never evicted to make room, every accepted insertion is persisted before
-//! it returns, and a process-lifetime sidecar lock prevents concurrent writers
-//! from forking the ledger history. Snapshots use canonical, checksum-protected
-//! Norito frames and persist a monotonic wall-clock high-water mark. Loading
-//! admits only a stable direct regular file under capacity-derived byte and
+//! Replay records are security state rather than cache entries. Active records are never evicted to
+//! make room, every accepted insertion is persisted before it returns, and a process-lifetime
+//! sidecar lock prevents concurrent writers from forking the ledger history. Snapshots use
+//! canonical, checksum-protected Norito frames and persist a monotonic wall-clock high-water mark.
+//! Loading admits only a stable direct regular file under capacity-derived byte and
 //! decoder-allocation limits.
 use super::{
     replay_lock::ExclusiveLedgerLock,
@@ -181,10 +180,9 @@ impl PersistentReplayLedger {
     }
     /// Load or create a durable replay ledger at `path`.
     ///
-    /// Missing ledgers are materialized immediately, proving that replay state
-    /// is writable before the caller begins accepting credentials. Existing
-    /// ledgers are bound to `namespace`; a file copied from another credential
-    /// class is rejected.
+    /// Missing ledgers are materialized immediately, proving that replay state is writable before
+    /// the caller begins accepting credentials. Existing ledgers are bound to `namespace`; a file
+    /// copied from another credential class is rejected.
     ///
     /// # Errors
     ///

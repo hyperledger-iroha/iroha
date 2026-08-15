@@ -15,11 +15,10 @@
 //! authenticated confidential-spool leaf and expose no file,
 //! key, path, random-access, callback, or caller-selected slot surface.
 //!
-//! This is not source aggregation, algebra verification, a commitment, or a
-//! proof. The sole production constructor consumes a private seal whose two
-//! fields are uninhabited. Consequently no production caller can create these
-//! spools yet. Test-only construction exercises the storage state machine with
-//! tiny geometry. Every readiness and completion axis remains false.
+//! This is not source aggregation, algebra verification, a commitment, or a proof. The sole
+//! production constructor consumes a private seal whose two fields are uninhabited. Consequently no
+//! production caller can create these spools yet. Test-only construction exercises the storage
+//! state machine with tiny geometry. Every readiness and completion axis remains false.
 use super::super::super::manifest::{RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1};
 use super::is_prime_u64;
 use crate::vega::sponge::{Keccak256, keccak256};

@@ -3,11 +3,10 @@
 //! This child freezes the exact plane inventory, axes, authenticated-snapshot
 //! layout, source-context binding, and one-shot replay purposes needed before
 //! the `s = 3, 5, 8` vector-arithmetic proofs can be implemented.  A narrowly
-//! purpose-bound confidential-spool constructor now admits the exact snapshot,
-//! but no upstream owner supplies all values, blindings, and matching
-//! commitments. Production construction is therefore deliberately uninhabited.
-//! No proof, transcript frame, wire byte, receipt, authority, RSS claim, or
-//! release gate is added here.
+//! purpose-bound confidential-spool constructor now admits the exact snapshot, but no upstream
+//! owner supplies all values, blindings, and matching commitments. Production construction is
+//! therefore deliberately uninhabited. No proof, transcript frame, wire byte, receipt, authority,
+//! RSS claim, or release gate is added here.
 
 #![allow(
     dead_code,

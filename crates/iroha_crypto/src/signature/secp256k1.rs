@@ -41,8 +41,7 @@ impl EcdsaSecp256k1Sha256 {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Signing`] if the key material cannot produce a recoverable
-    /// signature.
+    /// Returns [`Error::Signing`] if the key material cannot produce a recoverable signature.
     pub fn sign_prehash_recoverable(
         prehash: &[u8; 32],
         sk: &PrivateKey,

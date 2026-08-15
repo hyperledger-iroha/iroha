@@ -1,10 +1,9 @@
 //! Atomic cross-transaction (AXT) helper types.
 //!
-//! The structures defined here deliberately model only the subset of fields
-//! exercised by the current host implementation. They provide a Norito-
-//! compatible schema so test fixtures can round-trip through the pointer-ABI
-//! TLVs exposed to the VM. As the end-to-end pipeline matures these models
-//! should converge with the canonical data-model crate.
+//! The structures defined here deliberately model only the subset of fields exercised by the
+//! current host implementation. They provide a Norito- compatible schema so test fixtures can
+//! round-trip through the pointer-ABI TLVs exposed to the VM. As the end-to-end pipeline matures
+//! these models should converge with the canonical data-model crate.
 use crate::{
     codec::{decode_canonical_norito, encode_canonical_norito},
     error::VMError,
@@ -126,9 +125,8 @@ pub fn derive_amount_commitment(
 }
 /// Resolve an effective amount and commitment for a handle usage.
 ///
-/// This supports both cleartext (`intent.op.amount`) and hidden modes where
-/// the cleartext amount is redacted and a committed amount is carried in the
-/// [`AxtProofEnvelope`].
+/// This supports both cleartext (`intent.op.amount`) and hidden modes where the cleartext amount is
+/// redacted and a committed amount is carried in the [`AxtProofEnvelope`].
 pub fn resolve_handle_amount(
     intent: &RemoteSpendIntent,
     proof: Option<&ProofBlob>,
@@ -148,9 +146,8 @@ pub fn resolve_handle_amount(
 ///
 /// # Errors
 ///
-/// Returns [`HandleAmountResolutionError`] when the amount is absent, zero,
-/// inconsistent with the proof statement, or cannot be represented exactly by
-/// the V1 proof scalar.
+/// Returns [`HandleAmountResolutionError`] when the amount is absent, zero, inconsistent with the
+/// proof statement, or cannot be represented exactly by the V1 proof scalar.
 pub fn resolve_handle_amount_components(
     asset_dsid: DataSpaceId,
     intent_amount: Option<&Quantity>,
@@ -675,9 +672,8 @@ pub struct SpendOp {
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] for empty or non-canonical operation and
-/// account strings, and [`VMError::PermissionDenied`] for an explicit zero
-/// amount.
+/// Returns [`VMError::NoritoInvalid`] for empty or non-canonical operation and account strings, and
+/// [`VMError::PermissionDenied`] for an explicit zero amount.
 pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VMError> {
     for value in [&intent.op.kind, &intent.op.from, &intent.op.to] {
         if value.is_empty() || value.trim() != value {
@@ -752,8 +748,7 @@ pub fn preflight_fastpq_v1_proof_envelope_for_manifest(
     }
     Ok(())
 }
-/// Preflight an AXT proof envelope as FastPQ V1 material without pinning a
-/// manifest root.
+/// Preflight an AXT proof envelope as FastPQ V1 material without pinning a manifest root.
 ///
 /// This is diagnostic routing/metadata validation only. A host must still call
 /// a real FastPQ verifier before accepting the envelope as proof material.
@@ -827,10 +822,9 @@ fn fastpq_claim_type_is_supported(value: &str) -> bool {
 }
 /// Compute the canonical descriptor binding used by asset handles.
 ///
-/// The current implementation prefixes the descriptor bytes with a stable
-/// domain separator and hashes the concatenation using the Poseidon2 sponge
-/// (rate 2, capacity 1, +1 padding). This matches the normative definition
-/// documented in `nexus.md`.
+/// The current implementation prefixes the descriptor bytes with a stable domain separator and
+/// hashes the concatenation using the Poseidon2 sponge (rate 2, capacity 1, +1 padding). This
+/// matches the normative definition documented in `nexus.md`.
 pub fn compute_binding(descriptor: &AxtDescriptor) -> Result<[u8; 32], norito::Error> {
     compute_descriptor_binding(&model_descriptor(descriptor))
 }

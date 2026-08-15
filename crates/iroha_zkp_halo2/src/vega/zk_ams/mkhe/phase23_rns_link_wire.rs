@@ -1,10 +1,9 @@
 //! Canonical release-shape transport for one unverified RNS-Link envelope.
 //!
-//! This module freezes only the bounded byte-level envelope. It does not prove
-//! or verify any Phase-II/III algebra and cannot mint a receipt or open a
-//! readiness gate. The eventual algebraic verifier must independently check
-//! every committed packing, radix/CRT carry, negacyclic-quotient, and
-//! Hyrax-to-BGV equality relation before treating a decoded value as evidence.
+//! This module freezes only the bounded byte-level envelope. It does not prove or verify any
+//! Phase-II/III algebra and cannot mint a receipt or open a readiness gate. The eventual algebraic
+//! verifier must independently check every committed packing, radix/CRT carry, negacyclic-quotient,
+//! and Hyrax-to-BGV equality relation before treating a decoded value as evidence.
 //!
 //! The sole v1 order is `X, U, E, RE, W, RW`, followed by one 38-record
 //! packing section, one 38-record radix/CRT-carry section, one 38-record
@@ -56,8 +55,7 @@ const WHOLE_PROOF_EXACT_BYTES_V1: usize = WHOLE_PROOF_HEADER_BYTES_V1
     + WHOLE_PROOF_SECTION_COUNT_V1 * WHOLE_PROOF_SECTION_HEADER_BYTES_V1
     + WHOLE_PROOF_FAMILY_RECORD_COUNT_V1 * WHOLE_PROOF_FAMILY_RECORD_BYTES_V1
     + WHOLE_PROOF_RELATION_RECORD_COUNT_V1 * WHOLE_PROOF_RELATION_RECORD_BYTES_V1;
-/// Exact and maximum canonical byte length of the frozen release-shape
-/// structural envelope.
+/// Exact and maximum canonical byte length of the frozen release-shape structural envelope.
 ///
 /// This is not a measured algebraic-proof size and is never resource evidence.
 pub(super) const ZK_AMS_PHASE23_RNS_LINK_WHOLE_PROOF_MAX_BYTES_V1: usize =
@@ -212,9 +210,8 @@ struct WholeProofRelationRecordsV1 {
 }
 /// Structurally decoded but cryptographically unverified whole-proof envelope.
 ///
-/// No constructor is exposed: decoding proves canonical transport shape only.
-/// It is not evidence of any RNS-Link equation and cannot be converted into a
-/// verified receipt by this module.
+/// No constructor is exposed: decoding proves canonical transport shape only. It is not evidence of
+/// any RNS-Link equation and cannot be converted into a verified receipt by this module.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
     profile_digest: [u8; 32],
@@ -349,19 +346,16 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         }
         Ok(value)
     }
-    /// Decode canonically and bind the envelope to verifier-owned release
-    /// inputs.
+    /// Decode canonically and bind the envelope to verifier-owned release inputs.
     ///
-    /// This recomputes the profile, immutable algorithm manifest, context,
-    /// ordered commitment root, complete 38-limb challenge-set digest, and all
-    /// 43 Hyrax chunk commitments through the native relation types. Passing
-    /// this check only establishes that the envelope is the transport for
-    /// those inputs. The returned type remains explicitly unverified because
-    /// the packing, carry, quotient, and Hyrax-to-BGV response equations are
-    /// not yet represented by this envelope.
+    /// This recomputes the profile, immutable algorithm manifest, context, ordered commitment root,
+    /// complete 38-limb challenge-set digest, and all 43 Hyrax chunk commitments through the native
+    /// relation types. Passing this check only establishes that the envelope is the transport for
+    /// those inputs. The returned type remains explicitly unverified because the packing, carry,
+    /// quotient, and Hyrax-to-BGV response equations are not yet represented by this envelope.
     pub(super) fn decode_exact_bound_unverified(
         bytes: &[u8],
-        context: ZkAmsPhase23RnsLinkContextV1,
+        context: &ZkAmsPhase23RnsLinkContextV1,
         commitments: &[ZkAmsPhase23RnsLinkChunkCommitmentV1],
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         // Preserve the cheap malformed-input boundary before deriving the
@@ -1035,7 +1029,7 @@ mod tests {
         let mut proof = whole_proof_fixture();
         let context = release_context(b"release-bound-wire-fixture");
         let commitments = relation_commitments(&proof, b"release-bound-commitments");
-        let binding = ZkAmsPhase23RnsLinkWholeProofBindingV1::derive(context, &commitments)
+        let binding = ZkAmsPhase23RnsLinkWholeProofBindingV1::derive(&context, &commitments)
             .expect("verifier-owned release binding");
         proof.profile_digest = binding.profile_digest;
         proof.algorithm_manifest_digest = binding.algorithm_manifest_digest;
@@ -1105,7 +1099,7 @@ mod tests {
         let decoded =
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &wire,
-                context,
+                &context,
                 &commitments,
             )
             .expect("canonical transport is bound to native relation inputs");
@@ -1118,7 +1112,7 @@ mod tests {
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &shell,
-                context,
+                &context,
                 &commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1147,7 +1141,7 @@ mod tests {
             assert_eq!(
                 ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                     &changed,
-                    context,
+                    &context,
                     &commitments,
                 ),
                 Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1157,7 +1151,7 @@ mod tests {
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &wire,
-                wrong_context,
+                &wrong_context,
                 &commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1166,7 +1160,7 @@ mod tests {
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &wire,
-                context,
+                &context,
                 &different_commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1176,7 +1170,7 @@ mod tests {
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &wire,
-                context,
+                &context,
                 &reordered_commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -1192,7 +1186,7 @@ mod tests {
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
                 &changed_hyrax,
-                context,
+                &context,
                 &commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)

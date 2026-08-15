@@ -19,8 +19,7 @@ fn query_fanout_pool_may_be_smaller_than_the_general_body_cap() {
         defaults::torii::QUERY_FANOUT_MIN_POOL_BYTES_V1
     );
     assert!(
-        root.torii.query_fanout_max_retained_bytes.get()
-            < root.torii.transaction_max_content_len.get(),
+        root.torii.query_fanout_max_retained_bytes.get() < root.torii.max_content_len.get(),
         "the query pool derives a smaller phase-bounded body limit instead of rejecting the general listener cap"
     );
 }
@@ -58,14 +57,21 @@ fn zero_torii_content_bound_is_rejected() {
     assert!(format!("{error:?}").contains("torii.max_content_len must be greater than zero"));
 }
 #[test]
-fn small_general_content_limit_keeps_a_complete_query_envelope() {
+fn minimum_transport_content_limit_keeps_a_complete_query_envelope() {
+    let exact = i64::try_from(defaults::torii::HTTP_READ_CHUNK_BYTES_V1)
+        .expect("HTTP read chunk fits TOML integer");
     let mut table = base_table();
     table
         .get_mut("torii")
         .and_then(Value::as_table_mut)
         .expect("torii table")
-        .insert("max_content_len".into(), Value::Integer(1));
-    assert_eq!(load_root(table).torii.transaction_max_content_len.get(), 1);
+        .insert("max_content_len".into(), Value::Integer(exact));
+    let root = load_root(table);
+    assert_eq!(root.torii.max_content_len.get(), exact as u64);
+    assert!(
+        root.torii.max_content_len.get() < root.torii.query_fanout_max_retained_bytes.get(),
+        "the exact transport minimum remains far below the aggregate query-memory pool"
+    );
 }
 #[test]
 fn undersized_aggregate_query_memory_pool_is_rejected() {

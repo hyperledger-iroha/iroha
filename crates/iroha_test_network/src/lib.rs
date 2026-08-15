@@ -10631,9 +10631,9 @@ mod tests {
         assert_genesis_voting_roster_matches_network(&genesis, &expected);
         let incomplete = expected[..expected.len() - 1].to_vec();
         assert!(
-            std::panic::catch_unwind(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 assert_genesis_voting_roster_matches_network(&genesis, &incomplete);
-            })
+            }))
             .is_err(),
             "a custom signed roster that differs from the guarded topology must fail closed"
         );

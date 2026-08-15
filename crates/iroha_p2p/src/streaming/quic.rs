@@ -258,10 +258,9 @@ pub struct StreamingClient {
 impl StreamingClient {
     /// Connect to the remote publisher described by `multiaddr`.
     ///
-    /// `expected_certificate_fingerprint` must come from an authenticated
-    /// manifest, directory, or operator configuration. Requiring it here keeps
-    /// transport authentication fail-closed even before streaming `KeyUpdate`
-    /// frames establish end-to-end content keys.
+    /// `expected_certificate_fingerprint` must come from an authenticated manifest, directory, or
+    /// operator configuration. Requiring it here keeps transport authentication fail-closed even
+    /// before streaming `KeyUpdate` frames establish end-to-end content keys.
     pub async fn connect(
         multiaddr: &str,
         expected_certificate_fingerprint: CertificateFingerprint,

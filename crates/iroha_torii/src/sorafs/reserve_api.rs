@@ -1,10 +1,9 @@
 //! Chain-authoritative SoraFS reserve/rent HTTP boundary.
 //!
-//! V1 deliberately has no process-local reserve model. Mutation routes accept
-//! one exact caller-signed native instruction and forward that transaction to
-//! strict durable ingress. Read routes execute typed queries against one
-//! immutable finalized view and expose the resulting cursor with every page or
-//! singular record.
+//! V1 deliberately has no process-local reserve model. Mutation routes accept one exact
+//! caller-signed native instruction and forward that transaction to strict durable ingress. Read
+//! routes execute typed queries against one immutable finalized view and expose the resulting
+//! cursor with every page or singular record.
 
 #![cfg(feature = "app_api")]
 use crate::{

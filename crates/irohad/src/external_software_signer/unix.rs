@@ -143,15 +143,13 @@ fn valid_receipt_commit_position(
 impl SoftwareSignerSignatureReceiptV1 {
     /// Verify a public receipt without contacting the signer service.
     ///
-    /// This binds the reviewed service identity, exact payload bytes, detached
-    /// signature, operation identifier, durable audit commit, live provenance,
-    /// response digest, and both active-key attestations. Revoked provenance is
-    /// never accepted.
+    /// This binds the reviewed service identity, exact payload bytes, detached signature, operation
+    /// identifier, durable audit commit, live provenance, response digest, and both active-key
+    /// attestations. Revoked provenance is never accepted.
     ///
     /// # Errors
     ///
-    /// Returns a payload-free failure class for any mismatch or invalid
-    /// signature.
+    /// Returns a payload-free failure class for any mismatch or invalid signature.
     pub fn verify_offline(
         &self,
         expected_binding: &SoftwareSignerPublicBindingV1,
@@ -485,9 +483,8 @@ impl SoftwareSignerAdministratorClientV1 {
     ///
     /// # Errors
     ///
-    /// Rejects stale predecessors, non-monotonic revisions, unauthorized
-    /// algorithms, idempotency conflicts, substituted bindings, or unavailable
-    /// durable persistence.
+    /// Rejects stale predecessors, non-monotonic revisions, unauthorized algorithms, idempotency
+    /// conflicts, substituted bindings, or unavailable durable persistence.
     pub fn rotate(
         &self,
         request: SoftwareSignerRotationRequestV1,

@@ -1101,8 +1101,7 @@ impl PorProofV1 {
     ///
     /// # Errors
     ///
-    /// Returns a Norito encoding error if the canonical payload cannot be
-    /// serialized.
+    /// Returns a Norito encoding error if the canonical payload cannot be serialized.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
         preflight_por_proof_len(self, POR_PROOF_MAX_CANONICAL_BYTES_V1)
             .map_err(|error| norito::core::Error::Message(error.to_string()))?;
@@ -1126,9 +1125,8 @@ impl PorProofV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`PorSignatureVerificationError`] for unsupported algorithms,
-    /// malformed key/signature material, canonical encoding failures, or an
-    /// invalid signature.
+    /// Returns [`PorSignatureVerificationError`] for unsupported algorithms, malformed
+    /// key/signature material, canonical encoding failures, or an invalid signature.
     pub fn verify_signature(&self) -> Result<(), PorSignatureVerificationError> {
         let payload = self.signature_payload_bytes().map_err(|error| {
             PorSignatureVerificationError::PayloadEncoding {
@@ -1141,9 +1139,8 @@ impl PorProofV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`PorSignatureVerificationError`] when the signature is invalid
-    /// or its embedded key is not the trusted key supplied by provider
-    /// admission.
+    /// Returns [`PorSignatureVerificationError`] when the signature is invalid or its embedded key
+    /// is not the trusted key supplied by provider admission.
     pub fn verify_signature_for_provider(
         &self,
         admitted_provider_key: &[u8],
@@ -1492,8 +1489,7 @@ impl AuditVerdictV1 {
     ///
     /// # Errors
     ///
-    /// Returns a Norito encoding error if the canonical payload cannot be
-    /// serialized.
+    /// Returns a Norito encoding error if the canonical payload cannot be serialized.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
         preflight_audit_verdict_len(self, AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1)
             .map_err(|error| norito::core::Error::Message(error.to_string()))?;
@@ -2045,9 +2041,8 @@ pub struct PorChallengeStatusV1 {
     pub proof_digest: Option<[u8; 32]>,
     /// Chain-authoritative repair task identifier for a failed challenge.
     ///
-    /// This field is intentionally not defaulted: the canonical V1 wire shape
-    /// rejects pre-release snapshots that omitted the field or encoded the
-    /// former process-local 16-byte identifier.
+    /// This field is intentionally not defaulted: the canonical V1 wire shape rejects pre-release
+    /// snapshots that omitted the field or encoded the former process-local 16-byte identifier.
     pub repair_task_id: Option<[u8; 32]>,
     /// Optional failure reason when the challenge was unsuccessful.
     #[norito(default)]
@@ -2270,8 +2265,7 @@ pub fn decode_por_challenge_status_v1(
 }
 /// Decode and validate one bounded canonical page of V1 PoR challenge statuses.
 ///
-/// `maximum_records` may further restrict, but never raise, the protocol page
-/// ceiling.
+/// `maximum_records` may further restrict, but never raise, the protocol page ceiling.
 ///
 /// # Errors
 ///

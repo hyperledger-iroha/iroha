@@ -635,6 +635,7 @@ impl EmergencyThrottle {
         })
     }
 }
+#[derive(Debug)]
 struct LoadedEmergencyThrottle {
     descriptors: HashSet<[u8; 16]>,
     cooldown_override_secs: Option<u64>,

@@ -125,9 +125,8 @@ struct Interval {
 #[cfg(test)]
 /// Legacy transport-IR optimizer retained only for regression comparison.
 ///
-/// Production optimization is owned by the strict SSA MIR.
-/// Apply deterministic, semantics-preserving optimizations before register
-/// allocation.
+/// Production optimization is owned by the strict SSA MIR. Apply deterministic,
+/// semantics-preserving optimizations before register allocation.
 ///
 /// Constant evaluation uses Rust's checked integer operations. A checked
 /// operation that would overflow or divide by zero is deliberately retained,
@@ -153,12 +152,11 @@ pub(crate) fn optimize_program(program: &mut Program) {
 /// Legacy transport-IR whole-program DCE retained for regression tests.
 /// Remove functions that cannot be reached from any deployable or test root.
 ///
-/// Kotodama has no function pointers in V1, so the complete inter-function
-/// graph is represented by direct [`Instr::Call`] and [`Instr::CallMulti`]
-/// instructions. Running this after intra-function CFG simplification means a
-/// call in a folded-away block cannot keep an otherwise dead helper alive.
-/// Missing roots, duplicate symbols, and unresolved callees fail closed instead
-/// of silently changing the executable graph.
+/// Kotodama has no function pointers in V1, so the complete inter-function graph is represented by
+/// direct [`Instr::Call`] and [`Instr::CallMulti`] instructions. Running this after intra-function
+/// CFG simplification means a call in a folded-away block cannot keep an otherwise dead helper
+/// alive. Missing roots, duplicate symbols, and unresolved callees fail closed instead of silently
+/// changing the executable graph.
 pub(crate) fn retain_reachable_functions(
     program: &mut Program,
     roots: &BTreeSet<String>,
@@ -353,10 +351,9 @@ fn instruction_constant_state(
         _ => ConstantState::Overdefined,
     }
 }
-/// Infer constants across SSA copies and control-flow joins. A temporary is a
-/// constant only when every reachable definition converges to the same value.
-/// Treating unknown definitions as the lattice bottom lets loop-carried copies
-/// settle without making block traversal order observable.
+/// Infer constants across SSA copies and control-flow joins. A temporary is a constant only when
+/// every reachable definition converges to the same value. Treating unknown definitions as the
+/// lattice bottom lets loop-carried copies settle without making block traversal order observable.
 #[cfg(test)]
 fn infer_integer_constants(function: &Function) -> HashMap<Temp, ConstantState> {
     let mut constants = HashMap::new();
@@ -639,10 +636,9 @@ fn is_simple_definition(instruction: &Instr, temp: Temp) -> bool {
             if *dest == temp
     )
 }
-/// Coalesce a copy into its unique, same-block producer. Restricting the pass
-/// to a single block and a source with exactly one use makes dominance and
-/// lifetime preservation explicit; multi-definition join/loop copies remain
-/// untouched.
+/// Coalesce a copy into its unique, same-block producer. Restricting the pass to a single block and
+/// a source with exactly one use makes dominance and lifetime preservation explicit;
+/// multi-definition join/loop copies remain untouched.
 #[cfg(test)]
 fn coalesce_local_copies(function: &mut Function) -> bool {
     let mut any_changed = false;

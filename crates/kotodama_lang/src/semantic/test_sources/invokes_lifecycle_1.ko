@@ -1,0 +1,12 @@
+
+            module Tests {
+                #[test]
+                fn invokes_private_helper() {
+                    test::invoke_kotoage_as(
+                        actor: "issuer",
+                        kotoage: "helper",
+                        arguments: Json::parse("{}"),
+                    );
+                }
+            }
+            

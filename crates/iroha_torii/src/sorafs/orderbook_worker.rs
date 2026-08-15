@@ -1,17 +1,15 @@
 //! Pure state-machine logic for the durable native SoraFS orderbook worker.
 //!
-//! This module performs no queue, signer, filesystem, or wall-clock access.
-//! The supervised Torii adapter supplies one coherent finalized-ledger
-//! observation keyed by the exact retained transaction digest. The returned
-//! action is then applied through the shared
+//! This module performs no queue, signer, filesystem, or wall-clock access. The supervised Torii
+//! adapter supplies one coherent finalized-ledger observation keyed by the exact retained
+//! transaction digest. The returned action is then applied through the shared
 //! [`sorafs_node::orderbook_transaction_forwarder`].
 //!
-//! Match and maintenance operations deliberately do not complete from a book
-//! revision change alone. Their bounded limits are part of the instruction but
-//! not the revision identity, so only an exact committed envelope proves their
-//! semantic result. Settlement receipts have a globally unique receipt
-//! identity and retain their exact canonical payload on-chain; those may be
-//! reconciled idempotently across ingress peers.
+//! Match and maintenance operations deliberately do not complete from a book revision change alone.
+//! Their bounded limits are part of the instruction but not the revision identity, so only an exact
+//! committed envelope proves their semantic result. Settlement receipts have a globally unique
+//! receipt identity and retain their exact canonical payload on-chain; those may be reconciled
+//! idempotently across ingress peers.
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     NetworkId,
@@ -74,10 +72,9 @@ pub(crate) enum OrderbookSemanticReconciliationV1 {
 }
 /// Observation keyed by the exact retained signed-transaction digest.
 ///
-/// The digest is repeated in every signed outcome so a caller cannot
-/// accidentally feed a status for a different transaction into this worker.
-/// Every signed outcome is anchored at the same current finalized cursor as
-/// the semantic snapshot; a containing block's older height/hash is not an
+/// The digest is repeated in every signed outcome so a caller cannot accidentally feed a status for
+/// a different transaction into this worker. Every signed outcome is anchored at the same current
+/// finalized cursor as the semantic snapshot; a containing block's older height/hash is not an
 /// ancestry proof and must not be supplied in its place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrderbookEnvelopeReconciliationV1 {
@@ -183,9 +180,8 @@ enum FinalizedCursorRelationV1 {
 }
 /// Compare one retained operation with an exact finalized projection.
 ///
-/// The snapshot must come from one immutable state view. In particular, the
-/// policy and status must never be assembled from independently advancing
-/// queries.
+/// The snapshot must come from one immutable state view. In particular, the policy and status must
+/// never be assembled from independently advancing queries.
 pub(crate) fn reconcile_orderbook_semantics(
     expected_network_id: &NetworkId,
     delivery: &OrderbookTransactionPendingV1,

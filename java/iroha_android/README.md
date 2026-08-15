@@ -1229,22 +1229,51 @@ HTTP requests:
 
 ```java
 import java.net.URI;
+import java.security.Signature;
+import java.util.Map;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
+import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.model.NetworkId;
 
-URI uri = URI.create("https://torii.example/v1/accounts/<account_i105>/assets?limit=10");
-NetworkId networkId = NetworkId.parse("<genesis-derived checksummed hash literal>");
+URI uri = URI.create("https://torii.example/v1/node/capabilities");
+NetworkId networkId =
+    NetworkId.parse(
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+long timestampMs = System.currentTimeMillis();
+String nonce = "fresh-visible-ascii-nonce";
+ToriiCanonicalRequestAuth auth =
+    new ToriiCanonicalRequestAuth(
+        accountId,
+        message -> {
+          try {
+            Signature signature = Signature.getInstance("Ed25519");
+            signature.initSign(keyPair.getPrivate());
+            signature.update(message);
+            return signature.sign();
+          } catch (Exception error) {
+            throw new IllegalStateException("canonical request signing failed", error);
+          }
+        });
 Map<String, String> headers =
-    CanonicalRequestSigner.buildHeaders(networkId, "get", uri, new byte[0], "<account_i105>", keyPair.getPrivate());
+    CanonicalRequestSigner.buildHeaders(
+        networkId, "get", uri, new byte[0], auth, timestampMs, nonce);
 ```
 
-The signer keeps `<account_i105>` as the semantic SDK identity but emits its
+When `accountId` is I105, the signer keeps it as the semantic SDK identity but emits its
 lowercase canonical-hex address in `X-Iroha-Account`, which is safe on strict
-ASCII HTTP stacks. Active printable-ASCII aliases are emitted unchanged.
+ASCII HTTP stacks. Canonical lowercase ASCII aliases (`label@dataspace` or
+`label@domain.dataspace`) are emitted unchanged after a bounded structural
+preflight. Torii remains authoritative for UTS-46, active alias bindings, and
+controller verification.
 
 Signatures cover the exact genesis-derived `NetworkId`, canonical
 method/path/query/body layout, and freshness metadata. Labels and legacy chain
-identifiers are never accepted as a signing domain.
+identifiers are never accepted as a signing domain. First-release network IDs use
+exactly `hash:` plus 64 uppercase hexadecimal characters, `#`, and a four-character
+uppercase hexadecimal CRC-16/IBM-3740 checksum. Methods are non-empty ASCII HTTP tokens
+of at most 32 bytes,
+paths use an exact root-relative ASCII wire spelling of at most 64 KiB, and nonces contain
+1...256 visible ASCII bytes (`0x21...0x7e`, with no spaces).
 Raw `witness_base64` body authentication is not exposed; multisig writes must
 use a canonical signed transaction or a closed typed signed intent.
 Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls require
@@ -1262,8 +1291,25 @@ transaction, and operator receipt submission returns a native `SettleVpnLease`
 instruction with earned/refunded XOR amounts:
 
 ```java
+java.util.function.Function<
+        java.security.PrivateKey,
+        org.hyperledger.iroha.android.client.CanonicalRequestSignatureProvider>
+    signerFor =
+        privateKey ->
+            message -> {
+              try {
+                java.security.Signature signature =
+                    java.security.Signature.getInstance("Ed25519");
+                signature.initSign(privateKey);
+                signature.update(message);
+                return signature.sign();
+              } catch (Exception error) {
+                throw new IllegalStateException("canonical request signing failed", error);
+              }
+            };
 ToriiCanonicalRequestAuth userAuth =
-    new ToriiCanonicalRequestAuth("<account_i105>", userKeyPair.getPrivate());
+    new ToriiCanonicalRequestAuth(
+        "<account_i105>", signerFor.apply(userKeyPair.getPrivate()));
 
 VpnQuote quote = transport.createVpnQuote(
     new VpnQuoteCreateRequest("standard", "<metering_public_key_hex>"),
@@ -1278,7 +1324,8 @@ VpnSession session = transport.createVpnSession(
     userAuth).join();
 
 ToriiCanonicalRequestAuth operatorAuth =
-    new ToriiCanonicalRequestAuth("<operator_i105>", operatorKeyPair.getPrivate());
+    new ToriiCanonicalRequestAuth(
+        "<operator_i105>", signerFor.apply(operatorKeyPair.getPrivate()));
 VpnReceipt settled = transport.submitVpnReceipt(
     new VpnReceiptSubmitRequest("<relay_receipt_hex>", "<client_voucher_hex>", quote.leaseIdHex()),
     operatorAuth).join();

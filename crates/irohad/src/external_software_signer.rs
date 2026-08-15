@@ -1,11 +1,10 @@
 //! Isolated authenticated software signing for SoraFS runtime roles.
 //!
-//! The service keeps private keys outside node configuration and ledger state.
-//! A deployment supplies a 256-bit wrapping key through an inherited descriptor
-//! or a systemd credential. The process decrypts one role-bound key envelope in
-//! memory, serves only that role on peer-credential-authenticated Unix sockets,
-//! and persists a payload-free predecessor-bound audit chain before reporting a
-//! mutating operation as successful.
+//! The service keeps private keys outside node configuration and ledger state. A deployment
+//! supplies a 256-bit wrapping key through an inherited descriptor or a systemd credential. The
+//! process decrypts one role-bound key envelope in memory, serves only that role on
+//! peer-credential-authenticated Unix sockets, and persists a payload-free predecessor-bound audit
+//! chain before reporting a mutating operation as successful.
 //!
 //! The broker adapter implements the existing native transaction signer traits,
 //! so replacing this software backend with a future HSM adapter does not change

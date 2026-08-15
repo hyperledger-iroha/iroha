@@ -1,21 +1,18 @@
 //! Pointwise scalar-bit copy bus for the complete P-256 window schedule.
 //!
-//! The P-256 arithmetic chip decomposes each scalar result into sixteen
-//! little-endian 16-bit limbs.  The window chip consumes 64 big-endian
-//! four-bit nibbles for each of `u1` and `u2`.  This module fixes the conversion
-//! between those layouts and binds every one of the 512 consumed bits directly
+//! The P-256 arithmetic chip decomposes each scalar result into sixteen little-endian 16-bit limbs.
+//! The window chip consumes 64 big-endian four-bit nibbles for each of `u1` and `u2`. This module
+//! fixes the conversion between those layouts and binds every one of the 512 consumed bits directly
 //! to the corresponding committed arithmetic `c` bit.
 //!
-//! Four independently challenged products audit the same fixed-address copy
-//! relation.  Three consecutive factors are packed into one physical row with
-//! explicit intermediate products, so every product transition remains degree
-//! two.  The 513th and final slot is canonical inactive padding.  Deterministic
-//! per-slot equality is also enforced; correctness therefore does not depend
+//! Four independently challenged products audit the same fixed-address copy relation. Three
+//! consecutive factors are packed into one physical row with explicit intermediate products, so
+//! every product transition remains degree two. The 513th and final slot is canonical inactive
+//! padding. Deterministic per-slot equality is also enforced; correctness therefore does not depend
 //! on a probabilistic permutation argument.
 //!
-//! The aggregate zk-X509 proof commits the arithmetic trace and all 128 window
-//! traces before sampling these challenges; this bus has no standalone
-//! activation path.
+//! The aggregate zk-X509 proof commits the arithmetic trace and all 128 window traces before
+//! sampling these challenges; this bus has no standalone activation path.
 #[cfg(not(any(test, feature = "privacy-release-evidence")))]
 use super::p256_window_air::P256WindowScalarV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -231,9 +228,8 @@ pub(crate) enum P256ScalarBitBusErrorV1 {
 /// Sample product challenges after the arithmetic base commitment and all 128
 /// window base commitments have been absorbed in verifier-fixed order.
 ///
-/// The aggregate prover and verifier own commitment absorption.  This function
-/// only performs the post-commitment squeezes and gives every lane/coordinate
-/// an independent domain label.
+/// The aggregate prover and verifier own commitment absorption. This function only performs the
+/// post-commitment squeezes and gives every lane/coordinate an independent domain label.
 pub(crate) fn derive_zk_x509_p256_scalar_bit_bus_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
 ) -> Result<P256ScalarBitBusChallengesV1, TransparentStarkErrorV1> {
@@ -277,8 +273,7 @@ pub(crate) fn derive_zk_x509_p256_scalar_bit_bus_challenges_v1(
     }
     Ok(P256ScalarBitBusChallengesV1 { lanes })
 }
-/// Convert one big-endian window bit to its arithmetic `c` limb and
-/// little-endian bit position.
+/// Convert one big-endian window bit to its arithmetic `c` limb and little-endian bit position.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_scalar_window_bit_to_c_position_v1(
     window: usize,
@@ -425,10 +420,9 @@ impl P256ScalarBitBusTraceV1 {
 }
 /// Low-degree constraints for one packed three-factor row.
 ///
-/// `fixed` is verifier-regenerated.  Every slot constrains both bits to be
-/// equal to the supplied cells from the already-committed arithmetic and
-/// window traces, Boolean, and equal to each other.  It then advances each of
-/// both endpoint-product families in every lane by one independently
+/// `fixed` is verifier-regenerated. Every slot constrains both bits to be equal to the supplied
+/// cells from the already-committed arithmetic and window traces, Boolean, and equal to each other.
+/// It then advances each of both endpoint-product families in every lane by one independently
 /// compressed factor.
 #[cfg(test)]
 pub(crate) fn evaluate_zk_x509_p256_scalar_bit_bus_row_constraints_v1(
@@ -560,8 +554,7 @@ pub(crate) fn compile_p256_scalar_bit_bus_stark_fixed_rows_v1()
 /// Regenerate one verifier-owned scalar-bit bus fixed row on any shared
 /// power-of-two domain containing the exact 171 logical rows.
 ///
-/// This is the production constant-memory provider used by the native
-/// scalar-bit aggregate group.
+/// This is the production constant-memory provider used by the native scalar-bit aggregate group.
 pub(crate) fn p256_scalar_bit_bus_stark_fixed_row_v1(
     row_index: usize,
     trace_size: usize,
@@ -1018,8 +1011,7 @@ impl P256ScalarBitBusBaseSourceV1 {
             arithmetic_trace,
         )?)
     }
-    /// Enter the base phase from already validated, challenge-independent
-    /// material.
+    /// Enter the base phase from already validated, challenge-independent material.
     pub(crate) fn from_base_material_v1(
         material: P256ScalarBitBusBaseMaterialV1,
     ) -> Result<Self, P256ScalarBitBusErrorV1> {
@@ -1109,8 +1101,7 @@ impl Drop for P256ScalarBitBusBaseSourceV1 {
 }
 /// Post-X5B1 scalar-bit bus capability.
 ///
-/// Only this type can mint challenge-dependent product replay and expose the
-/// two terminal families.
+/// Only this type can mint challenge-dependent product replay and expose the two terminal families.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ScalarBitBusBoundSourceV1 {
     material: Option<P256ScalarBitBusBaseMaterialV1>,
@@ -1405,12 +1396,10 @@ fn stark_scalar_bit_factor_v1(
         .add(terms[4].mul(value));
     Ok(F::ONE.add(active.mul(compressed.sub(F::ONE))))
 }
-/// Arithmetic and window product terminals in one opened packed-bus
-/// auxiliary row.
+/// Arithmetic and window product terminals in one opened packed-bus auxiliary row.
 ///
-/// The aggregate verifier opens this projection at the verifier-fixed final
-/// logical row; no proof-supplied row index is accepted by the terminal
-/// registration.
+/// The aggregate verifier opens this projection at the verifier-fixed final logical row; no
+/// proof-supplied row index is accepted by the terminal registration.
 pub(crate) fn p256_scalar_bit_bus_opened_terminals_v1(
     aux: &[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
 ) -> [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2] {
@@ -1422,9 +1411,8 @@ pub(crate) fn p256_scalar_bit_bus_opened_terminals_v1(
 }
 /// Evaluate the packed scalar-bit bus on the aggregate extension domain.
 ///
-/// The terminal equality here binds the two bus copies. Source-side products
-/// over the arithmetic and window commitments remain a separate required
-/// adapter and activation gate.
+/// The terminal equality here binds the two bus copies. Source-side products over the arithmetic
+/// and window commitments remain a separate required adapter and activation gate.
 pub(crate) fn evaluate_p256_scalar_bit_bus_stark_residues_v1(
     current: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
     next: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],

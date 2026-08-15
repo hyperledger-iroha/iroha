@@ -1,0 +1,6 @@
+
+            fn incomplete(bool flag) -> int {
+                if flag { 7 } else { return 9; }
+                let still_falls_through = 1;
+            }
+            

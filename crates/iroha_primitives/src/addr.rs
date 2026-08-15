@@ -118,9 +118,8 @@ impl JsonDeserialize for Ipv4Addr {
 impl Ipv4Addr {
     /// The address normally associated with the local machine.
     pub const LOCALHOST: Self = Self([127, 0, 0, 1]);
-    /// An unspecified address. Normally resolves to
-    /// [`Self::LOCALHOST`] but might be configured to resolve to
-    /// something else.
+    /// An unspecified address. Normally resolves to [`Self::LOCALHOST`] but might be configured to
+    /// resolve to something else.
     pub const UNSPECIFIED: Self = Self([0, 0, 0, 0]);
 }
 ffi::ffi_item! {
@@ -150,9 +149,8 @@ impl Ipv6Addr {
     /// The analogue of [`std::net::Ipv4Addr::LOCALHOST`], an address associated
     /// with the local machine.
     pub const LOOPBACK: Self = Self([0, 0, 0, 0_u16, 0, 0, 0, 1]);
-    /// The analogue of [`std::net::Ipv4Addr::UNSPECIFIED`], an address that
-    /// usually resolves to the `LOCALHOST`, but might be configured
-    /// to resolve to something else.
+    /// The analogue of [`std::net::Ipv4Addr::UNSPECIFIED`], an address that usually resolves to the
+    /// `LOCALHOST`, but might be configured to resolve to something else.
     pub const UNSPECIFIED: Self = Self([0, 0, 0, 0_u16, 0, 0, 0, 0]);
     /// Construct new [`Ipv6Addr`] from given segments
     pub const fn new(segments: [u16; 8]) -> Self {

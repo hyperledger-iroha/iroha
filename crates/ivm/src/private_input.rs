@@ -178,8 +178,7 @@ pub(crate) fn private_numeric_projection_v1(
     material.extend_from_slice(canonical_envelope);
     Hash::new(&material).into()
 }
-/// Reduce one 256-bit digest modulo the BLS12-381 scalar order with a fixed
-/// operation count.
+/// Reduce one 256-bit digest modulo the BLS12-381 scalar order with a fixed operation count.
 ///
 /// The modulus is greater than `2^254`, so every 256-bit input is below three
 /// moduli. Two unconditional subtract-and-select rounds therefore produce the

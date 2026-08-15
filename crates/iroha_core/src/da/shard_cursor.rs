@@ -243,9 +243,8 @@ impl DaShardCursorIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`DaShardCursorError::Regression`] if any commitment attempts to
-    /// regress an existing cursor or [`DaShardCursorError::UnknownLane`] when a
-    /// commitment references an unmapped lane.
+    /// Returns [`DaShardCursorError::Regression`] if any commitment attempts to regress an existing
+    /// cursor or [`DaShardCursorError::UnknownLane`] when a commitment references an unmapped lane.
     pub fn record_bundle(
         &mut self,
         lane_config: &LaneConfig,
@@ -258,9 +257,8 @@ impl DaShardCursorIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`DaShardCursorError::Regression`] if any commitment attempts to
-    /// regress an existing cursor or [`DaShardCursorError::UnknownLane`] when a
-    /// commitment references an unmapped lane.
+    /// Returns [`DaShardCursorError::Regression`] if any commitment attempts to regress an existing
+    /// cursor or [`DaShardCursorError::UnknownLane`] when a commitment references an unmapped lane.
     pub fn record_records(
         &mut self,
         lane_config: &LaneConfig,

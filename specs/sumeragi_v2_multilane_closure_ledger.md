@@ -50,6 +50,25 @@ statements in this document describe the mutable development checkout. They are
 inventories and source-consistency observations, not immutable-candidate
 execution or release receipts.
 
+## 2026-08-15 current merge audit
+
+- The checkout is an uncommitted merge with `HEAD`
+  `69f5e617e9cef11cb45d519396d89b22a7317ae0` and `MERGE_HEAD`
+  `51deea83409635f99ce2fcbb6a983b7cca18b99b`, not a signed immutable
+  candidate. Historical snapshots below are not current receipts.
+- The immutable source-budget baseline, active ratchet, and objective remain
+  5,067,263, 5,014,603, and 4,560,536 Rust lines, with at least 550 lines of
+  required headroom. The official exact current check inspected 8,031 paths
+  with 197 exceptions and counted 5,014,041 Rust lines with zero findings,
+  leaving 562 lines of headroom and 453,505 lines to the objective. The log is
+  `/private/tmp/iroha-source-budget-final-after-fmt.log`, SHA-256
+  `46c4d7306136e3d5898fd1fb23eee79cf1e17e916b9be5c391c61c3db4277955`.
+- Focused, authoritative formal, and workspace-wide validation remain pending.
+  The proof ledger remains at 35 `tlaps_proved`, 12 `specified_unproved`, 6
+  `trusted_contract`, and 1 `out_of_scope`, with
+  `machine_checked_completion: false`; this static budget receipt does not
+  promote any formal or release gate.
+
 ## 2026-08-14 mutable-development closure snapshot
 
 - The bound inventory contains exactly 857 production tests across 40 modules,
@@ -70,11 +89,11 @@ execution or release receipts.
   structural production-trace extraction reports no open action name. This is
   a source partition only; no fresh TLC, Apalache, TLAPS, Verus, trace-replay,
   mutation, or cross-tool certificate is claimed.
-- A fresh checker run over the merged development tree inspected 7,979 paths
-  with 198 exceptions and counted 5,014,747 Rust lines. It reports zero
-  findings and remains below the 5,254,807 ratchet ceiling; the 4,560,536
-  objective remains 454,211 lines away. The static source-budget guard passes,
-  while the reduction objective and immutable-candidate evidence remain Open.
+- That historical checker snapshot inspected 8,029 paths with 198 exceptions
+  and counted 5,022,733 Rust lines. It exceeded the active 5,014,603-line
+  ratchet by 8,130 lines, so it was not a source-budget pass or a current
+  receipt; the current exact result is recorded above. The reduction objective
+  and immutable-candidate evidence remain Open.
   The reviewed Rust include topology contains 48 parents and 296 direct entries;
   its canonical payload SHA-256 is
   `df2fe00c80e0b300bee7e044451f4d7a8f0f893cb4a130e582a19ba8547a6402`.
@@ -84,7 +103,7 @@ execution or release receipts.
   distribution source and Kotlin/Java Native model dependencies, are present in
   the development tree. The SoraFS orderbook JavaScript declaration,
   implementation, and standalone Python module are tracked. The recursive
-  resolver currently enumerates exactly 1,386 grouped and 1,386 diagnostics
+  resolver currently enumerates exactly 1,397 grouped and 1,397 diagnostics
   records. The canonical suite-source hashes are recorded with the owning
   corpus row (`ML-API-04`) and release gate (`G-SDK`) below.
   Diagnostics suite counts are Rust 14, Python 121, JavaScript 88, Swift 33,
@@ -1629,7 +1648,7 @@ status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
 and Kotlin/Java Native model dependencies. The staged inventory is exactly
-1,386 grouped and 1,386 diagnostics records. Their canonical hashes are
+1,397 grouped and 1,397 diagnostics records. Their canonical hashes are
 recorded once in the owning corpus row and once in the release gate. The
 release receipt must reproduce those values from its immutable candidate;
 the staged values alone are not evidence. The two specialized static Python modules are canonically
@@ -1719,11 +1738,11 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The staged recursive closure contains exactly
-1,386 grouped and 1,386 diagnostics records. Its grouped and diagnostics
+1,397 grouped and 1,397 diagnostics records. Its grouped and diagnostics
 suite-source SHA-256 values are
-`1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
+`a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
 and
-`1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`.
+`1bec39d7d0b9a08bf151c90e52a1d7d46d30bce2857a7726d939bf9ed1daf6ee`.
 The checked-in grouped fixture has SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -2016,11 +2035,11 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The staged
-closure contains exactly 1,386 records for each suite, with grouped and
+closure contains exactly 1,397 records for each suite, with grouped and
 diagnostics suite-source SHA-256 values
-`1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
+`a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
 and
-`1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`.
+`1bec39d7d0b9a08bf151c90e52a1d7d46d30bce2857a7726d939bf9ed1daf6ee`.
 The current grouped JSON and wire TSV SHA-256 values are
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
 and

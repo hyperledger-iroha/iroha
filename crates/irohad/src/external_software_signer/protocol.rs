@@ -25,9 +25,8 @@ const REQUEST_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.request.v1";
 const RESPONSE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.response.v1";
 /// Exact prefix of the SoraFS V1 foundational-promotion signing payload.
 ///
-/// The promotion key signs the complete byte string beginning with this prefix;
-/// the signer never hashes, decodes, or reserializes the JSON suffix in place of
-/// those reviewed bytes.
+/// The promotion key signs the complete byte string beginning with this prefix; the signer never
+/// hashes, decodes, or reserializes the JSON suffix in place of those reviewed bytes.
 pub const SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1: &[u8] =
     b"iroha:sorafs:production-readiness:foundational-prerequisites:v1\0";
 /// Provider implementation class carried by external-signer provenance.
@@ -361,8 +360,7 @@ impl SoftwareSignerPublicBindingV1 {
     ///
     /// # Errors
     ///
-    /// Returns `()` for malformed, substituted, test-marked, or non-software
-    /// bindings.
+    /// Returns `()` for malformed, substituted, test-marked, or non-software bindings.
     pub fn validate(&self) -> Result<(), ()> {
         if self.magic != SIGNER_PUBLIC_BINDING_MAGIC_V1
             || self.version != SIGNER_PROTOCOL_VERSION_V1

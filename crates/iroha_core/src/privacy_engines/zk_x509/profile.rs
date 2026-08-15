@@ -37,10 +37,9 @@ pub(crate) const ZK_X509_MAX_CHAIN_DEPTH_V1: usize = 3;
 pub(crate) const ZK_X509_MAX_CRL_BYTES_V1: usize = 4_096;
 /// Maximum revoked-certificate entries accepted in the private DER CRL.
 ///
-/// Every active serial is parsed and compared in the RFC 5280 AIR. Sixty-four
-/// entries keep that exact comparison table bounded. A policy whose issuer's
-/// complete base CRL exceeds this ceiling is unusable under v0; partitioning,
-/// delta CRLs, and omission are not fallback paths.
+/// Every active serial is parsed and compared in the RFC 5280 AIR. Sixty-four entries keep that
+/// exact comparison table bounded. A policy whose issuer's complete base CRL exceeds this ceiling
+/// is unusable under v0; partitioning, delta CRLs, and omission are not fallback paths.
 pub(crate) const ZK_X509_MAX_CRL_ENTRIES_V1: usize = 64;
 /// Maximum canonical unsigned certificate-serial bytes.
 pub(crate) const ZK_X509_MAX_SERIAL_BYTES_V1: usize = 20;
@@ -109,53 +108,46 @@ pub(crate) const ZK_X509_TRUST_ANCHOR_REVISION_SCHEMA_V1: &[u8] = b"implicit_ver
 pub(crate) const ZK_X509_CERTIFICATE_POLICY_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-be=1|trust_anchor_id:bytes32|policy_id:bytes32|record_epoch:u64-be|policy_digest:bytes32|required_key_usage:u8-mask-bits0through3-upper-zero|required_extended_key_usages:u8-count-plus-strictly-sorted-u8-codes-max3|required_disclosed_attribute_indices:u8-count-plus-strictly-sorted-u8-indices-max4|previous_record_digest:tag-plus-bytes32|lifecycle:u8-active-or-revoked|record_digest:domain-framed-sha256";
 /// Canonical schema of one immutable governed CRL revision.
 ///
-/// The authoritative data-model record must carry all of these fields and a
-/// domain-separated self-digest. The relation recomputes `der_digest`,
-/// `issuer_spki_digest`, and both times from the private signed CRL, then proves
-/// the leaf serial differs from every active entry. There is deliberately no
-/// parallel sparse-root state that could diverge from the signed CRL.
+/// The authoritative data-model record must carry all of these fields and a domain-separated
+/// self-digest. The relation recomputes `der_digest`, `issuer_spki_digest`, and both times from the
+/// private signed CRL, then proves the leaf serial differs from every active entry. There is
+/// deliberately no parallel sparse-root state that could diverge from the signed CRL.
 pub(crate) const ZK_X509_CRL_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-be=1|trust_anchor_id:bytes32|certificate_policy_id:bytes32|record_epoch:u64-be|crl_number:u64-be-strictly-increasing|crl_der_digest:domain-framed-sha256-of-complete-exact-signed-der|issuer_spki_digest:domain-framed-sha256|this_update_unix_seconds:u64-be|next_update_unix_seconds:u64-be|complete-crl-entry-nonrevocation:proved-in-rfc5280-stark-no-secondary-root|previous_record_digest:tag-plus-bytes32|lifecycle:u8-active-or-revoked|record_digest:domain-framed-sha256";
 /// Closed revocation scope for the first release.
 ///
-/// One certificate-policy lineage identifies exactly one leaf-certificate
-/// issuer and its complete, non-partitioned signed CRL. The relation checks
-/// revocation of the leaf certificate only. Deployments with multiple
-/// intermediate issuers use separate policy lineages; delta CRLs, indirect
-/// CRLs, distribution-point partitions, and incomplete shard claims are
-/// rejected rather than interpreted.
+/// One certificate-policy lineage identifies exactly one leaf-certificate issuer and its complete,
+/// non-partitioned signed CRL. The relation checks revocation of the leaf certificate only.
+/// Deployments with multiple intermediate issuers use separate policy lineages; delta CRLs,
+/// indirect CRLs, distribution-point partitions, and incomplete shard claims are rejected rather
+/// than interpreted.
 pub(crate) const ZK_X509_CRL_SCOPE_PROFILE_V1: &[u8] = b"leaf-only:one-issuer-per-certificate-policy:complete-base-crl:no-delta:no-indirect:no-partition:no-distribution-point";
 /// Canonical rules for the admitted complete base CRL.
 ///
-/// Every CRL is v2, direct, complete, and issuer-scoped. AKI and CRLNumber are
-/// required exactly once and non-critical. CRLNumber must fit `u64` and
-/// strictly increase in governance. Delta, indirect, partitioned, and
-/// distribution-point CRLs are forbidden. No CRL-entry extension is allowed,
-/// including certificateIssuer and reasonCode.
+/// Every CRL is v2, direct, complete, and issuer-scoped. AKI and CRLNumber are required exactly
+/// once and non-critical. CRLNumber must fit `u64` and strictly increase in governance. Delta,
+/// indirect, partitioned, and distribution-point CRLs are forbidden. No CRL-entry extension is
+/// allowed, including certificateIssuer and reasonCode.
 pub(crate) const ZK_X509_CRL_PROFILE_V1: &[u8] = b"rfc5280-crl-closed-v1:der-only:v2:ecdsa-sha256-absent-params:aki-required-noncritical:crl-number-required-noncritical-u64-strictly-increasing:no-delta-crl-indicator:no-issuing-distribution-point:no-freshest-crl:no-indirect:no-partition:no-entry-extensions:complete-base-crl:max64-revoked-entries";
 /// Canonical rules for the admitted RFC 5280 subset.
 ///
-/// These bytes are included in the parameter/engine manifest.  They are
-/// intentionally exhaustive: version 3 only; strict DER with one top-level
-/// value; positive non-zero serials of at most 20 DER content octets; exact
-/// issuer/subject DER equality; exact UTC encoding (`UTCTime` through 2049,
-/// `GeneralizedTime` from 2050, seconds and `Z`, no offset/fraction); no issuer
-/// or subject unique IDs; ECDSA-with-SHA256 with absent parameters in both
-/// outer and TBS identifiers; uncompressed prime256v1 SPKIs; duplicate,
-/// unparsed, unsupported, and unlisted extensions rejected regardless of
-/// criticality; AKI/SKI required and linked; BasicConstraints and KeyUsage
-/// critical; leaf-only critical EKU; CA/pathLen/keyCertSign/cRLSign enforced;
-/// root self-name and self-signature enforced.  NameConstraints,
-/// PolicyMappings, CertificatePolicies, PolicyConstraints, InhibitAnyPolicy,
-/// alternate names, distribution points, and every other extension are
-/// forbidden rather than silently ignored.
+/// These bytes are included in the parameter/engine manifest. They are intentionally exhaustive:
+/// version 3 only; strict DER with one top-level value; positive non-zero serials of at most 20 DER
+/// content octets; exact issuer/subject DER equality; exact UTC encoding (`UTCTime` through 2049,
+/// `GeneralizedTime` from 2050, seconds and `Z`, no offset/fraction); no issuer or subject unique
+/// IDs; ECDSA-with-SHA256 with absent parameters in both outer and TBS identifiers; uncompressed
+/// prime256v1 SPKIs; duplicate, unparsed, unsupported, and unlisted extensions rejected regardless
+/// of criticality; AKI/SKI required and linked; BasicConstraints and KeyUsage critical; leaf-only
+/// critical EKU; CA/pathLen/keyCertSign/cRLSign enforced; root self-name and self-signature
+/// enforced. NameConstraints, PolicyMappings, CertificatePolicies, PolicyConstraints,
+/// InhibitAnyPolicy, alternate names, distribution points, and every other extension are forbidden
+/// rather than silently ignored.
 pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-only:v3:serial-positive-nonzero-max20:exact-name-der:name-oids-only-c-o-ou-cn:no-duplicate-name-attributes:c-printablestring-two-uppercase-ascii:o-ou-cn-utf8string-or-printablestring:max-name-value256:disclosed-attribute-hash-content-octets-only:utf8-well-formed-no-u0000-u001f-u007f-u009f:utc-time-1970-2049:generalized-time-2050-9999:seconds-z-no-fraction:certificate-validity-inclusive:no-unique-id:ecdsa-sha256-absent-params:spki-id-ec-public-key-prime256v1-uncompressed:extensions-exact-order-aki-ski-keyusage-basicconstraints-and-optional-leaf-eku:no-duplicates-no-unknown:aki-ski-linked:bc-ku-eku-critical:ca-keycertsign-and-crlsign-only:ca-pathlen-required-explicit:direct-leaf-issuer-crlsign:root-self-name-self-signature:leaf-revocation-only:no-nameconstraints:no-policy-mapping:no-certificate-policies:no-policy-constraints:no-inhibit-any-policy:no-alt-names:no-distribution-points:no-freshest-crl";
 /// ECDSA signature canonicalization rules.
 ///
-/// Certificate and CRL signatures accept both mathematically valid `s`
-/// halves, as required for interoperable RFC 5280 verification, but their ASN.1
-/// `SEQUENCE(INTEGER r, INTEGER s)` must be minimal DER.  The fresh wallet
-/// ownership signature is controlled by this protocol and must additionally
-/// use low `s`, eliminating an avoidable witness malleability.
+/// Certificate and CRL signatures accept both mathematically valid `s` halves, as required for
+/// interoperable RFC 5280 verification, but their ASN.1 `SEQUENCE(INTEGER r, INTEGER s)` must be
+/// minimal DER. The fresh wallet ownership signature is controlled by this protocol and must
+/// additionally use low `s`, eliminating an avoidable witness malleability.
 pub(crate) const ZK_X509_ECDSA_RULES_V1: &[u8] =
     b"cert-and-crl:ecdsa-with-sha256-over-exact-tbs:minimal-der-rs-valid-range-high-or-low-s|wallet:ecdsa-p256-prehash-over-exact-32-byte-ownership-digest:minimal-der-rs-valid-range-low-s";
 /// Goldilocks prime `2^64 - 2^32 + 1`.
@@ -193,10 +185,9 @@ pub(crate) const ZK_X509_PROVER_ADDRESS_SPACE_CEILING_BYTES_V1: u64 = 32 * 1024 
 pub(crate) const ZK_X509_PROVER_TARGET_SECONDS_V1: u64 = 300;
 /// Maximum algebraic constraint degree before quotienting.
 ///
-/// The complete strict-DER evaluator attains degree seven.  This is measured
-/// independently over affine row samples; registering the former degree-four
-/// ceiling truncated genuine DER quotients and made proof construction fail
-/// closed.
+/// The complete strict-DER evaluator attains degree seven. This is measured independently over
+/// affine row samples; registering the former degree-four ceiling truncated genuine DER quotients
+/// and made proof construction fail closed.
 pub(crate) const ZK_X509_MAX_CONSTRAINT_DEGREE_V1: u8 = 7;
 /// Low-degree-extension blow-up factor.
 pub(crate) const ZK_X509_FRI_BLOWUP_FACTOR_V1: u8 = 64;
@@ -221,9 +212,8 @@ pub(crate) const ZK_X509_FRI_TERMINAL_DEGREE_BOUND_V1: u16 = 31;
 pub(crate) const ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1: u8 = 4;
 /// Inclusive degree of each trace zero-knowledge mask multiplier.
 ///
-/// Haböck--Al Kindi Equation (3), with reduced AIR degree six, Fp4 extension
-/// degree four, one DEEP point, and 58 FRI queries, requires 802 randomizer
-/// coefficients.
+/// Haböck--Al Kindi Equation (3), with reduced AIR degree six, Fp4 extension degree four, one DEEP
+/// point, and 58 FRI queries, requires 802 randomizer coefficients.
 pub(crate) const ZK_X509_TRACE_MASK_DEGREE_V1: u16 = 801;
 /// Exact common-domain FRI rounds at the maximum native trace size.
 pub(crate) const ZK_X509_FRI_ROUNDS_V1: u8 = 15;
@@ -277,9 +267,8 @@ pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 9 * 1024 * 1024;
 pub(crate) const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 8_212_538;
 /// Exact encoded byte length of the deterministic first-release X5S1 KAT.
 ///
-/// This stays zero only while the one-time capture corridor is open. The
-/// production activation gate rejects a zero length or a length above the
-/// canonical X5S1 ceiling.
+/// This stays zero only while the one-time capture corridor is open. The production activation gate
+/// rejects a zero length or a length above the canonical X5S1 ceiling.
 pub(crate) const ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1: u32 = 0;
 /// SHA-256 of the deterministic first-release X5S1 KAT proof.
 pub(crate) const ZK_X509_RELEASE_KAT_EXPECTED_PROOF_SHA256_V1: [u8; 32] = [0; 32];

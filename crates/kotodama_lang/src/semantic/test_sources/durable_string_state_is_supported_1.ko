@@ -1,0 +1,4 @@
+seiyaku C {
+                state string label;
+                hajimari() { label = "ready"; }
+            }

@@ -1,10 +1,9 @@
 //! Norito Column Blocks (adaptive, internal)
 //!
-//! This module implements a columnar block layout for homogeneous sequences and
-//! exposes an adaptive API that automatically chooses between the traditional
-//! Array-of-Structs (AoS) Norito encoding and the columnar layout based on
-//! simple heuristics. To developers, this is just “Norito” – the layout choice
-//! is an internal detail selected for performance and size.
+//! This module implements a columnar block layout for homogeneous sequences and exposes an adaptive
+//! API that automatically chooses between the traditional Array-of-Structs (AoS) Norito encoding
+//! and the columnar layout based on simple heuristics. To developers, this is just “Norito” – the
+//! layout choice is an internal detail selected for performance and size.
 //!
 //! Layout (NCB v1) for a specific row shape `(u64, &str, bool)`:
 //! - `n: u32` rows
@@ -15,8 +14,7 @@
 //!   Offsets start at 0, are non-decreasing, and the final offset equals the blob length.
 //! - Column 3 (bool): packed bitset of length `ceil(n/8)` bytes (LSB-first)
 //!
-//! All padding bytes are zeroed and at most 7 bytes are inserted before a
-//! column to meet alignment.
+//! All padding bytes are zeroed and at most 7 bytes are inserted before a column to meet alignment.
 //!
 //! This module purposely avoids `unsafe` and uses only safe slice operations.
 //!
@@ -556,9 +554,8 @@ pub fn should_use_columnar(n: usize) -> bool {
 }
 /// Encode rows using either AoS (Vec) or NCB based on a threshold.
 ///
-/// Returns a bare payload suitable for hashing or embedding into a Norito
-/// field. The caller is responsible for prefixing with any higher-level length
-/// header when needed.
+/// Returns a bare payload suitable for hashing or embedding into a Norito field. The caller is
+/// responsible for prefixing with any higher-level length header when needed.
 pub fn encode_rows_u64_str_bool_auto(rows: &[(u64, &str, bool)]) -> (u8, Vec<u8>) {
     if should_use_columnar(rows.len()) {
         (1u8, encode_ncb_u64_str_bool(rows))
@@ -3177,10 +3174,9 @@ pub fn decode_rows_u64_bytes_u32_bool_adaptive(
 // ===== AoS borrowed views for (u64, str/bytes, u32, bool) =====
 /// Borrowed view over an AoS ad-hoc body for rows shaped as `(u64, &str, u32, bool)`.
 ///
-/// The view indexes the variable-length string field and returns borrowed `&str`
-/// slices into the original `body` input. Parsing performs strict bounds checks
-/// and returns `Error::LengthMismatch` on truncation. UTF-8 validity is checked
-/// at access time for the specific row.
+/// The view indexes the variable-length string field and returns borrowed `&str` slices into the
+/// original `body` input. Parsing performs strict bounds checks and returns `Error::LengthMismatch`
+/// on truncation. UTF-8 validity is checked at access time for the specific row.
 pub struct AosU64StrU32BoolView<'a> {
     n: usize,
     body: &'a [u8],
@@ -6054,8 +6050,7 @@ impl<'a> NcbU64EnumBoolView<'a> {
         self.n == 0
     }
 }
-/// Encode an enum-heavy dataset into NCB.
-/// Layout:
+/// Encode an enum-heavy dataset into NCB. Layout:
 /// - u32 n
 /// - u8 desc (DESC_U64_ENUM_BOOL | optional dict flag)
 /// - ids: aligned 8, either `[u64; n]` or delta+zigzag varints starting with base

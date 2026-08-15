@@ -1,10 +1,9 @@
 //! Authenticated workspace boundary for structured Kotodama V1 tests.
 //!
-//! Selected workspace roots own their test targets and development edges. The
-//! consumer lock remains authoritative for exact registry selections, while
-//! every reachable registry bundle is re-authenticated before it can become a
-//! compiler input. Filesystem-backed execution is qualified on Unix; other
-//! targets fail closed before reading workspace, cache, or test-source state.
+//! Selected workspace roots own their test targets and development edges. The consumer lock remains
+//! authoritative for exact registry selections, while every reachable registry bundle is
+//! re-authenticated before it can become a compiler input. Filesystem-backed execution is qualified
+//! on Unix; other targets fail closed before reading workspace, cache, or test-source state.
 use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
     compiler::validate_exact_registry_interfaces_v1,
@@ -169,10 +168,9 @@ impl AuthenticatedTestRegistryV1 for MusubiCache {
 }
 /// Run tests for exactly `selected` workspace roots after authenticating their lock graph.
 ///
-/// Development dependencies are considered only on explicitly selected roots;
-/// registry nodes are already forbidden from carrying development edges by the
-/// lock schema. This function never discovers or runs tests owned by dependency
-/// packages.
+/// Development dependencies are considered only on explicitly selected roots; registry nodes are
+/// already forbidden from carrying development edges by the lock schema. This function never
+/// discovers or runs tests owned by dependency packages.
 ///
 /// # Errors
 ///
@@ -1238,7 +1236,7 @@ mod tests {
         write(&temporary.path().join("src/lib.ko"), "module AppLib {}");
         write(&temporary.path().join("tests/unit.ko"), contents);
         let workspace =
-            load_workspace(temporary.path().join("Musubi.toml")).expect("workspace fixture");
+            load_workspace(&temporary.path().join("Musubi.toml")).expect("workspace fixture");
         (temporary, workspace)
     }
     fn package_manifest(name: &str, dependency: &str) -> String {
@@ -1809,7 +1807,8 @@ core = { package = "test/core", version = "^1.0.0" }
                 )
             },
         )
-        .expect_err("raced declared-source replacement must fail");
+        .err()
+        .expect("raced declared-source replacement must fail");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("securely read bounded"));
         assert_eq!(budget.source_bytes, 0);
@@ -1845,7 +1844,8 @@ core = { package = "test/core", version = "^1.0.0" }
                 )
             },
         )
-        .expect_err("raced FIFO source must fail without hanging");
+        .err()
+        .expect("raced FIFO source must fail without hanging");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("securely read bounded"));
         assert_eq!(budget.source_bytes, 0);
@@ -1871,7 +1871,8 @@ core = { package = "test/core", version = "^1.0.0" }
             .next()
             .expect("workspace member");
         let error = declared_test_sources(member, Path::new("tests/unit.ko"))
-            .expect_err("oversized test source must fail closed");
+            .err()
+            .expect("oversized test source must fail closed");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("bounded regular file"));
     }
@@ -1900,7 +1901,8 @@ core = { package = "test/core", version = "^1.0.0" }
             .next()
             .expect("workspace member");
         let error = declared_test_sources(member, Path::new("tests"))
-            .expect_err("FIFO test source must fail without hanging");
+            .err()
+            .expect("FIFO test source must fail without hanging");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("hardlink or special file"));
     }

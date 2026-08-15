@@ -62,8 +62,7 @@ impl<B: IpaBackend> Polynomial<B> {
     pub fn commit(&self, params: &Params<B>) -> Result<B::Group, Error> {
         commit_vec::<B>(params.g(), &self.coeffs)
     }
-    /// Creates an opening proof at point `z` that the committed polynomial
-    /// evaluates to `t` at `z`.
+    /// Creates an opening proof at point `z` that the committed polynomial evaluates to `t` at `z`.
     pub fn open(
         &self,
         params: &Params<B>,
@@ -147,10 +146,9 @@ impl<B: IpaBackend> Polynomial<B> {
     /// Derive the verifier witness for an opening proof while binding the
     /// supplied metadata into the Fiat-Shamir transcript.
     ///
-    /// This is the transparent proof-derived witness path used by recursive
-    /// verifier preflight: the returned witness is reconstructed from the proof
-    /// envelope's public statement and proof bytes, and is returned only if the
-    /// final verifier group equality holds.
+    /// This is the transparent proof-derived witness path used by recursive verifier preflight: the
+    /// returned witness is reconstructed from the proof envelope's public statement and proof
+    /// bytes, and is returned only if the final verifier group equality holds.
     ///
     /// # Errors
     ///

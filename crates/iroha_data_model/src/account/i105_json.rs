@@ -15,14 +15,12 @@ const I105_CHECKSUM_LEN: usize = 6;
 /// Write one canonical AccountId JSON string without constructing an
 /// `AccountAddress` or staging the rendered string.
 ///
-/// The sole attacker-sized scratch object is an exact-layout boxed slice of
-/// base-105^8 limbs. For
-/// an `N`-byte canonical address, `ceil(4N/3)` base-105 digits suffice because
-/// every digit carries more than six bits. The non-zero V1 header also means the
-/// emitted numeral contains at least `N` digits. Accounting for the partially
-/// occupied final limb, the reserved scratch is therefore at most twice the
-/// complete emitted JSON body. Allocation is attempted fallibly before any
-/// unchecked vector push.
+/// The sole attacker-sized scratch object is an exact-layout boxed slice of base-105^8 limbs. For
+/// an `N`-byte canonical address, `ceil(4N/3)` base-105 digits suffice because every digit carries
+/// more than six bits. The non-zero V1 header also means the emitted numeral contains at least `N`
+/// digits. Accounting for the partially occupied final limb, the reserved scratch is therefore at
+/// most twice the complete emitted JSON body. Allocation is attempted fallibly before any unchecked
+/// vector push.
 pub(super) fn write_bounded(
     account: &AccountId,
     output: &mut dyn JsonWriteSink,

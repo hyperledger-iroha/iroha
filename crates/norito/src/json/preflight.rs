@@ -2,10 +2,9 @@
 use super::MAX_JSON_VALUE_NESTING_DEPTH;
 /// Resource ceilings enforced before an owned JSON decoder is entered.
 ///
-/// These limits cover representation-independent lexical facts. A caller
-/// constructing an owned Rust value must additionally translate the returned
-/// [`JsonPreflightProfile`] into a source-audited allocation bound for that
-/// concrete type.
+/// These limits cover representation-independent lexical facts. A caller constructing an owned Rust
+/// value must additionally translate the returned [`JsonPreflightProfile`] into a source-audited
+/// allocation bound for that concrete type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JsonPreflightLimits {
     max_raw_bytes: usize,
@@ -50,10 +49,9 @@ impl JsonPreflightLimits {
     }
     /// Derive JSON lexical ceilings from a raw-body limit and Norito limits.
     ///
-    /// JSON arrays and objects both act as sequences. Their combined entry
-    /// count consumes the total-element budget, while every individual
-    /// container consumes the per-sequence budget. One scalar or container
-    /// root is allowed in addition to those elements.
+    /// JSON arrays and objects both act as sequences. Their combined entry count consumes the
+    /// total-element budget, while every individual container consumes the per-sequence budget. One
+    /// scalar or container root is allowed in addition to those elements.
     #[must_use]
     pub fn from_decode_limits(max_raw_bytes: usize, limits: crate::core::DecodeLimits) -> Self {
         let elements = limits.max_total_elements();
@@ -305,8 +303,7 @@ impl JsonPreflightProfile {
     pub const fn object_entries(self) -> usize {
         self.object_entries
     }
-    /// Exact sum of the parser's conservative B-tree node count for every
-    /// object in this document.
+    /// Exact sum of the parser's conservative B-tree node count for every object in this document.
     #[must_use]
     pub const fn object_btree_node_upper_bound(self) -> usize {
         self.object_btree_node_upper_bound
@@ -888,9 +885,8 @@ impl<'a> Scanner<'a> {
 }
 /// Validate and profile one complete JSON document without heap allocation.
 ///
-/// Duplicate object names are left to the typed decoder. Retaining them here
-/// would require an input-sized key set and is not necessary for lexical or
-/// allocation admission.
+/// Duplicate object names are left to the typed decoder. Retaining them here would require an
+/// input-sized key set and is not necessary for lexical or allocation admission.
 pub fn preflight_slice(
     bytes: &[u8],
     limits: JsonPreflightLimits,

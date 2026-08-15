@@ -1,10 +1,9 @@
 //! Limb-bounded verification for seekable collective source evidence.
 //!
-//! This module deliberately does not construct `RnsPolynomial` relation graphs.
-//! Canonical public polynomials remain in the caller's immutable seekable
-//! provider, every limb reread is checked against two independently domain-
-//! separated index digests, and proof responses are the only release-sized
-//! owner retained across limbs.
+//! This module deliberately does not construct `RnsPolynomial` relation graphs. Canonical public
+//! polynomials remain in the caller's immutable seekable provider, every limb reread is checked
+//! against two independently domain- separated index digests, and proof responses are the only
+//! release-sized owner retained across limbs.
 use super::*;
 use crate::vega::sponge::Shake256Reader;
 const SOURCE_RELEASE_LIMBS_V1: usize = 38;

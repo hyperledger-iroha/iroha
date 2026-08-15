@@ -1,11 +1,10 @@
 //! Fixed-topology P-256 ECDSA verification composition.
 //!
-//! This module assembles strict scalar arithmetic, canonical digest/x
-//! reduction, complete group formulas, public-key curve validation, nonzero
-//! checks, and the wallet-only low-s rule. Every primitive is emitted through
-//! [`P256EcdsaCircuitV1`]; a production implementation must bind those
-//! primitives to the arithmetic, reduction, window, equality, and byte-I/O
-//! AIRs. The verifier never calls RustCrypto or the native reference relation.
+//! This module assembles strict scalar arithmetic, canonical digest/x reduction, complete group
+//! formulas, public-key curve validation, nonzero checks, and the wallet-only low-s rule. Every
+//! primitive is emitted through [`P256EcdsaCircuitV1`]; a production implementation must bind those
+//! primitives to the arithmetic, reduction, window, equality, and byte-I/O AIRs. The verifier never
+//! calls RustCrypto or the native reference relation.
 use super::p256_group_air::{
     P256ProjectiveValueV1, P256WindowCircuitV1, constrain_p256_affine_on_curve_v1,
     normalize_p256_nonidentity_v1, p256_two_scalar_linear_combination_v1,
@@ -14,8 +13,7 @@ use super::p256_window_air::P256WindowScalarV1;
 /// Verifier-fixed signature role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256EcdsaRoleV1 {
-    /// Certificate or CRL signature: both mathematically valid s halves are
-    /// admitted by RFC 5280.
+    /// Certificate or CRL signature: both mathematically valid s halves are admitted by RFC 5280.
     CertificateOrCrl,
     /// Fresh wallet-ownership signature: low-s is mandatory.
     WalletOwnership,
@@ -116,8 +114,7 @@ pub(crate) trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
         &mut self,
         coordinate: Self::Value,
     ) -> Result<Self::Scalar, Self::Error>;
-    /// Return the 256 algebraically bound big-endian bits of a
-    /// verifier-positioned ECDSA scalar.
+    /// Return the 256 algebraically bound big-endian bits of a verifier-positioned ECDSA scalar.
     fn scalar_bits_be_v1(
         &mut self,
         scalar: Self::Scalar,
@@ -128,10 +125,9 @@ pub(crate) trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
 }
 /// Typed source for the five external values consumed by one ECDSA equation.
 ///
-/// The relation schedule asks for each value only at its canonical allocation
-/// point. Native proving sources bind concrete witness bytes through
-/// [`P256EcdsaCircuitV1`], while verifier-topology compilers can allocate typed
-/// handles without constructing witness-shaped placeholder values.
+/// The relation schedule asks for each value only at its canonical allocation point. Native proving
+/// sources bind concrete witness bytes through [`P256EcdsaCircuitV1`], while verifier-topology
+/// compilers can allocate typed handles without constructing witness-shaped placeholder values.
 pub(crate) trait P256EcdsaInputSourceV1<C: P256EcdsaCircuitV1> {
     /// Allocate the affine public-key coordinates.
     fn public_key_v1(&mut self, circuit: &mut C) -> Result<(C::Value, C::Value), C::Error>;
@@ -163,8 +159,7 @@ impl<C: P256EcdsaCircuitV1> P256EcdsaInputSourceV1<C> for P256EcdsaWitnessInputS
         circuit.reduce_digest_v1(self.witness.digest_be)
     }
 }
-/// Constrain one complete P-256 ECDSA verification equation from a typed
-/// external-value source.
+/// Constrain one complete P-256 ECDSA verification equation from a typed external-value source.
 ///
 /// This is the single canonical relation schedule shared by native witness
 /// compilation and independent verifier-topology compilation.
@@ -213,8 +208,7 @@ pub(crate) fn constrain_p256_ecdsa_from_source_v1<
         reduced_x,
     })
 }
-/// Constrain one complete P-256 ECDSA verification equation from native
-/// witness bytes.
+/// Constrain one complete P-256 ECDSA verification equation from native witness bytes.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn constrain_p256_ecdsa_v1<C: P256EcdsaCircuitV1>(
     circuit: &mut C,

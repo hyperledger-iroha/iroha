@@ -1,9 +1,8 @@
 //! SoraFS reference validator CLI.
 //!
-//! This binary implements the first SF-11 validator slice without adding a new
-//! workspace crate. It validates Norito-encoded provider adverts and
-//! replication orders, then emits stable `ValidationOutcomeV1`
-//! JSON/table/YAML output.
+//! This binary implements the first SF-11 validator slice without adding a new workspace crate. It
+//! validates Norito-encoded provider adverts and replication orders, then emits stable
+//! `ValidationOutcomeV1` JSON/table/YAML output.
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use iroha_crypto::sha256;
 use norito::json;

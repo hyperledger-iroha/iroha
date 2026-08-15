@@ -386,10 +386,9 @@ impl StateValueNodeV1 {
 }
 /// Compiler-owned schema for one aggregate durable-state type.
 ///
-/// Wire traversal and owned-value cleanup are iterative. The standalone
-/// derived codec, `Clone`, `Debug`, and equality implementations on recursive
-/// [`StateValueNodeV1`] remain nominal Rust convenience surfaces and are not
-/// used at the untrusted aggregate-state boundary.
+/// Wire traversal and owned-value cleanup are iterative. The standalone derived codec, `Clone`,
+/// `Debug`, and equality implementations on recursive [`StateValueNodeV1`] remain nominal Rust
+/// convenience surfaces and are not used at the untrusted aggregate-state boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateValueSchemaV1 {
     /// Preorder aggregate layout.
@@ -880,10 +879,9 @@ impl<'a> DecodeFromSlice<'a> for StateValueSchemaV1 {
 /// Reconstruct the exact V1 runtime schema for one non-map CNTR durable-state
 /// type, including the selected value type of a `StateMap`.
 ///
-/// `StateMap` itself is a host collection resource and therefore is not a
-/// persistable value schema. Callers must pass its declared value type. The
-/// shared node budget is consumed across recursive [`StateValueNodeV1::List`]
-/// element schemas as well as the outer preorder stream.
+/// `StateMap` itself is a host collection resource and therefore is not a persistable value schema.
+/// Callers must pass its declared value type. The shared node budget is consumed across recursive
+/// [`StateValueNodeV1::List`] element schemas as well as the outer preorder stream.
 #[must_use]
 pub fn state_value_schema_for_embedded_type_v1(
     ty: &crate::metadata::EmbeddedStateType,
@@ -1645,10 +1643,9 @@ pub enum StateValueWordKindV1 {
 }
 /// Canonical stored representation of one flattened aggregate word.
 ///
-/// Record wire traversal and owner cleanup are iterative. The standalone
-/// derived codec, `Clone`, `Debug`, and equality implementations remain
-/// recursive nominal Rust convenience surfaces and are not used by the KRV1
-/// aggregate-state boundary.
+/// Record wire traversal and owner cleanup are iterative. The standalone derived codec, `Clone`,
+/// `Debug`, and equality implementations remain recursive nominal Rust convenience surfaces and are
+/// not used by the KRV1 aggregate-state boundary.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StateValueAtomV1 {
     /// Option/Result tag.
@@ -2261,10 +2258,9 @@ impl<'a> DecodeFromSlice<'a> for StateValueRecordV1 {
 }
 /// Decode one exact canonical V1 durable-state record without re-encoding it.
 ///
-/// The outer Norito frame must use the canonical uncompressed layout, exact
-/// type-specific alignment, schema hash, payload length, and checksum. The
-/// custom KRV1 payload decoder then enforces its unique flat representation and
-/// must consume the complete checksummed payload.
+/// The outer Norito frame must use the canonical uncompressed layout, exact type-specific
+/// alignment, schema hash, payload length, and checksum. The custom KRV1 payload decoder then
+/// enforces its unique flat representation and must consume the complete checksummed payload.
 pub fn decode_canonical_state_value_record_v1(
     bytes: &[u8],
 ) -> Result<StateValueRecordV1, NoritoError> {

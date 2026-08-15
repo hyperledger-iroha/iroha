@@ -1,5 +1,4 @@
-//! Native first-release private-note execution for
-//! `iroha-ivm-private-note-stark-v1`.
+//! Native first-release private-note execution for `iroha-ivm-private-note-stark-v1`.
 //!
 //! The module has one closed profile:
 //!
@@ -13,14 +12,12 @@
 //!   exact typed chain, genesis, action, and governed-artifact consensus
 //!   binding.
 //!
-//! Wallet witnesses never cross the ledger boundary. Verification returns only
-//! statement-derived effects; in particular, no proof or caller can select a
-//! successor accumulator root.
+//! Wallet witnesses never cross the ledger boundary. Verification returns only statement-derived
+//! effects; in particular, no proof or caller can select a successor accumulator root.
 //!
-//! The native verifier and deterministic compiled profile are wired into typed
-//! runtime dispatch. Compiling the profile does not create or activate a
-//! protocol lifecycle record; deployment still requires explicit governed
-//! admission after the release gates pass. There is no legacy proof or
+//! The native verifier and deterministic compiled profile are wired into typed runtime dispatch.
+//! Compiling the profile does not create or activate a protocol lifecycle record; deployment still
+//! requires explicit governed admission after the release gates pass. There is no legacy proof or
 //! ciphertext codec.
 mod air;
 mod codec;

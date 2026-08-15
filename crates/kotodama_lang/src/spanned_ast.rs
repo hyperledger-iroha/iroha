@@ -110,9 +110,8 @@ impl AstSourceMap {
     /// Reclassify a parser-reserved block expression as the statement form
     /// selected after its trailing syntax is known.
     ///
-    /// The stable identity is deliberately preserved so binding facts remain
-    /// attached to their direct owner without a spelling-, address-, or
-    /// traversal-order-based rebind.
+    /// The stable identity is deliberately preserved so binding facts remain attached to their
+    /// direct owner without a spelling-, address-, or traversal-order-based rebind.
     pub(crate) fn set_kind(&mut self, id: NodeId, kind: AstNodeKind) {
         if let Some(node) = self.nodes.get_mut(id.index()) {
             node.kind = kind;

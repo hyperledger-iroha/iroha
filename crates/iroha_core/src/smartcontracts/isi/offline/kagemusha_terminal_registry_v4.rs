@@ -124,11 +124,10 @@ const PARSED_PARAMS_BYTES_PER_ROW_V4: u64 = 2 * 64;
 const PARSED_VERIFYING_KEY_EXPANSION_V4: u64 = 2;
 /// Conservative retained cost of Halo2's verifier-key evaluation domain.
 ///
-/// The vendored domain owns forward and inverse FFT twiddle tables for the
-/// base and extended domains. Charging 512 bytes per base-domain row covers
-/// those tables, their vector metadata, and construction scratch without
-/// pretending that the tiny serialized VK is representative of its decoded
-/// footprint.
+/// The vendored domain owns forward and inverse FFT twiddle tables for the base and extended
+/// domains. Charging 512 bytes per base-domain row covers those tables, their vector metadata, and
+/// construction scratch without pretending that the tiny serialized VK is representative of its
+/// decoded footprint.
 const PARSED_VERIFYING_KEY_DOMAIN_BYTES_PER_ROW_V4: u64 = 512;
 /// Small authenticated objects retained in several catalog/verifier owners.
 const CATALOG_RELEASE_METADATA_PERSISTENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTES
@@ -252,11 +251,10 @@ struct KagemushaCatalogSealedReleaseQualificationV1 {
 /// Root-trusted proof that one exact Kagemusha catalog completed full release
 /// and proving-key qualification.
 ///
-/// The canonical Norito value contains an explicit schema and fixed V1 layout.
-/// It is not self-authenticating: production loading accepts it only from a
-/// root-owned, single-link, non-writable descriptor-relative path (also
-/// extended-ACL-free on macOS) and compares every sealed source and executable
-/// identity before trusting its qualified Eq/Ep facts.
+/// The canonical Norito value contains an explicit schema and fixed V1 layout. It is not
+/// self-authenticating: production loading accepts it only from a root-owned, single-link,
+/// non-writable descriptor-relative path (also extended-ACL-free on macOS) and compares every
+/// sealed source and executable identity before trusting its qualified Eq/Ep facts.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaCatalogQualificationSealV1 {
     schema: String,
@@ -354,10 +352,9 @@ pub(crate) struct KagemushaCachedReleaseV4 {
 }
 /// Immutable startup catalog keyed by canonical V4 manifest digest.
 ///
-/// The catalog owns qualified pinned read-only artifact handles and one
-/// source-backed verifier facade per release. Consensus execution performs map
-/// lookups and reads only those already-opened inodes; it never reopens an
-/// artifact by path or caches two-parity Halo2 material.
+/// The catalog owns qualified pinned read-only artifact handles and one source-backed verifier
+/// facade per release. Consensus execution performs map lookups and reads only those already-opened
+/// inodes; it never reopens an artifact by path or caches two-parity Halo2 material.
 #[derive(Default)]
 pub struct KagemushaReleaseCatalogV4 {
     configured_policy_sha256: Option<[u8; 32]>,
@@ -381,11 +378,10 @@ impl KagemushaReleaseCatalogV4 {
     }
     /// Load an optional immutable verifier cache.
     ///
-    /// An omitted policy/artifact pair produces the explicit empty catalog. The
-    /// cache is not an offline-capability switch and is not an asset catalog;
-    /// every deployment and asset retains the protocol primitives when it is
-    /// empty. A partially configured pair or authentication failure is rejected
-    /// only when an operator explicitly configures this cache.
+    /// An omitted policy/artifact pair produces the explicit empty catalog. The cache is not an
+    /// offline-capability switch and is not an asset catalog; every deployment and asset retains
+    /// the protocol primitives when it is empty. A partially configured pair or authentication
+    /// failure is rejected only when an operator explicitly configures this cache.
     ///
     /// # Errors
     ///
@@ -437,9 +433,8 @@ impl KagemushaReleaseCatalogV4 {
     }
     /// Deterministically authenticate every manifest-digest subdirectory.
     ///
-    /// Both configured paths must be canonical absolute paths. Every directory
-    /// component is opened relative to its already pinned parent and symlinks
-    /// are rejected at every level.
+    /// Both configured paths must be canonical absolute paths. Every directory component is opened
+    /// relative to its already pinned parent and symlinks are rejected at every level.
     ///
     /// All filesystem access, hashing, framing checks, Halo2 verifier parsing,
     /// and allocation-free proving-key structural validation complete before
@@ -480,10 +475,9 @@ impl KagemushaReleaseCatalogV4 {
     }
     /// Fully authenticate a catalog and produce its root-trusted restart seal.
     ///
-    /// This constructor always executes complete artifact hashing and Eq/Ep
-    /// proving-key structural qualification before it emits a seal. It also
-    /// requires the configured inputs and current executable to be rooted in
-    /// root-owned, non-writable, symlink-free path chains.
+    /// This constructor always executes complete artifact hashing and Eq/Ep proving-key structural
+    /// qualification before it emits a seal. It also requires the configured inputs and current
+    /// executable to be rooted in root-owned, non-writable, symlink-free path chains.
     pub fn load_and_build_qualification_seal(
         policy_path: &Path,
         artifact_dir: &Path,
@@ -716,12 +710,11 @@ impl KagemushaReleaseCatalogV4 {
     }
     /// Build the exact governed activation payload for one authenticated release.
     ///
-    /// This is the only production constructor for the consensus payload. It
-    /// projects both inline verifier records from the immutable, qualified
-    /// pinned startup source, so an operator cannot substitute release fields,
-    /// key bytes, commitments, schemas, activation heights, or policy identity.
-    /// Consensus still enforces that `verifier_version` is the next atomic
-    /// Eq/Ep version when the resulting instruction is executed.
+    /// This is the only production constructor for the consensus payload. It projects both inline
+    /// verifier records from the immutable, qualified pinned startup source, so an operator cannot
+    /// substitute release fields, key bytes, commitments, schemas, activation heights, or policy
+    /// identity. Consensus still enforces that `verifier_version` is the next atomic Eq/Ep version
+    /// when the resulting instruction is executed.
     pub fn build_activation(
         &self,
         manifest_sha256: [u8; 32],
@@ -2403,13 +2396,11 @@ fn lock_kagemusha_catalog_source_mutex_v4<T>(mutex: &Mutex<T>) -> std::sync::Mut
 }
 /// Exact-eight, read-only source retained by one authenticated catalog release.
 ///
-/// Every handle is opened relative to the already pinned release directory and
-/// is never reopened by path. A source-wide permit prevents Eq/Ep or role
-/// readers from overlapping; each file also owns its cursor mutex so clones of
-/// the source cannot race a rewind. Full qualification retains one
-/// complete-frame inspection per role. A sealed restart retains only the
-/// root-trusted inode identity and reauthenticates every byte when a later
-/// parser actually consumes the role.
+/// Every handle is opened relative to the already pinned release directory and is never reopened by
+/// path. A source-wide permit prevents Eq/Ep or role readers from overlapping; each file also owns
+/// its cursor mutex so clones of the source cannot race a rewind. Full qualification retains one
+/// complete-frame inspection per role. A sealed restart retains only the root-trusted inode
+/// identity and reauthenticates every byte when a later parser actually consumes the role.
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))

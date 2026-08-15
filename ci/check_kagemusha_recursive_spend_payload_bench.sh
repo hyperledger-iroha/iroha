@@ -14,7 +14,19 @@ import re
 import sys
 
 root = Path(sys.argv[1])
-rust = (root / "crates/iroha_data_model/src/offline/mod.rs").read_text(encoding="utf-8")
+model_path = root / "crates/iroha_data_model/src/offline/mod.rs"
+model_fragment_path = root / "crates/iroha_data_model/src/offline/kagemusha_model.rs"
+model_include = 'include!("kagemusha_model.rs");'
+model_parent = model_path.read_text(encoding="utf-8")
+if model_parent.count(model_include) != 1:
+    raise SystemExit(
+        f"{model_path}: expected exactly one reviewed {model_fragment_path.name} include"
+    )
+rust = model_parent.replace(
+    model_include,
+    model_fragment_path.read_text(encoding="utf-8"),
+    1,
+)
 swift = (root / "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift").read_text(encoding="utf-8")
 transport = (root / "IrohaSwift/Sources/IrohaSwift/KagemushaPeerTransport.swift").read_text(encoding="utf-8")
 swift_qr_tests = (root / "IrohaSwift/Tests/IrohaSwiftTests/KagemushaQRStreamTests.swift").read_text(encoding="utf-8")
@@ -51,12 +63,13 @@ if (raw_limit, raw_limit_v4, branch_depth, peer_hop_limit, tag_bytes) != (
     )
 
 backend = re.search(
-    r"KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE\s*:\s*bool\s*=\s*(true|false)\s*;",
+    r"pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE:\s*bool\s*=\s*"
+    r'cfg!\(feature\s*=\s*"kagemusha-production-enabled"\)\s*;',
     rust,
 )
 if backend is None:
     raise SystemExit(
-        "missing the explicit Kagemusha promotion availability marker"
+        "Kagemusha proof-backend availability must remain compile-time promotion gated"
     )
 
 text_limit = 12 * 1_024
@@ -86,16 +99,12 @@ for prefix in ("PKK2R.", "PKK2P.", "PKK2A."):
     if f'= "{prefix}"' not in transport or len(prefix.encode("ascii")) != 6:
         raise SystemExit(f"missing canonical six-byte peer prefix: {prefix}")
 
-for depth, peer_hops, raw_bytes in (
-    (1, 1, "6_677"),
-    (8, 8, "6_848"),
+for source, transport_name, needle in (
+    (swift_qr_tests, "QR", '("payment-v4-peer-hop-1", 11_887, 60),'),
+    (swift_nfc_tests, "NFC", '("payment-v4-peer-hop-1", 11_887, 55, 57),'),
 ):
-    qr_needle = f'(\"payment-depth-{depth}-hop-{peer_hops}\", {raw_bytes},'
-    nfc_needle = f'(\"payment-depth-{depth}-hop-{peer_hops}\", {raw_bytes},'
-    if qr_needle not in swift_qr_tests:
-        raise SystemExit(f"Swift QR measurement drifted: {qr_needle}")
-    if nfc_needle not in swift_nfc_tests:
-        raise SystemExit(f"Swift NFC measurement drifted: {nfc_needle}")
+    if needle not in source:
+        raise SystemExit(f"Swift {transport_name} measurement drifted: {needle}")
 for retired_hop in (16, 32, 64):
     needle = f"hop-{retired_hop}"
     if needle in swift_qr_tests or needle in swift_nfc_tests:
@@ -103,8 +112,8 @@ for retired_hop in (16, 32, 64):
 
 print(
     "Kagemusha peer transport bounds are internally consistent: "
-    "the ABI-21/V4 archive permits 32 MiB, the retained V2 request-leaf text measurement remains bounded by "
-    "32,768 raw bytes and eight peer hops, and the "
+    "the ABI-21/V4 archive permits 32 MiB, the canonical 11,887-byte ABI-21 peer-payment "
+    "fixture remains pinned in the QR and NFC transport tests, and the "
     "12 KiB text envelope derives an independent 9,211-byte raw sub-cap; runtime proof use "
     "still requires the authenticated installed ABI-21/V4 artifact set and promotion evidence."
 )

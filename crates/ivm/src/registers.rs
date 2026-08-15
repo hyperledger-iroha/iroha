@@ -337,10 +337,9 @@ impl Registers {
         (proof, adj_root)
     }
     #[inline]
-    /// Ensure the Merkle tree is rebuilt when marked dirty. This uses a
-    /// deterministic full rebuild today; once `iroha_crypto` exposes a
-    /// canonical incremental builder, the `merkle_incremental` feature gate
-    /// will switch this to an incremental update path.
+    /// Ensure the Merkle tree is rebuilt when marked dirty. This uses a deterministic full rebuild
+    /// today; once `iroha_crypto` exposes a canonical incremental builder, the `merkle_incremental`
+    /// feature gate will switch this to an incremental update path.
     fn ensure_built(&self) {
         if self.dirty.load(Ordering::Acquire) {
             self.rebuild_tree();

@@ -1,9 +1,8 @@
 //! Canonical rowset payloads carried inside query projection shard archives.
 //!
-//! These types define the stable on-wire rows that a DA-backed projection shard
-//! archive contains. The aggregate DSL can be evaluated against these rows after
-//! retrieval from DA without depending on ad hoc JSON maps or endpoint-specific
-//! response wrappers.
+//! These types define the stable on-wire rows that a DA-backed projection shard archive contains.
+//! The aggregate DSL can be evaluated against these rows after retrieval from DA without depending
+//! on ad hoc JSON maps or endpoint-specific response wrappers.
 use crate::query::projection_checkpoint::QueryProjectionResourceKind;
 use iroha_primitives::numeric::Quantity;
 use norito::{

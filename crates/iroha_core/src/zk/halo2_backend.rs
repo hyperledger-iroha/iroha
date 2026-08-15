@@ -231,11 +231,10 @@ mod tests {
             ipa::{multiopen::VerifierIPA, strategy::AccumulatorStrategy},
         },
     };
-    /// A deliberately tiny circuit used to exercise Halo2's native IPA
-    /// accumulator strategy. This is a host-side batch-verification proof of
-    /// concept, not a recursive verifier circuit: `AccumulatorStrategy` keeps
-    /// an unevaluated MSM in private Rust state and `finalize` decides it on the
-    /// host.
+    /// A deliberately tiny circuit used to exercise Halo2's native IPA accumulator strategy. This
+    /// is a host-side batch-verification proof of concept, not a recursive verifier circuit:
+    /// `AccumulatorStrategy` keeps an unevaluated MSM in private Rust state and `finalize` decides
+    /// it on the host.
     #[derive(Clone, Default)]
     struct PublicValue {
         value: Scalar,

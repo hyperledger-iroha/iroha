@@ -1,10 +1,9 @@
 //! Feature-isolated process-cut hooks for real-network Native AMX tests.
 //!
-//! Shipping builds do not compile this module. The dedicated adversarial-test
-//! daemon supplies a private, per-peer control directory. A canonical command
-//! names one exact Native AMX source and phase; the hook durably acknowledges
-//! that the phase was crossed and then aborts the process. The acknowledgement
-//! makes the command one-shot across restart.
+//! Shipping builds do not compile this module. The dedicated adversarial-test daemon supplies a
+//! private, per-peer control directory. A canonical command names one exact Native AMX source and
+//! phase; the hook durably acknowledges that the phase was crossed and then aborts the process. The
+//! acknowledgement makes the command one-shot across restart.
 #[cfg(test)]
 use norito::json::Map;
 use norito::json::Value;

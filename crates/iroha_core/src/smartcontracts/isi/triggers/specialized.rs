@@ -21,9 +21,8 @@ use norito::json::{self, JsonSerialize as JsonSerializeTrait, Value as JsonValue
 pub struct SpecializedAction<F> {
     /// The executable linked to this action
     pub executable: Executable,
-    /// The repeating scheme of the action. It's kept as part of the
-    /// action and not inside the [`iroha_data_model::trigger::Trigger`] type, so that further
-    /// sanity checking can be done.
+    /// The repeating scheme of the action. It's kept as part of the action and not inside the
+    /// [`iroha_data_model::trigger::Trigger`] type, so that further sanity checking can be done.
     pub repeats: Repeats,
     /// Account executing this action
     pub authority: AccountId,

@@ -1,11 +1,9 @@
 //! Native first-release ZK-ACE authorization engine.
 //!
-//! The only admitted proof wire is the dedicated masked execution-trace STARK
-//! in `zk_ace_stark`. It proves both Poseidon2 relations, commits an
-//! independent full-space zero-knowledge mask before batching challenges,
-//! links the AIR at one quartic-extension DEEP point, runs Fp4 FRI, and
-//! carries no caller-selected backend, verifier key, parameter record, or
-//! legacy generic envelope.
+//! The only admitted proof wire is the dedicated masked execution-trace STARK in `zk_ace_stark`. It
+//! proves both Poseidon2 relations, commits an independent full-space zero-knowledge mask before
+//! batching challenges, links the AIR at one quartic-extension DEEP point, runs Fp4 FRI, and
+//! carries no caller-selected backend, verifier key, parameter record, or legacy generic envelope.
 //!
 //! The compiled 128-bit Fiat--Shamir certificate is work-normalized in the
 //! classical random-oracle model.  The `pq_authorization` relation name does
@@ -278,8 +276,7 @@ pub fn prove_zk_ace_privacy_v1_with_rng<R: TryCryptoRng + ?Sized>(
 ///
 /// # Errors
 ///
-/// Returns the same closed typed failures as
-/// [`prove_zk_ace_privacy_v1_with_rng`].
+/// Returns the same closed typed failures as [`prove_zk_ace_privacy_v1_with_rng`].
 pub fn prove_zk_ace_privacy_v1(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
     witness: &ZkAcePrivacyWitnessV1,
@@ -293,9 +290,8 @@ pub fn prove_zk_ace_privacy_v1(
 ///
 /// # Errors
 ///
-/// Rejects invalid typed inputs and every empty, oversized, malformed,
-/// non-canonical, transcript-inconsistent, algebraically invalid, or
-/// low-degree-invalid proof.
+/// Rejects invalid typed inputs and every empty, oversized, malformed, non-canonical,
+/// transcript-inconsistent, algebraically invalid, or low-degree-invalid proof.
 pub fn verify_zk_ace_privacy_v1(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
     proof: &[u8],

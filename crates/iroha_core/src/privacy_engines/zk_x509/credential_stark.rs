@@ -1,11 +1,10 @@
 //! Canonical full-credential proof envelope and cross-subproof binding.
 //!
-//! `X5S1` is the sole first-release credential container. It carries exactly
-//! two ordered, length-delimited proof records: one main aggregate proof and
-//! one dedicated `X5C1` compact-CA proof. Public statement material is repeated
-//! in the fixed header so decode cannot silently pair a proof with another
-//! statement, root, or root-SPKI channel. The cryptographic verifier must still
-//! derive and compare that material from its trusted statement.
+//! `X5S1` is the sole first-release credential container. It carries exactly two ordered,
+//! length-delimited proof records: one main aggregate proof and one dedicated `X5C1` compact-CA
+//! proof. Public statement material is repeated in the fixed header so decode cannot silently pair
+//! a proof with another statement, root, or root-SPKI channel. The cryptographic verifier must
+//! still derive and compare that material from its trusted statement.
 use super::{
     accumulator_stark::{
         ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1,
@@ -42,9 +41,8 @@ pub(crate) const ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1: usize =
     FIXED_HEADER_BYTES_V1 + 2 * SUBPROOF_HEADER_BYTES_V1;
 /// Exact hard ceiling for the main aggregate section inside `X5S1`.
 ///
-/// The full credential ceiling is partitioned rather than shared dynamically:
-/// a caller cannot steal the compact-CA verifier's budget for an oversized
-/// main proof, or vice versa.
+/// The full credential ceiling is partitioned rather than shared dynamically: a caller cannot steal
+/// the compact-CA verifier's budget for an oversized main proof, or vice versa.
 pub(crate) const ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1: usize =
     ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize
         - ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1
@@ -343,10 +341,9 @@ pub(crate) fn decode_zk_x509_credential_envelope_v1(
 }
 /// Validate the exact public and terminal equality binding between verified proofs.
 ///
-/// `main` and `ca` must be reconstructed independently from successfully
-/// verified proof openings. This pure boundary additionally fixes the semantic
-/// SHA call identities and root-SPKI metadata so equal but mislabelled
-/// terminals cannot be paired.
+/// `main` and `ca` must be reconstructed independently from successfully verified proof openings.
+/// This pure boundary additionally fixes the semantic SHA call identities and root-SPKI metadata so
+/// equal but mislabelled terminals cannot be paired.
 pub(crate) fn validate_cross_subproof_binding_v1(
     expected_public: ZkX509CredentialPublicBindingV1,
     main: ZkX509MainCaBindingV1,

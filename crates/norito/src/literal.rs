@@ -82,9 +82,8 @@ pub fn parse<'a>(tag: &str, candidate: &'a str) -> Result<&'a str, Error> {
 
 /// Parse a canonical literal without constructing source-sized diagnostics.
 ///
-/// This is the allocation-free counterpart used by bounded decoders that map
-/// malformed input to their own fixed error. It accepts exactly the same
-/// canonical spelling as [`parse`].
+/// This is the allocation-free counterpart used by bounded decoders that map malformed input to
+/// their own fixed error. It accepts exactly the same canonical spelling as [`parse`].
 #[doc(hidden)]
 pub fn parse_without_diagnostics<'a>(tag: &str, candidate: &'a str) -> Option<&'a str> {
     let rest = candidate.strip_prefix(tag)?.strip_prefix(':')?;

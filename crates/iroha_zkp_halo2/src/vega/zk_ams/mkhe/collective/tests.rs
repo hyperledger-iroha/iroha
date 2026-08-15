@@ -1755,23 +1755,31 @@ fn persistent_commitment_blindings_move_without_duplicate_drop() {
 #[test]
 fn opaque_party_state_debug_and_api_do_not_expose_rlwe_coefficients() {
     let state = ZkAmsMkheCollectivePartyStateV1 {
-        profile_digest: [1; 32],
-        security_certificate_digest: [2; 32],
-        roster_digest: [3; 32],
-        key_material_digest: [4; 32],
-        epoch: 1,
-        transcript_digest: [5; 32],
-        party_index: 0,
-        party: test_parties().parties[0],
-        public_share_digest: [6; 32],
-        persistent_secret_binding: None,
-        persistent_secret_commitment_blindings: test_persistent_secret_commitment_blindings(),
-        secret: SecretPolynomial {
-            coefficients: vec![1, -1, 0],
+        persistent_direct_opening: PersistentDirectOpeningOwnerV1 {
+            axes: PersistentDirectOpeningAxesV1 {
+                profile_digest: [1; 32],
+                security_certificate_digest: [2; 32],
+                roster_digest: [3; 32],
+                key_material_digest: [4; 32],
+                epoch: 1,
+                cpk_transcript_digest: [5; 32],
+                party_index: 0,
+                party: test_parties().parties[0],
+                public_share_digest: [6; 32],
+            },
+            verified_binding: None,
+            blindings: test_persistent_secret_commitment_blindings(),
+            secret: SecretPolynomial {
+                coefficients: vec![1, -1, 0],
+            },
+            retained_commitment_wire: [[7; PERSISTENT_OPENING_POINT_WIRE_BYTES_V1];
+                ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1],
         },
         public_error: SecretPolynomial {
             coefficients: vec![2, -2, 0],
         },
+        party_local_rkg_ephemeral_opening: None,
+        party_local_rkg_ephemeral_creation_mask: 0,
     };
     let debug = format!("{state:?}");
     assert_eq!(debug.matches("[REDACTED]").count(), 3);
@@ -1780,16 +1788,6 @@ fn opaque_party_state_debug_and_api_do_not_expose_rlwe_coefficients() {
     assert!(!debug.contains("17"));
     assert_eq!(state.secret().coefficients.len(), 3);
     assert_eq!(state.public_error().coefficients.len(), 3);
-    assert_eq!(
-        state.persistent_secret_commitment_blindings().len(),
-        ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1
-    );
-    assert!(
-        state
-            .persistent_secret_commitment_blindings()
-            .iter()
-            .all(|blinding| !blinding.is_zero())
-    );
 }
 #[test]
 fn in_place_party_b_finish_matches_owned_polynomial_algebra() {

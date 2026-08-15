@@ -1,10 +1,9 @@
 //! Wrapper around immutable, shared text in one canonical JSON representation.
 //!
-//! [`Json::new`] serializes a [`norito::json::JsonSerialize`] value through its
-//! checked writer, parses it back into the bounded semantic value, and stores
-//! only the canonical compact rendering. Text constructors do the same; Norito
-//! decoding rejects alternate lexical spellings instead of normalizing a signed
-//! wire payload.
+//! [`Json::new`] serializes a [`norito::json::JsonSerialize`] value through its checked writer,
+//! parses it back into the bounded semantic value, and stores only the canonical compact rendering.
+//! Text constructors do the same; Norito decoding rejects alternate lexical spellings instead of
+//! normalizing a signed wire payload.
 use core::str::FromStr;
 use derive_more::Display;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
@@ -15,17 +14,15 @@ use norito::{
 use std::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 /// Maximum UTF-8 byte length of one [`Json`] document.
 ///
-/// This fixed V1 protocol bound matches the ledger's default metadata-value
-/// ceiling and applies before a value can enter the data model, independently
-/// of any lower context-specific limit.
+/// This fixed V1 protocol bound matches the ledger's default metadata-value ceiling and applies
+/// before a value can enter the data model, independently of any lower context-specific limit.
 pub const MAX_JSON_BYTES: usize = 1_048_576;
 /// Maximum structural nesting depth of one [`Json`] document.
 pub const MAX_JSON_NESTING_DEPTH: usize = json::MAX_JSON_VALUE_NESTING_DEPTH;
 /// A wrapper around immutable, reference-counted text that contains exactly one
 /// canonical rendering of a valid JSON document.
 ///
-/// Use [`Json::new`] to serialize a value and establish the canonical lexical
-/// invariant.
+/// Use [`Json::new`] to serialize a value and establish the canonical lexical invariant.
 #[derive(Debug, Display, Clone, PartialOrd, PartialEq, Ord, Eq)]
 #[display("{_0}")]
 pub struct Json(Arc<String>);
@@ -202,9 +199,8 @@ impl Json {
     /// Fallible constructor: serialize `payload` to JSON using Norito's helper.
     ///
     /// # Errors
-    /// Returns an error if `payload` has no checked writer, cannot be converted
-    /// into one valid JSON document, is too deeply nested, or exceeds
-    /// [`MAX_JSON_BYTES`].
+    /// Returns an error if `payload` has no checked writer, cannot be converted into one valid JSON
+    /// document, is too deeply nested, or exceeds [`MAX_JSON_BYTES`].
     #[allow(clippy::needless_pass_by_value)]
     pub fn try_new<T: JsonSerialize>(payload: T) -> Result<Self, norito::Error> {
         let serialized = norito::json::to_json_bounded(&payload, MAX_JSON_BYTES)
@@ -247,12 +243,10 @@ impl Json {
     pub fn get(&self) -> &String {
         self.0.as_ref()
     }
-    /// Returns `true` when `self` and `other` share the same immutable backing
-    /// allocation.
+    /// Returns `true` when `self` and `other` share the same immutable backing allocation.
     ///
-    /// This is an allocation-identity check, not a value comparison: two
-    /// independently constructed [`Json`] values can compare equal while this
-    /// method returns `false`.
+    /// This is an allocation-identity check, not a value comparison: two independently constructed
+    /// [`Json`] values can compare equal while this method returns `false`.
     #[must_use]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -594,7 +588,8 @@ mod tests {
         let expected = value.get();
         assert_eq!(
             norito::json::to_json_bounded(&value, expected.len())
-                .expect("serialize Json at exact bound"),
+                .expect("serialize Json at exact bound")
+                .as_str(),
             expected.as_str()
         );
         assert_eq!(

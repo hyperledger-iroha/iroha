@@ -3,8 +3,7 @@
 //! The parent V2 prerequisite hashed challenge-independent and inverse points
 //! together.  This additive child separates those roots so the sole global
 //! lookup `z` may be derived without a dependency cycle.  Production entry
-//! remains uninhabited and this module constructs no point, witness, proof, or
-//! authority.
+//! remains uninhabited and this module constructs no point, witness, proof, or authority.
 
 use super::*;
 

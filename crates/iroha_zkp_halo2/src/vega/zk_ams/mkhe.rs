@@ -4,8 +4,7 @@
 //! arithmetic profile used by its known-answer tests.  A profile is admitted
 //! only after every modulus/root, byte bound, work bound, and decryption-noise
 //! inequality has been checked.  In particular, none of these routines fall
-//! back to plaintext execution when an evaluated key or decryption share is
-//! absent.
+//! back to plaintext execution when an evaluated key or decryption share is absent.
 use super::super::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1, VegaT256ScalarV1 as Scalar,
     derive_t256_generators_v1,
@@ -266,6 +265,71 @@ pub use direct_object_transport::{
     ZkAmsMkheDirectObjectSealTokenV1, ZkAmsMkheDirectObjectStagingTokenV1,
     validate_zk_ams_mkhe_direct_object_v1,
 };
+/// Frozen width of the legacy direct-RKG1 orphan record occupying the stable storage key.
+pub const ZK_AMS_MKHE_DIRECT_RKG_ONE_LEGACY_RECORD_BYTES_V1: usize = 334;
+/// Frozen width of one V2 direct-RKG1 lifecycle record.
+pub const ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2: usize = 640;
+/// Actual atomic value width observed at the stable direct-RKG1 lifecycle key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2 {
+    /// The stable key has no committed value.
+    Absent,
+    /// The key contains one complete legacy 334-byte record.
+    Legacy334,
+    /// The key contains one complete V2 640-byte lifecycle record.
+    Lifecycle640,
+}
+/// Linearizable result of inserting one V2 lifecycle value at an absent stable key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2 {
+    /// This exact call inserted the value.
+    InsertedByThisCall,
+    /// A value was already present; this call changed nothing.
+    AlreadyPresent,
+}
+/// Linearizable result of one exact V2 lifecycle compare-exchange.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2 {
+    /// This exact call replaced the expected value.
+    ExchangedByThisCall,
+    /// The exact desired value was already committed; this call changed nothing.
+    ExactReplay,
+    /// A different value was committed; this call changed nothing.
+    Conflict,
+}
+/// Raw durable backend for the authority-neutral direct-RKG1 lifecycle journal.
+///
+/// `load_exact_v2` must bypass caches and obtain the committed value width from backend metadata;
+/// zero padding alone is not a width discriminator. `Absent` zeros all 640 output bytes;
+/// `Legacy334` writes exactly 334 bytes then zeros the remainder; `Lifecycle640` writes all bytes.
+/// Mutations are atomic, linearizable, and crash-durable before a successful return. This raw API
+/// additionally requires one protected singleton root plus global same-key fencing and
+/// rollback-resistant absence/CAS state: rollback to `Absent` could otherwise mint a second Fresh
+/// permit. A host-local checkpoint alone does not meet this contract. This raw API carries no
+/// publication permit, proof receipt, verifier result, binding, or release authority.
+pub trait ZkAmsMkheDirectRkgOneLifecycleStoreV2 {
+    /// Load the exact committed value and its independently observed width.
+    fn load_exact_v2(
+        &mut self,
+        storage_key: &[u8; 32],
+        record: &mut [u8; ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2],
+    ) -> Result<ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2, ZkAmsMkheErrorV1>;
+
+    /// Insert exactly one V2 record without overwriting any existing-width value.
+    fn put_if_absent_exact_v2(
+        &mut self,
+        storage_key: &[u8; 32],
+        record: &[u8; ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2],
+    ) -> Result<ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2, ZkAmsMkheErrorV1>;
+
+    /// Replace exactly one V2 value only when every expected byte matches.
+    fn compare_exchange_exact_v2(
+        &mut self,
+        storage_key: &[u8; 32],
+        expected: &[u8; ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2],
+        replacement: &[u8; ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2],
+    ) -> Result<ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2, ZkAmsMkheErrorV1>;
+}
 pub(super) use manifest::require_release_ready_v1;
 pub use manifest::{
     ZkAmsMkheReadinessV1, ZkAmsMkheReleaseManifestV1, zk_ams_mkhe_manifest_digest_v1,
@@ -867,10 +931,9 @@ impl BgvProfile {
     /// Digest only the algebraic and distribution parameters consumed by the
     /// concrete RLWE security analysis.
     ///
-    /// Operational byte, memory, and work ceilings are deliberately excluded:
-    /// changing a deployment limit must not invalidate an estimator result for
-    /// unchanged mathematics. The complete wire/profile identity remains
-    /// [`Self::digest`].
+    /// Operational byte, memory, and work ceilings are deliberately excluded: changing a deployment
+    /// limit must not invalidate an estimator result for unchanged mathematics. The complete
+    /// wire/profile identity remains [`Self::digest`].
     fn security_parameters_digest(&self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.validate()?;
         let mut frame = Vec::with_capacity(192 + self.moduli.len() * 16);

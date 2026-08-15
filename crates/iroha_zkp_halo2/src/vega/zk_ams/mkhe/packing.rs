@@ -180,9 +180,8 @@ impl Drop for ZeroizingPackingScalarBytesV1 {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
-/// Reusable, exactly release-sized decoder workspace. The sole evaluation
-/// vector is erased after every chunk and again when the workspace is dropped.
-/// Deliberately neither `Clone` nor `Debug`.
+/// Reusable, exactly release-sized decoder workspace. The sole evaluation vector is erased after
+/// every chunk and again when the workspace is dropped. Deliberately neither `Clone` nor `Debug`.
 pub(super) struct T256PackedPlaintextDecodeWorkspaceV1(ZeroizingPackingFp2V1);
 impl T256PackedPlaintextDecodeWorkspaceV1 {
     /// Fallibly reserve the complete decoder workspace before consuming input.
@@ -259,8 +258,7 @@ impl Drop for ZeroizingPackedRnsBindingV1 {
     }
 }
 /// Heap-stable owner for exactly one release-RNS limb. Its storage is private,
-/// optimizer-resistantly erased on every drop path, and deliberately neither
-/// `Clone` nor `Debug`.
+/// optimizer-resistantly erased on every drop path, and deliberately neither `Clone` nor `Debug`.
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -269,11 +267,10 @@ pub(super) struct ZeroizingT256ReleaseLimbV1 {
     coefficients: Box<[u64]>,
     filled_limb: Option<usize>,
 }
-/// Immutable typed borrow of one successfully filled release limb. The private
-/// ordinal and modulus travel with the coefficient slice; future adapters must
-/// accept this typed borrow intact when preserving that association. Reading
-/// its parts separately does not by itself enforce correct pairing.
-/// Deliberately neither `Clone` nor `Debug`.
+/// Immutable typed borrow of one successfully filled release limb. The private ordinal and modulus
+/// travel with the coefficient slice; future adapters must accept this typed borrow intact when
+/// preserving that association. Reading its parts separately does not by itself enforce correct
+/// pairing. Deliberately neither `Clone` nor `Debug`.
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -363,10 +360,9 @@ impl Drop for ZeroizingT256ReleaseLimbV1 {
         let _ = core::hint::black_box(&mut *coefficients);
     }
 }
-/// Borrowed, exact-validation capability for allocation-free release-limb
-/// lifting. Its fields stay private so sibling modules cannot recover the raw
-/// packed artifact through this capability. Deliberately neither `Clone` nor
-/// `Debug`.
+/// Borrowed, exact-validation capability for allocation-free release-limb lifting. Its fields stay
+/// private so sibling modules cannot recover the raw packed artifact through this capability.
+/// Deliberately neither `Clone` nor `Debug`.
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -409,11 +405,10 @@ impl<'packed> ValidatedT256PackedPlaintextV1<'packed> {
     }
     /// Fill exactly one zeroizing release-limb owner without allocation.
     ///
-    /// Invalid indices or buffer sizes are rejected before the output is
-    /// touched. On success the owner retains the residues for later arithmetic
-    /// and erases them automatically on drop. Scalar loop values and
-    /// compiler-created temporaries are not claimed to be optimizer-resistantly
-    /// zeroized.
+    /// Invalid indices or buffer sizes are rejected before the output is touched. On success the
+    /// owner retains the residues for later arithmetic and erases them automatically on drop.
+    /// Scalar loop values and compiler-created temporaries are not claimed to be
+    /// optimizer-resistantly zeroized.
     fn lift_release_limb_into_v1(
         &self,
         limb: usize,
@@ -435,9 +430,8 @@ impl<'packed> ValidatedT256PackedPlaintextV1<'packed> {
         Ok(())
     }
 }
-/// Move-only ordered transcript state shared by the release wrapper and tiny
-/// parity tests. It retains only the Keccak state and non-secret profile
-/// geometry, never polynomial coefficients.
+/// Move-only ordered transcript state shared by the release wrapper and tiny parity tests. It
+/// retains only the Keccak state and non-secret profile geometry, never polynomial coefficients.
 #[allow(
     dead_code,
     reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
@@ -538,9 +532,8 @@ impl<'packed> T256PackedRnsBindingHasherV1<'packed> {
             transcript: OrderedRnsBindingHashV1::new(&release_profile_v1())?,
         })
     }
-    /// Lift and absorb the next canonical release limb into a caller-provided
-    /// zeroizing owner. Its typed immutable borrow remains available after
-    /// success.
+    /// Lift and absorb the next canonical release limb into a caller-provided zeroizing owner. Its
+    /// typed immutable borrow remains available after success.
     pub(super) fn absorb_next_release_limb_into_v1(
         &mut self,
         limb: usize,
@@ -561,10 +554,9 @@ impl<'packed> T256PackedRnsBindingHasherV1<'packed> {
     }
     /// Finish only after all 38 release limbs were absorbed exactly once.
     ///
-    /// The returned deterministic digest is a non-hiding in-process
-    /// equality/lineage binding. It is not a proof, MAC, authorization,
-    /// capability, or receipt, and equality or offline guesses can be visible
-    /// for low-entropy plaintexts. No partial transcript state is exposed.
+    /// The returned deterministic digest is a non-hiding in-process equality/lineage binding. It is
+    /// not a proof, MAC, authorization, capability, or receipt, and equality or offline guesses can
+    /// be visible for low-entropy plaintexts. No partial transcript state is exposed.
     pub(super) fn finish(self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.transcript.finish()
     }
@@ -835,10 +827,9 @@ pub struct ZkAmsT256RotationCertificateV1 {
 }
 /// Immutable evidence identity for the exact release packing KAT.
 ///
-/// The focused release test recomputes every positive artifact and the ordered
-/// adversarial catalogue from the native implementation. Runtime readiness
-/// consumes this compact, profile-bound identity instead of repeating a
-/// release-degree NTT on each admission attempt.
+/// The focused release test recomputes every positive artifact and the ordered adversarial
+/// catalogue from the native implementation. Runtime readiness consumes this compact, profile-bound
+/// identity instead of repeating a release-degree NTT on each admission attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsT256ReleasePackingCertificateV1 {
     /// Certificate schema version.
@@ -1417,9 +1408,8 @@ pub(super) fn packed_plaintext_to_rns_v1(
 /// This is a native equality check, not a proof verifier: the caller supplies
 /// the plaintext coefficients, and this function derives every residue under
 /// all release moduli after rechecking the packed artifact.  It is useful to
-/// bind an in-process verified capability to the real 38-limb representation,
-/// but cannot replace the missing RNS-Link carry/quotient proof on untrusted
-/// wire bytes.
+/// bind an in-process verified capability to the real 38-limb representation, but cannot replace
+/// the missing RNS-Link carry/quotient proof on untrusted wire bytes.
 pub(super) fn packed_plaintext_rns_binding_digest_v1(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,

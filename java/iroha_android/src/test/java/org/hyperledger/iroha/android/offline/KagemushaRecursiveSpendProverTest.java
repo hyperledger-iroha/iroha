@@ -1477,7 +1477,10 @@ public final class KagemushaRecursiveSpendProverTest {
     final String nonce = "offline-lineage-1";
     final ToriiCanonicalRequestAuth canonicalAuth =
         new ToriiCanonicalRequestAuth(
-            "alice", message -> signEd25519(keyPair.getPrivate(), message), timestampMs, nonce);
+            "alice@universal",
+            message -> signEd25519(keyPair.getPrivate(), message),
+            timestampMs,
+            nonce);
     final AtomicReference<TransportRequest> captured = new AtomicReference<>();
     final KagemushaRecursiveSpendProver.ToriiClient client =
         KagemushaRecursiveSpendProver.newToriiClient(
@@ -1534,7 +1537,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert lineageRequest.headers().get("Content-Type")
         .equals(Arrays.asList("application/x-norito"));
     assert lineageRequest.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT)
-        .equals(Arrays.asList("alice"));
+        .equals(Arrays.asList("alice@universal"));
     assert lineageRequest.headers().get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS)
         .equals(Arrays.asList(Long.toString(timestampMs)));
     assert lineageRequest.headers().get(CanonicalRequestSigner.HEADER_NONCE)

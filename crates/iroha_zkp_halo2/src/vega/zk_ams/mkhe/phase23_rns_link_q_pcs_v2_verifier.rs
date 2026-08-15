@@ -1,10 +1,9 @@
 //! Borrowed, fixed-scratch verifier for the ten-row qPCS V2 envelope.
 //!
-//! Merkle leaves and nodes bind the parameter digest, tree role, FRI layer,
-//! tree length, and height. Multiproof values stay borrowed from the bounded
-//! proof; the largest live path frontier is exactly 320 nodes. Successful
-//! verification authenticates C0, Cq, and all 18 FRI layers before checking
-//! every one-point quotient, ten-row batch, FRI fold, and terminal equation.
+//! Merkle leaves and nodes bind the parameter digest, tree role, FRI layer, tree length, and
+//! height. Multiproof values stay borrowed from the bounded proof; the largest live path frontier
+//! is exactly 320 nodes. Successful verification authenticates C0, Cq, and all 18 FRI layers before
+//! checking every one-point quotient, ten-row batch, FRI fold, and terminal equation.
 use super::super::{Fq2ParametersV1, Fq2V1};
 use super::*;
 const MERKLE_LEAF_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0";

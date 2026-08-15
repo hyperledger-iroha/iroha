@@ -1,10 +1,41 @@
 import { Buffer } from "buffer";
-import { AccountAddress } from "./address.js";
-import { createHash, randomBytes } from "./cryptoHash.js";
+import {
+  canonicalAuthAccountHeaderValue,
+  requireCanonicalAuthAccount,
+} from "./canonicalAccount.js";
+import {
+  canonicalRequestMessage,
+  CANONICAL_REQUEST_MAX_METHOD_BYTES_V1,
+  CANONICAL_REQUEST_MAX_PATH_BYTES_V1,
+  CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1,
+  CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1,
+  canonicalQueryString,
+} from "./canonicalMessage.js";
+import {
+  CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
+  CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1,
+  CANONICAL_REQUEST_MAX_WITNESS_BYTES_V1,
+} from "./canonicalLimits.js";
+import { preparedTransportQuery } from "./canonicalTransport.js";
+import { randomBytes } from "./cryptoHash.js";
 import { signEd25519 } from "./crypto.js";
 import { NetworkId, networkIdBytes } from "./networkId.js";
 
 export { NetworkId };
+export { requireCanonicalAuthAccount };
+export {
+  canonicalRequestMessage,
+  CANONICAL_REQUEST_MAX_METHOD_BYTES_V1,
+  CANONICAL_REQUEST_MAX_PATH_BYTES_V1,
+  CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1,
+  CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1,
+  canonicalQueryString,
+};
+export {
+  CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
+  CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1,
+  CANONICAL_REQUEST_MAX_WITNESS_BYTES_V1,
+};
 
 const DEFAULT_JSON_HEADERS = Object.freeze({
   "Content-Type": "application/json",
@@ -15,33 +46,6 @@ const CANONICAL_REQUEST_NETWORK_DOMAIN = Buffer.from(
   "iroha.app.request.network.v1\0",
   "utf8",
 );
-
-/** Maximum decoded non-empty form pairs in a canonical V1 request. */
-export const CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1 = 64;
-/** Maximum UTF-8 bytes in the raw canonical V1 query. */
-export const CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1 = 64 * 1024;
-/** Maximum UTF-8 bytes in the canonical V1 HTTP method token. */
-export const CANONICAL_REQUEST_MAX_METHOD_BYTES_V1 = 32;
-/** Maximum UTF-8 bytes in the percent-encoded canonical V1 path. */
-export const CANONICAL_REQUEST_MAX_PATH_BYTES_V1 = 64 * 1024;
-/** Maximum UTF-8 bytes in a canonical V1 account identity or alias. */
-export const CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 = 36 * 1024;
-
-function compareUtf8(left, right) {
-  if (left === right) {
-    return 0;
-  }
-  const a = Buffer.from(String(left), "utf8");
-  const b = Buffer.from(String(right), "utf8");
-  const min = Math.min(a.length, b.length);
-  for (let index = 0; index < min; index += 1) {
-    const diff = a[index] - b[index];
-    if (diff !== 0) {
-      return diff;
-    }
-  }
-  return a.length - b.length;
-}
 
 function requireExactNonBlankString(value, field, context) {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -61,106 +65,6 @@ function requireExactNonBlankString(value, field, context) {
     throw new Error(`nonce must contain 1...256 non-whitespace ASCII bytes for ${context}`);
   }
   return value;
-}
-
-const CANONICAL_AUTH_ACCOUNT_ALIAS_PATTERN =
-  /^[a-z0-9]+(?:[._-][a-z0-9]+)*@[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)?$/u;
-
-export function requireCanonicalAuthAccount(value, context) {
-  if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
-    throw new TypeError(
-      `${context} must be an exact canonical I105 account or ASCII account alias`,
-    );
-  }
-  if (Buffer.byteLength(value, "utf8") > CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1) {
-    throw new TypeError(
-      `${context} exceeds ${CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1} UTF-8 bytes`,
-    );
-  }
-  if (CANONICAL_AUTH_ACCOUNT_ALIAS_PATTERN.test(value)) {
-    return value;
-  }
-  try {
-    const parsed = AccountAddress.parseEncoded(value);
-    if (parsed.address.toI105(parsed.chainDiscriminant) === value) {
-      return value;
-    }
-  } catch {
-    // Use the single stable diagnostic below for every malformed identifier.
-  }
-  throw new TypeError(
-    `${context} must be an exact canonical I105 account or ASCII account alias`,
-  );
-}
-
-function canonicalAuthAccountHeaderValue(accountId) {
-  if (CANONICAL_AUTH_ACCOUNT_ALIAS_PATTERN.test(accountId)) {
-    return accountId;
-  }
-  return AccountAddress.parseEncoded(accountId).address.canonicalHex();
-}
-
-/**
- * Canonicalise a raw query string by decoding, sorting, and re-encoding.
- * @param {string | URLSearchParams | undefined | null} raw
- * @returns {string}
- */
-export function canonicalQueryString(raw) {
-  if (raw === undefined || raw === null) {
-    return "";
-  }
-  const rawText = raw instanceof URLSearchParams ? raw.toString() : String(raw);
-  const rawBytes = Buffer.byteLength(rawText, "utf8");
-  if (rawBytes > CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1) {
-    throw new RangeError(
-      `canonical request query exceeds ${CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1} raw UTF-8 bytes`,
-    );
-  }
-  const params = new URLSearchParams(rawText);
-  const pairs = Array.from(params.entries()).map(([k, v]) => [k, v]);
-  if (pairs.length > CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1) {
-    throw new RangeError(
-      `canonical request query exceeds ${CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1} pairs`,
-    );
-  }
-  pairs.sort((a, b) => {
-    const keyOrder = compareUtf8(a[0], b[0]);
-    if (keyOrder !== 0) {
-      return keyOrder;
-    }
-    return compareUtf8(a[1], b[1]);
-  });
-  const serializer = new URLSearchParams();
-  for (const [key, value] of pairs) {
-    serializer.append(key, value);
-  }
-  return serializer.toString();
-}
-
-/**
- * Build canonical request bytes for signing.
- * @param {{method: string, path: string, query?: string | URLSearchParams, body?: Buffer | ArrayBuffer | ArrayBufferView | string}} params
- * @returns {Buffer}
- */
-export function canonicalRequestMessage({ method, path, query, body }) {
-  const methodText = String(method ?? "");
-  const pathText = String(path);
-  if (Buffer.byteLength(methodText, "utf8") > CANONICAL_REQUEST_MAX_METHOD_BYTES_V1) {
-    throw new RangeError(
-      `canonical request method exceeds ${CANONICAL_REQUEST_MAX_METHOD_BYTES_V1} UTF-8 bytes`,
-    );
-  }
-  if (Buffer.byteLength(pathText, "utf8") > CANONICAL_REQUEST_MAX_PATH_BYTES_V1) {
-    throw new RangeError(
-      `canonical request path exceeds ${CANONICAL_REQUEST_MAX_PATH_BYTES_V1} UTF-8 bytes`,
-    );
-  }
-  const upperMethod = methodText.toUpperCase();
-  const canonicalQuery = canonicalQueryString(query);
-  const bodyBuffer = body === undefined ? Buffer.alloc(0) : Buffer.from(body);
-  const bodyHash = createHash("sha256").update(bodyBuffer).digest("hex");
-  const rendered = `${upperMethod}\n${pathText}\n${canonicalQuery}\n${bodyHash}`;
-  return Buffer.from(rendered, "utf8");
 }
 
 /**
@@ -226,7 +130,7 @@ export function buildCanonicalRequestHeaders({
   const signatureInput = {
     method,
     path,
-    query,
+    query: preparedTransportQuery(query),
     body,
     timestampMs,
     nonce: checkedNonce,
@@ -276,21 +180,61 @@ function normalizeHeadersInit(headers) {
 }
 
 function normalizeSignatureBase64(signature, context = "signature") {
-  if (typeof signature === "string") {
-    const trimmed = signature.trim();
-    if (!trimmed) {
-      throw new Error(`${context} must not be empty`);
-    }
-    return trimmed;
-  }
   if (signature === undefined || signature === null) {
     throw new Error(`${context} must be returned by the canonical request signer`);
   }
-  return Buffer.from(signature).toString("base64");
+  let payload;
+  let canonical;
+  if (typeof signature === "string") {
+    if (
+      !signature ||
+      signature.length > 4 * Math.ceil(CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1 / 3) ||
+      signature.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
+        signature,
+      )
+    ) {
+      throw new Error(`${context} must be exact padded standard-base64`);
+    }
+    payload = Buffer.from(signature, "base64");
+    canonical = payload.toString("base64");
+    if (canonical !== signature) {
+      throw new Error(`${context} must be exact padded standard-base64`);
+    }
+  } else {
+    const byteLength = ArrayBuffer.isView(signature)
+      ? signature.byteLength
+      : signature instanceof ArrayBuffer
+        ? signature.byteLength
+        : null;
+    if (byteLength === null) {
+      throw new TypeError(`${context} must be bytes or exact padded standard-base64`);
+    }
+    if (byteLength > CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1) {
+      throw new RangeError(`${context} exceeds the canonical V1 signature limit`);
+    }
+    payload = ArrayBuffer.isView(signature)
+      ? Buffer.from(signature.buffer, signature.byteOffset, signature.byteLength)
+      : Buffer.from(signature);
+    canonical = payload.toString("base64");
+  }
+  if (
+    payload.length === 0 ||
+    payload.length > CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1 ||
+    payload.every((byte) => byte === 0)
+  ) {
+    throw new RangeError(
+      `${context} must contain 1...${CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1} non-zero signature bytes`,
+    );
+  }
+  return canonical;
 }
 
 function splitPathAndQuery(path, query) {
   const pathText = String(path);
+  if (pathText.includes("#")) {
+    throw new TypeError("canonical request targets must not contain a URL fragment");
+  }
   const queryIndex = pathText.indexOf("?");
   if (query !== undefined && query !== null) {
     return {
@@ -308,13 +252,18 @@ function splitPathAndQuery(path, query) {
 }
 
 function canonicalTargetFromPath({ path, query, baseUrl }) {
+  const pathText = String(path);
   const absoluteUrlPattern = /^[a-z][a-z0-9+.-]*:\/\//i;
-  if (absoluteUrlPattern.test(String(path))) {
-    const url = new URL(String(path));
-    return splitPathAndQuery(url.pathname + url.search, query);
+  if (absoluteUrlPattern.test(pathText)) {
+    throw new TypeError(
+      "canonical JSON request path must be root-relative; use baseUrl for the origin",
+    );
+  }
+  if (!pathText.startsWith("/") || pathText.startsWith("//")) {
+    throw new TypeError("canonical JSON request path must be exact root-relative text");
   }
 
-  const target = splitPathAndQuery(path, query);
+  const target = splitPathAndQuery(pathText, query);
   if (!baseUrl) {
     return target;
   }
@@ -372,6 +321,7 @@ export async function buildCanonicalJsonRequest({
   }
   const methodUpper = String(method).toUpperCase();
   const canonicalTarget = canonicalTargetFromPath({ path, query, baseUrl });
+  canonicalTarget.query = preparedTransportQuery(canonicalTarget.query);
   const bodyJson = body === undefined ? "" : JSON.stringify(body);
   const message = canonicalRequestSignatureMessage({
     networkId,

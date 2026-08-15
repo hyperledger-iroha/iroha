@@ -1,9 +1,8 @@
 //! Typed governance instructions.
 //!
-//! These canonical data-model types are serialized into transactions and are
-//! executed by the corresponding core governance paths. They also define the
-//! exact CLI and Torii draft surfaces; endpoint-local aliases are not part of
-//! the instruction format.
+//! These canonical data-model types are serialized into transactions and are executed by the
+//! corresponding core governance paths. They also define the exact CLI and Torii draft surfaces;
+//! endpoint-local aliases are not part of the instruction format.
 #[cfg(feature = "governance")]
 use crate::governance::types::ParliamentBody;
 use std::{string::String, vec::Vec};
@@ -320,10 +319,9 @@ pub struct EnactReferendum {
 impl crate::seal::Instruction for EnactReferendum {}
 /// Enact a finalized threshold referendum for one exact SCCP route action.
 ///
-/// Unlike the generic referendum instruction, this surface carries the full
-/// closed preimage and Core checks it against the stored proposal, exact
-/// [`NetworkId`], and canonical referendum id before applying any registry
-/// mutation.
+/// Unlike the generic referendum instruction, this surface carries the full closed preimage and
+/// Core checks it against the stored proposal, exact [`NetworkId`], and canonical referendum id
+/// before applying any registry mutation.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
 )]
@@ -441,9 +439,8 @@ pub struct CastParliamentBallot {
 impl crate::seal::Instruction for CastParliamentBallot {}
 /// Persist a council membership for an epoch.
 ///
-/// This instruction records an explicitly administered `members` roster for
-/// `epoch` in the WSV. Selection metadata is derived by the ledger and is not
-/// accepted from the caller.
+/// This instruction records an explicitly administered `members` roster for `epoch` in the WSV.
+/// Selection metadata is derived by the ledger and is not accepted from the caller.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct PersistCouncilForEpoch {
     /// Epoch index

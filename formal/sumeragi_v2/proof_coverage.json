@@ -8,7 +8,7 @@
     "trusted_contract",
     "out_of_scope"
   ],
-  "machine_checked_completion": true,
+  "machine_checked_completion": false,
   "obligations": [
     {
       "id": "dual-quorum-definition",
@@ -176,7 +176,7 @@
       "requirement": "The source-linked Rust/Verus safety kernels and ordinary production worker, effect-executor, runtime, and runner state refine the executable effective-lock acquisition owner: post-WAL EnterView emits the exact protected certified fetch; map/hash/byte ownership is exact; the control-reserved physical load and certified recovery callbacks are fairly invoked; and terminating local work eventually delivers the rebound body or a higher lock or decision supersedes it",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "EffectiveLockBodyAcquisitionProductionRefinementObligation",
-      "status": "cross_tool_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "async-runner-scheduler-preservation",
@@ -239,7 +239,7 @@
       "requirement": "The production reducer, durable WAL sources, effect executor, scheduler queues, body-recovery workers, application completion, successor activation, unified V2/lane-local ingress, and reliable outbound transport refine the exact abstract progress-owner identities and transitions: every durable Commit intent and Decision carrier maps to one current production owner or terminal state; reset and admission lifetimes agree; lane-local and V2 classes share the modeled count/byte owner without conflating semantic origin with the authenticated resource-owning hop; every reliable occurrence retains its exact source, target or remaining broadcast cursor, bytes, and attempt identity through actor, encode, frame, batch, write, and flush stages until the matching flush acknowledgement; scheduler service ranks preserve production FIFO/capacity semantics; and application completion reconstructs the next-height activation witness. Together with the separately reviewed effective-lock production refinement, this exact trace relation derives the historical locked-body production refinement. Source-fidelity checks and adversarial mutation matrices constrain this mapping but do not prove it",
       "module": "SumeragiV2AsyncTemporalClosureProofs",
       "symbol": "ProgressWitnessProductionRefinementObligation",
-      "status": "cross_tool_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "protected-service-rank-stage4-ready-causal",
@@ -274,70 +274,70 @@
       "requirement": "Every reachable undecided post-GST state enables a concrete AsyncNext step that grows current-height protocol evidence; strictly decreases deadline debt; decreases/exits a protected candidate or Serve-occurrence rank; or strictly decreases named terminating local work: Stage-2 Busy or deferred-handoff rank, Stage-3/4/6 auxiliary or capacity rank, exact-recipient runner-prefix or runtime-invocation debt, completion I/O depth, ingress depth, outstanding transport cardinality, or the node-service gate. The overdue-packet branch must follow the packet's authenticated recipient/source through exact duplicate coalescing, fresh admission, recipient-local runner work, applied-node historical draining, or the blocking Serve I/O FIFO; an unrelated runner, bare clock, idle/rearm, or view-change step is insufficient",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "DeadlockFreedomObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "post-gst-starvation-freedom",
       "requirement": "Under the concrete post-GST weak-fairness actions, every admitted protected protocol candidate and every responsive recovery Serve occurrence eventually leaves scheduler ownership",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "StarvationFreedomObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "timeout-view-liveness",
       "requirement": "After GST, a nondeciding responsive validator advances by TC or decides",
       "module": "SumeragiV2AsyncTemporalClosureProofs",
       "symbol": "AsyncTemporalClosureTimeoutViewProgressObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "rotating-leader-liveness",
       "requirement": "Under AsyncLiveSpecAt(initialContext), which is exactly the asynchronous transition and fairness specification with no finite-counter premise, every post-GST undecided execution either decides before another rotation is needed or reaches a view in which the responsive honest scheduled leader itself is active; from such a leader view all responsive validators eventually decide. The live model uses Nat generations, bounded TLC exhaustion is diagnostic only, and production physical nonexhaustion follows from strict same-view Prepare-rank ascent",
       "module": "SumeragiV2AsyncTemporalClosureProofs",
       "symbol": "AsyncTemporalClosureRotatingLeaderProgressObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "locked-body-reproposal",
       "requirement": "After GST, every stable available retained lock at a responsive validator eventually commits in its original round, is reproposed unchanged in a later round, or is legitimately decided or superseded by a higher certified Prepare lock",
       "module": "SumeragiV2AsyncTemporalClosureProofs",
       "symbol": "AsyncTemporalClosureLockedBodyReproposalProgressObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "application-liveness",
       "requirement": "For every responsive validator independently, once GST holds and that validator has a durable decision, the exact Decision-stage service lifecycle eventually recovers, validates, and applies the certified body without waiting for all other validators to decide. The release theorem consumes the five exact off-scheduler Decision leaves and protected finite-runner service; it may not fall back to an aggregate application facade",
       "module": "SumeragiV2AsyncTemporalClosureProofs",
       "symbol": "AsyncTemporalClosureApplicationCompletionProgressObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "successor-activation-starvation-freedom",
-      "requirement": "Every responsive validator's Queued or Running successor activation has an exact durable parent witness, an enabled progress action, and a rank in the finite 0..21 lifecycle carrier: Published predecessor ownership occupies the 12..21 tier and recovered/absent ownership occupies 1..10. A clean exact-complete-tip restart strictly descends from the Published tier into the absent-owner attempt, snapshot-bootstrap authority cannot authenticate that recovery, and failed resets occur only before the explicit eventual failure-free suffix. Within that suffix every fair progress action strictly decreases rank or publishes/supersedes the successor, no chain step orphans pending activation or raises its rank, and well-founded rank convergence plus suffix lifting yields starvation freedom. Release completion requires strict TLAPS verification of this target; no progress claim is made for validators outside Responsive",
+      "requirement": "Every responsive validator's Queued or Running successor activation has an exact durable parent witness, an enabled progress action, and a rank in the finite 0..21 lifecycle carrier: Published predecessor ownership occupies the 12..21 tier and recovered/absent ownership occupies 1..10. A clean exact-complete-tip restart strictly descends from the Published tier into the absent-owner attempt, snapshot-bootstrap authority cannot authenticate that recovery, and failed resets occur only before the explicit eventual failure-free suffix. Within that suffix every fair progress action strictly decreases rank or publishes/supersedes the successor, no chain step orphans pending activation or raises its rank, and well-founded rank convergence plus suffix lifting yields starvation freedom. The candidate TLAPS proof remains specified_unproved until strict verification succeeds; no progress claim is made for validators outside Responsive",
       "module": "SumeragiV2SuccessorActivationRefinementProofs",
       "symbol": "SuccessorActivationStarvationFreedomObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "successor-activation-exact-recovery-production-refinement",
-      "requirement": "Six explicit, unassigned external trace claims must connect production to the indexed model: Applied successor publication, Recovered successor publication, fail-closed startup failure, authenticated historical-certificate import, the ordinary historical body/store/validate/apply pipeline, and terminal application without successor activation. Production successor startup must refine the full-context Applied/Recovered token pipeline through ordered adapter, runtime, services, startup effects, clocks, marker, ingress, and publication actions; fail-closed recovery requires exact durable complete-tip authority and never fabricates physical predecessor completion; historical recovery opens an exact per-context Async target, imports only an authenticated exact CommitQC, and traverses the ordinary decision, body recovery, store, validation, and application reducer path. Source-order checks, adversarial production tests, and source-manifest binding constrain this mapping; release completion requires machine-checked cross-tool trace evidence for every claim",
+      "requirement": "Six explicit, unassigned external trace claims must connect production to the indexed model: Applied successor publication, Recovered successor publication, fail-closed startup failure, authenticated historical-certificate import, the ordinary historical body/store/validate/apply pipeline, and terminal application without successor activation. Production successor startup must refine the full-context Applied/Recovered token pipeline through ordered adapter, runtime, services, startup effects, clocks, marker, ingress, and publication actions; fail-closed recovery requires exact durable complete-tip authority and never fabricates physical predecessor completion; historical recovery opens an exact per-context Async target, imports only an authenticated exact CommitQC, and traverses the ordinary decision, body recovery, store, validation, and application reducer path. Source-order checks, adversarial production tests, and source-manifest binding constrain these six claims but do not prove them; the obligation remains proofless specified_unproved debt until machine-checked cross-tool trace evidence establishes every claim",
       "module": "SumeragiV2ChainEpochRefinement",
       "symbol": "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
-      "status": "cross_tool_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "genesis-height-successor-handoff",
       "requirement": "Under AsyncLiveChainSpec, which is exactly the concrete genesis asynchronous chain product with no finite-counter premise, every responsive validator eventually records the exact first successor context when a successor height exists; the terminal finite horizon is vacuous. The live model uses Nat generations, bounded TLC exhaustion is diagnostic only, and production physical nonexhaustion follows from strict same-view Prepare-rank ascent",
       "module": "SumeragiV2ChainEpochRefinement",
       "symbol": "GenesisHeightSuccessorHandoffObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "height-liveness",
       "requirement": "Under IndexedLiveChainSpec plus the explicit environmental IndexedGstEventuallyCondition, with no per-context finite-counter or restart-exhaustion premise, every joined post-GST context eventually applies at the terminal MaxHeight, or advances every responsive validator into a successor context when nonterminal. IndexedGstEventuallyCondition is the sole environmental premise in this dimension; the live model uses Nat generations, bounded TLC exhaustion is diagnostic only, and production physical nonexhaustion follows from strict same-view Prepare-rank ascent",
       "module": "SumeragiV2ChainLivenessProofs",
       "symbol": "HeightLivenessObligation",
-      "status": "tlaps_proved"
+      "status": "specified_unproved"
     },
     {
       "id": "cryptography",

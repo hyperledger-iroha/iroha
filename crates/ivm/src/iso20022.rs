@@ -1,10 +1,9 @@
 //! ISO 20022 message handling opcodes and bridge parser support.
 //!
-//! The module keeps a compact in-memory message stack for IVM opcodes while
-//! providing deterministic XML and key-value parsing for the ISO bridge. XML
-//! payloads are bound to their declared ISO message definition through
-//! `MsgDefIdr` and `Document` XSD namespaces before schema-table validation is
-//! applied. Network transport is deliberately outside this module and outside
+//! The module keeps a compact in-memory message stack for IVM opcodes while providing deterministic
+//! XML and key-value parsing for the ISO bridge. XML payloads are bound to their declared ISO
+//! message definition through `MsgDefIdr` and `Document` XSD namespaces before schema-table
+//! validation is applied. Network transport is deliberately outside this module and outside
 //! consensus execution.
 use crate::signature::{SignatureScheme, verify_signature};
 use core::fmt;
@@ -36,10 +35,9 @@ thread_local! {
 }
 /// Return the list of fields that must be present for the given message type.
 ///
-/// This is a tiny stand-in for schema driven validation. Only a handful of
-/// message types are recognised and each lists a couple of representative
-/// mandatory fields. The map can be extended over time as more messages are
-/// supported.
+/// This is a tiny stand-in for schema driven validation. Only a handful of message types are
+/// recognised and each lists a couple of representative mandatory fields. The map can be extended
+/// over time as more messages are supported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Requirement {
     Required,
@@ -1606,9 +1604,8 @@ impl From<ValidationFailure> for MsgError {
 }
 /// Consume and return the most recent validation error recorded by [`msg_validate`].
 ///
-/// The helper yields [`MsgError`] variants mirroring the validation failure and
-/// clears the stored state so subsequent calls return `None` until
-/// [`msg_validate`] runs again.
+/// The helper yields [`MsgError`] variants mirroring the validation failure and clears the stored
+/// state so subsequent calls return `None` until [`msg_validate`] runs again.
 #[must_use]
 pub fn take_validation_error() -> Option<MsgError> {
     take_validation_failure().map(MsgError::from)
@@ -3615,8 +3612,7 @@ pub fn encode_amount(value: u64) -> Vec<u8> {
 }
 /// Decode a numeric amount from an ASCII string.
 ///
-/// Returns `None` if the input contains non-digit characters or does not fit
-/// into a `u64`.
+/// Returns `None` if the input contains non-digit characters or does not fit into a `u64`.
 pub fn decode_amount(value: &[u8]) -> Option<u64> {
     if value.iter().all(|b| b.is_ascii_digit()) {
         core::str::from_utf8(value).ok()?.parse().ok()
@@ -3626,8 +3622,7 @@ pub fn decode_amount(value: &[u8]) -> Option<u64> {
 }
 /// Base64 alphabet used by [`encode_base64`] and [`decode_base64`].
 const BASE64_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-/// Precomputed table mapping ASCII bytes to their 6-bit Base64 value.
-/// Invalid bytes map to `0xFF`.
+/// Precomputed table mapping ASCII bytes to their 6-bit Base64 value. Invalid bytes map to `0xFF`.
 const fn build_b64_decode_table() -> [u8; 256] {
     let mut table = [0xFFu8; 256];
     let mut i = 0;
@@ -3667,12 +3662,10 @@ pub fn encode_base64(data: &[u8]) -> Vec<u8> {
 }
 /// Decode a Base64 ASCII string into the provided output buffer.
 ///
-/// The caller supplies the destination [`Vec`] which is extended with the
-/// decoded bytes. This allows large payloads to be processed without
-/// allocating a fresh buffer for every call.
+/// The caller supplies the destination [`Vec`] which is extended with the decoded bytes. This
+/// allows large payloads to be processed without allocating a fresh buffer for every call.
 ///
-/// Returns `None` if the input contains invalid characters or has the wrong
-/// padding.
+/// Returns `None` if the input contains invalid characters or has the wrong padding.
 pub fn decode_base64_into(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
     if !data.len().is_multiple_of(4) {
         return None;
@@ -3704,8 +3697,7 @@ pub fn decode_base64_into(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
 }
 /// Decode a Base64 ASCII string back into binary data.
 ///
-/// Returns `None` if the input contains invalid characters or has the wrong
-/// padding.
+/// Returns `None` if the input contains invalid characters or has the wrong padding.
 pub fn decode_base64(data: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(data.len().div_ceil(4) * 3);
     decode_base64_into(data, &mut out)?;
@@ -3742,9 +3734,8 @@ pub fn validate_format(pattern: &str, value: &[u8]) -> bool {
 }
 /// Create a new ISO 20022 message of the given type.
 ///
-/// The message is represented as a deterministic in-memory [`IsoMessage`] slot.
-/// Schema helpers and validators can inspect or update the fields before the
-/// encoded XML is emitted.
+/// The message is represented as a deterministic in-memory [`IsoMessage`] slot. Schema helpers and
+/// validators can inspect or update the fields before the encoded XML is emitted.
 pub fn msg_create(message_type: &str) {
     MESSAGE_STACK.with(|stack| {
         stack.borrow_mut().push(IsoMessage {
@@ -3890,11 +3881,10 @@ pub fn msg_validate() -> bool {
 }
 /// Sign the current ISO 20022 message.
 ///
-/// Uses Ed25519, secp256k1, or ML-DSA (Dilithium3) depending on the key
-/// length. Secret keys may be prefixed with an `iroha_crypto::Algorithm` tag;
-/// secp256k1 signing requires the `Algorithm::Secp256k1` tag to disambiguate
-/// 32-byte secret keys. The function signs the serialized message bytes and
-/// returns the signature or an empty vector if signing fails.
+/// Uses Ed25519, secp256k1, or ML-DSA (Dilithium3) depending on the key length. Secret keys may be
+/// prefixed with an `iroha_crypto::Algorithm` tag; secp256k1 signing requires the
+/// `Algorithm::Secp256k1` tag to disambiguate 32-byte secret keys. The function signs the
+/// serialized message bytes and returns the signature or an empty vector if signing fails.
 #[allow(unused_variables)]
 pub fn msg_sign(key: &[u8]) -> Vec<u8> {
     let msg = match msg_serialize("XML") {

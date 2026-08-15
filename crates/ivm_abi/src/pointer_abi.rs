@@ -1,7 +1,6 @@
 //! Pointer-ABI TLV helpers and type table.
 //!
-//! Envelope layout (in validated INPUT, allocated HEAP, or a loader-validated
-//! `LTLB` code literal):
+//! Envelope layout (in validated INPUT, allocated HEAP, or a loader-validated `LTLB` code literal):
 //! - type_id: u16 (BE)
 //! - version: u8
 //! - len: u32 (BE)

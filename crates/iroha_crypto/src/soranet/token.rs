@@ -1,9 +1,8 @@
 //! Admission token primitives for the `SoraNet` handshake.
 //!
-//! Tokens provide an optional alternative to memory-hard puzzles during relay
-//! admission. Each token binds to a specific relay identity and handshake
-//! transcript hash and is signed with an ML-DSA key managed by the relay or a
-//! delegated issuer.
+//! Tokens provide an optional alternative to memory-hard puzzles during relay admission. Each token
+//! binds to a specific relay identity and handshake transcript hash and is signed with an ML-DSA
+//! key managed by the relay or a delegated issuer.
 //!
 //! Persistent token-consumption snapshots are hard-bounded, decoded under
 //! explicit Norito limits, and loaded only from stable direct regular files.
@@ -155,8 +154,7 @@ impl AdmissionToken {
     pub fn encode(&self) -> Vec<u8> {
         self.try_encode().unwrap_or_else(|_| TOKEN_MAGIC.to_vec())
     }
-    /// Flags embedded in the token body.
-    /// Reserved for future use (must be zero in v1).
+    /// Flags embedded in the token body. Reserved for future use (must be zero in v1).
     #[must_use]
     pub fn flags(&self) -> u8 {
         self.flags
@@ -166,8 +164,7 @@ impl AdmissionToken {
     pub fn issued_at(&self) -> u64 {
         self.issued_at
     }
-    /// UNIX timestamp when the token becomes valid, if representable by
-    /// [`SystemTime`].
+    /// UNIX timestamp when the token becomes valid, if representable by [`SystemTime`].
     #[must_use]
     pub fn checked_issued_at(&self) -> Option<SystemTime> {
         unix_time_from_secs(self.issued_at)
@@ -177,8 +174,7 @@ impl AdmissionToken {
     pub fn expires_at(&self) -> u64 {
         self.expires_at
     }
-    /// UNIX timestamp when the token expires, if representable by
-    /// [`SystemTime`].
+    /// UNIX timestamp when the token expires, if representable by [`SystemTime`].
     #[must_use]
     pub fn checked_expires_at(&self) -> Option<SystemTime> {
         unix_time_from_secs(self.expires_at)
@@ -216,9 +212,8 @@ impl AdmissionToken {
     /// Mint a new admission token using the provided issuer secret key.
     ///
     /// # Errors
-    /// Returns [`MintError`] if the time bounds are invalid, the provided issuer
-    /// fingerprint does not match the signing key, random bytes cannot be
-    /// generated, or signing fails.
+    /// Returns [`MintError`] if the time bounds are invalid, the provided issuer fingerprint does
+    /// not match the signing key, random bytes cannot be generated, or signing fails.
     #[allow(clippy::too_many_arguments)]
     pub fn mint<R: TryCryptoRng>(
         suite: MlDsaSuite,
@@ -349,11 +344,10 @@ pub struct AdmissionTokenVerifier {
 impl AdmissionTokenVerifier {
     /// Construct a new verifier.
     ///
-    /// Runtime configuration loaders should prefer
-    /// [`AdmissionTokenVerifier::try_new`] so invalid key material can fail at
-    /// configuration load time. This compatibility constructor keeps malformed
-    /// issuer keys as fail-closed verifier state; verification preflights reject
-    /// them before backend signature checks or replay-store mutation.
+    /// Runtime configuration loaders should prefer [`AdmissionTokenVerifier::try_new`] so invalid
+    /// key material can fail at configuration load time. This compatibility constructor keeps
+    /// malformed issuer keys as fail-closed verifier state; verification preflights reject them
+    /// before backend signature checks or replay-store mutation.
     pub fn new(
         suite: MlDsaSuite,
         public_key: Vec<u8>,
@@ -758,10 +752,9 @@ impl TokenStore for InMemoryTokenStore {
 }
 /// Persistent admission token store backed by a Norito snapshot.
 ///
-/// The store prunes expired entries on load and before every insert. Active
-/// records that violate the configured TTL or capacity make loading fail
-/// closed. Inserts never evict an active record. A process-lifetime sidecar
-/// lock prevents concurrent writers from forking replay history.
+/// The store prunes expired entries on load and before every insert. Active records that violate
+/// the configured TTL or capacity make loading fail closed. Inserts never evict an active record. A
+/// process-lifetime sidecar lock prevents concurrent writers from forking replay history.
 #[derive(Debug)]
 pub struct PersistentTokenStore {
     limits: TokenStoreLimits,

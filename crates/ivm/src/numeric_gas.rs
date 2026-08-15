@@ -13,10 +13,9 @@ use iroha_primitives::numeric::NumericWorkStep;
 pub const NUMERIC_GAS_FORMULA_VERSION_V1: u64 = 5;
 /// Fixed staged-syscall entry charge.
 ///
-/// The value is calibrated against the complete admitted-call control path,
-/// including deterministic dispatch and staged-context initialization.  It is
-/// intentionally higher than the arithmetic limb rate because that fixed work
-/// is substantial even when pointer validation fails immediately.
+/// The value is calibrated against the complete admitted-call control path, including deterministic
+/// dispatch and staged-context initialization. It is intentionally higher than the arithmetic limb
+/// rate because that fixed work is substantial even when pointer validation fails immediately.
 pub const NUMERIC_ENTRY_GAS: u64 = 384;
 /// Gas charged for each logical 64-bit limb of arithmetic work.
 pub const NUMERIC_GAS_PER_LIMB_WORK: u64 = 4;
@@ -69,9 +68,8 @@ pub fn payload_hash_gas(frame_bytes: usize) -> Result<u64, VMError> {
 }
 /// Output byte work for canonical framing, authentication, and publication.
 ///
-/// `envelope_bytes` covers building/publishing the complete envelope. Two
-/// additional frame traversals cover Norito checksum/framing and the outer
-/// authentication hash.
+/// `envelope_bytes` covers building/publishing the complete envelope. Two additional frame
+/// traversals cover Norito checksum/framing and the outer authentication hash.
 pub fn output_serialization_gas(envelope_bytes: usize, frame_bytes: usize) -> Result<u64, VMError> {
     checked_add(
         checked_bytes(envelope_bytes)?,
@@ -80,13 +78,12 @@ pub fn output_serialization_gas(envelope_bytes: usize, frame_bytes: usize) -> Re
 }
 /// Logical work needed to decode and validate one numeric frame.
 ///
-/// Structural Norito validation scans every complete or partial eight-byte
-/// word, including the payload CRC. Canonical value decoding then scans every
-/// complete or partial body word. Counting both passes prevents the nested
-/// checksum traversal from disappearing behind the pointer-envelope byte
-/// charge. Scaled decimal/quantity values additionally charge their observed
-/// quotient/remainder canonicality probe. Frame bytes themselves are still
-/// charged exactly once as transport.
+/// Structural Norito validation scans every complete or partial eight-byte word, including the
+/// payload CRC. Canonical value decoding then scans every complete or partial body word. Counting
+/// both passes prevents the nested checksum traversal from disappearing behind the pointer-envelope
+/// byte charge. Scaled decimal/quantity values additionally charge their observed
+/// quotient/remainder canonicality probe. Frame bytes themselves are still charged exactly once as
+/// transport.
 pub fn numeric_frame_validation_work(frame_bytes: usize) -> Result<u64, VMError> {
     let (decode, canonical) = numeric_frame_validation_phase_work(frame_bytes)?;
     checked_add(decode, canonical)
@@ -129,12 +126,11 @@ pub fn pow10_limbs(exponent: u8) -> Result<u64, VMError> {
 }
 /// Conservative exact width bound for a nonzero `value * 10^exponent`.
 ///
-/// `value_bits` is the exact magnitude bit width. For a nonzero exponent the
-/// product uses at most `value_bits + bit_length(10^exponent)` bits. The
-/// seemingly tighter `- 1` bound is not valid for every operand: for example,
-/// a 61-bit value multiplied by ten can require 65 bits. Exponent zero is
-/// handled separately so multiplying by one retains the original width.
-/// Passing zero returns one logical limb regardless of exponent.
+/// `value_bits` is the exact magnitude bit width. For a nonzero exponent the product uses at most
+/// `value_bits + bit_length(10^exponent)` bits. The seemingly tighter `- 1` bound is not valid for
+/// every operand: for example, a 61-bit value multiplied by ten can require 65 bits. Exponent zero
+/// is handled separately so multiplying by one retains the original width. Passing zero returns one
+/// logical limb regardless of exponent.
 pub fn scaled_limbs(value_bits: u64, exponent: u8) -> Result<u64, VMError> {
     if value_bits == 0 {
         return Ok(1);
@@ -201,10 +197,9 @@ pub fn multiplication_work(lhs_limbs: u64, rhs_limbs: u64) -> Result<u64, VMErro
 }
 /// Deterministic Knuth-style long-division bound.
 ///
-/// Let `q = max(1, dividend_limbs - divisor_limbs + 1)`, with subtraction
-/// clamped at zero. Work is `dividend + divisor + divisor * q`: one dividend
-/// scan, one divisor normalization pass, and one divisor-width trial per
-/// candidate quotient limb.
+/// Let `q = max(1, dividend_limbs - divisor_limbs + 1)`, with subtraction clamped at zero. Work is
+/// `dividend + divisor + divisor * q`: one dividend scan, one divisor normalization pass, and one
+/// divisor-width trial per candidate quotient limb.
 pub fn division_work(dividend_limbs: u64, divisor_limbs: u64) -> Result<u64, VMError> {
     let dividend = dividend_limbs.max(1);
     let divisor = divisor_limbs.max(1);
@@ -220,9 +215,8 @@ pub fn division_work(dividend_limbs: u64, divisor_limbs: u64) -> Result<u64, VME
 }
 /// Conservative logical width of a truncating quotient.
 ///
-/// The zero quotient still occupies one logical limb. For all other inputs,
-/// base-`2^64` long division cannot produce more than
-/// `dividend_limbs - divisor_limbs + 1` quotient limbs.
+/// The zero quotient still occupies one logical limb. For all other inputs, base-`2^64` long
+/// division cannot produce more than `dividend_limbs - divisor_limbs + 1` quotient limbs.
 pub fn quotient_limb_bound(dividend_limbs: u64, divisor_limbs: u64) -> Result<u64, VMError> {
     let dividend = dividend_limbs.max(1);
     let divisor = divisor_limbs.max(1);
@@ -251,11 +245,10 @@ pub fn quotient_remainder_work(dividend_limbs: u64, divisor_limbs: u64) -> Resul
 }
 /// Conservative all-rounding-mode work for a rounded quotient.
 ///
-/// In addition to the quotient/remainder operation, the implementation scans
-/// and doubles the remainder, scans the absolute denominator, compares the
-/// doubled remainder, probes quotient parity for nearest-even, and may add one
-/// to the quotient. Charging the all-mode bound keeps gas independent of the
-/// selected rounding tag and of whether the remainder is a tie.
+/// In addition to the quotient/remainder operation, the implementation scans and doubles the
+/// remainder, scans the absolute denominator, compares the doubled remainder, probes quotient
+/// parity for nearest-even, and may add one to the quotient. Charging the all-mode bound keeps gas
+/// independent of the selected rounding tag and of whether the remainder is a tie.
 pub fn rounded_division_work(dividend_limbs: u64, divisor_limbs: u64) -> Result<u64, VMError> {
     let dividend = dividend_limbs.max(1);
     let divisor = divisor_limbs.max(1);
@@ -368,9 +361,8 @@ pub fn work_gas(limb_work: u64) -> Result<u64, VMError> {
 }
 /// Gas for one core-reported arithmetic step.
 ///
-/// The primitive layer invokes the observer immediately before performing each
-/// bounded work step. This conversion is the sole VM mapping from that logical
-/// work protocol into gas.
+/// The primitive layer invokes the observer immediately before performing each bounded work step.
+/// This conversion is the sole VM mapping from that logical work protocol into gas.
 pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
     let work = match step {
         NumericWorkStep::CanonicalityProbe { mantissa_limbs, .. } => {
@@ -424,9 +416,8 @@ pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
 }
 /// Explicit inputs to the complete successful-call gas formula.
 ///
-/// Keeping the transport and logical-work terms named prevents callers from
-/// silently swapping consensus-visible measurements that share the same
-/// integer representation.
+/// Keeping the transport and logical-work terms named prevents callers from silently swapping
+/// consensus-visible measurements that share the same integer representation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SuccessfulCallGas {
     /// Total bytes in all complete input pointer envelopes.
@@ -449,12 +440,11 @@ pub struct SuccessfulCallGas {
 }
 /// Complete successful-call formula used by golden tests and documentation.
 ///
-/// Input and output lengths include the complete pointer envelopes; frame-byte
-/// arguments account for authentication and output framing traversals. The
-/// input count adds one fixed schema-frame decode charge per value; control
-/// booleans add their stable validation phases. Canonical validation,
-/// output-length, and normalization work remain explicit so they cannot
-/// disappear into a codec or bigint backend.
+/// Input and output lengths include the complete pointer envelopes; frame-byte arguments account
+/// for authentication and output framing traversals. The input count adds one fixed schema-frame
+/// decode charge per value; control booleans add their stable validation phases. Canonical
+/// validation, output-length, and normalization work remain explicit so they cannot disappear into
+/// a codec or bigint backend.
 pub fn successful_call_gas(call: SuccessfulCallGas) -> Result<u64, VMError> {
     let SuccessfulCallGas {
         input_envelope_bytes,

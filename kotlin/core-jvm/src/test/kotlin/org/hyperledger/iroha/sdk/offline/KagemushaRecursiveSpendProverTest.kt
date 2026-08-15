@@ -1651,7 +1651,7 @@ class KagemushaRecursiveSpendProverTest {
         val timestampMs = 1_700_000_000_500L
         val nonce = "offline-lineage-1"
         val canonicalAuth = ToriiCanonicalRequestAuth(
-            "alice",
+            "alice@universal",
             keyPair.private,
             timestampMs,
             nonce,
@@ -1724,7 +1724,10 @@ class KagemushaRecursiveSpendProverTest {
         val lineageRequest = captured.get()
         assertEquals("/api/v1/offline/receiver-lineage", lineageRequest.uri.path)
         assertEquals(listOf("application/x-norito"), lineageRequest.headers["Content-Type"])
-        assertEquals(listOf("alice"), lineageRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT])
+        assertEquals(
+            listOf("alice@universal"),
+            lineageRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT],
+        )
         assertEquals(
             listOf(timestampMs.toString()),
             lineageRequest.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS],

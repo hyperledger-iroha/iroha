@@ -156,10 +156,9 @@ impl WebSocketNorito {
     }
     /// Wait for the peer to close while rejecting post-subscription data frames.
     ///
-    /// Canonical Torii event and block streams are server-to-client after their
-    /// single binary subscription request. Silently accepting further data
-    /// frames would make protocol mistakes indistinguishable from supported
-    /// control messages.
+    /// Canonical Torii event and block streams are server-to-client after their single binary
+    /// subscription request. Silently accepting further data frames would make protocol mistakes
+    /// indistinguishable from supported control messages.
     pub async fn closed(&mut self) -> Result<(), Error> {
         loop {
             match self.ws.next().await {

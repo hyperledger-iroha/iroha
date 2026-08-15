@@ -34,8 +34,7 @@ impl ManifestRootCid {
     ///
     /// # Errors
     ///
-    /// Returns an [`ManifestRootCidErrorKind::InertDigest`] error for the
-    /// all-zero digest.
+    /// Returns an [`ManifestRootCidErrorKind::InertDigest`] error for the all-zero digest.
     pub fn from_blake3_digest(digest: [u8; 32]) -> Result<Self, ManifestRootCidError> {
         if digest.iter().all(|byte| *byte == 0) {
             return Err(ManifestRootCidError::new(

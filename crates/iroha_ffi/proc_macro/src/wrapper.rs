@@ -224,23 +224,20 @@ pub fn wrap_as_opaque(emitter: &mut Emitter, mut input: FfiTypeInput) -> TokenSt
             }
         }
         impl #impl_generics #name #ty_generics #handle_bounded_where_clause {
-            /// Construct an instance of the wrapper from a raw external
-            /// pointer. This needs to be public so that the `ffi_import`
-            /// attribute can create wrapper instances when converting the
-            /// results of FFI calls into Rust values.
+            /// Construct an instance of the wrapper from a raw external pointer. This needs to be
+            /// public so that the `ffi_import` attribute can create wrapper instances when
+            /// converting the results of FFI calls into Rust values.
             pub fn from_extern_ptr(opaque_ptr: *mut iroha_ffi::Extern) -> Self {
                 Self(opaque_ptr #(#new_phantom_data_types)*)
             }
         }
         impl #ref_impl_generics #name #ty_generics #handle_bounded_where_clause {
-            /// Obtain an immutable reference wrapper to the underlying
-            /// structure. This is useful for tests and external consumers that
-            /// need to pass references across FFI.
+            /// Obtain an immutable reference wrapper to the underlying structure. This is useful
+            /// for tests and external consumers that need to pass references across FFI.
             pub fn as_ref(&self) -> #ref_name #ref_ty_generics {
                 #ref_name(self.0, core::marker::PhantomData #(#new_phantom_data_types)*)
             }
-            /// Obtain a mutable reference wrapper to the underlying
-            /// structure. See [`as_ref`].
+            /// Obtain a mutable reference wrapper to the underlying structure. See [`as_ref`].
             pub fn as_mut(&mut self) -> #ref_mut_name #ref_ty_generics #handle_bounded_where_clause {
                 #ref_mut_name(self.0, core::marker::PhantomData #(#new_phantom_data_types)*)
             }

@@ -1,10 +1,9 @@
 //! A compact, heap-allocated container for immutable elements.
 //!
-//! [`ConstVec`] behaves similarly to [`Vec`] but omits the capacity field,
-//! making it cheaper to store when the number of elements is known never to
-//! change. It is primarily used for byte buffers or other data that is loaded
-//! once and then treated as read‑only for the remainder of the program's
-//! lifetime.
+//! [`ConstVec`] behaves similarly to [`Vec`] but omits the capacity field, making it cheaper to
+//! store when the number of elements is known never to change. It is primarily used for byte
+//! buffers or other data that is loaded once and then treated as read‑only for the remainder of the
+//! program's lifetime.
 use crate::ffi;
 use core::{ops::Deref, ptr};
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
@@ -105,9 +104,8 @@ ffi::ffi_item! {
     /// program in a compact way.
     ///
     /// Compared to `Vec<T>` this type omits the capacity field, reducing the
-    /// memory footprint when the collection is immutable. The trade-off is that
-    /// cloning requires duplicating the entire buffer because there is no
-    /// reference counting.
+    /// memory footprint when the collection is immutable. The trade-off is that cloning requires
+    /// duplicating the entire buffer because there is no reference counting.
     #[derive(
         Clone,
         Eq,

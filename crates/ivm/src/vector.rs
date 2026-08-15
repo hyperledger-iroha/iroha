@@ -30,10 +30,9 @@ fn warm_up_core_graphics_display() {
 #[cfg(all(target_os = "macos", feature = "metal"))]
 const METAL_ED25519_SHADER: &str = include_str!("metal_ed25519.metal");
 use std::sync::{Mutex, MutexGuard};
-/// Return true if the host CPU supports SIMD operations that the vector
-/// extension can leverage. This is a lightweight stand‑in for more elaborate
-/// feature detection used by a production implementation.
-/// Determine if SIMD vector operations are available on the current
+/// Return true if the host CPU supports SIMD operations that the vector extension can leverage.
+/// This is a lightweight stand‑in for more elaborate feature detection used by a production
+/// implementation. Determine if SIMD vector operations are available on the current
 /// architecture.  This helper is intentionally small and only checks for a
 /// minimal baseline feature on supported platforms.  Additional runtime feature
 /// detection can be added as the implementation grows.
@@ -344,8 +343,7 @@ pub fn simd_choice() -> SimdChoice {
     }
     detect_simd_choice()
 }
-/// Return true if the host CPU supports SIMD operations that the vector
-/// extension can leverage.
+/// Return true if the host CPU supports SIMD operations that the vector extension can leverage.
 pub fn vector_supported() -> bool {
     simd_choice() != SimdChoice::Scalar
 }

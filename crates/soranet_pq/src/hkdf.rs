@@ -73,10 +73,9 @@ impl<'a> HkdfDomain<'a> {
 }
 /// Derive HKDF keying material with protocol domain separation.
 ///
-/// The `domain` tuple avoids cross-talk between the Diffie-Hellman portion of
-/// the handshake (`DH/es`, `DH/ss`, …) and the ML-KEM stages (`KEM/1`, `KEM/2`,
-/// …) while allowing higher layers to thread additional context such as
-/// transcript hashes.
+/// The `domain` tuple avoids cross-talk between the Diffie-Hellman portion of the handshake
+/// (`DH/es`, `DH/ss`, …) and the ML-KEM stages (`KEM/1`, `KEM/2`, …) while allowing higher layers
+/// to thread additional context such as transcript hashes.
 ///
 /// # Errors
 /// Returns an error if the requested output length exceeds the HKDF limits.

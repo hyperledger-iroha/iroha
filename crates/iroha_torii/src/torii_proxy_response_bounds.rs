@@ -10,11 +10,10 @@ const TORII_PROXY_MAX_HEADER_VALUE_BYTES_V1: usize = 16 * 1024;
 const TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1: usize = 64 * 1024;
 /// Drop an oversized retryable body before another full response is admitted.
 ///
-/// The original snapshot has already passed the route body limit, but keeping
-/// that entire allocation beside the next transport chunk and accumulated
-/// response would multiply the one-slot proxy envelope. Ordinary diagnostics
-/// are preserved byte-for-byte; an oversized retryable diagnostic is replaced
-/// by fixed local text while retaining its status code.
+/// The original snapshot has already passed the route body limit, but keeping that entire
+/// allocation beside the next transport chunk and accumulated response would multiply the one-slot
+/// proxy envelope. Ordinary diagnostics are preserved byte-for-byte; an oversized retryable
+/// diagnostic is replaced by fixed local text while retaining its status code.
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn bound_retained_retryable_torii_proxy_snapshot(
     snapshot: ToriiProxyHttpResponseV1,

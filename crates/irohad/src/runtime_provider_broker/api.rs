@@ -43,17 +43,14 @@ impl RuntimeProviderBrokerLifecycleV1 {
     }
     /// Request orderly shutdown without waiting for in-flight provider calls.
     ///
-    /// The serving call closes accepted local transports and joins every
-    /// session before it returns. A provider qualification already in progress
-    /// or an operation already admitted when this method linearizes is allowed
-    /// to finish because the synchronous V1 provider traits do not expose
-    /// cancellation. Operation admission is the final atomic check immediately
-    /// before dispatch; it can precede the actual trait-method call by a small
-    /// in-process interval.
+    /// The serving call closes accepted local transports and joins every session before it returns.
+    /// A provider qualification already in progress or an operation already admitted when this
+    /// method linearizes is allowed to finish because the synchronous V1 provider traits do not
+    /// expose cancellation. Operation admission is the final atomic check immediately before
+    /// dispatch; it can precede the actual trait-method call by a small in-process interval.
     ///
-    /// This call waits for a readiness callback that already owns the bounded
-    /// publication gate. The callback must therefore be bounded and must not
-    /// call `request_shutdown` reentrantly.
+    /// This call waits for a readiness callback that already owns the bounded publication gate. The
+    /// callback must therefore be bounded and must not call `request_shutdown` reentrantly.
     pub fn request_shutdown(&self) {
         let _publication = self
             .readiness_publication_gate
@@ -451,9 +448,8 @@ pub enum BootleLanternIssuanceBrokerBackendErrorV1 {
 /// Deployment-owned pure cryptographic boundary for brokered Bootle/Lantern issuance.
 ///
 /// Implementations hold the issuer trapdoor (or its protected runtime boundary) and opaque
-/// authenticator. They must not hold or mutate an issuance replay store. Torii
-/// remains the sole authority for authorization registration, preflight,
-/// claim, completion, and terminal failure.
+/// authenticator. They must not hold or mutate an issuance replay store. Torii remains the sole
+/// authority for authorization registration, preflight, claim, completion, and terminal failure.
 pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
     /// Exact stable production handle served by this backend.
     fn handle(&self) -> &str;
@@ -498,9 +494,8 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
     /// Verify one canonical `ILQ1` against the injected issuer key without randomness or state mutation.
     ///
     /// Native implementations use core's
-    /// `issuer_validate_blind_issuance_request_for_issuer_encoded_v1`; a
-    /// public-only validation is not sufficient private-key/provider-bound readiness
-    /// check for this operation.
+    /// `issuer_validate_blind_issuance_request_for_issuer_encoded_v1`; a public-only validation is
+    /// not sufficient private-key/provider-bound readiness check for this operation.
     fn validate_request(
         &self,
         context: &iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -1572,23 +1567,20 @@ impl fmt::Display for RuntimeProviderBrokerReadinessErrorV1 {
     }
 }
 impl std::error::Error for RuntimeProviderBrokerReadinessErrorV1 {}
-/// Serve the exact qualified catalog on the platform-fixed
-/// service-UID-owned endpoint.
+/// Serve the exact qualified catalog on the platform-fixed service-UID-owned endpoint.
 ///
-/// This is the packaged launcher boundary for deployment-owned broker
-/// executables. It blocks in the authenticated accept loop and never loads
-/// credentials, private keys, environment overrides, or test backends.
-/// Each client authenticates a canonical non-empty subset of this catalog and
-/// is confined to that exact subset for the lifetime of its session. This lets
-/// the stock daemon and packaged standalone services share one supervised
-/// broker without weakening binding or operation isolation.
+/// This is the packaged launcher boundary for deployment-owned broker executables. It blocks in the
+/// authenticated accept loop and never loads credentials, private keys, environment overrides, or
+/// test backends. Each client authenticates a canonical non-empty subset of this catalog and is
+/// confined to that exact subset for the lifetime of its session. This lets the stock daemon and
+/// packaged standalone services share one supervised broker without weakening binding or operation
+/// isolation.
 ///
 /// # Errors
 ///
-/// Fails before accepting clients if the catalog/backend set is incomplete or
-/// any live public binding is missing, substituted, stale, revoked, or
-/// test-marked. It also fails when the fixed endpoint cannot be created with
-/// the required ownership and mode.
+/// Fails before accepting clients if the catalog/backend set is incomplete or any live public
+/// binding is missing, substituted, stale, revoked, or test-marked. It also fails when the fixed
+/// endpoint cannot be created with the required ownership and mode.
 pub fn serve_runtime_provider_broker_v1(
     bindings: &IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
@@ -1606,52 +1598,45 @@ pub fn serve_runtime_provider_broker_v1(
 /// Serve the exact catalog until the caller requests an orderly shutdown.
 ///
 /// The caller retains a clone of `lifecycle` and requests shutdown through
-/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`]. `on_ready` runs
-/// exactly once, on the serving thread, after all requested backends have
-/// passed live qualification, the fixed endpoint has been securely bound, and
-/// the complete backend catalog has passed an immediate second qualification.
-/// A bounded gate linearizes the complete callback against shutdown: a
-/// shutdown that wins suppresses the callback, while a shutdown that loses
-/// waits for the callback to finish before returning.
+/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`]. `on_ready` runs exactly once, on the
+/// serving thread, after all requested backends have passed live qualification, the fixed endpoint
+/// has been securely bound, and the complete backend catalog has passed an immediate second
+/// qualification. A bounded gate linearizes the complete callback against shutdown: a shutdown that
+/// wins suppresses the callback, while a shutdown that loses waits for the callback to finish
+/// before returning.
 ///
 /// The callback must be bounded and must not call
-/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`] reentrantly. The
-/// lifecycle remains in its starting state while the callback runs and becomes
-/// ready only after it returns `Ok(())`. A payload-free callback failure moves
-/// the lifecycle to stopping, removes the endpoint, and returns before the
-/// accept loop is entered.
+/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`] reentrantly. The lifecycle remains in its
+/// starting state while the callback runs and becomes ready only after it returns `Ok(())`. A
+/// payload-free callback failure moves the lifecycle to stopping, removes the endpoint, and returns
+/// before the accept loop is entered.
 ///
-/// After shutdown, the server closes every accepted transport and joins every
-/// session before returning. Synchronous deployment-owned provider methods do
-/// not expose cancellation or a uniform deadline, so a qualification call
-/// already in progress or an operation already admitted can delay this return;
-/// deployments must enforce their advertised bounds inside each provider
-/// adapter. Admission is the final atomic check immediately before dispatch
-/// and can precede entry into the trait method by a small in-process interval.
-/// No operation is admitted after the shutdown transition.
+/// After shutdown, the server closes every accepted transport and joins every session before
+/// returning. Synchronous deployment-owned provider methods do not expose cancellation or a uniform
+/// deadline, so a qualification call already in progress or an operation already admitted can delay
+/// this return; deployments must enforce their advertised bounds inside each provider adapter.
+/// Admission is the final atomic check immediately before dispatch and can precede entry into the
+/// trait method by a small in-process interval. No operation is admitted after the shutdown
+/// transition.
 ///
-/// Startup acquires a mode-`0600`, single-link instance file with an exclusive
-/// nonblocking lock that remains held for the complete serving lifetime. A
-/// conforming active broker therefore prevents a second process from touching
-/// its endpoint, while a crash releases the lock. After acquiring it, startup
-/// recovers a socket only when the validated lock marker pre-dates this
-/// process; a newly created marker plus an existing endpoint is rejected and
-/// the new marker is removed. Recovery accepts only the exact service UID,
-/// mode, single-link count, and stable device/inode identity. It then binds an
-/// unpredictable staging name in the pinned parent directory and atomically
-/// promotes it to the canonical name without replacement. Stale recovery and
-/// orderly cleanup atomically move the candidate to an OS-random quarantine
-/// name with no replacement, verify the moved identity, and unlink only that
-/// quarantine entry. A mismatch is preserved or restored and fails closed.
-/// The service-owned runtime directory must still exclude untrusted same-UID
-/// pathname mutators.
+/// Startup acquires a mode-`0600`, single-link instance file with an exclusive nonblocking lock
+/// that remains held for the complete serving lifetime. A conforming active broker therefore
+/// prevents a second process from touching its endpoint, while a crash releases the lock. After
+/// acquiring it, startup recovers a socket only when the validated lock marker pre-dates this
+/// process; a newly created marker plus an existing endpoint is rejected and the new marker is
+/// removed. Recovery accepts only the exact service UID, mode, single-link count, and stable
+/// device/inode identity. It then binds an unpredictable staging name in the pinned parent
+/// directory and atomically promotes it to the canonical name without replacement. Stale recovery
+/// and orderly cleanup atomically move the candidate to an OS-random quarantine name with no
+/// replacement, verify the moved identity, and unlink only that quarantine entry. A mismatch is
+/// preserved or restored and fails closed. The service-owned runtime directory must still exclude
+/// untrusted same-UID pathname mutators.
 ///
 /// # Errors
 ///
-/// Fails before readiness if the catalog/backend set is incomplete, any live
-/// public binding is missing, substituted, stale, revoked, or test-marked, the
-/// fixed endpoint cannot be created with the required ownership and mode, or
-/// the readiness callback returns
+/// Fails before readiness if the catalog/backend set is incomplete, any live public binding is
+/// missing, substituted, stale, revoked, or test-marked, the fixed endpoint cannot be created with
+/// the required ownership and mode, or the readiness callback returns
 /// [`RuntimeProviderBrokerReadinessErrorV1`].
 pub fn serve_runtime_provider_broker_with_fallible_readiness_v1<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
@@ -1676,9 +1661,8 @@ where
 /// Serve the exact catalog with an infallible caller-owned readiness callback.
 ///
 /// This preserves the original callback contract as a wrapper around
-/// [`serve_runtime_provider_broker_with_fallible_readiness_v1`]. Use the
-/// fallible variant for supervisor transports such as systemd where readiness
-/// publication itself can fail.
+/// [`serve_runtime_provider_broker_with_fallible_readiness_v1`]. Use the fallible variant for
+/// supervisor transports such as systemd where readiness publication itself can fail.
 ///
 /// # Errors
 ///

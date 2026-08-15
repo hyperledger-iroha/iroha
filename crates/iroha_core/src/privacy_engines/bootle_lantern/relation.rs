@@ -393,8 +393,7 @@ pub fn validate_presentation_witness_v1(
     }
     Ok(())
 }
-/// Lift the canonical presentation witness into its fixed 48-polynomial
-/// application-relation order.
+/// Lift the canonical presentation witness into its fixed 48-polynomial application-relation order.
 ///
 /// Publicly disclosed attribute columns are represented by zero because their
 /// values are already accumulated into the relation's public offset.

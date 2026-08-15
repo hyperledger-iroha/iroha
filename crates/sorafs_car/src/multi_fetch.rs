@@ -1,10 +1,9 @@
 //! Multi-source chunk retrieval for SoraFS payloads.
 //!
-//! The orchestrator defined in this module schedules chunk downloads across a
-//! pool of providers, verifies returned data, and emits a consolidated result
-//! that higher layers can stream into a CAR writer or on-disk store. It is
-//! transport-agnostic: callers provide an async fetcher that knows how to talk
-//! to their networking stack or storage adapters, while the scheduler handles
+//! The orchestrator defined in this module schedules chunk downloads across a pool of providers,
+//! verifies returned data, and emits a consolidated result that higher layers can stream into a CAR
+//! writer or on-disk store. It is transport-agnostic: callers provide an async fetcher that knows
+//! how to talk to their networking stack or storage adapters, while the scheduler handles
 //! determinism, retry policy, and basic fairness.
 use crate::{CarBuildPlan, CarPlanError, ChunkFetchSpec};
 use futures::{Future, FutureExt, StreamExt, stream::FuturesUnordered};
@@ -994,10 +993,9 @@ fn deliver_ready_chunks(
 }
 /// Fetches chunks described by `plan` using the supplied providers and fetcher.
 ///
-/// The orchestrator schedules chunk requests across providers using a weighted
-/// round-robin policy, enforces per-provider and global concurrency limits,
-/// verifies returned data, and retries failed chunks until they succeed or
-/// exhaust the configured retry budget.
+/// The orchestrator schedules chunk requests across providers using a weighted round-robin policy,
+/// enforces per-provider and global concurrency limits, verifies returned data, and retries failed
+/// chunks until they succeed or exhaust the configured retry budget.
 async fn fetch_plan_parallel_internal<F, Fut, E>(
     plan: &CarBuildPlan,
     providers: impl IntoIterator<Item = FetchProvider>,

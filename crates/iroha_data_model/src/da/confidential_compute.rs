@@ -1,9 +1,8 @@
 //! Confidential-compute lane policy metadata.
 //!
-//! These types describe the confidentiality posture for computation lanes that
-//! must keep payloads off the public DA surface while still advertising
-//! deterministic availability and proof parameters. Policies are derived from
-//! lane metadata and enforced during DA validation.
+//! These types describe the confidentiality posture for computation lanes that must keep payloads
+//! off the public DA surface while still advertising deterministic availability and proof
+//! parameters. Policies are derived from lane metadata and enforced during DA validation.
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 /// Confidential-compute protection mechanism.

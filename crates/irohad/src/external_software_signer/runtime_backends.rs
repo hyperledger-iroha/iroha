@@ -47,9 +47,8 @@ impl ExternalSoftwareSignerBackendsV1 {
     }
     /// Compose with the deployment registry for every non-signer slot.
     ///
-    /// The complete catalog is partitioned before either resolver is called;
-    /// a base registry that returns any signer backend is rejected rather than
-    /// overwritten.
+    /// The complete catalog is partitioned before either resolver is called; a base registry that
+    /// returns any signer backend is rejected rather than overwritten.
     pub fn with_base_registry(
         mut self,
         registry: Arc<dyn crate::RuntimeProviderBrokerBackendRegistryV1>,

@@ -216,8 +216,7 @@ pub fn decode_alias_proof(
 ///
 /// # Errors
 ///
-/// Returns [`AliasProofError`] for a non-canonical, malformed, or internally
-/// inconsistent proof.
+/// Returns [`AliasProofError`] for a non-canonical, malformed, or internally inconsistent proof.
 pub fn decode_alias_proof_untrusted_signers(
     bytes: &[u8],
 ) -> Result<AliasProofBundleV1, AliasProofError> {

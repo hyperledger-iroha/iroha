@@ -1,6 +1,6 @@
 ## Torii App API Parity Audit (TORII-APP-1)
 
-Status: Completed 2026-03-21  
+Status: Route inventory complete; typed canonical-witness construction remains an explicit SDK residual (updated 2026-08-14)
 Owners: Torii Platform, SDK Program Lead  
 Roadmap reference: TORII-APP-1 — `app_api` parity audit
 
@@ -24,34 +24,91 @@ feature-gated route builders (`add_app_api_routes`, `add_contracts_and_vk_routes
 
 ### Auth & canonical signing
 
-- App-facing GET/POST endpoints accept optional canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`) built from `METHOD\n/path\nsorted_query\nsha256(body)\n<timestamp_ms>\n<nonce>`; Torii validates freshness/replay resistance before wrapping them into `QueryRequestWithAuthority`, so they mirror `/v1/query` without accepting stale or replayed signatures.
+- Catalog-protected app-facing GET/POST endpoints require a complete canonical
+  signature tuple (`X-Iroha-Account`, `X-Iroha-Signature`,
+  `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`) or its exclusive bounded witness
+  alternative. The signature preimage is
+  `iroha.app.request.network.v1\0 || exact_network_id_bytes || METHOD\n/path\nsorted_query\nsha256(body)\n<timestamp_ms>\n<nonce>`;
+  Torii validates exact-network binding, freshness, and replay resistance
+  before wrapping the request into `QueryRequestWithAuthority`. Public catalog
+  routes do not require this proof.
+- SDK builders keep canonical I105 as the semantic account spelling in paths
+  and bodies, but transport that identity in `X-Iroha-Account` as lowercase
+  canonical-address hex; an exact active canonical ASCII alias may be carried
+  unchanged. Canonical form queries ignore empty `&` segments, preserve empty
+  names and values, apply byte-precise lossy UTF-8 decoding, sort by UTF-8
+  bytes, and use the application/x-www-form-urlencoded safe set.
+- First-release network binding accepts only the exact genesis-derived
+  `hash:<64 uppercase hex digits>#<4 uppercase CRC-16 digits>` `NetworkId`
+  literal whose decoded 32-byte value carries the V1 marker bit. Canonical
+  nonces contain 1--256 visible ASCII bytes (`0x21..0x7e`). Methods are
+  non-empty ASCII HTTP tokens of at most 32 bytes, and SDK URI signers require
+  the exact root-relative ASCII wire path of at most 64 KiB.
 - SDK helpers ship in all primary clients:
-  - JS/TS: `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey, timestampMs?, nonce? })` from `canonicalRequest.js`.
-  - Swift: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:timestampMs:nonce:)` and `ToriiCanonicalRequest.buildHeaders(...)`.
-  - Android (Kotlin/Java): `CanonicalRequestSigner.buildHeaders(method, uri, body, accountId, privateKey, timestampMs, nonce)`.
-- Example snippets:
+  - JS/TS: `buildCanonicalRequestHeaders({ accountId, networkId, method, path, query, body, privateKey, timestampMs?, nonce? })` from `canonicalRequest.js`.
+  - Swift: `CanonicalRequest.signingHeaders(accountId:networkId:method:path:query:body:signer:timestampMs:nonce:)` and `ToriiCanonicalRequest.buildHeaders(..., networkId: ...)`.
+  - Android (Kotlin): `CanonicalRequestSigner.buildHeaders(networkId, method, uri, body, accountId, privateKey, timestampMs, nonce)`.
+  - Android (Java): `CanonicalRequestSigner.buildHeaders(networkId, method, uri, body, canonicalAuth, timestampMs, nonce)`, where `canonicalAuth` is a `ToriiCanonicalRequestAuth` backed by a caller-owned signing callback.
+- Residual witness surface: no client SDK yet exposes end-to-end typed witness
+  construction. Rust can bounded-encode a completed witness; JavaScript and the
+  `iroha_python` SoraFS reputation helpers can validate and forward an
+  externally produced bounded canonical witness. The standalone
+  `iroha_torii_client` and the typed mobile/C# helpers are intentionally
+  signer-only.
+  Kotlin and Java direct multisig writes to canonical signed transactions or
+  closed typed signed intents. This is not malformed single-key V1 wire, but
+  it remains an explicit API-parity gap until every affected SDK either ships
+  typed bounded witness construction or documents a route-complete alternative.
+- Example snippets use one syntactically valid fixture `NetworkId`; production
+  callers must replace it with the exact genesis-derived identity of their
+  deployment:
 ```ts
-import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "<i105-account-id>", method: "get", path: "/v1/accounts/<i105-account-id>/assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/<i105-account-id>/assets?limit=5`, { headers });
+import { buildCanonicalRequestHeaders, NetworkId } from "@iroha/iroha-js";
+const networkId = NetworkId.parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+const headers = buildCanonicalRequestHeaders({ accountId, networkId, method: "get", path: "/v1/node/capabilities", query: "", body: "", privateKey });
+await fetch(`${torii}/v1/node/capabilities`, { headers });
 ```
 ```swift
-let headers = try CanonicalRequest.signingHeaders(accountId: "<i105-account-id>",
+let networkId = try NetworkId(literal: "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
+let headers = try CanonicalRequest.signingHeaders(accountId: accountId,
+                                                  networkId: networkId,
                                                   method: "get",
-                                                  path: "/v1/accounts/<i105-account-id>/assets",
-                                                  query: "limit=5",
+                                                  path: "/v1/node/capabilities",
+                                                  query: "",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
+val networkId = NetworkId.parse(
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+)
 val headers = CanonicalRequestSigner.buildHeaders(
+    networkId,
     "get",
-    URI.create("https://torii.example/v1/accounts/<i105-account-id>/assets?limit=5"),
+    URI.create("https://torii.example/v1/node/capabilities"),
     ByteArray(0),
-    "<i105-account-id>",
+    accountId,
     privateKey
 )
 ```
+```java
+NetworkId networkId = NetworkId.parse(
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+ToriiCanonicalRequestAuth canonicalAuth =
+    new ToriiCanonicalRequestAuth(accountId, signatureProvider);
+long timestampMs = System.currentTimeMillis();
+Map<String, String> headers = CanonicalRequestSigner.buildHeaders(
+    networkId,
+    "get",
+    URI.create("https://torii.example/v1/node/capabilities"),
+    new byte[0],
+    canonicalAuth,
+    timestampMs,
+    "request-20260814-0001");
+```
+The Java `signatureProvider` is supplied by the application keystore or HSM and
+must return a non-empty, non-zero detached signature no larger than the V1
+3,309-byte ceiling.
 
 ### Endpoint Inventory
 

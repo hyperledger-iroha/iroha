@@ -63,11 +63,10 @@ pub enum ZkX509CredentialProofContainerErrorV1 {
 }
 /// Validate the fixed-capacity `X5S1` container and its verifier-owned header.
 ///
-/// This boundary is intended for resource-isolated prover workers. It performs
-/// no ledger-state lookup and does not replace full proof verification; it
-/// proves that the returned bytes are the sole first-release container and
-/// that they bind the exact typed statement and committed genesis hash before
-/// an SDK signs a submission transaction.
+/// This boundary is intended for resource-isolated prover workers. It performs no ledger-state
+/// lookup and does not replace full proof verification; it proves that the returned bytes are the
+/// sole first-release container and that they bind the exact typed statement and committed genesis
+/// hash before an SDK signs a submission transaction.
 pub fn validate_zk_x509_credential_proof_container_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     canonical_genesis_hash: [u8; 32],

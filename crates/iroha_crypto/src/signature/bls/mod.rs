@@ -58,9 +58,8 @@ pub use ethereum::{
     ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,
     ethereum_bls_pop_validate_public_key,
 };
-/// This version is the "normal" BLS signature scheme
-/// with the public key group in G1 and signature group in G2.
-/// 192 byte signatures and 97 byte public keys
+/// This version is the "normal" BLS signature scheme with the public key group in G1 and signature
+/// group in G2. 192 byte signatures and 97 byte public keys
 mod normal {
     use super::{implementation, implementation::BlsConfiguration};
     use crate::Algorithm;
@@ -148,8 +147,7 @@ pub(crate) fn verify_aggregate_same_message_small(
 }
 /// Exact per-signature verification across distinct messages, normal variant.
 ///
-/// Success proves every signature is valid for the public key and message at
-/// the same index.
+/// Success proves every signature is valid for the public key and message at the same index.
 #[allow(dead_code)]
 pub fn verify_aggregate_multi_message_normal(
     messages: &[&[u8]],
@@ -164,8 +162,7 @@ pub fn verify_aggregate_multi_message_normal(
 }
 /// Exact per-signature verification across distinct messages, small variant.
 ///
-/// Success proves every signature is valid for the public key and message at
-/// the same index.
+/// Success proves every signature is valid for the public key and message at the same index.
 #[allow(dead_code)]
 pub fn verify_aggregate_multi_message_small(
     messages: &[&[u8]],

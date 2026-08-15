@@ -4,9 +4,8 @@
 //! for a relay. Certificates are CBOR-encoded, dual-signed (Ed25519 +
 //! ML-DSA-65), and referenced by the directory consensus artefacts.
 //!
-//! This module provides a minimal CBOR encoder/decoder tailored to the `SRCv2`
-//! schema so we can avoid pulling an additional dependency while keeping the
-//! encoding canonical and deterministic.
+//! This module provides a minimal CBOR encoder/decoder tailored to the `SRCv2` schema so we can
+//! avoid pulling an additional dependency while keeping the encoding canonical and deterministic.
 use crate::soranet::handshake::HandshakeSuite;
 use blake3::Hasher as Blake3;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
@@ -974,8 +973,7 @@ impl RelayCertificateV2 {
     }
     /// Returns the checked length of the validity window.
     ///
-    /// Returns `None` when the certificate carries an inverted or unrepresentable
-    /// timestamp range.
+    /// Returns `None` when the certificate carries an inverted or unrepresentable timestamp range.
     pub fn checked_validity_duration(&self) -> Option<Duration> {
         let seconds = self.valid_until.checked_sub(self.valid_after)?;
         let seconds = u64::try_from(seconds).ok()?;

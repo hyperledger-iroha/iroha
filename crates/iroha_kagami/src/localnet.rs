@@ -9418,6 +9418,7 @@ mod tests {
         );
     }
     include!("localnet/path_and_script_tests.rs");
+    #[cfg(unix)]
     #[test]
     fn start_script_includes_sora_flag_when_enabled() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -9439,8 +9440,7 @@ mod tests {
             "start script should include --sora when profile enabled"
         );
     }
-    // Keep the generated rANS table contract tests in a focused child while
-    // retaining their paths under `localnet::tests`.
+    // Keep the generated rANS table contract tests in a focused child under `localnet::tests`.
     include!("localnet/rans_table_tests.rs");
     #[test]
     fn localnet_defaults_to_permissioned_without_profile_or_perf_preset() {

@@ -244,9 +244,8 @@ impl Prover {
     }
     /// Construct a prover using a canonical parameter set and explicit execution mode.
     ///
-    /// This helper mirrors [`Prover::canonical`] but forces the backend to use the
-    /// specified [`ExecutionMode`], allowing operators to pin the prover to CPU or GPU
-    /// execution explicitly.
+    /// This helper mirrors [`Prover::canonical`] but forces the backend to use the specified
+    /// [`ExecutionMode`], allowing operators to pin the prover to CPU or GPU execution explicitly.
     ///
     /// # Errors
     ///
@@ -290,9 +289,8 @@ impl Prover {
     ///
     /// # Errors
     ///
-    /// Propagates errors from [`trace_commitment`] and from the configured
-    /// backend implementation. The generated proof is verified through the
-    /// canonical verifier path before being returned.
+    /// Propagates errors from [`trace_commitment`] and from the configured backend implementation.
+    /// The generated proof is verified through the canonical verifier path before being returned.
     pub fn prove(&self, batch: &TransitionBatch) -> Result<Proof> {
         let commitment = trace_commitment(&self.params, batch)?;
         let ordering = ordering::ordering_hash(batch)?;
@@ -312,22 +310,19 @@ impl Prover {
 ///
 /// # Errors
 ///
-/// Returns [`Error::UnknownParameter`] when the proof references an unknown
-/// parameter set, or an appropriate [`Error`] variant identifying the invalid
-/// proof component.
+/// Returns [`Error::UnknownParameter`] when the proof references an unknown parameter set, or an
+/// appropriate [`Error`] variant identifying the invalid proof component.
 pub fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     verify_with_limits(batch, proof, VerifyLimits::default())
 }
-/// Verify a V1 proof from proof contents, public inputs, commitments, Merkle paths,
-/// lookup product binding, AIR openings, FRI query chains, challenges, and
-/// parameter/version checks.
+/// Verify a V1 proof from proof contents, public inputs, commitments, Merkle paths, lookup product
+/// binding, AIR openings, FRI query chains, challenges, and parameter/version checks.
 ///
 /// # Errors
 ///
-/// Returns [`Error::UnknownParameter`] when the proof references an unknown
-/// parameter set, [`Error::VerifierLimitExceeded`] when inputs exceed the
-/// supplied limits, or another [`Error`] variant identifying the invalid proof
-/// component.
+/// Returns [`Error::UnknownParameter`] when the proof references an unknown parameter set,
+/// [`Error::VerifierLimitExceeded`] when inputs exceed the supplied limits, or another [`Error`]
+/// variant identifying the invalid proof component.
 #[allow(clippy::too_many_lines)]
 pub fn verify_with_limits(
     batch: &TransitionBatch,

@@ -1,10 +1,9 @@
 //! Durable forwarding for unsigned native repair intents and exact externally signed
 //! repair transactions.
 //!
-//! `NodeHandle` owns this forwarder, while Torii supplies the isolated signer,
-//! transaction ingress, and finalized-ledger reconciliation worker. PDP, PoR,
-//! and PoTR use the same native repair handoff so no process-local scheduler
-//! can become authoritative in production.
+//! `NodeHandle` owns this forwarder, while Torii supplies the isolated signer, transaction ingress,
+//! and finalized-ledger reconciliation worker. PDP, PoR, and PoTR use the same native repair
+//! handoff so no process-local scheduler can become authoritative in production.
 use crate::durable_transaction_forwarder::{
     self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
     DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
@@ -128,9 +127,8 @@ pub enum RepairTransactionKindV1 {
 }
 /// Bounded native repair operation retained for isolated external signing.
 ///
-/// The forwarder validates the operation, its embedded canonical payloads, and
-/// its authority binding before persistence. It never creates or retains a
-/// private key.
+/// The forwarder validates the operation, its embedded canonical payloads, and its authority
+/// binding before persistence. It never creates or retains a private key.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum RepairOperationV1 {
     /// Admit one source-bound repair report.
@@ -635,10 +633,9 @@ impl RepairTransactionForwarder {
     }
     /// Return a circular page of pending entries after an immutable sequence cursor.
     ///
-    /// Entries newer than `after_sequence` are returned first, followed by the
-    /// oldest retained entries after wrapping. At most one snapshot of each
-    /// pending entry is returned, so one blocked operation cannot starve later
-    /// repairs indefinitely.
+    /// Entries newer than `after_sequence` are returned first, followed by the oldest retained
+    /// entries after wrapping. At most one snapshot of each pending entry is returned, so one
+    /// blocked operation cannot starve later repairs indefinitely.
     pub fn pending_after(
         &self,
         after_sequence: Option<u64>,
@@ -716,9 +713,8 @@ impl RepairTransactionForwarder {
     }
     /// Atomically claim a ready operation for isolated external signing.
     ///
-    /// The transition consumes one bounded attempt before the request is
-    /// exposed. A crash or explicit release can restore `Ready`, but never
-    /// refunds the consumed attempt.
+    /// The transition consumes one bounded attempt before the request is exposed. A crash or
+    /// explicit release can restore `Ready`, but never refunds the consumed attempt.
     pub fn claim_for_signing(
         &self,
         operation_id: [u8; 32],
@@ -861,10 +857,9 @@ impl RepairTransactionForwarder {
     }
     /// Reconcile exact semantic success committed by this or another ingress.
     ///
-    /// This transition is valid before local signing: the operation identity
-    /// authenticates the exact authority and native instruction retained by
-    /// the forwarder, while the caller must have matched that semantic
-    /// material against a finalized ledger projection. This is required for
+    /// This transition is valid before local signing: the operation identity authenticates the
+    /// exact authority and native instruction retained by the forwarder, while the caller must have
+    /// matched that semantic material against a finalized ledger projection. This is required for
     /// cross-peer duplicate submission convergence.
     pub fn mark_semantic_finalized(
         &self,

@@ -1,5 +1,4 @@
-//! Minimal bridge helpers for emitting typed bridge receipts.
-//! Feature-gated behind `bridge`.
+//! Minimal bridge helpers for emitting typed bridge receipts. Feature-gated behind `bridge`.
 use crate::{
     Execute,
     data_model::{

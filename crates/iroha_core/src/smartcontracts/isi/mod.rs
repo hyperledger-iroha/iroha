@@ -1,6 +1,5 @@
-//! This module contains enumeration of all possible Iroha Special
-//! Instructions, generic instruction types and related
-//! implementations.
+//! This module contains enumeration of all possible Iroha Special Instructions, generic instruction
+//! types and related implementations.
 pub mod account;
 mod account_admission;
 pub mod asset;

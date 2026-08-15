@@ -109,9 +109,8 @@ mod model {
         pub contract_address: ContractAddress,
         /// Exact code hash that the signer authorizes at this address.
         ///
-        /// Validators reject the invocation if the live instance binding has
-        /// changed, preventing an in-flight signed call from crossing a
-        /// governance `kaizen`/`改善` rebind boundary.
+        /// Validators reject the invocation if the live instance binding has changed, preventing an
+        /// in-flight signed call from crossing a governance `kaizen`/`改善` rebind boundary.
         pub expected_code_hash: Hash,
         /// Public or view entrypoint selector.
         pub entrypoint: String,

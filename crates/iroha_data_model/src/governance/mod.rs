@@ -8,9 +8,8 @@ pub mod types;
 pub const GOVERNANCE_SELECTOR_V1_MAX_BYTES: usize = 128;
 /// OpenAPI/SDK grammar for canonical V1 governance selectors.
 ///
-/// Selectors are one RFC 3986 unreserved path segment. A leading dot is
-/// deliberately excluded so intermediaries cannot reinterpret a selector as a
-/// relative-path segment.
+/// Selectors are one RFC 3986 unreserved path segment. A leading dot is deliberately excluded so
+/// intermediaries cannot reinterpret a selector as a relative-path segment.
 pub const GOVERNANCE_SELECTOR_V1_PATTERN: &str = "^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}$";
 /// Return whether `value` is a canonical V1 governance selector.
 ///

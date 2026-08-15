@@ -1,9 +1,8 @@
 //! Deterministic scheduler tie-break test.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
-//! Build several independent transactions (no conflicts) and assert that the
-//! execution order is a stable sort by (`call_hash`, index) regardless of the
-//! input order.
+//! Build several independent transactions (no conflicts) and assert that the execution order is a
+//! stable sort by (`call_hash`, index) regardless of the input order.
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,

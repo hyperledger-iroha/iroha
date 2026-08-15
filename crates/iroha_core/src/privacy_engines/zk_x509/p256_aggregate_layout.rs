@@ -33,12 +33,10 @@ pub(crate) const P256_SCALAR_BIT_BUS_AGGREGATE_TRACE_LOG2_V1: u8 = 8;
 /// argument. The largest value-bus domain has `2^20` rows, with canonical
 /// identity padding, so every active multiset has strictly fewer factors.
 pub(crate) const P256_PERMUTATION_FACTOR_CARDINALITY_BOUND_V1: usize = 1 << 20;
-/// Independent multiset arguments registered by one P-256 signature:
-/// value memory, external-cell chain, arithmetic-cell copy, arithmetic scalar
-/// bits, and window scalar bits.
+/// Independent multiset arguments registered by one P-256 signature: value memory, external-cell
+/// chain, arithmetic-cell copy, arithmetic scalar bits, and window scalar bits.
 pub(crate) const P256_PERMUTATION_ARGUMENTS_PER_SIGNATURE_V1: usize = 5;
-/// Certificate-or-CRL signatures in the canonical depth-three chain plus its
-/// signed CRL.
+/// Certificate-or-CRL signatures in the canonical depth-three chain plus its signed CRL.
 pub(crate) const P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1: usize = 4;
 /// Wallet-ownership signatures in the canonical X5S1 statement.
 pub(crate) const P256_X5S1_WALLET_SIGNATURES_V1: usize = 1;

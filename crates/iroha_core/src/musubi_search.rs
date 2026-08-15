@@ -78,9 +78,8 @@ pub struct MusubiSearchProjectionV1 {
 }
 /// Anchored process-local search index updated only from finalized Musubi events.
 ///
-/// The index and its revision are operator-local discovery state. Dependency
-/// resolution cannot access this type and continues to use the universal sparse
-/// resolver index exclusively.
+/// The index and its revision are operator-local discovery state. Dependency resolution cannot
+/// access this type and continues to use the universal sparse resolver index exclusively.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MusubiSearchIndexV1 {
     projection: MusubiSearchProjectionV1,
@@ -370,9 +369,8 @@ impl MusubiSearchIndexV1 {
     }
     /// Apply one finalized event and advance the search-specific projection revision.
     ///
-    /// `finalized_height` and `finalized_block_hash` must identify the block that
-    /// emitted the event. Events unrelated to package discovery do not change the
-    /// anchor or revision.
+    /// `finalized_height` and `finalized_block_hash` must identify the block that emitted the
+    /// event. Events unrelated to package discovery do not change the anchor or revision.
     pub fn apply_finalized(
         &mut self,
         event: &MusubiEvent,

@@ -728,9 +728,8 @@ pub enum AxtHandleSequenceError {
 }
 /// Validate one exact era/counter transition and return the next counter.
 ///
-/// This deliberately rejects both stale values and caller-selected future
-/// values. The active manifest controls the era; accepted handles advance only
-/// the per-dataspace counter by one.
+/// This deliberately rejects both stale values and caller-selected future values. The active
+/// manifest controls the era; accepted handles advance only the per-dataspace counter by one.
 pub fn next_axt_handle_sub_nonce(
     policy: &AxtPolicyEntry,
     handle: &AssetHandle,

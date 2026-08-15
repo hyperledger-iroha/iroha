@@ -15,11 +15,10 @@ pub(super) enum MainTraceColumnKindV1 {
 }
 /// Exact ordered ownership of the six authenticated masked polynomial sets.
 ///
-/// Each group retains only the coefficients of the polynomials that were
-/// streamed into its commitment. The native witness and a common-domain LDE
-/// matrix are neither retained nor reconstructed after commitment. This keeps
-/// the phase transition binding while avoiding terabyte-scale encrypted
-/// scratch for the full MAIN profile.
+/// Each group retains only the coefficients of the polynomials that were streamed into its
+/// commitment. The native witness and a common-domain LDE matrix are neither retained nor
+/// reconstructed after commitment. This keeps the phase transition binding while avoiding
+/// terabyte-scale encrypted scratch for the full MAIN profile.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) struct MainTracePolynomialSetV1 {
     groups: [aggregate::MaskedTracePolynomialSetV1; FULL_PROFILE_TRACE_GROUPS_V1],
@@ -223,10 +222,9 @@ fn map_credential_pre_aux_error_v1(
 }
 /// MAIN state after exactly six ordered base commitments and before X5B1.
 ///
-/// The type owns every challenge-independent child which must cross the joint
-/// credential phase. It exposes only a consuming transition accepting the
-/// opaque outer credential binding; raw challenge families and auxiliary
-/// commitment APIs are intentionally absent.
+/// The type owns every challenge-independent child which must cross the joint credential phase. It
+/// exposes only a consuming transition accepting the opaque outer credential binding; raw challenge
+/// families and auxiliary commitment APIs are intentionally absent.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509MainAwaitingCredentialBindingV1<'a> {
     layout: AggregateProofLayoutV1,
@@ -270,10 +268,9 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
 }
 /// Composition-ready MAIN state after the sole X5B1 transition.
 ///
-/// Both trace-mask sets, all six base/aux roots, the exact terminal claims,
-/// and per-registration composition coefficients are retained together. A
-/// future composition/DEEP/FRI continuation cannot resample challenges or
-/// return to either earlier phase.
+/// Both trace-mask sets, all six base/aux roots, the exact terminal claims, and per-registration
+/// composition coefficients are retained together. A future composition/DEEP/FRI continuation
+/// cannot resample challenges or return to either earlier phase.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509MainCompositionPhaseV1<'a> {
     layout: AggregateProofLayoutV1,
@@ -1221,12 +1218,10 @@ impl<'a> MainTraceProviderSetV1<'a> {
         Ok(column)
     }
 }
-/// Closed prover-side fixed-polynomial and quotient provider for one canonical
-/// MAIN trace group.
+/// Closed prover-side fixed-polynomial and quotient provider for one canonical MAIN trace group.
 ///
-/// The variants are verifier-derived and exhaustive. No dynamic callback can
-/// supply fixed rows or a quotient value, and every challenge-dependent source
-/// borrows the already-bound X5B1 phase.
+/// The variants are verifier-derived and exhaustive. No dynamic callback can supply fixed rows or a
+/// quotient value, and every challenge-dependent source borrows the already-bound X5B1 phase.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 enum MainProverConstraintProviderV1<'phase, 'assembly> {
     Log5(MainP256Log5ProverConstraintSourceV1<'phase>),
@@ -2052,8 +2047,7 @@ fn main_fri_bases_from_polynomials_v1(
         })
         .collect()
 }
-/// Exact six-provider registry used only for verifier-safe opened-row
-/// evaluation.
+/// Exact six-provider registry used only for verifier-safe opened-row evaluation.
 pub(super) struct MainOpenedProviderSetV1<'a> {
     layout: AggregateProofLayoutV1,
     groups: Vec<MainOpenedGroupProviderV1<'a>>,
@@ -3115,10 +3109,9 @@ pub(crate) fn zk_x509_main_pre_aux_from_proof_v1(
 }
 /// Verify the complete six-group, 49-registration canonical MAIN aggregate.
 ///
-/// Every fixed opening is reconstructed after post-grinding query derivation.
-/// The proof supplies only authenticated trace/composition/FRI openings and
-/// terminal claims; it cannot select a provider, registration, schedule,
-/// fixed row, or shared X5B1 challenge.
+/// Every fixed opening is reconstructed after post-grinding query derivation. The proof supplies
+/// only authenticated trace/composition/FRI openings and terminal claims; it cannot select a
+/// provider, registration, schedule, fixed row, or shared X5B1 challenge.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
     statement: &IrohaZkX509StarkP256StatementV1,

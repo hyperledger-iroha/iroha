@@ -1,10 +1,9 @@
 //! Typed-HIR linker for Kotodama V1 modules.
 //!
-//! Source units are parsed and type checked independently. The linker resolves
-//! only explicit `alias::symbol` imports backed by a locked export table,
-//! rewrites final symbol identities in typed HIR, and then reruns whole-program
-//! recursion and effect analysis before handing the result to the canonical
-//! compiler session.
+//! Source units are parsed and type checked independently. The linker resolves only explicit
+//! `alias::symbol` imports backed by a locked export table, rewrites final symbol identities in
+//! typed HIR, and then reruns whole-program recursion and effect analysis before handing the result
+//! to the canonical compiler session.
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
     builtins::{Builtin, BuiltinSurface},
@@ -114,11 +113,10 @@ pub struct SourceLinkRequest {
 }
 /// Complete source graph for validating one reusable package before publish.
 ///
-/// Unlike [`SourceLinkRequest`], this graph has no deployable seiyaku root.
-/// The package being published and every locked dependency must consist only
-/// of production `module` units. All declared exports, imported calls, types,
-/// and transitive effects are checked together after independent module
-/// analysis.
+/// Unlike [`SourceLinkRequest`], this graph has no deployable seiyaku root. The package being
+/// published and every locked dependency must consist only of production `module` units. All
+/// declared exports, imported calls, types, and transitive effects are checked together after
+/// independent module analysis.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourcePackageGraphRequest {
     /// The local package being validated for publication.
@@ -378,11 +376,10 @@ impl ParsedSourceCache {
 }
 /// Reusable, content-addressed parser and typed-HIR linker.
 ///
-/// A call parses independent changed modules in parallel. Equal source contents
-/// are parsed once, while a bounded LRU retains exact source text to defend
-/// against digest collisions without permitting unbounded service memory. The
-/// final linker still receives a deterministic request and performs whole-graph
-/// type/effect analysis exactly once.
+/// A call parses independent changed modules in parallel. Equal source contents are parsed once,
+/// while a bounded LRU retains exact source text to defend against digest collisions without
+/// permitting unbounded service memory. The final linker still receives a deterministic request and
+/// performs whole-graph type/effect analysis exactly once.
 #[derive(Default)]
 pub struct ModuleBuildGraph {
     parsed: Mutex<ParsedSourceCache>,
@@ -394,10 +391,9 @@ pub struct ModuleBuildGraph {
 impl ModuleBuildGraph {
     /// Return the canonical identity of a complete locked source graph.
     ///
-    /// This preflight performs the same aggregate resource-budget check as
-    /// [`Self::link`] but does not parse, resolve, or type-check any source. A
-    /// build driver can therefore authenticate a previously published result
-    /// before doing compiler work on an unchanged graph.
+    /// This preflight performs the same aggregate resource-budget check as [`Self::link`] but does
+    /// not parse, resolve, or type-check any source. A build driver can therefore authenticate a
+    /// previously published result before doing compiler work on an unchanged graph.
     pub fn fingerprint(request: &SourceLinkRequest) -> Result<Hash, SourceGraphError> {
         let names = validate_source_link_request(request)?;
         Ok(source_graph_fingerprint(request, &names))
@@ -550,10 +546,9 @@ impl ModuleBuildGraph {
     }
     /// Parse, resolve, type/effect-check, and validate one publishable package.
     ///
-    /// No synthetic deployable root is created. Every source is parsed once
-    /// through this graph's content-addressed parser, every package is resolved
-    /// against its explicit locked imports, and whole-graph call/effect checks
-    /// run over the resulting typed HIR.
+    /// No synthetic deployable root is created. Every source is parsed once through this graph's
+    /// content-addressed parser, every package is resolved against its explicit locked imports, and
+    /// whole-graph call/effect checks run over the resulting typed HIR.
     pub fn validate_package(
         &self,
         mut request: SourcePackageGraphRequest,
@@ -655,10 +650,9 @@ impl ModuleBuildGraph {
     }
     /// Link and compile one explicit local test root with its exact package graph.
     ///
-    /// The suite and deployable runtime projection are derived from the same
-    /// linked typed HIR. This keeps external module calls bound to the supplied
-    /// package identities while avoiding source rewriting between test and
-    /// production compilation.
+    /// The suite and deployable runtime projection are derived from the same linked typed HIR. This
+    /// keeps external module calls bound to the supplied package identities while avoiding source
+    /// rewriting between test and production compilation.
     pub fn build_test_project(
         &self,
         request: SourceLinkRequest,

@@ -84,11 +84,10 @@ const QUERY_FANOUT_SIGNED_REQUEST_REPRESENTATIONS: usize =
 const QUERY_FANOUT_VERIFIED_REQUEST_REPRESENTATIONS: usize = 1;
 /// Equal high-water phases in the coordinator working set.
 ///
-/// The seventh unit covers the singular producer corridor while a previously
-/// successful route remains retained: request decode, retained first output,
-/// an owned persisted/source projection, the current decoded output, the
-/// destination frame, and two canonicalization scratch units can coexist.
-/// Routes still execute sequentially.
+/// The seventh unit covers the singular producer corridor while a previously successful route
+/// remains retained: request decode, retained first output, an owned persisted/source projection,
+/// the current decoded output, the destination frame, and two canonicalization scratch units can
+/// coexist. Routes still execute sequentially.
 const QUERY_FANOUT_PHASE_COUNT: usize = 7;
 /// Conservative pre-body units: 7Q + E + 7P.
 const QUERY_FANOUT_PREBODY_UNITS: usize = QUERY_FANOUT_SIGNED_REQUEST_REPRESENTATIONS
@@ -110,12 +109,11 @@ fn query_ingress_fixed_overhead_bytes() -> Option<usize> {
 }
 /// Maximum candidate-list high water for one sequentially resolved route.
 ///
-/// Core admits at most 256 manifest validators. Until the routing-only Core
-/// seam can return a single representation, account for three simultaneous
-/// identity/key payloads, one bounded manifest URL, and explicit container
-/// slack for every selected status. This bound is intentionally independent
-/// of the total online/world peer population and is not multiplied by lanes:
-/// candidate resolution is sequential.
+/// Core admits at most 256 manifest validators. Until the routing-only Core seam can return a
+/// single representation, account for three simultaneous identity/key payloads, one bounded
+/// manifest URL, and explicit container slack for every selected status. This bound is
+/// intentionally independent of the total online/world peer population and is not multiplied by
+/// lanes: candidate resolution is sequential.
 fn query_fanout_candidate_snapshot_overhead_bytes() -> Option<usize> {
     let identities = iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES
         .checked_mul(QUERY_FANOUT_CANDIDATE_IDENTITY_REPRESENTATIONS)?;
@@ -136,10 +134,9 @@ fn query_fanout_fixed_overhead_bytes() -> Option<usize> {
 }
 /// Deterministic phase geometry for one signed-query fanout.
 ///
-/// This is logical admission accounting, not an estimate of allocator internals.
-/// The request and fixed allowance remain live for the operation. The remaining
-/// bytes are divided into seven equal parts so that every high-water phase fits
-/// in one working-set reservation:
+/// This is logical admission accounting, not an estimate of allocator internals. The request and
+/// fixed allowance remain live for the operation. The remaining bytes are divided into seven equal
+/// parts so that every high-water phase fits in one working-set reservation:
 ///
 /// - request decode + outer accumulator + a local Core accumulator + two
 ///   candidate-sized encoder transients (direct frame and nested serialization
@@ -502,13 +499,11 @@ impl QueryScopeMemoryLimits {
 const QUERY_INGRESS_POOL_DIVISOR: usize = 4;
 /// Independent signed-query bodies that may be read concurrently.
 const QUERY_INGRESS_SLOT_COUNT: usize = 4;
-/// Maximum simultaneous variable-size ingress representations during bounded
-/// routing-scope classification: decoded signed query, its canonical frame, a
-/// nested decoded scope query, that query's canonical-check frame, and one
-/// derived-codec scratch representation.
+/// Maximum simultaneous variable-size ingress representations during bounded routing-scope
+/// classification: decoded signed query, its canonical frame, a nested decoded scope query, that
+/// query's canonical-check frame, and one derived-codec scratch representation.
 const QUERY_INGRESS_PHASE_UNITS: usize = 5;
-/// Complete memory reservation for one signed-query body before its route is
-/// known.
+/// Complete memory reservation for one signed-query body before its route is known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct QueryIngressMemoryEnvelope {
     slot_bytes: usize,
@@ -521,13 +516,12 @@ struct QueryIngressMemoryEnvelope {
 /// Complete memory admitted while one authenticated peer delivers an internal
 /// Torii proxy request over HTTP.
 ///
-/// A dedicated single-slot bridge lane holds this complete reservation before
-/// polling the body. The high-water phases cover the signed raw frame plus the
-/// decoded request, and then the moved decoded envelope, one shared outbound
-/// frame, and two derived-codec scratch representations. Candidate attempts
-/// share those representations instead of cloning the request per candidate.
-/// One fixed 64 KiB retryable diagnostic may remain while the next sequential
-/// authority is attempted; larger retry bodies are dropped before proceeding.
+/// A dedicated single-slot bridge lane holds this complete reservation before polling the body. The
+/// high-water phases cover the signed raw frame plus the decoded request, and then the moved
+/// decoded envelope, one shared outbound frame, and two derived-codec scratch representations.
+/// Candidate attempts share those representations instead of cloning the request per candidate. One
+/// fixed 64 KiB retryable diagnostic may remain while the next sequential authority is attempted;
+/// larger retry bodies are dropped before proceeding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ToriiProxyHttpIngressEnvelope {
     working_set_bytes: usize,
@@ -615,12 +609,11 @@ impl QueryIngressMemoryEnvelope {
     }
     /// Decode limits for JSON ingress while two allocation units can coexist.
     ///
-    /// Unlike the direct Norito path above, a JSON wrapper can still own its
-    /// decoded base64 string buffer while the nested Norito payload is being
-    /// reconstructed. The JSON path therefore receives at most two ingress
-    /// allocation units for that transient. The independent fanout half-phase
-    /// remains an upper bound so ingress cannot borrow memory it will not own
-    /// after promotion.
+    /// Unlike the direct Norito path above, a JSON wrapper can still own its decoded base64 string
+    /// buffer while the nested Norito payload is being reconstructed. The JSON path therefore
+    /// receives at most two ingress allocation units for that transient. The independent fanout
+    /// half-phase remains an upper bound so ingress cannot borrow memory it will not own after
+    /// promotion.
     fn json_request_two_unit_decode_limits(
         self,
         provisional_fanout: QueryFanoutMemoryEnvelope,
@@ -792,10 +785,9 @@ fn weighted_permit_count(bytes: u64, bytes_per_permit: NonZeroU64) -> Option<u32
 }
 /// One app-local byte-weighted pool shared by fanout and ordinary queries.
 ///
-/// Tokio exposes weighted acquisition through a `u32` permit count, while its
-/// semaphore has a platform-dependent larger maximum. The pool therefore
-/// chooses a conservative byte quantum and never represents more bytes than
-/// the configured capacity.
+/// Tokio exposes weighted acquisition through a `u32` permit count, while its semaphore has a
+/// platform-dependent larger maximum. The pool therefore chooses a conservative byte quantum and
+/// never represents more bytes than the configured capacity.
 #[derive(Clone, Debug)]
 struct QueryWeightedMemoryPool {
     semaphore: Arc<tokio::sync::Semaphore>,

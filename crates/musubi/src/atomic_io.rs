@@ -1,9 +1,8 @@
 //! Durable, root-confined atomic file access for Musubi project state.
 //!
-//! Callers first bind access to a trusted directory with [`AtomicWriteRoot`]
-//! and then provide only a normal relative path. This deliberately prevents a
-//! path read from a lockfile or registry response from becoming an arbitrary
-//! filesystem target.
+//! Callers first bind access to a trusted directory with [`AtomicWriteRoot`] and then provide only
+//! a normal relative path. This deliberately prevents a path read from a lockfile or registry
+//! response from becoming an arbitrary filesystem target.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::AsRawFd as _;
 #[cfg(unix)]
@@ -300,14 +299,12 @@ impl AtomicWriteRoot {
     }
     /// Durably replace one root-relative regular file.
     ///
-    /// The destination parent must already exist. The method rejects absolute
-    /// paths, traversal, symlink parents and targets, non-regular targets, and
-    /// hard-linked targets. V1 currently enables replacement only on Unix. It
-    /// creates a private temporary file in the
-    /// destination directory with `create_new`, writes and flushes all bytes,
-    /// synchronizes the file, atomically renames it, and synchronizes the
-    /// parent directory. Existing permissions are retained; a new file is
-    /// private (`0600`) on Unix.
+    /// The destination parent must already exist. The method rejects absolute paths, traversal,
+    /// symlink parents and targets, non-regular targets, and hard-linked targets. V1 currently
+    /// enables replacement only on Unix. It creates a private temporary file in the destination
+    /// directory with `create_new`, writes and flushes all bytes, synchronizes the file, atomically
+    /// renames it, and synchronizes the parent directory. Existing permissions are retained; a new
+    /// file is private (`0600`) on Unix.
     ///
     /// A concurrent change is rejected instead of overwriting the unexpected
     /// entry. Failure cleanup removes only the temporary inode created by this
@@ -363,13 +360,12 @@ impl AtomicWriteRoot {
     }
     /// Load one bounded immutable root-relative regular file.
     ///
-    /// The destination parent must already exist. The method rejects absolute
-    /// paths, traversal, symlink parents and targets, non-regular targets, and
-    /// hard-linked targets. It opens the destination without following links and
-    /// in nonblocking mode, binds the open file to the inspected single-link inode,
-    /// reads at most one byte beyond `max_bytes`, and revalidates the file, parent
-    /// chain, and root.
-    /// A destination that remains absent throughout validation returns `None`.
+    /// The destination parent must already exist. The method rejects absolute paths, traversal,
+    /// symlink parents and targets, non-regular targets, and hard-linked targets. It opens the
+    /// destination without following links and in nonblocking mode, binds the open file to the
+    /// inspected single-link inode, reads at most one byte beyond `max_bytes`, and revalidates the
+    /// file, parent chain, and root. A destination that remains absent throughout validation
+    /// returns `None`.
     ///
     /// # Errors
     ///
@@ -455,12 +451,11 @@ impl AtomicWriteRoot {
     ///
     /// Linux and Android expose an open directory descriptor as
     /// `/proc/self/fd/<fd>`. Appending the validated relative name makes the final
-    /// file open resolve below the retained directory even if the canonical root
-    /// pathname is temporarily replaced. The descriptor anchor and canonical root
-    /// identity are checked before and after the read. Other platforms fail closed;
-    /// safe `std` does not expose `openat` or an equivalent descriptor-rooted open.
-    /// This requires a kernel-provided procfs at `/proc`; the procfs entry must
-    /// resolve to the retained directory inode or the read is rejected.
+    /// file open resolve below the retained directory even if the canonical root pathname is
+    /// temporarily replaced. The descriptor anchor and canonical root identity are checked before
+    /// and after the read. Other platforms fail closed; safe `std` does not expose `openat` or an
+    /// equivalent descriptor-rooted open. This requires a kernel-provided procfs at `/proc`; the
+    /// procfs entry must resolve to the retained directory inode or the read is rejected.
     ///
     /// # Errors
     ///
@@ -509,21 +504,19 @@ impl AtomicWriteRoot {
     /// only while it still identifies the inode created by this call, and the parent is
     /// synchronized before a bounded nonblocking no-follow readback verifies the exact bytes.
     ///
-    /// An existing single-link regular file with identical bytes is idempotent. Any
-    /// different regular-file contents return
-    /// [`AtomicWriteErrorCode::ImmutableConflict`]; symlinks, hard links, directories,
-    /// and special files return [`AtomicWriteErrorCode::UnsafeTarget`]. No existing
-    /// destination is overwritten.
+    /// An existing single-link regular file with identical bytes is idempotent. Any different
+    /// regular-file contents return [`AtomicWriteErrorCode::ImmutableConflict`]; symlinks, hard
+    /// links, directories, and special files return [`AtomicWriteErrorCode::UnsafeTarget`]. No
+    /// existing destination is overwritten.
     ///
     /// TODO: Qualify this path for production with descriptor-relative
-    /// `renameat`/`linkat`/`unlinkat` no-replace operations once a permitted safe
-    /// dependency and lockfile update are available. The std-only implementation uses
-    /// the module's existing identity-checked pathname cleanup model and therefore does
-    /// not claim protection from a hostile same-UID substitution between its final
-    /// metadata check and temporary-name unlink. A crash before cleanup or a cleanup
-    /// failure under hostile substitution can leave a recoverable exact-owned temporary
-    /// name as a second link to the installed inode. Such a residue is never deleted by
-    /// a broad scan; safely discovering and recovering it is part of that production
+    /// `renameat`/`linkat`/`unlinkat` no-replace operations once a permitted safe dependency and
+    /// lockfile update are available. The std-only implementation uses the module's existing
+    /// identity-checked pathname cleanup model and therefore does not claim protection from a
+    /// hostile same-UID substitution between its final metadata check and temporary-name unlink. A
+    /// crash before cleanup or a cleanup failure under hostile substitution can leave a recoverable
+    /// exact-owned temporary name as a second link to the installed inode. Such a residue is never
+    /// deleted by a broad scan; safely discovering and recovering it is part of that production
     /// gate.
     ///
     /// # Errors

@@ -3776,9 +3776,8 @@ pub(crate) fn ensure_provider_may_be_removed(
 const fn provider_count_is_healthy(provider_count: usize) -> bool {
     provider_count >= MUSUBI_MIN_HEALTHY_REPLICAS_V1 as usize
 }
-/// Recompute location and universal resolver projections after an underlying
-/// SoraFS lifecycle change. Every lookup is exact or bounded by archive-local
-/// directories populated at registration.
+/// Recompute location and universal resolver projections after an underlying SoraFS lifecycle
+/// change. Every lookup is exact or bounded by archive-local directories populated at registration.
 pub(crate) fn refresh_musubi_locations(
     locations: &[MusubiArchiveLocationKeyV1],
     state_transaction: &mut StateTransaction<'_, '_>,

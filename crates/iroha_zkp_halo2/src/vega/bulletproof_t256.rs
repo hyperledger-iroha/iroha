@@ -13,13 +13,14 @@ use crate::generalized_bulletproof::{
     ArithmeticCircuitStatement, ArithmeticCircuitWitness, GeneralizedBulletproofErrorV1, LinComb,
     ProofGenerators, ProofPoint, ProofRandomSource, ProofScalar, ProofSuite, ProverTranscript,
     SecretMultiexpBuilder, Variable, VectorCommitmentOpening, VerifierTranscript,
+    exact_small_coefficient_source_v1 as exact_small,
 };
 use core::{
     marker::PhantomData,
     ops::{AddAssign, Neg, SubAssign},
 };
 use halo2curves::ff::Field as _;
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use thiserror::Error;
 const T256_BP_MAX_GATES_V1: usize = 65_536;
 const T256_BP_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.generalized-bulletproof.t256.transcript.v1";
@@ -311,9 +312,12 @@ pub(super) enum ZkAmsT256MembershipErrorV1 {
     WireEncoding,
     #[error("ZK-AMS T256 membership proof length is invalid")]
     ProofLength,
+    #[error("ZK-AMS T256 membership verification lease is poisoned")]
+    VerificationLeasePoisoned,
     #[error(transparent)]
     Backend(#[from] GeneralizedBulletproofErrorV1),
 }
+static ZK_AMS_T256_MEMBERSHIP_VERIFICATION_LEASE_V1: Mutex<()> = Mutex::new(());
 /// Canonical public evidence for one coefficient chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsT256MembershipProofV1 {
@@ -331,9 +335,17 @@ struct BorrowedZkAmsT256MembershipProofWireV1<'a> {
     proof: &'a [u8],
     padded_gates: usize,
 }
-fn borrow_zk_ams_t256_membership_proof_wire_exact_v1(
+struct BorrowedZkAmsT256MembershipHeaderV1<'a> {
+    bound: ZkAmsT256MembershipBoundV1,
+    chunk_ordinal: u16,
+    coefficient_count: u32,
+    commitment: &'a [u8],
+    encoded_proof_len: usize,
+    proof: &'a [u8],
+}
+fn borrow_zk_ams_t256_membership_header_v1(
     bytes: &[u8],
-) -> Result<BorrowedZkAmsT256MembershipProofWireV1<'_>, ZkAmsT256MembershipErrorV1> {
+) -> Result<BorrowedZkAmsT256MembershipHeaderV1<'_>, ZkAmsT256MembershipErrorV1> {
     if bytes.len() < ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1
         || bytes[..4] != ZK_AMS_MEMBERSHIP_WIRE_MAGIC_V1
         || bytes[4] != ZK_AMS_MEMBERSHIP_WIRE_VERSION_V1
@@ -354,29 +366,39 @@ fn borrow_zk_ams_t256_membership_proof_wire_exact_v1(
             .try_into()
             .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?,
     );
-    let coefficient_count_usize = usize::try_from(coefficient_count)
-        .map_err(|_| ZkAmsT256MembershipErrorV1::CoefficientCount)?;
-    let (_, padded_gates, _) = membership_shape(coefficient_count_usize, bound)?;
-    let expected_proof_len = membership_proof_len(padded_gates)?;
-    let commitment = Point::from_non_identity_wire_bytes_exact(&bytes[12..45])
-        .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?;
     let encoded_proof_len = usize::from(u16::from_be_bytes(
         bytes[45..47]
             .try_into()
             .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?,
     ));
-    let expected_wire_len = ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1
-        .checked_add(encoded_proof_len)
-        .ok_or(ZkAmsT256MembershipErrorV1::WireEncoding)?;
-    if encoded_proof_len != expected_proof_len || bytes.len() != expected_wire_len {
-        return Err(ZkAmsT256MembershipErrorV1::ProofLength);
-    }
-    Ok(BorrowedZkAmsT256MembershipProofWireV1 {
+    Ok(BorrowedZkAmsT256MembershipHeaderV1 {
         bound,
         chunk_ordinal,
         coefficient_count,
-        commitment,
+        commitment: &bytes[12..45],
+        encoded_proof_len,
         proof: &bytes[ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1..],
+    })
+}
+fn borrow_zk_ams_t256_membership_proof_wire_exact_v1(
+    bytes: &[u8],
+) -> Result<BorrowedZkAmsT256MembershipProofWireV1<'_>, ZkAmsT256MembershipErrorV1> {
+    let header = borrow_zk_ams_t256_membership_header_v1(bytes)?;
+    let coefficient_count_usize = usize::try_from(header.coefficient_count)
+        .map_err(|_| ZkAmsT256MembershipErrorV1::CoefficientCount)?;
+    let (_, padded_gates, _) = membership_shape(coefficient_count_usize, header.bound)?;
+    let expected_proof_len = membership_proof_len(padded_gates)?;
+    if header.encoded_proof_len != expected_proof_len || header.proof.len() != expected_proof_len {
+        return Err(ZkAmsT256MembershipErrorV1::ProofLength);
+    }
+    let commitment = Point::from_non_identity_wire_bytes_exact(header.commitment)
+        .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?;
+    Ok(BorrowedZkAmsT256MembershipProofWireV1 {
+        bound: header.bound,
+        chunk_ordinal: header.chunk_ordinal,
+        coefficient_count: header.coefficient_count,
+        commitment,
+        proof: header.proof,
         padded_gates,
     })
 }
@@ -987,50 +1009,184 @@ where
         transcript_digest,
     ))
 }
-fn verify_membership_chunk_for_suite<S>(
+#[derive(Clone, Copy)]
+enum ZkAmsT256MembershipVerificationInputV1<'a> {
+    Owned(&'a ZkAmsT256MembershipProofV1),
+    Wire(&'a [u8]),
+}
+enum BorrowedT256MembershipCommitmentV1<'a> {
+    Point(Point),
+    Wire(&'a [u8]),
+}
+struct PreparedZkAmsT256MembershipVerificationV1<'a> {
+    commitment: Point,
+    proof: &'a [u8],
+    padded_gates: usize,
+}
+#[derive(Clone, Copy)]
+enum T256MembershipVerifierBasisV1 {
+    Canonical,
+    #[cfg(test)]
+    Fixed([u8; 32]),
+}
+fn prepare_zk_ams_t256_membership_verification_v1<'a>(
     context_digest: [u8; 32],
-    generator_basis_digest: [u8; 32],
     expected_chunk_ordinal: u16,
     expected_bound: ZkAmsT256MembershipBoundV1,
     expected_coefficient_count: usize,
-    evidence: &ZkAmsT256MembershipProofV1,
-) -> Result<[u8; 32], ZkAmsT256MembershipErrorV1>
-where
-    S: ProofSuite<Scalar = Scalar, Point = Point>,
-{
-    if context_digest == [0; 32] || generator_basis_digest == [0; 32] {
+    input: ZkAmsT256MembershipVerificationInputV1<'a>,
+) -> Result<PreparedZkAmsT256MembershipVerificationV1<'a>, ZkAmsT256MembershipErrorV1> {
+    if context_digest == [0; 32] {
         return Err(ZkAmsT256MembershipErrorV1::Context);
     }
     if expected_chunk_ordinal > ZK_AMS_MEMBERSHIP_MAX_CHUNK_ORDINAL_V1 {
         return Err(ZkAmsT256MembershipErrorV1::ChunkOrdinal);
     }
-    if evidence.bound != expected_bound
-        || evidence.chunk_ordinal != expected_chunk_ordinal
-        || usize::try_from(evidence.coefficient_count).ok() != Some(expected_coefficient_count)
+    let (bound, chunk_ordinal, coefficient_count, commitment, encoded_proof_len, proof) =
+        match input {
+            ZkAmsT256MembershipVerificationInputV1::Owned(evidence) => (
+                evidence.bound,
+                evidence.chunk_ordinal,
+                evidence.coefficient_count,
+                BorrowedT256MembershipCommitmentV1::Point(evidence.commitment),
+                evidence.proof.len(),
+                evidence.proof.as_slice(),
+            ),
+            ZkAmsT256MembershipVerificationInputV1::Wire(bytes) => {
+                let header = borrow_zk_ams_t256_membership_header_v1(bytes)?;
+                (
+                    header.bound,
+                    header.chunk_ordinal,
+                    header.coefficient_count,
+                    BorrowedT256MembershipCommitmentV1::Wire(header.commitment),
+                    header.encoded_proof_len,
+                    header.proof,
+                )
+            }
+        };
+    if bound != expected_bound
+        || chunk_ordinal != expected_chunk_ordinal
+        || usize::try_from(coefficient_count).ok() != Some(expected_coefficient_count)
     {
         return Err(ZkAmsT256MembershipErrorV1::StatementMismatch);
     }
-    let (padded_gates, constraints) =
-        membership_constraints(expected_coefficient_count, expected_bound)?;
-    if evidence.proof.len() != membership_proof_len(padded_gates)? {
+    let (_, padded_gates, _) = membership_shape(expected_coefficient_count, expected_bound)?;
+    let expected_proof_len = membership_proof_len(padded_gates)?;
+    if encoded_proof_len != expected_proof_len || proof.len() != expected_proof_len {
         return Err(ZkAmsT256MembershipErrorV1::ProofLength);
     }
+    let commitment = match commitment {
+        BorrowedT256MembershipCommitmentV1::Point(point) => {
+            if point.is_identity() {
+                return Err(ZkAmsT256MembershipErrorV1::CommitmentIdentity);
+            }
+            point
+        }
+        BorrowedT256MembershipCommitmentV1::Wire(bytes) => {
+            Point::from_non_identity_wire_bytes_exact(bytes)
+                .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?
+        }
+    };
+    preflight_generalized_membership_proof_syntax_v1(proof, padded_gates)?;
+    Ok(PreparedZkAmsT256MembershipVerificationV1 {
+        commitment,
+        proof,
+        padded_gates,
+    })
+}
+fn acquire_zk_ams_t256_membership_verification_lease_v1(
+    lease: &Mutex<()>,
+) -> Result<MutexGuard<'_, ()>, ZkAmsT256MembershipErrorV1> {
+    lease
+        .lock()
+        .map_err(|_| ZkAmsT256MembershipErrorV1::VerificationLeasePoisoned)
+}
+fn verify_prepared_membership_chunk_for_suite<S>(
+    context_digest: [u8; 32],
+    generator_basis_digest: [u8; 32],
+    expected_chunk_ordinal: u16,
+    expected_bound: ZkAmsT256MembershipBoundV1,
+    expected_coefficient_count: usize,
+    prepared: PreparedZkAmsT256MembershipVerificationV1<'_>,
+) -> Result<[u8; 32], ZkAmsT256MembershipErrorV1>
+where
+    S: ProofSuite<Scalar = Scalar, Point = Point>,
+{
+    let source_bound = match expected_bound {
+        ZkAmsT256MembershipBoundV1::One => exact_small::ExactSmallCoefficientBoundV1::One,
+        ZkAmsT256MembershipBoundV1::Two => exact_small::ExactSmallCoefficientBoundV1::Two,
+    };
+    let source = exact_small::ExactSmallCoefficientConstraintSourceV1::new(
+        expected_coefficient_count,
+        source_bound,
+    )?;
+    let statement = exact_small::ExactSmallCoefficientVerifierStatementV1::new(
+        S::generators().reduce(prepared.padded_gates)?,
+        source,
+        prepared.commitment,
+    )?;
     let mut transcript = T256BulletproofVerifierTranscriptV1::<S>::new(
         context_digest,
         generator_basis_digest,
         expected_chunk_ordinal,
         expected_bound as u8,
-        evidence.commitment,
-        &evidence.proof,
+        prepared.commitment,
+        prepared.proof,
     )?;
-    ArithmeticCircuitStatement::new(
-        S::generators().reduce(padded_gates)?,
-        constraints,
-        vec![evidence.commitment],
-        Vec::new(),
-    )?
-    .verify(&mut transcript)?;
+    statement.verify(&mut transcript)?;
     Ok(transcript.finish()?)
+}
+fn verify_membership_input_for_suite_with_lease_v1<S>(
+    context_digest: [u8; 32],
+    expected_chunk_ordinal: u16,
+    expected_bound: ZkAmsT256MembershipBoundV1,
+    expected_coefficient_count: usize,
+    input: ZkAmsT256MembershipVerificationInputV1<'_>,
+    lease: &Mutex<()>,
+    basis: T256MembershipVerifierBasisV1,
+) -> Result<[u8; 32], ZkAmsT256MembershipErrorV1>
+where
+    S: ProofSuite<Scalar = Scalar, Point = Point>,
+{
+    let prepared = prepare_zk_ams_t256_membership_verification_v1(
+        context_digest,
+        expected_chunk_ordinal,
+        expected_bound,
+        expected_coefficient_count,
+        input,
+    )?;
+    let _lease = acquire_zk_ams_t256_membership_verification_lease_v1(lease)?;
+    let generator_basis_digest = match basis {
+        T256MembershipVerifierBasisV1::Canonical => {
+            zk_ams_t256_bulletproof_generator_basis_digest_v1()
+        }
+        #[cfg(test)]
+        T256MembershipVerifierBasisV1::Fixed(digest) => digest,
+    };
+    verify_prepared_membership_chunk_for_suite::<S>(
+        context_digest,
+        generator_basis_digest,
+        expected_chunk_ordinal,
+        expected_bound,
+        expected_coefficient_count,
+        prepared,
+    )
+}
+fn verify_zk_ams_t256_membership_input_v1(
+    context_digest: [u8; 32],
+    expected_chunk_ordinal: u16,
+    expected_bound: ZkAmsT256MembershipBoundV1,
+    input: ZkAmsT256MembershipVerificationInputV1<'_>,
+) -> Result<[u8; 32], ZkAmsT256MembershipErrorV1> {
+    verify_membership_input_for_suite_with_lease_v1::<ZkAmsT256BulletproofSuiteV1>(
+        context_digest,
+        expected_chunk_ordinal,
+        expected_bound,
+        ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1,
+        input,
+        &ZK_AMS_T256_MEMBERSHIP_VERIFICATION_LEASE_V1,
+        T256MembershipVerifierBasisV1::Canonical,
+    )
 }
 /// Prove exact membership for one release-shape 16,384-coefficient chunk.
 pub(super) fn prove_zk_ams_t256_membership_chunk_v1<R: ProofRandomSource>(
@@ -1083,13 +1239,26 @@ pub(super) fn verify_zk_ams_t256_membership_chunk_v1(
     expected_bound: ZkAmsT256MembershipBoundV1,
     evidence: &ZkAmsT256MembershipProofV1,
 ) -> Result<[u8; 32], ZkAmsT256MembershipErrorV1> {
-    verify_membership_chunk_for_suite::<ZkAmsT256BulletproofSuiteV1>(
+    verify_zk_ams_t256_membership_input_v1(
         context_digest,
-        zk_ams_t256_bulletproof_generator_basis_digest_v1(),
         expected_chunk_ordinal,
         expected_bound,
-        ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1,
-        evidence,
+        ZkAmsT256MembershipVerificationInputV1::Owned(evidence),
+    )
+}
+/// Verify one canonical borrowed release-shape membership chunk without
+/// allocating an owned proof buffer.
+pub(super) fn verify_zk_ams_t256_membership_chunk_wire_v1(
+    context_digest: [u8; 32],
+    expected_chunk_ordinal: u16,
+    expected_bound: ZkAmsT256MembershipBoundV1,
+    wire: &[u8],
+) -> Result<[u8; 32], ZkAmsT256MembershipErrorV1> {
+    verify_zk_ams_t256_membership_input_v1(
+        context_digest,
+        expected_chunk_ordinal,
+        expected_bound,
+        ZkAmsT256MembershipVerificationInputV1::Wire(wire),
     )
 }
 fn initialize_transcript_state(
@@ -1328,6 +1497,49 @@ mod tests {
         },
         vega::VEGA_T256_SCALAR_MODULUS_BE_V1,
     };
+    fn verify_membership_input_for_suite_with_lease<S>(
+        context_digest: [u8; 32],
+        generator_basis_digest: [u8; 32],
+        expected_chunk_ordinal: u16,
+        expected_bound: ZkAmsT256MembershipBoundV1,
+        expected_coefficient_count: usize,
+        input: ZkAmsT256MembershipVerificationInputV1<'_>,
+        lease: &Mutex<()>,
+    ) -> Result<[u8; 32], ZkAmsT256MembershipErrorV1>
+    where
+        S: ProofSuite<Scalar = Scalar, Point = Point>,
+    {
+        verify_membership_input_for_suite_with_lease_v1::<S>(
+            context_digest,
+            expected_chunk_ordinal,
+            expected_bound,
+            expected_coefficient_count,
+            input,
+            lease,
+            T256MembershipVerifierBasisV1::Fixed(generator_basis_digest),
+        )
+    }
+    fn verify_membership_chunk_for_suite<S>(
+        context_digest: [u8; 32],
+        generator_basis_digest: [u8; 32],
+        expected_chunk_ordinal: u16,
+        expected_bound: ZkAmsT256MembershipBoundV1,
+        expected_coefficient_count: usize,
+        evidence: &ZkAmsT256MembershipProofV1,
+    ) -> Result<[u8; 32], ZkAmsT256MembershipErrorV1>
+    where
+        S: ProofSuite<Scalar = Scalar, Point = Point>,
+    {
+        verify_membership_input_for_suite_with_lease::<S>(
+            context_digest,
+            generator_basis_digest,
+            expected_chunk_ordinal,
+            expected_bound,
+            expected_coefficient_count,
+            ZkAmsT256MembershipVerificationInputV1::Owned(evidence),
+            &Mutex::new(()),
+        )
+    }
     #[test]
     fn scalar_copy_owner_take_clears_named_source_and_guards_by_value_boundary() {
         let expected = Scalar::from_u64(41);
@@ -2139,6 +2351,35 @@ mod tests {
     fn exact_membership_circuits_cover_both_sets_and_reject_adversarial_evidence() {
         let context = keccak256(b"t256-membership-test-context");
         let basis = keccak256(b"t256-membership-test-basis");
+        let verify_wire =
+            |candidate_context, ordinal, bound, count, wire: &[u8], lease: &Mutex<()>| {
+                verify_membership_input_for_suite_with_lease::<TinyT256Suite>(
+                    candidate_context,
+                    basis,
+                    ordinal,
+                    bound,
+                    count,
+                    ZkAmsT256MembershipVerificationInputV1::Wire(wire),
+                    lease,
+                )
+            };
+        let assert_owned_wire_parity =
+            |ordinal, bound, count, evidence: &ZkAmsT256MembershipProofV1| {
+                let wire = evidence.to_wire_bytes();
+                let lease = Mutex::new(());
+                assert_eq!(
+                    verify_membership_input_for_suite_with_lease::<TinyT256Suite>(
+                        context,
+                        basis,
+                        ordinal,
+                        bound,
+                        count,
+                        ZkAmsT256MembershipVerificationInputV1::Owned(evidence),
+                        &lease,
+                    ),
+                    verify_wire(context, ordinal, bound, count, &wire, &lease)
+                );
+            };
         let prove_bound_one = || {
             prove_membership_chunk_for_suite::<TinyT256Suite, _>(
                 context,
@@ -2198,6 +2439,7 @@ mod tests {
             ),
             Ok(bound_one_digest)
         );
+        assert_owned_wire_parity(6, ZkAmsT256MembershipBoundV1::One, 3, &bound_one);
         let (bound_two, bound_two_digest) = prove_membership_chunk_for_suite::<TinyT256Suite, _>(
             context,
             basis,
@@ -2253,6 +2495,7 @@ mod tests {
             ),
             Ok(bound_two_digest)
         );
+        assert_owned_wire_parity(7, ZkAmsT256MembershipBoundV1::Two, 5, &bound_two);
         for index in 0..bound_two.proof.len() {
             let mut changed = bound_two.clone();
             changed.proof[index] ^= 1;
@@ -2348,6 +2591,141 @@ mod tests {
             ),
             Err(ZkAmsT256MembershipErrorV1::StatementMismatch)
         );
+        let poisoned_lease = Mutex::new(());
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _guard = poisoned_lease
+                    .lock()
+                    .expect("fresh local verification lease");
+                panic!("deliberately poison local verification lease");
+            })
+            .is_err()
+        );
+        let verify_poisoned = |candidate_context, ordinal, candidate_wire: &[u8]| {
+            verify_wire(
+                candidate_context,
+                ordinal,
+                ZkAmsT256MembershipBoundV1::Two,
+                5,
+                candidate_wire,
+                &poisoned_lease,
+            )
+        };
+        assert_eq!(
+            verify_poisoned([0; 32], 7, &wire),
+            Err(ZkAmsT256MembershipErrorV1::Context)
+        );
+        assert_eq!(
+            verify_poisoned(context, ZK_AMS_MEMBERSHIP_MAX_CHUNK_ORDINAL_V1 + 1, &wire,),
+            Err(ZkAmsT256MembershipErrorV1::ChunkOrdinal)
+        );
+        let mut poisoned_precedence_cases = Vec::new();
+        let mut malformed = wire.clone();
+        malformed[0] ^= 1;
+        poisoned_precedence_cases.push((malformed, ZkAmsT256MembershipErrorV1::WireEncoding));
+        let mut excessive = wire.clone();
+        excessive[6..8]
+            .copy_from_slice(&(ZK_AMS_MEMBERSHIP_MAX_CHUNK_ORDINAL_V1 + 1).to_be_bytes());
+        poisoned_precedence_cases.push((excessive, ZkAmsT256MembershipErrorV1::ChunkOrdinal));
+        for (offset, replacement) in [(5, 1_u8), (7, 6_u8), (11, 4_u8)] {
+            let mut changed = wire.clone();
+            changed[offset] = replacement;
+            poisoned_precedence_cases
+                .push((changed, ZkAmsT256MembershipErrorV1::StatementMismatch));
+        }
+        let mut wrong_length = wire.clone();
+        wrong_length[45..47].copy_from_slice(&720_u16.to_be_bytes());
+        poisoned_precedence_cases.push((wrong_length, ZkAmsT256MembershipErrorV1::ProofLength));
+        let mut identity_commitment = wire.clone();
+        identity_commitment[12..45].fill(0);
+        identity_commitment[12] = 0x40;
+        poisoned_precedence_cases.push((
+            identity_commitment,
+            ZkAmsT256MembershipErrorV1::WireEncoding,
+        ));
+        let mut identity_proof_point = wire.clone();
+        identity_proof_point[47..80].fill(0);
+        identity_proof_point[47] = 0x40;
+        poisoned_precedence_cases.push((
+            identity_proof_point,
+            ZkAmsT256MembershipErrorV1::Backend(GeneralizedBulletproofErrorV1::PointIdentity),
+        ));
+        let mut noncanonical_scalar = wire.clone();
+        let first_scalar = 47 + ZK_AMS_MEMBERSHIP_FIXED_PROOF_POINTS_V1 * Point::POINT_BYTES;
+        noncanonical_scalar[first_scalar..first_scalar + 32].fill(0xff);
+        poisoned_precedence_cases.push((
+            noncanonical_scalar,
+            ZkAmsT256MembershipErrorV1::Backend(GeneralizedBulletproofErrorV1::ScalarEncoding),
+        ));
+        for (changed, expected) in poisoned_precedence_cases {
+            assert_eq!(verify_poisoned(context, 7, &changed), Err(expected));
+        }
+        for _ in 0..2 {
+            assert_eq!(
+                verify_poisoned(context, 7, &wire),
+                Err(ZkAmsT256MembershipErrorV1::VerificationLeasePoisoned)
+            );
+        }
+        let normal_error_lease = Mutex::new(());
+        assert!(
+            verify_wire(
+                keccak256(b"wrong-but-nonzero-membership-context"),
+                7,
+                ZkAmsT256MembershipBoundV1::Two,
+                5,
+                &wire,
+                &normal_error_lease,
+            )
+            .is_err()
+        );
+        assert!(normal_error_lease.try_lock().is_ok());
+        let source = include_str!("bulletproof_t256.rs");
+        let shared = source
+            .split_once("fn verify_membership_input_for_suite_with_lease_v1<S>(")
+            .unwrap()
+            .1
+            .split_once("fn verify_zk_ams_t256_membership_input_v1(")
+            .unwrap()
+            .0;
+        let mut prior = 0;
+        for step in [
+            "prepare_zk_ams_t256_membership_verification_v1(",
+            "acquire_zk_ams_t256_membership_verification_lease_v1(lease)",
+            "zk_ams_t256_bulletproof_generator_basis_digest_v1()",
+            "verify_prepared_membership_chunk_for_suite::<S>(",
+        ] {
+            let offset = shared.find(step).expect("missing verifier lease step");
+            assert!(offset >= prior);
+            prior = offset + step.len();
+        }
+        assert_eq!(
+            shared
+                .matches("acquire_zk_ams_t256_membership_verification_lease_v1")
+                .count(),
+            1
+        );
+        for forbidden in
+            "FnOnce FnMut callback rayon par_ into_inner clear_poison".split_whitespace()
+        {
+            assert!(!shared.contains(forbidden));
+        }
+        let core = source
+            .split_once("fn verify_prepared_membership_chunk_for_suite<S>(")
+            .unwrap()
+            .1
+            .split_once("fn verify_membership_input_for_suite_with_lease_v1<S>(")
+            .unwrap()
+            .0;
+        for forbidden in "Mutex .lock( callback receipt capability rayon par_".split_whitespace() {
+            assert!(!core.contains(forbidden));
+        }
+        let production = source.rsplit_once("\n#[cfg(test)]\nmod tests {").unwrap().0;
+        for needle in [
+            "fn verify_zk_ams_t256_membership_chunk_wire_v1(",
+            "VerificationInputV1::Wire(wire)",
+        ] {
+            assert_eq!(production.matches(needle).count(), 1);
+        }
         assert_eq!(
             prove_membership_chunk_for_suite::<TinyT256Suite, _>(
                 context,
@@ -2618,4 +2996,5 @@ mod tests {
             assert!(result.is_err());
         }
     }
+    include!("bulletproof_t256_streaming_constraint_tests.rs");
 }

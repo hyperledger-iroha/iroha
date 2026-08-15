@@ -7,6 +7,21 @@
     clippy::result_large_err,
     clippy::struct_excessive_bools
 )]
+macro_rules! routing_test {
+    (sync $name:ident $($body:tt)*) => {
+        #[test]
+        fn $name() { $($body)* }
+    };
+    (async $name:ident $($body:tt)*) => {
+        #[tokio::test]
+        async fn $name() { $($body)* }
+    };
+    (current_thread $name:ident $($body:tt)*) => {
+        #[tokio::test(flavor = "current_thread")]
+        async fn $name() { $($body)* }
+    };
+}
+
 use axum::{
     Json,
     body::Body,
@@ -494,8 +509,7 @@ fn routing_test_network_id(seed: u8) -> NetworkId {
     ))
 }
 #[cfg(test)]
-#[test]
-fn checked_routing_fixture_keypair_rejects_all_zero_seed_material() {
+routing_test! { sync checked_routing_fixture_keypair_rejects_all_zero_seed_material
     assert!(
         KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
         "checked routing fixtures must reject invalid Ed25519 seed material"
@@ -634,13 +648,11 @@ where
 #[cfg(test)]
 mod pagination_tests {
     use super::{clamp_history_window, pagination_bounds};
-    #[test]
-    fn pagination_bounds_limit_zero_returns_empty() {
+    routing_test! { sync pagination_bounds_limit_zero_returns_empty
         let (start, end) = pagination_bounds(10, 0, Some(0), Some(5));
         assert_eq!((start, end), (0, 0));
     }
-    #[test]
-    fn clamp_history_window_limit_zero_returns_empty() {
+    routing_test! { sync clamp_history_window_limit_zero_returns_empty
         let items = vec![3u64, 2, 1];
         let windowed = clamp_history_window(items, None, Some(0), 10, |v| *v);
         assert!(windowed.is_empty());
@@ -1132,8 +1144,7 @@ mod streaming_pager_tests {
         collect_page_linear, collect_page_streaming, enforce_app_pagination,
     };
     use std::{cell::Cell, rc::Rc};
-    #[test]
-    fn omitted_count_mode_is_bounded() {
+    routing_test! { sync omitted_count_mode_is_bounded
         assert_eq!(
             app_transaction_count_mode(None, "/v1/test/bounded"),
             AppCountMode::Bounded
@@ -1143,8 +1154,7 @@ mod streaming_pager_tests {
             AppCountMode::Exact
         );
     }
-    #[test]
-    fn pagination_window_cannot_exceed_the_configured_fetch_budget() {
+    routing_test! { sync pagination_window_cannot_exceed_the_configured_fetch_budget
         let limits = app_query_limits();
         let error = match enforce_app_pagination(
             Some(1),
@@ -1163,26 +1173,22 @@ mod streaming_pager_tests {
             }
         ));
     }
-    #[test]
-    fn collects_expected_page_with_limit() {
+    routing_test! { sync collects_expected_page_with_limit
         let (items, total) = collect_page_streaming((0..10).map(|i| (i, i)), 2, Some(3), None);
         assert_eq!(total, 10);
         assert_eq!(items, vec![2, 3, 4]);
     }
-    #[test]
-    fn respects_large_offset() {
+    routing_test! { sync respects_large_offset
         let (items, total) = collect_page_streaming((0..5).map(|i| (i, i)), 10, Some(2), None);
         assert_eq!(total, 5);
         assert!(items.is_empty());
     }
-    #[test]
-    fn collects_all_when_limit_absent() {
+    routing_test! { sync collects_all_when_limit_absent
         let (items, total) = collect_page_streaming((0..3).map(|i| (i, i)), 1, None, None);
         assert_eq!(total, 3);
         assert_eq!(items, vec![1, 2]);
     }
-    #[test]
-    fn orders_multi_key_with_mixed_directions() {
+    routing_test! { sync orders_multi_key_with_mixed_directions
         let data = vec![
             (
                 MultiSortKey::new(vec![
@@ -1210,21 +1216,18 @@ mod streaming_pager_tests {
         assert_eq!(total, 3);
         assert_eq!(items, vec!["alpha-3", "alpha-2", "beta-1"]);
     }
-    #[test]
-    fn preserves_insertion_order_when_keys_equal() {
+    routing_test! { sync preserves_insertion_order_when_keys_equal
         let key = MultiSortKey::new(vec![SortKeyComponent::asc("same".to_string())]);
         let data = vec![(key.clone(), 1usize), (key.clone(), 2usize), (key, 3usize)];
         let (items, _) = collect_page_streaming(data, 0, None, None);
         assert_eq!(items, vec![1, 2, 3]);
     }
-    #[test]
-    fn linear_collects_expected_window() {
+    routing_test! { sync linear_collects_expected_window
         let (items, total) = collect_page_linear(0..5, 1, Some(2), None);
         assert_eq!(total, 5);
         assert_eq!(items, vec![1, 2]);
     }
-    #[test]
-    fn linear_respects_fetch_cap_after_page_fill() {
+    routing_test! { sync linear_respects_fetch_cap_after_page_fill
         let counter = Rc::new(Cell::new(0usize));
         let iter_counter = counter.clone();
         let iter = (0..10).inspect(move |_| {
@@ -2835,8 +2838,7 @@ pub struct IdentifierResolveResponseDto {
 #[cfg(all(test, feature = "app_api"))]
 mod ram_lfe_encrypted_only_request_dto_tests {
     use super::*;
-    #[test]
-    fn ram_lfe_execute_request_rejects_legacy_plaintext_fields() {
+    routing_test! { sync ram_lfe_execute_request_rejects_legacy_plaintext_fields
         let error = norito::json::from_str::<RamLfeExecuteRequestDto>(
             r#"{"encrypted_input":"ciphertext","input_hex":"74657374"}"#,
         )
@@ -2848,8 +2850,7 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         .expect_err("RAM-LFE execute requests must reject plaintext aliases");
         assert!(error.to_string().contains("plaintext"));
     }
-    #[test]
-    fn ram_lfe_execute_request_rejects_missing_or_non_string_ciphertext() {
+    routing_test! { sync ram_lfe_execute_request_rejects_missing_or_non_string_ciphertext
         let error = norito::json::from_str::<RamLfeExecuteRequestDto>(r#"{}"#)
             .expect_err("encrypted input is mandatory");
         assert!(error.to_string().contains("encrypted_input"));
@@ -2863,8 +2864,7 @@ mod ram_lfe_encrypted_only_request_dto_tests {
             .expect_err("RAM-LFE execute request must be a JSON object");
         assert!(error.to_string().contains("object"));
     }
-    #[test]
-    fn ram_lfe_execute_request_rejects_ciphertext_alias_fields() {
+    routing_test! { sync ram_lfe_execute_request_rejects_ciphertext_alias_fields
         let error =
             norito::json::from_str::<RamLfeExecuteRequestDto>(r#"{"encryptedInput":"ciphertext"}"#)
                 .expect_err("camelCase encrypted-input aliases must be rejected");
@@ -2880,8 +2880,7 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         .expect_err("duplicate encrypted inputs must be rejected");
         assert!(error.to_string().contains("encrypted_input"));
     }
-    #[test]
-    fn identifier_resolve_request_rejects_legacy_plaintext_fields() {
+    routing_test! { sync identifier_resolve_request_rejects_legacy_plaintext_fields
         let error = norito::json::from_str::<IdentifierResolveRequestDto>(
             r#"{"policy_id":"policy","encrypted_input":"ciphertext","input_hex":"74657374"}"#,
         )
@@ -2893,8 +2892,7 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         .expect_err("identifier resolution must reject plaintext identifier aliases");
         assert!(error.to_string().contains("identifier"));
     }
-    #[test]
-    fn identifier_resolve_request_requires_opening_and_encrypted_input() {
+    routing_test! { sync identifier_resolve_request_requires_opening_and_encrypted_input
         let error = norito::json::from_str::<IdentifierResolveRequestDto>(
             r#"{"policy_id":"policy","encrypted_input":"ciphertext"}"#,
         )
@@ -2910,8 +2908,7 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         .expect_err("policy id is mandatory");
         assert!(error.to_string().contains("policy_id"));
     }
-    #[test]
-    fn identifier_resolve_request_rejects_malformed_encrypted_fields() {
+    routing_test! { sync identifier_resolve_request_rejects_malformed_encrypted_fields
         let error = norito::json::from_str::<IdentifierResolveRequestDto>(
             r#"{"policy_id":123,"encrypted_input":"ciphertext","output_opening":{}}"#,
         )
@@ -3325,8 +3322,7 @@ mod app_api_transaction_signing_tests {
             other => panic!("expected conversion error, got {other:?}"),
         }
     }
-    #[test]
-    fn app_api_fixture_keypair_uses_checked_seed_derivation() {
+    routing_test! { sync app_api_fixture_keypair_uses_checked_seed_derivation
         let seed = b"iroha:torii:routing:test:app-api-transaction-signing".to_vec();
         let key_pair = checked_app_api_fixture_keypair(
             seed.clone(),
@@ -3337,8 +3333,7 @@ mod app_api_transaction_signing_tests {
         assert_eq!(key_pair.public_key(), expected.public_key());
         assert_eq!(key_pair.private_key(), expected.private_key());
     }
-    #[test]
-    fn app_api_transaction_checked_signing_verifies() {
+    routing_test! { sync app_api_transaction_checked_signing_verifies
         let key_pair = checked_app_api_fixture_keypair(
             b"iroha:torii:routing:test:app-api-transaction-signing".to_vec(),
             "derive Torii app-api transaction signing fixture key",
@@ -3359,8 +3354,7 @@ mod app_api_transaction_signing_tests {
         tx.verify_signature()
             .expect("checked signed transaction should verify");
     }
-    #[test]
-    fn app_api_transaction_builder_binds_the_exact_core_state_network() {
+    routing_test! { sync app_api_transaction_builder_binds_the_exact_core_state_network
         let app = crate::mk_app_state_for_tests();
         let key_pair = checked_app_api_fixture_keypair(
             b"iroha:torii:routing:test:app-api-core-state-network".to_vec(),
@@ -3405,8 +3399,7 @@ mod app_api_transaction_signing_tests {
         tx.verify_signature()
             .expect("quote-first signed transaction should verify");
     }
-    #[test]
-    fn app_api_unsigned_draft_is_exact_deterministic_payload_roundtrip() {
+    routing_test! { sync app_api_unsigned_draft_is_exact_deterministic_payload_roundtrip
         use base64::Engine as _;
         let requested_authority = AccountId::new(
             checked_app_api_fixture_keypair(
@@ -3448,16 +3441,14 @@ mod app_api_transaction_signing_tests {
             builder.payload_hash_bytes()
         );
     }
-    #[test]
-    fn app_api_detached_signature_rejects_all_zero_payload() {
+    routing_test! { sync app_api_detached_signature_rejects_all_zero_payload
         use base64::Engine as _;
         let signature_b64 = base64::engine::general_purpose::STANDARD.encode([0_u8; 64]);
         let err = decode_app_api_detached_signature(&signature_b64)
             .expect_err("all-zero detached signatures must fail at admission");
         assert!(expect_conversion(err).contains("Ed25519 signature failed admission"));
     }
-    #[test]
-    fn app_api_detached_signature_rejects_noncanonical_base64() {
+    routing_test! { sync app_api_detached_signature_rejects_noncanonical_base64
         use base64::Engine as _;
         let canonical = base64::engine::general_purpose::STANDARD.encode([0x42_u8; 64]);
         let unpadded = canonical.trim_end_matches('=');
@@ -3465,8 +3456,7 @@ mod app_api_transaction_signing_tests {
             .expect_err("unpadded detached signature must fail before signature parsing");
         assert!(expect_conversion(err).contains("invalid signature_b64"));
     }
-    #[test]
-    fn app_api_detached_signature_rejects_malformed_ed25519_payloads() {
+    routing_test! { sync app_api_detached_signature_rejects_malformed_ed25519_payloads
         use base64::Engine as _;
         let short_signature_b64 = base64::engine::general_purpose::STANDARD.encode([0xAA_u8; 3]);
         let err = decode_app_api_detached_signature(&short_signature_b64)
@@ -3496,8 +3486,7 @@ mod app_api_transaction_signing_tests {
             );
         }
     }
-    #[test]
-    fn authority_signature_uses_authority_algorithm_without_redundant_key() {
+    routing_test! { sync authority_signature_uses_authority_algorithm_without_redundant_key
         use base64::Engine as _;
         for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1] {
             let key_pair = KeyPair::try_from_seed(
@@ -3521,8 +3510,7 @@ mod app_api_transaction_signing_tests {
                 .expect("decoded signature uses the authority algorithm");
         }
     }
-    #[test]
-    fn authority_signature_rejects_noncanonical_and_malformed_base64() {
+    routing_test! { sync authority_signature_rejects_noncanonical_and_malformed_base64
         use base64::Engine as _;
         let key_pair = checked_app_api_fixture_keypair(
             b"iroha:torii:sccp:signature-adversarial".to_vec(),
@@ -3553,8 +3541,7 @@ mod app_api_transaction_signing_tests {
             "oversized detached signatures must reject before transaction construction"
         );
     }
-    #[test]
-    fn app_api_unsigned_payload_accepts_authority_and_rejects_unrelated_signature() {
+    routing_test! { sync app_api_unsigned_payload_accepts_authority_and_rejects_unrelated_signature
         use base64::Engine as _;
         let authority_key = checked_app_api_fixture_keypair(
             b"iroha:torii:app-api:bound-authority".to_vec(),
@@ -3600,8 +3587,7 @@ mod app_api_transaction_signing_tests {
             .verify_signature()
             .expect("the matching authority signature must verify");
     }
-    #[test]
-    fn authority_signature_rejects_direct_multisig_submission() {
+    routing_test! { sync authority_signature_rejects_direct_multisig_submission
         use base64::Engine as _;
         use iroha_data_model::account::{MultisigMember, MultisigPolicy};
         let key_pair = checked_app_api_fixture_keypair(
@@ -3889,8 +3875,7 @@ mod app_query_limits_tests {
     use super::{AppQueryLimits, read_app_query_limits};
     use std::panic::{self, AssertUnwindSafe};
     use std::sync::RwLock;
-    #[test]
-    fn read_app_query_limits_recovers_from_poison() {
+    routing_test! { sync read_app_query_limits_recovers_from_poison
         let lock = RwLock::new(AppQueryLimits::default());
         let _ = panic::catch_unwind(AssertUnwindSafe(|| {
             let _guard = lock.write().expect("lock");
@@ -4755,8 +4740,7 @@ mod connect_session_tests {
             node: None,
         }
     }
-    #[tokio::test]
-    async fn connect_session_requires_client_sid() {
+    routing_test! { async connect_session_requires_client_sid
         let network_id = network_id(b"connect-session-genesis");
         let mut req = valid_request(network_id);
         req.sid.clear();
@@ -4765,8 +4749,7 @@ mod connect_session_tests {
             .err();
         assert!(err.is_some(), "expected error when sid is missing");
     }
-    #[tokio::test]
-    async fn connect_session_accepts_valid_sid_b64() {
+    routing_test! { async connect_session_accepts_valid_sid_b64
         let network_id = network_id(b"connect-session-genesis");
         let req = valid_request(network_id);
         let sid_str = req.sid.clone();
@@ -4792,8 +4775,7 @@ mod connect_session_tests {
         assert!(resp.0.wallet_uri.contains("network_id="));
         assert!(!resp.0.wallet_uri.contains("chain_id="));
     }
-    #[tokio::test]
-    async fn connect_session_rejects_hex_sid() {
+    routing_test! { async connect_session_rejects_hex_sid
         let network_id = network_id(b"connect-session-genesis");
         let mut req = valid_request(network_id);
         req.sid = hex::encode([9u8; 32]);
@@ -4802,8 +4784,7 @@ mod connect_session_tests {
             .err();
         assert!(err.is_some(), "expected error when sid is hex");
     }
-    #[tokio::test]
-    async fn connect_session_rejects_same_label_different_genesis_before_rng() {
+    routing_test! { async connect_session_rejects_same_label_different_genesis_before_rng
         let expected = network_id(b"same-display-label-genesis-a");
         let supplied = network_id(b"same-display-label-genesis-b");
         let req = valid_request(supplied);
@@ -4816,8 +4797,7 @@ mod connect_session_tests {
             crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(_))
         ));
     }
-    #[tokio::test]
-    async fn connect_session_rejects_sid_network_substitution() {
+    routing_test! { async connect_session_rejects_sid_network_substitution
         let expected = network_id(b"connect-session-genesis-a");
         let other = network_id(b"connect-session-genesis-b");
         let mut req = valid_request(expected);
@@ -4827,8 +4807,7 @@ mod connect_session_tests {
             .err();
         assert!(err.is_some(), "SID from another network must be rejected");
     }
-    #[tokio::test]
-    async fn connect_session_reports_token_rng_failure() {
+    routing_test! { async connect_session_reports_token_rng_failure
         let network_id = network_id(b"connect-session-genesis");
         let req = valid_request(network_id);
         let err =
@@ -4993,8 +4972,7 @@ mod zk_request_dto_json_tests {
             other => panic!("expected unknown field error, got {other:?}"),
         }
     }
-    #[test]
-    fn closed_zk_query_requests_reject_unknown_json_fields() {
+    routing_test! { sync closed_zk_query_requests_reject_unknown_json_fields
         let error = norito::json::from_str::<ZkRootsGetRequestDto>(
             r#"{"asset_id":"rose#universal","max":1,"unexpected":true}"#,
         )
@@ -5214,8 +5192,7 @@ mod proof_query_envelope_tests {
         query::{QueryRequest, executor::prelude::FindParameters, prelude::SingularQueryBox},
     };
     use iroha_version::codec::EncodeVersioned as _;
-    #[test]
-    fn proof_query_envelope_rejects_other_signed_query_variants() {
+    routing_test! { sync proof_query_envelope_rejects_other_signed_query_variants
         let key_pair = super::checked_routing_fixture_keypair(
             0x51,
             iroha_crypto::Algorithm::Ed25519,
@@ -5353,8 +5330,7 @@ mod consensus_key_response_bounds_tests {
     use iroha_data_model::consensus::{
         ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
     };
-    #[test]
-    fn consensus_key_snapshot_keeps_only_the_newest_named_protocol_bound() {
+    routing_test! { sync consensus_key_snapshot_keeps_only_the_newest_named_protocol_bound
         let public_key = KeyPair::random_with_algorithm(Algorithm::Ed25519)
             .public_key()
             .clone();
@@ -6708,8 +6684,7 @@ mod sccp_first_release_api_tests {
         );
         (state, fixture.bundle.commitment.message_id)
     }
-    #[test]
-    fn message_id_parser_rejects_malleability_and_zero() {
+    routing_test! { sync message_id_parser_rejects_malleability_and_zero
         let canonical = "ab".repeat(32);
         assert_eq!(
             parse_sccp_message_id_hex(&canonical).expect("canonical message id"),
@@ -6731,8 +6706,7 @@ mod sccp_first_release_api_tests {
             );
         }
     }
-    #[test]
-    fn query_free_surfaces_reject_every_nonempty_query() {
+    routing_test! { sync query_free_surfaces_reject_every_nonempty_query
         assert!(reject_sccp_query(None).is_ok());
         assert!(reject_sccp_query(Some("")).is_ok());
         for query in [
@@ -6841,8 +6815,7 @@ mod sccp_first_release_api_tests {
             );
         }
     }
-    #[test]
-    fn locator_record_validation_rejects_tamper_and_missing_index() {
+    routing_test! { sync locator_record_validation_rejects_tamper_and_missing_index
         let (message_id, key, record) = indexed_fixture();
         let descriptor = record.descriptor();
         assert!(validate_sccp_indexed_outbound_record(message_id, key, descriptor, true).is_ok());
@@ -6877,8 +6850,7 @@ mod sccp_first_release_api_tests {
             );
         }
     }
-    #[test]
-    fn recent_amount_projection_requires_retained_route_and_exact_asset_scale() {
+    routing_test! { sync recent_amount_projection_requires_retained_route_and_exact_asset_scale
         let (state, message_id) = exact_archived_sccp_state();
         let indexed = sccp_indexed_outbound_record(&state, message_id)
             .expect("indexed lookup succeeds")
@@ -6917,8 +6889,7 @@ mod sccp_first_release_api_tests {
             "a stale route-configuration hash must fail closed"
         );
     }
-    #[test]
-    fn recent_index_seek_and_take_are_bounded_on_large_history() {
+    routing_test! { sync recent_index_seek_and_take_are_bounded_on_large_history
         use std::{cell::Cell, collections::BTreeSet};
         const HISTORY: u64 = 50_000;
         const FROM: u64 = 137;
@@ -6966,8 +6937,7 @@ mod sccp_first_release_api_tests {
                 .all(|entry| entry.recorded_at_height <= FROM)
         );
     }
-    #[test]
-    fn recent_compound_cursor_pages_all_512_same_height_entries_once() {
+    routing_test! { sync recent_compound_cursor_pages_all_512_same_height_entries_once
         use std::collections::BTreeSet;
         const HEIGHT: u64 = 42;
         const LIMIT: usize = 50;
@@ -7030,8 +7000,7 @@ mod sccp_first_release_api_tests {
                 .collect::<Vec<_>>()
         );
     }
-    #[test]
-    fn recent_projection_rejects_text_recipients_for_binary_destination_families() {
+    routing_test! { sync recent_projection_rejects_text_recipients_for_binary_destination_families
         let context_for = |target| {
             iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
                 iroha_data_model::bridge::SccpLaneIdV1 {
@@ -7100,8 +7069,7 @@ mod sccp_first_release_api_tests {
             assert!(validate_recent_message_projection(&wrong_amount, context).is_err());
         }
     }
-    #[test]
-    fn empty_authoritative_locator_returns_not_found_without_block_scan() {
+    routing_test! { sync empty_authoritative_locator_returns_not_found_without_block_scan
         let state = empty_taira_state();
         assert!(
             sccp_indexed_outbound_record(&state, [0x77; 32])
@@ -7296,8 +7264,7 @@ mod sccp_first_release_api_tests {
         assert_eq!(vk_fields, ["backend", "commitment", "name", "version"]);
         assert_no_private_fields(&value);
     }
-    #[test]
-    fn recent_projection_fails_closed_without_immutable_finality_archive() {
+    routing_test! { sync recent_projection_fails_closed_without_immutable_finality_archive
         let state = empty_taira_state();
         let (message_id, key, record) = indexed_fixture();
         state
@@ -7323,8 +7290,7 @@ mod sccp_first_release_api_tests {
         };
         assert!(message.contains("finality artifact for height 9 not found"));
     }
-    #[test]
-    fn bundle_proof_request_and_recent_readback_survive_body_eviction() {
+    routing_test! { sync bundle_proof_request_and_recent_readback_survive_body_eviction
         let (state, message_id) = exact_archived_sccp_state();
         let bundle = sccp_message_bundle_for_request(&state, message_id)
             .expect("bodyless bundle lookup")
@@ -7374,8 +7340,7 @@ mod sccp_first_release_api_tests {
         assert_eq!(recent.items[0].message_id_hex, hex::encode(message_id));
         assert!(recent.next.is_none());
     }
-    #[tokio::test]
-    async fn registry_endpoint_negotiates_exact_json_and_norito_payloads() {
+    routing_test! { async registry_endpoint_negotiates_exact_json_and_norito_payloads
         let state = empty_taira_state();
         let json_accept = axum::http::HeaderValue::from_static("application/json");
         let json_response = handle_v1_sccp_registry(&state, Some(json_accept))
@@ -7433,8 +7398,7 @@ mod sccp_first_release_api_tests {
         assert_eq!(norito_registry, json_registry);
     }
     #[cfg(feature = "app_api")]
-    #[test]
-    fn submit_json_accepts_only_closed_first_release_fields() {
+    routing_test! { sync submit_json_accepts_only_closed_first_release_fields
         let key_pair =
             KeyPair::try_from_seed(b"iroha:torii:sccp:submit-json".to_vec(), Algorithm::Ed25519)
                 .expect("derive submit JSON authority");
@@ -7496,8 +7460,7 @@ mod sccp_first_release_api_tests {
         assert!(norito::json::from_value::<BridgeProofSubmitDto>(Value::Object(missing)).is_err());
     }
     #[cfg(feature = "app_api")]
-    #[test]
-    fn destination_proof_base64_rejects_malleability_and_non_artifacts() {
+    routing_test! { sync destination_proof_base64_rejects_malleability_and_non_artifacts
         use base64::Engine as _;
         for encoded in [
             String::new(),
@@ -7522,8 +7485,7 @@ mod sccp_first_release_api_tests {
         assert!(validate_sccp_creation_time(Some(0)).is_err());
     }
     #[cfg(feature = "app_api")]
-    #[test]
-    fn submit_signing_state_rejects_mixed_implicit_and_multisig_direct_forms() {
+    routing_test! { sync submit_signing_state_rejects_mixed_implicit_and_multisig_direct_forms
         use iroha_data_model::account::{MultisigMember, MultisigPolicy};
         let key_pair = KeyPair::try_from_seed(
             b"iroha:torii:sccp:state-machine".to_vec(),
@@ -7562,8 +7524,7 @@ mod sccp_first_release_api_tests {
         assert!(conversion_message(&error).is_some_and(|message| message.contains("multisig")));
     }
     #[cfg(feature = "app_api")]
-    #[test]
-    fn direct_submit_reuses_prepared_payload_when_server_default_changes() {
+    routing_test! { sync direct_submit_reuses_prepared_payload_when_server_default_changes
         use base64::Engine as _;
         use iroha_data_model::{
             bridge::{BridgeProof, BridgeProofPayload, BridgeProofRange},
@@ -7668,8 +7629,7 @@ mod sccp_first_release_api_tests {
         .expect("valid exact native SCCP registry fixture")
     }
     #[cfg(feature = "app_api")]
-    #[test]
-    fn native_route_resolution_verifies_exact_governed_proof_and_configuration() {
+    routing_test! { sync native_route_resolution_verifies_exact_governed_proof_and_configuration
         let (proof, source_identity, trust_anchor) =
             iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
         let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
@@ -7744,8 +7704,7 @@ mod sccp_first_release_api_tests {
         );
     }
     #[cfg(feature = "app_api")]
-    #[test]
-    fn native_submit_json_rejects_redundant_public_key() {
+    routing_test! { sync native_submit_json_rejects_redundant_public_key
         let key_pair = KeyPair::try_from_seed(
             b"iroha:torii:sccp:native-submit-json".to_vec(),
             Algorithm::Ed25519,
@@ -7790,8 +7749,7 @@ mod sccp_first_release_api_tests {
             norito::json::from_value::<BridgeMessageSubmitDto>(Value::Object(missing)).is_err()
         );
     }
-    #[test]
-    fn sccp_finality_encoding_is_the_exact_v2_bridge_proof() {
+    routing_test! { sync sccp_finality_encoding_is_the_exact_v2_bridge_proof
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let proof = iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
             .expect("exact SCCP finality fixture");
@@ -8569,8 +8527,7 @@ pub async fn handle_v1_sumeragi_bls_keys(
 mod bls_key_response_bounds_tests {
     use super::{BLS_KEY_RESPONSE_CAP, PeerId, bounded_bls_key_map};
     use iroha_crypto::{Algorithm, KeyPair};
-    #[test]
-    fn bls_key_snapshot_is_capped_at_the_voting_roster_protocol_bound() {
+    routing_test! { sync bls_key_snapshot_is_capped_at_the_voting_roster_protocol_bound
         let peers: Vec<_> = (1..=BLS_KEY_RESPONSE_CAP + 2)
             .map(|seed| {
                 let seed = u8::try_from(seed).expect("test roster cap fits u8");
@@ -9529,8 +9486,7 @@ mod zk_vote_tally_response_tests {
             ..iroha_core::state::ElectionState::default()
         }
     }
-    #[test]
-    fn tally_response_rejects_corrupt_or_oversized_election_state() {
+    routing_test! { sync tally_response_rejects_corrupt_or_oversized_election_state
         for (options, tally) in [
             (0, Vec::new()),
             (64, Vec::new()),
@@ -9546,8 +9502,7 @@ mod zk_vote_tally_response_tests {
             );
         }
     }
-    #[test]
-    fn tally_response_accepts_v1_boundaries_with_snapshot_identity() {
+    routing_test! { sync tally_response_accepts_v1_boundaries_with_snapshot_identity
         for (options, tally_len) in [(1, 1), (64, 64)] {
             let state = election(options, vec![7; tally_len]);
             let expected_hash = hex::encode([9_u8; 32]);
@@ -9720,8 +9675,7 @@ mod evidence_list_query_contract_tests {
             kind: kind.map(str::to_owned),
         }
     }
-    #[test]
-    fn exact_evidence_query_contract_rejects_legacy_and_normalized_spellings() {
+    routing_test! { sync exact_evidence_query_contract_rejects_legacy_and_normalized_spellings
         for kind in [
             "DoublePrepare",
             "DoubleCommit",
@@ -9754,8 +9708,7 @@ mod evidence_list_query_contract_tests {
             assert!(message.contains(kind));
         }
     }
-    #[test]
-    fn exact_evidence_query_contract_rejects_noncanonical_pagination() {
+    routing_test! { sync exact_evidence_query_contract_rejects_noncanonical_pagination
         for limit in ["0", "1001", "01", " 1", "1 ", "+1", "null", ""] {
             let error = EvidenceListQuery::try_from(raw_query(Some(limit), None, None))
                 .expect_err("invalid evidence limit must fail closed");
@@ -9773,8 +9726,7 @@ mod evidence_list_query_contract_tests {
             assert_eq!(code, "sumeragi_evidence_pagination_invalid");
         }
     }
-    #[test]
-    fn evidence_offset_boundary_and_capacity_overflow_fail_before_state_scan() {
+    routing_test! { sync evidence_offset_boundary_and_capacity_overflow_fail_before_state_scan
         let boundary = EvidenceListQuery {
             limit: Some(EVIDENCE_LIST_LIMIT_CAP),
             offset: Some(EVIDENCE_LIST_OFFSET_CAP),
@@ -10285,32 +10237,28 @@ mod zk_roots_selector_tests {
         assert_response(&response, StatusCode::OK, Some("application/json"));
         norito::json::from_slice(&response_bytes(response).await).expect("json response payload")
     }
-    #[test]
-    fn resolve_asset_definition_selector_accepts_alias_literal() {
+    routing_test! { sync resolve_asset_definition_selector_accepts_alias_literal
         let (state, definition_id) = selector_state();
         let view = state.world_view();
         let resolved =
             resolve_asset_definition_selector(&view, "usd#main", 0).expect("alias should resolve");
         assert_eq!(resolved, definition_id);
     }
-    #[test]
-    fn resolve_asset_definition_selector_accepts_trimmed_alias_literal() {
+    routing_test! { sync resolve_asset_definition_selector_accepts_trimmed_alias_literal
         let (state, definition_id) = selector_state();
         let view = state.world_view();
         let resolved = resolve_asset_definition_selector(&view, "  usd#main  ", 0)
             .expect("trimmed alias should resolve");
         assert_eq!(resolved, definition_id);
     }
-    #[test]
-    fn resolve_asset_definition_selector_accepts_base58_literal() {
+    routing_test! { sync resolve_asset_definition_selector_accepts_base58_literal
         let (state, definition_id) = selector_state();
         let view = state.world_view();
         let resolved = resolve_asset_definition_selector(&view, &definition_id.to_string(), 0)
             .expect("base58 id should resolve");
         assert_eq!(resolved, definition_id);
     }
-    #[test]
-    fn resolve_asset_definition_selector_rejects_blank_literal() {
+    routing_test! { sync resolve_asset_definition_selector_rejects_blank_literal
         let (state, _) = selector_state();
         let view = state.world_view();
         let err = resolve_asset_definition_selector(&view, "   ", 0)
@@ -10321,8 +10269,7 @@ mod zk_roots_selector_tests {
                 if message.contains("invalid asset selector")
         ));
     }
-    #[test]
-    fn resolve_asset_definition_selector_rejects_prefixed_literal() {
+    routing_test! { sync resolve_asset_definition_selector_rejects_prefixed_literal
         let (state, _) = selector_state();
         let view = state.world_view();
         let err =
@@ -10333,8 +10280,7 @@ mod zk_roots_selector_tests {
             Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))
         ));
     }
-    #[test]
-    fn resolve_asset_definition_selector_rejects_unknown_alias() {
+    routing_test! { sync resolve_asset_definition_selector_rejects_unknown_alias
         let (state, _) = selector_state();
         let view = state.world_view();
         let err = resolve_asset_definition_selector(&view, "usd#missing", 0)
@@ -10346,8 +10292,7 @@ mod zk_roots_selector_tests {
             ))
         ));
     }
-    #[test]
-    fn resolve_asset_definition_selector_rejects_unknown_base58_literal() {
+    routing_test! { sync resolve_asset_definition_selector_rejects_unknown_base58_literal
         let (state, _) = selector_state();
         let view = state.world_view();
         let missing_definition =
@@ -10361,8 +10306,7 @@ mod zk_roots_selector_tests {
             ))
         ));
     }
-    #[test]
-    fn parse_tx_history_asset_selector_accepts_asset_alias_literal() {
+    routing_test! { sync parse_tx_history_asset_selector_accepts_asset_alias_literal
         let parsed = parse_tx_history_asset_selector("usd#main").expect("selector should parse");
         match parsed {
             TxHistoryAssetSelectorInput::DefinitionSelector(value) => {
@@ -10371,8 +10315,7 @@ mod zk_roots_selector_tests {
             other => panic!("unexpected selector variant: {other:?}"),
         }
     }
-    #[test]
-    fn resolve_tx_history_asset_selector_accepts_asset_alias_literal() {
+    routing_test! { sync resolve_tx_history_asset_selector_accepts_asset_alias_literal
         let (state, definition_id) = selector_state();
         let view = state.world_view();
         let resolved = resolve_tx_history_asset_selector(&view, 0, Some("usd#main"), None)
@@ -10382,8 +10325,7 @@ mod zk_roots_selector_tests {
             Some(TxHistoryAssetSelector::DefinitionId(ref id)) if id == &definition_id
         ));
     }
-    #[test]
-    fn resolve_tx_history_asset_selector_rejects_alias_outside_allowed_definition() {
+    routing_test! { sync resolve_tx_history_asset_selector_rejects_alias_outside_allowed_definition
         let (state, definition_id) = selector_state();
         let view = state.world_view();
         let other_definition =
@@ -10400,14 +10342,12 @@ mod zk_roots_selector_tests {
         ));
         assert_ne!(definition_id, other_definition);
     }
-    #[test]
-    fn typed_fee_payment_validation_rejects_missing_contract_gas() {
+    routing_test! { sync typed_fee_payment_validation_rejects_missing_contract_gas
         let intent = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
         assert!(validate_app_api_fee_payment(&intent, false).is_ok());
         assert!(validate_app_api_fee_payment(&intent, true).is_err());
     }
-    #[test]
-    fn multisig_propose_metadata_forwards_only_non_fee_metadata() {
+    routing_test! { sync multisig_propose_metadata_forwards_only_non_fee_metadata
         let policy_hash = "ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000";
         let validation_fee_policy_metadata = normalize_validation_fee_policy_metadata(
             Some("7".to_owned()),
@@ -10460,8 +10400,7 @@ mod zk_roots_selector_tests {
             Some("abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000")
         );
     }
-    #[test]
-    fn normalize_validation_fee_policy_metadata_requires_complete_well_formed_pair() {
+    routing_test! { sync normalize_validation_fee_policy_metadata_requires_complete_well_formed_pair
         assert!(
             normalize_validation_fee_policy_metadata(None, None, None, None)
                 .expect("absent policy metadata is allowed")
@@ -10552,14 +10491,12 @@ mod zk_roots_selector_tests {
             .is_err()
         );
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_accepts_alias_literal_and_returns_profile_empty_root() {
+    routing_test! { async handle_v1_zk_roots_accepts_alias_literal_and_returns_profile_empty_root
         let (state, _) = selector_state();
         let payload = json_roots_payload(state, None, "usd#main".to_owned(), 5).await;
         assert_profile_anchored_empty_roots(&payload);
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_prefers_norito_when_accept_quality_ties() {
+    routing_test! { async handle_v1_zk_roots_prefers_norito_when_accept_quality_ties
         let (state, definition_id) = selector_state();
         let response = roots_response(
             state,
@@ -10576,8 +10513,7 @@ mod zk_roots_selector_tests {
             Some(crate::utils::NORITO_MIME_TYPE),
         );
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_negotiates_norito_response_when_requested() {
+    routing_test! { async handle_v1_zk_roots_negotiates_norito_response_when_requested
         let (state, definition_id) = selector_state();
         let response = roots_response(
             state,
@@ -10596,8 +10532,7 @@ mod zk_roots_selector_tests {
             norito::decode_from_bytes(&bytes).expect("norito response payload");
         assert_profile_anchored_empty_roots(&payload);
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_prefers_json_when_accept_quality_is_higher() {
+    routing_test! { async handle_v1_zk_roots_prefers_json_when_accept_quality_is_higher
         let (state, definition_id) = selector_state();
         let payload = json_roots_payload(
             state,
@@ -10610,8 +10545,7 @@ mod zk_roots_selector_tests {
         .await;
         assert_profile_anchored_empty_roots(&payload);
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_treats_wildcard_accept_as_json() {
+    routing_test! { async handle_v1_zk_roots_treats_wildcard_accept_as_json
         let (state, definition_id) = selector_state();
         let payload = json_roots_payload(
             state,
@@ -10622,8 +10556,7 @@ mod zk_roots_selector_tests {
         .await;
         assert_profile_anchored_empty_roots(&payload);
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_treats_application_wildcard_accept_as_json() {
+    routing_test! { async handle_v1_zk_roots_treats_application_wildcard_accept_as_json
         let (state, definition_id) = selector_state();
         let payload = json_roots_payload(
             state,
@@ -10634,8 +10567,7 @@ mod zk_roots_selector_tests {
         .await;
         assert_profile_anchored_empty_roots(&payload);
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_accepts_vendor_json_media_type() {
+    routing_test! { async handle_v1_zk_roots_accepts_vendor_json_media_type
         let (state, definition_id) = selector_state();
         let payload = json_roots_payload(
             state,
@@ -10646,8 +10578,7 @@ mod zk_roots_selector_tests {
         .await;
         assert_profile_anchored_empty_roots(&payload);
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_ignores_zero_quality_norito_and_uses_json() {
+    routing_test! { async handle_v1_zk_roots_ignores_zero_quality_norito_and_uses_json
         let (state, definition_id) = selector_state();
         let payload = json_roots_payload(
             state,
@@ -10660,8 +10591,7 @@ mod zk_roots_selector_tests {
         .await;
         assert_profile_anchored_empty_roots(&payload);
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_returns_not_acceptable_for_unsupported_accept_header() {
+    routing_test! { async handle_v1_zk_roots_returns_not_acceptable_for_unsupported_accept_header
         let (state, definition_id) = selector_state();
         let response = roots_response(
             state,
@@ -10675,8 +10605,7 @@ mod zk_roots_selector_tests {
         let body = std::str::from_utf8(&bytes).expect("utf8 response body");
         assert!(body.contains("unsupported Accept header"));
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_returns_not_acceptable_for_invalid_accept_qvalue() {
+    routing_test! { async handle_v1_zk_roots_returns_not_acceptable_for_invalid_accept_qvalue
         let (state, definition_id) = selector_state();
         let response = roots_response(
             state,
@@ -10690,8 +10619,7 @@ mod zk_roots_selector_tests {
         let body = std::str::from_utf8(&bytes).expect("utf8 response body");
         assert!(body.contains("invalid q-value"));
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_returns_not_acceptable_for_invalid_accept_encoding() {
+    routing_test! { async handle_v1_zk_roots_returns_not_acceptable_for_invalid_accept_encoding
         let (state, definition_id) = selector_state();
         let response = roots_response(
             state,
@@ -10705,8 +10633,7 @@ mod zk_roots_selector_tests {
         let body = std::str::from_utf8(&bytes).expect("utf8 response body");
         assert!(body.contains("invalid Accept header encoding"));
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_rejects_blank_asset_selector() {
+    routing_test! { async handle_v1_zk_roots_rejects_blank_asset_selector
         let (state, _) = selector_state();
         let err = handle_v1_zk_roots(
             state,
@@ -10724,8 +10651,7 @@ mod zk_roots_selector_tests {
                 if message.contains("invalid asset selector")
         ));
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_uses_profile_without_transfer_verifier_binding() {
+    routing_test! { async handle_v1_zk_roots_uses_profile_without_transfer_verifier_binding
         let (state, definition_id) = selector_state();
         let expected_root =
             seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x2a; 32]], None);
@@ -10733,8 +10659,7 @@ mod zk_roots_selector_tests {
         assert_eq!(payload.latest, hex::encode(expected_root));
         assert_eq!(payload.roots, vec![hex::encode(expected_root)]);
     }
-    #[test]
-    fn requested_commitment_positions_scan_the_frontier_once() {
+    routing_test! { sync requested_commitment_positions_scan_the_frontier_once
         fn indexed_commitment(index: u64) -> [u8; 32] {
             let mut commitment = [0_u8; 32];
             commitment[..8].copy_from_slice(&index.to_le_bytes());
@@ -10763,8 +10688,7 @@ mod zk_roots_selector_tests {
             Some(RequestedCommitmentPosition::Missing)
         ));
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_returns_batch_paths_in_request_order() {
+    routing_test! { async handle_v1_zk_merkle_path_returns_batch_paths_in_request_order
         let (state, definition_id) = selector_state();
         let commitments = vec![[0x11; 32], [0x22; 32], [0x33; 32]];
         let root =
@@ -10841,8 +10765,7 @@ mod zk_roots_selector_tests {
             .expect("expected next zero path");
         assert_eq!(next_zero_path.root, hex::encode(expected_zero.root));
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_negotiates_norito_response_when_requested() {
+    routing_test! { async handle_v1_zk_merkle_path_negotiates_norito_response_when_requested
         let (state, definition_id) = selector_state();
         let commitments = vec![[0x24; 32]];
         seed_zk_asset_frontier_for_test(&state, &definition_id, commitments.clone(), None);
@@ -10884,8 +10807,7 @@ mod zk_roots_selector_tests {
             1
         );
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_returns_current_root_for_empty_request() {
+    routing_test! { async handle_v1_zk_merkle_path_returns_current_root_for_empty_request
         let (state, definition_id) = selector_state();
         let commitments = vec![[0x25; 32]];
         let root =
@@ -10919,8 +10841,7 @@ mod zk_roots_selector_tests {
             commitments.len() as u32
         );
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_rejects_asset_without_zk_state() {
+    routing_test! { async handle_v1_zk_merkle_path_rejects_asset_without_zk_state
         let (state, definition_id) = selector_state_without_zk();
         let err = handle_v1_zk_merkle_path(
             state,
@@ -10939,8 +10860,7 @@ mod zk_roots_selector_tests {
             ))
         ));
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_rejects_missing_commitment() {
+    routing_test! { async handle_v1_zk_merkle_path_rejects_missing_commitment
         let (state, definition_id) = selector_state();
         seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x27; 32]], None);
         let err = handle_v1_zk_merkle_path(
@@ -10960,8 +10880,7 @@ mod zk_roots_selector_tests {
             ))
         ));
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_rejects_duplicate_request_commitment() {
+    routing_test! { async handle_v1_zk_merkle_path_rejects_duplicate_request_commitment
         let (state, definition_id) = selector_state();
         let err = handle_v1_zk_merkle_path(
             state,
@@ -10975,8 +10894,7 @@ mod zk_roots_selector_tests {
         .expect_err("duplicate request commitment should fail");
         assert_query_conversion_contains(err, "duplicates an earlier request entry");
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_rejects_ambiguous_frontier_commitment() {
+    routing_test! { async handle_v1_zk_merkle_path_rejects_ambiguous_frontier_commitment
         let (state, definition_id) = selector_state();
         seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x29; 32], [0x29; 32]], None);
         let err = handle_v1_zk_merkle_path(
@@ -10991,8 +10909,7 @@ mod zk_roots_selector_tests {
         .expect_err("ambiguous frontier commitment should fail");
         assert_query_conversion_contains(err, "appears more than once");
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_rejects_malformed_commitment_hex() {
+    routing_test! { async handle_v1_zk_merkle_path_rejects_malformed_commitment_hex
         let (state, definition_id) = selector_state();
         let err = handle_v1_zk_merkle_path(
             state,
@@ -11006,8 +10923,7 @@ mod zk_roots_selector_tests {
         .expect_err("malformed commitment should fail");
         assert_query_conversion_contains(err, "must be 32-byte hex");
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_rejects_oversized_batch() {
+    routing_test! { async handle_v1_zk_merkle_path_rejects_oversized_batch
         let (state, definition_id) = selector_state();
         let commitments = (0..=ZK_MERKLE_PATH_MAX_COMMITMENTS)
             .map(|index| hex::encode([index as u8; 32]))
@@ -11024,8 +10940,7 @@ mod zk_roots_selector_tests {
         .expect_err("oversized commitment batch should fail");
         assert_query_conversion_contains(err, "supports at most");
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_uses_profile_without_transfer_verifier_binding() {
+    routing_test! { async handle_v1_zk_merkle_path_uses_profile_without_transfer_verifier_binding
         let (state, definition_id) = selector_state();
         seed_zk_asset_frontier_for_test(&state, &definition_id, vec![[0x2a; 32]], None);
         let response = handle_v1_zk_merkle_path(
@@ -11049,8 +10964,7 @@ mod zk_roots_selector_tests {
         assert_eq!(payload.paths.len(), 1);
         assert_eq!(payload.paths[0].commitment, hex::encode([0x2a; 32]));
     }
-    #[tokio::test]
-    async fn handle_v1_zk_merkle_path_rejects_root_history_mismatch() {
+    routing_test! { async handle_v1_zk_merkle_path_rejects_root_history_mismatch
         let (state, definition_id) = selector_state();
         seed_zk_asset_frontier_for_test(
             &state,
@@ -11070,8 +10984,7 @@ mod zk_roots_selector_tests {
         .expect_err("mismatched root history should fail");
         assert_query_conversion_contains(err, "root history tail");
     }
-    #[tokio::test]
-    async fn handle_v1_zk_roots_rejects_drift_in_older_retained_root() {
+    routing_test! { async handle_v1_zk_roots_rejects_drift_in_older_retained_root
         let (state, definition_id) = selector_state();
         let commitments = vec![[0x10; 32], [0x20; 32], [0x30; 32]];
         let profile = iroha_core::state::ConfidentialTreeProfile::PoseidonPastaV1;
@@ -11321,8 +11234,7 @@ mod multisig_guard_tests {
         isi::CustomInstruction,
         role::{Role, RoleId},
     };
-    #[test]
-    fn direct_multisig_signing_rejected_during_admission() {
+    routing_test! { sync direct_multisig_signing_rejected_during_admission
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer_keypair = super::checked_routing_fixture_keypair(
             0xe7,
@@ -11357,8 +11269,7 @@ mod multisig_guard_tests {
             other => panic!("expected multisig direct-sign rejection, got {other:?}"),
         }
     }
-    #[test]
-    fn single_signatory_with_multisig_role_is_not_rejected() {
+    routing_test! { sync single_signatory_with_multisig_role_is_not_rejected
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = super::checked_routing_fixture_keypair(
             0xe8,
@@ -11389,8 +11300,7 @@ mod multisig_guard_tests {
             "single-signature signatories with multisig role must pass admission guard"
         );
     }
-    #[test]
-    fn multisig_authority_with_custom_instruction_envelope_is_not_rejected() {
+    routing_test! { sync multisig_authority_with_custom_instruction_envelope_is_not_rejected
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer_keypair = super::checked_routing_fixture_keypair(
             0xe9,
@@ -11900,8 +11810,7 @@ fn push_accepted_transaction_for_ingress_with_durability(
 mod ingress_routing_tests {
     use super::IngressRouting;
     use iroha_core::queue::{RoutingDecision, RoutingPlan};
-    #[test]
-    fn strict_durable_routing_always_carries_its_plan() {
+    routing_test! { sync strict_durable_routing_always_carries_its_plan
         let expected = RoutingDecision::default();
         let selected = IngressRouting::StrictDurable(RoutingPlan::single(expected)).dispatch(
             7_u8,
@@ -12113,8 +12022,7 @@ mod lane_admission_latency_tests {
     use iroha_core::telemetry::{StateTelemetry, Telemetry};
     use iroha_data_model::nexus::LaneId;
     use iroha_telemetry::metrics::global_or_default;
-    #[test]
-    fn telemetry_observation_records_without_actor_sync() {
+    routing_test! { sync telemetry_observation_records_without_actor_sync
         let metrics = global_or_default();
         let telemetry = Telemetry::from(StateTelemetry::new(metrics.clone(), true));
         let gate = MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator);
@@ -12130,8 +12038,7 @@ mod lane_admission_latency_tests {
         );
         assert_eq!(histogram.get_sample_count(), before + 1);
     }
-    #[test]
-    fn route_stage_observation_records_without_actor_sync() {
+    routing_test! { sync route_stage_observation_records_without_actor_sync
         let metrics = global_or_default();
         let telemetry = Telemetry::from(StateTelemetry::new(metrics.clone(), true));
         let gate = MaybeTelemetry::from_profile(Some(telemetry), TelemetryProfile::Operator);
@@ -12400,8 +12307,7 @@ pub async fn handle_time_status() -> impl IntoResponse {
 mod nts_tests {
     use super::*;
     use http_body_util::BodyExt as _;
-    #[tokio::test]
-    async fn nts_now_returns_expected_keys() {
+    routing_test! { async nts_now_returns_expected_keys
         let resp = handle_time_now().await.into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         let (parts, body) = resp.into_parts();
@@ -12428,8 +12334,7 @@ mod nts_tests {
         assert!(val.get("fallback").is_some(), "missing fallback");
         assert!(val.get("health").is_some(), "missing health");
     }
-    #[tokio::test]
-    async fn nts_status_returns_expected_keys() {
+    routing_test! { async nts_status_returns_expected_keys
         let resp = handle_time_status().await.into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         let (parts, body) = resp.into_parts();
@@ -12532,8 +12437,7 @@ mod contract_manifest_response_tests {
         EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor, KotobaTranslation,
         KotobaTranslationEntry, StateDescriptor,
     };
-    #[test]
-    fn response_serializes_the_complete_canonical_manifest() {
+    routing_test! { sync response_serializes_the_complete_canonical_manifest
         let expected_manifest = ContractManifest {
             seiyaku_name: Some("Treasury".to_owned()),
             code_hash: Some(Hash::new(b"complete-code")),
@@ -14454,8 +14358,7 @@ mod contract_state_tests {
     use ivm::pointer_abi::PointerType;
     use std::collections::BTreeMap;
     use std::sync::Arc;
-    #[test]
-    fn contract_state_schema_interest_is_query_local() {
+    routing_test! { sync contract_state_schema_interest_is_query_local
         let exact = ContractStateSelection::Exact(
             StatePath::from_str("orders/by-id").expect("exact state path"),
         );
@@ -14466,8 +14369,7 @@ mod contract_state_tests {
         assert!(contract_state_schema_is_relevant(&prefix, "orders"));
         assert!(!contract_state_schema_is_relevant(&prefix, "receipts"));
     }
-    #[test]
-    fn contract_state_schema_registry_accepts_exact_budget_and_rejects_growth() {
+    routing_test! { sync contract_state_schema_registry_accepts_exact_budget_and_rejects_growth
         let ty = ivm::EmbeddedStateType::Bool;
         let encoded_bytes = norito::core::encoded_frame_len(&ty).expect("measure schema");
         let name = "bounded".to_owned();
@@ -14648,8 +14550,7 @@ mod contract_state_tests {
             .join()
             .expect("malformed-sibling projection worker");
     }
-    #[test]
-    fn contract_state_scalar_rejects_trailing_atoms() {
+    routing_test! { sync contract_state_scalar_rejects_trailing_atoms
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
@@ -14693,8 +14594,7 @@ mod contract_state_tests {
             .join()
             .expect("native-Json boundary worker");
     }
-    #[test]
-    fn contract_state_projection_enforces_combined_outer_and_native_json_depth() {
+    routing_test! { sync contract_state_projection_enforces_combined_outer_and_native_json_depth
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
@@ -14798,8 +14698,7 @@ mod contract_state_tests {
         let scoped = format!("sc/{digest}/{logical_path}");
         StatePath::from_str(&scoped).expect("scoped contract state path")
     }
-    #[tokio::test]
-    async fn contract_state_prefix_empty_on_blank_state() {
+    routing_test! { async contract_state_prefix_empty_on_blank_state
         let state = Arc::new(CoreState::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -14817,8 +14716,7 @@ mod contract_state_tests {
         assert_eq!(response.offset, 0);
         assert_eq!(response.next_offset, None);
     }
-    #[tokio::test]
-    async fn contract_state_explicit_paths_accept_v1_count_and_reject_first_overflow() {
+    routing_test! { async contract_state_explicit_paths_accept_v1_count_and_reject_first_overflow
         let state = Arc::new(CoreState::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -14852,8 +14750,7 @@ mod contract_state_tests {
         .expect_err("the first explicit path beyond the V1 count must fail");
         assert!(error.to_string().contains("paths supports at most"));
     }
-    #[tokio::test]
-    async fn contract_state_prefix_paginates_before_retained_page_overflow() {
+    routing_test! { async contract_state_prefix_paginates_before_retained_page_overflow
         let mut world = World::default();
         let value = vec![0x5a; ivm::state_value::MAX_STATE_VALUE_RECORD_BYTES];
         for index in 0..8 {
@@ -14886,8 +14783,7 @@ mod contract_state_tests {
             Some(u64::try_from(response.entries.len()).expect("entry count fits u64"))
         );
     }
-    #[tokio::test]
-    async fn contract_state_exact_path_can_scope_by_contract_address() {
+    routing_test! { async contract_state_exact_path_can_scope_by_contract_address
         let contract_address: iroha_data_model::smart_contract::ContractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
@@ -14921,8 +14817,7 @@ mod contract_state_tests {
         assert_eq!(response.entries[0].path, "market/by-id/mkt-1/state");
         assert!(response.entries[0].found);
     }
-    #[tokio::test]
-    async fn contract_state_prefix_can_scope_by_contract_address() {
+    routing_test! { async contract_state_prefix_can_scope_by_contract_address
         let contract_address: iroha_data_model::smart_contract::ContractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
@@ -14965,8 +14860,7 @@ mod contract_state_tests {
             vec!["market/by-id/mkt-1/meta", "market/by-id/mkt-1/state"]
         );
     }
-    #[tokio::test]
-    async fn contract_state_query_uses_state_path_not_business_name_limits() {
+    routing_test! { async contract_state_query_uses_state_path_not_business_name_limits
         let logical_path = format!("map/{}", "a".repeat(300));
         let state_path =
             StatePath::from_str(&logical_path).expect("long composite state path remains valid");
@@ -14997,8 +14891,7 @@ mod contract_state_tests {
         assert!(response.entries[0].found);
         assert_eq!(response.entries[0].value_len, Some(1));
     }
-    #[test]
-    fn decode_contract_state_scalar_json_returns_lossless_strings_for_ints() {
+    routing_test! { sync decode_contract_state_scalar_json_returns_lossless_strings_for_ints
         use ivm::state_value::StateValueAtomV1;
         let ty = ivm::EmbeddedStateType::Int;
         let value = "922337203685477500012345678901234567890"
@@ -15135,8 +15028,7 @@ mod contract_state_tests {
             "trailing bytes after a state record must reject"
         );
     }
-    #[test]
-    fn contract_state_map_key_suffix_uses_canonical_numeric_pointer_envelopes() {
+    routing_test! { sync contract_state_map_key_suffix_uses_canonical_numeric_pointer_envelopes
         let int = "42"
             .parse::<iroha_primitives::bigint::BigInt>()
             .expect("parse int");
@@ -15171,8 +15063,7 @@ mod contract_state_tests {
             );
         }
     }
-    #[test]
-    fn decode_contract_state_scalar_json_supports_decimal_and_quantity() {
+    routing_test! { sync decode_contract_state_scalar_json_supports_decimal_and_quantity
         use ivm::state_value::StateValueAtomV1;
         let decimal = "123.450"
             .parse::<iroha_primitives::numeric::Numeric>()
@@ -15202,8 +15093,7 @@ mod contract_state_tests {
         assert_eq!(decimal_json.get(), &format!("\"{decimal}\""));
         assert_eq!(quantity_json.get(), &format!("\"{quantity}\""));
     }
-    #[test]
-    fn decode_contract_state_map_value_json_preserves_struct_field_encodings() {
+    routing_test! { sync decode_contract_state_map_value_json_preserves_struct_field_encodings
         use ivm::state_value::StateValueAtomV1;
         let schema = ivm::EmbeddedStateType::Struct {
             name: "MintRequestRecord".to_owned(),
@@ -15243,8 +15133,7 @@ mod contract_state_tests {
             "{\"approval_alias_fqn\":\"YmFua2luZ0BjZW50cmFsYmFuaw==\",\"status\":\"1\"}"
         );
     }
-    #[test]
-    fn decode_contract_state_path_json_resolves_name_map_keys_containing_slashes() {
+    routing_test! { sync decode_contract_state_path_json_resolves_name_map_keys_containing_slashes
         let mut registry = BTreeMap::<String, Option<ivm::EmbeddedStateType>>::new();
         registry.insert(
             "BeneficiaryTrancheIndexByLookupKey".to_owned(),
@@ -15282,8 +15171,7 @@ mod contract_state_tests {
         .expect("decode slash-containing logical key");
         assert_eq!(decoded.get(), "\"5\"");
     }
-    #[test]
-    fn decode_contract_state_logical_path_exists_handles_name_keys_with_slashes() {
+    routing_test! { sync decode_contract_state_logical_path_exists_handles_name_keys_with_slashes
         let mut registry = BTreeMap::<String, Option<ivm::EmbeddedStateType>>::new();
         registry.insert(
             "BeneficiaryTrancheIndexByLookupKey".to_owned(),
@@ -15303,8 +15191,7 @@ mod contract_state_tests {
             &|path| path == stored_path
         ));
     }
-    #[test]
-    fn decode_contract_state_scalar_json_decodes_schema_bound_json() {
+    routing_test! { sync decode_contract_state_scalar_json_decodes_schema_bound_json
         let json_value = iroha_primitives::json::Json::from_str_norito(
             "{\"marketId\":\"mkt-1\",\"status\":\"open\"}",
         )
@@ -15327,8 +15214,7 @@ mod contract_state_tests {
             "{\"marketId\":\"mkt-1\",\"status\":\"open\"}"
         );
     }
-    #[test]
-    fn decode_contract_state_scalar_json_rejects_unbound_legacy_json_payloads() {
+    routing_test! { sync decode_contract_state_scalar_json_rejects_unbound_legacy_json_payloads
         let json_value = iroha_primitives::json::Json::from_str_norito(
             "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
         )
@@ -15338,8 +15224,7 @@ mod contract_state_tests {
             .expect_err("unbound legacy JSON must not bypass the V1 state schema");
         assert!(error.contains("record"), "{error}");
     }
-    #[test]
-    fn decode_contract_state_scalar_json_rejects_policyless_norito_json_wrapper() {
+    routing_test! { sync decode_contract_state_scalar_json_rejects_policyless_norito_json_wrapper
         let json_value = iroha_primitives::json::Json::from_str_norito(
             "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
         )
@@ -15358,8 +15243,7 @@ mod contract_state_tests {
         .expect_err("first-release state decoding requires a schema-bound record");
         assert!(error.contains("expected Json payload"), "{error}");
     }
-    #[test]
-    fn decode_contract_state_scalar_json_rejects_schema_confusion() {
+    routing_test! { sync decode_contract_state_scalar_json_rejects_schema_confusion
         let int_ty = ivm::EmbeddedStateType::Int;
         let frame = iroha_primitives::numeric_abi::IntValueV1::try_new(
             "7".parse().expect("parse int fixture"),
@@ -15378,8 +15262,7 @@ mod contract_state_tests {
             .expect_err("a record cannot be decoded under a different deployed schema");
         assert!(error.contains("schema"), "{error}");
     }
-    #[test]
-    fn contract_state_quantity_map_keys_use_canonical_tlv_bytes() {
+    routing_test! { sync contract_state_quantity_map_keys_use_canonical_tlv_bytes
         let ty = ivm::EmbeddedStateType::Quantity;
         let canonical =
             contract_state_stored_map_key_suffix(&ty, "7").expect("canonical quantity map key");
@@ -15458,8 +15341,7 @@ mod contract_state_tests {
             .is_err(),
         );
     }
-    #[test]
-    fn contract_state_invalid_typed_map_keys_never_fall_back_to_raw_paths() {
+    routing_test! { sync contract_state_invalid_typed_map_keys_never_fall_back_to_raw_paths
         let registry = BTreeMap::from([(
             "Prices".to_owned(),
             Some(ivm::EmbeddedStateType::StateMap {
@@ -15512,8 +15394,7 @@ mod contract_state_tests {
             "the explicit, validated physical form remains round-trippable"
         );
     }
-    #[test]
-    fn contract_state_logical_keys_can_escape_the_physical_tlv_namespace() {
+    routing_test! { sync contract_state_logical_keys_can_escape_the_physical_tlv_namespace
         for ty in [
             ivm::EmbeddedStateType::String,
             ivm::EmbeddedStateType::Bytes,
@@ -15533,8 +15414,7 @@ mod contract_state_tests {
             );
         }
     }
-    #[test]
-    fn contract_state_numeric_map_keys_use_exact_nominal_pointer_envelopes() {
+    routing_test! { sync contract_state_numeric_map_keys_use_exact_nominal_pointer_envelopes
         for (ty, first, equivalent) in [
             (ivm::EmbeddedStateType::Int, "7", "7"),
             (ivm::EmbeddedStateType::Decimal, "7.00", "7"),
@@ -15797,8 +15677,7 @@ fn exact_asset_transfer_amount(raw: &str) -> Result<iroha_primitives::numeric::Q
 #[cfg(all(test, feature = "app_api"))]
 mod asset_transfer_quantity_tests {
     use super::exact_asset_transfer_amount;
-    #[test]
-    fn exact_asset_transfer_amount_accepts_only_positive_canonical_quantity_text() {
+    routing_test! { sync exact_asset_transfer_amount_accepts_only_positive_canonical_quantity_text
         for valid in ["1", "1.25", "0.0000000000000000000000000001"] {
             let quantity = exact_asset_transfer_amount(valid).expect("canonical quantity");
             assert_eq!(quantity.to_string(), valid);
@@ -16405,8 +16284,7 @@ mod asset_transfer_request_tests {
     ) -> Result<(NormalizedAssetTransfer, AssetTransferSigningState)> {
         normalize_asset_transfer_request(&ChainId::from("asset-transfer-test"), request, NOW_MS)
     }
-    #[test]
-    fn request_json_rejects_unknown_or_legacy_signing_fields() {
+    routing_test! { sync request_json_rejects_unknown_or_legacy_signing_fields
         let request = fixture_request(&fixture_keypair(0x31));
         let encoded = norito::json::to_json(&request).expect("serialize exact request");
         let authority_json =
@@ -16452,8 +16330,7 @@ mod asset_transfer_request_tests {
                 .remove(field);
         }
     }
-    #[test]
-    fn normalized_builder_contains_exactly_one_scoped_numeric_transfer() {
+    routing_test! { sync normalized_builder_contains_exactly_one_scoped_numeric_transfer
         let authority_keypair = fixture_keypair(0x34);
         let (transfer, state) = normalize(fixture_request(&authority_keypair)).expect("normalize");
         assert!(matches!(state, AssetTransferSigningState::Prepare));
@@ -16510,8 +16387,7 @@ mod asset_transfer_request_tests {
         assert_eq!(instruction.object.to_string(), "1.25");
         assert_eq!(instruction.destination, transfer.destination);
     }
-    #[test]
-    fn prepare_draft_roundtrips_exact_payload_and_accepts_only_authority_signature() {
+    routing_test! { sync prepare_draft_roundtrips_exact_payload_and_accepts_only_authority_signature
         use base64::Engine as _;
         let authority_keypair = fixture_keypair(0x35);
         let (transfer, _) = normalize(fixture_request(&authority_keypair)).expect("normalize");
@@ -16535,8 +16411,7 @@ mod asset_transfer_request_tests {
             .expect("final signature verifies");
         assert_eq!(final_transaction.payload(), decoded.payload());
     }
-    #[test]
-    fn signing_state_requires_exact_pair_and_matching_authority() {
+    routing_test! { sync signing_state_requires_exact_pair_and_matching_authority
         use base64::Engine as _;
         let authority_keypair = fixture_keypair(0x36);
         let mut request = fixture_request(&authority_keypair);
@@ -16590,8 +16465,7 @@ mod asset_transfer_request_tests {
             "signature must not verify after an amount change"
         );
     }
-    #[test]
-    fn detached_signature_rejects_every_signed_field_substitution() {
+    routing_test! { sync detached_signature_rejects_every_signed_field_substitution
         use base64::Engine as _;
         let authority_keypair = fixture_keypair(0x3A);
         let base_request = fixture_request(&authority_keypair);
@@ -16663,8 +16537,7 @@ mod asset_transfer_request_tests {
             }
         }
     }
-    #[test]
-    fn public_key_signature_and_identifier_encodings_are_exact() {
+    routing_test! { sync public_key_signature_and_identifier_encodings_are_exact
         use base64::Engine as _;
         let authority_keypair = fixture_keypair(0x3B);
         let (prepared, _) =
@@ -16741,8 +16614,7 @@ mod asset_transfer_request_tests {
             );
         }
     }
-    #[test]
-    fn scope_amount_memo_and_time_are_strictly_canonical_and_bounded() {
+    routing_test! { sync scope_amount_memo_and_time_are_strictly_canonical_and_bounded
         let authority_keypair = fixture_keypair(0x38);
         for scope in [
             "Global",
@@ -16797,8 +16669,7 @@ mod asset_transfer_request_tests {
             "already expired draft must fail"
         );
     }
-    #[test]
-    fn exact_scope_memo_and_clock_boundaries_are_accepted() {
+    routing_test! { sync exact_scope_memo_and_clock_boundaries_are_accepted
         let authority_keypair = fixture_keypair(0x39);
         for scope in ["global", "dataspace:0", "dataspace:18446744073709551615"] {
             let mut request = fixture_request(&authority_keypair);
@@ -16833,8 +16704,7 @@ mod asset_transfer_request_tests {
             "future-skew boundary must be accepted"
         );
     }
-    #[tokio::test]
-    async fn exact_queued_replay_is_idempotent_but_signed_field_substitution_is_not() {
+    routing_test! { async exact_queued_replay_is_idempotent_but_signed_field_substitution_is_not
         let (state, queue, chain_id, telemetry) = submission_components();
         let authority_keypair = fixture_keypair(0x43);
         let now_ms = current_time_millis();
@@ -16889,8 +16759,7 @@ mod asset_transfer_request_tests {
         );
         assert_eq!(queue.active_len(), 1);
     }
-    #[tokio::test]
-    async fn concurrent_exact_replays_converge_on_one_queue_entry() {
+    routing_test! { async concurrent_exact_replays_converge_on_one_queue_entry
         let (state, queue, chain_id, telemetry) = submission_components();
         let authority_keypair = fixture_keypair(0x46);
         let (request, transaction_hash) = signed_fixture_request(
@@ -16935,8 +16804,7 @@ mod asset_transfer_request_tests {
             "concurrent exact submissions must enqueue only once"
         );
     }
-    #[tokio::test]
-    async fn exact_applied_replay_survives_expiry_but_unknown_expired_transaction_fails() {
+    routing_test! { async exact_applied_replay_survives_expiry_but_unknown_expired_transaction_fails
         let (state, queue, chain_id, telemetry) = submission_components();
         let now_ms = current_time_millis();
         let creation_time_ms = now_ms.saturating_sub(ASSET_TRANSFER_MAX_TTL_MS + 1);
@@ -20489,8 +20357,7 @@ fn reject_unverified_multisig_alias_selector(selector: &MultisigAccountSelectorD
 #[cfg(all(test, feature = "app_api"))]
 mod multisig_alias_selector_guard_tests {
     use super::*;
-    #[test]
-    fn unsigned_draft_rejects_alias_even_when_body_asserts_a_signer() {
+    routing_test! { sync unsigned_draft_rejects_alias_even_when_body_asserts_a_signer
         let selector = MultisigAccountSelectorDto {
             multisig_account_id: None,
             multisig_account_alias: Some("treasury@universal".to_owned()),
@@ -21954,8 +21821,7 @@ mod multisig_contract_call_tests {
             provenance: None,
         }
     }
-    #[test]
-    fn implicit_contract_gas_limit_covers_strict_argument_admission_floor() {
+    routing_test! { sync implicit_contract_gas_limit_covers_strict_argument_admission_floor
         assert!(DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT > 1_048_752);
     }
     fn sample_account_id() -> iroha_data_model::account::AccountId {
@@ -22020,8 +21886,7 @@ mod multisig_contract_call_tests {
             "a name-only token must not spoof the typed contract permission",
         );
     }
-    #[test]
-    fn trigger_id_derivation_is_stable_and_sensitive_to_input() {
+    routing_test! { sync trigger_id_derivation_is_stable_and_sensitive_to_input
         let multisig = sample_account_id();
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "n": 1 }));
@@ -22061,8 +21926,7 @@ mod multisig_contract_call_tests {
         .expect("trigger id");
         assert_ne!(first, changed);
     }
-    #[test]
-    fn multisig_contract_call_instruction_envelope_hashes_deterministically() {
+    routing_test! { sync multisig_contract_call_instruction_envelope_hashes_deterministically
         let multisig = sample_account_id();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -22111,8 +21975,7 @@ mod multisig_contract_call_tests {
             "contract-call trigger execution must carry the normalized payload because the trigger host receives ExecuteTrigger args"
         );
     }
-    #[test]
-    fn canonical_quantity_string_rejects_signed_and_noncanonical_payloads() {
+    routing_test! { sync canonical_quantity_string_rejects_signed_and_noncanonical_payloads
         assert_eq!(
             canonical_quantity_string(&norito::json!("1.25"), false).as_deref(),
             Some("1.25")
@@ -22137,8 +22000,7 @@ mod multisig_contract_call_tests {
         }
         assert!(canonical_quantity_string(&norito::json!("0"), false).is_none());
     }
-    #[test]
-    fn multisig_contract_call_intent_requires_exact_canonical_envelope() {
+    routing_test! { sync multisig_contract_call_intent_requires_exact_canonical_envelope
         let multisig = sample_account_id();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -22552,8 +22414,7 @@ mod multisig_contract_call_tests {
             .into();
         assert!(strict_multisig_contract_call_intent(&multisig, &proposal(mismatched)).is_none());
     }
-    #[test]
-    fn contract_call_metadata_excludes_retired_fee_fields() {
+    routing_test! { sync contract_call_metadata_excludes_retired_fee_fields
         let manifest = manifest::ContractManifest {
             seiyaku_name: None,
             code_hash: None,
@@ -22589,8 +22450,7 @@ mod multisig_contract_call_tests {
         assert!(metadata.get("fee_sponsor").is_none());
         assert!(metadata.get("gas_limit").is_none());
     }
-    #[test]
-    fn multisig_propose_metadata_includes_normalized_memo() {
+    routing_test! { sync multisig_propose_metadata_includes_normalized_memo
         assert_eq!(
             normalize_transaction_memo(Some("  QR invoice 42  ".to_owned())).as_deref(),
             Some("QR invoice 42")
@@ -22602,8 +22462,7 @@ mod multisig_contract_call_tests {
         assert!(json.get("fee_sponsor").is_none());
         assert_eq!(json["memo"].as_str(), Some("QR invoice 42"));
     }
-    #[test]
-    fn multisig_draft_injects_canonical_fee_marker_before_proposal_hashing() {
+    routing_test! { sync multisig_draft_injects_canonical_fee_marker_before_proposal_hashing
         use iroha_data_model::{
             Level,
             isi::{InstructionBox, Log},
@@ -22703,16 +22562,14 @@ mod contract_entrypoint_validation_tests {
             other => panic!("expected app conflict error, got {other:?}"),
         }
     }
-    #[test]
-    fn ensure_public_contract_entrypoint_rejects_missing_manifest_entrypoints() {
+    routing_test! { sync ensure_public_contract_entrypoint_rejects_missing_manifest_entrypoints
         let manifest = manifest_with_entrypoints(None);
         let err = ensure_public_contract_entrypoint(&manifest, "main")
             .expect_err("missing entrypoints must fail");
         let message = expect_conversion(err);
         assert!(message.contains("does not advertise callable entrypoints"));
     }
-    #[test]
-    fn ensure_public_contract_entrypoint_rejects_non_public_targets() {
+    routing_test! { sync ensure_public_contract_entrypoint_rejects_non_public_targets
         let manifest = manifest_with_entrypoints(Some(vec![EntrypointDescriptor {
             name: "boot".to_owned(),
             kind: manifest::EntryPointKind::Hajimari,
@@ -22732,8 +22589,7 @@ mod contract_entrypoint_validation_tests {
         let message = expect_conversion(err);
         assert!(message.contains("is not a kotoage by-call entrypoint"));
     }
-    #[test]
-    fn callable_contract_entrypoints_include_runtime_authorized_lifecycle_kinds() {
+    routing_test! { sync callable_contract_entrypoints_include_runtime_authorized_lifecycle_kinds
         let descriptors = vec![
             EntrypointDescriptor {
                 name: "hajimari".to_owned(),
@@ -22812,8 +22668,7 @@ mod contract_entrypoint_validation_tests {
             .expect_err("views must use the read-only endpoint");
         assert!(expect_conversion(err).contains("read-only"));
     }
-    #[test]
-    fn lifecycle_permissions_are_defined_by_the_runtime() {
+    routing_test! { sync lifecycle_permissions_are_defined_by_the_runtime
         let mut descriptor = EntrypointDescriptor {
             name: "hajimari".to_owned(),
             kind: manifest::EntryPointKind::Hajimari,
@@ -22976,8 +22831,7 @@ mod contract_payload_normalization_tests {
             other => panic!("expected conversion error, got {other:?}"),
         }
     }
-    #[test]
-    fn denied_contract_requests_skip_payload_normalization_and_record_decoding() {
+    routing_test! { sync denied_contract_requests_skip_payload_normalization_and_record_decoding
         let descriptor = int_descriptor();
         let malformed_payload = IrohaJson::new(norito::json!({
             "amount": "+1"
@@ -22998,8 +22852,7 @@ mod contract_payload_normalization_tests {
         assert!(!normalization_attempted.get());
         assert_eq!(ivm::argument_record_decode_count(), 0);
     }
-    #[test]
-    fn normalize_contract_payload_is_permutation_invariant_and_compact() {
+    routing_test! { sync normalize_contract_payload_is_permutation_invariant_and_compact
         let descriptor = json_descriptor();
         let first = IrohaJson::from_raw_json(
             r#" { "ev" : { "z" : "last", "a" : 1, "b" : [true, false] } } "#.to_owned(),
@@ -23031,8 +22884,7 @@ mod contract_payload_normalization_tests {
                 .expect("permuted canonical argument record"),
         );
     }
-    #[test]
-    fn json_payload_constructor_rejects_duplicate_keys_and_trailing_tokens() {
+    routing_test! { sync json_payload_constructor_rejects_duplicate_keys_and_trailing_tokens
         for (label, raw) in [
             ("duplicate root", r#"{"ev":{},"ev":{"a":1}}"#),
             ("duplicate nested", r#"{"ev":{"a":1,"a":2}}"#),
@@ -23076,8 +22928,7 @@ mod contract_payload_normalization_tests {
             );
         }
     }
-    #[test]
-    fn normalize_contract_payload_accepts_wide_and_endpoint_int_values() {
+    routing_test! { sync normalize_contract_payload_accepts_wide_and_endpoint_int_values
         let descriptor = int_descriptor();
         for value in [
             "10",
@@ -23093,8 +22944,7 @@ mod contract_payload_normalization_tests {
             assert_eq!(normalized, payload, "canonical int `{value}` was rewritten");
         }
     }
-    #[test]
-    fn normalize_contract_payload_rejects_noncanonical_int_boundaries() {
+    routing_test! { sync normalize_contract_payload_rejects_noncanonical_int_boundaries
         let descriptor = int_descriptor();
         for value in [
             "",
@@ -23123,8 +22973,7 @@ mod contract_payload_normalization_tests {
             .expect_err("JSON number tokens must not enter the exact int domain");
         assert!(expect_conversion(error).contains("exact argument schema"));
     }
-    #[test]
-    fn normalize_contract_payload_requires_canonical_lowercase_hex_bytes() {
+    routing_test! { sync normalize_contract_payload_requires_canonical_lowercase_hex_bytes
         let descriptor = bytes_descriptor();
         let canonical = format!("0x{}", hex::encode("banking@centralbank"));
         let payload = scalar_payload("alias_literal", Value::from(canonical.clone()));
@@ -23236,8 +23085,7 @@ seiyaku ZkIvmPayloadNormalizeTest {
             "missing exact schema must fail before any retired textual-type fallback"
         );
     }
-    #[test]
-    fn normalize_contract_payload_preserves_named_single_json_parameter() {
+    routing_test! { sync normalize_contract_payload_preserves_named_single_json_parameter
         let descriptor = json_descriptor();
         let payload = IrohaJson::new(norito::json!({
             "ev": {
@@ -23259,8 +23107,7 @@ seiyaku ZkIvmPayloadNormalizeTest {
             })
         );
     }
-    #[test]
-    fn normalize_contract_payload_rejects_direct_single_json_parameter() {
+    routing_test! { sync normalize_contract_payload_rejects_direct_single_json_parameter
         let descriptor = json_descriptor();
         let payload = IrohaJson::new(norito::json!({
             "action": "finalize",
@@ -23965,8 +23812,7 @@ mod multisig_selector_tests {
         assert!(payload.get("transaction_scaffold_b64").is_none());
         assert!(payload.get("signed_transaction_b64").is_none());
     }
-    #[test]
-    fn multisig_selector_rejects_both_fields() {
+    routing_test! { sync multisig_selector_rejects_both_fields
         let state = build_state(World::default());
         let err = resolve_multisig_account_selector(
             state.as_ref(),
@@ -23983,8 +23829,7 @@ mod multisig_selector_tests {
         let message = expect_app_validation(err, "multisig_selector_invalid");
         assert!(message.contains("exactly one of multisig_account_id or multisig_account_alias"));
     }
-    #[test]
-    fn multisig_selector_rejects_neither_field() {
+    routing_test! { sync multisig_selector_rejects_neither_field
         let state = build_state(World::default());
         let err = resolve_multisig_account_selector(
             state.as_ref(),
@@ -23995,8 +23840,7 @@ mod multisig_selector_tests {
         let message = expect_app_validation(err, "multisig_selector_invalid");
         assert!(message.contains("exactly one of multisig_account_id or multisig_account_alias"));
     }
-    #[test]
-    fn multisig_proposal_selector_requires_exactly_one_canonical_hash() {
+    routing_test! { sync multisig_proposal_selector_requires_exactly_one_canonical_hash
         let instructions: Vec<dm::InstructionBox> =
             vec![dm::Log::new(dm::Level::INFO, "x".to_owned()).into()];
         let canonical = HashOf::new(&instructions).to_string();
@@ -24023,8 +23867,7 @@ mod multisig_selector_tests {
             ));
         }
     }
-    #[test]
-    fn multisig_read_json_contracts_reject_unknown_top_level_fields() {
+    routing_test! { sync multisig_read_json_contracts_reject_unknown_top_level_fields
         let cases = [
             (
                 "spec",
@@ -24053,8 +23896,7 @@ mod multisig_selector_tests {
             assert!(rejected, "{kind} must reject unknown fields");
         }
     }
-    #[test]
-    fn multisig_read_json_contracts_reject_duplicate_selectors() {
+    routing_test! { sync multisig_read_json_contracts_reject_duplicate_selectors
         let proposal_id = "a".repeat(64);
         let cases = [
             (
@@ -24088,8 +23930,7 @@ mod multisig_selector_tests {
             assert!(rejected, "{kind} must reject duplicate selector fields");
         }
     }
-    #[test]
-    fn multisig_contract_call_json_contracts_reject_unknown_top_level_fields() {
+    routing_test! { sync multisig_contract_call_json_contracts_reject_unknown_top_level_fields
         let account = checked_multisig_selector_account_id(
             0x76,
             "derive strict contract-call DTO fixture account",
@@ -24124,8 +23965,7 @@ mod multisig_selector_tests {
             "contract simulation must reject fee-payer selection",
         );
     }
-    #[test]
-    fn multisig_selector_rejects_noncanonical_alias_whitespace() {
+    routing_test! { sync multisig_selector_rejects_noncanonical_alias_whitespace
         let state = build_state(World::default());
         let authority =
             checked_multisig_selector_account_id(0x77, "derive alias parser authority key");
@@ -24140,8 +23980,7 @@ mod multisig_selector_tests {
             assert!(message.contains("exact non-empty canonical literal"));
         }
     }
-    #[test]
-    fn multisig_proposal_selector_requires_one_canonical_consistent_hash() {
+    routing_test! { sync multisig_proposal_selector_requires_one_canonical_consistent_hash
         let instructions: Vec<dm::InstructionBox> =
             vec![dm::Log::new(dm::Level::INFO, "strict".to_owned()).into()];
         let canonical = HashOf::new(&instructions).to_string();
@@ -24176,8 +24015,7 @@ mod multisig_selector_tests {
             assert!(message.contains(expected), "unexpected message: {message}");
         }
     }
-    #[test]
-    fn multisig_status_filters_require_exact_canonical_values() {
+    routing_test! { sync multisig_status_filters_require_exact_canonical_values
         assert_eq!(
             requested_multisig_statuses(&["FINALIZED".to_owned()]).expect("canonical status"),
             BTreeSet::from(["FINALIZED".to_owned()]),
@@ -24193,8 +24031,7 @@ mod multisig_selector_tests {
             assert!(!message.is_empty());
         }
     }
-    #[test]
-    fn active_proposal_with_quorum_is_not_reported_as_finalized() {
+    routing_test! { sync active_proposal_with_quorum_is_not_reported_as_finalized
         let signer_one =
             checked_multisig_selector_account_id(0x73, "derive active-quorum signer one key");
         let signer_two =
@@ -24247,8 +24084,7 @@ mod multisig_selector_tests {
             Some(target.to_string().as_str()),
         );
     }
-    #[test]
-    fn terminal_proposal_projection_rejects_impossible_status_timestamps() {
+    routing_test! { sync terminal_proposal_projection_rejects_impossible_status_timestamps
         use iroha_executor_data_model::isi::multisig::{
             MultisigProposalTerminalState, MultisigProposalTerminalStatus,
         };
@@ -24297,8 +24133,7 @@ mod multisig_selector_tests {
         validate_multisig_terminal_proposal_binding(&account, &instructions_hash, &canceled)
             .expect("a cancellation between proposal creation and expiry is coherent");
     }
-    #[tokio::test]
-    async fn multisig_spec_returns_not_found_for_unknown_alias() {
+    routing_test! { async multisig_spec_returns_not_found_for_unknown_alias
         let (world, _multisig, resolve_authority, _signer_two, alias_literal, _active_hash) =
             multisig_test_world();
         let state = build_state(world);
@@ -24315,8 +24150,7 @@ mod multisig_selector_tests {
         let message = expect_app_not_found(err, "multisig_authority_alias_not_found");
         assert!(message.contains("missing@banka.universal"));
     }
-    #[tokio::test]
-    async fn multisig_spec_rejects_alias_bound_non_multisig_account() {
+    routing_test! { async multisig_spec_rejects_alias_bound_non_multisig_account
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let keypair =
             checked_multisig_selector_keypair(0x68, "derive non-multisig alias fixture key");
@@ -24339,8 +24173,7 @@ mod multisig_selector_tests {
         let message = expect_app_conflict(err, "multisig_account_not_authority");
         assert!(message.contains("resolved account is not a multisig authority"));
     }
-    #[tokio::test]
-    async fn contract_call_accepts_contract_address_target() {
+    routing_test! { async contract_call_accepts_contract_address_target
         let authority_keypair = checked_multisig_selector_keypair(
             0x69,
             "derive contract-call address target authority key",
@@ -24392,8 +24225,7 @@ mod multisig_selector_tests {
         );
         assert_exact_unsigned_transaction_draft(&payload);
     }
-    #[tokio::test]
-    async fn contract_call_rejects_missing_target() {
+    routing_test! { async contract_call_rejects_missing_target
         let authority =
             checked_multisig_selector_account_id(0x6a, "derive missing-target authority key");
         let result = handle_post_contract_call(
@@ -24425,8 +24257,7 @@ mod multisig_selector_tests {
         let message = expect_conversion(err);
         assert!(message.contains("provide exactly one contract target"));
     }
-    #[tokio::test]
-    async fn contract_call_returns_specific_not_found_for_missing_alias() {
+    routing_test! { async contract_call_returns_specific_not_found_for_missing_alias
         let authority = checked_multisig_selector_account_id(
             0x6b,
             "derive missing-contract-alias authority key",
@@ -24460,8 +24291,7 @@ mod multisig_selector_tests {
         let message = expect_app_not_found(err, "contract_alias_not_found");
         assert!(message.contains("boi-preauth-ret-01::is"));
     }
-    #[tokio::test]
-    async fn multisig_contract_propose_rejects_signer_missing_from_live_spec() {
+    routing_test! { async multisig_contract_propose_rejects_signer_missing_from_live_spec
         let (
             state,
             multisig_account_id,
@@ -24505,8 +24335,7 @@ mod multisig_selector_tests {
         assert!(message.contains(&outsider.to_string()));
         assert!(message.contains(&multisig_account_id.to_string()));
     }
-    #[tokio::test]
-    async fn multisig_spec_uses_native_account_state_when_metadata_is_missing() {
+    routing_test! { async multisig_spec_uses_native_account_state_when_metadata_is_missing
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
         let signer_one = checked_multisig_selector_keypair(
@@ -24569,8 +24398,7 @@ mod multisig_selector_tests {
         assert_eq!(response.resolved_multisig_account_id, multisig_account_id);
         assert_eq!(response.spec, spec);
     }
-    #[tokio::test]
-    async fn multisig_spec_rejects_metadata_without_native_account_state() {
+    routing_test! { async multisig_spec_rejects_metadata_without_native_account_state
         let (mut world, multisig_account_id, _signer_one, _signer_two, _alias, _active_hash) =
             multisig_test_world();
         let mut smart_contract_state = world.smart_contract_state_mut_for_testing().block();
@@ -24592,8 +24420,7 @@ mod multisig_selector_tests {
         let message = expect_app_conflict(error, "multisig_account_not_authority");
         assert!(message.contains("not a multisig authority"));
     }
-    #[tokio::test]
-    async fn multisig_spec_rejects_metadata_native_state_disagreement() {
+    routing_test! { async multisig_spec_rejects_metadata_native_state_disagreement
         let (mut world, multisig_account_id, signer_one, signer_two, _alias, _active_hash) =
             multisig_test_world();
         let divergent_spec = MultisigSpec {
@@ -24618,8 +24445,7 @@ mod multisig_selector_tests {
         let message = expect_conversion(error);
         assert!(message.contains("disagrees with canonical native account state"));
     }
-    #[test]
-    fn multisig_status_filters_are_canonical_and_fail_closed() {
+    routing_test! { sync multisig_status_filters_are_canonical_and_fail_closed
         let statuses = requested_multisig_statuses(&[
             "COLLECTING_SIGNATURES".to_owned(),
             "CANCELED".to_owned(),
@@ -24661,8 +24487,7 @@ mod multisig_selector_tests {
             );
         }
     }
-    #[tokio::test]
-    async fn multisig_read_endpoints_match_alias_and_concrete_resolution() {
+    routing_test! { async multisig_read_endpoints_match_alias_and_concrete_resolution
         let (world, multisig_account_id, signer_one_id, _signer_two_id, alias_literal, active_hash) =
             multisig_test_world();
         let state = build_state(world);
@@ -24747,8 +24572,7 @@ mod multisig_selector_tests {
         assert_eq!(alias_resolve.instructions_hash, active_hash);
         assert_eq!(alias_resolve.proposal, concrete_resolve.proposal);
     }
-    #[tokio::test]
-    async fn multisig_proposals_query_is_bounded_and_cursor_is_context_bound() {
+    routing_test! { async multisig_proposals_query_is_bounded_and_cursor_is_context_bound
         let (world, multisig_account_id, signer_one, _signer_two, alias_literal, active_hash) =
             multisig_test_world();
         let state = build_state(world);
@@ -24894,8 +24718,7 @@ mod multisig_selector_tests {
             ));
         }
     }
-    #[tokio::test]
-    async fn multisig_reads_fail_closed_on_cross_account_proposal_state_tamper() {
+    routing_test! { async multisig_reads_fail_closed_on_cross_account_proposal_state_tamper
         let (mut world, multisig_account_id, _signer_one, _signer_two, _alias, active_hash) =
             multisig_test_world();
         let instructions = vec![dm::Log::new(dm::Level::INFO, "active".to_owned()).into()];
@@ -24939,8 +24762,7 @@ mod multisig_selector_tests {
             ))
         ));
     }
-    #[tokio::test]
-    async fn multisig_get_fails_closed_on_conflicting_active_and_terminal_state() {
+    routing_test! { async multisig_get_fails_closed_on_conflicting_active_and_terminal_state
         use iroha_executor_data_model::isi::multisig::{
             MultisigProposalTerminalState, MultisigProposalTerminalStatus,
         };
@@ -24981,8 +24803,7 @@ mod multisig_selector_tests {
         let message = expect_conversion(error);
         assert!(message.contains("conflicting active and terminal state"));
     }
-    #[tokio::test]
-    async fn multisig_read_endpoints_return_terminal_canceled_state() {
+    routing_test! { async multisig_read_endpoints_return_terminal_canceled_state
         let (
             mut world,
             multisig_account_id,
@@ -25058,8 +24879,7 @@ mod multisig_selector_tests {
         assert_eq!(resolve_response.terminal_at_ms, Some(1_700_000_000_333));
         assert_eq!(resolve_response.proposal, canceled_value);
     }
-    #[tokio::test]
-    async fn multisig_proposals_query_and_resolve_include_asset_transfer_control_intent() {
+    routing_test! { async multisig_proposals_query_and_resolve_include_asset_transfer_control_intent
         let (
             mut world,
             multisig_account_id,
@@ -25385,8 +25205,7 @@ mod multisig_selector_tests {
         assert_eq!(resolve_response.operation_type, "MINT");
         assert!(resolve_response.intent.is_none());
     }
-    #[tokio::test]
-    async fn asset_transfer_control_get_returns_stored_state_and_usage() {
+    routing_test! { async asset_transfer_control_get_returns_stored_state_and_usage
         let authority =
             checked_multisig_selector_account_id(0x70, "derive asset-transfer authority key");
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
@@ -25579,8 +25398,7 @@ mod multisig_selector_tests {
         assert!(payload["cancel_instructions_hash"].as_str().is_some());
         assert_exact_unsigned_transaction_draft(&payload);
     }
-    #[tokio::test]
-    async fn multisig_cancel_approves_existing_cancel_proposal() {
+    routing_test! { async multisig_cancel_approves_existing_cancel_proposal
         let (
             mut world,
             multisig_account_id,
@@ -25699,8 +25517,7 @@ mod multisig_selector_tests {
         );
         assert_exact_unsigned_transaction_draft(&payload);
     }
-    #[tokio::test]
-    async fn multisig_contract_propose_validates_payload_before_hashing() {
+    routing_test! { async multisig_contract_propose_validates_payload_before_hashing
         let (
             state,
             multisig_account_id,
@@ -25791,8 +25608,7 @@ seiyaku BytesPayloadNormalizeTest {
             Some(expected_hash.as_str())
         );
     }
-    #[tokio::test]
-    async fn multisig_generic_propose_prepares_with_concrete_selector() {
+    routing_test! { async multisig_generic_propose_prepares_with_concrete_selector
         let (
             state,
             multisig_account_id,
@@ -25841,8 +25657,7 @@ seiyaku BytesPayloadNormalizeTest {
         );
         assert_exact_unsigned_transaction_draft(&payload);
     }
-    #[tokio::test]
-    async fn multisig_generic_propose_rejects_incomplete_detached_signature_fields() {
+    routing_test! { async multisig_generic_propose_rejects_incomplete_detached_signature_fields
         let (state, multisig_account_id, _authority_account_id, signer_two_id, _alias_literal, _) =
             multisig_contract_test_fixture();
         let instruction: dm::InstructionBox =
@@ -25914,8 +25729,7 @@ seiyaku BytesPayloadNormalizeTest {
         .expect_err("blank detached credentials must be rejected");
         assert!(expect_conversion(err).contains("public_key_hex is required"));
     }
-    #[tokio::test]
-    async fn multisig_generic_propose_rejects_malformed_detached_signature_fields() {
+    routing_test! { async multisig_generic_propose_rejects_malformed_detached_signature_fields
         use base64::Engine as _;
         const SMALL_ORDER_PUBLIC_KEY: [u8; 32] = [
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -26065,8 +25879,7 @@ seiyaku BytesPayloadNormalizeTest {
         .expect_err("all-zero detached signature must be rejected");
         assert!(expect_conversion(err).contains("signature payload must not be all zero"));
     }
-    #[tokio::test]
-    async fn multisig_generic_immediate_propose_routes_inner_dataspace() {
+    routing_test! { async multisig_generic_immediate_propose_routes_inner_dataspace
         use base64::Engine as _;
         let (mut world, multisig_account_id, signer_account_id, _alias_literal, signer_keypair) =
             quorum_one_multisig_world();
@@ -26184,8 +25997,7 @@ seiyaku BytesPayloadNormalizeTest {
             "immediate multisig proposal should preserve the inner instruction route",
         );
     }
-    #[tokio::test]
-    async fn multisig_generic_proposal_only_response_has_no_executed_hash() {
+    routing_test! { async multisig_generic_proposal_only_response_has_no_executed_hash
         use base64::Engine as _;
         let (
             mut world,
@@ -26272,8 +26084,7 @@ seiyaku BytesPayloadNormalizeTest {
             "a proposal below quorum must not claim that value-moving instructions executed",
         );
     }
-    #[test]
-    fn multisig_immediate_contract_call_plan_routes_contract_dataspace() {
+    routing_test! { sync multisig_immediate_contract_call_plan_routes_contract_dataspace
         let (world, _multisig_account_id, signer_account_id, _alias_literal, _signer_keypair) =
             quorum_one_multisig_world();
         let state = build_state(world);
@@ -26314,15 +26125,13 @@ seiyaku BytesPayloadNormalizeTest {
             "immediate contract-call proposals should route by contract address dataspace",
         );
     }
-    #[test]
-    fn multisig_generic_propose_does_not_deserialize_private_keys() {
+    routing_test! { sync multisig_generic_propose_does_not_deserialize_private_keys
         norito::json::from_str::<MultisigProposeDto>(
             r#"{"private_key":"ed01200000000000000000000000000000000000000000000000000000000000000000"}"#,
         )
         .expect_err("private_key must be rejected as an unknown field");
     }
-    #[test]
-    fn multisig_generic_propose_json_accepts_native_norito_instruction_strings() {
+    routing_test! { sync multisig_generic_propose_json_accepts_native_norito_instruction_strings
         let (
             _state,
             _multisig_account_id,
@@ -26382,8 +26191,7 @@ seiyaku BytesPayloadNormalizeTest {
             "unexpected error: {message}"
         );
     }
-    #[test]
-    fn multisig_generic_propose_json_rejects_unknown_instruction_object() {
+    routing_test! { sync multisig_generic_propose_json_rejects_unknown_instruction_object
         let (
             _state,
             _multisig_account_id,
@@ -26408,8 +26216,7 @@ seiyaku BytesPayloadNormalizeTest {
             "unexpected error: {message}"
         );
     }
-    #[test]
-    fn multisig_generic_propose_json_rejects_bad_request_scalars() {
+    routing_test! { sync multisig_generic_propose_json_rejects_bad_request_scalars
         let (
             _state,
             _multisig_account_id,
@@ -26496,8 +26303,7 @@ seiyaku BytesPayloadNormalizeTest {
             "unexpected error: {message}"
         );
     }
-    #[tokio::test]
-    async fn multisig_generic_approve_prepares_with_concrete_selector() {
+    routing_test! { async multisig_generic_approve_prepares_with_concrete_selector
         let (
             world,
             multisig_account_id,
@@ -28180,8 +27986,7 @@ mod account_recovery_route_tests {
             .is_err()
         );
     }
-    #[test]
-    fn detached_recovery_signer_requires_an_exact_complete_ed25519_proof_pair() {
+    routing_test! { sync detached_recovery_signer_requires_an_exact_complete_ed25519_proof_pair
         let signer = ed25519_keypair();
         let signer_account = single_account(&signer);
         assert!(
@@ -28208,8 +28013,7 @@ mod account_recovery_route_tests {
         submitted.public_key_hex = Some(hex::encode(different_bytes));
         assert!(validate_account_recovery_detached_signer(&submitted).is_err());
     }
-    #[test]
-    fn detached_recovery_draft_roundtrips_and_binds_the_signer() {
+    routing_test! { sync detached_recovery_draft_roundtrips_and_binds_the_signer
         use base64::Engine as _;
         let signer = KeyPair::try_from_seed(
             b"iroha:torii:account-recovery:draft-signer".to_vec(),
@@ -28572,15 +28376,13 @@ mod proof_retention_summary_tests {
     use iroha_data_model::ValidationFail;
     use iroha_torii_shared::PROOF_RETENTION_STATUS_MAX_BACKENDS;
     use std::collections::BTreeMap;
-    #[test]
-    fn count_matches_grace_cap_and_batch_semantics_without_record_materialization() {
+    routing_test! { sync count_matches_grace_cap_and_batch_semantics_without_record_materialization
         assert_eq!(prunable_proof_count(10, 3, 5, 0), 5);
         assert_eq!(prunable_proof_count(10, 3, 5, 2), 2);
         assert_eq!(prunable_proof_count(10, 3, 0, 0), 3);
         assert_eq!(prunable_proof_count(3, 3, 1, 0), 3);
     }
-    #[test]
-    fn backend_summary_accepts_the_protocol_boundary_and_existing_backend_updates() {
+    routing_test! { sync backend_summary_accepts_the_protocol_boundary_and_existing_backend_updates
         let labels: Vec<_> = (0..PROOF_RETENTION_STATUS_MAX_BACKENDS)
             .map(|index| format!("backend-{index:04}"))
             .collect();
@@ -28600,8 +28402,7 @@ mod proof_retention_summary_tests {
         assert_eq!(first.oldest_height, Some(5));
         assert_eq!(first.newest_height, Some(10));
     }
-    #[test]
-    fn backend_summary_rejects_the_first_backend_over_the_protocol_ceiling() {
+    routing_test! { sync backend_summary_rejects_the_first_backend_over_the_protocol_ceiling
         let labels: Vec<_> = (0..=PROOF_RETENTION_STATUS_MAX_BACKENDS)
             .map(|index| format!("backend-{index:04}"))
             .collect();
@@ -29057,8 +28858,7 @@ mod vk_record_input_tests {
     fn sample_hex32(fill: u8) -> String {
         hex::encode([fill; 32])
     }
-    #[test]
-    fn mk_record_from_inputs_sets_optional_fields() {
+    routing_test! { sync mk_record_from_inputs_sets_optional_fields
         let vk_bytes = vec![1, 2, 3, 4];
         let inputs = VkRecordInputs {
             backend: "halo2/ipa".to_string(),
@@ -29087,8 +28887,7 @@ mod vk_record_input_tests {
         assert!(record.key.is_some(), "stored vk bytes should be preserved");
         assert_eq!(record.gas_schedule_id.as_deref(), Some("sched_default"));
     }
-    #[test]
-    fn vk_record_detail_json_preserves_identity_and_exact_norito_archive() {
+    routing_test! { sync vk_record_detail_json_preserves_identity_and_exact_norito_archive
         let mut record = mk_record_from_inputs(VkRecordInputs {
             backend: "halo2/ipa".to_string(),
             version: 7,
@@ -29154,8 +28953,7 @@ mod vk_record_input_tests {
         assert_eq!(decoded.withdraw_height, record.withdraw_height);
         assert_eq!(decoded, record);
     }
-    #[test]
-    fn mk_record_from_inputs_rejects_protocol_names_as_generic_backends() {
+    routing_test! { sync mk_record_from_inputs_rejects_protocol_names_as_generic_backends
         for backend in [
             "halo2/ipa/orchard",
             "groth16/bls12-377",
@@ -29192,8 +28990,7 @@ mod vk_record_input_tests {
             );
         }
     }
-    #[test]
-    fn mk_record_requires_vk_len_without_bytes() {
+    routing_test! { sync mk_record_requires_vk_len_without_bytes
         let res = mk_record_from_inputs(VkRecordInputs {
             backend: "halo2/ipa".to_string(),
             version: 1,
@@ -29213,8 +29010,7 @@ mod vk_record_input_tests {
         });
         assert!(res.is_err());
     }
-    #[test]
-    fn mk_record_allows_missing_gas_schedule() {
+    routing_test! { sync mk_record_allows_missing_gas_schedule
         let record = mk_record_from_inputs(VkRecordInputs {
             backend: "halo2/ipa".to_string(),
             version: 1,
@@ -29235,8 +29031,7 @@ mod vk_record_input_tests {
         .expect("record created without optional gas schedule");
         assert!(record.gas_schedule_id.is_none());
     }
-    #[test]
-    fn mk_record_allows_withdrawn_status() {
+    routing_test! { sync mk_record_allows_withdrawn_status
         let record = mk_record_from_inputs(VkRecordInputs {
             backend: "halo2/ipa".to_string(),
             version: 1,
@@ -29257,8 +29052,7 @@ mod vk_record_input_tests {
         .expect("withdrawn verifier records can be submitted by update routes");
         assert_eq!(record.status, ConfidentialStatus::Withdrawn);
     }
-    #[test]
-    fn mk_record_rejects_inconsistent_heights() {
+    routing_test! { sync mk_record_rejects_inconsistent_heights
         let res = mk_record_from_inputs(VkRecordInputs {
             backend: "halo2/ipa".to_string(),
             version: 1,
@@ -30737,8 +30531,7 @@ mod multisig_native_norito_dto_tests {
         norito::core::serialize_to_buffer(value, &mut payload).expect("serialize bare payload");
         payload
     }
-    #[test]
-    fn multisig_contract_call_propose_native_norito_flattens_selector() {
+    routing_test! { sync multisig_contract_call_propose_native_norito_flattens_selector
         let signer = AccountId::new(
             super::checked_routing_fixture_keypair(
                 0x73,
@@ -30798,8 +30591,7 @@ mod multisig_native_norito_dto_tests {
             Some(10_000)
         );
     }
-    #[test]
-    fn retired_multisig_sponsor_metadata_native_fixture_is_rejected() {
+    routing_test! { sync retired_multisig_sponsor_metadata_native_fixture_is_rejected
         let bytes = hex::decode(
             "4e525430000055d4aca04764986b7830e36cc7b2bfb9003403000000000000c451acc6dd15a8f70251014f000000004a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101004f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110100010001000a0108d2040000000000001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432d8040200000000000000a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e400000000000000e600289487e97fb60202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000504000000004f000000004a2100000000000000010001220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e4000000000000005a9e96352b9536ab0202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000a04020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
         )
@@ -30807,8 +30599,7 @@ mod multisig_native_norito_dto_tests {
         norito::decode_from_bytes::<MultisigProposeDto>(&bytes)
             .expect_err("retired metadata fee sponsor fixture must not decode");
     }
-    #[test]
-    fn retired_multisig_account_sponsor_metadata_native_fixture_is_rejected() {
+    routing_test! { sync retired_multisig_account_sponsor_metadata_native_fixture_is_rejected
         let bytes = hex::decode(
             "4e525430000055d4aca04764986b7830e36cc7b2bfb9004302000000000000af7359993510158c02640162010000005d01010201005701000000000000004e4a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011102010001004f000000004a210000000000000001000122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201000b01090864656164626565660701050463326c6e0a010873658e10940100001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432c4020100000000000000ba020f0e69726f68612e7472616e73666572a80220010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900f800000000000000a25f939a2d0a8f7e0202000000f201930162010000005d01010201005701000000000000004e4a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110201002001be01f5013c011c01cd0117014901e1018001df01ba01d60151019b01fd01660e01000000090801000000000000000c0602000000f40104020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
         )
@@ -33026,8 +32817,7 @@ mod sorafs_pin_tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-    #[test]
-    fn manifest_policy_helpers_round_trip_all_storage_classes() {
+    routing_test! { sync manifest_policy_helpers_round_trip_all_storage_classes
         use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
         let cases = [
             (ManifestStorageClass::Hot, DmStorageClass::Hot),
@@ -33046,14 +32836,12 @@ mod sorafs_pin_tests {
             assert_eq!(dm_policy.retention_epoch, 42);
         }
     }
-    #[test]
-    fn parse_hex_array_accepts_prefixed_hex() {
+    routing_test! { sync parse_hex_array_accepts_prefixed_hex
         let parsed = parse_hex_array::<4>("0xdeadbeef", "manifest_digest_hex")
             .expect("prefixed hex should parse");
         assert_eq!(parsed, [0xDE, 0xAD, 0xBE, 0xEF]);
     }
-    #[test]
-    fn parse_hex_array_rejects_invalid_hex_with_field_name() {
+    routing_test! { sync parse_hex_array_rejects_invalid_hex_with_field_name
         let err = parse_hex_array::<4>("zz", "manifest_digest_hex")
             .expect_err("invalid hex must be rejected");
         let message = match err {
@@ -33067,8 +32855,7 @@ mod sorafs_pin_tests {
             "unexpected error message: {message}"
         );
     }
-    #[test]
-    fn parse_hex_array_rejects_wrong_length_with_expected_size() {
+    routing_test! { sync parse_hex_array_rejects_wrong_length_with_expected_size
         let err = parse_hex_array::<4>("abcd", "chunk_digest_sha3_256")
             .expect_err("wrong-sized hex must be rejected");
         let message = match err {
@@ -33082,8 +32869,7 @@ mod sorafs_pin_tests {
             "unexpected error message: {message}"
         );
     }
-    #[tokio::test]
-    async fn sorafs_pin_validation_error_emits_stable_norito_envelope_code() {
+    routing_test! { async sorafs_pin_validation_error_emits_stable_norito_envelope_code
         let response = sorafs_pin_validation_error(
             "sorafs_pin_manifest_payload_base64_invalid",
             "manifest_payload must be canonical padded base64",
@@ -33218,8 +33004,7 @@ mod sorafs_pin_tests {
             "unexpected error message: {message}"
         );
     }
-    #[test]
-    fn register_manifest_rejects_oversized_manifest_before_decode() {
+    routing_test! { sync register_manifest_rejects_oversized_manifest_before_decode
         let payload = vec![0; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1];
         let err = decode_sorafs_pin_manifest_bytes(
             payload.as_slice(),
@@ -33233,8 +33018,7 @@ mod sorafs_pin_tests {
             "unexpected error message: {message}"
         );
     }
-    #[test]
-    fn register_manifest_rejects_zero_successor_digest() {
+    routing_test! { sync register_manifest_rejects_zero_successor_digest
         let network_id = test_network_id(0x51);
         let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
             default_manifest().encode().expect("manifest"),
@@ -33252,8 +33036,7 @@ mod sorafs_pin_tests {
             "sorafs_pin_successor_digest_invalid"
         );
     }
-    #[test]
-    fn register_manifest_alias_is_bounded() {
+    routing_test! { sync register_manifest_alias_is_bounded
         let valid = iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
             namespace: "sora".into(),
             name: "docs".into(),
@@ -33291,8 +33074,7 @@ mod sorafs_pin_tests {
             "sorafs_pin_alias_proof_size_invalid"
         );
     }
-    #[test]
-    fn register_manifest_requires_one_signed_native_instruction() {
+    routing_test! { sync register_manifest_requires_one_signed_native_instruction
         let network_id = test_network_id(0x52);
         let register = instruction_from_manifest(&default_manifest());
         let empty = transaction_from_instructions(network_id, []);
@@ -33335,8 +33117,7 @@ mod sorafs_pin_tests {
             "sorafs_pin_transaction_instruction_invalid"
         );
     }
-    #[test]
-    fn register_manifest_requires_matching_network_and_valid_signature() {
+    routing_test! { sync register_manifest_requires_matching_network_and_valid_signature
         let network_id = test_network_id(0x53);
         let other_network_id = test_network_id(0x54);
         let transaction = transaction_from_manifest(network_id, &default_manifest());
@@ -33360,8 +33141,7 @@ mod sorafs_pin_tests {
             "sorafs_pin_transaction_signature_invalid"
         );
     }
-    #[tokio::test]
-    async fn register_manifest_accepts_alias_binding() {
+    routing_test! { async register_manifest_accepts_alias_binding
         use crate::mk_app_state_for_tests;
         let app = mk_app_state_for_tests();
         let queue = Arc::clone(&app.queue);
@@ -33745,8 +33525,7 @@ mod sorafs_capacity_tests {
             .build();
         (sorafs_node::NodeHandle::new(cfg), temp_dir)
     }
-    #[tokio::test]
-    async fn transaction_signature_limit_rejects_and_records_metrics() {
+    routing_test! { async transaction_signature_limit_rejects_and_records_metrics
         let (state, queue, telemetry) = test_state_components();
         #[cfg(feature = "telemetry")]
         let before = telemetry.metrics().await.torii_signature_limit_total.get();
@@ -33937,8 +33716,7 @@ mod sorafs_capacity_tests {
             "sorafs_capacity_declaration_transaction_instruction_invalid"
         );
     }
-    #[test]
-    fn capacity_quota_subject_is_bound_to_transaction_authority() {
+    routing_test! { sync capacity_quota_subject_is_bound_to_transaction_authority
         let network_id = test_network_id(0x63);
         let authority = checked_capacity_keypair(0xB1, "derive capacity quota authority fixture");
         let other = checked_capacity_keypair(0xB2, "derive alternate quota authority fixture");
@@ -33967,8 +33745,7 @@ mod sorafs_capacity_tests {
             sorafs_transaction_quota_subject(&other_declaration)
         );
     }
-    #[test]
-    fn capacity_declaration_rejects_noncanonical_bounded_and_mismatched_records() {
+    routing_test! { sync capacity_declaration_rejects_noncanonical_bounded_and_mismatched_records
         let network_id = test_network_id(0x64);
         let key_pair = checked_capacity_keypair(0xA3, "derive capacity record validation fixture");
         let mut trailing = sample_capacity_declaration_record();
@@ -34058,8 +33835,7 @@ mod sorafs_capacity_tests {
             Some(100)
         );
     }
-    #[tokio::test]
-    async fn capacity_mutation_replay_is_rejected_by_the_transaction_queue() {
+    routing_test! { async capacity_mutation_replay_is_rejected_by_the_transaction_queue
         let (state, queue, telemetry) = test_state_components();
         let key_pair = checked_capacity_keypair(0x97, "derive capacity replay fixture key");
         let transaction = signed_capacity_telemetry_transaction(
@@ -34092,8 +33868,7 @@ mod sorafs_capacity_tests {
             "the queue must reject replay of the same signed transaction"
         );
     }
-    #[test]
-    fn capacity_telemetry_rejects_invalid_accounting_and_replay_nonce() {
+    routing_test! { sync capacity_telemetry_rejects_invalid_accounting_and_replay_nonce
         let network_id = test_network_id(0x65);
         let kp = checked_capacity_keypair(0x96, "derive invalid capacity telemetry fixture key");
         let mut invalid_records = Vec::new();
@@ -34242,8 +34017,7 @@ mod sorafs_capacity_tests {
             other => panic!("expected PoR forbidden error, got {other:?}"),
         }
     }
-    #[test]
-    fn por_persistence_uncertainty_and_fault_latch_are_internal_errors() {
+    routing_test! { sync por_persistence_uncertainty_and_fault_latch_are_internal_errors
         let uncertain = por_coordinator_error(PorCoordinatorError::Persistence(
             crate::sorafs::por::PorPersistenceError::CommitUncertain(
                 "injected post-publication sync failure".to_owned(),
@@ -34388,8 +34162,7 @@ mod sorafs_capacity_tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-    #[test]
-    fn por_base64_preflight_enforces_decoded_bound_before_decode() {
+    routing_test! { sync por_base64_preflight_enforces_decoded_bound_before_decode
         assert_eq!(
             POR_PROOF_SUBMISSION_MAX_HTTP_BODY_BYTES_V1,
             canonical_padded_base64_len(POR_PROOF_MAX_CANONICAL_BYTES_V1)
@@ -38599,8 +38372,7 @@ mod address_metrics_tests {
     fn local8_literal() -> &'static str {
         "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@kaigi.sora"
     }
-    #[tokio::test(flavor = "current_thread")]
-    async fn parse_account_literal_counts_local8_attempts() {
+    routing_test! { current_thread parse_account_literal_counts_local8_attempts
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
         let reason = iroha_data_model::account::AccountId::parse_encoded(local8_literal())
@@ -38613,8 +38385,7 @@ mod address_metrics_tests {
         assert!(parse_account_literal(local8_literal(), &telemetry, TEST_CONTEXT).is_err());
         assert_eq!(invalid_counter.get(), before_invalid + 1);
     }
-    #[tokio::test(flavor = "current_thread")]
-    async fn parse_account_literal_records_local8_domain_labels() {
+    routing_test! { current_thread parse_account_literal_records_local8_domain_labels
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
         let domain_label = local8_domain_label(local8_literal()).expect("domain parses");
@@ -38630,8 +38401,7 @@ mod address_metrics_tests {
         assert_eq!(local8_counter.get(), before_local8 + 1);
         assert_eq!(domain_counter.get(), before_domain + 1);
     }
-    #[tokio::test(flavor = "current_thread")]
-    async fn filter_validation_records_address_metrics() {
+    routing_test! { current_thread filter_validation_records_address_metrics
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
         let reason = iroha_data_model::account::AccountId::parse_encoded(local8_literal())
@@ -38648,8 +38418,7 @@ mod address_metrics_tests {
         assert!(validate_tx_filter_adapter(&expr, &telemetry).is_err());
         assert_eq!(invalid_counter.get(), before_invalid + 1);
     }
-    #[tokio::test(flavor = "current_thread")]
-    async fn account_filter_rejects_alias_literals() {
+    routing_test! { current_thread account_filter_rejects_alias_literals
         let telemetry = MaybeTelemetry::for_tests();
         let mut expr = FilterExpr::Eq(
             FieldPath("id".to_string()),
@@ -38659,8 +38428,7 @@ mod address_metrics_tests {
             canonicalize_accounts_filter_literals(&mut expr, &telemetry, ENDPOINT_ACCOUNTS_QUERY);
         assert!(result.is_err(), "alias literals must be rejected");
     }
-    #[tokio::test(flavor = "current_thread")]
-    async fn account_literal_metric_tracks_selection() {
+    routing_test! { current_thread account_literal_metric_tracks_selection
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY;
         let before = {
@@ -38680,8 +38448,7 @@ mod address_metrics_tests {
         };
         assert_eq!(after, before + 1);
     }
-    #[tokio::test(flavor = "current_thread")]
-    async fn kaigi_sse_invalid_literal_records_metric() {
+    routing_test! { current_thread kaigi_sse_invalid_literal_records_metric
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
         let literal = "sorainvalid@kaigi";
@@ -38712,8 +38479,7 @@ mod address_metrics_tests {
         let account = AccountId::new(kp.public_key().clone());
         account.to_string()
     }
-    #[tokio::test(flavor = "current_thread")]
-    async fn parse_account_literal_records_default_domain_metrics() {
+    routing_test! { current_thread parse_account_literal_records_default_domain_metrics
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = TEST_CONTEXT;
         let literal = i105_literal("wonderland");
@@ -38735,8 +38501,7 @@ mod address_metrics_tests {
         };
         assert_eq!(after, before + 1);
     }
-    #[tokio::test(flavor = "current_thread")]
-    async fn kaigi_sse_accepts_i105_literal() {
+    routing_test! { current_thread kaigi_sse_accepts_i105_literal
         let telemetry = MaybeTelemetry::for_tests();
         let literal = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
         let parsed = parse_account_literal(&literal, &telemetry, KAIGI_SSE_CONTEXT)
@@ -38747,8 +38512,7 @@ mod address_metrics_tests {
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod account_path_metric_tests {
     use super::*;
-    #[tokio::test]
-    async fn invalid_literal_records_endpoint_counter() {
+    routing_test! { async invalid_literal_records_endpoint_counter
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY;
         let literal = "bad@banka.dataspace";
@@ -38790,8 +38554,7 @@ mod stateful_account_path_parser_tests {
     };
     use iroha_test_samples::ALICE_ID;
     use std::sync::Arc;
-    #[tokio::test]
-    async fn stateful_account_path_parser_resolves_bound_alias_literal() {
+    routing_test! { async stateful_account_path_parser_resolves_bound_alias_literal
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let authority = ALICE_ID.clone();
         let scoped_account_id = authority.clone();
@@ -40101,8 +39864,7 @@ mod sse_filter_tests {
         nexus::{DataSpaceId, LaneId},
     };
     use nonzero_ext::nonzero;
-    #[test]
-    fn tx_status_eq_builds_matching_filter() {
+    routing_test! { sync tx_status_eq_builds_matching_filter
         // Build filter expr: tx_status == Approved
         let expr = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("tx_status".into()),
@@ -40133,8 +39895,7 @@ mod sse_filter_tests {
         assert!(filters.iter().any(|f| f.matches(&ev_ok)));
         assert!(!filters.iter().any(|f| f.matches(&ev_no)));
     }
-    #[test]
-    fn tx_status_in_builds_union_filters() {
+    routing_test! { sync tx_status_in_builds_union_filters
         // Build filter expr: tx_status IN {Approved, Rejected}
         let expr = crate::filter::FilterExpr::In(
             crate::filter::FieldPath("tx_status".into()),
@@ -40177,8 +39938,7 @@ mod sse_filter_tests {
         assert!(filters.iter().any(|f| f.matches(&ev_rejected)));
         assert!(!filters.iter().any(|f| f.matches(&ev_queued)));
     }
-    #[test]
-    fn tx_lane_id_eq_builds_matching_filter() {
+    routing_test! { sync tx_lane_id_eq_builds_matching_filter
         let expr = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("tx_lane_id".into()),
             norito::json::Value::from(5u64),
@@ -40204,8 +39964,7 @@ mod sse_filter_tests {
         assert!(filters.iter().any(|f| f.matches(&ev_lane_match)));
         assert!(!filters.iter().any(|f| f.matches(&ev_lane_other)));
     }
-    #[test]
-    fn tx_dataspace_id_eq_builds_matching_filter() {
+    routing_test! { sync tx_dataspace_id_eq_builds_matching_filter
         let expr = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("tx_dataspace_id".into()),
             norito::json::Value::from(42u64),
@@ -40231,8 +39990,7 @@ mod sse_filter_tests {
         assert!(filters.iter().any(|f| f.matches(&ev_ds_match)));
         assert!(!filters.iter().any(|f| f.matches(&ev_ds_other)));
     }
-    #[test]
-    fn event_to_json_value_includes_lane_metadata() {
+    routing_test! { sync event_to_json_value_includes_lane_metadata
         let ev: EventBox = TransactionEvent {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x9Fu8; Hash::LENGTH])),
             block_height: Some(nonzero!(64_u64)),
@@ -40257,8 +40015,7 @@ mod sse_filter_tests {
             Some(64)
         );
     }
-    #[test]
-    fn block_status_eq_builds_matching_filter() {
+    routing_test! { sync block_status_eq_builds_matching_filter
         let expr = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("block_status".into()),
             norito::json::Value::String("Committed".into()),
@@ -40279,8 +40036,7 @@ mod sse_filter_tests {
         assert!(filters.iter().any(|f| f.matches(&ev_block_committed)));
         assert!(!filters.iter().any(|f| f.matches(&ev_block_created)));
     }
-    #[test]
-    fn tx_hash_eq_builds_matching_filter() {
+    routing_test! { sync tx_hash_eq_builds_matching_filter
         // Build two distinct tx hashes and use the first one in the filter
         let h_match = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
         let h_other = HashOf::from_untyped_unchecked(Hash::prehashed([0xCD; Hash::LENGTH]));
@@ -40311,8 +40067,7 @@ mod sse_filter_tests {
         assert!(filters.iter().any(|f| f.matches(&ev_ok)));
         assert!(!filters.iter().any(|f| f.matches(&ev_no)));
     }
-    #[test]
-    fn tx_hash_invalid_rejected() {
+    routing_test! { sync tx_hash_invalid_rejected
         use crate::filter::{FieldPath, FilterExpr};
         // Non-hex string should be rejected -> no filters produced
         let expr = FilterExpr::Eq(
@@ -40329,8 +40084,7 @@ mod sse_filter_tests {
         let filters2 = event_filters_from_expr(&expr2);
         assert!(filters2.is_empty());
     }
-    #[test]
-    fn tx_status_and_block_height_and_combination() {
+    routing_test! { sync tx_status_and_block_height_and_combination
         use crate::filter::{FieldPath, FilterExpr};
         // Build AND filter: tx_status == Approved AND tx_block_height == 777
         let expr = FilterExpr::And(vec![
@@ -40371,8 +40125,7 @@ mod sse_filter_tests {
         assert!(!filters.iter().any(|f| f.matches(&ev_wrong_height)));
         assert!(!filters.iter().any(|f| f.matches(&ev_wrong_status)));
     }
-    #[test]
-    fn tx_status_or_block_status_or_combination() {
+    routing_test! { sync tx_status_or_block_status_or_combination
         use crate::filter::{FieldPath, FilterExpr};
         // OR filter: tx_status == Approved OR block_status == Committed
         let expr = FilterExpr::Or(vec![
@@ -40422,8 +40175,7 @@ mod sse_filter_tests {
         assert!(!filters.iter().any(|f| f.matches(&ev_tx_queued)));
         assert!(!filters.iter().any(|f| f.matches(&ev_block_created)));
     }
-    #[test]
-    fn not_tx_status_and_block_height_combination() {
+    routing_test! { sync not_tx_status_and_block_height_combination
         use crate::filter::{FieldPath, FilterExpr};
         // NOT(tx_status == Rejected) AND tx_block_height == 9
         let expr = FilterExpr::And(vec![
@@ -40467,8 +40219,7 @@ mod sse_filter_tests {
         assert!(!filters.iter().any(|f| f.matches(&ev_rejected_h9)));
         assert!(!filters.iter().any(|f| f.matches(&ev_approved_h10)));
     }
-    #[test]
-    fn not_block_status_or_tx_status_combination() {
+    routing_test! { sync not_block_status_or_tx_status_combination
         use crate::filter::{FieldPath, FilterExpr};
         // NOT(block_status == Committed) OR tx_status == Approved
         let expr = FilterExpr::Or(vec![
@@ -40508,8 +40259,7 @@ mod sse_filter_tests {
         assert!(!filters.iter().any(|f| f.matches(&ev_block_committed)));
         assert!(filters.iter().any(|f| f.matches(&ev_tx_approved)));
     }
-    #[test]
-    fn tx_block_height_matchers_work() {
+    routing_test! { sync tx_block_height_matchers_work
         use crate::filter::{FieldPath, FilterExpr};
         // eq: tx_block_height == 123
         let expr_eq = FilterExpr::Eq(FieldPath("tx_block_height".into()), json_value(&123u64));
@@ -40578,8 +40328,7 @@ mod tx_query_filter_tests {
         let account = dm::AccountId::new(kp.public_key().clone());
         (account, kp)
     }
-    #[test]
-    fn account_with_key_uses_checked_callsite_seed_derivation() {
+    routing_test! { sync account_with_key_uses_checked_callsite_seed_derivation
         let (first, first_keypair) = account_with_key();
         let (second, second_keypair) = account_with_key();
         assert_eq!(
@@ -40677,8 +40426,7 @@ mod tx_query_filter_tests {
             dm::FeePaymentIntent::authority(Vec::new(), None),
         )
     }
-    #[test]
-    fn tx_fee_projection_uses_typed_authority_and_sponsor_intents() {
+    routing_test! { sync tx_fee_projection_uses_typed_authority_and_sponsor_intents
         use std::num::NonZeroU64;
         let (authority, keypair) = account_with_key();
         let pipeline_asset = test_asset_definition_id();
@@ -40760,8 +40508,7 @@ mod tx_query_filter_tests {
             merge_inclusion: None,
         }
     }
-    #[test]
-    fn tx_history_visibility_dataspace_wide_matches_dataspace_alias() {
+    routing_test! { sync tx_history_visibility_dataspace_wide_matches_dataspace_alias
         let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
         let banka_domain = DomainId::try_new("treasury", "banka").expect("banka domain");
         let bankb_domain = DomainId::try_new("treasury", "bankb").expect("bankb domain");
@@ -40786,8 +40533,7 @@ mod tx_query_filter_tests {
         assert!(tx_matches_history_visibility_scope(&banka_tx, &scope));
         assert!(!tx_matches_history_visibility_scope(&bankb_tx, &scope));
     }
-    #[test]
-    fn explorer_transaction_filters_match_asset_id() {
+    routing_test! { sync explorer_transaction_filters_match_asset_id
         let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
         let (other_account, _) = account_with_key();
         let def = test_asset_definition_id();
@@ -40818,8 +40564,7 @@ mod tx_query_filter_tests {
         };
         assert!(!filters.matches(signed, 1, &tx.result));
     }
-    #[test]
-    fn instruction_matches_asset_id_handles_mint_assets() {
+    routing_test! { sync instruction_matches_asset_id_handles_mint_assets
         let (authority, _) = account_with_key();
         let (other_account, _) = account_with_key();
         let def = test_asset_definition_id();
@@ -40830,8 +40575,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_asset_id(&instruction, &asset_id));
         assert!(!instruction_matches_asset_id(&instruction, &other_asset_id));
     }
-    #[test]
-    fn instruction_matches_asset_id_matches_transfer_source_and_recipient_buckets() {
+    routing_test! { sync instruction_matches_asset_id_matches_transfer_source_and_recipient_buckets
         let (sender, _) = account_with_key();
         let (recipient, _) = account_with_key();
         let (other, _) = account_with_key();
@@ -40848,8 +40592,7 @@ mod tx_query_filter_tests {
         ));
         assert!(!instruction_matches_asset_id(&instruction, &other_asset_id));
     }
-    #[test]
-    fn tx_asset_selector_matches_transfer_source_and_recipient_buckets() {
+    routing_test! { sync tx_asset_selector_matches_transfer_source_and_recipient_buckets
         let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
         let (sender, _) = account_with_key();
         let (recipient, _) = account_with_key();
@@ -40884,8 +40627,7 @@ mod tx_query_filter_tests {
             &TxHistoryAssetSelector::AssetId(other_asset_id)
         ));
     }
-    #[test]
-    fn instruction_matches_asset_id_matches_transfer_batch_recipients() {
+    routing_test! { sync instruction_matches_asset_id_matches_transfer_batch_recipients
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let (carol, _) = account_with_key();
@@ -40919,8 +40661,7 @@ mod tx_query_filter_tests {
             &dm::AssetId::new(def, eve)
         ));
     }
-    #[test]
-    fn instruction_matches_asset_id_matches_multisig_custom_propose_nested_asset() {
+    routing_test! { sync instruction_matches_asset_id_matches_multisig_custom_propose_nested_asset
         let (controller, _) = account_with_key();
         let (holder, _) = account_with_key();
         let (other_holder, _) = account_with_key();
@@ -40933,8 +40674,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_asset_id(&instruction, &asset_id));
         assert!(!instruction_matches_asset_id(&instruction, &other_asset_id));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_transfer_asset_accounts() {
+    routing_test! { sync instruction_matches_account_id_matches_transfer_asset_accounts
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let (carol, _) = account_with_key();
@@ -40946,8 +40686,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &bob));
         assert!(!instruction_matches_account_id(&instruction, &carol));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_transfer_batch_accounts() {
+    routing_test! { sync instruction_matches_account_id_matches_transfer_batch_accounts
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let (carol, _) = account_with_key();
@@ -40965,8 +40704,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &dave));
         assert!(!instruction_matches_account_id(&instruction, &eve));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_mint_asset_destination_account() {
+    routing_test! { sync instruction_matches_account_id_matches_mint_asset_destination_account
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let def = test_asset_definition_id();
@@ -40976,8 +40714,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &alice));
         assert!(!instruction_matches_account_id(&instruction, &bob));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_burn_asset_destination_account() {
+    routing_test! { sync instruction_matches_account_id_matches_burn_asset_destination_account
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let def = test_asset_definition_id();
@@ -40987,8 +40724,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &alice));
         assert!(!instruction_matches_account_id(&instruction, &bob));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_set_asset_key_value_asset_account() {
+    routing_test! { sync instruction_matches_account_id_matches_set_asset_key_value_asset_account
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let asset_id = dm::AssetId::new(test_asset_definition_id(), alice.clone());
@@ -40997,8 +40733,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &alice));
         assert!(!instruction_matches_account_id(&instruction, &bob));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_set_account_key_value_account() {
+    routing_test! { sync instruction_matches_account_id_matches_set_account_key_value_account
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let set = dm::SetKeyValue::account(alice.clone(), "key".parse().unwrap(), "value");
@@ -41006,8 +40741,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &alice));
         assert!(!instruction_matches_account_id(&instruction, &bob));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_remove_asset_key_value_asset_account() {
+    routing_test! { sync instruction_matches_account_id_matches_remove_asset_key_value_asset_account
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let asset_id = dm::AssetId::new(test_asset_definition_id(), alice.clone());
@@ -41016,8 +40750,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &alice));
         assert!(!instruction_matches_account_id(&instruction, &bob));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_remove_account_key_value_account() {
+    routing_test! { sync instruction_matches_account_id_matches_remove_account_key_value_account
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let remove = dm::RemoveKeyValue::account(alice.clone(), "key".parse().unwrap());
@@ -41025,8 +40758,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &alice));
         assert!(!instruction_matches_account_id(&instruction, &bob));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_public_lane_rewards_asset_account() {
+    routing_test! { sync instruction_matches_account_id_matches_public_lane_rewards_asset_account
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let reward_asset = dm::AssetId::new(test_asset_definition_id(), alice.clone());
@@ -41042,8 +40774,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &alice));
         assert!(!instruction_matches_account_id(&instruction, &bob));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_multisig_custom_propose_account() {
+    routing_test! { sync instruction_matches_account_id_matches_multisig_custom_propose_account
         let (multisig, _) = account_with_key();
         let (other, _) = account_with_key();
         let propose = MultisigPropose::new(multisig.clone(), Vec::new(), None);
@@ -41067,8 +40798,7 @@ mod tx_query_filter_tests {
         ));
         assert!(!instruction_matches_account_id(&instruction, &other));
     }
-    #[test]
-    fn account_history_movements_project_transfer_direction_and_counterparty() {
+    routing_test! { sync account_history_movements_project_transfer_direction_and_counterparty
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let def = test_asset_definition_id();
@@ -41111,8 +40841,7 @@ mod tx_query_filter_tests {
         assert_eq!(incoming.amount.as_deref(), Some("10"));
         assert_eq!(incoming.history_type, "TRANSFER");
     }
-    #[test]
-    fn account_history_index_filters_incoming_transfer_by_recipient_asset_id() {
+    routing_test! { sync account_history_index_filters_incoming_transfer_by_recipient_asset_id
         let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
         let (sender, _) = account_with_key();
         let (recipient, _) = account_with_key();
@@ -41156,8 +40885,7 @@ mod tx_query_filter_tests {
             Some(source_asset_literal.as_str())
         );
     }
-    #[test]
-    fn account_history_movements_project_transfer_batch_recipient_asset_ids() {
+    routing_test! { sync account_history_movements_project_transfer_batch_recipient_asset_ids
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let (carol, _) = account_with_key();
@@ -41191,8 +40919,7 @@ mod tx_query_filter_tests {
         );
         assert_eq!(dave_incoming.amount.as_deref(), Some("2"));
     }
-    #[test]
-    fn account_transaction_subject_matches_authority_and_transfer_participants() {
+    routing_test! { sync account_transaction_subject_matches_authority_and_transfer_participants
         let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
         let (sender, _) = account_with_key();
         let (recipient, _) = account_with_key();
@@ -41211,8 +40938,7 @@ mod tx_query_filter_tests {
         assert!(tx_matches_account_history_subject(&tx, &recipient));
         assert!(!tx_matches_account_history_subject(&tx, &unrelated));
     }
-    #[test]
-    fn account_history_index_records_mint_asset_for_holder_filters() {
+    routing_test! { sync account_history_index_records_mint_asset_for_holder_filters
         let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
         let (holder, _) = account_with_key();
         let def = test_asset_definition_id();
@@ -41256,8 +40982,7 @@ mod tx_query_filter_tests {
             &TxHistoryAssetSelector::DefinitionId(other_def)
         ));
     }
-    #[test]
-    fn account_history_cache_extension_rejects_missing_previous_tip() {
+    routing_test! { sync account_history_cache_extension_rejects_missing_previous_tip
         let state = iroha_core::state::State::new_for_testing(
             iroha_core::state::World::default(),
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -41278,8 +41003,7 @@ mod tx_query_filter_tests {
             &existing, &state, &next_key
         ));
     }
-    #[test]
-    fn account_history_cache_key_uses_committed_hash_journal_without_block_body() {
+    routing_test! { sync account_history_cache_key_uses_committed_hash_journal_without_block_body
         let state = iroha_core::state::State::new_for_testing(
             iroha_core::state::World::default(),
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -41341,8 +41065,7 @@ mod tx_query_filter_tests {
             &existing, &state, &next_key
         ));
     }
-    #[test]
-    fn instruction_matches_account_id_matches_multisig_custom_cancel_account() {
+    routing_test! { sync instruction_matches_account_id_matches_multisig_custom_cancel_account
         let (multisig, _) = account_with_key();
         let (other, _) = account_with_key();
         let cancel = MultisigCancel::new(
@@ -41353,8 +41076,7 @@ mod tx_query_filter_tests {
         assert!(instruction_matches_account_id(&instruction, &multisig));
         assert!(!instruction_matches_account_id(&instruction, &other));
     }
-    #[test]
-    fn filter_authority_eq_matches() {
+    routing_test! { sync filter_authority_eq_matches
         let (a, kp_a) = account_with_key();
         let (b, kp_b) = account_with_key();
         let tx_a = make_external_tx(&a, &kp_a, 1_710_000_000_000, None, true);
@@ -41366,8 +41088,7 @@ mod tx_query_filter_tests {
         assert!(filter_tx(&expr, &tx_a));
         assert!(!filter_tx(&expr, &tx_b));
     }
-    #[test]
-    fn tx_predicate_from_filter_applies_without_feature() {
+    routing_test! { sync tx_predicate_from_filter_applies_without_feature
         use iroha_data_model::query::dsl::EvaluatePredicate;
         let (a, kp_a) = account_with_key();
         let (b, kp_b) = account_with_key();
@@ -41381,8 +41102,7 @@ mod tx_query_filter_tests {
         assert!(predicate.applies(&tx_a));
         assert!(!predicate.applies(&tx_b));
     }
-    #[test]
-    fn metadata_filters_apply_locally() {
+    routing_test! { sync metadata_filters_apply_locally
         let (account, kp) = account_with_key();
         let mut meta = dm::Metadata::default();
         meta.insert("display_name".parse().unwrap(), Json::new("Alice"));
@@ -41412,8 +41132,7 @@ mod tx_query_filter_tests {
             crate::filter::FilterExpr::IsNull(crate::filter::FieldPath("metadata.note".into()));
         assert!(filter_tx(&expr_is_null, &tx_null));
     }
-    #[test]
-    fn filter_asset_id_eq_matches_instruction_asset() {
+    routing_test! { sync filter_asset_id_eq_matches_instruction_asset
         let (account, kp) = account_with_key();
         let asset_def: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
@@ -41434,8 +41153,7 @@ mod tx_query_filter_tests {
         );
         assert!(!filter_tx(&expr_miss, &tx));
     }
-    #[test]
-    fn filter_asset_id_eq_matches_transfer_recipient_bucket() {
+    routing_test! { sync filter_asset_id_eq_matches_transfer_recipient_bucket
         let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
         let (sender, _) = account_with_key();
         let (recipient, _) = account_with_key();
@@ -41465,8 +41183,7 @@ mod tx_query_filter_tests {
         assert!(filter_tx(&expr, &tx));
         assert!(!filter_tx(&miss, &tx));
     }
-    #[test]
-    fn tx_filter_adapter_accepts_asset_id_eq() {
+    routing_test! { sync tx_filter_adapter_accepts_asset_id_eq
         let telemetry = MaybeTelemetry::disabled();
         let (account, _kp) = account_with_key();
         let asset_def: dm::AssetDefinitionId =
@@ -41478,8 +41195,7 @@ mod tx_query_filter_tests {
         );
         assert!(validate_tx_filter_adapter(&expr, &telemetry).is_ok());
     }
-    #[test]
-    fn tx_filter_adapter_accepts_asset_definition_id_eq() {
+    routing_test! { sync tx_filter_adapter_accepts_asset_definition_id_eq
         let telemetry = MaybeTelemetry::disabled();
         let asset_def: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
@@ -41489,8 +41205,7 @@ mod tx_query_filter_tests {
         );
         assert!(validate_tx_filter_adapter(&expr, &telemetry).is_ok());
     }
-    #[test]
-    fn filter_timestamp_range_matches() {
+    routing_test! { sync filter_timestamp_range_matches
         let (a, kp) = account_with_key();
         let tx = make_external_tx(&a, &kp, 1_710_000_000_000, None, true);
         let gte = crate::filter::FilterExpr::Gte(
@@ -41504,8 +41219,7 @@ mod tx_query_filter_tests {
         let expr = crate::filter::FilterExpr::And(vec![gte, lte]);
         assert!(filter_tx(&expr, &tx));
     }
-    #[test]
-    fn filter_entrypoint_hash_in_matches_only_target() {
+    routing_test! { sync filter_entrypoint_hash_in_matches_only_target
         let (a, kp) = account_with_key();
         let h_match: GenericHashOf<dm::TransactionEntrypoint> =
             GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x55; Hash::LENGTH]));
@@ -41521,8 +41235,7 @@ mod tx_query_filter_tests {
         assert!(filter_tx(&expr, &tx_ok));
         assert!(!filter_tx(&expr, &tx_no));
     }
-    #[test]
-    fn filter_result_ok_eq_matches() {
+    routing_test! { sync filter_result_ok_eq_matches
         // NOTE: For app-facing filters on transactions, empty-instruction Externals are
         // treated as logically-ok for filtering purposes, even if a dummy error is set
         // in the test transaction. This keeps filtering aligned with projections used
@@ -41543,8 +41256,7 @@ mod tx_query_filter_tests {
         assert!(!filter_tx(&expr_false, &tx_false));
         assert!(!filter_tx(&expr_false, &tx_true));
     }
-    #[test]
-    fn filter_not_and_or_across_fields() {
+    routing_test! { sync filter_not_and_or_across_fields
         let (a, kp_a) = account_with_key();
         let (b, kp_b) = account_with_key();
         let tx_a = make_external_tx(&a, &kp_a, 1500, None, true);
@@ -41566,8 +41278,7 @@ mod tx_query_filter_tests {
         assert!(filter_tx(&expr, &tx_b));
         assert!(filter_tx(&expr, &tx_c));
     }
-    #[test]
-    fn kaigi_signal_from_transaction_extracts_metadata() {
+    routing_test! { sync kaigi_signal_from_transaction_extracts_metadata
         let (authority, keypair) = account_with_key();
         let mut metadata = dm::Metadata::default();
         metadata.insert(
@@ -41611,8 +41322,7 @@ mod tx_query_filter_tests {
             Some(authority_literal.as_str())
         );
     }
-    #[test]
-    fn kaigi_signal_from_transaction_hides_identities_for_private_calls() {
+    routing_test! { sync kaigi_signal_from_transaction_hides_identities_for_private_calls
         let (authority, keypair) = account_with_key();
         let mut metadata = dm::Metadata::default();
         metadata.insert(
@@ -41640,8 +41350,7 @@ mod tx_query_filter_tests {
         assert!(signal.host_account_id.is_none());
         assert!(signal.participant_account_id.is_none());
     }
-    #[test]
-    fn kaigi_call_view_hides_host_identity_for_private_calls() {
+    routing_test! { sync kaigi_call_view_hides_host_identity_for_private_calls
         let (host, _) = account_with_key();
         let call_id = iroha_data_model::kaigi::KaigiId::new(
             DomainId::try_new("kaigi", "universal").expect("domain"),
@@ -41678,8 +41387,7 @@ mod tx_query_filter_tests {
         assert!(view.host_account_id.is_none());
         assert!(view.billing_account_id.is_none());
     }
-    #[test]
-    fn convert_kaigi_call_event_maps_roster_and_end_updates() {
+    routing_test! { sync convert_kaigi_call_event_maps_roster_and_end_updates
         use iroha_data_model::events::data::prelude::{DomainEvent, KaigiRosterSummary};
         let call_id = iroha_data_model::kaigi::KaigiId::new(
             DomainId::try_new("kaigi", "universal").expect("domain"),
@@ -41751,8 +41459,7 @@ mod tx_query_filter_tests {
         assert_eq!(kind, "ended");
         assert_eq!(payload.get("ended_at_ms").and_then(Value::as_u64), Some(2));
     }
-    #[test]
-    fn explorer_pagination_window_matches_paginate_semantics() {
+    routing_test! { sync explorer_pagination_window_matches_paginate_semantics
         assert_eq!(explorer_pagination_window(0, 0), (1, 0, 1));
         assert_eq!(explorer_pagination_window(1, 5), (5, 0, 5));
         assert_eq!(explorer_pagination_window(3, 2), (2, 4, 6));
@@ -41762,8 +41469,7 @@ mod tx_query_filter_tests {
             .collect();
         assert_eq!(kept, vec![4, 5]);
     }
-    #[test]
-    fn explorer_pagination_meta_keeps_page_and_counts() {
+    routing_test! { sync explorer_pagination_meta_keeps_page_and_counts
         let meta = explorer_pagination_meta(0, 1, 3);
         assert_eq!(meta.page, 0);
         assert_eq!(meta.per_page, 1);
@@ -41902,8 +41608,7 @@ mod explorer_lookup_tests {
             block_emitted: false,
         }
     }
-    #[test]
-    fn explorer_stream_serializes_one_item_at_a_time() {
+    routing_test! { sync explorer_stream_serializes_one_item_at_a_time
         let first: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "first".to_owned()).into();
         let second: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "second".to_owned()).into();
         let third: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "third".to_owned()).into();
@@ -42004,8 +41709,7 @@ mod explorer_lookup_tests {
             .expect("store Kura-only block");
         (state, target_hash)
     }
-    #[test]
-    fn explorer_instruction_history_collects_requested_page_only() {
+    routing_test! { sync explorer_instruction_history_collects_requested_page_only
         let instructions = vec![
             dm::Log::new(dm::Level::INFO, "first".to_owned()).into(),
             dm::Log::new(dm::Level::INFO, "second".to_owned()).into(),
@@ -42035,8 +41739,7 @@ mod explorer_lookup_tests {
         assert_eq!(items[0].index, 2);
         assert_eq!(items[0].transaction_hash, target_hash.to_string());
     }
-    #[test]
-    fn explorer_instruction_reads_include_batch_items_in_order() {
+    routing_test! { sync explorer_instruction_reads_include_batch_items_in_order
         let first: dm::InstructionBox =
             dm::Log::new(dm::Level::INFO, "first batch item".to_owned()).into();
         let second: dm::InstructionBox =
@@ -42079,8 +41782,7 @@ mod explorer_lookup_tests {
                 .expect("second batch instruction detail");
         assert_eq!(detail.index, 1);
     }
-    #[test]
-    fn explorer_instruction_history_transaction_hash_index_miss_returns_empty_page() {
+    routing_test! { sync explorer_instruction_history_transaction_hash_index_miss_returns_empty_page
         let instructions = vec![dm::Log::new(dm::Level::INFO, "indexed-miss".to_owned()).into()];
         let (state, target_hash) = build_state_with_unindexed_kura_transaction(instructions);
         let filters = ExplorerInstructionFilters {
@@ -42098,8 +41800,7 @@ mod explorer_lookup_tests {
         assert_eq!(pagination.total_items, 0);
         assert_eq!(pagination.total_pages, 0);
     }
-    #[test]
-    fn explorer_latest_transactions_respect_limit() {
+    routing_test! { sync explorer_latest_transactions_respect_limit
         let (state, hashes) = build_state_with_transactions(vec![
             vec![dm::Log::new(dm::Level::INFO, "first".to_owned()).into()],
             vec![dm::Log::new(dm::Level::INFO, "second".to_owned()).into()],
@@ -42126,8 +41827,7 @@ mod explorer_lookup_tests {
             assert!(expected.contains(&hash));
         }
     }
-    #[test]
-    fn explorer_latest_instruction_history_respects_limit() {
+    routing_test! { sync explorer_latest_instruction_history_respects_limit
         let instructions = vec![
             dm::Log::new(dm::Level::INFO, "first".to_owned()).into(),
             dm::Log::new(dm::Level::INFO, "second".to_owned()).into(),
@@ -42174,8 +41874,7 @@ mod explorer_lookup_tests {
             .expect("latest instruction collection should succeed");
         assert!(items.is_empty());
     }
-    #[tokio::test]
-    async fn explorer_instructions_endpoint_account_filter_includes_mint_and_burn() {
+    routing_test! { async explorer_instructions_endpoint_account_filter_includes_mint_and_burn
         use axum::{Router, routing::get};
         use tower::ServiceExt;
         let (alice, _) =
@@ -42333,8 +42032,7 @@ mod explorer_lookup_tests {
         );
         assert_eq!(items[0]["kind"].as_str(), Some("Custom"));
     }
-    #[test]
-    fn explorer_detail_lookup_returns_transaction_and_instruction() {
+    routing_test! { sync explorer_detail_lookup_returns_transaction_and_instruction
         let instructions = vec![
             dm::Log::new(dm::Level::INFO, "first".to_owned()).into(),
             dm::Log::new(dm::Level::INFO, "second".to_owned()).into(),
@@ -42370,8 +42068,7 @@ mod explorer_endpoint_telemetry_tests {
         let query = LiveQueryStore::start_test();
         Arc::new(State::new_for_testing(World::default(), kura, query))
     }
-    #[tokio::test]
-    async fn explorer_transactions_record_ok_metrics() {
+    routing_test! { async explorer_transactions_record_ok_metrics
         let telemetry = MaybeTelemetry::for_tests();
         let state = blank_state();
         let before_count = telemetry
@@ -42418,8 +42115,7 @@ mod explorer_endpoint_telemetry_tests {
         assert_eq!(after_count, before_count + 1);
         assert_eq!(after_samples, before_samples + 1);
     }
-    #[tokio::test]
-    async fn explorer_transaction_detail_records_error_metrics() {
+    routing_test! { async explorer_transaction_detail_records_error_metrics
         let telemetry = MaybeTelemetry::for_tests();
         let state = blank_state();
         let before_count = telemetry
@@ -42484,8 +42180,7 @@ mod query_endpoint_tests {
         checked_routing_fixture_keypair(seed, algorithm, context)
     }
     // NOTE: end-to-end /query handler test omitted; exercised by integration tests.
-    #[tokio::test]
-    async fn handle_queries_iterable_assets_non_empty() {
+    routing_test! { async handle_queries_iterable_assets_non_empty
         use iroha_data_model::query::{
             QueryItemKind, QueryOutputBatchBox, QueryRequest, QueryWithParams,
             dsl::{CompoundPredicate, SelectorTuple},
@@ -42565,8 +42260,7 @@ mod query_endpoint_tests {
                 .any(|a| a.id() == &asset_id && *a.value() == Quantity::from(13_u32))
         );
     }
-    #[tokio::test]
-    async fn handle_queries_rejects_fetch_size_above_max() {
+    routing_test! { async handle_queries_rejects_fetch_size_above_max
         use iroha_data_model::query::{
             QueryItemKind, QueryRequest, QueryWithParams,
             dsl::{CompoundPredicate, SelectorTuple},
@@ -42618,8 +42312,7 @@ mod query_endpoint_tests {
             ))
         ));
     }
-    #[tokio::test]
-    async fn handle_queries_rejects_invalid_signature() {
+    routing_test! { async handle_queries_rejects_invalid_signature
         use iroha_data_model::query::{
             QueryRequest, prelude::SingularQueryBox, runtime::prelude::FindAbiVersion,
         };
@@ -42660,8 +42353,7 @@ mod query_endpoint_tests {
             Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))
         ));
     }
-    #[tokio::test]
-    async fn get_proof_record_not_found_maps_404() {
+    routing_test! { async get_proof_record_not_found_maps_404
         use axum::routing::get;
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::default(),
@@ -42686,8 +42378,7 @@ mod query_endpoint_tests {
         // Not found should map to 404
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
-    #[tokio::test]
-    async fn proofs_roundtrip_and_query_via_torii() {
+    routing_test! { async proofs_roundtrip_and_query_via_torii
         use axum::extract::Path as AxumPath;
         use iroha_core::{
             kura::Kura,
@@ -43863,8 +43554,7 @@ mod governance_stream_tests {
                 .is_some_and(|candidate| candidate == kind)
         })
     }
-    #[test]
-    fn proposal_submitted_emits_proposal_and_referendum_updates() {
+    routing_test! { sync proposal_submitted_emits_proposal_and_referendum_updates
         let proposal_id = [0xAB; 32];
         let event = GovernanceEvent::ProposalSubmitted(GovernanceProposalSubmitted {
             id: proposal_id,
@@ -43890,8 +43580,7 @@ mod governance_stream_tests {
             Some(expected.as_str())
         );
     }
-    #[test]
-    fn lock_created_emits_unlocks_locks_and_tally_updates() {
+    routing_test! { sync lock_created_emits_unlocks_locks_and_tally_updates
         let referendum_id = "ref-42".to_owned();
         let event = GovernanceEvent::LockCreated(GovernanceLockCreated {
             referendum_id: referendum_id.clone(),
@@ -43916,8 +43605,7 @@ mod governance_stream_tests {
             Some(referendum_id.as_str())
         );
     }
-    #[test]
-    fn council_persisted_emits_council_update() {
+    routing_test! { sync council_persisted_emits_council_update
         let event = GovernanceEvent::CouncilPersisted(GovernanceCouncilPersisted {
             epoch: 7,
             members_count: 5,
@@ -46218,8 +45906,7 @@ fn parse_sse_filters(expr: &FilterExpr) -> Result<SseFilterSpec, String> {
 mod sse_filter_validation_tests {
     use super::*;
     use crate::filter::{FieldPath, FilterExpr};
-    #[test]
-    fn sse_filter_rejects_unknown_field() {
+    routing_test! { sync sse_filter_rejects_unknown_field
         let expr = FilterExpr::Eq(
             FieldPath("unknown_field".into()),
             norito::json::Value::String("nope".into()),
@@ -46227,8 +45914,7 @@ mod sse_filter_validation_tests {
         let err = parse_sse_filters(&expr).expect_err("unknown field should be rejected");
         assert!(err.contains("unsupported filter field"));
     }
-    #[test]
-    fn sse_filter_rejects_invalid_proof_hash() {
+    routing_test! { sync sse_filter_rejects_invalid_proof_hash
         let expr = FilterExpr::Eq(
             FieldPath("proof_call_hash".into()),
             norito::json::Value::String("deadbeef".into()),
@@ -46236,8 +45922,7 @@ mod sse_filter_validation_tests {
         let err = parse_sse_filters(&expr).expect_err("invalid proof hash should be rejected");
         assert!(err.contains("proof_call_hash"));
     }
-    #[test]
-    fn sse_filter_rejects_incompatible_and() {
+    routing_test! { sync sse_filter_rejects_incompatible_and
         let expr = FilterExpr::And(vec![
             FilterExpr::Eq(
                 FieldPath("tx_status".into()),
@@ -46251,8 +45936,7 @@ mod sse_filter_validation_tests {
         let err = parse_sse_filters(&expr).expect_err("incompatible AND should be rejected");
         assert_eq!(err, "filter does not match any SSE events");
     }
-    #[test]
-    fn sse_filter_accepts_proof_only_filter() {
+    routing_test! { sync sse_filter_accepts_proof_only_filter
         let expr = FilterExpr::Eq(
             FieldPath("proof_backend".into()),
             norito::json::Value::String("halo2/ipa".into()),
@@ -46261,13 +45945,11 @@ mod sse_filter_validation_tests {
         assert!(spec.filters.is_none());
         assert_eq!(spec.proof_backend.unwrap(), vec!["halo2/ipa".to_string()]);
     }
-    #[test]
-    fn sse_filter_params_rejects_invalid_json() {
+    routing_test! { sync sse_filter_params_rejects_invalid_json
         let err = parse_sse_filter_params(Some("not-json")).expect_err("invalid json rejected");
         let _ = err;
     }
-    #[test]
-    fn sse_handler_rejects_invalid_filter() {
+    routing_test! { sync sse_handler_rejects_invalid_filter
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
         let params = EventsSseParams {
             filter: Some("not-json".to_string()),
@@ -46315,8 +45997,7 @@ mod sse_stream_tests {
             status: TransactionStatus::Queued,
         }))
     }
-    #[tokio::test]
-    async fn sse_stream_expands_pipeline_batches() {
+    routing_test! { async sse_stream_expands_pipeline_batches
         let events: EventsSender = tokio::sync::broadcast::channel(8).0;
         let params = EventsSseParams { filter: None };
         let sse = handle_v1_events_sse(events.clone(), crate::NoritoQuery(params))
@@ -46344,8 +46025,7 @@ mod sse_stream_tests {
         let value: norito::json::Value = norito::json::from_str(json).expect("json payload");
         assert!(matches!(value, norito::json::Value::Object(_)));
     }
-    #[tokio::test]
-    async fn sse_stream_preserves_pipeline_batch_order() {
+    routing_test! { async sse_stream_preserves_pipeline_batch_order
         let events: EventsSender = tokio::sync::broadcast::channel(8).0;
         let sse = handle_v1_events_sse(
             events.clone(),
@@ -46370,8 +46050,7 @@ mod sse_stream_tests {
         assert!(first.contains(&Hash::prehashed([0x31; Hash::LENGTH]).to_string()));
         assert!(second.contains(&Hash::prehashed([0x32; Hash::LENGTH]).to_string()));
     }
-    #[tokio::test]
-    async fn sse_lag_is_machine_readable_and_terminal() {
+    routing_test! { async sse_lag_is_machine_readable_and_terminal
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let sse = handle_v1_events_sse(
             events.clone(),
@@ -46403,8 +46082,7 @@ mod sse_stream_tests {
             "lagged stream must close after its error event"
         );
     }
-    #[tokio::test]
-    async fn sse_idle_stream_emits_heartbeat_comment() {
+    routing_test! { async sse_idle_stream_emits_heartbeat_comment
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let sse = handle_v1_events_sse(
             events.clone(),
@@ -46415,8 +46093,7 @@ mod sse_stream_tests {
         let heartbeat = next_sse_chunk(&mut body).await;
         assert_eq!(heartbeat, ": heartbeat\n\n");
     }
-    #[tokio::test]
-    async fn sse_source_shutdown_is_machine_readable_and_terminal() {
+    routing_test! { async sse_source_shutdown_is_machine_readable_and_terminal
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let sse = handle_v1_events_sse(
             events.clone(),
@@ -46433,8 +46110,7 @@ mod sse_stream_tests {
             .expect("terminal stream should not hang");
         assert!(terminal.is_none());
     }
-    #[tokio::test]
-    async fn resume_rejection_uses_native_sse_error_contract() {
+    routing_test! { async resume_rejection_uses_native_sse_error_contract
         let response = stream_resume_unsupported_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
@@ -46592,8 +46268,7 @@ mod cursor_mode_tests {
         )
         .await
     }
-    #[tokio::test]
-    async fn stored_mode_insufficient_gas_rejected() {
+    routing_test! { async stored_mode_insufficient_gas_rejected
         let kp =
             checked_cursor_mode_keypair(0x96, "derive stored cursor insufficient-gas fixture key");
         let authority = AccountId::new(kp.public_key().clone());
@@ -46613,8 +46288,7 @@ mod cursor_mode_tests {
             Err(crate::Error::Query(ValidationFail::NotPermitted(_)))
         ));
     }
-    #[tokio::test]
-    async fn stored_mode_sufficient_gas_ok() {
+    routing_test! { async stored_mode_sufficient_gas_ok
         let kp =
             checked_cursor_mode_keypair(0x97, "derive stored cursor sufficient-gas fixture key");
         let authority = AccountId::new(kp.public_key().clone());
@@ -46631,8 +46305,7 @@ mod cursor_mode_tests {
         let res = run_query(state, signed, opts).await;
         assert!(res.is_ok());
     }
-    #[tokio::test]
-    async fn stored_mode_continue_uses_cursor_gas_budget() {
+    routing_test! { async stored_mode_continue_uses_cursor_gas_budget
         let kp = checked_cursor_mode_keypair(0x98, "derive stored cursor continue fixture key");
         let authority = AccountId::new(kp.public_key().clone());
         let state = query_state(
@@ -46653,8 +46326,7 @@ mod cursor_mode_tests {
         let res = run_query(state, signed, opts).await;
         assert!(res.is_ok());
     }
-    #[tokio::test]
-    async fn ephemeral_mode_unaffected_without_gas() {
+    routing_test! { async ephemeral_mode_unaffected_without_gas
         let kp = checked_cursor_mode_keypair(0x99, "derive ephemeral cursor fixture key");
         let authority = AccountId::new(kp.public_key().clone());
         let state = query_state(
@@ -46738,8 +46410,7 @@ mod transaction_ingress_overload_tests {
             other => panic!("expected queue backpressure error, got {other:?}"),
         }
     }
-    #[tokio::test]
-    async fn transaction_ingress_allows_latency_saturated_queue_before_capacity() {
+    routing_test! { async transaction_ingress_allows_latency_saturated_queue_before_capacity
         let state = Arc::new(State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -47695,8 +47366,7 @@ mod validation_fee_torii_ingress_tests {
             Err(error) => format!("{error:?}"),
         }
     }
-    #[tokio::test]
-    async fn torii_raw_fee_asset_transfer_reaches_validator_fee_admission() {
+    routing_test! { async torii_raw_fee_asset_transfer_reaches_validator_fee_admission
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
         commit_empty_genesis_like_block(&state);
         let policy = validation_fee_policy(&state, &user, fee_asset.clone(), treasury);
@@ -47754,8 +47424,7 @@ mod validation_fee_torii_ingress_tests {
         );
         assert_eq!(exact_fee_result, "ok");
     }
-    #[tokio::test]
-    async fn torii_native_multisig_signed_fee_coordinate_resolves_nested_context() {
+    routing_test! { async torii_native_multisig_signed_fee_coordinate_resolves_nested_context
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
         commit_empty_genesis_like_block(&state);
         let policy = validation_fee_policy(&state, &user, fee_asset.clone(), treasury.clone());
@@ -47878,8 +47547,7 @@ mod validation_fee_torii_ingress_tests {
         install_validation_fee_policy(&app.state, &user, &user_key_pair, policy.clone());
         (app, user, user_key_pair, recipient, policy)
     }
-    #[tokio::test]
-    async fn public_transaction_handler_requires_authoritative_queue_plan_transport() {
+    routing_test! { async public_transaction_handler_requires_authoritative_queue_plan_transport
         let (app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
         let exact_fee_tx = signed_transfer(
             &app.state,
@@ -47912,8 +47580,7 @@ mod validation_fee_torii_ingress_tests {
             Some(expected_reject_code)
         );
     }
-    #[tokio::test]
-    async fn public_batch_raw_fee_transfer_reaches_validation_fee_admission() {
+    routing_test! { async public_batch_raw_fee_transfer_reaches_validation_fee_admission
         let (missing_fee_app, user, user_key_pair, recipient, policy) =
             test_app_with_active_policy();
         let missing_fee_tx = signed_transfer(
@@ -47966,8 +47633,7 @@ mod validation_fee_torii_ingress_tests {
         );
         assert_eq!(exact_fee_result, "ok");
     }
-    #[tokio::test]
-    async fn public_batch_http_raw_fee_transfer_reaches_validation_fee_admission() {
+    routing_test! { async public_batch_http_raw_fee_transfer_reaches_validation_fee_admission
         let (missing_fee_app, user, user_key_pair, recipient, policy) =
             test_app_with_active_policy();
         let missing_fee_tx = signed_transfer(
@@ -48033,8 +47699,7 @@ mod lane_admission_metrics_tests {
     use iroha_data_model::prelude::*;
     use iroha_logger::Level;
     use std::sync::Arc;
-    #[tokio::test]
-    async fn transaction_ingress_records_latency_histogram() {
+    routing_test! { async transaction_ingress_records_latency_histogram
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -51944,8 +51609,7 @@ mod tx_projection_display_tests {
     use super::*;
     use iroha_data_model::account::AccountId;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    #[test]
-    fn projections_emit_i105_authority_when_requested() {
+    routing_test! { sync projections_emit_i105_authority_when_requested
         let account: AccountId = ALICE_ID.clone();
         let i105 = account
             .to_account_address()
@@ -51967,8 +51631,7 @@ mod tx_projection_display_tests {
             .expect("authority field");
         assert_eq!(authority, expected);
     }
-    #[test]
-    fn projections_preserve_i105_literals_by_default() {
+    routing_test! { sync projections_preserve_i105_literals_by_default
         let account: AccountId = BOB_ID.clone();
         let projection = TxProjection {
             authority: Some(account.to_string()),
@@ -51985,8 +51648,7 @@ mod tx_projection_display_tests {
             .expect("authority field");
         assert_eq!(authority, account.to_string());
     }
-    #[test]
-    fn projections_emit_memo_when_present() {
+    routing_test! { sync projections_emit_memo_when_present
         let projection = TxProjection {
             authority: None,
             timestamp_ms: Some(123),
@@ -51998,8 +51660,7 @@ mod tx_projection_display_tests {
         let items = tx_projections_to_json(&[projection]);
         assert_eq!(items[0]["memo"].as_str(), Some("QR invoice 42"));
     }
-    #[test]
-    fn trader_module_alias_candidates_are_parseable_contract_aliases() {
+    routing_test! { sync trader_module_alias_candidates_are_parseable_contract_aliases
         for module in TRADER_MODULE_ORDER {
             for alias in trader_module_alias_candidates(module) {
                 alias
@@ -52008,8 +51669,7 @@ mod tx_projection_display_tests {
             }
         }
     }
-    #[test]
-    fn projections_omit_invalid_authority_literals() {
+    routing_test! { sync projections_omit_invalid_authority_literals
         let projection = TxProjection {
             authority: Some("operator1@banka".to_string()),
             timestamp_ms: Some(123),
@@ -52024,8 +51684,7 @@ mod tx_projection_display_tests {
             "invalid non-i105 authority literals must not leak into explorer output"
         );
     }
-    #[test]
-    fn contract_activity_projection_json_preserves_payload_and_fee_fields() {
+    routing_test! { sync contract_activity_projection_json_preserves_payload_and_fee_fields
         let account: AccountId = ALICE_ID.clone();
         let projection = ContractActivityProjection {
             authority: Some(account.to_string()),
@@ -52114,8 +51773,7 @@ mod tx_projection_display_tests {
         }
         index
     }
-    #[test]
-    fn contract_activity_index_prefers_smallest_exact_match_set() {
+    routing_test! { sync contract_activity_index_prefers_smallest_exact_match_set
         let index = sample_contract_activity_index();
         let params = ContractActivityGetParams {
             authority: Some(ALICE_ID.to_string()),
@@ -52132,8 +51790,7 @@ mod tx_projection_display_tests {
             other => panic!("expected indexed candidate set, got {other:?}"),
         }
     }
-    #[test]
-    fn contract_activity_index_intersects_exact_match_sets() {
+    routing_test! { sync contract_activity_index_intersects_exact_match_sets
         let index = sample_contract_activity_index();
         let params = ContractActivityGetParams {
             authority: Some(ALICE_ID.to_string()),
@@ -52148,8 +51805,7 @@ mod tx_projection_display_tests {
             other => panic!("expected indexed candidate set, got {other:?}"),
         }
     }
-    #[test]
-    fn contract_activity_indexed_pager_respects_filters_and_offset() {
+    routing_test! { sync contract_activity_indexed_pager_respects_filters_and_offset
         let index = sample_contract_activity_index();
         let params = ContractActivityGetParams {
             authority: Some(ALICE_ID.to_string()),
@@ -52173,8 +51829,7 @@ mod tx_projection_display_tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].entrypoint_hash, "hash-1");
     }
-    #[test]
-    fn contract_event_projection_json_preserves_generic_fields() {
+    routing_test! { sync contract_event_projection_json_preserves_generic_fields
         let account: AccountId = ALICE_ID.clone();
         let projection = ContractEventProjection {
             event_id: "feedface:0".into(),
@@ -52308,8 +51963,7 @@ mod tx_projection_display_tests {
         }
         index
     }
-    #[test]
-    fn contract_event_index_intersects_exact_match_sets() {
+    routing_test! { sync contract_event_index_intersects_exact_match_sets
         let index = sample_contract_event_index();
         let params = ContractEventGetParams {
             authority: Some(ALICE_ID.to_string()),
@@ -52327,8 +51981,7 @@ mod tx_projection_display_tests {
             other => panic!("expected indexed candidate set, got {other:?}"),
         }
     }
-    #[test]
-    fn contract_event_indexed_pager_respects_participant_filter_and_offset() {
+    routing_test! { sync contract_event_indexed_pager_respects_participant_filter_and_offset
         let index = sample_contract_event_index();
         let params = ContractEventGetParams {
             participant: Some(ALICE_ID.to_string()),
@@ -52349,8 +52002,7 @@ mod tx_projection_display_tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].tx_hash_hex, "hash-3");
     }
-    #[test]
-    fn uranai_event_payload_normalization_redacts_private_proofs() {
+    routing_test! { sync uranai_event_payload_normalization_redacts_private_proofs
         assert_eq!(
             canonical_contract_module(Some("uranai::markets.universal"), "irohac1uranai"),
             Some("uranai")
@@ -52474,8 +52126,7 @@ mod tx_projection_display_tests {
         }
         index
     }
-    #[test]
-    fn uranai_market_history_rollup_replays_before_range_and_paginates() {
+    routing_test! { sync uranai_market_history_rollup_replays_before_range_and_paginates
         let index = sample_uranai_history_index();
         let params = UranaiMarketHistoryParams {
             market_id: "mkt-1".into(),
@@ -52515,8 +52166,7 @@ mod tx_projection_display_tests {
             Some("No")
         );
     }
-    #[test]
-    fn uranai_market_history_rollup_replays_in_block_order() {
+    routing_test! { sync uranai_market_history_rollup_replays_in_block_order
         let mut index = ContractEventIndex::default();
         for projection in [
             uranai_projection(
@@ -52579,8 +52229,7 @@ mod tx_projection_display_tests {
         assert_eq!(json["items"][1]["tradeCount"].as_u64(), Some(2));
         assert_eq!(json["items"][1]["volumeXorTotal"].as_u64(), Some(180));
     }
-    #[test]
-    fn uranai_market_history_rollup_marks_mismatched_replay_incomplete() {
+    routing_test! { sync uranai_market_history_rollup_marks_mismatched_replay_incomplete
         let mut index = ContractEventIndex::default();
         append_contract_event_projection(
             &mut index,
@@ -52631,8 +52280,7 @@ mod tx_projection_display_tests {
         assert!(json["warning"].as_str().is_some());
         assert_eq!(json["items"].as_array().map(Vec::len), Some(0));
     }
-    #[test]
-    fn uranai_market_history_rollup_warns_on_unreplayable_metadata() {
+    routing_test! { sync uranai_market_history_rollup_warns_on_unreplayable_metadata
         let mut index = sample_uranai_history_index();
         let mut missing_payload = uranai_projection(
             "shares_bought",
@@ -52737,8 +52385,7 @@ mod tx_projection_display_tests {
             ],
         }
     }
-    #[test]
-    fn swap_fill_rollup_json_respects_limit_and_offset() {
+    routing_test! { sync swap_fill_rollup_json_respects_limit_and_offset
         let rollup = sample_swap_fill_rollup();
         let json = swap_fill_rollup_to_json_value(&rollup, Some(1), 1);
         assert_eq!(json["ok"].as_bool(), Some(true));
@@ -52748,8 +52395,7 @@ mod tx_projection_display_tests {
         assert_eq!(json["items"][0]["recordId"].as_u64(), Some(6));
         assert_eq!(json["items"][0]["executionHash"].as_str(), Some("hash-buy"));
     }
-    #[test]
-    fn compute_swap_analytics_tracks_realized_and_open_inventory() {
+    routing_test! { sync compute_swap_analytics_tracks_realized_and_open_inventory
         let rollup = sample_swap_fill_rollup();
         let analytics = compute_swap_analytics(&rollup.items);
         assert_eq!(analytics.avg_entry, Some(0.5));
@@ -52762,8 +52408,7 @@ mod tx_projection_display_tests {
         let avg_cushion_ratio = analytics.avg_cushion_ratio.expect("avg cushion ratio");
         assert!((avg_cushion_ratio - 1.15).abs() < 1e-9);
     }
-    #[test]
-    fn trader_activity_page_ignores_unsupported_modules() {
+    routing_test! { sync trader_activity_page_ignores_unsupported_modules
         let mut index = sample_contract_event_index();
         append_contract_event_projection(
             &mut index,
@@ -53758,8 +53403,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     }
 }
 #[cfg(all(test, feature = "app_api"))]
-#[tokio::test]
-async fn repo_agreements_list_filters_by_id() {
+routing_test! { async repo_agreements_list_filters_by_id
     use axum::body::to_bytes;
     let fixture = build_repo_state_for_tests();
     let filter_expr = FilterExpr::Eq(
@@ -53794,8 +53438,7 @@ async fn repo_agreements_list_filters_by_id() {
     assert!(items[0]["settlement_timestamp_ms"].is_null());
 }
 #[cfg(all(test, feature = "app_api"))]
-#[tokio::test]
-async fn repo_agreements_query_supports_sorting() {
+routing_test! { async repo_agreements_query_supports_sorting
     use axum::body::to_bytes;
     let fixture = build_repo_state_for_tests();
     let envelope = crate::filter::QueryEnvelope {
@@ -53825,8 +53468,7 @@ async fn repo_agreements_query_supports_sorting() {
     assert_eq!(items[1]["id"].as_str().unwrap(), fixture.agreements[0].0);
 }
 #[cfg(all(test, feature = "app_api"))]
-#[tokio::test]
-async fn repo_agreements_list_accepts_i105_only_literals() {
+routing_test! { async repo_agreements_list_accepts_i105_only_literals
     let fixture = build_repo_state_for_tests();
     let params = ListFilterParams {
         limit: Some(1),
@@ -53843,8 +53485,7 @@ async fn repo_agreements_list_accepts_i105_only_literals() {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
 }
 #[cfg(all(test, feature = "app_api"))]
-#[tokio::test]
-async fn repo_agreements_list_uses_canonical_i105_literals() {
+routing_test! { async repo_agreements_list_uses_canonical_i105_literals
     use axum::body::to_bytes;
     let fixture = build_repo_state_for_tests();
     let params = ListFilterParams {
@@ -53874,8 +53515,7 @@ async fn repo_agreements_list_uses_canonical_i105_literals() {
     );
 }
 #[cfg(all(test, feature = "app_api"))]
-#[tokio::test]
-async fn repo_agreements_list_filter_accepts_canonical_accounts() {
+routing_test! { async repo_agreements_list_filter_accepts_canonical_accounts
     use axum::body::to_bytes;
     let fixture = build_repo_state_for_tests();
     let canonical_literal = fixture.initiator_id.to_string();
@@ -53907,8 +53547,7 @@ async fn repo_agreements_list_filter_accepts_canonical_accounts() {
     );
 }
 #[cfg(all(test, feature = "app_api"))]
-#[tokio::test]
-async fn repo_agreements_query_filter_accepts_canonical_accounts() {
+routing_test! { async repo_agreements_query_filter_accepts_canonical_accounts
     use axum::body::to_bytes;
     let fixture = build_repo_state_for_tests();
     let canonical_literal = fixture.counterparty_id.to_string();
@@ -53941,8 +53580,7 @@ async fn repo_agreements_query_filter_accepts_canonical_accounts() {
     );
 }
 #[cfg(all(test, feature = "app_api"))]
-#[test]
-fn repo_filter_candidate_ids_extracts_safe_indexed_constraints() {
+routing_test! { sync repo_filter_candidate_ids_extracts_safe_indexed_constraints
     let fixture = build_repo_state_for_tests();
     let world = fixture.state.world_view();
     let first_id = fixture.agreements[0].0.clone();
@@ -54481,8 +54119,7 @@ mod pagination_enforcement_tests {
             Ok(_) => panic!("expected pagination error"),
         }
     }
-    #[tokio::test]
-    async fn account_permissions_rejects_limit_zero() {
+    routing_test! { async account_permissions_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_account_permissions_with_policy(
                 test_state(),
@@ -54493,20 +54130,17 @@ mod pagination_enforcement_tests {
             .await,
         );
     }
-    #[tokio::test]
-    async fn domains_list_rejects_limit_zero() {
+    routing_test! { async domains_list_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_domains(test_state(), crate::NoritoQuery(zero_pagination_params())).await,
         );
     }
-    #[tokio::test]
-    async fn domains_query_rejects_limit_zero() {
+    routing_test! { async domains_query_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_domains_query(test_state(), NoritoJson(zero_query_envelope())).await,
         );
     }
-    #[test]
-    fn live_page_budget_accepts_exact_examined_and_retained_boundaries() {
+    routing_test! { sync live_page_budget_accepts_exact_examined_and_retained_boundaries
         let entry_bytes = core::mem::size_of::<PageEntry<u8, (String, usize)>>().saturating_mul(2);
         let retained_cap = entry_bytes.saturating_mul(2).saturating_add(3);
         let page = collect_live_page_with_budget(
@@ -54526,8 +54160,7 @@ mod pagination_enforcement_tests {
         assert_eq!(page.total, Some(2));
         assert!(page.has_more);
     }
-    #[test]
-    fn live_page_budget_charges_filtered_rows_to_the_examined_ceiling() {
+    routing_test! { sync live_page_budget_charges_filtered_rows_to_the_examined_ceiling
         let error = match collect_live_page_with_budget(
             [3_u8, 2_u8, 1_u8],
             0,
@@ -54548,8 +54181,7 @@ mod pagination_enforcement_tests {
         };
         assert_eq!(code, "scan_budget_exceeded");
     }
-    #[test]
-    fn live_page_and_materialized_rows_reject_retained_byte_overflow() {
+    routing_test! { sync live_page_and_materialized_rows_reject_retained_byte_overflow
         let entry_bytes = core::mem::size_of::<PageEntry<u8, (String, usize)>>().saturating_mul(2);
         let page_error = match collect_live_page_with_budget(
             [(2_u8, "bb".to_owned()), (1_u8, "a".to_owned())],
@@ -54585,8 +54217,7 @@ mod pagination_enforcement_tests {
         };
         assert_eq!(code, "response_budget_exceeded");
     }
-    #[tokio::test]
-    async fn assets_definitions_list_rejects_limit_zero() {
+    routing_test! { async assets_definitions_list_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_assets_definitions(
                 test_state(),
@@ -54595,15 +54226,13 @@ mod pagination_enforcement_tests {
             .await,
         );
     }
-    #[tokio::test]
-    async fn assets_definitions_query_rejects_limit_zero() {
+    routing_test! { async assets_definitions_query_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_assets_definitions_query(test_state(), NoritoJson(zero_query_envelope()))
                 .await,
         );
     }
-    #[tokio::test]
-    async fn repo_agreements_list_rejects_limit_zero() {
+    routing_test! { async repo_agreements_list_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_repo_agreements(
                 test_state(),
@@ -54613,8 +54242,7 @@ mod pagination_enforcement_tests {
             .await,
         );
     }
-    #[tokio::test]
-    async fn repo_agreements_query_rejects_limit_zero() {
+    routing_test! { async repo_agreements_query_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_repo_agreements_query(
                 test_state(),
@@ -54624,20 +54252,17 @@ mod pagination_enforcement_tests {
             .await,
         );
     }
-    #[tokio::test]
-    async fn nfts_list_rejects_limit_zero() {
+    routing_test! { async nfts_list_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_nfts(test_state(), crate::NoritoQuery(zero_list_filter_params())).await,
         );
     }
-    #[tokio::test]
-    async fn nfts_query_rejects_limit_zero() {
+    routing_test! { async nfts_query_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_nfts_query(test_state(), NoritoJson(zero_query_envelope())).await,
         );
     }
-    #[tokio::test]
-    async fn accounts_list_rejects_limit_zero() {
+    routing_test! { async accounts_list_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_accounts(
                 test_state(),
@@ -54647,8 +54272,7 @@ mod pagination_enforcement_tests {
             .await,
         );
     }
-    #[tokio::test]
-    async fn accounts_query_rejects_limit_zero() {
+    routing_test! { async accounts_query_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_accounts_query(
                 test_state(),
@@ -55096,8 +54720,7 @@ mod account_permissions_json_tests {
             LiveQueryStore::start_test(),
         ))
     }
-    #[tokio::test]
-    async fn account_permissions_handler_preserves_structured_payloads() {
+    routing_test! { async account_permissions_handler_preserves_structured_payloads
         let authority = AccountId::new(
             checked_routing_fixture_keypair(
                 0xA2,
@@ -55195,31 +54818,27 @@ mod uaid_parsing_tests {
     use iroha_crypto::Hash;
     const SAMPLE_UAID_HEX: &str =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    #[test]
-    fn parses_trimmed_prefixed_literal() {
+    routing_test! { sync parses_trimmed_prefixed_literal
         let literal = format!("  UAID:{}  ", SAMPLE_UAID_HEX.to_uppercase());
         let parsed = parse_uaid_literal(&literal).expect("parse UAID literal");
         let expected_hash = Hash::from_str(SAMPLE_UAID_HEX).expect("decode UAID hash");
         let expected = UniversalAccountId::from_hash(expected_hash);
         assert_eq!(parsed, expected);
     }
-    #[test]
-    fn parses_mixed_case_prefix() {
+    routing_test! { sync parses_mixed_case_prefix
         let literal = format!("  UaId:  {}  ", SAMPLE_UAID_HEX.to_uppercase());
         let parsed = parse_uaid_literal(&literal).expect("parse UAID literal");
         let expected_hash = Hash::from_str(SAMPLE_UAID_HEX).expect("decode UAID hash");
         let expected = UniversalAccountId::from_hash(expected_hash);
         assert_eq!(parsed, expected);
     }
-    #[test]
-    fn parses_raw_hex_literal_without_prefix() {
+    routing_test! { sync parses_raw_hex_literal_without_prefix
         let parsed = parse_uaid_literal(SAMPLE_UAID_HEX).expect("parse UAID literal");
         let expected_hash = Hash::from_str(SAMPLE_UAID_HEX).expect("decode UAID hash");
         let expected = UniversalAccountId::from_hash(expected_hash);
         assert_eq!(parsed, expected);
     }
-    #[test]
-    fn rejects_invalid_inputs() {
+    routing_test! { sync rejects_invalid_inputs
         assert!(parse_uaid_literal("").is_err());
         assert!(parse_uaid_literal("uaid:1234").is_err());
         let invalid_hex = format!("{}g", "0".repeat(63));
@@ -55410,8 +55029,7 @@ mod sponsored_onboarding_dto_tests {
         account::{AccountId, MultisigMember, MultisigPolicy},
         alias_setup::{AliasFramedInstructionV1, AliasPlanDispositionV1},
     };
-    #[test]
-    fn plan_request_is_secret_free_and_rejects_legacy_fields() {
+    routing_test! { sync plan_request_is_secret_free_and_rejects_legacy_fields
         let request = AccountOnboardingPlanRequestDto {
             version: AccountOnboardingPlanRequestDto::VERSION,
             alias: "merchant@banka.paynet".to_owned(),
@@ -55433,8 +55051,7 @@ mod sponsored_onboarding_dto_tests {
             );
         }
     }
-    #[test]
-    fn receipt_disposition_transitions_only_allow_idempotent_progress() {
+    routing_test! { sync receipt_disposition_transitions_only_allow_idempotent_progress
         use AliasPlanDispositionV1::{Conflict, Create, NoOp, Repair};
         for live in [Create, Repair, NoOp] {
             assert!(onboarding_disposition_transition_allowed(Create, live));
@@ -55452,8 +55069,7 @@ mod sponsored_onboarding_dto_tests {
             assert!(!onboarding_disposition_transition_allowed(planned, live));
         }
     }
-    #[test]
-    fn live_receipt_frames_may_only_remove_already_completed_work() {
+    routing_test! { sync live_receipt_frames_may_only_remove_already_completed_work
         let frame = |wire_id: &str, byte| AliasFramedInstructionV1 {
             wire_id: wire_id.to_owned(),
             framed_payload: vec![byte],
@@ -55476,8 +55092,7 @@ mod sponsored_onboarding_dto_tests {
             &planned,
         ));
     }
-    #[test]
-    fn receipt_signature_rejects_multisig_authority_without_panicking() {
+    routing_test! { sync receipt_signature_rejects_multisig_authority_without_panicking
         let signer = checked_routing_fixture_keypair(
             0xa9,
             Algorithm::Ed25519,
@@ -55721,8 +55336,7 @@ fn faucet_executable_is_claim(
         .any(|instruction| faucet_instruction_is_claim(instruction, source_asset_id, amount))
 }
 #[cfg(all(test, feature = "app_api"))]
-#[test]
-fn faucet_claim_scanner_includes_instruction_items_from_mixed_batch() {
+routing_test! { sync faucet_claim_scanner_includes_instruction_items_from_mixed_batch
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     let source_asset_id = AssetId::new(
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa"),
@@ -57881,8 +57495,7 @@ pub struct SpaceDirectoryManifestRevokeDto {
 #[cfg(all(test, feature = "app_api"))]
 mod app_api_inline_signing_boundary_tests {
     use super::*;
-    #[test]
-    fn mutation_and_query_dtos_do_not_deserialize_private_keys() {
+    routing_test! { sync mutation_and_query_dtos_do_not_deserialize_private_keys
         macro_rules! assert_private_key_rejected {
             ($dto:ty) => {
                 assert!(
@@ -58383,8 +57996,7 @@ mod space_directory_manifest_helper_tests {
             Err("status must be one of: active, inactive, all")
         );
     }
-    #[test]
-    fn manifest_status_and_matching_cover_pending_active_expired_and_revoked_rows() {
+    routing_test! { sync manifest_status_and_matching_cover_pending_active_expired_and_revoked_rows
         let pending = SpaceDirectoryManifestRecord::new(sample_manifest_record().manifest);
         assert_eq!(manifest_status(&pending), "Pending");
         assert!(manifest_status_matches(
@@ -58430,8 +58042,7 @@ mod space_directory_manifest_helper_tests {
             SpaceDirectoryManifestStatus::All
         ));
     }
-    #[test]
-    fn manifest_lifecycle_json_keeps_reasonless_revocation_shape() {
+    routing_test! { sync manifest_lifecycle_json_keeps_reasonless_revocation_shape
         let mut lifecycle = SpaceDirectoryManifestLifecycle::default();
         lifecycle.mark_activated(13);
         lifecycle.mark_revoked(21, None);
@@ -58449,8 +58060,7 @@ mod space_directory_manifest_helper_tests {
             "reasonless revocations should keep an explicit null reason field",
         );
     }
-    #[test]
-    fn manifest_lifecycle_json_keeps_reasonful_revocation_shape() {
+    routing_test! { sync manifest_lifecycle_json_keeps_reasonful_revocation_shape
         let mut lifecycle = SpaceDirectoryManifestLifecycle::default();
         lifecycle.mark_expired(34);
         lifecycle.mark_revoked(55, Some("operator request".to_owned()));
@@ -58543,8 +58153,7 @@ mod space_directory_manifest_helper_tests {
             0
         );
     }
-    #[tokio::test]
-    async fn handle_v1_space_directory_bindings_accepts_raw_hex_uaid_literals() {
+    routing_test! { async handle_v1_space_directory_bindings_accepts_raw_hex_uaid_literals
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5C; Hash::LENGTH]));
         let raw_hex = uaid.to_string().trim_start_matches("uaid:").to_owned();
         let state = manifest_state(World::default(), None);
@@ -58568,8 +58177,7 @@ mod space_directory_manifest_helper_tests {
             0
         );
     }
-    #[tokio::test]
-    async fn handle_v1_space_directory_bindings_rejects_invalid_uaid_literals() {
+    routing_test! { async handle_v1_space_directory_bindings_rejects_invalid_uaid_literals
         let state = manifest_state(World::default(), None);
         let error = match handle_v1_space_directory_bindings(
             state,
@@ -58584,8 +58192,7 @@ mod space_directory_manifest_helper_tests {
         };
         assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
     }
-    #[tokio::test]
-    async fn handle_v1_space_directory_bindings_returns_aliases_and_sorted_accounts() {
+    routing_test! { async handle_v1_space_directory_bindings_returns_aliases_and_sorted_accounts
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5A; Hash::LENGTH]));
         let primary_dataspace = DataSpaceId::new(7);
         let secondary_dataspace = DataSpaceId::new(9);
@@ -58675,8 +58282,7 @@ mod space_directory_manifest_helper_tests {
             Some(crate::account_literal::display_literal(&tertiary_account).as_str())
         );
     }
-    #[tokio::test]
-    async fn manifest_entry_to_json_includes_alias_hash_status_lifecycle_and_accounts() {
+    routing_test! { async manifest_entry_to_json_includes_alias_hash_status_lifecycle_and_accounts
         let dataspace = DataSpaceId::new(7);
         let account =
             checked_space_directory_account(0xA9, "derive space-directory manifest entry key");
@@ -58783,8 +58389,7 @@ mod space_directory_manifest_helper_tests {
             0
         );
     }
-    #[tokio::test]
-    async fn handle_v1_space_directory_manifests_rejects_invalid_status_queries() {
+    routing_test! { async handle_v1_space_directory_manifests_rejects_invalid_status_queries
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x56; Hash::LENGTH]));
         let state = manifest_state(World::default(), None);
         let error = match handle_v1_space_directory_manifests(
@@ -58803,8 +58408,7 @@ mod space_directory_manifest_helper_tests {
         };
         assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
     }
-    #[tokio::test]
-    async fn handle_v1_space_directory_manifests_accepts_raw_hex_uaid_literals() {
+    routing_test! { async handle_v1_space_directory_manifests_accepts_raw_hex_uaid_literals
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5D; Hash::LENGTH]));
         let raw_hex = uaid.to_string().trim_start_matches("uaid:").to_owned();
         let state = manifest_state(World::default(), None);
@@ -58826,8 +58430,7 @@ mod space_directory_manifest_helper_tests {
             0
         );
     }
-    #[tokio::test]
-    async fn handle_v1_space_directory_manifests_rejects_invalid_uaid_literals() {
+    routing_test! { async handle_v1_space_directory_manifests_rejects_invalid_uaid_literals
         let state = manifest_state(World::default(), None);
         let error = match handle_v1_space_directory_manifests(
             state,
@@ -59148,8 +58751,7 @@ mod asset_definitions_query_tests {
             .to_bytes();
         norito::json::from_slice(&body).expect("valid JSON")
     }
-    #[tokio::test]
-    async fn assets_definitions_list_exposes_name_and_nullable_alias() {
+    routing_test! { async assets_definitions_list_exposes_name_and_nullable_alias
         let state = state_with_asset_definitions();
         let params = ListFilterParams {
             filter: None,
@@ -59172,8 +58774,7 @@ mod asset_definitions_query_tests {
         assert_eq!(items[1]["name"].as_str(), Some("USD"));
         assert!(items[1]["alias"].is_null());
     }
-    #[tokio::test]
-    async fn assets_definitions_query_filters_name_alias_and_null_alias() {
+    routing_test! { async assets_definitions_query_filters_name_alias_and_null_alias
         let state = state_with_asset_definitions();
         let by_name = crate::filter::QueryEnvelope {
             query: None,
@@ -59262,8 +58863,7 @@ mod asset_definitions_query_tests {
         assert_eq!(items[0]["name"].as_str(), Some("USD"));
         assert!(items[0]["alias"].is_null());
     }
-    #[tokio::test]
-    async fn assets_definitions_query_sorts_by_name_alias_and_metadata() {
+    routing_test! { async assets_definitions_query_sorts_by_name_alias_and_metadata
         let state = state_with_asset_definitions();
         let name_sort = crate::filter::QueryEnvelope {
             query: None,
@@ -59354,8 +58954,7 @@ mod asset_definitions_query_tests {
         assert_eq!(items[0]["name"].as_str(), Some("USD"));
     }
     #[cfg(feature = "app_api")]
-    #[test]
-    fn asset_definition_sort_key_orders_alias_binding_bound_at_desc() {
+    routing_test! { sync asset_definition_sort_key_orders_alias_binding_bound_at_desc
         let authority = checked_asset_definition_authority(
             0xC1,
             "derive asset-definition sort fixture authority",
@@ -59599,8 +59198,7 @@ pub async fn handle_v1_explorer_blocks(
     response
 }
 #[cfg(all(test, feature = "app_api"))]
-#[tokio::test]
-async fn explorer_blocks_falls_back_to_hash_only_committed_journal() {
+routing_test! { async explorer_blocks_falls_back_to_hash_only_committed_journal
     let state = Arc::new(CoreState::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -61431,8 +61029,7 @@ mod explorer_asset_definition_econometrics_tests {
     ) -> KeyPair {
         checked_routing_fixture_keypair(seed, algorithm, context)
     }
-    #[test]
-    fn econometrics_participant_cap_is_aggregate_and_precedes_insertion() {
+    routing_test! { sync econometrics_participant_cap_is_aggregate_and_precedes_insertion
         let alice = dm::AccountId::new(
             checked_econometrics_keypair(
                 0xC0,
@@ -61473,8 +61070,7 @@ mod explorer_asset_definition_econometrics_tests {
         assert_eq!(participants.len(), 1);
         assert!(!participants.contains_key(&bob));
     }
-    #[tokio::test]
-    async fn explorer_asset_definition_econometrics_aggregates_velocity_and_issuance() {
+    routing_test! { async explorer_asset_definition_econometrics_aggregates_velocity_and_issuance
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(
@@ -61804,8 +61400,7 @@ mod explorer_asset_definition_snapshot_tests {
     fn checked_snapshot_keypair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
         checked_routing_fixture_keypair(seed, algorithm, context)
     }
-    #[test]
-    fn snapshot_holder_cap_rejects_before_cap_plus_one_retention() {
+    routing_test! { sync snapshot_holder_cap_rejects_before_cap_plus_one_retention
         let alice = dm::AccountId::new(
             checked_snapshot_keypair(
                 0xCF,
@@ -61835,8 +61430,7 @@ mod explorer_asset_definition_snapshot_tests {
         assert_eq!(code, "explorer_snapshot_holder_limit_exceeded");
         assert_eq!(holders, vec![(alice, Quantity::from(1_u32))]);
     }
-    #[tokio::test]
-    async fn explorer_asset_definition_snapshot_computes_distribution_metrics() {
+    routing_test! { async explorer_asset_definition_snapshot_computes_distribution_metrics
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(
@@ -62011,8 +61605,7 @@ mod explorer_asset_definition_snapshot_tests {
             .expect("top_holders");
         assert_eq!(top_holders.len(), 2);
     }
-    #[tokio::test]
-    async fn explorer_asset_definition_snapshot_quantiles_use_nearest_rank() {
+    routing_test! { async explorer_asset_definition_snapshot_quantiles_use_nearest_rank
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(
@@ -63200,8 +62793,7 @@ fn validate_defs_filter_adapter(expr: &FilterExpr) -> Result<()> {
     }
 }
 #[cfg(all(test, feature = "app_api"))]
-#[test]
-fn asset_definition_filter_candidate_ids_extracts_safe_exact_constraints() {
+routing_test! { sync asset_definition_filter_candidate_ids_extracts_safe_exact_constraints
     let world_storage = iroha_core::state::World::new();
     let world = world_storage.view();
     let first = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554405f1");
@@ -63511,8 +63103,7 @@ fn public_lane_reward_record_matches_key(
     key.0 == record.lane_id && key.1 == record.epoch
 }
 #[cfg(all(test, feature = "app_api"))]
-#[test]
-fn public_lane_validator_record_matches_key_rejects_mismatched_rows() {
+routing_test! { sync public_lane_validator_record_matches_key_rejects_mismatched_rows
     let validator_keypair = checked_routing_fixture_keypair(
         0x71,
         Algorithm::Ed25519,
@@ -63554,8 +63145,7 @@ fn public_lane_validator_record_matches_key_rejects_mismatched_rows() {
     assert!(!public_lane_validator_record_matches_key(&key, &record));
 }
 #[cfg(all(test, feature = "app_api"))]
-#[test]
-fn public_lane_stake_share_matches_key_rejects_mismatched_rows() {
+routing_test! { sync public_lane_stake_share_matches_key_rejects_mismatched_rows
     let validator = AccountId::new(
         checked_routing_fixture_keypair(
             0x74,
@@ -63610,8 +63200,7 @@ fn public_lane_stake_share_matches_key_rejects_mismatched_rows() {
     assert!(!public_lane_stake_share_matches_key(&key, &share));
 }
 #[cfg(all(test, feature = "app_api"))]
-#[test]
-fn public_lane_reward_record_matches_key_rejects_mismatched_rows() {
+routing_test! { sync public_lane_reward_record_matches_key_rejects_mismatched_rows
     let recipient = AccountId::new(
         checked_routing_fixture_keypair(
             0x78,
@@ -63646,8 +63235,7 @@ fn public_lane_reward_record_matches_key_rejects_mismatched_rows() {
     assert!(!public_lane_reward_record_matches_key(&key, &record));
 }
 #[cfg(all(test, feature = "app_api"))]
-#[test]
-fn collect_pending_public_lane_rewards_ignores_mismatched_reward_rows() {
+routing_test! { sync collect_pending_public_lane_rewards_ignores_mismatched_reward_rows
     let account = AccountId::new(
         checked_routing_fixture_keypair(
             0x7C,
@@ -63752,8 +63340,7 @@ fn assert_empty_public_lane_items(payload: &Value, lane_id: LaneId) {
     );
 }
 #[cfg(all(test, feature = "app_api"))]
-#[tokio::test]
-async fn public_lane_handlers_hide_future_created_autoscale_stale_rows() {
+routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_rows
     let future_lane = LaneId::new(1);
     let validator = AccountId::new(
         checked_routing_fixture_keypair(
@@ -64584,8 +64171,7 @@ fn validate_nfts_filter_adapter(expr: &FilterExpr) -> Result<()> {
     }
 }
 #[cfg(all(test, feature = "app_api"))]
-#[test]
-fn nft_filter_candidate_ids_extracts_safe_exact_constraints() {
+routing_test! { sync nft_filter_candidate_ids_extracts_safe_exact_constraints
     let first: NftId = "ticket$art".parse().unwrap();
     let second: NftId = "receipt$art".parse().unwrap();
     let exact = FilterExpr::Eq(
@@ -64895,8 +64481,7 @@ fn validate_rwas_filter_adapter(expr: &FilterExpr) -> Result<()> {
     }
 }
 #[cfg(all(test, feature = "app_api"))]
-#[test]
-fn rwa_filter_candidate_ids_extracts_safe_exact_constraints() {
+routing_test! { sync rwa_filter_candidate_ids_extracts_safe_exact_constraints
     let domain = DomainId::try_new("vault", "universal").unwrap();
     let first = RwaId::generated(domain.clone(), Hash::prehashed([0x11; Hash::LENGTH]));
     let second = RwaId::generated(domain, Hash::prehashed([0x22; Hash::LENGTH]));

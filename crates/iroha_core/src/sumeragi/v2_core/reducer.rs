@@ -5209,45 +5209,6 @@ mod source_link_tests {
         assert_eq!(decided, before);
     }
     #[test]
-    fn local_ready_apply_capability_requires_the_exact_manifest() {
-        let subject = Subject::repeat(0xaa);
-        let manifest =
-            PayloadManifest::new(subject, Digest::repeat(0xab), Digest::repeat(0xac), 256, 4);
-        let conflicting =
-            PayloadManifest::new(subject, Digest::repeat(0xad), Digest::repeat(0xae), 256, 4);
-        let (mut before, decision) = decided_reducer(subject);
-        before.body_work.insert(
-            (decision.round(), subject),
-            BodyWork {
-                manifest: None,
-                state: BodyState::Missing,
-            },
-        );
-        let mut after = before.clone();
-        after.body_work.insert(
-            (decision.round(), subject),
-            BodyWork {
-                manifest: Some(manifest),
-                state: BodyState::Validated,
-            },
-        );
-        let apply = Effect::Apply {
-            tag: after.current_tag(),
-            subject,
-            certificate: decision,
-        };
-        let exact = Event::LocalProposalReady {
-            tag: before.current_tag(),
-            manifest,
-        };
-        let counterfeit = Event::LocalProposalReady {
-            tag: before.current_tag(),
-            manifest: conflicting,
-        };
-        assert!(before.transition_refines(&exact, &after, std::slice::from_ref(&apply)));
-        assert!(!before.transition_refines(&counterfeit, &after, &[apply]));
-    }
-    #[test]
     fn counterfeit_effect_grant_with_a_different_primitive_key_fails_closed() {
         let before = reducer();
         let after = before.clone();

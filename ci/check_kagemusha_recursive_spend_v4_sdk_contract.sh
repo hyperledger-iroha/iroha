@@ -27,10 +27,20 @@ mode = sys.argv[2]
 script = Path(sys.argv[3]).resolve()
 paths = {
     "data_model": Path("crates/iroha_data_model/src/offline/mod.rs"),
-    "data_model_model": Path(
+    "data_model_component": Path(
         "crates/iroha_data_model/src/offline/kagemusha_model.rs"
     ),
     "rust": Path("crates/connect_norito_bridge/src/lib.rs"),
+    "rust_platform_jni": Path("crates/connect_norito_bridge/src/platform_jni.rs"),
+    "rust_platform_jni_part_1": Path(
+        "crates/connect_norito_bridge/src/platform_jni/part_1.rs"
+    ),
+    "rust_platform_jni_part_2": Path(
+        "crates/connect_norito_bridge/src/platform_jni/part_2.rs"
+    ),
+    "rust_platform_jni_part_3": Path(
+        "crates/connect_norito_bridge/src/platform_jni/part_3.rs"
+    ),
     "header": Path("crates/connect_norito_bridge/include/connect_norito_bridge.h"),
     "swift": Path("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"),
     "swift_v4": Path("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV4.swift"),
@@ -96,23 +106,45 @@ for label, relative in paths.items():
     if not absolute.is_file():
         raise SystemExit(f"required ABI21 contract file is missing: {relative}")
     texts[label] = absolute.read_text(encoding="utf-8")
-texts["data_model"] += "\n" + texts["data_model_model"]
 
-# The check is dormant on branches that have no ABI21 SDK work. As soon as a
-# V4 lifecycle method or carrier is introduced, the entire boundary must land
-# atomically instead of relying on symbol presence or an ABI20 fallback.
-v4_markers = (
-    "nativeInitSpendV4",
-    "KagemushaRecursiveSpendInitLocalRequestV4",
-    "connect_norito_kagemusha_recursive_spend_init_v4",
+data_model_include = 'include!("kagemusha_model.rs");'
+if texts["data_model"].count(data_model_include) != 1:
+    raise SystemExit(
+        f"{paths['data_model']}: expected exactly one reviewed "
+        f"{paths['data_model_component'].name} include"
+    )
+texts["data_model"] = texts["data_model"].replace(
+    data_model_include,
+    texts["data_model_component"],
+    1,
 )
-if not any(
-    marker in texts[label]
-    for marker in v4_markers
-    for label in ("rust", "header", "swift_v4", "kotlin", "java")
-):
-    print("Kagemusha ABI21 SDK contract is not exposed; fail-closed pre-V4 state accepted.")
-    raise SystemExit(0)
+
+if len(re.findall(r"^mod platform_jni;$", texts["rust"], re.MULTILINE)) != 1:
+    raise SystemExit(
+        f"{paths['rust']}: expected exactly one reviewed platform_jni module"
+    )
+platform_jni_includes = tuple(
+    re.findall(
+        r'^include!\("([^"]+)"\);$',
+        texts["rust_platform_jni"],
+        re.MULTILINE,
+    )
+)
+expected_platform_jni_includes = tuple(
+    f"platform_jni/part_{part}.rs" for part in range(1, 4)
+)
+if platform_jni_includes != expected_platform_jni_includes:
+    raise SystemExit(
+        f"{paths['rust_platform_jni']}: expected the reviewed three-part JNI include "
+        f"closure, found {platform_jni_includes!r}"
+    )
+texts["rust"] = "\n".join(
+    (
+        texts["rust"],
+        texts["rust_platform_jni"],
+        *(texts[f"rust_platform_jni_part_{part}"] for part in range(1, 4)),
+    )
+)
 
 errors: list[str] = []
 
@@ -820,7 +852,7 @@ for label in (
     # mandatory. Only a ninth/tenth standalone role or file is forbidden.
     if (
         "circuit-params.krv4" in texts[label]
-        or "CIRCUIT_PARAMS_FILE_NAME_V4" in texts[label]
+        or re.search(r"\bCIRCUIT_PARAMS_FILE_NAME_V4\b", texts[label])
         or "KagemushaPastaCycleArtifactKindV4::CircuitParams" in texts[label]
         or re.search(r'\bCircuitParams\s*,', texts[label])
         or re.search(r'["\']step_(?:eq|ep)_circuit_params["\']', texts[label])
@@ -1233,6 +1265,38 @@ if mode == "--self-test":
                 raise SystemExit(
                     f"self-test {name!r} did not fail for {expected!r}:\n{result.stdout}"
                 )
+
+    run_negative(
+        "reviewed data-model component cannot detach",
+        lambda fixture: replace_once(
+            fixture / paths["data_model"],
+            'include!("kagemusha_model.rs");',
+            "// reviewed Kagemusha model component detached",
+        ),
+        "expected exactly one reviewed kagemusha_model.rs include",
+    )
+
+    run_negative(
+        "reviewed JNI fragment closure cannot detach",
+        lambda fixture: replace_once(
+            fixture / paths["rust_platform_jni"],
+            'include!("platform_jni/part_3.rs");',
+            "// reviewed JNI fragment detached",
+        ),
+        "expected the reviewed three-part JNI include closure",
+    )
+
+    run_negative(
+        "standalone circuit-parameter artifact cannot enter the inventory",
+        lambda fixture: replace_once(
+            fixture / paths["kagami"],
+            "const RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4: &str = "
+            '"step-eq-circuit-params.norito";',
+            "const CIRCUIT_PARAMS_FILE_NAME_V4: &str = "
+            '"step-eq-circuit-params.norito";',
+        ),
+        "separate V4 CircuitParams artifact path is forbidden",
+    )
 
     run_negative(
         "ABI22 cannot regress to ABI21",

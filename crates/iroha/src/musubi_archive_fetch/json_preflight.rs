@@ -29,11 +29,10 @@ pub(super) enum JsonDomPreflightErrorV1 {
 }
 /// Scan a response before Norito constructs its owned JSON value tree.
 ///
-/// The scanner itself allocates nothing. It deliberately counts object keys as
-/// tokens because the DOM owns them separately from their values. Full grammar,
-/// number, duplicate-key, and UTF-8 validation remains the Norito parser's job;
-/// this pass only ensures that any valid prefix it can allocate is inside the
-/// endpoint-specific structural and string envelope.
+/// The scanner itself allocates nothing. It deliberately counts object keys as tokens because the
+/// DOM owns them separately from their values. Full grammar, number, duplicate-key, and UTF-8
+/// validation remains the Norito parser's job; this pass only ensures that any valid prefix it can
+/// allocate is inside the endpoint-specific structural and string envelope.
 #[expect(
     clippy::too_many_lines,
     reason = "the allocation-free JSON scanner keeps its state transitions in one audit surface"

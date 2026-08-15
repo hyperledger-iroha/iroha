@@ -1,9 +1,8 @@
 //! FCMP++ adapters for the shared generalized-Bulletproof backend.
 //!
-//! Selene/Helios arithmetic and the exact Blake2b transcript remain here so
-//! the IFC1 consensus codec stays byte-for-byte pinned. The proof equations,
-//! IPA, generators container, and MSM implementation live in
-//! `iroha_zkp_halo2::generalized_bulletproof`.
+//! Selene/Helios arithmetic and the exact Blake2b transcript remain here so the IFC1 consensus
+//! codec stays byte-for-byte pinned. The proof equations, IPA, generators container, and MSM
+//! implementation live in `iroha_zkp_halo2::generalized_bulletproof`.
 use super::{
     FcmpNativeErrorV1,
     field::{

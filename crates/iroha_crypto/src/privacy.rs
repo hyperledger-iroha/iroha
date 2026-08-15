@@ -1,9 +1,8 @@
 //! Lane privacy commitment registry and verification helpers (NX-10).
 //!
-//! Nexus private lanes currently support only domain-separated Merkle
-//! commitments. A proof-system commitment must not be added here until
-//! admission can resolve an on-chain verifying key and invoke its real
-//! cryptographic verifier.
+//! Nexus private lanes currently support only domain-separated Merkle commitments. A proof-system
+//! commitment must not be added here until admission can resolve an on-chain verifying key and
+//! invoke its real cryptographic verifier.
 use crate::{Hash, HashOf, MerkleProof, MerkleTree};
 use core::{convert::TryFrom, fmt};
 use iroha_schema::IntoSchema;
@@ -13,8 +12,7 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 /// Domain tag used when hashing a raw lane-privacy Merkle leaf.
 ///
-/// The trailing NUL prevents the tag from being a prefix of another protocol
-/// label.
+/// The trailing NUL prevents the tag from being a prefix of another protocol label.
 const LANE_MERKLE_LEAF_DOMAIN_V1: &[u8] = b"iroha:nexus:lane-privacy:merkle:leaf:v1\x00";
 /// Domain tag used when hashing a lane-privacy Merkle internal node.
 const LANE_MERKLE_NODE_DOMAIN_V1: &[u8] = b"iroha:nexus:lane-privacy:merkle:node:v1\x00";
@@ -55,9 +53,8 @@ impl fmt::Display for LaneCommitmentId {
 }
 /// Canonical commitment schemes supported by Nexus private lanes.
 ///
-/// The first release deliberately exposes only Merkle commitments. A
-/// proof-system variant requires a real, on-chain verifying-key-backed
-/// verifier before it can join this enum.
+/// The first release deliberately exposes only Merkle commitments. A proof-system variant requires
+/// a real, on-chain verifying-key-backed verifier before it can join this enum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommitmentScheme {
     /// Merkle tree root enforcing membership proofs.
@@ -169,8 +166,7 @@ impl MerkleWitness {
     ///
     /// # Errors
     ///
-    /// Returns a structural or depth error when the proof is not a valid lane
-    /// privacy path.
+    /// Returns a structural or depth error when the proof is not a valid lane privacy path.
     pub fn implied_root(&self, max_depth: u8) -> Result<HashOf<MerkleTree<[u8; 32]>>> {
         let depth = self.proof.audit_path().len();
         if depth == 0 {

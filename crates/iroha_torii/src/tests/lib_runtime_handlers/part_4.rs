@@ -1496,16 +1496,17 @@ async fn privacy_ingest_authenticates_before_body_decode() {
             &app_mut.soranet_privacy_ingest.allow_cidrs,
         ));
     }
-    let descriptor = route_catalog::telemetry::SORANET_PRIVACY_EVENT;
-    let routes = [descriptor];
+    const ROUTES: &[iroha_torii_shared::route_catalog::RouteDescriptor] =
+        &[route_catalog::telemetry::SORANET_PRIVACY_EVENT];
+    let descriptor = &ROUTES[0];
     let mut builder = RouterBuilder::new(
         app.clone(),
-        RouteCatalog::new(&routes),
+        RouteCatalog::new(ROUTES),
         compiled_route_features(),
     )
     .expect("privacy route catalog is valid");
     builder.route(
-        &descriptor,
+        descriptor,
         catalog_post(super::handler_post_soranet_privacy_event)
             .layer(DefaultBodyLimit::max(
                 super::SORANET_PRIVACY_INGEST_MAX_BODY_BYTES,
@@ -1513,6 +1514,7 @@ async fn privacy_ingest_authenticates_before_body_decode() {
             .authenticated_soranet_privacy_collector(app.clone(), "event"),
     );
     let (router, _) = builder.finish().expect("privacy route mounts exactly once");
+    let router = router.with_state(app.clone());
     let mut request = Request::builder()
         .method(HttpMethod::POST)
         .uri(descriptor.path())

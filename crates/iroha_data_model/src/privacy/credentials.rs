@@ -83,10 +83,9 @@ pub const ZK_X509_MIN_CHAIN_DEPTH_V1: u8 = 2;
 pub const ZK_X509_MAX_CRL_AGE_SECONDS_V1: u64 = 300;
 /// Maximum public presentation window covered by one X.509 proof.
 ///
-/// The proof establishes certificate and signed-CRL validity for the complete
-/// window; consensus then checks the unpredictable inclusion timestamp lies
-/// inside it. Keeping this equal to the CRL-age ceiling preserves the strict
-/// five-minute freshness profile.
+/// The proof establishes certificate and signed-CRL validity for the complete window; consensus
+/// then checks the unpredictable inclusion timestamp lies inside it. Keeping this equal to the
+/// CRL-age ceiling preserves the strict five-minute freshness profile.
 pub const ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1: u64 = ZK_X509_MAX_CRL_AGE_SECONDS_V1;
 /// Maximum DER bytes for one X.509 certificate in the canonical proof topology.
 ///
@@ -205,10 +204,9 @@ impl PrivacyStatementContextV1 {
 }
 /// Exact network, genesis, action, and governed-artifact binding shared by native engines.
 ///
-/// The binding owns every consensus-selected byte that a native proof
-/// transcript must commit. It is constructed from a validated
-/// [`PrivacyStatementContextV1`] plus the trusted committed genesis hash; there is
-/// no optional field, default, alias, or legacy wire shape.
+/// The binding owns every consensus-selected byte that a native proof transcript must commit. It is
+/// constructed from a validated [`PrivacyStatementContextV1`] plus the trusted committed genesis
+/// hash; there is no optional field, default, alias, or legacy wire shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.native-consensus-binding.v1")]
 #[cfg_attr(
@@ -343,10 +341,9 @@ impl PrivacyNativeConsensusBindingV1 {
     }
     /// Hash the exact canonical binding in its dedicated transcript domain.
     ///
-    /// Callers must validate the binding before treating the digest as a
-    /// consensus input. This method remains independently useful for prover
-    /// construction, where the validating constructor already established the
-    /// invariant.
+    /// Callers must validate the binding before treating the digest as a consensus input. This
+    /// method remains independently useful for prover construction, where the validating
+    /// constructor already established the invariant.
     ///
     /// # Errors
     ///
@@ -435,10 +432,9 @@ pub struct PrivacyEncryptedOutputV1 {
     pub recipient: PrivacyRecipientIdV1,
     /// Protocol-defined identifier for the ephemeral encryption material.
     ///
-    /// Diffie-Hellman profiles use a public key here. The fixed PQ-MASP
-    /// profile uses the domain-separated digest of its ML-KEM-768
-    /// encapsulation ciphertext; the full 1,088-byte encapsulation remains in
-    /// `ciphertext`.
+    /// Diffie-Hellman profiles use a public key here. The fixed PQ-MASP profile uses the
+    /// domain-separated digest of its ML-KEM-768 encapsulation ciphertext; the full 1,088-byte
+    /// encapsulation remains in `ciphertext`.
     pub ephemeral_public_key: PrivacyEncryptionKeyV1,
     /// Commitment to the plaintext output.
     pub commitment: PrivacyCommitmentV1,
@@ -506,9 +502,8 @@ impl PrivacyZkAcePolicyRecordV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a zero identifier, commitment, digest, or epoch; an empty,
-    /// oversized, unsorted, or duplicate allowlist; or a digest encoding
-    /// failure.
+    /// Rejects a zero identifier, commitment, digest, or epoch; an empty, oversized, unsorted, or
+    /// duplicate allowlist; or a digest encoding failure.
     pub fn new(
         policy_id: PrivacyPolicyIdV1,
         identity_commitment: PrivacyCommitmentV1,
@@ -573,8 +568,7 @@ impl PrivacyZkAcePolicyRecordV1 {
     ///
     /// # Errors
     ///
-    /// Returns an encoding error when the canonical digest material cannot be
-    /// serialized.
+    /// Returns an encoding error when the canonical digest material cannot be serialized.
     pub fn compute_record_digest(
         &self,
     ) -> Result<PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordValidationErrorV1> {
@@ -956,8 +950,7 @@ pub struct PrivacyZkAmsRegistryBootstrapV1 {
     pub policy_digest: PrivacyPolicyDigestV1,
     /// Nonzero origin of the proof-managed admitted-identity registry.
     pub initial_registry_root: PrivacyRootV1,
-    /// Closed origin epoch; exactly
-    /// [`ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1`].
+    /// Closed origin epoch; exactly [`ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1`].
     pub initial_registry_epoch: u64,
 }
 impl PrivacyZkAmsRegistryBootstrapV1 {
@@ -980,9 +973,8 @@ impl PrivacyZkAmsRegistryBootstrapV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyZkAmsRegistryBootstrapValidationError`] when a
-    /// required identifier, digest, key, or root is zero, the origin epoch is
-    /// noncanonical, or the derived namespace is invalid.
+    /// Returns [`PrivacyZkAmsRegistryBootstrapValidationError`] when a required identifier, digest,
+    /// key, or root is zero, the origin epoch is noncanonical, or the derived namespace is invalid.
     pub fn validate(&self) -> Result<(), PrivacyZkAmsRegistryBootstrapValidationError> {
         if self.issuer_id.is_zero() {
             return Err(PrivacyZkAmsRegistryBootstrapValidationError::ZeroIssuerId);
@@ -1174,8 +1166,7 @@ impl PrivacyZkAmsPersonhoodCredentialV1 {
     /// The payload is closed to
     /// `version || issuer_id || policy_id || subject_commitment ||
     /// seed_public_key || credential_nonce`. Every field has a fixed width, so
-    /// no optional, offset, or length table can introduce an alternative
-    /// preimage.
+    /// no optional, offset, or length table can introduce an alternative preimage.
     #[must_use]
     pub fn canonical_payload(&self) -> PrivacyZkAmsPhcCanonicalPayloadV1 {
         let mut payload = [0_u8; ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1];
@@ -1241,11 +1232,10 @@ pub struct PrivacyZkAmsAdmissionAnchorV1 {
 }
 /// Setup-free Iroha instantiation of ZK-AMS batch settlement.
 ///
-/// The native proof recursively folds one fixed credential relation for every
-/// ordered anchor and proves the final relaxed instance with a freshly masked
-/// Relaxed Spartan proof. Intermediate accumulator and cross-term commitments
-/// are already canonical proof sections; duplicating caller-selected digests
-/// in the public statement would be circular and is deliberately forbidden.
+/// The native proof recursively folds one fixed credential relation for every ordered anchor and
+/// proves the final relaxed instance with a freshly masked Relaxed Spartan proof. Intermediate
+/// accumulator and cross-term commitments are already canonical proof sections; duplicating
+/// caller-selected digests in the public statement would be circular and is deliberately forbidden.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1410,15 +1400,13 @@ pub enum PrivacyVegaIssuerRecordLifecycleV1 {
 }
 /// One immutable authoritative Vega mDL issuer-key and algorithm-policy revision.
 ///
-/// Revisions form a bounded append-only self-digested lineage. A proof
-/// statement must bind the exact current active revision, including its P-256
-/// key, so a submitter cannot manufacture a self-issued credential. Consensus
-/// permanently assigns every issuer P-256 key to one issuer lineage: a key
-/// retired or revoked in one lineage cannot be re-registered under another
-/// issuer identity to relabel old credentials, and a key rotated out of a
-/// lineage cannot later be reactivated inside that lineage. A terminal
-/// revocation retains its immediately preceding key only to preserve the
-/// immutable audit trail.
+/// Revisions form a bounded append-only self-digested lineage. A proof statement must bind the
+/// exact current active revision, including its P-256 key, so a submitter cannot manufacture a
+/// self-issued credential. Consensus permanently assigns every issuer P-256 key to one issuer
+/// lineage: a key retired or revoked in one lineage cannot be re-registered under another issuer
+/// identity to relabel old credentials, and a key rotated out of a lineage cannot later be
+/// reactivated inside that lineage. A terminal revocation retains its immediately preceding key
+/// only to preserve the immutable audit trail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1493,8 +1481,7 @@ impl PrivacyVegaIssuerRecordV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or
-    /// terminal origin.
+    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or terminal origin.
     pub fn validate_initial(&self) -> Result<(), PrivacyVegaIssuerRecordValidationErrorV1> {
         self.validate()?;
         if self.record_epoch != VEGA_INITIAL_ISSUER_RECORD_EPOCH_V1 {
@@ -1807,11 +1794,10 @@ pub struct PrivacyVegaMdlDateV1 {
 }
 /// Vega Figure 9 ISO/IEC 18013-5 mDL-age public statement.
 ///
-/// The native circuit exposes only the paper's public inputs `Q_I`, `H_dev`,
-/// `(Y, M, D)`, and `tau`. The exact document bytes, decoded MSO payload,
-/// issuer and device signatures, device public key, validity interval,
-/// birth-date `IssuerSignedItemBytes`, and every lookup hint are private
-/// engine witness values.
+/// The native circuit exposes only the paper's public inputs `Q_I`, `H_dev`, `(Y, M, D)`, and
+/// `tau`. The exact document bytes, decoded MSO payload, issuer and device signatures, device
+/// public key, validity interval, birth-date `IssuerSignedItemBytes`, and every lookup hint are
+/// private engine witness values.
 ///
 /// `issuer_id`, `issuer_record_epoch`, and `issuer_record_digest` select the
 /// exact active governance revision whose key and algorithm policy must match
@@ -1845,10 +1831,9 @@ pub struct VegaExistingCredentialStatementV1 {
     pub issuer_public_key: PrivacyP256PointV1,
     /// Public device-authentication digest `H_dev`.
     ///
-    /// The native engine recomputes this value from the canonical consensus
-    /// frame containing chain, genesis, action, all governed artifact
-    /// bindings, `Q_I`, date, threshold, challenge, and session digest before
-    /// performing any proof verification.
+    /// The native engine recomputes this value from the canonical consensus frame containing chain,
+    /// genesis, action, all governed artifact bindings, `Q_I`, date, threshold, challenge, and
+    /// session digest before performing any proof verification.
     pub device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1,
     /// Public trusted UTC presentation date `(Y, M, D)`.
     ///
@@ -2050,9 +2035,8 @@ pub struct PrivacyZkX509TrustAnchorRecordV1 {
     pub ca_membership_root: PrivacyRootV1,
     /// Canonical epoch of `ca_membership_root`.
     ///
-    /// An active record requires this to equal `record_epoch`. A terminal
-    /// revocation preserves the preceding active root epoch and does not
-    /// manufacture a new CA-membership root.
+    /// An active record requires this to equal `record_epoch`. A terminal revocation preserves the
+    /// preceding active root epoch and does not manufacture a new CA-membership root.
     pub ca_membership_root_epoch: u64,
     /// Exact predecessor revision digest, absent only at epoch one.
     pub previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
@@ -2098,8 +2082,7 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or
-    /// revoked origin.
+    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or revoked origin.
     pub fn validate_initial(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
         self.validate()?;
         validate_zk_x509_initial_revision(
@@ -2266,8 +2249,7 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or
-    /// revoked origin.
+    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or revoked origin.
     pub fn validate_initial(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
         self.validate()?;
         validate_zk_x509_initial_revision(
@@ -2363,16 +2345,14 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
 }
 /// One immutable authoritative revision of an issuer-scoped signed CRL.
 ///
-/// The exact signed DER digest, signing-key digest, and validity window are one
-/// self-digested governance object. The proof parses that complete, signed CRL
-/// and checks the leaf serial against every active entry; there is deliberately
-/// no second revocation accumulator whose contents could diverge from the CRL.
-/// The first release assigns exactly one leaf certificate issuer and its
-/// complete, non-partitioned CRL to each certificate-policy lineage;
-/// revocation checks the leaf certificate only.
-/// Multiple intermediates require distinct policy lineages. Consensus keeps
-/// only the current self-chained record while historical transitions remain
-/// committed by blocks. Revocation is terminal.
+/// The exact signed DER digest, signing-key digest, and validity window are one self-digested
+/// governance object. The proof parses that complete, signed CRL and checks the leaf serial against
+/// every active entry; there is deliberately no second revocation accumulator whose contents could
+/// diverge from the CRL. The first release assigns exactly one leaf certificate issuer and its
+/// complete, non-partitioned CRL to each certificate-policy lineage; revocation checks the leaf
+/// certificate only. Multiple intermediates require distinct policy lineages. Consensus keeps only
+/// the current self-chained record while historical transitions remain committed by blocks.
+/// Revocation is terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2447,8 +2427,7 @@ impl PrivacyZkX509CrlRecordV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or
-    /// revoked origin.
+    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or revoked origin.
     pub fn validate_initial(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
         self.validate()?;
         validate_zk_x509_initial_revision(
@@ -2941,9 +2920,8 @@ pub fn validate_zk_x509_trust_anchor_rotation_v1(
 ///
 /// # Errors
 ///
-/// Rejects malformed records, identity changes, stale/skipped epochs,
-/// predecessor substitution, nonterminal successors, or trust-store/root
-/// changes.
+/// Rejects malformed records, identity changes, stale/skipped epochs, predecessor substitution,
+/// nonterminal successors, or trust-store/root changes.
 pub fn validate_zk_x509_trust_anchor_revocation_v1(
     current: &PrivacyZkX509TrustAnchorRecordV1,
     successor: &PrivacyZkX509TrustAnchorRecordV1,
@@ -3063,9 +3041,8 @@ pub fn validate_zk_x509_certificate_policy_revocation_v1(
 ///
 /// # Errors
 ///
-/// Rejects malformed records, namespace or issuer-key changes,
-/// stale/skipped epochs, predecessor substitution, non-increasing
-/// `thisUpdate`, terminal successors, and no-op rotations.
+/// Rejects malformed records, namespace or issuer-key changes, stale/skipped epochs, predecessor
+/// substitution, non-increasing `thisUpdate`, terminal successors, and no-op rotations.
 pub fn validate_zk_x509_crl_rotation_v1(
     current: &PrivacyZkX509CrlRecordV1,
     successor: &PrivacyZkX509CrlRecordV1,
@@ -3110,9 +3087,8 @@ pub fn validate_zk_x509_crl_rotation_v1(
 ///
 /// # Errors
 ///
-/// Rejects malformed records, namespace or issuer-key changes,
-/// stale/skipped epochs, predecessor substitution, nonterminal successors,
-/// or any change to the signed CRL or validity window.
+/// Rejects malformed records, namespace or issuer-key changes, stale/skipped epochs, predecessor
+/// substitution, nonterminal successors, or any change to the signed CRL or validity window.
 pub fn validate_zk_x509_crl_revocation_v1(
     current: &PrivacyZkX509CrlRecordV1,
     successor: &PrivacyZkX509CrlRecordV1,

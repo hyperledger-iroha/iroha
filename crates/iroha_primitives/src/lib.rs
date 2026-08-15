@@ -1,11 +1,9 @@
 //! Data primitives used inside Iroha, but not related directly to the
 //! blockchain-specific data model.
 //!
-//! If you need a thin wrapper around a third-party library, so that
-//! it can be used in `IntoSchema`, as well as [`norito::codec`]'s
-//! `Encode` and `Decode` trait implementations, you should add the
-//! wrapper as a submodule to this crate, rather than into
-//! `iroha_data_model` directly.
+//! If you need a thin wrapper around a third-party library, so that it can be used in `IntoSchema`,
+//! as well as [`norito::codec`]'s `Encode` and `Decode` trait implementations, you should add the
+//! wrapper as a submodule to this crate, rather than into `iroha_data_model` directly.
 #![deny(warnings)]
 pub mod addr;
 pub mod bigint;

@@ -180,8 +180,7 @@ pub(crate) async fn handle_post_evidence_session_challenge(
     }
     response
 }
-/// Consume a WebAuthn assertion and return one case-bound rotating-grant
-/// session.
+/// Consume a WebAuthn assertion and return one case-bound rotating-grant session.
 pub(crate) async fn handle_post_evidence_session(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -850,8 +849,7 @@ fn canonical_query_segment<'a>(segment: &'a str, expected_key: &str) -> Result<&
         Ok(value)
     }
 }
-/// Return a bounded exact-cursor projection of signed, hash-chained,
-/// payload-free receipts.
+/// Return a bounded exact-cursor projection of signed, hash-chained, payload-free receipts.
 pub(crate) async fn handle_get_evidence_audit(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -882,8 +880,7 @@ pub(crate) async fn handle_get_evidence_audit(
     };
     audit_projection_response(&projection)
 }
-/// Return the payload-free durable audit status to explicit auditors or legal
-/// reviewers.
+/// Return the payload-free durable audit status to explicit auditors or legal reviewers.
 pub(crate) async fn handle_get_evidence_status(
     State(state): State<SharedAppState>,
     headers: HeaderMap,

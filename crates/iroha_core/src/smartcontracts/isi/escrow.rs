@@ -953,10 +953,9 @@ pub(crate) fn partition_orderbook_asset_lock(
 }
 /// Atomically settle provider credit and treasury fee from a funded generic asset lock.
 ///
-/// The lock must name `authority` as its explicit release authority. Its seller
-/// is the buyer/funder and its destination is the provider. All balance,
-/// numeric-spec, transfer-policy, expiry, and overflow checks run before any
-/// asset or escrow record is mutated.
+/// The lock must name `authority` as its explicit release authority. Its seller is the buyer/funder
+/// and its destination is the provider. All balance, numeric-spec, transfer-policy, expiry, and
+/// overflow checks run before any asset or escrow record is mutated.
 pub(crate) fn settle_orderbook_asset_lock(
     state_transaction: &mut StateTransaction<'_, '_>,
     escrow_id: &EscrowId,

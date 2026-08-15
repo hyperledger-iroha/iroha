@@ -1,8 +1,7 @@
 //! Planner micro-benchmarks for the FASTPQ production pipeline.
 //!
-//! These benchmarks exercise the canonical planner across CPU and GPU
-//! execution paths so operators can capture comparative performance data
-//! on reference hardware.
+//! These benchmarks exercise the canonical planner across CPU and GPU execution paths so operators
+//! can capture comparative performance data on reference hardware.
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use fastpq_isi::{CANONICAL_PARAMETER_SETS, StarkParameterSet};
 use fastpq_prover::{ExecutionMode, Planner};

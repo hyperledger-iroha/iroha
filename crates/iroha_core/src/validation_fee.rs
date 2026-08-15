@@ -954,10 +954,9 @@ fn reject_ivm_proved_completed_axt_effects(
 }
 /// Re-evaluate a stored or derived instruction list against the policy active at execution time.
 ///
-/// Deferred executables do not retain transaction-level fee-coordinate metadata, so each
-/// execution context must contain one unambiguous authority-paid treasury transfer with the exact
-/// aggregate fee. This deliberately makes pre-activation fee-free work fail closed after policy
-/// activation.
+/// Deferred executables do not retain transaction-level fee-coordinate metadata, so each execution
+/// context must contain one unambiguous authority-paid treasury transfer with the exact aggregate
+/// fee. This deliberately makes pre-activation fee-free work fail closed after policy activation.
 pub(crate) fn enforce_deferred_instruction_list(
     authority: &AccountId,
     instructions: &[InstructionBox],

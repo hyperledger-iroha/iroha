@@ -1,17 +1,15 @@
 //! Durable finalized-ledger billing, statement delivery, and hedge-intent service.
 //!
-//! This module is deliberately a projector and delivery coordinator. Billing
-//! inputs must arrive as typed, contiguous pages from a finalized native-ledger
-//! query. The checkpoint retains rebuildable accrual material, statement
-//! delivery state, acknowledgements, and hedge intents; it never becomes an
-//! independent authority for orderbook, reserve/rent, metering, or penalty
-//! state. Statement signatures are produced by a runtime-only HSM/KMS provider,
-//! and automatic hedge execution is not exposed by this V1 service.
+//! This module is deliberately a projector and delivery coordinator. Billing inputs must arrive as
+//! typed, contiguous pages from a finalized native-ledger query. The checkpoint retains rebuildable
+//! accrual material, statement delivery state, acknowledgements, and hedge intents; it never
+//! becomes an independent authority for orderbook, reserve/rent, metering, or penalty state.
+//! Statement signatures are produced by a runtime-only HSM/KMS provider, and automatic hedge
+//! execution is not exposed by this V1 service.
 //!
-//! Checkpoint compaction and signer/feed-policy rotation use one
-//! consensus-authenticated, governance-signed epoch transition plus a
-//! runtime-only sealed monotonic witness archive. The service hard-stops before
-//! dropping unsettled state and rejects silent history truncation, policy
+//! Checkpoint compaction and signer/feed-policy rotation use one consensus-authenticated,
+//! governance-signed epoch transition plus a runtime-only sealed monotonic witness archive. The
+//! service hard-stops before dropping unsettled state and rejects silent history truncation, policy
 //! substitution, rollback, and skipped predecessors.
 use crate::durable_transaction_forwarder::{AtomicCheckpointStore, CheckpointStoreError};
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -532,10 +530,9 @@ pub enum HedgingBillingRuntimeProviderReadinessErrorV1 {
 }
 /// Stable identity and readiness exposed by an external production provider.
 ///
-/// Implementations own credentials, signing keys, authentication material,
-/// and provider-specific diagnostics. `qualification` must fail when the
-/// provider is unavailable, revoked, stale, test-marked, or otherwise not
-/// production-ready.
+/// Implementations own credentials, signing keys, authentication material, and provider-specific
+/// diagnostics. `qualification` must fail when the provider is unavailable, revoked, stale,
+/// test-marked, or otherwise not production-ready.
 pub trait HedgingBillingRuntimeProviderV1: Send + Sync + fmt::Debug {
     /// Return the stable opaque deployment handle for this provider.
     fn handle(&self) -> &str;
@@ -636,14 +633,12 @@ pub struct HedgingBillingRuntimeAdapterIdentityV1 {
 }
 /// Runtime verifier for consensus-committed journal pages and period closes.
 ///
-/// Implementations must authenticate finality against the configured chain,
-/// verify page inclusion, and prove that a new journal commitment is an
-/// append-only successor (or exact replay) of `previous`. When `previous` is a
-/// compacted epoch frontier, verification must also authenticate semantic
-/// source-identity uniqueness against the native ledger or the sealed
-/// compaction archive; the bounded local receipt set no longer contains those
-/// older identities. A locally generated hash or an unauthenticated Torii
-/// response is not a valid implementation.
+/// Implementations must authenticate finality against the configured chain, verify page inclusion,
+/// and prove that a new journal commitment is an append-only successor (or exact replay) of
+/// `previous`. When `previous` is a compacted epoch frontier, verification must also authenticate
+/// semantic source-identity uniqueness against the native ledger or the sealed compaction archive;
+/// the bounded local receipt set no longer contains those older identities. A locally generated
+/// hash or an unauthenticated Torii response is not a valid implementation.
 pub trait HedgingBillingJournalVerifier: HedgingBillingRuntimeProviderV1 {
     /// Return the current verifier identity.
     ///
@@ -684,10 +679,9 @@ pub trait HedgingBillingJournalVerifier: HedgingBillingRuntimeProviderV1 {
     ) -> Result<(), HedgingBillingExternalError>;
     /// Authenticate one governance-signed compaction frontier against consensus.
     ///
-    /// Verification must bind the exact predecessor root/tail and close
-    /// frontier, archived source/economic digests and counts, retained account
-    /// bases, next sequence, and both policy envelopes. Merely validating the
-    /// governance signature or proof shape is insufficient.
+    /// Verification must bind the exact predecessor root/tail and close frontier, archived
+    /// source/economic digests and counts, retained account bases, next sequence, and both policy
+    /// envelopes. Merely validating the governance signature or proof shape is insufficient.
     ///
     /// # Errors
     ///
@@ -718,13 +712,11 @@ pub trait HedgingBillingFinalizedQuery: HedgingBillingRuntimeProviderV1 {
     /// Whether this adapter supplies typed consensus-authenticated period-close
     /// records as well as finalized journal pages.
     fn supplies_period_closes(&self) -> bool;
-    /// Return the exact current finalized chain head authenticated by this
-    /// query provider.
+    /// Return the exact current finalized chain head authenticated by this query provider.
     ///
-    /// Implementors must not report an unfinalized or locally inferred head.
-    /// They must durably preserve monotonic finalized-head identity across
-    /// provider and daemon restarts. The runtime independently rejects
-    /// in-process regression/equivocation and uses this cursor to bound every
+    /// Implementors must not report an unfinalized or locally inferred head. They must durably
+    /// preserve monotonic finalized-head identity across provider and daemon restarts. The runtime
+    /// independently rejects in-process regression/equivocation and uses this cursor to bound every
     /// query scan as well as projector lag.
     ///
     /// # Errors
@@ -735,9 +727,8 @@ pub trait HedgingBillingFinalizedQuery: HedgingBillingRuntimeProviderV1 {
     ) -> Result<HedgingBillingFinalizedCursorV1, HedgingBillingExternalError>;
     /// Return the next bounded page after the durable projector position.
     ///
-    /// `None` means the adapter has no newer complete finalized view. Local
-    /// process events and unfinalized subscriptions must never implement this
-    /// interface.
+    /// `None` means the adapter has no newer complete finalized view. Local process events and
+    /// unfinalized subscriptions must never implement this interface.
     ///
     /// # Errors
     ///
@@ -997,8 +988,7 @@ impl HedgingBillingServicePolicyV1 {
     ///
     /// # Errors
     ///
-    /// Rejects invalid policy material or an encoding above the V1 policy
-    /// artifact ceiling.
+    /// Rejects invalid policy material or an encoding above the V1 policy artifact ceiling.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, HedgingBillingServiceError> {
         self.validate()?;
         let bytes =
@@ -1238,8 +1228,7 @@ impl HedgingBillingEpochWitnessRecordV1 {
     ///
     /// # Errors
     ///
-    /// Rejects malformed, oversized, tampered, or revision-substituted
-    /// records.
+    /// Rejects malformed, oversized, tampered, or revision-substituted records.
     pub fn validate(&self, max_bytes: u64) -> Result<(), HedgingBillingServiceError> {
         if self.version != HEDGING_BILLING_EPOCH_WITNESS_RECORD_VERSION_V1
             || max_bytes == 0
@@ -1310,12 +1299,10 @@ impl HedgingBillingEpochWitnessRecordV1 {
 }
 /// Runtime-only sealed, monotonic, immutable billing epoch witness archive.
 ///
-/// Implementations must authenticate records at rest, preserve every epoch for
-/// audit export, persist records only through
-/// [`HedgingBillingEpochWitnessRecordV1::to_canonical_bytes`] and
-/// [`HedgingBillingEpochWitnessRecordV1::from_canonical_bytes`], and make
-/// `compare_and_swap_latest` linearizable. Revisions and epochs may never roll
-/// back or fork.
+/// Implementations must authenticate records at rest, preserve every epoch for audit export,
+/// persist records only through [`HedgingBillingEpochWitnessRecordV1::to_canonical_bytes`] and
+/// [`HedgingBillingEpochWitnessRecordV1::from_canonical_bytes`], and make `compare_and_swap_latest`
+/// linearizable. Revisions and epochs may never roll back or fork.
 pub trait HedgingBillingEpochWitnessStore: HedgingBillingRuntimeProviderV1 {
     /// Authenticate sealed-store readiness without reading witness bytes.
     ///
@@ -1737,11 +1724,10 @@ pub trait BillingStatementPublisher: HedgingBillingRuntimeProviderV1 {
     ///
     /// # Errors
     ///
-    /// Returns a fixed failure class. `Unavailable` guarantees that no sink
-    /// write occurred; every uncertain result must be `Ambiguous` and requires
-    /// lookup before retry. A successful return guarantees that immediate and
-    /// future `lookup(idempotency_key)` calls return the immutable exact signed
-    /// statement and receipt.
+    /// Returns a fixed failure class. `Unavailable` guarantees that no sink write occurred; every
+    /// uncertain result must be `Ambiguous` and requires lookup before retry. A successful return
+    /// guarantees that immediate and future `lookup(idempotency_key)` calls return the immutable
+    /// exact signed statement and receipt.
     fn publish(
         &self,
         idempotency_key: [u8; 32],
@@ -1750,10 +1736,9 @@ pub trait BillingStatementPublisher: HedgingBillingRuntimeProviderV1 {
     ) -> Result<BillingStatementPublicationReceiptV1, HedgingBillingExternalError>;
     /// Look up an immutable publication by statement identity.
     ///
-    /// The returned record must include the exact signed statement, allowing
-    /// restart reconciliation even when a rolled-back local checkpoint omitted
-    /// its signed envelope. A publisher must reject statement-ID collisions and
-    /// never replace a previously returned record.
+    /// The returned record must include the exact signed statement, allowing restart reconciliation
+    /// even when a rolled-back local checkpoint omitted its signed envelope. A publisher must
+    /// reject statement-ID collisions and never replace a previously returned record.
     ///
     /// # Errors
     ///
@@ -1814,8 +1799,7 @@ pub trait BillingStatementAcknowledgementAuthority: HedgingBillingRuntimeProvide
     fn identity(
         &self,
     ) -> Result<BillingStatementAcknowledgementAuthorityIdentityV1, HedgingBillingExternalError>;
-    /// Authenticate acknowledgement-authority readiness without reading
-    /// account material.
+    /// Authenticate acknowledgement-authority readiness without reading account material.
     ///
     /// # Errors
     ///
@@ -1857,11 +1841,10 @@ pub trait BillingStatementAcknowledgementAuthority: HedgingBillingRuntimeProvide
 }
 /// Provider wrapper that pins one production identity and public policy.
 ///
-/// The wrapper revalidates the exact handle, revision, and policy digest
-/// immediately before and after every external operation. Read-only results
-/// observed across drift are discarded as unavailable. Results from operations
-/// that may have committed externally are classified as ambiguous so callers
-/// reconcile through their existing immutable lookup protocol.
+/// The wrapper revalidates the exact handle, revision, and policy digest immediately before and
+/// after every external operation. Read-only results observed across drift are discarded as
+/// unavailable. Results from operations that may have committed externally are classified as
+/// ambiguous so callers reconcile through their existing immutable lookup protocol.
 pub struct QualifiedHedgingBillingRuntimeProviderV1<P: HedgingBillingRuntimeProviderV1 + ?Sized> {
     handle: String,
     qualification: HedgingBillingRuntimeProviderQualificationV1,
@@ -1872,8 +1855,7 @@ impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> QualifiedHedgingBillingRuntime
     ///
     /// # Errors
     ///
-    /// Fails for an invalid, unavailable, stale, substituted, or mismatched
-    /// provider binding.
+    /// Fails for an invalid, unavailable, stale, substituted, or mismatched provider binding.
     pub fn try_new(
         expected_handle: &str,
         expected_qualification: HedgingBillingRuntimeProviderQualificationV1,
@@ -2476,9 +2458,8 @@ impl HedgeExecutionSubmissionReceiptV1 {
 }
 /// Adapter boundary for an explicitly operator-authorized venue integration.
 ///
-/// No service loop invokes this trait. The only submission helper requires a
-/// valid authorization, performs authoritative lookup first, and uses the
-/// authorization identity as its idempotency key.
+/// No service loop invokes this trait. The only submission helper requires a valid authorization,
+/// performs authoritative lookup first, and uses the authorization identity as its idempotency key.
 pub trait GovernedHedgeExecutionAdapter: Send + Sync + fmt::Debug {
     /// Return the current venue identity and receipt key.
     ///
@@ -3524,9 +3505,8 @@ pub struct HedgingBillingServiceStatusV1 {
 }
 /// Retention contract for V1 runtime projections.
 ///
-/// The local checkpoint exposes only the active billing epoch. Older epochs
-/// remain available through sealed audit witnesses, not through these bounded
-/// runtime pages.
+/// The local checkpoint exposes only the active billing epoch. Older epochs remain available
+/// through sealed audit witnesses, not through these bounded runtime pages.
 #[derive(
     Debug,
     Clone,
@@ -4034,12 +4014,11 @@ pub enum HedgingBillingRuntimeApiErrorV1 {
 }
 /// Object-safe production API implemented by the supervised `irohad` runtime.
 ///
-/// Torii depends only on this node-owned boundary and never receives the raw
-/// billing service, HSM/KMS adapters, publisher, or hedge-execution adapter.
-/// Projection methods, including reconciliation status, must fail closed unless
-/// a live qualified finalized head proves the retained projection fresh and
-/// remains stable through response construction. Payload-free daemon health and
-/// metrics remain observable while the projection is unavailable.
+/// Torii depends only on this node-owned boundary and never receives the raw billing service,
+/// HSM/KMS adapters, publisher, or hedge-execution adapter. Projection methods, including
+/// reconciliation status, must fail closed unless a live qualified finalized head proves the
+/// retained projection fresh and remains stable through response construction. Payload-free daemon
+/// health and metrics remain observable while the projection is unavailable.
 pub trait HedgingBillingRuntimeApiV1: Send + Sync + fmt::Debug {
     /// Return the current exact checkpoint/finality anchor.
     fn projection_anchor(
@@ -4107,9 +4086,8 @@ impl fmt::Debug for HedgingBillingService {
 impl HedgingBillingService {
     /// Open or initialize a durable service checkpoint.
     ///
-    /// Interrupted signer-only claims are reset to ready because the signer
-    /// cannot publish. Interrupted publication remains ambiguous and requires
-    /// sink lookup before retry.
+    /// Interrupted signer-only claims are reset to ready because the signer cannot publish.
+    /// Interrupted publication remains ambiguous and requires sink lookup before retry.
     ///
     /// # Errors
     ///
@@ -4250,9 +4228,8 @@ impl HedgingBillingService {
     ///
     /// # Errors
     ///
-    /// Rejects gaps, forks, timestamp rollback, late events for an already
-    /// closed period, semantic replay, resource exhaustion, and persistence
-    /// uncertainty without changing in-memory state.
+    /// Rejects gaps, forks, timestamp rollback, late events for an already closed period, semantic
+    /// replay, resource exhaustion, and persistence uncertainty without changing in-memory state.
     pub fn ingest_finalized_page(
         &self,
         page: &HedgingBillingFinalizedEventPageV1,
@@ -4440,9 +4417,8 @@ impl HedgingBillingService {
     }
     /// Consume a bounded sequence of authoritative finalized query pages.
     ///
-    /// A scan stops on `None`, an exact replay, or a page that advances only
-    /// finality without advancing the event sequence. This prevents a faulty
-    /// adapter from spinning on an empty page.
+    /// A scan stops on `None`, an exact replay, or a page that advances only finality without
+    /// advancing the event sequence. This prevents a faulty adapter from spinning on an empty page.
     ///
     /// # Errors
     ///
@@ -4636,12 +4612,11 @@ impl HedgingBillingService {
     }
     /// Compact a fully settled epoch and install an explicitly governed policy successor.
     ///
-    /// This consumes the service instance. Every statement in the compacted
-    /// epoch must already have an authoritative acknowledgement, the journal
-    /// must be exactly at the last authenticated close, and no open accrual may
-    /// cross the frontier. The sealed witness is appended before the local
-    /// checkpoint replacement, allowing restart to recover either side of a
-    /// crash without accepting rollback.
+    /// This consumes the service instance. Every statement in the compacted epoch must already have
+    /// an authoritative acknowledgement, the journal must be exactly at the last authenticated
+    /// close, and no open accrual may cross the frontier. The sealed witness is appended before the
+    /// local checkpoint replacement, allowing restart to recover either side of a crash without
+    /// accepting rollback.
     ///
     /// # Errors
     ///
@@ -4910,9 +4885,8 @@ impl HedgingBillingService {
     }
     /// Sign the first ready statement with a runtime-only HSM/KMS provider.
     ///
-    /// Identity is checked before the durable claim, immediately before the
-    /// signing call, and after the call. The produced signature is verified
-    /// locally before it is persisted.
+    /// Identity is checked before the durable claim, immediately before the signing call, and after
+    /// the call. The produced signature is verified locally before it is persisted.
     ///
     /// # Errors
     ///
@@ -4928,9 +4902,8 @@ impl HedgingBillingService {
     ///
     /// # Errors
     ///
-    /// Fails when the statement is absent or no longer ready, as well as for
-    /// every signer, policy, persistence, and concurrency failure documented
-    /// by [`Self::sign_next_statement`].
+    /// Fails when the statement is absent or no longer ready, as well as for every signer, policy,
+    /// persistence, and concurrency failure documented by [`Self::sign_next_statement`].
     pub fn sign_statement(
         &self,
         statement_id: [u8; 32],
@@ -5051,21 +5024,18 @@ impl HedgingBillingService {
     }
     /// Publish the first signed statement through an authenticated immutable sink.
     ///
-    /// The checkpoint enters the ambiguous state before bytes leave the
-    /// process. Ambiguous sink failures therefore require lookup, never blind
-    /// resubmission.
+    /// The checkpoint enters the ambiguous state before bytes leave the process. Ambiguous sink
+    /// failures therefore require lookup, never blind resubmission.
     ///
     /// # Errors
     ///
-    /// Returns fixed external failures or rejects malformed receipts and
-    /// persistence uncertainty.
+    /// Returns fixed external failures or rejects malformed receipts and persistence uncertainty.
     pub fn publish_next_statement(
         &self,
     ) -> Result<Option<BillingStatementPublicationReceiptV1>, HedgingBillingServiceError> {
         self.publish_statement_selected(None)
     }
-    /// Publish one exact signed statement selected by the supervised fair
-    /// scanner.
+    /// Publish one exact signed statement selected by the supervised fair scanner.
     ///
     /// # Errors
     ///
@@ -5193,8 +5163,7 @@ impl HedgingBillingService {
             }
         }
     }
-    /// Durably acknowledge a published statement under a canonical authenticated
-    /// request binding.
+    /// Durably acknowledge a published statement under a canonical authenticated request binding.
     ///
     /// # Errors
     ///
@@ -5700,8 +5669,7 @@ impl HedgingBillingService {
             acknowledgement,
         })
     }
-    /// Authenticate and durably acknowledge one owner statement at an exact
-    /// checkpoint anchor.
+    /// Authenticate and durably acknowledge one owner statement at an exact checkpoint anchor.
     ///
     /// The statement, canonical account, and idempotency nonce form the
     /// domain-separated request binding. The bounded proof authenticates that
@@ -5718,15 +5686,13 @@ impl HedgingBillingService {
             &mut allow_commit,
         )
     }
-    /// Authenticate and durably acknowledge one owner statement while invoking
-    /// an external authority fence immediately before every durable local
-    /// checkpoint store write.
+    /// Authenticate and durably acknowledge one owner statement while invoking an external
+    /// authority fence immediately before every durable local checkpoint store write.
     ///
     /// # Errors
     ///
-    /// Returns the same bounded runtime API errors as
-    /// [`Self::api_acknowledge_statement`], and maps a failed fence to the
-    /// caller-supplied service error without changing the local checkpoint.
+    /// Returns the same bounded runtime API errors as [`Self::api_acknowledge_statement`], and maps
+    /// a failed fence to the caller-supplied service error without changing the local checkpoint.
     pub fn api_acknowledge_statement_with_precommit_fence(
         &self,
         request: &BillingStatementAcknowledgementRequestV1,
@@ -5993,11 +5959,10 @@ impl HedgingBillingService {
     /// Return at most `limit` actionable statement-delivery projections using
     /// a bounded fair scan rotated by `scan_sequence`.
     ///
-    /// The fixed stage order puts ambiguous-write reconciliation before new
-    /// publication, but the starting stage and record rotate on every worker
-    /// attempt. Each non-empty stage contributes at most one record per round,
-    /// preventing a persistent published or signing backlog from starving the
-    /// other stages.
+    /// The fixed stage order puts ambiguous-write reconciliation before new publication, but the
+    /// starting stage and record rotate on every worker attempt. Each non-empty stage contributes
+    /// at most one record per round, preventing a persistent published or signing backlog from
+    /// starving the other stages.
     ///
     /// # Errors
     ///
@@ -6162,8 +6127,7 @@ impl HedgingBillingService {
     ///
     /// # Errors
     ///
-    /// Rejects an invalid venue identity or any adapter enabling automatic
-    /// execution in V1.
+    /// Rejects an invalid venue identity or any adapter enabling automatic execution in V1.
     pub fn validate_execution_adapter(
         policy: &GovernedHedgeExecutionPolicyV1,
         adapter: &dyn GovernedHedgeExecutionAdapter,
@@ -6189,9 +6153,8 @@ impl HedgingBillingService {
     ///
     /// # Errors
     ///
-    /// Rejects unknown/overflow intents, substituted policies or venues,
-    /// forged/expired authorizations and receipts, automatic adapters, and
-    /// fixed external failures.
+    /// Rejects unknown/overflow intents, substituted policies or venues, forged/expired
+    /// authorizations and receipts, automatic adapters, and fixed external failures.
     pub fn submit_authorized_hedge_intent(
         &self,
         execution_policy: &GovernedHedgeExecutionPolicyV1,

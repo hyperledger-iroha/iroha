@@ -8,26 +8,35 @@ use super::super::super::{
 };
 use super::super::{PersistentDirectRelationV1, VerifiedPersistentWitnessDirectRelationUseV1};
 use super::{
-    DIRECT_RELATION_CODEC_VERSION_V1, DIRECT_RELATION_STATEMENT_MAGIC_V1,
-    EXACT_POLYNOMIAL_OBJECT_BYTES_V1, FINAL_STATEMENT_DOMAIN_V1, MAX_STATEMENT_BYTES_V1,
-    OBJECT_ENTRY_BYTES_V1, RELATION_CORE_DOMAIN_V1, RELATION_LINEAGE_DOMAIN_V1,
-    STATEMENT_PREFIX_BYTES_V1,
+    DIRECT_RELATION_CODEC_VERSION_V1, EXACT_POLYNOMIAL_OBJECT_BYTES_V1, FINAL_STATEMENT_DOMAIN_V1,
+    MAX_STATEMENT_BYTES_V1, RELATION_CORE_DOMAIN_V1, RELATION_LINEAGE_DOMAIN_V1,
 };
 use crate::vega::sponge::Keccak256;
 use core::marker::PhantomData;
+#[path = "statement_v1/galois_b_replay_v1.rs"]
+mod galois_b_replay_v1;
+#[allow(
+    unused_imports,
+    reason = "candidate-only Galois statement replay seam is retained for the pending semantic verifier and cannot mint admission or release authority"
+)]
+pub(in super::super) use galois_b_replay_v1::DirectGaloisBStatementReplayV1;
 #[path = "statement_v1/rkg_one_h0_h1_replay_v1.rs"]
 mod rkg_one_h0_h1_replay_v1;
 pub(in super::super) use rkg_one_h0_h1_replay_v1::DirectRkgOneH0H1StatementReplayV1;
-pub(in super::super) mod object_role {
+#[path = "statement_v1/rkg_one_creator_core_v1.rs"]
+mod rkg_one_creator_core_v1;
+pub(in crate::vega::zk_ams::mkhe) use rkg_one_creator_core_v1::PreparedDirectRkgOneStatementCoreV1;
+use rkg_one_creator_core_v1::build_statement_core_v1;
+pub(in crate::vega::zk_ams::mkhe) mod object_role {
     use super::ZkAmsMkheDirectObjectKindV1;
-    pub(in super::super::super) trait Sealed {
+    pub(in crate::vega::zk_ams::mkhe) trait Sealed {
         const KIND: ZkAmsMkheDirectObjectKindV1;
     }
 }
 macro_rules! direct_object_role {
     ($name:ident, $kind:ident) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub(in super::super) enum $name {}
+        pub(in crate::vega::zk_ams::mkhe) enum $name {}
         impl object_role::Sealed for $name {
             const KIND: ZkAmsMkheDirectObjectKindV1 = ZkAmsMkheDirectObjectKindV1::$kind;
         }
@@ -42,13 +51,13 @@ direct_object_role!(AggregateH0ObjectRoleV1, AggregateH0);
 direct_object_role!(AggregateH1ObjectRoleV1, AggregateH1);
 /// A role-typed public polynomial statement and its exact content address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in super::super) struct DirectPolynomialObjectV1<R: object_role::Sealed> {
+pub(in crate::vega::zk_ams::mkhe) struct DirectPolynomialObjectV1<R: object_role::Sealed> {
     statement_digest: [u8; 32],
     pointer: ZkAmsMkheDirectObjectPointerV1,
     role: PhantomData<fn() -> R>,
 }
 impl<R: object_role::Sealed> DirectPolynomialObjectV1<R> {
-    pub(in super::super) fn new(
+    pub(in crate::vega::zk_ams::mkhe) fn new(
         statement_digest: [u8; 32],
         pointer: ZkAmsMkheDirectObjectPointerV1,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -79,7 +88,7 @@ struct CanonicalObjectEntryV1 {
 }
 /// Exact role-shaped set of separately addressed public polynomials.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in super::super) enum DirectRelationPublicObjectsV1 {
+pub(in crate::vega::zk_ams::mkhe) enum DirectRelationPublicObjectsV1 {
     RkgRoundOne {
         h0: DirectPolynomialObjectV1<RkgH0ObjectRoleV1>,
         h1: DirectPolynomialObjectV1<RkgH1ObjectRoleV1>,
@@ -205,53 +214,36 @@ impl ExpectedDirectRelationStatementV1 {
         let relation = selector.relation;
         let bytes_len = relation.statement_bytes();
         let mut bytes = [0_u8; MAX_STATEMENT_BYTES_V1];
-        put(&mut bytes, 0, &DIRECT_RELATION_STATEMENT_MAGIC_V1);
-        bytes[4] = DIRECT_RELATION_CODEC_VERSION_V1;
-        bytes[5] = relation as u8;
-        bytes[6] = relation.object_count() as u8;
-        bytes[7] = u8::from(capability.ephemeral_commitments.is_some());
-        put(&mut bytes, 8, &(bytes_len as u32).to_be_bytes());
-        put(&mut bytes, 12, &context.profile_digest());
-        put(&mut bytes, 44, &context.roster_digest());
-        put(&mut bytes, 76, &context.key_material_digest());
-        put(&mut bytes, 108, &context.epoch().to_be_bytes());
-        put(&mut bytes, 116, &context.transcript_digest());
-        put(&mut bytes, 148, &selector.context_digest);
-        put(&mut bytes, 180, &selector.prior_round_digest);
-        put(&mut bytes, 212, &capability.binding_set_root);
-        put(&mut bytes, 244, &capability.collective_public_key_digest);
-        bytes[276] = capability.party_index;
-        bytes[277] = selector.evaluated_key_ordinal;
-        bytes[278] = selector.digit_index;
-        put(&mut bytes, 280, &selector.galois_exponent.to_be_bytes());
-        put(
+        let core_end = build_statement_core_v1(
             &mut bytes,
-            284,
-            &capability.ephemeral_record_index.to_be_bytes(),
-        );
-        put(&mut bytes, 288, &capability.party.to_bytes());
-        put(&mut bytes, 320, &capability.secret_identity_digest);
-        put(&mut bytes, 352, &capability.ephemeral_identity_digest);
-        put(&mut bytes, 384, &capability.ephemeral_source_context_digest);
-        put(
-            &mut bytes,
-            416,
-            &capability.ephemeral_source_statement_digest,
-        );
-        put(&mut bytes, 448, &selector.common_a_statement_digest);
-        put(&mut bytes, 480, &selector.target_a_statement_digest);
-        put(&mut bytes, 512, &selector.contribution_statement_digest);
-        let (entries, entry_count) = objects.entries();
-        if entry_count != relation.object_count() {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
-        for (index, entry) in entries.into_iter().take(entry_count).enumerate() {
-            let entry = entry.ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-            let offset = STATEMENT_PREFIX_BYTES_V1 + index * OBJECT_ENTRY_BYTES_V1;
-            put(&mut bytes, offset, &entry.statement_digest);
-            put(&mut bytes, offset + 32, &entry.pointer.encode());
-        }
-        let core_end = STATEMENT_PREFIX_BYTES_V1 + entry_count * OBJECT_ENTRY_BYTES_V1;
+            context,
+            relation,
+            selector.prior_round_digest,
+            capability.ephemeral_commitments.is_some(),
+            objects,
+            |output| {
+                put(output, 212, &capability.binding_set_root);
+                put(output, 244, &capability.collective_public_key_digest);
+                output[276] = capability.party_index;
+                output[277] = selector.evaluated_key_ordinal;
+                output[278] = selector.digit_index;
+                put(output, 280, &selector.galois_exponent.to_be_bytes());
+                put(
+                    output,
+                    284,
+                    &capability.ephemeral_record_index.to_be_bytes(),
+                );
+                put(output, 288, &capability.party.to_bytes());
+                put(output, 320, &capability.secret_identity_digest);
+                put(output, 352, &capability.ephemeral_identity_digest);
+                put(output, 384, &capability.ephemeral_source_context_digest);
+                put(output, 416, &capability.ephemeral_source_statement_digest);
+                put(output, 448, &selector.common_a_statement_digest);
+                put(output, 480, &selector.target_a_statement_digest);
+                put(output, 512, &selector.contribution_statement_digest);
+                Ok(())
+            },
+        )?;
         put(&mut bytes, core_end, &capability.use_digest);
         put(
             &mut bytes,

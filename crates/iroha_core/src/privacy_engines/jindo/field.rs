@@ -67,16 +67,14 @@ impl JindoFieldElementV1 {
     pub(crate) fn from_u64(value: u64) -> Self {
         Self::from_u128(u128::from(value))
     }
-    /// Construct from an unsigned integer known to be smaller than the field
-    /// modulus.
+    /// Construct from an unsigned integer known to be smaller than the field modulus.
     pub(crate) fn from_u128(value: u128) -> Self {
         Self(Self::montgomery_mul_limbs(
             [value as u64, (value >> 64) as u64, 0, 0],
             Self::MONTGOMERY_R2,
         ))
     }
-    /// Construct from a signed integer whose magnitude is smaller than the
-    /// field modulus.
+    /// Construct from a signed integer whose magnitude is smaller than the field modulus.
     pub(crate) fn from_i128(value: i128) -> Self {
         if value < 0 {
             -Self::from_u128(value.unsigned_abs())

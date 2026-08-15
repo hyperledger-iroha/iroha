@@ -1,9 +1,8 @@
 //! A vector that silently deduplicates its elements.
 //!
-//! [`UniqueVec`] wraps a standard [`Vec`] but ensures that each inserted value
-//! appears at most once. The accompanying `unique_vec!`
-//! macro offers a convenient way to construct such collections inline,
-//! discarding any duplicates in the provided list.
+//! [`UniqueVec`] wraps a standard [`Vec`] but ensures that each inserted value appears at most
+//! once. The accompanying `unique_vec!` macro offers a convenient way to construct such collections
+//! inline, discarding any duplicates in the provided list.
 use core::borrow::Borrow;
 use derive_more::{AsRef, Deref};
 use iroha_schema::IntoSchema;

@@ -1,0 +1,3 @@
+fn malformed() -> Json {
+                Json::parse("{\"owner\":")
+            }

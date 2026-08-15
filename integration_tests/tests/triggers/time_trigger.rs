@@ -237,7 +237,7 @@ async fn mint_asset_after_3_sec_scenario(
         .await??;
         let expected_value = init_quantity
             .clone()
-            .checked_add(1u32.into())
+            .checked_add(&1u32.into())
             .expect("quantity should increment");
         let mut target_height = network
             .peers()

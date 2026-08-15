@@ -4,6 +4,7 @@ import java.net.URI;
 import java.security.PublicKey;
 import java.security.Signature;
 import java.util.Base64;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.model.NetworkId;
 
@@ -20,6 +21,16 @@ final class CanonicalRequestSigningTestSupport {
         .setBaseUri(URI.create(baseUri))
         .setLocalSigningContext(new LocalSigningContext(VERIFYING_KEY_NETWORK_ID))
         .build();
+  }
+
+  static String canonicalAccountHeader(final String accountId) {
+    try {
+      return AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null)
+          .address
+          .canonicalHex();
+    } catch (final AccountAddress.AccountAddressException error) {
+      throw new IllegalArgumentException("invalid canonical I105 test account", error);
+    }
   }
 
   static void assertCanonicalSignature(

@@ -1,9 +1,8 @@
 //! Canonical V1 records for Kotodama's typed core-ledger queries.
 //!
-//! The protocol deliberately exposes only the five projections understood by
-//! the V1 core-query host. Page and quantity invariants are enforced during both
-//! construction and Norito decoding so untrusted contract payloads cannot
-//! manufacture values that the host itself would never return.
+//! The protocol deliberately exposes only the five projections understood by the V1 core-query
+//! host. Page and quantity invariants are enforced during both construction and Norito decoding so
+//! untrusted contract payloads cannot manufacture values that the host itself would never return.
 use iroha_data_model::prelude::{
     AccountId, AssetDefinitionId, AssetId, DomainId, Json, NftId, Numeric, NumericOperationError,
     Quantity,

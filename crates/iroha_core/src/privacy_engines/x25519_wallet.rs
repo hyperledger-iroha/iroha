@@ -72,8 +72,7 @@ pub(crate) fn x25519_public_key_v1(
     validate_x25519_public_key_v1(public_key)?;
     Ok(public_key)
 }
-/// Perform strict X25519 key agreement and retain the secret in zeroizing
-/// storage.
+/// Perform strict X25519 key agreement and retain the secret in zeroizing storage.
 pub(crate) fn x25519_shared_secret_v1(
     secret_key: impl Borrow<[u8; 32]>,
     peer_public_key: [u8; 32],

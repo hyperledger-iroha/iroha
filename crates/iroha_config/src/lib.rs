@@ -10,10 +10,9 @@ pub mod parameters;
 pub mod snapshot;
 /// Enables verbose tracing of configuration loading.
 ///
-/// This installs a minimal `log` logger that prints only messages originating
-/// from modules under `iroha_config_base::*` to stderr at `TRACE` level.
-/// It is used early (before the global tracing subscriber is set) to observe
-/// config parsing behavior when `--trace-config` is passed.
+/// This installs a minimal `log` logger that prints only messages originating from modules under
+/// `iroha_config_base::*` to stderr at `TRACE` level. It is used early (before the global tracing
+/// subscriber is set) to observe config parsing behavior when `--trace-config` is passed.
 ///
 /// # Errors
 /// Returns an error if a global logger is already installed via `log`.

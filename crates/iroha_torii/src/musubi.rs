@@ -1,9 +1,8 @@
 //! Torii HTTP helpers for the first-release Musubi package registry.
 //!
-//! Query endpoints accept the bounded data-model request objects directly and
-//! return the corresponding typed finalized result. Instruction endpoints are
-//! pre-signing helpers: they return deterministic Norito-framed instructions
-//! and never accept or load signing material.
+//! Query endpoints accept the bounded data-model request objects directly and return the
+//! corresponding typed finalized result. Instruction endpoints are pre-signing helpers: they return
+//! deterministic Norito-framed instructions and never accept or load signing material.
 use crate::{Error, JsonBody, NoritoJson, Result, SharedAppState};
 use axum::extract::State;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};

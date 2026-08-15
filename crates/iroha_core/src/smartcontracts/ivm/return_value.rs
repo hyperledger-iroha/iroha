@@ -1710,8 +1710,7 @@ fn render_entrypoint_return_record_validated(
 /// Render a canonical nested return record for a client-facing JSON boundary.
 ///
 /// # Errors
-/// Returns an error when the record is oversized, not schema-bound, or atom
-/// kinds differ.
+/// Returns an error when the record is oversized, not schema-bound, or atom kinds differ.
 pub fn render_entrypoint_return_record(
     schema: &EntrypointValueTypeV1,
     record: &EntrypointReturnRecordV1,
@@ -1726,8 +1725,7 @@ pub fn render_entrypoint_return_record(
 /// inactive branches fail closed before any client-facing rendering.
 ///
 /// # Errors
-/// Returns an error for oversized or non-canonical bytes, schema mismatch, or
-/// invalid typed atoms.
+/// Returns an error for oversized or non-canonical bytes, schema mismatch, or invalid typed atoms.
 pub fn decode_entrypoint_return_record(
     schema: &EntrypointValueTypeV1,
     payload: &[u8],

@@ -1772,6 +1772,19 @@ const request = await buildCanonicalJsonRequest({
 const response = await fetch(`${toriiBaseUrl}/v1/aliases/resolve`, request);
 ```
 
+Canonical methods are non-empty ASCII HTTP tokens and signed paths use the
+exact root-relative ASCII wire spelling. The public header builders and the
+fetch-facing JSON builder derive and bound the WHATWG-percent-encoded wire
+query before signing; the standalone query canonicalizer consumes an
+already-wire query. Callback signers return 1--3,309
+non-zero signature bytes. The complete `0x` account-header prefix is reserved
+for canonical address hex, not aliases. Alias headers receive only a bounded
+lowercase-ASCII structural preflight; Torii remains authoritative for UTS-46,
+active-catalog resolution, and controller verification. The SoraFS reputation helper can validate and
+forward an externally constructed canonical witness (strict padded base64, at
+most 768 KiB decoded), but the JavaScript SDK does not yet construct a typed
+multisignature witness end to end.
+
 The `canonical-request` subpath ships standalone DOM declarations, so browser
 TypeScript consumers do not need ambient Node types.
 

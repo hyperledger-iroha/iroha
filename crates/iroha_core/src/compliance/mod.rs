@@ -271,9 +271,8 @@ impl LaneComplianceEngine {
     }
     /// Validate exact lane/dataspace policy coverage for every active lane.
     ///
-    /// Policies for prospective lanes may remain pre-provisioned, but each
-    /// currently active lane must have a policy whose dataspace matches the
-    /// active catalog exactly.
+    /// Policies for prospective lanes may remain pre-provisioned, but each currently active lane
+    /// must have a policy whose dataspace matches the active catalog exactly.
     ///
     /// # Errors
     ///

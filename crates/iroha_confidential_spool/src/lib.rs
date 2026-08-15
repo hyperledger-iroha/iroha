@@ -1,34 +1,28 @@
 //! Authenticated, process-local spooling for bounded confidential chunks.
 //!
-//! Version 1 stores equally sized chunks in write-once slots in an unlinked
-//! Unix temporary file. Every slot is independently protected with
-//! XChaCha20-Poly1305. The file is never reopenable through this API: the live
-//! file descriptor, zeroizing key, immutable layout, context, and arena nonce
-//! prefix move together from [`ConfidentialSpoolWriterV1`] to
+//! Version 1 stores equally sized chunks in write-once slots in an unlinked Unix temporary file.
+//! Every slot is independently protected with XChaCha20-Poly1305. The file is never reopenable
+//! through this API: the live file descriptor, zeroizing key, immutable layout, context, and arena
+//! nonce prefix move together from [`ConfidentialSpoolWriterV1`] to
 //! [`ConfidentialSpoolSnapshotV1`].
 //!
-//! This module deliberately makes narrower claims than encrypted storage. It
-//! does not claim secure deletion, swap exclusion, core-dump exclusion,
-//! page-cache erasure, or an RSS bound. The snapshot digest is deterministic
-//! for the encrypted snapshot, but is neither an authentication authority nor
-//! a hiding commitment. A caller must bind it into its own authenticated
-//! protocol transcript before relying on it.
-//! An unlinked descriptor and the process key memory survive `fork`; callers
-//! must not fork while a spool is live. Close-on-exec, ptrace/procfs isolation,
-//! crash behavior, core policy, and swap remain outside this source guarantee.
-//! The retained spool key, owned plaintext/AAD buffers, AEAD key, derived MAC
-//! key, ChaCha state, and retained Poly1305 state are wiped on ordinary Rust
-//! drops under this crate's declared dependency feature graph. The direct
-//! `poly1305/zeroize` dependency is intentional: it feature-unifies with the
-//! Poly1305 instance inside `chacha20poly1305`, whose `Drop` implementation then
-//! wipes that retained state. This does not guarantee erasure of
-//! compiler/register temporaries, panic-abort paths, or operating-system copies,
-//! and alone cannot satisfy release secret-lifecycle evidence.
+//! This module deliberately makes narrower claims than encrypted storage. It does not claim secure
+//! deletion, swap exclusion, core-dump exclusion, page-cache erasure, or an RSS bound. The snapshot
+//! digest is deterministic for the encrypted snapshot, but is neither an authentication authority
+//! nor a hiding commitment. A caller must bind it into its own authenticated protocol transcript
+//! before relying on it. An unlinked descriptor and the process key memory survive `fork`; callers
+//! must not fork while a spool is live. Close-on-exec, ptrace/procfs isolation, crash behavior,
+//! core policy, and swap remain outside this source guarantee. The retained spool key, owned
+//! plaintext/AAD buffers, AEAD key, derived MAC key, ChaCha state, and retained Poly1305 state are
+//! wiped on ordinary Rust drops under this crate's declared dependency feature graph. The direct
+//! `poly1305/zeroize` dependency is intentional: it feature-unifies with the Poly1305 instance
+//! inside `chacha20poly1305`, whose `Drop` implementation then wipes that retained state. This does
+//! not guarantee erasure of compiler/register temporaries, panic-abort paths, or operating-system
+//! copies, and alone cannot satisfy release secret-lifecycle evidence.
 //!
 //! # Canonical framing
 //!
-//! Integers below are unsigned, big-endian `u64` values. The exact per-slot AAD
-//! is, in order:
+//! Integers below are unsigned, big-endian `u64` values. The exact per-slot AAD is, in order:
 //!
 //! ```text
 //! AAD_DOMAIN
@@ -46,10 +40,9 @@
 //! layout/context-digest/arena prefix, and then, for every slot in numeric
 //! order, `slot || derived_coordinate || ciphertext_record_len || ciphertext
 //! || tag`. The public, non-authorizing derived coordinate is BLAKE3 over
-//! `COORDINATE_DOMAIN`, the public nonsecret context digest, exact layout, and
-//! slot. The context digest must bind the protocol/version/role and complete
-//! canonical slot-to-application-coordinate mapping; reusing it after a
-//! mapping, order, or interpretation change is a caller error.
+//! `COORDINATE_DOMAIN`, the public nonsecret context digest, exact layout, and slot. The context
+//! digest must bind the protocol/version/role and complete canonical slot-to-application-coordinate
+//! mapping; reusing it after a mapping, order, or interpretation change is a caller error.
 use aead::{AeadInOut as _, KeyInit as _};
 use chacha20poly1305::XChaCha20Poly1305;
 use rand_core::{OsRng, TryRngCore as _};
@@ -157,9 +150,8 @@ const _: () = {
 };
 /// Errors returned by the V1 confidential spool.
 ///
-/// Filesystem errors intentionally retain only a coarse operation label and
-/// [`io::ErrorKind`]. They never retain a caller-supplied directory path or an
-/// underlying platform error string.
+/// Filesystem errors intentionally retain only a coarse operation label and [`io::ErrorKind`]. They
+/// never retain a caller-supplied directory path or an underlying platform error string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ConfidentialSpoolErrorV1 {
     /// The layout must contain at least one slot.
@@ -265,12 +257,11 @@ pub enum ConfidentialSpoolErrorV1 {
 }
 /// Immutable fixed-record layout and application context for one V1 spool.
 ///
-/// Constructing a layout performs all record, file, AAD, and
-/// process-address-space geometry checks before filesystem or entropy effects.
-/// The public, nonsecret context digest must bind the protocol/version/role and
-/// the complete canonical slot-to-application-coordinate mapping. It is bound
-/// into every derived coordinate, record, and snapshot digest. This type
-/// exposes no context-digest accessor.
+/// Constructing a layout performs all record, file, AAD, and process-address-space geometry checks
+/// before filesystem or entropy effects. The public, nonsecret context digest must bind the
+/// protocol/version/role and the complete canonical slot-to-application-coordinate mapping. It is
+/// bound into every derived coordinate, record, and snapshot digest. This type exposes no
+/// context-digest accessor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfidentialSpoolLayoutV1 {
     slot_count: u64,
@@ -363,11 +354,10 @@ impl ConfidentialSpoolLayoutV1 {
     }
     /// Construct the sole approved global-lookup plane-opening layout.
     ///
-    /// Its exact 306,603-by-16,384-byte geometry is the only V1 exception to
-    /// the general-purpose detached-file ceiling. The caller's nonzero public
-    /// digest must bind the complete plane/value/blinding/commitment mapping;
-    /// this constructor freezes geometry only and mints no replay or release
-    /// authority.
+    /// Its exact 306,603-by-16,384-byte geometry is the only V1 exception to the general-purpose
+    /// detached-file ceiling. The caller's nonzero public digest must bind the complete
+    /// plane/value/blinding/commitment mapping; this constructor freezes geometry only and mints no
+    /// replay or release authority.
     pub fn global_lookup_plane_openings_v1(
         context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
     ) -> Result<Self, ConfidentialSpoolErrorV1> {
@@ -380,10 +370,9 @@ impl ConfidentialSpoolLayoutV1 {
     }
     /// Construct the sole approved Phase23 RNS-Link secret-main layout.
     ///
-    /// The caller-supplied public digest must bind the protocol version, the
-    /// `main` role, and the complete record/component/block mapping. This
-    /// constructor freezes geometry only; it does not authenticate such a
-    /// mapping or mint protocol authority.
+    /// The caller-supplied public digest must bind the protocol version, the `main` role, and the
+    /// complete record/component/block mapping. This constructor freezes geometry only; it does not
+    /// authenticate such a mapping or mint protocol authority.
     pub fn phase23_rns_link_secret_main_v1(
         context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
     ) -> Result<Self, ConfidentialSpoolErrorV1> {
@@ -425,9 +414,8 @@ impl ConfidentialSpoolLayoutV1 {
     }
     /// Return the exact persistent sequential-cursor bytes.
     ///
-    /// This narrow accounting excludes Rust/allocator overhead, key and arena
-    /// material, the live chunk/AAD/cipher state, filesystem and page cache,
-    /// and all operating-system accounting.
+    /// This narrow accounting excludes Rust/allocator overhead, key and arena material, the live
+    /// chunk/AAD/cipher state, filesystem and page cache, and all operating-system accounting.
     pub const fn writer_cursor_bytes_v1(&self) -> u64 {
         8
     }
@@ -448,13 +436,12 @@ impl ConfidentialSpoolLayoutV1 {
 }
 /// Move-only, zeroizing owner for exactly one plaintext chunk.
 ///
-/// [`Self::new_zeroed_v1`] is the only public constructor. Before initializing
-/// the allocation or exposing it to caller plaintext, it fallibly reserves the
-/// requested length and requires the `Vec`'s visible capacity to equal that
-/// length. The owner never converts or resizes that `Vec`, so no later
-/// allocation can copy a live secret. Borrowing the slice cannot prevent a
-/// caller from explicitly copying or forgetting secret bytes; the owner only
-/// guarantees zeroization of the allocation it retains.
+/// [`Self::new_zeroed_v1`] is the only public constructor. Before initializing the allocation or
+/// exposing it to caller plaintext, it fallibly reserves the requested length and requires the
+/// `Vec`'s visible capacity to equal that length. The owner never converts or resizes that `Vec`,
+/// so no later allocation can copy a live secret. Borrowing the slice cannot prevent a caller from
+/// explicitly copying or forgetting secret bytes; the owner only guarantees zeroization of the
+/// allocation it retains.
 pub struct ConfidentialSpoolChunkV1 {
     bytes: Zeroizing<Vec<u8>>,
     len: u64,
@@ -464,9 +451,8 @@ impl ConfidentialSpoolChunkV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if the length cannot be represented, the fallible
-    /// reserve step fails, or the allocator exposes a capacity other than the
-    /// exact requested length.
+    /// Returns an error if the length cannot be represented, the fallible reserve step fails, or
+    /// the allocator exposes a capacity other than the exact requested length.
     pub fn new_zeroed_v1(len: u64) -> Result<Self, ConfidentialSpoolErrorV1> {
         if len == 0 {
             return Err(ConfidentialSpoolErrorV1::EmptyChunk);
@@ -539,8 +525,7 @@ impl ConfidentialSpoolWriterV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error when descriptor validation, unlink, sizing, or entropy
-    /// generation fails.
+    /// Returns an error when descriptor validation, unlink, sizing, or entropy generation fails.
     pub fn create_in_v1(
         directory: impl AsRef<Path>,
         layout: ConfidentialSpoolLayoutV1,
@@ -634,16 +619,14 @@ impl ConfidentialSpoolWriterV1 {
     }
     /// Consume and authenticate every record, returning an immutable snapshot.
     ///
-    /// Sealing requires all slots and the exact file length. It rereads slots in
-    /// canonical numeric order, hashes the derived coordinate and original
-    /// ciphertext/tag, and authenticates every record before finalizing the
-    /// digest. Any I/O, length, allocation, or authentication error consumes and
-    /// poisons the backing resources.
+    /// Sealing requires all slots and the exact file length. It rereads slots in canonical numeric
+    /// order, hashes the derived coordinate and original ciphertext/tag, and authenticates every
+    /// record before finalizing the digest. Any I/O, length, allocation, or authentication error
+    /// consumes and poisons the backing resources.
     ///
     /// # Errors
     ///
-    /// Returns an error if slots are missing or the canonical authenticated
-    /// seal pass fails.
+    /// Returns an error if slots are missing or the canonical authenticated seal pass fails.
     pub fn seal_v1(mut self) -> Result<ConfidentialSpoolSnapshotV1, ConfidentialSpoolErrorV1> {
         let slot_count = self
             .resources
@@ -712,12 +695,11 @@ impl ConfidentialSpoolSnapshotV1 {
     }
     /// Authentically read one random-access slot into a zeroizing owner.
     ///
-    /// Slot bounds and exact expected-context equality are pure caller
-    /// preflights and do not poison the snapshot. The operation then removes
-    /// the resources, derives the exact coordinate, revalidates the detached
-    /// descriptor, reads the fixed-offset record, and authenticates it. Any
-    /// operational error or unwind permanently drops the file and key; only
-    /// success restores them.
+    /// Slot bounds and exact expected-context equality are pure caller preflights and do not poison
+    /// the snapshot. The operation then removes the resources, derives the exact coordinate,
+    /// revalidates the detached descriptor, reads the fixed-offset record, and authenticates it.
+    /// Any operational error or unwind permanently drops the file and key; only success restores
+    /// them.
     ///
     /// # Errors
     ///

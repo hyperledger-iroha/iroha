@@ -7,14 +7,13 @@
 //! share_i = c_1 * s_i + t * z_i.
 //! ```
 //!
-//! The complete CPK verifier separately proves that the exact persistent T256
-//! commitment opens to a short `s_i` in the first equation. This module
-//! consumes all eight secret-free, proof-verified CPK contributions at ceremony
-//! time, retains their actual ordered commitment points, and makes that opaque
-//! authority mandatory at prove, verify, split, reconstruct, and combine.
-//! Proving additionally reopens the selected state-owned commitment and rejects
-//! a mismatch before randomness is used. No verifier needs another party's
-//! private state, and no caller-supplied digest can mint the authority.
+//! The complete CPK verifier separately proves that the exact persistent T256 commitment opens to a
+//! short `s_i` in the first equation. This module consumes all eight secret-free, proof-verified
+//! CPK contributions at ceremony time, retains their actual ordered commitment points, and makes
+//! that opaque authority mandatory at prove, verify, split, reconstruct, and combine. Proving
+//! additionally reopens the selected state-owned commitment and rejects a mismatch before
+//! randomness is used. No verifier needs another party's private state, and no caller-supplied
+//! digest can mint the authority.
 //!
 //! Equality remains the transitive short-solution claim for the shared CPK
 //! equation; it is not presented as a direct Pedersen cross-opening. Release
@@ -115,10 +114,9 @@ struct PersistentDecryptionStreamingAuthorityV1 {
 struct StreamingDecryptionAuthoritySealV1;
 /// One-shot capability for constructing a bounded decryption statement.
 ///
-/// The capability is move-only and has no decoder, public constructor, raw
-/// pointer constructor, or `Clone` implementation. It can be minted only by
-/// the exact eight-party bounded CPK ceremony below and is consumed by the
-/// explicit streaming-statement constructor.
+/// The capability is move-only and has no decoder, public constructor, raw pointer constructor, or
+/// `Clone` implementation. It can be minted only by the exact eight-party bounded CPK ceremony
+/// below and is consumed by the explicit streaming-statement constructor.
 pub struct ZkAmsMkheStreamingDecryptionAuthorityV1 {
     _seal: StreamingDecryptionAuthoritySealV1,
     context_authority_digest: [u8; 32],
@@ -160,12 +158,11 @@ impl ZkAmsMkheStreamingDecryptionAuthorityMaterialV1 {
 }
 /// Poisoned monotonic builder for the exact ordered eight-party CPK ceremony.
 ///
-/// It is crate-private because the verified CPK contribution type is itself a
-/// sealed internal capability. At most one public share is borrowed by each
-/// transition; no array of eight release-sized shares is accepted or retained.
-/// The buffer bound covers this algorithm, not arbitrary storage retained by a
-/// caller's CAS implementation. Release deployment must use bounded/external
-/// staging and remains blocked on the authenticated whole-worker residency run.
+/// It is crate-private because the verified CPK contribution type is itself a sealed internal
+/// capability. At most one public share is borrowed by each transition; no array of eight
+/// release-sized shares is accepted or retained. The buffer bound covers this algorithm, not
+/// arbitrary storage retained by a caller's CAS implementation. Release deployment must use
+/// bounded/external staging and remains blocked on the authenticated whole-worker residency run.
 #[allow(dead_code)]
 pub(super) struct ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
     roster: ZkAmsMkheGovernedActiveRosterV1,
@@ -278,11 +275,10 @@ impl core::fmt::Debug for ZkAmsMkhePersistentDecryptionVerificationContextV1 {
 }
 /// Move-only authority for one exact governed party and ciphertext statement.
 ///
-/// It is neither `Clone` nor serializable. Each compact statement binding can
-/// issue a fresh set for the exact statement; replay rejection therefore rests
-/// on the bound ciphertext, record, sample, and admission state rather than on
-/// pretending the retained context is a one-shot token. The public prover still
-/// consumes each issued use, and there is no omitted-capability or raw-digest
+/// It is neither `Clone` nor serializable. Each compact statement binding can issue a fresh set for
+/// the exact statement; replay rejection therefore rests on the bound ciphertext, record, sample,
+/// and admission state rather than on pretending the retained context is a one-shot token. The
+/// public prover still consumes each issued use, and there is no omitted-capability or raw-digest
 /// proving overload.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ZkAmsMkhePersistentDecryptionPartyUseV1 {
@@ -372,10 +368,9 @@ impl PersistentDecryptionProofBindingV1 {
 impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
     /// Begin the exact bounded ceremony before generating any party secret.
     ///
-    /// This transition allocates the sole prepared common-`a` backing and all
-    /// bounded metadata capacity. It deliberately does not allocate the
-    /// aggregate polynomial; generation and proof validation can therefore
-    /// never coexist with that second `P`-sized owner.
+    /// This transition allocates the sole prepared common-`a` backing and all bounded metadata
+    /// capacity. It deliberately does not allocate the aggregate polynomial; generation and proof
+    /// validation can therefore never coexist with that second `P`-sized owner.
     pub(super) fn new(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         cpk_transcript_digest: [u8; 32],
@@ -1590,10 +1585,9 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
     }
     /// Mint the exact move-only party-use set for a compact streaming statement.
     ///
-    /// The caller supplies no digest or content address. Every axis is
-    /// recomputed from the retained verified CPK authority and the canonical
-    /// roster/ciphertext pair. Each returned capability is consumed by one
-    /// staged prover invocation.
+    /// The caller supplies no digest or content address. Every axis is recomputed from the retained
+    /// verified CPK authority and the canonical roster/ciphertext pair. Each returned capability is
+    /// consumed by one staged prover invocation.
     pub(super) fn bind_streaming_statement_party_uses_v1(
         &self,
         roster: &ZkAmsMkheGovernedRosterWireV1,

@@ -1,8 +1,7 @@
 //! Frozen integer-only parameters for the revised Jindo first-release profile.
 //!
-//! The upstream search was run only as an external oracle. Consensus never
-//! reruns its floating-point search: every prime, dimension and integer bound
-//! is compiled below.
+//! The upstream search was run only as an external oracle. Consensus never reruns its
+//! floating-point search: every prime, dimension and integer bound is compiled below.
 use super::JINDO_MAX_BATCH_SIZE_V1;
 use iroha_data_model::privacy::IROHA_JINDO_OUTER_COMMITMENT_RANK_V1;
 /// Exact rounded-discrete-Gaussian width for ΠAgg.
@@ -65,10 +64,9 @@ pub(crate) const JINDO_PARAMETERS_V1: JindoParametersV1 = JindoParametersV1 {
 pub const JINDO_SOURCE_PROVENANCE_V1: &[u8] = b"paper=eprint-2026-044-revision-2026-06-02;pdf-sha256=ebf0f9634b2d6a5c42e8f4810a7b9da07c3edd760cfca3d5a8159838d2bdc70e;oracle=ringo-snark@805eab27a4bc5daa01e26eee79a7e20a9394fc76;tree=9b326a6d7ca3421493a7373f7a2cf3382627b1f5;oracle-profile-sha256=88a885219c79f72cfb6a36edc7a32c4a19e81b9032c1c34a4be7e78a0a90004b;oracle-crs-kat-sha256=65921b820fda1ea47d1a75b97e216e6255cb0fa0691ce27eda0f4286a2107ca7";
 /// Domain-separated, reviewable parameter manifest input.
 ///
-/// This profile is exactly the univariate coefficient-encoding specialization.
-/// It makes no claim to implement slot encoding, a general multilinear API, or
-/// dynamic parameter selection. The paper's `S_35` spreadness argument remains
-/// heuristic and the engine therefore remains Experimental.
+/// This profile is exactly the univariate coefficient-encoding specialization. It makes no claim to
+/// implement slot encoding, a general multilinear API, or dynamic parameter selection. The paper's
+/// `S_35` spreadness argument remains heuristic and the engine therefore remains Experimental.
 pub const JINDO_PARAMETER_MANIFEST_V1: &[u8] = b"iroha-jindo-current-v1|paper=eprint-2026-044-current-figures-2-7|specialization=univariate-coefficient-encoding-only;no-slot-encoding;no-general-multilinear-api|field=p=3611623616^8+1,le32|split-challenge=uniform-nonzero-Fp;paper-correct-Fp-star;oracle-digit-sampler-zero-and-minus-one-boundary-corrected|ring=Zq[X]/(X^1024+1)|target-coefficients=256|batch=4-exact|split=1|rows=2|columns=1|slots=128|inner-msis-rank=4|outer-msis-rank=3|mlwe-rank=4|inner-primes=70368744067073,70368744183809|outer-primes=48591984641,48592009217|ambient-prime-oracle=7223242753|exact-split-evaluation=i128-ambient-equivalent;partial-wire=unique-balanced-inner-lift|inner-cutoff=2^43|outer-cutoff=2^48|response-two-norm-lt=26726985705641897984|decomposed-two-norm-lt=4811910842327350272|challenge=complete-uniform-fixed-weight-S_35-over-1024-signed-coefficients;candidate-set-cardinality=4237250353474513005583342210963717757744597392123051014751100017656012472320;difference-invertibility-via-heuristic-well-spreadness-only|mask-sigma=8241321404272819/2|mask-sigma-q64=76012773386902651841814477513162752|mask-tail=14sigma|rejection-rate=6/5;integer-q256;max-attempts=256|rng-health=distinct-256bit-blocks|crs=shake256-domain-separated-iroha|wire=IJP2-fixed-phases-rns-le|assurance=experimental-testnet-only";
 #[cfg(test)]
 mod tests {

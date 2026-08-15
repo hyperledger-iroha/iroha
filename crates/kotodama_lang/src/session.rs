@@ -32,8 +32,7 @@ pub struct CompileRequest<'source> {
 pub struct CompileOutput {
     /// Canonical compiled `.to` bytes.
     ///
-    /// Production output is deployable; test-mode output is a local-only
-    /// generic IVM harness.
+    /// Production output is deployable; test-mode output is a local-only generic IVM harness.
     pub artifact: Vec<u8>,
     /// Exact compiler-owned contract interface for this artifact.
     ///
@@ -174,10 +173,9 @@ impl CompilerSession {
     }
     /// Validate a reusable package and its authenticated locked dependencies.
     ///
-    /// Package frontends use this entry point so typed linking receives the
-    /// exact production, ZK, and test capabilities owned by this compiler
-    /// session. Validation does not synthesize a deployable seiyaku and does
-    /// not emit bytecode.
+    /// Package frontends use this entry point so typed linking receives the exact production, ZK,
+    /// and test capabilities owned by this compiler session. Validation does not synthesize a
+    /// deployable seiyaku and does not emit bytecode.
     pub fn validate_package_graph(
         &self,
         graph: &crate::linker::ModuleBuildGraph,
@@ -196,9 +194,8 @@ impl CompilerSession {
     }
     /// Run the canonical check pipeline and return non-fatal lint findings.
     ///
-    /// Parsing and semantic analysis occur exactly once. Frontends use this
-    /// method to replace the retired standalone linter without maintaining a
-    /// second parser path.
+    /// Parsing and semantic analysis occur exactly once. Frontends use this method to replace the
+    /// retired standalone linter without maintaining a second parser path.
     pub fn check_with_lints(
         &self,
         request: CompileRequest<'_>,
@@ -526,9 +523,8 @@ impl CompilerSession {
     }
     /// Compile a fully resolved and linked typed-HIR program inside the trusted driver.
     ///
-    /// This is the only post-link code-generation entry point. It deliberately
-    /// accepts no AST, so package managers cannot reintroduce source rewriting
-    /// after module type/effect analysis.
+    /// This is the only post-link code-generation entry point. It deliberately accepts no AST, so
+    /// package managers cannot reintroduce source rewriting after module type/effect analysis.
     pub(crate) fn build_typed_program(
         &self,
         program: TypedProgram,

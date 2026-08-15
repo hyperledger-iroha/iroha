@@ -1,10 +1,9 @@
 //! Restart-safe finalized reserve-event ingestion for transparency publication.
 //!
-//! The scanner consumes only exact-anchor immutable reserve pages, verifies
-//! every referenced block against a fresh committed projection, records the
-//! existing payload-free transparency adapter output, and advances its local
-//! cursor only after the durable source index accepts the entry. Query access,
-//! committed-state access, and source storage remain explicit injected seams.
+//! The scanner consumes only exact-anchor immutable reserve pages, verifies every referenced block
+//! against a fresh committed projection, records the existing payload-free transparency adapter
+//! output, and advances its local cursor only after the durable source index accepts the entry.
+//! Query access, committed-state access, and source storage remain explicit injected seams.
 use crate::{
     NodeHandle, TransparencyLedgerSourceEntry, decode_local_checkpoint_canonical,
     read_local_checkpoint_bounded,
@@ -185,8 +184,7 @@ pub enum ReserveTransparencyScannerErrorV1 {
     /// malformed, unsafe, corrupt, or could not be persisted.
     #[error("reserve transparency scanner checkpoint failed validation or persistence")]
     Checkpoint,
-    /// The finalized query handle, revision, policy digest, or readiness
-    /// changed.
+    /// The finalized query handle, revision, policy digest, or readiness changed.
     #[error("reserve transparency finalized-query binding changed")]
     QueryBinding,
     /// The exact immutable query view is temporarily unavailable.
@@ -198,16 +196,13 @@ pub enum ReserveTransparencyScannerErrorV1 {
     /// The immutable archive has not yet captured the fresh committed head.
     #[error("reserve transparency finalized archive is behind committed head")]
     ArchiveLag,
-    /// A persisted, selected, or event cursor is not on the current committed
-    /// chain.
+    /// A persisted, selected, or event cursor is not on the current committed chain.
     #[error("reserve transparency scanner detected a fork or reorganization")]
     ForkOrReorg,
-    /// The immutable query returned a malformed, unbounded, or cursor-divergent
-    /// page.
+    /// The immutable query returned a malformed, unbounded, or cursor-divergent page.
     #[error("reserve transparency finalized query returned an invalid page")]
     InvalidPage,
-    /// The existing reserve-to-transparency adapter rejected the committed
-    /// event.
+    /// The existing reserve-to-transparency adapter rejected the committed event.
     #[error("reserve transparency source adapter rejected a finalized event")]
     SourceAdapter,
     /// The durable source index rejected or could not persist an entry.
@@ -311,8 +306,7 @@ fn checkpoint_payload_digest(
 pub struct ReserveTransparencyTickOutcomeV1 {
     /// Immutable pages consumed during this tick.
     pub pages: u32,
-    /// Source entries durably accepted during this tick, including exact
-    /// idempotent replay.
+    /// Source entries durably accepted during this tick, including exact idempotent replay.
     pub events: u32,
     /// Whether the selected exact anchor had no remaining continuation.
     pub caught_up: bool,
@@ -413,8 +407,7 @@ impl ReserveTransparencyScannerV1 {
             checkpoint,
         })
     }
-    /// Consume at most the configured page budget from one exact immutable
-    /// committed anchor.
+    /// Consume at most the configured page budget from one exact immutable committed anchor.
     ///
     /// The source entry becomes durable before the cursor advances. A crash in
     /// between replays the exact entry into the idempotent source index.

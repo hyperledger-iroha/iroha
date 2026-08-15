@@ -1,5 +1,4 @@
-//! Generate or check header policy sections in `specs/ivm_header*.md`.
-//! Usage:
+//! Generate or check header policy sections in `specs/ivm_header*.md`. Usage:
 //!   cargo run -p ivm --features dev-tools --bin gen_header_doc -- --write
 //!   cargo run -p ivm --features dev-tools --bin gen_header_doc -- --check
 //!   cargo run -p ivm --features dev-tools --bin gen_header_doc -- --write --root /tmp/ivm-doc-stage

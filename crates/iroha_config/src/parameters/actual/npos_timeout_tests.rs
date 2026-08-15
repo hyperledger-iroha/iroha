@@ -266,4 +266,4 @@ fn sorafs_gateway_effective_anonymity_policy_respects_phase_fallback() {
         SorafsAnonymityStage::MajorityPq
     );
 }
-include!("actual/runtime_tail_tests.rs");
+include!("runtime_tail_tests.rs");

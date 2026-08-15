@@ -1,11 +1,9 @@
 //! Deployment-owned evidence-viewer transparency producer boundary.
 //!
-//! The producer accepts only a verified
-//! [`EvidenceViewerTransparencyProjectionV1`], derives a payload-free public
-//! head, and advances a qualified external publisher with compare-and-publish
-//! semantics. It has no scheduler, credential loader, network client, private
-//! key, or filesystem fallback. Deployments own those concerns and inject the
-//! publisher at runtime.
+//! The producer accepts only a verified [`EvidenceViewerTransparencyProjectionV1`], derives a
+//! payload-free public head, and advances a qualified external publisher with compare-and-publish
+//! semantics. It has no scheduler, credential loader, network client, private key, or filesystem
+//! fallback. Deployments own those concerns and inject the publisher at runtime.
 use super::{
     EvidenceViewerRuntimeProviderQualificationErrorV1,
     EvidenceViewerRuntimeProviderQualificationV1, EvidenceViewerRuntimeProviderV1,
@@ -132,8 +130,7 @@ impl EvidenceViewerSignedTransparencyHeadV1 {
     ///
     /// # Errors
     ///
-    /// Rejects every malformed, stale-policy, substituted, forged, or
-    /// noncanonical head.
+    /// Rejects every malformed, stale-policy, substituted, forged, or noncanonical head.
     pub fn verify(
         &self,
         config: &EvidenceViewerTransparencyProducerConfigV1,
@@ -209,11 +206,10 @@ pub enum EvidenceViewerTransparencyPublisherExternalErrorV1 {
 }
 /// Deployment-owned monotonic public-head authority.
 ///
-/// `compare_and_publish` must durably install `body` only when the currently
-/// published head digest equals `body.predecessor_head_digest`. An exact retry
-/// must be idempotent. `load_head` must return the authoritative signed
-/// readback, never a process-local cache. Credentials, private keys, endpoint
-/// discovery, and vendor diagnostics remain inside the implementation.
+/// `compare_and_publish` must durably install `body` only when the currently published head digest
+/// equals `body.predecessor_head_digest`. An exact retry must be idempotent. `load_head` must
+/// return the authoritative signed readback, never a process-local cache. Credentials, private
+/// keys, endpoint discovery, and vendor diagnostics remain inside the implementation.
 pub trait EvidenceViewerTransparencyPublisherV1: EvidenceViewerRuntimeProviderV1 {
     /// Return the governed Ed25519 public verification key.
     fn public_key(&self) -> [u8; 32];
@@ -384,9 +380,8 @@ impl fmt::Debug for QualifiedEvidenceViewerTransparencyPublisherV1 {
 }
 /// Stateless producer coordinating one qualified authoritative publisher.
 ///
-/// Durable cursor state lives exclusively in the external signed public head,
-/// so replica failover and restart always reconcile against the same
-/// authoritative value.
+/// Durable cursor state lives exclusively in the external signed public head, so replica failover
+/// and restart always reconcile against the same authoritative value.
 pub struct EvidenceViewerTransparencyProducerV1 {
     config: EvidenceViewerTransparencyProducerConfigV1,
     publisher: QualifiedEvidenceViewerTransparencyPublisherV1,
@@ -408,8 +403,7 @@ impl EvidenceViewerTransparencyProducerV1 {
             QualifiedEvidenceViewerTransparencyPublisherV1::try_new(&config, publisher)?;
         Ok(Self { config, publisher })
     }
-    /// Resolve an optional producer without accepting partial or unrequested
-    /// runtime injection.
+    /// Resolve an optional producer without accepting partial or unrequested runtime injection.
     ///
     /// # Errors
     ///
@@ -456,9 +450,8 @@ impl EvidenceViewerTransparencyProducerV1 {
     ///
     /// # Errors
     ///
-    /// Fails for invalid source signatures, cursor/checkpoint/archive rollback,
-    /// publisher drift, CAS rejection, ambiguous nonmatching readback, or
-    /// malformed publication state.
+    /// Fails for invalid source signatures, cursor/checkpoint/archive rollback, publisher drift,
+    /// CAS rejection, ambiguous nonmatching readback, or malformed publication state.
     pub fn publish_projection(
         &self,
         projection: &EvidenceViewerTransparencyProjectionV1,

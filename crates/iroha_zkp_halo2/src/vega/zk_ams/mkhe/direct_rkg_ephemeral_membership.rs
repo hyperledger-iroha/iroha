@@ -1,54 +1,34 @@
-//! Exact membership and retained-opening bootstrap for direct RKG ephemerals.
+//! Exact public membership evidence for direct RKG ephemerals.
 //!
-//! One party-local `u_i` is committed in eight canonical T256 chunks under a
-//! role which is disjoint from persistent CPK secrets and CPK public errors.
-//! The public 12,291-byte evidence is bound to the complete direct ceremony
-//! context and the same party's already verified secret-lineage identity.
-//! Only replay of all eight exact membership proofs can mint the move-only
-//! source consumed by the active exact-binding graph.
-//!
-//! The retained opening owns all 131,072 scalar coordinates and all eight
-//! commitment blindings. It never returns either borrow. A purpose-checked
-//! closure is the only way a future RKG round can use them, and construction
-//! recomputes every commitment before retaining the opening.
+//! One party-local `u_i` is committed in eight canonical T256 chunks under a role which is disjoint
+//! from persistent CPK secrets and CPK public errors. The public 12,291-byte evidence is bound to
+//! the complete direct ceremony context and the same party's already verified secret-lineage
+//! identity. This module creates no verified binding or retained secret owner. The party-local
+//! collective state owns the opening, and only a future complete direct-relation verifier may mint
+//! binding authority from this evidence.
 
 use super::{
     MKHE_VERSION_V1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
-    active_exact_binding::{
-        VerifiedPersistentWitnessBindingSetV1, VerifiedPersistentWitnessBindingV1,
-        mint_rkg_ephemeral_binding_from_verified_membership_v1,
-    },
-    direct_collective_eval_ceremony::{
-        ZkAmsMkheDirectCeremonyContextV1, ZkAmsMkheDirectCeremonyRoundV1,
-    },
+    active_exact_binding::VerifiedPersistentWitnessBindingSetV1,
+    direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1,
     exact_eight_chunk_membership::{
         ExactEightChunkMembershipContextV1, ExactEightChunkMembershipErrorV1,
         ExactEightChunkMembershipEvidenceV1, RkgEphemeralMembershipRoleV1,
-        VerifiedExactEightChunkMembershipV1, ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1,
-        ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1,
+        ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1, ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1,
         ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1,
     },
+    manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
 };
 #[cfg(test)]
 use crate::vega::bulletproof_t256::ZkAmsT256MembershipProofV1;
 use crate::{
     generalized_bulletproof::ProofRandomSource,
-    vega::{
-        VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
-        bulletproof_t256::{
-            ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZeroizingT256ScalarCopyV1,
-            ZeroizingT256ScalarVecV1, ZkAmsT256MembershipBoundV1,
-            commit_zk_ams_t256_membership_chunk_v1,
-        },
-        sponge::Keccak256,
-    },
+    vega::{VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, sponge::Keccak256},
 };
 use thiserror::Error;
 const RKG_EPHEMERAL_STATEMENT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-rkg-ephemeral-membership.statement";
-const RKG_EPHEMERAL_VERIFIED_SOURCE_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.mkhe.direct-rkg-ephemeral-membership.verified-source";
 const _: () = {
     assert!(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 == 8);
     assert!(ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1 == 131_072);
@@ -94,7 +74,6 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
         bindings: &VerifiedPersistentWitnessBindingSetV1,
         direct_context: &ZkAmsMkheDirectCeremonyContextV1,
         party_index: usize,
-        record_index: u32,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         roster.validate()?;
         direct_context.validate_rkg_ephemeral_membership_axes(roster, bindings)?;
@@ -102,9 +81,12 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
             .participants()
             .get(party_index)
             .ok_or(ZkAmsMkheErrorV1::InvalidPartySet)?;
-        if record_index == 0 {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
+        let record_index = canonical_rkg_ephemeral_record_index_v1(
+            direct_context.evaluated_key_ordinal(),
+            direct_context.digit_index(),
+            party_index,
+        )
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         let mut context = Self {
             profile_digest: direct_context.profile_digest(),
             roster_digest: direct_context.roster_digest(),
@@ -136,7 +118,12 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
             || self.direct_context_digest == [0; 32]
             || self.party.to_bytes() == [0; 32]
             || self.evaluated_key_ordinal != 0
-            || self.record_index == 0
+            || Some(self.record_index)
+                != canonical_rkg_ephemeral_record_index_v1(
+                    self.evaluated_key_ordinal,
+                    self.digit_index,
+                    usize::from(self.party_index),
+                )
             || self.secret_lineage_identity_digest == [0; 32]
             || self.statement_digest == [0; 32]
             || self.statement_digest != rkg_ephemeral_statement_digest_v1(self)
@@ -175,6 +162,29 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
     pub(super) const fn record_index(self) -> u32 {
         self.record_index
     }
+    pub(super) const fn digit_index(self) -> u8 {
+        self.digit_index
+    }
+}
+fn canonical_rkg_ephemeral_record_index_v1(
+    evaluated_key_ordinal: u8,
+    digit_index: u8,
+    party_index: usize,
+) -> Option<u32> {
+    let profile = release_profile_v1();
+    if evaluated_key_ordinal != 0
+        || usize::from(digit_index) >= profile.gadget_digits
+        || party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+    {
+        return None;
+    }
+    usize::from(evaluated_key_ordinal)
+        .checked_mul(profile.gadget_digits)
+        .and_then(|base| base.checked_add(usize::from(digit_index)))
+        .and_then(|coordinate| coordinate.checked_mul(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1))
+        .and_then(|base| base.checked_add(party_index))
+        .and_then(|zero_based| zero_based.checked_add(1))
+        .and_then(|record_index| u32::try_from(record_index).ok())
 }
 fn rkg_ephemeral_statement_digest_v1(
     context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
@@ -250,17 +260,11 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1 {
         }
         self.inner.to_wire_bytes().map_err(Into::into)
     }
-    /// Replay all eight proofs and mint the sole move-only wrapper source.
-    pub(super) fn into_verified(
-        self,
-    ) -> Result<VerifiedRkgEphemeralMembershipSourceV1, ZkAmsMkheDirectRkgEphemeralMembershipErrorV1>
-    {
-        self.context.validate()?;
-        if self.inner.context() != self.context.to_exact()? {
-            return Err(ZkAmsMkheDirectRkgEphemeralMembershipErrorV1::Context);
-        }
-        let verified = self.inner.into_verified()?;
-        VerifiedRkgEphemeralMembershipSourceV1::from_exact_verifier(self.context, verified)
+    pub(super) const fn context(&self) -> ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
+        self.context
+    }
+    pub(super) fn commitments(&self) -> [Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1] {
+        self.inner.commitments()
     }
     #[cfg(test)]
     pub(super) fn assemble_for_test(
@@ -275,312 +279,7 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1 {
         )?;
         Ok(Self { context, inner })
     }
-    #[cfg(test)]
-    pub(super) fn into_verified_with_for_test<F>(
-        self,
-        verify_chunk: F,
-    ) -> Result<VerifiedRkgEphemeralMembershipSourceV1, ZkAmsMkheDirectRkgEphemeralMembershipErrorV1>
-    where
-        F: FnMut(
-            [u8; 32],
-            u16,
-            &ZkAmsT256MembershipProofV1,
-        ) -> Result<[u8; 32], ExactEightChunkMembershipErrorV1>,
-    {
-        self.context.validate()?;
-        if self.inner.context() != self.context.to_exact()? {
-            return Err(ZkAmsMkheDirectRkgEphemeralMembershipErrorV1::Context);
-        }
-        let verified = self.inner.into_verified_with_for_test(verify_chunk)?;
-        VerifiedRkgEphemeralMembershipSourceV1::from_exact_verifier(self.context, verified)
-    }
-}
-/// Move-only exact-verifier source for one RKG-ephemeral binding.
-///
-/// This type has no decoder, public constructor, or `Clone` implementation.
-/// Its only constructor consumes the move-only result of all eight exact
-/// membership verifications.
-pub(super) struct VerifiedRkgEphemeralMembershipSourceV1 {
-    context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
-    verified: VerifiedExactEightChunkMembershipV1<RkgEphemeralMembershipRoleV1>,
-    source_verification_digest: [u8; 32],
-}
-impl VerifiedRkgEphemeralMembershipSourceV1 {
-    fn from_exact_verifier(
-        context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
-        verified: VerifiedExactEightChunkMembershipV1<RkgEphemeralMembershipRoleV1>,
-    ) -> Result<Self, ZkAmsMkheDirectRkgEphemeralMembershipErrorV1> {
-        context.validate()?;
-        if verified.context() != context.to_exact()? {
-            return Err(ZkAmsMkheDirectRkgEphemeralMembershipErrorV1::Context);
-        }
-        let mut source = Self {
-            context,
-            verified,
-            source_verification_digest: [0; 32],
-        };
-        source.source_verification_digest = verified_source_digest_v1(&source)?;
-        source
-            .validate_against(context)
-            .map_err(|_| ZkAmsMkheDirectRkgEphemeralMembershipErrorV1::Context)?;
-        Ok(source)
-    }
-    pub(super) fn validate_against(
-        &self,
-        expected_context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
-    ) -> Result<(), ZkAmsMkheErrorV1> {
-        expected_context
-            .validate()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-        if self.context != expected_context
-            || self.verified.context()
-                != expected_context
-                    .to_exact()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?
-            || self.source_verification_digest == [0; 32]
-            || self.source_verification_digest
-                != verified_source_digest_v1(self)
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
-        Ok(())
-    }
-    pub(super) const fn generator_basis_digest(&self) -> [u8; 32] {
-        self.verified.generator_basis_digest()
-    }
-    pub(super) const fn commitments(&self) -> &[Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1] {
-        self.verified.commitments()
-    }
-    pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
-        self.verified.commitment_set_digest()
-    }
-    pub(super) const fn membership_proof_digest(&self) -> [u8; 32] {
-        self.verified.proof_set_digest()
-    }
-    pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
-        self.verified.verifier_transcript_digest()
-    }
-    pub(super) const fn source_verification_digest(&self) -> [u8; 32] {
-        self.source_verification_digest
-    }
-}
-impl core::fmt::Debug for VerifiedRkgEphemeralMembershipSourceV1 {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("VerifiedRkgEphemeralMembershipSourceV1")
-            .field("context", &self.context)
-            .field(
-                "commitment_set_digest",
-                &hex::encode(self.commitment_set_digest()),
-            )
-            .field(
-                "source_verification_digest",
-                &hex::encode(self.source_verification_digest),
-            )
-            .finish_non_exhaustive()
-    }
-}
-fn verified_source_digest_v1(
-    source: &VerifiedRkgEphemeralMembershipSourceV1,
-) -> Result<[u8; 32], ExactEightChunkMembershipErrorV1> {
-    source
-        .context
-        .validate()
-        .map_err(|_| ExactEightChunkMembershipErrorV1::Context)?;
-    let exact_context = source.context.to_exact().map_err(|error| match error {
-        ZkAmsMkheDirectRkgEphemeralMembershipErrorV1::ExactMembership(error) => error,
-        ZkAmsMkheDirectRkgEphemeralMembershipErrorV1::Context => {
-            ExactEightChunkMembershipErrorV1::Context
-        }
-    })?;
-    if source.verified.context() != exact_context {
-        return Err(ExactEightChunkMembershipErrorV1::Context);
-    }
-    let mut hash = Keccak256::new();
-    hash.update(RKG_EPHEMERAL_VERIFIED_SOURCE_DOMAIN_V1);
-    hash.update(&[MKHE_VERSION_V1]);
-    hash.update(&source.context.statement_digest());
-    hash.update(&exact_context.context_digest());
-    hash.update(&source.verified.generator_basis_digest());
-    hash.update(&source.verified.commitment_set_digest());
-    hash.update(&source.verified.proof_set_digest());
-    hash.update(&source.verified.verifier_transcript_digest());
-    Ok(hash.finalize())
-}
-/// Move-only owner of one exact RKG-ephemeral opening and its compact binding.
-pub(super) struct RetainedRkgEphemeralOpeningV1 {
-    context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
-    binding: VerifiedPersistentWitnessBindingV1,
-    u: ZeroizingT256ScalarVecV1,
-    blindings: [ZeroizingT256ScalarCopyV1; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
-}
-impl RetainedRkgEphemeralOpeningV1 {
-    /// Verify, bind, and retain one complete opening.
-    ///
-    /// The returned second value is an explicit fork of compact public
-    /// binding metadata only. Neither the 131,072 coordinates nor any
-    /// blinding is duplicated by that fork.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn from_verified_membership(
-        roster: &ZkAmsMkheGovernedActiveRosterV1,
-        bindings: &VerifiedPersistentWitnessBindingSetV1,
-        direct_context: &ZkAmsMkheDirectCeremonyContextV1,
-        party_index: usize,
-        record_index: u32,
-        source: VerifiedRkgEphemeralMembershipSourceV1,
-        u: ZeroizingT256ScalarVecV1,
-        blindings: [ZeroizingT256ScalarCopyV1; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
-    ) -> Result<(Self, VerifiedPersistentWitnessBindingV1), ZkAmsMkheErrorV1> {
-        let context = ZkAmsMkheDirectRkgEphemeralMembershipContextV1::from_verified_binding_set(
-            roster,
-            bindings,
-            direct_context,
-            party_index,
-            record_index,
-        )?;
-        source.validate_against(context)?;
-        let binding = mint_rkg_ephemeral_binding_from_verified_membership_v1(
-            roster,
-            bindings,
-            direct_context,
-            party_index,
-            record_index,
-            source,
-        )?;
-        let (binding, verifier_binding) = binding.fork_for_state_and_verifier_v1();
-        bindings.validate_rkg_ephemeral_binding_for_direct_context(
-            roster,
-            direct_context,
-            party_index,
-            &binding,
-            ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne,
-        )?;
-        bindings.validate_rkg_ephemeral_binding_for_direct_context(
-            roster,
-            direct_context,
-            party_index,
-            &binding,
-            ZkAmsMkheDirectCeremonyRoundV1::RkgRoundTwo,
-        )?;
-        verify_retained_opening_commitments_v1(&binding, &u, &blindings)?;
-        Ok((
-            Self {
-                context,
-                binding,
-                u,
-                blindings,
-            },
-            verifier_binding,
-        ))
-    }
-    /// Borrow the retained opening only inside one authorized RKG-round call.
-    ///
-    /// `RkgNormalize` and `Galois` are rejected before the closure runs. The
-    /// closure cannot return a borrow tied to these arguments, so neither
-    /// secret slice escapes this boundary.
-    pub(super) fn with_borrowed_opening_for_round<T, F>(
-        &self,
-        roster: &ZkAmsMkheGovernedActiveRosterV1,
-        bindings: &VerifiedPersistentWitnessBindingSetV1,
-        direct_context: &ZkAmsMkheDirectCeremonyContextV1,
-        round: ZkAmsMkheDirectCeremonyRoundV1,
-        use_opening: F,
-    ) -> Result<T, ZkAmsMkheErrorV1>
-    where
-        F: FnOnce(&[Scalar], [&Scalar; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1]) -> T,
-    {
-        let expected = ZkAmsMkheDirectRkgEphemeralMembershipContextV1::from_verified_binding_set(
-            roster,
-            bindings,
-            direct_context,
-            self.context.party_index(),
-            self.context.record_index(),
-        )?;
-        if expected != self.context || expected.direct_context_digest() != direct_context.digest() {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
-        bindings.validate_rkg_ephemeral_binding_for_direct_context(
-            roster,
-            direct_context,
-            self.context.party_index(),
-            &self.binding,
-            round,
-        )?;
-        let blindings = core::array::from_fn(|index| self.blindings[index].as_ref());
-        verify_retained_opening_commitments_v1(&self.binding, &self.u, &self.blindings)?;
-        Ok(use_opening(self.u.as_slice(), blindings))
-    }
-}
-impl core::fmt::Debug for RetainedRkgEphemeralOpeningV1 {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("RetainedRkgEphemeralOpeningV1")
-            .field("context", &self.context)
-            .field("u", &"[REDACTED; 131072]")
-            .field("blindings", &"[REDACTED; 8]")
-            .finish_non_exhaustive()
-    }
-}
-fn verify_retained_opening_commitments_v1(
-    binding: &VerifiedPersistentWitnessBindingV1,
-    u: &ZeroizingT256ScalarVecV1,
-    blindings: &[ZeroizingT256ScalarCopyV1; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
-) -> Result<(), ZkAmsMkheErrorV1> {
-    if u.len() != ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1 {
-        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-    }
-    for (index, chunk) in u
-        .as_slice()
-        .chunks_exact(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1)
-        .enumerate()
-    {
-        let coefficients = ZeroizingRkgEphemeralCoefficientChunkV1::from_scalars(chunk)?;
-        let commitment = commit_zk_ams_t256_membership_chunk_v1(
-            ZkAmsT256MembershipBoundV1::One,
-            coefficients.as_slice(),
-            blindings[index].as_ref(),
-        )
-        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
-        if binding.commitments()[index] != commitment {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
-    }
-    Ok(())
-}
-struct ZeroizingRkgEphemeralCoefficientChunkV1(Vec<i8>);
-impl ZeroizingRkgEphemeralCoefficientChunkV1 {
-    fn from_scalars(values: &[Scalar]) -> Result<Self, ZkAmsMkheErrorV1> {
-        if values.len() != ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1 {
-            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-        }
-        let mut coefficients = Self(Vec::with_capacity(values.len()));
-        for value in values {
-            let coefficient = if value == &Scalar::zero() {
-                0
-            } else if value == &Scalar::one() {
-                1
-            } else if value == &-Scalar::one() {
-                -1
-            } else {
-                return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-            };
-            coefficients.0.push(coefficient);
-        }
-        Ok(coefficients)
-    }
-    fn as_slice(&self) -> &[i8] {
-        &self.0
-    }
-}
-impl Drop for ZeroizingRkgEphemeralCoefficientChunkV1 {
-    fn drop(&mut self) {
-        let coefficients = core::hint::black_box(&mut self.0);
-        coefficients.fill(0);
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        let _ = core::hint::black_box(&mut *coefficients);
-    }
 }
 #[cfg(test)]
 #[path = "direct_rkg_ephemeral_membership_tests.rs"]
-mod tests;
+pub(super) mod tests;

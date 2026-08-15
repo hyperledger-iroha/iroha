@@ -1,0 +1,273 @@
+{
+  "fixtures": [
+    {
+      "byte_len": 283,
+      "content_sha256": "5d7c8d71146548f95df19d90324675d832394c5a64fa20c266e5da7ed379d835",
+      "path": "crates/kotodama_lang/src/ir/test_sources/named_struct_literal_evaluates_fields_in_source_order_before_layout_1.ko"
+    },
+    {
+      "byte_len": 190,
+      "content_sha256": "a56c71e2b6274468f845efc7a765cee615a8ffbde53bc559c6225a314a3d2847",
+      "path": "crates/kotodama_lang/src/ir/test_sources/named_struct_literal_lowers_in_declaration_order_1.ko"
+    },
+    {
+      "byte_len": 273,
+      "content_sha256": "818b1e1d07e82ffcca9780b5c360828eb7ece0e530778f8d20e5f2bd2e4742cc",
+      "path": "crates/kotodama_lang/src/ir/test_sources/wrapping_builtins_have_distinct_ir_1.ko"
+    },
+    {
+      "byte_len": 165,
+      "content_sha256": "3e5c8e6e38ecdaeb4f059b7950f9a01a76d2b4bd504cb48b013972157efe13e0",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/actor_helpers_reject_non_test_functions_1.ko"
+    },
+    {
+      "byte_len": 671,
+      "content_sha256": "5aadd5c3e5f300514c4d794ddb21a635389dd6ab355b19e0fbae8a739b4d3a9d",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/canonical_context_and_ledger_namespaces_type_check_1.ko"
+    },
+    {
+      "byte_len": 167,
+      "content_sha256": "7af99feb6f49d9e19b02d11ee31ad46ddf8327bc557e42bc55e205aa6e21571a",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/discarded_branch_tail_does_not_count_as_function_return_coverage_1.ko"
+    },
+    {
+      "byte_len": 1284,
+      "content_sha256": "eecc93695294ca7b1985dedc8781b761ea81da7d7c27c42e9dc50c14d98df8e2",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/divergent_expression_arms_inhabit_the_sibling_value_type_1.ko"
+    },
+    {
+      "byte_len": 334,
+      "content_sha256": "c9e543be6e29b10e23a22f2d698e99d0397a132bb1c53699ba6fdf08131e1b17",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/durable_option_and_result_accept_aggregate_payloads_1.ko"
+    },
+    {
+      "byte_len": 860,
+      "content_sha256": "f1defd389d4c57f5bb80dda5a82d0f51b940be32653f7b27ada83a8cb40d5ef5",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/durable_state_maps_accept_forward_declared_struct_values_1.ko"
+    },
+    {
+      "byte_len": 109,
+      "content_sha256": "65e13e6b78a71df0a164fef867482a0af8f98e870ce9d29b8b04aeb96168acf0",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/durable_string_state_is_supported_1.ko"
+    },
+    {
+      "byte_len": 151,
+      "content_sha256": "7f4257c4ec3424adf0c598259ba7ec194d6fe324a46be98f52b4713ed4ddcfc6",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/durable_struct_string_field_is_supported_1.ko"
+    },
+    {
+      "byte_len": 711,
+      "content_sha256": "7cd3f01ea6010f32fe27cac938d7e73c117f224ef08b22f3ed751d689ceeb3ac",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/escrow_open_offer_signature_matches_the_host_abi_1.ko"
+    },
+    {
+      "byte_len": 559,
+      "content_sha256": "213a651c9e6bc56e853d8267ced895db1e9c0155a32a9a8abd7c9d2e28870e1a",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/escrow_open_offer_signature_matches_the_host_abi_2.ko"
+    },
+    {
+      "byte_len": 386,
+      "content_sha256": "1042195dd11fa81c384ade2523188189665a2bd2de62206b3c9a4cb55cfd1531",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_accepts_name_literal_target_1.ko"
+    },
+    {
+      "byte_len": 373,
+      "content_sha256": "6716dc25763d37b479cd785568731fbfbaf5965c1a752c0d2226c873639c1bbf",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_accepts_test_functions_1.ko"
+    },
+    {
+      "byte_len": 461,
+      "content_sha256": "8bc47e574abfea2c3e041e459b8bf64388bd6d55a383e1b6fe1ce029638dc0dc",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_as_accepts_tuple_returning_targets_1.ko"
+    },
+    {
+      "byte_len": 902,
+      "content_sha256": "773a8f44053f6dd33c42d23180fe1fadfb4f4db7c6e883062ce7244894223774",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_as_and_actor_helpers_type_check_in_tests_1.ko"
+    },
+    {
+      "byte_len": 262,
+      "content_sha256": "56a9ec98402b27406ddbc5e4afea0c53a00631e70509a71524cabdb0ee6ece19",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_rejects_internal_target_1.ko"
+    },
+    {
+      "byte_len": 278,
+      "content_sha256": "ca2db49a65f921f4b5d7063c5451f1ba71fb10ed73c8d58c552be8edd5bab89d",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_rejects_non_json_payload_1.ko"
+    },
+    {
+      "byte_len": 347,
+      "content_sha256": "553b0137183f74fc48e6b42a6e8ff9df0e6dc5f51b5d1bf57aa6e25ebb0d1822",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_rejects_non_literal_target_1.ko"
+    },
+    {
+      "byte_len": 279,
+      "content_sha256": "a089b563f7719d5ff4af240c972de098551475bd67fe521e9f8c72aa54066944",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/invoke_entrypoint_rejects_non_test_functions_1.ko"
+    },
+    {
+      "byte_len": 348,
+      "content_sha256": "93337d2db653248a64db351ad5897d93d9b47bd3db04282aae6bb2dc99c39073",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/invokes_lifecycle_1.ko"
+    },
+    {
+      "byte_len": 173,
+      "content_sha256": "d0ef6b137ebe0436ba85f2ef1603021199f8a51252da79a39770ed1144c67335",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/invokes_private_helper_1.ko"
+    },
+    {
+      "byte_len": 380,
+      "content_sha256": "be5f605e2def9dd914b97eb24992f06379591003e6753d9eaba1cdec96ddd85e",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/japanese_branded_capability_segments_normalize_to_the_canonical_registry_1.ko"
+    },
+    {
+      "byte_len": 95,
+      "content_sha256": "ba3bfba804f28d1bb39e44f5d332b0752ed0f5e9ed4f5999d6051f55505bbe1b",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/json_parse_literals_fail_during_semantic_analysis_1.ko"
+    },
+    {
+      "byte_len": 81,
+      "content_sha256": "abfa0283db9b1ae436b94886831bad8fc786170ed4c85e1486f5c54f162320f0",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/json_parse_literals_fail_during_semantic_analysis_2.ko"
+    },
+    {
+      "byte_len": 78,
+      "content_sha256": "9462b81168c799acf4d7a6b592081f3e7699f64c76a20a3540f4ade83943dd80",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_1.ko"
+    },
+    {
+      "byte_len": 77,
+      "content_sha256": "47b8cbc0049786887db4e34f1b8b5a5d28de28ff6e7e1260144f21b5676e6cdb",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_2.ko"
+    },
+    {
+      "byte_len": 114,
+      "content_sha256": "5666612264e4bcd8b3f4b289f283765c2c1d85206a55f690695b8e6b4a50feac",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_3.ko"
+    },
+    {
+      "byte_len": 92,
+      "content_sha256": "17c5302ba8566581da5bd4467ce84036e3415eacdb4c81cac719614eaaa1f01a",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_4.ko"
+    },
+    {
+      "byte_len": 692,
+      "content_sha256": "027afef5f6648d70ebd8de3d8ee46c8ea2522f3561150a6d6123c14a2b894cee",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/list_contains_accepts_recursive_durable_aggregates_1.ko"
+    },
+    {
+      "byte_len": 804,
+      "content_sha256": "bb8766a3ea8c3371e3dbfbd6d2cbf607dbed442cb8044e85f40080744055d49b",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/local_sum_annotations_resolve_aggregate_payloads_contextually_1.ko"
+    },
+    {
+      "byte_len": 352,
+      "content_sha256": "809243d2f610822f79f79afaaa385064b9d50c40f1a8772c0e40e8aee007d260",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback_1.ko"
+    },
+    {
+      "byte_len": 219,
+      "content_sha256": "ac49aa29596f8dd5972e8c6718947124ef43758aed62cf5f870ae2a2666e9622",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/namespaced_trigger_callback_does_not_require_local_entrypoint_1.ko"
+    },
+    {
+      "byte_len": 107,
+      "content_sha256": "cba46e9c22ed4443b80a85e8abdcbd457da31949fbf6e514b0587bfba4ef2224",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/native_json_rejects_decoded_duplicate_keys_and_oversized_nodes_1.ko"
+    },
+    {
+      "byte_len": 168,
+      "content_sha256": "b512cfc9e3b4dece82f3d25decc4c0561aaf11357f041886c2fcad9a7816bc1e",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/standalone_test_helpers_preserve_external_entrypoint_kind_1.ko"
+    },
+    {
+      "byte_len": 345,
+      "content_sha256": "ea3864369adf3a7537b245460484d9da3c7f8658465eb3bfeefaade78bb8a29d",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/standalone_test_helpers_preserve_external_entrypoint_kind_2.ko"
+    },
+    {
+      "byte_len": 788,
+      "content_sha256": "354d37350c30b5841e9e38a686488cde43a77edb24dbb01a176b44439890da77",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/tail_sums_matches_if_let_and_propagation_type_check_together_1.ko"
+    },
+    {
+      "byte_len": 449,
+      "content_sha256": "0b9d2feb0fbf74db9162967d3c9e3c0dbe70a8405e5f6883cde17adb039b728c",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_callbacks_accept_trigger_event_payload_helpers_1.ko"
+    },
+    {
+      "byte_len": 294,
+      "content_sha256": "fddb860c4bcffa9cb94e2efb03b65ac309ed71b817d0f3bac0f9d6dbe19470f4",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_decl_cannot_target_lifecycle_entrypoints_through_constructed_ast_1.ko"
+    },
+    {
+      "byte_len": 255,
+      "content_sha256": "dc5eef0f8288487d38b35bb29a4887e764029047af9c2f7558f23b54a8e24f4c",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_decl_rejects_invalid_authority_1.ko"
+    },
+    {
+      "byte_len": 290,
+      "content_sha256": "64c1e95744089ab52529527f4abec097d7494fd1faacca07da0277745f7fa523",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_decl_rejects_invalid_data_matcher_literal_1.ko"
+    },
+    {
+      "byte_len": 175,
+      "content_sha256": "70ebc40515f03580e636803a2ed1af6095c18c64b77dd4417fba21a0f194ad7d",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_decl_requires_kotoage_entrypoint_1.ko"
+    },
+    {
+      "byte_len": 200,
+      "content_sha256": "4d452b4a6542950476524fe70ec32289d260a4d319553c0b0115e5860d375631",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_decl_supports_data_filter_1.ko"
+    },
+    {
+      "byte_len": 215,
+      "content_sha256": "b76e727f69d87e405ca7900ff5feb18db392f8a481db9b4c93845d960a8714fd",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_decl_supports_pipeline_filter_1.ko"
+    },
+    {
+      "byte_len": 221,
+      "content_sha256": "d6d9886c781fe9832f28515b7ea869d48e04b918a32bd37686b08c9ddb81f074",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_decl_supports_pipeline_transaction_approved_filter_1.ko"
+    },
+    {
+      "byte_len": 248,
+      "content_sha256": "88579f8cbdb787a6820be10ddaec583d59f2f1332bfcc1a9b5980ab7d38c7706",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_decl_supports_structured_data_filters_for_core_families_1.ko"
+    },
+    {
+      "byte_len": 244,
+      "content_sha256": "ad30fdd3fecdb24f7c548414affc18d9bdb8707fbbb1ae721719a8357da8cce2",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_decl_supports_structured_data_filters_for_core_families_2.ko"
+    },
+    {
+      "byte_len": 335,
+      "content_sha256": "b90bad887e6037d17c7a78ab27e7ce0adebe47e8378ff0748dd58e93071118d6",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_1.ko"
+    },
+    {
+      "byte_len": 321,
+      "content_sha256": "b8e728b21a96cf0bea4761aa5562b0f9461fdd87ad7607492a2f01146e9e5fca",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_2.ko"
+    },
+    {
+      "byte_len": 360,
+      "content_sha256": "2a51f7c9b13f4184e628d889f011f42810a8d0099da8a2b0243c603384e32e39",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/typed_core_queries_expose_declared_projection_and_page_types_1.ko"
+    },
+    {
+      "byte_len": 137,
+      "content_sha256": "a2e623b3fd9616f6a80eef4ee534eddb1df8156d625c3cc3b89c0669e94127c6",
+      "path": "crates/kotodama_lang/src/semantic/test_sources/wholly_divergent_expression_without_a_type_context_fails_closed_1.ko"
+    }
+  ],
+  "format": "iroha.kotodama.legacy-test-sources",
+  "inventory_sha256": "24c8109366577811b8243d13af241dae5e33a6493083cf183614d311d17b656e",
+  "origin_merge": "58a8040dc1726359edfdc72759b73ea3649ae38c",
+  "schema_version": 1,
+  "source_files": [
+    "crates/kotodama_lang/src/semantic.rs",
+    "crates/kotodama_lang/src/ir.rs",
+    "crates/kotodama_lang/src/ir_tail_tests.rs"
+  ]
+}

@@ -257,14 +257,21 @@ fn semantic_pipeline_order_and_completion_lifetime_are_pinned() {
     let predecode = verifier
         .find("super::predecode_direct_relation_proof_v1(")
         .unwrap();
+    let destructure = verifier
+        .find("let PredecodedDirectRelationProofV1 {")
+        .unwrap();
     let membership = verifier
-        .find("for evidence in &proof.bound_one_membership")
+        .find("membership_frames.verify_replayable()?")
         .unwrap();
-    let membership_two = verifier
-        .find("for evidence in &proof.bound_two_membership")
+    let copy = verifier
+        .find("membership_frames.copied_commitments()")
         .unwrap();
+    let frame_drop = verifier.find("drop(membership_frames);").unwrap();
     let commitment = verifier
         .find("reconstruct_commitment_first_messages(")
+        .unwrap();
+    let first_rns_allocation = verifier
+        .find("try_zeroed_u64(retained_replay_matrix_words()?)?")
         .unwrap();
     let common_begin = verifier.find("DirectCommonAReplayV1::begin").unwrap();
     let public_begin = verifier
@@ -273,17 +280,27 @@ fn semantic_pipeline_order_and_completion_lifetime_are_pinned() {
     let replay = verifier.find("replay_rkg_one_retained_matrices(").unwrap();
     let finish = verifier.find("let completed_replays =").unwrap();
     let final_challenge = verifier
-        .find("proof.validate_reconstructed_challenge")
+        .find("super::validate_reconstructed_challenge(")
         .unwrap();
     let equality = verifier
         .find("if reconstructed_challenges != challenges")
         .unwrap();
     let completion_drop = verifier.find("drop(completed_replays);").unwrap();
-    assert!(predecode < membership && membership < membership_two && membership_two < commitment);
-    assert!(commitment < common_begin && common_begin < public_begin && public_begin < replay);
+    assert!(predecode < destructure && destructure < membership && membership < copy);
+    assert!(copy < frame_drop && frame_drop < commitment && commitment < first_rns_allocation);
+    assert!(
+        first_rns_allocation < common_begin && common_begin < public_begin && public_begin < replay
+    );
     assert!(replay < finish && finish < final_challenge);
     assert!(final_challenge < equality && equality < completion_drop);
     assert!(!verifier.contains("catch_unwind"));
+    for forbidden in [
+        ".materialize()",
+        ".to_vec()",
+        "ExactEightChunkMembershipEvidenceV1",
+    ] {
+        assert!(!verifier.contains(forbidden));
+    }
     assert_eq!(
         verifier
             .matches("replay_rkg_one_retained_matrices(")
@@ -311,6 +328,68 @@ fn semantic_pipeline_order_and_completion_lifetime_are_pinned() {
         1
     );
     assert!(!replay_helper.contains("catch_unwind"));
+}
+
+#[test]
+fn upper_borrowed_replay_visits_all_48_chunks_and_stops_first() {
+    use crate::vega::zk_ams::mkhe::exact_eight_chunk_membership::{
+        DirectRelationBoundOneMembershipRoleV1, DirectRelationBoundTwoMembershipRoleV1,
+        ExactEightChunkMembershipErrorV1, canonical_membership_syntax_wire_fixture_for_test,
+    };
+    fn fixture_digest(context: [u8; 32], ordinal: u16, wire: &[u8]) -> [u8; 32] {
+        let mut hash = crate::vega::sponge::Keccak256::new();
+        hash.update(b"iroha.zk-ams.v1.mkhe.direct-membership.syntax-fixture-transcript");
+        hash.update(&context);
+        hash.update(&ordinal.to_be_bytes());
+        hash.update(wire);
+        hash.finalize()
+    }
+    let mut membership = Vec::new();
+    for slot in 0..6 {
+        let frame = if slot < 2 {
+            canonical_membership_syntax_wire_fixture_for_test::<
+                DirectRelationBoundOneMembershipRoleV1,
+            >(&[slot as u8 + 1], slot * 9)
+        } else {
+            canonical_membership_syntax_wire_fixture_for_test::<
+                DirectRelationBoundTwoMembershipRoleV1,
+            >(&[slot as u8 + 1], slot * 9)
+        };
+        membership.extend_from_slice(&frame);
+    }
+    let frames = super::super::PreflightedDirectRelationMembershipFramesV1::preflight(&membership)
+        .expect("six canonical frames");
+    let mut visited = Vec::new();
+    frames
+        .verify_replayable_with_for_test(|slot, context, ordinal, wire| {
+            visited.push((slot, ordinal));
+            Ok(fixture_digest(context, ordinal, wire))
+        })
+        .expect("all borrowed chunks");
+    let expected = (0_usize..6)
+        .flat_map(|slot| (0_u16..8).map(move |ordinal| (slot, ordinal)))
+        .collect::<Vec<_>>();
+    assert_eq!(visited, expected);
+
+    visited.clear();
+    let error = frames.verify_replayable_with_for_test(|slot, context, ordinal, wire| {
+        visited.push((slot, ordinal));
+        if (slot, ordinal) == (2, 3) {
+            Err(ExactEightChunkMembershipErrorV1::DigestMismatch)
+        } else {
+            Ok(fixture_digest(context, ordinal, wire))
+        }
+    });
+    assert_eq!(error, Err(ZkAmsMkheErrorV1::InvalidKeyMaterial));
+    assert_eq!(visited.as_slice(), &expected[..20]);
+    assert_eq!(
+        super::super::BORROWED_MEMBERSHIP_PROOF_ALLOCATIONS_ELIDED_V1,
+        48
+    );
+    assert_eq!(
+        super::super::BORROWED_MEMBERSHIP_PROOF_LOGICAL_BYTES_ELIDED_V1,
+        71_568
+    );
 }
 
 #[test]
@@ -365,7 +444,7 @@ fn exact_repetition_loop_and_replay_argument_shapes_are_pinned() {
     let commitments = source
         .split("fn reconstruct_commitment_first_messages")
         .nth(1)
-        .and_then(|tail| tail.split("trait MembershipCommitmentsV1").next())
+        .and_then(|tail| tail.split("fn decode_response_chunk").next())
         .unwrap();
     assert_eq!(
         commitments
@@ -431,6 +510,12 @@ fn candidate_completion_cannot_mint_release_authority() {
     }
     let active = include_str!("../../../active_exact_binding.rs");
     for closed_gate in [
+        "let external_commitment_provenance_certified = false;",
+        "let full_basis_mrep_crs_certified = false;",
+        "let membership_argument_of_knowledge_certified = false;",
+        "let membership_zero_knowledge_certified = false;",
+        "let composite_rom_forking_certified = false;",
+        "let full_ceremony_10_336_instance_composition_certified = false;",
         "let canonical_complete_wire_certified = false;",
         "let chunked_workspace_certified = false;",
         "let sampler_wired_to_runtime = false;",
@@ -440,6 +525,9 @@ fn candidate_completion_cannot_mint_release_authority() {
     ] {
         assert!(active.contains(closed_gate));
     }
+    assert!(!active.contains("candidate_membership_union_soundness_bits"));
+    assert!(!active.contains("BLOCKER_T256_MEMBERSHIP_BACKEND_V1"));
+    assert!(active.contains("BLOCKER_T256_MEMBERSHIP_SECURITY_V1"));
     let public_verifier = active
         .split("pub(super) fn verify_and_consume_direct_relation_use_v1")
         .nth(1)
@@ -447,5 +535,5 @@ fn candidate_completion_cannot_mint_release_authority() {
         .unwrap();
     assert!(public_verifier.contains("Err(ZkAmsMkheErrorV1::ReleaseUnavailable)"));
     assert!(!public_verifier.contains("verify_direct_rkg_one_semantic_candidate_v1"));
-    assert!(active.contains("assert_eq!(audit.blocker_mask, 0xfc);"));
+    assert!(active.contains("assert_eq!(audit.blocker_mask, 0xfd);"));
 }

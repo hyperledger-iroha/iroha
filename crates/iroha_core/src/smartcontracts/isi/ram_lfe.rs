@@ -389,9 +389,8 @@ fn expected_associated_data_hash(program_policy: &RamLfeProgramPolicy) -> Result
 }
 /// Verify a proof-mode RAM-LFE receipt under explicit node guardrails.
 ///
-/// The envelope cap is checked before decoding so callers cannot bypass the
-/// runtime backend policy or configured proof limits through this specialized
-/// verification path.
+/// The envelope cap is checked before decoding so callers cannot bypass the runtime backend policy
+/// or configured proof limits through this specialized verification path.
 pub(crate) fn verify_execution_proof(
     proof: &iroha_data_model::proof::ProofBox,
     execution: &RamLfeExecutionReceiptPayload,

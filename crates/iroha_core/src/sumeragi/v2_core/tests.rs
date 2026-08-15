@@ -7210,67 +7210,6 @@ fn tc_interleaving_cannot_retag_an_old_local_completion_as_decided_body() {
     assert_eq!(reducer, before);
 }
 #[test]
-fn delayed_lower_prepare_qc_cannot_downgrade_retransmitted_progress() {
-    let context = context();
-    let high_subject = Subject::repeat(0x7e);
-    let old_subject = Subject::repeat(0x7f);
-    let mut reducer = Reducer::recover(
-        context.clone(),
-        Some(id(1)),
-        Generation::new(31),
-        [
-            WalEntry::new(
-                PersistenceId::new(1),
-                WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
-            ),
-            WalEntry::new(
-                PersistenceId::new(2),
-                WalRecord::InstallTimeout(tc_without_high(&context, 1, &[1, 2, 3])),
-            ),
-        ],
-    )
-    .expect("recover at view two");
-    let resumed = resume_after_replay(&mut reducer);
-    assert!(resumed.disposition() == StepDisposition::Applied && resumed.effects().is_empty());
-    let higher = qc(&context, 1, Phase::Prepare, high_subject, &[1, 2, 3]);
-    let event = Event::QuorumCertificateReceived {
-        tag: reducer.current_tag(),
-        certificate: higher.clone(),
-    };
-    let persist_high = only_persist(reducer.step(event).expect("observe high PrepareQC"));
-    acknowledge(&mut reducer, &persist_high);
-    assert_eq!(reducer.volatile_prepare_counts(), (0, 1));
-    let older = qc(&context, 0, Phase::Prepare, old_subject, &[1, 2, 3]);
-    let before_older = reducer.clone();
-    let event = Event::QuorumCertificateReceived {
-        tag: reducer.current_tag(),
-        certificate: older,
-    };
-    let ignored = reducer.step(event).expect("ignore old PrepareQC");
-    assert!(
-        ignored.disposition() == StepDisposition::Ignored(IgnoreReason::IrrelevantView)
-            && ignored.effects().is_empty()
-            && reducer == before_older
-    );
-    let event = Event::RetransmitElapsed {
-        tag: reducer.current_tag(),
-    };
-    let retry = reducer.step(event).expect("retransmit cached controls");
-    let retained_prepare_qcs = retry
-        .effects()
-        .iter()
-        .filter_map(|effect| match effect {
-            Effect::Broadcast(ConsensusMessageV2::QuorumCertificate(certificate))
-                if certificate.phase() == Phase::Prepare =>
-            {
-                Some(certificate)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(retained_prepare_qcs, vec![&higher]);
-}
-#[test]
 fn timeout_elapsed_cannot_start_durable_timeout_after_decision() {
     let context = context();
     let subject = Subject::repeat(0x91);

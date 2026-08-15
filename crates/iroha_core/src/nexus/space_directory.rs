@@ -53,10 +53,9 @@ pub struct AxtIssuerBinding {
 }
 /// Resolve the exact AXT issuer key from committed Space Directory state.
 ///
-/// Resolution is keyed by both dataspace and active manifest root. The
-/// matching manifest supplies the UAID; the canonical UAID account index and
-/// dataspace binding then supply the sole authorized single-signature key.
-/// Nothing carried by the handle participates in issuer selection.
+/// Resolution is keyed by both dataspace and active manifest root. The matching manifest supplies
+/// the UAID; the canonical UAID account index and dataspace binding then supply the sole authorized
+/// single-signature key. Nothing carried by the handle participates in issuer selection.
 ///
 /// # Errors
 ///

@@ -1,11 +1,9 @@
 //! On-chain smart contract registry helpers backed by the world state.
 //!
-//! This module exposes thin helpers that wrap the canonical ISI instructions
-//! for registering manifests, storing bytecode, and binding contract
-//! instances. Read APIs query the authenticated world-state view so callers
-//! never rely on process-local caches. This replaces the historical
-//! process-global map and ensures every node observes the same registry
-//! contents.
+//! This module exposes thin helpers that wrap the canonical ISI instructions for registering
+//! manifests, storing bytecode, and binding contract instances. Read APIs query the authenticated
+//! world-state view so callers never rely on process-local caches. This replaces the historical
+//! process-global map and ensures every node observes the same registry contents.
 use crate::{
     smartcontracts::Execute,
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
@@ -497,8 +495,7 @@ pub fn register_code_bytes(
     RegisterSmartContractBytes { code_hash, code }.execute(authority, state_transaction)?;
     Ok(code_hash)
 }
-/// Bind `contract_address` to a `code_hash` to activate or perform `kaizen`/`改善` on an
-/// instance.
+/// Bind `contract_address` to a `code_hash` to activate or perform `kaizen`/`改善` on an instance.
 ///
 /// The authority must hold `CanRegisterSmartContractCode`, including for an
 /// idempotent request. Rebinding an active address to different verified code
@@ -507,8 +504,7 @@ pub fn register_code_bytes(
 ///
 /// # Errors
 ///
-/// Returns [`RegistryError`] when the activation instruction fails during
-/// execution.
+/// Returns [`RegistryError`] when the activation instruction fails during execution.
 pub fn activate_instance(
     authority: &AccountId,
     contract_address: ContractAddress,
@@ -630,9 +626,8 @@ pub(crate) fn bound_contract_subject_from_world(
 }
 /// Borrow the validated consensus-persisted runtime authority for an active contract.
 ///
-/// Read paths which immediately serialize the subject can avoid cloning a
-/// potentially nested account controller by keeping the world view alive for
-/// the duration of the checked write.
+/// Read paths which immediately serialize the subject can avoid cloning a potentially nested
+/// account controller by keeping the world view alive for the duration of the checked write.
 #[must_use]
 pub fn borrow_bound_contract_subject_from_world<'a>(
     world: &'a impl WorldReadOnly,

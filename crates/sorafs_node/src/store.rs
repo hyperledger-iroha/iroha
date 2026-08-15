@@ -1,9 +1,8 @@
 //! Persistent storage backend for the embedded SoraFS node.
 //!
-//! This module wraps `sorafs_car::ChunkStore` with an on-disk manifest index,
-//! deterministic chunk layout, verified Proof-of-Retrievability (PoR) recovery,
-//! canonical Proof-of-Data-Possession (PDP) commitments, and quota enforcement
-//! derived from Torii storage configuration.
+//! This module wraps `sorafs_car::ChunkStore` with an on-disk manifest index, deterministic chunk
+//! layout, verified Proof-of-Retrievability (PoR) recovery, canonical Proof-of-Data-Possession
+//! (PDP) commitments, and quota enforcement derived from Torii storage configuration.
 #![allow(unexpected_cfgs)]
 use crate::{config::StorageConfig, scheduler::StorageSchedulersRuntime};
 use blake3::Hash;
@@ -3155,9 +3154,8 @@ impl StorageBackend {
     ///
     /// # Errors
     ///
-    /// Returns an error if quota limits are exceeded, chunk digests do not match,
-    /// manifest metadata is inconsistent with the provided plan, or persistence
-    /// fails.
+    /// Returns an error if quota limits are exceeded, chunk digests do not match, manifest metadata
+    /// is inconsistent with the provided plan, or persistence fails.
     pub fn ingest_manifest<R: Read>(
         &self,
         manifest: &ManifestV1,
@@ -3508,10 +3506,9 @@ include!("store_manifest_lookup.rs");
 impl StorageBackend {
     /// Run work while holding the manifest lifecycle read lease.
     ///
-    /// The state read lock is retained until the lifecycle lease has been
-    /// acquired, so eviction cannot remove the manifest between lookup and
-    /// lease acquisition. The lifecycle lease remains held for the complete
-    /// callback and blocks eviction while repair validates or reads chunk
+    /// The state read lock is retained until the lifecycle lease has been acquired, so eviction
+    /// cannot remove the manifest between lookup and lease acquisition. The lifecycle lease remains
+    /// held for the complete callback and blocks eviction while repair validates or reads chunk
     /// paths.
     pub(crate) fn with_manifest_io<T>(
         &self,
@@ -3550,9 +3547,8 @@ impl StorageBackend {
     }
     /// Run work for the digest-selected manifest under its lifecycle read lease.
     ///
-    /// `Ok(None)` means that the digest was absent or had already entered the
-    /// fail-closed retirement window. Once leased, the manifest cannot be evicted
-    /// until the callback returns.
+    /// `Ok(None)` means that the digest was absent or had already entered the fail-closed
+    /// retirement window. Once leased, the manifest cannot be evicted until the callback returns.
     pub(crate) fn with_manifest_io_by_digest<T>(
         &self,
         digest: &[u8; 32],
@@ -3610,10 +3606,9 @@ impl StorageBackend {
     }
     /// Atomically replace one chunk during lifecycle-leased repair.
     ///
-    /// Callers must hold the owning manifest's lifecycle lease for the complete
-    /// repair operation. A failure after rename poisons storage durability and
-    /// is returned instead of being converted into a successful terminal
-    /// repair outcome.
+    /// Callers must hold the owning manifest's lifecycle lease for the complete repair operation. A
+    /// failure after rename poisons storage durability and is returned instead of being converted
+    /// into a successful terminal repair outcome.
     pub(crate) fn replace_chunk_for_repair(
         &self,
         manifest: &StoredManifest,
@@ -5707,9 +5702,8 @@ fn read_verified_chunk(
     }
     Ok(bytes)
 }
-/// Read one complete chunk through the same no-follow, single-link, stable
-/// inode/metadata, exact-length, and digest checks used by normal payload and
-/// PDP witness reads.
+/// Read one complete chunk through the same no-follow, single-link, stable inode/metadata,
+/// exact-length, and digest checks used by normal payload and PDP witness reads.
 pub(crate) fn read_verified_chunk_file(
     record: &ChunkFileRecord,
 ) -> Result<Vec<u8>, ChunkStoreError> {

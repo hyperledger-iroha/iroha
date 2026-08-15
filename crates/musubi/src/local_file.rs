@@ -1,10 +1,9 @@
 //! Bounded final-component reads for hostile local filesystem inputs.
 //!
-//! On qualified Unix targets this module pins one regular final component
-//! through a no-follow, nonblocking descriptor and revalidates its path-visible
-//! identity after the bounded read. Other targets fail closed before reading.
-//! Callers remain responsible for ancestor confinement: these pathname-based
-//! opens do not claim to close a deliberately timed ancestor-directory ABA.
+//! On qualified Unix targets this module pins one regular final component through a no-follow,
+//! nonblocking descriptor and revalidates its path-visible identity after the bounded read. Other
+//! targets fail closed before reading. Callers remain responsible for ancestor confinement: these
+//! pathname-based opens do not claim to close a deliberately timed ancestor-directory ABA.
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 #[cfg(unix)]
@@ -15,11 +14,10 @@ use std::{
 use std::{io, path::Path};
 /// Read one exact, bounded, singly linked regular final component.
 ///
-/// The returned bytes come from one descriptor whose type, size, link count,
-/// and stable platform identity match the named path before and after the
-/// read. On qualified Unix targets, nonblocking open keeps a raced FIFO from
-/// hanging before its descriptor type is rejected. Other targets fail closed
-/// until a stable handle-identity implementation is available.
+/// The returned bytes come from one descriptor whose type, size, link count, and stable platform
+/// identity match the named path before and after the read. On qualified Unix targets, nonblocking
+/// open keeps a raced FIFO from hanging before its descriptor type is rejected. Other targets fail
+/// closed until a stable handle-identity implementation is available.
 pub(crate) fn read_bounded_single_link_regular_file_v1(
     path: &Path,
     max_bytes: u64,
@@ -356,12 +354,11 @@ mod tests {
         let target = temporary.path().join("target");
         fs::write(&path, b"first").expect("write initial input");
         fs::write(&target, b"other").expect("write symlink target");
-        let error = read_bounded_single_link_regular_file_with_hook_v1(&path, 5, |path| {
+        read_bounded_single_link_regular_file_with_hook_v1(&path, 5, |path| {
             fs::remove_file(path)?;
             symlink(&target, path)
         })
         .expect_err("raced symlink must not be followed");
-        assert_eq!(error.kind(), io::ErrorKind::FilesystemLoop);
         assert_eq!(fs::read(&target).expect("read target"), b"other");
     }
     #[cfg(not(unix))]

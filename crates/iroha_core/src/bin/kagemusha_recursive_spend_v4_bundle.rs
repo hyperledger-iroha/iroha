@@ -1,11 +1,10 @@
 //! Generate and finalize calibrated ABI-21 Kagemusha release bundles.
 //!
-//! Candidate generation runs the independently reviewed recursion source
-//! closure exactly once and
-//! publishes eight immutable `KRV4KEY` artifacts plus one canonical pre-evidence
-//! candidate record. Finalization never regenerates proof material: it binds the
-//! unchanged candidate to supplied evidence and authenticates the resulting
-//! release before publishing a distinct final directory atomically.
+//! Candidate generation runs the independently reviewed recursion source closure exactly once and
+//! publishes eight immutable `KRV4KEY` artifacts plus one canonical pre-evidence candidate record.
+//! Finalization never regenerates proof material: it binds the unchanged candidate to supplied
+//! evidence and authenticates the resulting release before publishing a distinct final directory
+//! atomically.
 use iroha_core::zk::kagemusha_artifact_v4::{
     KagemushaValidatedArtifactPayloadV4, read_kagemusha_pasta_cycle_artifact_v4,
     read_kagemusha_pasta_cycle_candidate_artifact_v4,

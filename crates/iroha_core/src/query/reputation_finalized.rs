@@ -1,29 +1,23 @@
 //! Durable exact-anchor archive for finalized SoraFS reputation projections.
 //!
-//! The archive is deliberately a projection store, not finality authority. A
-//! commit-owned caller supplies one immutable finalized state view and its
-//! non-forgeable Kura receipt; capture authenticates and constructs the exact
-//! record before publication. This module never falls back to a current-head
-//! view and stores no credentials, signing material, or process-local
-//! authority.
+//! The archive is deliberately a projection store, not finality authority. A commit-owned caller
+//! supplies one immutable finalized state view and its non-forgeable Kura receipt; capture
+//! authenticates and constructs the exact record before publication. This module never falls back
+//! to a current-head view and stores no credentials, signing material, or process-local authority.
 //!
-//! Durable growth is linear in new state: each anchor stores only feed suffixes
-//! and reserve-provider upserts/removals, while authority policies are stored
-//! once by content digest. Exact reads reconstruct the public full projection
-//! through the manifest predecessor chain until an explicit, Kura-authenticated
-//! retention fence installs a content-addressed virtual base. Compacted feeds
-//! then expose a rolling prefix commitment plus retained suffix pagination,
-//! while a bounded authenticated journal source-head index and complete
-//! inter-checkpoint lifecycle suffix preserve exact source replay;
-//! full-history reads fail with a typed `HistoryPruned` condition. A
-//! policy-first crash leaves a
-//! validated, bounded, immutable cache entry: restart retains and accounts for
-//! it, but it cannot qualify an archive without a referenced anchor.
-//! Unix publication and staged recovery are descriptor-relative and remain
-//! bound to the verified directory inode across hostile ancestor renames.
-//! Non-Unix mutation fails closed: Windows needs an audited `NtCreateFile`
-//! `RootDirectory` plus handle-relative `FileLinkInformation` wrapper before
-//! this archive can be production-qualified there.
+//! Durable growth is linear in new state: each anchor stores only feed suffixes and
+//! reserve-provider upserts/removals, while authority policies are stored once by content digest.
+//! Exact reads reconstruct the public full projection through the manifest predecessor chain until
+//! an explicit, Kura-authenticated retention fence installs a content-addressed virtual base.
+//! Compacted feeds then expose a rolling prefix commitment plus retained suffix pagination, while a
+//! bounded authenticated journal source-head index and complete inter-checkpoint lifecycle suffix
+//! preserve exact source replay; full-history reads fail with a typed `HistoryPruned` condition. A
+//! policy-first crash leaves a validated, bounded, immutable cache entry: restart retains and
+//! accounts for it, but it cannot qualify an archive without a referenced anchor. Unix publication
+//! and staged recovery are descriptor-relative and remain bound to the verified directory inode
+//! across hostile ancestor renames. Non-Unix mutation fails closed: Windows needs an audited
+//! `NtCreateFile` `RootDirectory` plus handle-relative `FileLinkInformation` wrapper before this
+//! archive can be production-qualified there.
 use crate::{
     kura::{Kura, KuraV2CommitReceipt},
     smartcontracts::ValidSingularQuery,
@@ -194,8 +188,7 @@ impl ReputationFinalizedArchiveBounds {
     pub const fn max_entries(self) -> usize {
         self.max_entries.get()
     }
-    /// Maximum aggregate bytes accepted across anchors, checkpoints, and
-    /// policy records.
+    /// Maximum aggregate bytes accepted across anchors, checkpoints, and policy records.
     #[must_use]
     pub const fn max_total_bytes(self) -> u64 {
         self.max_total_bytes
@@ -270,10 +263,9 @@ impl ReputationFinalizedArchiveKeyV1 {
 }
 /// Complete typed reputation query projection captured from one finalized view.
 ///
-/// Event feeds contain their full ordered history through `key`; they are not
-/// pre-paginated. This insertion/capture form is never returned with a silently
-/// truncated prefix: after compaction callers must use the retained pagination
-/// APIs and receive a typed `HistoryPruned` boundary.
+/// Event feeds contain their full ordered history through `key`; they are not pre-paginated. This
+/// insertion/capture form is never returned with a silently truncated prefix: after compaction
+/// callers must use the retained pagination APIs and receive a typed `HistoryPruned` boundary.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationFinalizedProjectionV1 {
     /// Exact chain, height, and block hash shared by every field.
@@ -297,9 +289,8 @@ pub struct ReputationFinalizedProjectionV1 {
 }
 /// Source-indexed reputation journal result from one exact finalized archive view.
 ///
-/// The `event` is absent only when the selected finalized view authoritatively
-/// contains no event for `source_id`; it is never a capability or history
-/// fallback.
+/// The `event` is absent only when the selected finalized view authoritatively contains no event
+/// for `source_id`; it is never a capability or history fallback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
 pub struct ReputationFinalizedArchiveJournalSourceViewV1 {
@@ -2026,8 +2017,7 @@ impl ReputationFinalizedArchiveRetentionAuthorityBindingV1 {
     ///
     /// # Errors
     ///
-    /// Rejects credential-bearing, test-marked, malformed, stale, or zero
-    /// public identity material.
+    /// Rejects credential-bearing, test-marked, malformed, stale, or zero public identity material.
     pub fn try_new(
         handle: String,
         revision: u64,
@@ -2068,8 +2058,7 @@ struct ReputationFinalizedArchiveCompactionProposalMaterialV1 {
     journal_source_head_count: u64,
     journal_source_head_root: [u8; 32],
 }
-/// Exact canonical checkpoint, source-head summary, and fence submitted for
-/// external approval.
+/// Exact canonical checkpoint, source-head summary, and fence submitted for external approval.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationFinalizedArchiveCompactionProposalV1 {
     material: ReputationFinalizedArchiveCompactionProposalMaterialV1,
@@ -2334,8 +2323,7 @@ pub trait ReputationFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Deb
         Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>,
         ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
     >;
-    /// Install `next` only when the authoritative revision is exactly
-    /// `expected_revision`.
+    /// Install `next` only when the authoritative revision is exactly `expected_revision`.
     ///
     /// A write whose commit outcome is unknown must return
     /// [`ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::Ambiguous`].
@@ -2556,12 +2544,11 @@ impl ReputationFinalizedArchive {
     }
     /// Open an archive whose retention state is sealed by `authority`.
     ///
-    /// Startup installs or finishes only the exact checkpoint durably named by
-    /// the authority's canonical CAS record. A checkpoint file without that
-    /// approval is rejected without unlinking anchors, checkpoints, or policy
-    /// artifacts. If CAS committed before local checkpoint publication,
-    /// recovery deterministically reconstructs and publishes the approved
-    /// bytes before cleanup.
+    /// Startup installs or finishes only the exact checkpoint durably named by the authority's
+    /// canonical CAS record. A checkpoint file without that approval is rejected without unlinking
+    /// anchors, checkpoints, or policy artifacts. If CAS committed before local checkpoint
+    /// publication, recovery deterministically reconstructs and publishes the approved bytes before
+    /// cleanup.
     ///
     /// # Errors
     ///
@@ -2843,24 +2830,20 @@ impl ReputationFinalizedArchive {
     }
     /// Capture one exact immutable state view authenticated by Kura finality.
     ///
-    /// The caller must invoke this while the supplied view is frozen. Fresh
-    /// Sumeragi application uses the result-bearing [`crate::state::StateBlock`]
-    /// after Kura finality and the staged WSV checkpoint are durable, but
-    /// before WSV publication. Every native query page is pinned to the exact
-    /// receipt height and hash; no current-head or broadcast-event fallback is
-    /// available.
+    /// The caller must invoke this while the supplied view is frozen. Fresh Sumeragi application
+    /// uses the result-bearing [`crate::state::StateBlock`] after Kura finality and the staged WSV
+    /// checkpoint are durable, but before WSV publication. Every native query page is pinned to the
+    /// exact receipt height and hash; no current-head or broadcast-event fallback is available.
     ///
-    /// If this is the first anchor for a non-genesis height, that height is the
-    /// archive's explicit activation floor. The archive does not claim to
-    /// contain earlier provider-state projections even though append-only event
-    /// journals in the first record may begin before the floor.
+    /// If this is the first anchor for a non-genesis height, that height is the archive's explicit
+    /// activation floor. The archive does not claim to contain earlier provider-state projections
+    /// even though append-only event journals in the first record may begin before the floor.
     ///
     /// # Errors
     ///
-    /// Fails closed when Kura, the immutable view, any typed query page, or the
-    /// deterministic block timestamp disagrees with the supplied durable
-    /// receipt. Query collection is bounded by the configured aggregate archive
-    /// byte ceiling before immutable insertion is attempted.
+    /// Fails closed when Kura, the immutable view, any typed query page, or the deterministic block
+    /// timestamp disagrees with the supplied durable receipt. Query collection is bounded by the
+    /// configured aggregate archive byte ceiling before immutable insertion is attempted.
     pub fn capture_kura_authenticated_view(
         &self,
         state_ro: &impl StateReadOnly,
@@ -3146,12 +3129,11 @@ impl ReputationFinalizedArchive {
     }
     /// Capture and then qualify one frozen state view against the exact Kura tip.
     ///
-    /// An empty archive is allowed to establish an explicit activation floor at
-    /// this view. A non-empty archive must already contain every height from
-    /// its activation floor through the captured key; no current-tip write can
-    /// conceal a missed historical capture. The returned flag makes a new
-    /// non-genesis floor visible to the launcher, which must not advertise
-    /// earlier history.
+    /// An empty archive is allowed to establish an explicit activation floor at this view. A
+    /// non-empty archive must already contain every height from its activation floor through the
+    /// captured key; no current-tip write can conceal a missed historical capture. The returned
+    /// flag makes a new non-genesis floor visible to the launcher, which must not advertise earlier
+    /// history.
     ///
     /// # Errors
     ///
@@ -3177,17 +3159,15 @@ impl ReputationFinalizedArchive {
     }
     /// Reconcile a startup state tip using Kura's recovered durable receipt.
     ///
-    /// This convenience path is intended for launcher startup after State
-    /// replay has produced one frozen committed view. It never manufactures a
-    /// receipt from State metadata: Kura must recover and authenticate the
-    /// exact V2 finality artifact at the view height before normal reconciliation
-    /// runs.
+    /// This convenience path is intended for launcher startup after State replay has produced one
+    /// frozen committed view. It never manufactures a receipt from State metadata: Kura must
+    /// recover and authenticate the exact V2 finality artifact at the view height before normal
+    /// reconciliation runs.
     ///
     /// # Errors
     ///
-    /// Fails closed for an empty view, an unavailable or invalid durable
-    /// finality artifact, any capture mismatch, incomplete coverage, or excess
-    /// configured tip lag.
+    /// Fails closed for an empty view, an unavailable or invalid durable finality artifact, any
+    /// capture mismatch, incomplete coverage, or excess configured tip lag.
     pub fn reconcile_kura_authenticated_state_tip(
         &self,
         state_ro: &impl StateReadOnly,
@@ -3218,14 +3198,12 @@ impl ReputationFinalizedArchive {
     }
     /// Qualify exact contiguous archive coverage against one Kura boundary.
     ///
-    /// Every archive anchor from the explicit activation floor through the
-    /// archive tip must be present at every height, match Kura's authenticated
-    /// hash journal and V2 finality artifact, and retain the exact canonical
-    /// block timestamp. Only a suffix no larger than
-    /// `maximum_kura_tip_lag_blocks` may remain between the archive and Kura
-    /// tips. Kura, the archive generation, and the active checkpoint content
-    /// address are re-read before success so a changing boundary never receives
-    /// a mixed qualification.
+    /// Every archive anchor from the explicit activation floor through the archive tip must be
+    /// present at every height, match Kura's authenticated hash journal and V2 finality artifact,
+    /// and retain the exact canonical block timestamp. Only a suffix no larger than
+    /// `maximum_kura_tip_lag_blocks` may remain between the archive and Kura tips. Kura, the
+    /// archive generation, and the active checkpoint content address are re-read before success so
+    /// a changing boundary never receives a mixed qualification.
     ///
     /// # Errors
     ///
@@ -3503,10 +3481,9 @@ impl ReputationFinalizedArchive {
     }
     /// Durably publish one immutable exact-anchor projection.
     ///
-    /// The operation derives an immutable suffix from the latest exact
-    /// predecessor, publishes any new content-addressed policy, then publishes
-    /// the anchor manifest and delta without clobbering. An identical existing
-    /// projection is an exact replay.
+    /// The operation derives an immutable suffix from the latest exact predecessor, publishes any
+    /// new content-addressed policy, then publishes the anchor manifest and delta without
+    /// clobbering. An identical existing projection is an exact replay.
     ///
     /// # Errors
     ///
@@ -3851,9 +3828,8 @@ impl ReputationFinalizedArchive {
     /// Freeze the exact key, content digest, active checkpoint head, and
     /// generation for a caller-owned retention decision.
     ///
-    /// This read does not authorize or perform compaction. The caller must
-    /// prepare and durably approve the returned fence through
-    /// [`Self::prepare_kura_authenticated_compaction`] and
+    /// This read does not authorize or perform compaction. The caller must prepare and durably
+    /// approve the returned fence through [`Self::prepare_kura_authenticated_compaction`] and
     /// [`Self::approve_and_install_kura_authenticated_compaction`].
     ///
     /// # Errors
@@ -3888,16 +3864,14 @@ impl ReputationFinalizedArchive {
     }
     /// Prepare the exact canonical checkpoint proposed for sealed retention.
     ///
-    /// Preparation is read-only. Every physical prefix anchor and the fence's
-    /// finality artifact are reauthenticated against one frozen Kura boundary,
-    /// then the complete canonical checkpoint bytes are digested into the
-    /// returned proposal.
+    /// Preparation is read-only. Every physical prefix anchor and the fence's finality artifact are
+    /// reauthenticated against one frozen Kura boundary, then the complete canonical checkpoint
+    /// bytes are digested into the returned proposal.
     ///
     /// # Errors
     ///
-    /// Rejects an absent, stale, forked, unauthenticated, or non-advancing
-    /// fence, any archive/Kura boundary change, resource exhaustion, or a
-    /// damaged archive.
+    /// Rejects an absent, stale, forked, unauthenticated, or non-advancing fence, any archive/Kura
+    /// boundary change, resource exhaustion, or a damaged archive.
     pub fn prepare_kura_authenticated_compaction(
         &self,
         fence: &ReputationFinalizedArchiveRetentionFenceV1,
@@ -3910,11 +3884,10 @@ impl ReputationFinalizedArchive {
     }
     /// Durably approve and install one previously prepared compaction.
     ///
-    /// This is the only production compaction entry point. It repeats all
-    /// archive and Kura qualification while holding the archive write lock,
-    /// installs a monotonic canonical record through the deployment-owned CAS
-    /// authority, and requires exact authoritative readback both before
-    /// checkpoint publication and before any prefix object is unlinked.
+    /// This is the only production compaction entry point. It repeats all archive and Kura
+    /// qualification while holding the archive write lock, installs a monotonic canonical record
+    /// through the deployment-owned CAS authority, and requires exact authoritative readback both
+    /// before checkpoint publication and before any prefix object is unlinked.
     ///
     /// # Errors
     ///
@@ -4355,10 +4328,9 @@ impl ReputationFinalizedArchive {
     }
     /// Publish one checkpoint and adopt the authoritative durable head before cleanup.
     ///
-    /// `after_publish` is an in-process phase seam used by deterministic crash
-    /// tests. Production supplies a no-op. Every error after the publication
-    /// attempt still reconciles because a failed namespace sync may follow a
-    /// successful canonical link.
+    /// `after_publish` is an in-process phase seam used by deterministic crash tests. Production
+    /// supplies a no-op. Every error after the publication attempt still reconciles because a
+    /// failed namespace sync may follow a successful canonical link.
     fn publish_checkpoint_and_reconcile<AfterPublish>(
         &self,
         index: &mut ArchiveIndex,
@@ -4433,8 +4405,7 @@ impl ReputationFinalizedArchive {
     ///
     /// # Errors
     ///
-    /// Returns a typed storage, bounds, decode, canonicality, digest, or
-    /// exact-key binding failure.
+    /// Returns a typed storage, bounds, decode, canonicality, digest, or exact-key binding failure.
     pub fn get_exact(
         &self,
         key: &ReputationFinalizedArchiveKeyV1,
@@ -4457,10 +4428,9 @@ impl ReputationFinalizedArchive {
     }
     /// Read the latest journal event for one source at an exact finalized key.
     ///
-    /// A missing anchor or mismatched hash returns `Ok(None)`. A present view
-    /// with `event: None` is an authoritative source absence at that anchor.
-    /// Unlike full-history projection reads, the active checkpoint floor
-    /// remains queryable through its bounded source-head index.
+    /// A missing anchor or mismatched hash returns `Ok(None)`. A present view with `event: None` is
+    /// an authoritative source absence at that anchor. Unlike full-history projection reads, the
+    /// active checkpoint floor remains queryable through its bounded source-head index.
     ///
     /// # Errors
     ///
@@ -4638,8 +4608,7 @@ impl ReputationFinalizedArchive {
     ///
     /// # Errors
     ///
-    /// Returns a typed archive integrity, missing-policy, history-pruned, or
-    /// resource failure.
+    /// Returns a typed archive integrity, missing-policy, history-pruned, or resource failure.
     pub fn latest_at_or_before_with_policy_history(
         &self,
         network_id: &NetworkId,
@@ -4892,11 +4861,10 @@ impl ReputationFinalizedArchive {
     }
     /// Rescan the bound archive namespace and return its live generation.
     ///
-    /// An empty archive is deliberately unavailable: production startup must
-    /// wait for genesis capture instead of qualifying a current-head fallback.
-    /// The synchronized read guard prevents insertion while the durable
-    /// namespace is reconstructed and compared with the in-memory direct index.
-    /// The generation advances for each anchor publication and each active
+    /// An empty archive is deliberately unavailable: production startup must wait for genesis
+    /// capture instead of qualifying a current-head fallback. The synchronized read guard prevents
+    /// insertion while the durable namespace is reconstructed and compared with the in-memory
+    /// direct index. The generation advances for each anchor publication and each active
     /// checkpoint-head mutation, including compaction without a new anchor.
     ///
     /// # Errors
@@ -4949,10 +4917,9 @@ impl ReputationFinalizedArchive {
     /// Return whether the complete bound archive namespace has no anchors,
     /// checkpoints, or policy records.
     ///
-    /// Fresh height-zero startup uses this check before allowing genesis to
-    /// establish the first immutable anchor. Checking the whole namespace
-    /// prevents records belonging to another chain from being treated as an
-    /// empty current-chain archive.
+    /// Fresh height-zero startup uses this check before allowing genesis to establish the first
+    /// immutable anchor. Checking the whole namespace prevents records belonging to another chain
+    /// from being treated as an empty current-chain archive.
     ///
     /// # Errors
     ///

@@ -56,9 +56,8 @@ impl JdgSdnEnforcer {
     ///
     /// # Errors
     ///
-    /// Returns [`JdgSdnLoadError`] when the file cannot be read, the registry
-    /// payload fails Norito decoding, or registration violates the rotation
-    /// policy.
+    /// Returns [`JdgSdnLoadError`] when the file cannot be read, the registry payload fails Norito
+    /// decoding, or registration violates the rotation policy.
     pub fn from_path<P: AsRef<Path>>(
         path: P,
         policy: JdgSdnPolicy,

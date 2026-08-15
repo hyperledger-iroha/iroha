@@ -130,11 +130,10 @@ pub fn default_manifest(
 }
 /// Add the exact ledger state required by Mochi's local account-onboarding service.
 ///
-/// The local administrator is already the operator exposed by Mochi's bootstrap
-/// files. This extension registers the default Nexus fee asset, funds that
-/// administrator, and grants only the scoped capabilities used by sponsored
-/// account creation in the universal dataspace. Existing equivalent genesis
-/// instructions are preserved without duplication.
+/// The local administrator is already the operator exposed by Mochi's bootstrap files. This
+/// extension registers the default Nexus fee asset, funds that administrator, and grants only the
+/// scoped capabilities used by sponsored account creation in the universal dataspace. Existing
+/// equivalent genesis instructions are preserved without duplication.
 pub fn with_local_account_onboarding_bootstrap(
     manifest: RawGenesisTransaction,
     authority: &AccountId,

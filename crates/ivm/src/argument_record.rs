@@ -1,10 +1,9 @@
 //! One-shot decoding for compiler-generated public entrypoint wrappers.
 //!
-//! Torii, CLI, and SDK boundaries may accept ergonomic JSON, but they convert
-//! it before signing into one schema-hashed canonical Norito record. Execution
-//! preparation decodes and validates that complete record once. Contract
-//! wrappers still supply their compact schema, while the host only verifies the
-//! binding and materializes a VM-owned table of ABI words in declaration order.
+//! Torii, CLI, and SDK boundaries may accept ergonomic JSON, but they convert it before signing
+//! into one schema-hashed canonical Norito record. Execution preparation decodes and validates that
+//! complete record once. Contract wrappers still supply their compact schema, while the host only
+//! verifies the binding and materializes a VM-owned table of ABI words in declaration order.
 use crate::{
     VMError,
     host::quote_tlv_payload_len_at,
@@ -187,8 +186,7 @@ impl PreparedArgumentRecord {
     pub fn binding_bytes(&self) -> &[u8; Hash::LENGTH] {
         &self.inner.binding
     }
-    /// Debit the complete deterministic decode/materialization cost before
-    /// guest execution begins.
+    /// Debit the complete deterministic decode/materialization cost before guest execution begins.
     ///
     /// This escrow is mandatory for prepared records: it prevents a hand-built
     /// artifact from avoiding argument-decoding gas by branching around the
@@ -196,25 +194,22 @@ impl PreparedArgumentRecord {
     ///
     /// # Errors
     ///
-    /// Returns [`VMError::OutOfGas`] when the invocation cannot afford the
-    /// prepared record, or [`VMError::DecodeError`] if the same VM is charged
-    /// more than once.
+    /// Returns [`VMError::OutOfGas`] when the invocation cannot afford the prepared record, or
+    /// [`VMError::DecodeError`] if the same VM is charged more than once.
     pub fn precharge_vm(&self, vm: &mut IVM) -> Result<(), VMError> {
         vm.prepay_argument_decode(self.inner.decode_plan.gas())
     }
     /// Quote materialization after verifying the VM still presents the record
     /// pointer issued by the host and correctly bounded envelope shapes.
     ///
-    /// Payload authentication and exact binding checks happen in
-    /// [`Self::install_into_vm`] after the decode/materialization charge has
-    /// already been prepaid. The quote path deliberately does not hash or
-    /// deserialize attacker-controlled payloads.
+    /// Payload authentication and exact binding checks happen in [`Self::install_into_vm`] after
+    /// the decode/materialization charge has already been prepaid. The quote path deliberately does
+    /// not hash or deserialize attacker-controlled payloads.
     ///
     /// # Errors
     ///
-    /// Returns an error if either VM pointer is invalid, substituted, or not
-    /// allowed by the active ABI policy, or if the exact decode cost was not
-    /// prepaid for this invocation.
+    /// Returns an error if either VM pointer is invalid, substituted, or not allowed by the active
+    /// ABI policy, or if the exact decode cost was not prepaid for this invocation.
     pub fn decode_gas_quote(&self, vm: &IVM, record_pointer: u64) -> Result<u64, VMError> {
         if vm.register(10) != record_pointer {
             return Err(VMError::DecodeError);
@@ -1257,9 +1252,8 @@ fn validate_record_shape(
 }
 /// Validate canonical record bytes against an exact compiler-emitted schema.
 ///
-/// The byte bound is checked before Norito decoding. Canonical re-encoding,
-/// schema binding, active-only atom shape, pointer envelopes, and typed
-/// pointer payloads are all fail-closed.
+/// The byte bound is checked before Norito decoding. Canonical re-encoding, schema binding,
+/// active-only atom shape, pointer envelopes, and typed pointer payloads are all fail-closed.
 pub fn validate_argument_record(
     schema: &EntrypointArgumentSchemaV1,
     payload: &[u8],
@@ -1623,12 +1617,11 @@ fn build_decode_plan(
 /// Validate and prepare a canonical record only after its deterministic work
 /// fits the invocation's gas allowance.
 ///
-/// The compiler-owned schema is validated first and its framed length is counted
-/// under the canonical V1 Norito flags, independently of any prior decode
-/// context. Its flat preorder tape then yields a bounded, allocation-free
-/// maximum for ABI words and aggregate HEAP storage. Together with signed wire
-/// lengths and the record-bounded aligned pointer-copy allowance, that quote is
-/// checked before the first untrusted record decode.
+/// The compiler-owned schema is validated first and its framed length is counted under the
+/// canonical V1 Norito flags, independently of any prior decode context. Its flat preorder tape
+/// then yields a bounded, allocation-free maximum for ABI words and aggregate HEAP storage.
+/// Together with signed wire lengths and the record-bounded aligned pointer-copy allowance, that
+/// quote is checked before the first untrusted record decode.
 ///
 /// # Errors
 ///
@@ -1716,10 +1709,9 @@ pub(crate) fn decode_argument_record_gas_quote(vm: &IVM) -> Result<u64, VMError>
 }
 /// Decode the public argument object in `r10` using the schema in `r11`.
 ///
-/// On success, `r10` receives a `Blob` pointer whose payload is a packed
-/// little-endian table of `u64` ABI words after one canonical alignment byte.
-/// The operation decodes the boundary payload exactly once, before allocating
-/// any typed result envelopes.
+/// On success, `r10` receives a `Blob` pointer whose payload is a packed little-endian table of
+/// `u64` ABI words after one canonical alignment byte. The operation decodes the boundary payload
+/// exactly once, before allocating any typed result envelopes.
 pub(crate) fn decode_argument_record(vm: &mut IVM) -> Result<u64, VMError> {
     let plan = plan_argument_record_decode(vm)?;
     materialize_decode_plan(vm, &plan)

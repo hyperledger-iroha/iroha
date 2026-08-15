@@ -161,8 +161,7 @@ pub enum VMError {
     GasCostOverflow,
     /// The next staged syscall phase could not be afforded.
     ///
-    /// No gas is debited for the named phase; gas charged by earlier phases is
-    /// retained.
+    /// No gas is debited for the named phase; gas charged by earlier phases is retained.
     SyscallOutOfGas {
         /// Syscall executing the staged phase.
         syscall: u32,

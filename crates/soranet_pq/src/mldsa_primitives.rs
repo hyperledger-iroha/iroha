@@ -1,8 +1,7 @@
 //! Safe, portable FIPS 204 polynomial primitives used by the ML-DSA adapter.
 //!
-//! This module deliberately owns its Rust data structures. Nothing here is
-//! passed across an FFI boundary, so changing an upstream C implementation
-//! cannot invalidate Rust layout assumptions.
+//! This module deliberately owns its Rust data structures. Nothing here is passed across an FFI
+//! boundary, so changing an upstream C implementation cannot invalidate Rust layout assumptions.
 // These conversions and index loops mirror FIPS 204's explicitly fixed-width
 // polynomial arithmetic and byte encodings.
 #![allow(

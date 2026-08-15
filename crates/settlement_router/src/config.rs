@@ -26,8 +26,7 @@ pub struct EpsilonBps {
     value: u16,
 }
 impl EpsilonBps {
-    /// Basis points representing 100% (used when circuit breakers clamp the
-    /// price).
+    /// Basis points representing 100% (used when circuit breakers clamp the price).
     pub const FULL: Self = Self { value: 10_000 };
     /// Construct a new margin expressed in basis points.
     #[must_use]

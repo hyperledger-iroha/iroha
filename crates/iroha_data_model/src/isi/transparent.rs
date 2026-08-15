@@ -518,12 +518,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Log {
 isi! {
     /// Custom executor-defined instruction envelope.
     ///
-    /// `CustomInstruction` is a standardized wrapper to carry executor-specific
-    /// instructions without forking the data model. It serializes via Norito and
-    /// is transported on-chain like other ISI. The default executor in `iroha_core`
-    /// does not execute it and will panic if encountered; production use requires
-    /// a custom executor that recognizes and handles the payload deterministically
-    /// on every validating peer.
+    /// `CustomInstruction` is a standardized wrapper to carry executor-specific instructions
+    /// without forking the data model. It serializes via Norito and is transported on-chain like
+    /// other ISI. The default executor in `iroha_core` does not execute it and will panic if
+    /// encountered; production use requires a custom executor that recognizes and handles the
+    /// payload deterministically on every validating peer.
     ///
     /// Intended usage
     /// - Private/consortium deployments or prototyping: implement a custom
@@ -568,9 +567,8 @@ impl CustomInstruction {
 isi! {
     /// Placeholder instruction used when decoding an ISI payload fails.
     ///
-    /// Nodes may choose to decode malformed instruction payloads into this
-    /// sentinel value instead of panicking. The runtime executor must reject
-    /// it deterministically.
+    /// Nodes may choose to decode malformed instruction payloads into this sentinel value instead
+    /// of panicking. The runtime executor must reject it deterministically.
     ///
     /// Dev note: This instruction is not intended to be submitted by clients.
     #[derive(Display)]

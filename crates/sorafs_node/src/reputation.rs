@@ -1,17 +1,15 @@
 //! Durable finalized-ledger ingest for deterministic SoraFS reputation material.
 //!
-//! This module is deliberately a projector, not a domain authority. Its public
-//! ingest surface accepts only typed finalized event pages returned by native
-//! ledger queries. It never signs a reputation snapshot and never turns a
-//! process-local proof, repair, orderbook, dispute, token, or reserve outcome
-//! into an authoritative event.
+//! This module is deliberately a projector, not a domain authority. Its public ingest surface
+//! accepts only typed finalized event pages returned by native ledger queries. It never signs a
+//! reputation snapshot and never turns a process-local proof, repair, orderbook, dispute, token, or
+//! reserve outcome into an authoritative event.
 //!
-//! PDP/PoTR, repair, orderbook, reserve, and the unified PoR/dispute/token
-//! journal each retain one global contiguous cursor. The three semantic journal
-//! sources intentionally share that physical cursor and finality anchor so an
-//! interleaved committed journal cannot be partially projected.
-//! This module defines the complete projection contract; ledger mutation,
-//! storage, and native query/Torii wiring remain outside this service layer.
+//! PDP/PoTR, repair, orderbook, reserve, and the unified PoR/dispute/token journal each retain one
+//! global contiguous cursor. The three semantic journal sources intentionally share that physical
+//! cursor and finality anchor so an interleaved committed journal cannot be partially projected.
+//! This module defines the complete projection contract; ledger mutation, storage, and native
+//! query/Torii wiring remain outside this service layer.
 pub mod runtime;
 use crate::durable_transaction_forwarder::{AtomicCheckpointStore, CheckpointStoreError};
 use iroha_data_model::{
@@ -330,11 +328,10 @@ impl ReputationIngestPolicyV1 {
 }
 /// One set of typed pages read from a coherent finalized ledger view.
 ///
-/// Pages for a source may be omitted while another source catches up. Material
-/// emission remains blocked until every governed source reports complete at
-/// the same final target. A completed reserve event page requires a complete,
-/// same-anchor provider-account projection so lifecycle stages are never
-/// guessed.
+/// Pages for a source may be omitted while another source catches up. Material emission remains
+/// blocked until every governed source reports complete at the same final target. A completed
+/// reserve event page requires a complete, same-anchor provider-account projection so lifecycle
+/// stages are never guessed.
 #[derive(Debug, Clone)]
 pub struct ReputationFinalizedBatchV1 {
     /// Exact network from which every page and finalized block timestamp was read.
@@ -1479,14 +1476,12 @@ impl ReputationIngestService {
     }
     /// Durably acknowledge an externally signed result and remove its outbox item.
     ///
-    /// The signed envelope must be structurally canonical and exactly bind the
-    /// projected snapshot, scoring evidence, trust-policy digest, and signing
-    /// digest. `trust_policy` contains public verification material only; its
-    /// canonical digest must equal the governed ingest anchor. Full quorum,
-    /// revocation, signature, freshness, and future-skew verification uses the
-    /// authoritative finalized timestamp from the same locked checkpoint used
-    /// for exact material binding, and succeeds before the service retains the
-    /// canonical result digest.
+    /// The signed envelope must be structurally canonical and exactly bind the projected snapshot,
+    /// scoring evidence, trust-policy digest, and signing digest. `trust_policy` contains public
+    /// verification material only; its canonical digest must equal the governed ingest anchor. Full
+    /// quorum, revocation, signature, freshness, and future-skew verification uses the
+    /// authoritative finalized timestamp from the same locked checkpoint used for exact material
+    /// binding, and succeeds before the service retains the canonical result digest.
     ///
     /// # Errors
     ///
@@ -1571,9 +1566,8 @@ impl ReputationIngestService {
     }
     /// Return restart-safe cursors for the five physical committed feeds.
     ///
-    /// The PoR, dispute, and stream-token semantic sources intentionally share
-    /// one `Journal` row so a worker cannot resume those interleaved records
-    /// from divergent positions.
+    /// The PoR, dispute, and stream-token semantic sources intentionally share one `Journal` row so
+    /// a worker cannot resume those interleaved records from divergent positions.
     ///
     /// # Errors
     ///

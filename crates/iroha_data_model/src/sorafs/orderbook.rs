@@ -62,9 +62,8 @@ fn namespaced_orderbook_escrow_id(domain: &[u8], namespace: [u8; 4], id: [u8; 32
 }
 /// Derive the native asset-lock identifier that funds an admitted bid.
 ///
-/// Four reserved namespace bytes prevent public escrow creators from
-/// front-running this deterministic identifier while retaining 224 bits of
-/// domain-separated digest material.
+/// Four reserved namespace bytes prevent public escrow creators from front-running this
+/// deterministic identifier while retaining 224 bits of domain-separated digest material.
 #[must_use]
 pub fn orderbook_order_escrow_id(order_id: [u8; 32]) -> EscrowId {
     namespaced_orderbook_escrow_id(

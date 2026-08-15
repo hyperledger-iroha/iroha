@@ -14,9 +14,8 @@ pub use ivm_artifact_admission::{
 use std::sync::Arc;
 /// Prepare a validated self-describing contract for repeated VM loading.
 ///
-/// Admission is delegated to [`ivm_artifact_admission`]. This module only
-/// constructs native cache and execution structures after that shared policy
-/// has accepted the immutable artifact bytes.
+/// Admission is delegated to [`ivm_artifact_admission`]. This module only constructs native cache
+/// and execution structures after that shared policy has accepted the immutable artifact bytes.
 pub fn prepare_contract(artifact: Arc<[u8]>) -> Result<PreparedContract, ContractArtifactError> {
     PreparedContract::prepare(artifact)
 }

@@ -88,10 +88,9 @@ impl crate::seal::Instruction for BindManifestAlias {}
 isi! {
     /// Register or update capacity for an already governed, bonded provider.
     ///
-    /// Execution requires the transaction authority to be the exact registered
-    /// provider owner and the declaration's stake to be covered by the
-    /// owner-funded native reserve ledger. This instruction never creates or
-    /// changes a provider-owner binding.
+    /// Execution requires the transaction authority to be the exact registered provider owner and
+    /// the declaration's stake to be covered by the owner-funded native reserve ledger. This
+    /// instruction never creates or changes a provider-owner binding.
 pub struct RegisterCapacityDeclaration {
     /// Declaration record persisted by the capacity registry.
     pub record: CapacityDeclarationRecord,

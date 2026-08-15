@@ -126,10 +126,9 @@ where
 }
 /// Reference to an entity identified by `Id` with associated `Value`.
 ///
-/// This is a lightweight alternative to storing the full entity when the
-/// identifier is already known. It is commonly produced from key-value
-/// storages where the key acts as the identifier and the value stores the
-/// rest of the data.
+/// This is a lightweight alternative to storing the full entity when the identifier is already
+/// known. It is commonly produced from key-value storages where the key acts as the identifier and
+/// the value stores the rest of the data.
 #[derive(Debug, Copy, Clone)]
 pub struct Ref<'a, Id, Value> {
     /// Identification of the entity.

@@ -21782,7 +21782,7 @@ mod tests {
             handle_with_network_receivers::<DeferredProgressMsg>();
         handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
         let connection_id = 138;
-        let (delivery_peer, semantic_target, mut peer_receivers, tenure, route) =
+        let (_delivery_peer, semantic_target, mut peer_receivers, tenure, route) =
             install_test_reply_route(
                 &mut network,
                 socket_addr!(127.0.0.1:45718),

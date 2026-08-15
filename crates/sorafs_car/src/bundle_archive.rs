@@ -1,10 +1,9 @@
 //! Strict, bounded reader for native-bundle gzip/USTAR archives.
 //!
-//! The reader validates framing as it advances and returns success only after
-//! validating the complete archive. Each file payload is streamed through a
-//! size-bounded visitor, so callers can materialize entries without retaining
-//! the decoded archive in memory. Paths are returned as validated components
-//! so callers never need to split or normalize untrusted archive names.
+//! The reader validates framing as it advances and returns success only after validating the
+//! complete archive. Each file payload is streamed through a size-bounded visitor, so callers can
+//! materialize entries without retaining the decoded archive in memory. Paths are returned as
+//! validated components so callers never need to split or normalize untrusted archive names.
 use flate2::{Compression, GzBuilder, bufread::GzDecoder};
 use std::{
     collections::BTreeMap,
@@ -32,10 +31,9 @@ pub const BUNDLE_ARCHIVE_PROTOCOL_MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 pub const BUNDLE_ARCHIVE_PROTOCOL_MAX_TOTAL_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Resource limits applied while reading a native-bundle archive.
 ///
-/// All limits must be non-zero. `max_file_bytes` may not exceed
-/// `max_total_file_bytes`, and `max_total_file_bytes` may not exceed
-/// `max_decoded_bytes`. Every field is also bounded by the immutable protocol
-/// ceilings exported by this module.
+/// All limits must be non-zero. `max_file_bytes` may not exceed `max_total_file_bytes`, and
+/// `max_total_file_bytes` may not exceed `max_decoded_bytes`. Every field is also bounded by the
+/// immutable protocol ceilings exported by this module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BundleArchiveLimits {
     /// Maximum number of compressed bytes accepted from the input reader.
@@ -125,9 +123,8 @@ pub enum BundleArchiveEntryKind {
 }
 /// Metadata for one validated native-bundle archive entry.
 ///
-/// The entry borrows no decoder state and is valid only for the duration of
-/// the visitor call. Its path and path components are already validated and
-/// require no caller-side normalization.
+/// The entry borrows no decoder state and is valid only for the duration of the visitor call. Its
+/// path and path components are already validated and require no caller-side normalization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleArchiveEntry {
     path: String,
@@ -211,8 +208,7 @@ pub struct BundleArchiveFile<'a> {
 impl<'a> BundleArchiveFile<'a> {
     /// Describe one regular file.
     ///
-    /// Validation is deferred to [`write_gzip_ustar`]. `mode` must be either
-    /// `0o644` or `0o755`.
+    /// Validation is deferred to [`write_gzip_ustar`]. `mode` must be either `0o644` or `0o755`.
     #[must_use]
     pub const fn new(path: &'a str, mode: u32, payload: &'a [u8]) -> Self {
         Self {
@@ -239,18 +235,16 @@ impl<'a> BundleArchiveFile<'a> {
 }
 /// Encode regular files as one deterministic canonical gzip/USTAR bundle.
 ///
-/// Entries are validated and sorted by their canonical relative path before
-/// any output is written. Parent directories are implicit; the archive
-/// contains regular-file headers only. The gzip header, compression level,
-/// USTAR metadata, numeric fields, padding, and two-block terminator match the
-/// profile accepted by [`visit_gzip_ustar`].
+/// Entries are validated and sorted by their canonical relative path before any output is written.
+/// Parent directories are implicit; the archive contains regular-file headers only. The gzip
+/// header, compression level, USTAR metadata, numeric fields, padding, and two-block terminator
+/// match the profile accepted by [`visit_gzip_ustar`].
 ///
 /// # Errors
 ///
-/// Returns [`io::ErrorKind::InvalidInput`] when there are no files, a path or
-/// mode is non-canonical, two paths collide, a file is another file's parent,
-/// or a payload is too large for the canonical USTAR size field. I/O and
-/// compression failures are returned unchanged.
+/// Returns [`io::ErrorKind::InvalidInput`] when there are no files, a path or mode is
+/// non-canonical, two paths collide, a file is another file's parent, or a payload is too large for
+/// the canonical USTAR size field. I/O and compression failures are returned unchanged.
 pub fn write_gzip_ustar<W: Write>(writer: W, files: &[BundleArchiveFile<'_>]) -> io::Result<W> {
     let ordered = validate_bundle_archive_files_for_write(files)?;
     let mut gzip = GzBuilder::new()
@@ -401,13 +395,11 @@ fn write_canonical_octal(field: &mut [u8], value: u64) -> io::Result<()> {
     field[digits] = 0;
     Ok(())
 }
-/// Error returned when a native-bundle archive is malformed, unsafe, or over
-/// its configured limits.
+/// Error returned when a native-bundle archive is malformed, unsafe, or over its configured limits.
 ///
-/// The concrete error categories are intentionally private so callers cannot
-/// accidentally treat an archive-policy failure as recoverable based on
-/// unstable parser internals. The display text includes the rejected entry or
-/// limit where it is safe to do so.
+/// The concrete error categories are intentionally private so callers cannot accidentally treat an
+/// archive-policy failure as recoverable based on unstable parser internals. The display text
+/// includes the rejected entry or limit where it is safe to do so.
 #[derive(Debug)]
 pub struct BundleArchiveError(ArchiveError);
 impl fmt::Display for BundleArchiveError {
@@ -494,35 +486,30 @@ enum ArchiveError {
 }
 /// Validate and stream a gzip-compressed canonical USTAR native bundle.
 ///
-/// The compressed input is buffered only up to `limits.max_compressed_bytes`
-/// so that the parser can prove the gzip stream has exactly one member with the
-/// fixed ten-byte header `1f8b08000000000000ff`. The accepted USTAR profile
-/// permits only regular files (`0644` or `0755`) and directories (`0755`), with
-/// zero identity, timestamp, device, link, user-name, group-name, and reserved
-/// fields. Paths use one deterministic name/prefix split and strict
-/// lexicographic order. Exactly two zero terminator blocks end an archive that
-/// contains at least one regular file.
+/// The compressed input is buffered only up to `limits.max_compressed_bytes` so that the parser can
+/// prove the gzip stream has exactly one member with the fixed ten-byte header
+/// `1f8b08000000000000ff`. The accepted USTAR profile permits only regular files (`0644` or `0755`)
+/// and directories (`0755`), with zero identity, timestamp, device, link, user-name, group-name,
+/// and reserved fields. Paths use one deterministic name/prefix split and strict lexicographic
+/// order. Exactly two zero terminator blocks end an archive that contains at least one regular
+/// file.
 ///
-/// Decoded data is never buffered as a whole. For each validated entry,
-/// `visitor` receives a reader capped at the entry's declared size. The visitor
-/// must read that reader to EOF; returning successfully with unread bytes
-/// rejects the archive. Directory readers are empty.
+/// Decoded data is never buffered as a whole. For each validated entry, `visitor` receives a reader
+/// capped at the entry's declared size. The visitor must read that reader to EOF; returning
+/// successfully with unread bytes rejects the archive. Directory readers are empty.
 ///
-/// The visitor should create filesystem objects relative to an already-open,
-/// trusted root by walking [`BundleArchiveEntry::path_components`]. It should
-/// not reconstruct a host path from the raw display path. A filesystem visitor
-/// must use no-follow, component-relative operations and exclusive file
-/// creation so a pre-existing link cannot redirect extraction. Because the
-/// visitor runs while later entries are still being validated, side effects
-/// must target a disposable staging area that is published only after this
-/// function returns `Ok`.
+/// The visitor should create filesystem objects relative to an already-open, trusted root by
+/// walking [`BundleArchiveEntry::path_components`]. It should not reconstruct a host path from the
+/// raw display path. A filesystem visitor must use no-follow, component-relative operations and
+/// exclusive file creation so a pre-existing link cannot redirect extraction. Because the visitor
+/// runs while later entries are still being validated, side effects must target a disposable
+/// staging area that is published only after this function returns `Ok`.
 ///
 /// # Errors
 ///
-/// Returns an error when a resource limit is invalid or exceeded, the gzip or
-/// USTAR representation is non-canonical, an entry path is unsafe or
-/// conflicting, the visitor fails or leaves payload bytes unread, or the
-/// decoder does not finish at the exact end of the sole gzip member.
+/// Returns an error when a resource limit is invalid or exceeded, the gzip or USTAR representation
+/// is non-canonical, an entry path is unsafe or conflicting, the visitor fails or leaves payload
+/// bytes unread, or the decoder does not finish at the exact end of the sole gzip member.
 pub fn visit_gzip_ustar<R, F>(
     reader: R,
     limits: BundleArchiveLimits,

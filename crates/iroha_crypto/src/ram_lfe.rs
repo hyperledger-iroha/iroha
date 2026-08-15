@@ -506,8 +506,7 @@ pub fn identifier_hashes_from_output_hash(program_id: &[u8], output_hash: &Hash)
     ]);
     (opaque_id, receipt_hash)
 }
-/// Fallibly wrap BFV identifier-encryption parameters into the programmed
-/// RAM-FHE public bundle.
+/// Fallibly wrap BFV identifier-encryption parameters into the programmed RAM-FHE public bundle.
 ///
 /// # Errors
 /// Returns [`RamLfeError`] when the encryption parameters are not registered
@@ -524,8 +523,7 @@ pub fn try_bfv_programmed_public_parameters(
         None,
     )
 }
-/// Fallibly wrap BFV identifier-encryption parameters and explicit
-/// hidden-program metadata.
+/// Fallibly wrap BFV identifier-encryption parameters and explicit hidden-program metadata.
 ///
 /// # Errors
 /// Returns [`RamLfeError`] when the encryption parameters are not registered
@@ -700,9 +698,8 @@ pub fn evaluate_commitment_with_hidden_program(
 /// Validate a hidden BFV RAM-FHE program against the first-release profile.
 ///
 /// # Errors
-/// Returns [`RamLfeError`] when the program version, shape, register use,
-/// memory use, output shape, plaintext immediate encoding, or accumulated
-/// multiplicative depth exceeds the published profile.
+/// Returns [`RamLfeError`] when the program version, shape, register use, memory use, output shape,
+/// plaintext immediate encoding, or accumulated multiplicative depth exceeds the published profile.
 pub fn validate_hidden_ram_fhe_program(program: &HiddenRamFheProgram) -> Result<(), RamLfeError> {
     validate_hidden_program(program)
 }

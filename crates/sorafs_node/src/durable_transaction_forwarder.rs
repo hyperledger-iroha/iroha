@@ -1,9 +1,8 @@
 //! Internal durable state machine and atomic checkpoint store for transaction forwarders.
 //!
-//! Domain wrappers retain responsibility for validating the exact native
-//! instruction and its finalized-chain reconciliation result. This module owns
-//! only the reusable crash states and the hardened single-writer persistence
-//! protocol.
+//! Domain wrappers retain responsibility for validating the exact native instruction and its
+//! finalized-chain reconciliation result. This module owns only the reusable crash states and the
+//! hardened single-writer persistence protocol.
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 #[cfg(unix)]
 use std::os::unix::fs::{

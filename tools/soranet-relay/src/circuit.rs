@@ -93,8 +93,7 @@ impl Default for CircuitRegistry {
     }
 }
 impl CircuitRegistry {
-    /// Creates a registry whose logical ceiling cannot exceed the protocol
-    /// first-release corridor.
+    /// Creates a registry whose logical ceiling cannot exceed the protocol first-release corridor.
     pub(crate) fn with_max_entries(max_entries: usize) -> Self {
         Self {
             next_id: AtomicU64::new(0),

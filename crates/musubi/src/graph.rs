@@ -1,10 +1,9 @@
 //! Finalized registry collection and workspace-to-resolver graph construction.
 //!
-//! This module is deliberately separate from command parsing. It turns selected
-//! workspace packages (including recursively reachable local path packages)
-//! into deterministic resolver roots, binds every public selector to a stable
-//! structural package identity, and collects one coherent finalized sparse
-//! index snapshot before invoking the pure backtracking resolver.
+//! This module is deliberately separate from command parsing. It turns selected workspace packages
+//! (including recursively reachable local path packages) into deterministic resolver roots, binds
+//! every public selector to a stable structural package identity, and collects one coherent
+//! finalized sparse index snapshot before invoking the pure backtracking resolver.
 use crate::{
     lockfile::{LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1},
     manifest::ConcreteDependency,
@@ -258,10 +257,9 @@ pub struct CachedResolveOutcomeV1 {
 }
 /// Resolve entirely from the newest complete coherent cached snapshot.
 ///
-/// A missing query in a newer snapshot permits trying an older compatible
-/// snapshot. Any semantic resolver result (including governed unavailability,
-/// yank-aware selection, or a dependency conflict) is final and is never
-/// weakened by falling back to older data.
+/// A missing query in a newer snapshot permits trying an older compatible snapshot. Any semantic
+/// resolver result (including governed unavailability, yank-aware selection, or a dependency
+/// conflict) is final and is never weakened by falling back to older data.
 pub fn resolve_workspace_offline_cached(
     cache: &ResolverIndexCacheV1,
     workspace: &Workspace,

@@ -37,6 +37,26 @@ class CanonicalRequestSignerTest {
     }
 
     @Test
+    fun canonicalQueryMatchesRustLossyUtf8MalformedSequenceBoundaries() {
+        assertEquals(
+            "x=%EF%BF%BD%EF%BF%BD%EF%BF%BD",
+            CanonicalRequestSigner.canonicalQueryString("x=%ED%A0%80"),
+        )
+        assertEquals(
+            "x=%EF%BF%BDA",
+            CanonicalRequestSigner.canonicalQueryString("x=%E2%82%41"),
+        )
+        assertEquals(
+            "x=%EF%BF%BD",
+            CanonicalRequestSigner.canonicalQueryString("x=%F0%9F%92"),
+        )
+        assertEquals(
+            "x=%EF%BF%BDA%EF%BF%BD",
+            CanonicalRequestSigner.canonicalQueryString("x=%F0%9F%41%80"),
+        )
+    }
+
+    @Test
     fun canonicalQueryEnforcesV1PairAndByteLimits() {
         val exactPairs = (0 until CanonicalRequestSigner.CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1)
             .joinToString("&") { "k$it=v" }
@@ -61,7 +81,7 @@ class CanonicalRequestSignerTest {
     }
 
     @Test
-    fun canonicalRequestEnforcesV1MethodLimit() {
+    fun canonicalRequestEnforcesV1MethodTokenAndLimit() {
         val uri = URI.create("https://torii.example/v1/test")
         CanonicalRequestSigner.canonicalRequestMessage(
             "A".repeat(CanonicalRequestSigner.CANONICAL_REQUEST_MAX_METHOD_BYTES_V1),
@@ -74,6 +94,11 @@ class CanonicalRequestSignerTest {
                 uri,
                 ByteArray(0),
             )
+        }
+        listOf("", "GET request", "GET\n", "GÉT", "GET:").forEach { method ->
+            assertFailsWith<IllegalArgumentException>(method) {
+                CanonicalRequestSigner.canonicalRequestMessage(method, uri, ByteArray(0))
+            }
         }
     }
 
@@ -104,6 +129,71 @@ class CanonicalRequestSignerTest {
         assertFailsWith<IllegalArgumentException> {
             CanonicalRequestSigner.canonicalRequestMessage("GET", excessive, ByteArray(0))
         }
+
+        val exactTarget = String(
+            CanonicalRequestSigner.canonicalRequestMessage(
+                "get",
+                URI.create("https://torii.example/v1/test?b=2&a=1"),
+                ByteArray(0),
+            ),
+            StandardCharsets.UTF_8,
+        )
+        assertEquals("GET\n/v1/test\na=1&b=2", exactTarget.substringBeforeLast('\n'))
+        val escapedTarget = String(
+            CanonicalRequestSigner.canonicalRequestMessage(
+                "GET",
+                URI.create("/v1/%E3%81%82"),
+                ByteArray(0),
+            ),
+            StandardCharsets.UTF_8,
+        )
+        assertEquals("/v1/%E3%81%82", escapedTarget.lineSequence().elementAt(1))
+        val structuralEscapeTarget = String(
+            CanonicalRequestSigner.canonicalRequestMessage(
+                "GET",
+                URI.create("/v1/%2e%2Fasset/%252e"),
+                ByteArray(0),
+            ),
+            StandardCharsets.UTF_8,
+        )
+        assertEquals("/v1/%2e%2Fasset/%252e", structuralEscapeTarget.lineSequence().elementAt(1))
+
+        listOf(
+            URI.create("v1/test"),
+            URI.create("?a=1"),
+            URI.create("//torii.example/v1/test"),
+            URI.create("https:/v1/test"),
+            URI.create("https://torii.example//v1/test"),
+            URI.create("https://torii.example/v1/tést"),
+            URI.create("/v1/test#fragment"),
+            URI.create("mailto:test@example.com"),
+        ).forEach { invalid ->
+            assertFailsWith<IllegalArgumentException>(invalid.toString()) {
+                CanonicalRequestSigner.canonicalRequestMessage("GET", invalid, ByteArray(0))
+            }
+        }
+        listOf(
+            "/.",
+            "/..",
+            "/v1/./asset",
+            "/v1/../asset",
+            "/v1/%2e/asset",
+            "/v1/%2E%2e/asset",
+            "/v1/.%2E/asset",
+        ).forEach { invalidPath ->
+            assertFailsWith<IllegalArgumentException>(invalidPath) {
+                CanonicalRequestSigner.canonicalRequestMessage(
+                    "GET",
+                    URI.create(invalidPath),
+                    ByteArray(0),
+                )
+            }
+        }
+        listOf("/v1/%", "/v1/%2", "/v1/%GG").forEach { malformedPath ->
+            assertFailsWith<IllegalArgumentException>(malformedPath) {
+                URI.create(malformedPath)
+            }
+        }
     }
 
     @Test
@@ -126,22 +216,20 @@ class CanonicalRequestSignerTest {
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val uri = URI.create("https://torii.example/v1/accounts")
         val timestampMs = 1_717_171_717_005L
-        val exactAccount = "a".repeat(
-            CanonicalRequestSigner.CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
-        )
-        assertEquals(
-            CanonicalRequestSigner.CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
-            exactAccount.toByteArray(StandardCharsets.UTF_8).size,
-        )
+        val longestLexicalAlias =
+            "${"a".repeat(63)}@${"b".repeat(63)}.${"c".repeat(63)}"
         CanonicalRequestSigner.buildHeaders(
             networkId,
             "get",
             uri,
             ByteArray(0),
-            exactAccount,
+            longestLexicalAlias,
             keyPair.private,
             timestampMs,
             "account-limit",
+        )
+        val excessiveAccount = "a".repeat(
+            CanonicalRequestSigner.CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 + 1,
         )
         assertFailsWith<IllegalArgumentException> {
             CanonicalRequestSigner.buildHeaders(
@@ -149,11 +237,48 @@ class CanonicalRequestSignerTest {
                 "get",
                 uri,
                 ByteArray(0),
-                exactAccount + "a",
+                excessiveAccount,
                 keyPair.private,
                 timestampMs,
                 "account-limit-plus-one",
             )
+        }
+
+        listOf(
+            "alice",
+            "Alice@universal",
+            "alice@Universal",
+            "alice@@universal",
+            "alice@bank.universal.extra",
+            "ab--wallet@universal",
+            "alice+admin@universal",
+            "0xalice@universal",
+            "xn--@universal",
+        ).forEach { invalidAccount ->
+            assertFailsWith<IllegalArgumentException>(invalidAccount) {
+                CanonicalRequestSigner.buildHeaders(
+                    networkId,
+                    "get",
+                    uri,
+                    ByteArray(0),
+                    invalidAccount,
+                    keyPair.private,
+                    timestampMs,
+                    "invalid-account",
+                )
+            }
+            assertFailsWith<IllegalArgumentException>(invalidAccount) {
+                CanonicalRequestSigner.withBodySignature(
+                    networkId,
+                    "post",
+                    uri,
+                    emptyMap(),
+                    invalidAccount,
+                    keyPair.private,
+                    timestampMs,
+                    "invalid-body-account",
+                )
+            }
         }
 
         val exactNonce = "n".repeat(256)
@@ -205,18 +330,45 @@ class CanonicalRequestSignerTest {
         assertEquals(canonicalHex, i105Headers[CanonicalRequestSigner.HEADER_ACCOUNT])
         assertTrue(canonicalHex.matches(Regex("0x[0-9a-f]+")))
 
-        val alias = "alice-1@wonderland"
-        val aliasHeaders = CanonicalRequestSigner.buildHeaders(
-            networkId,
-            "get",
-            uri,
-            ByteArray(0),
-            alias,
-            keyPair.private,
-            timestampMs,
-            "alias-header",
-        )
-        assertEquals(alias, aliasHeaders[CanonicalRequestSigner.HEADER_ACCOUNT])
+        listOf(
+            "alice-1@wonderland",
+            "wallet@bank.universal",
+            "xn--bcher-kva@universal",
+            "alice@xn--fa-hia",
+            "alice@xn--3xa",
+            "alice@xn--nxa6a",
+            "alice@xn--11b2ezcw70k",
+            "alice@xn--mgba3gch31f060k",
+            "alice@xn--ngba7iz95i",
+            "alice@xn--ab-0ea",
+            "alice@xn--a-jib",
+            "alice@xn--ab-3n4a",
+            "xn--alice@universal",
+            "xn--a@universal",
+            "alice@xn--ab-j1t",
+            "alice@xn--mgba000r",
+            "alice@xn--ngba000r",
+            "alice@xn--ab-uuba211bca8057b",
+            "alice@xn--4u8c",
+            "alice@xn--pq1d",
+            "alice@xn--kx7e",
+            "alice@xn--5h0f",
+            "alice@xn--zo5h",
+            "alice@xn--fi3d",
+            "alice@xn--d4f",
+        ).forEachIndexed { index, alias ->
+            val aliasHeaders = CanonicalRequestSigner.buildHeaders(
+                networkId,
+                "get",
+                uri,
+                ByteArray(0),
+                alias,
+                keyPair.private,
+                timestampMs,
+                "alias-header-$index",
+            )
+            assertEquals(alias, aliasHeaders[CanonicalRequestSigner.HEADER_ACCOUNT])
+        }
 
         val signedBody = CanonicalRequestSigner.withBodySignature(
             networkId,
@@ -238,7 +390,7 @@ class CanonicalRequestSignerTest {
             CanonicalRequestSigner.BODY_SIGNATURE_BASE64 to "remove",
             "nested" to linkedMapOf(CanonicalRequestSigner.BODY_SIGNATURE_BASE64 to "keep"),
             "witness_base64" to "remove-too",
-            CanonicalRequestSigner.BODY_ACCOUNT_ID to "alice",
+            CanonicalRequestSigner.BODY_ACCOUNT_ID to "alice@universal",
             CanonicalRequestSigner.BODY_TIMESTAMP_MS to 7L,
             CanonicalRequestSigner.BODY_NONCE to "n",
         )
@@ -246,7 +398,7 @@ class CanonicalRequestSignerTest {
         val unsigned = String(CanonicalRequestSigner.unsignedBodyAuthJson(body), StandardCharsets.UTF_8)
 
         assertEquals(
-            """{"account_id":"alice","nested":{"signature_base64":"keep"},"nonce":"n","timestamp_ms":7,"z":"last"}""",
+            """{"account_id":"alice@universal","nested":{"signature_base64":"keep"},"nonce":"n","timestamp_ms":7,"z":"last"}""",
             unsigned,
         )
     }
@@ -264,13 +416,13 @@ class CanonicalRequestSignerTest {
             "post",
             uri,
             body,
-            "alice",
+            "alice@universal",
             keyPair.private,
             timestampMs,
             nonce,
         )
 
-        assertEquals("alice", signed[CanonicalRequestSigner.BODY_ACCOUNT_ID])
+        assertEquals("alice@universal", signed[CanonicalRequestSigner.BODY_ACCOUNT_ID])
         assertEquals(timestampMs, signed[CanonicalRequestSigner.BODY_TIMESTAMP_MS])
         assertEquals(nonce, signed[CanonicalRequestSigner.BODY_NONCE])
         assertFalse(signed.containsKey("witness_base64"))
@@ -327,7 +479,7 @@ class CanonicalRequestSignerTest {
                 "post",
                 uri,
                 bodyBytes,
-                "alice",
+                "alice@universal",
                 keyPair.private,
                 timestampMs,
                 "\nnonce",
@@ -351,7 +503,7 @@ class CanonicalRequestSignerTest {
                 "post",
                 uri,
                 body,
-                "alice",
+                "alice@universal",
                 keyPair.private,
                 timestampMs,
                 "nonce ",

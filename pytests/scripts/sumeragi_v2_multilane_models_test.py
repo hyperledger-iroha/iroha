@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -62,10 +63,13 @@ def copy_reviewed_rust_source_fixture(
 def initialize_git_fixture(
     root: Path, tracked: tuple[str, ...] | None = None
 ) -> None:
+    environment = os.environ.copy()
+    environment.pop("GIT_INDEX_FILE", None)
     subprocess.run(
         ["git", "init", "-q"],
         cwd=root,
         check=True,
+        env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -74,6 +78,7 @@ def initialize_git_fixture(
         ["git", "add", "--", *paths],
         cwd=root,
         check=True,
+        env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

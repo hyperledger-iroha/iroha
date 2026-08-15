@@ -1,8 +1,7 @@
 //! Transport and handshake scaffolding traits.
 //!
-//! This module provides thin abstractions intended to support optional
-//! transports (e.g., QUIC) and handshakes (e.g., Noise/TLS) behind
-//! feature flags without affecting the default TCP path.
+//! This module provides thin abstractions intended to support optional transports (e.g., QUIC) and
+//! handshakes (e.g., Noise/TLS) behind feature flags without affecting the default TCP path.
 #[cfg(any(feature = "p2p_tls", feature = "quic"))]
 use rustls::{
     DigitallySignedStruct, Error as RustlsError, SignatureScheme,
@@ -17,12 +16,11 @@ static SELF_SIGNED_SIGNATURE_ALGORITHMS: std::sync::LazyLock<
 });
 /// Certificate verifier for self-signed transport certificates.
 ///
-/// An unpinned verifier deliberately leaves naming and trust-root validation to the
-/// application identity layer, but still verifies TLS `CertificateVerify`. That proof
-/// of possession is required before a certificate fingerprint can serve as a channel
-/// binding: accepting a signature produced by an unrelated key would let an attacker
-/// replay another node's certificate bytes. A pinned verifier additionally authenticates
-/// the exact leaf fingerprint at the transport layer.
+/// An unpinned verifier deliberately leaves naming and trust-root validation to the application
+/// identity layer, but still verifies TLS `CertificateVerify`. That proof of possession is required
+/// before a certificate fingerprint can serve as a channel binding: accepting a signature produced
+/// by an unrelated key would let an attacker replay another node's certificate bytes. A pinned
+/// verifier additionally authenticates the exact leaf fingerprint at the transport layer.
 #[cfg(any(feature = "p2p_tls", feature = "quic"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CertificateKeyProofVerifier {
@@ -98,12 +96,11 @@ pub mod quic {
     #![allow(clippy::missing_errors_doc)]
     //! QUIC transport integration (feature-gated, optional).
     //!
-    //! This module provides a QUIC dialer that can be reused across many
-    //! outbound dials. Self-signed certificates are accepted because peer
-    //! identity is enforced by the signed application handshake, but TLS still
-    //! verifies that the server owns the certificate key. The signed handshake
-    //! binds the presented certificate fingerprint to the active session. ALPN
-    //! is fixed.
+    //! This module provides a QUIC dialer that can be reused across many outbound dials.
+    //! Self-signed certificates are accepted because peer identity is enforced by the signed
+    //! application handshake, but TLS still verifies that the server owns the certificate key. The
+    //! signed handshake binds the presented certificate fingerprint to the active session. ALPN is
+    //! fixed.
     use quinn::{
         ClientConfig, Connection, Endpoint, IdleTimeout, RecvStream, SendStream, TransportConfig,
         VarInt, crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
@@ -176,15 +173,13 @@ pub mod quic {
     }
     /// Derive bounded Quinn endpoint admission and datagram buffer limits.
     ///
-    /// Pending handshakes get one flow-control granule after their first packet,
-    /// plus a separate granule for the first packet that Quinn excludes from
-    /// both incoming-buffer limits. Since [`flow_control_geometry`] requires
-    /// four such granules per active connection, each aggregate pending region
-    /// fits within one quarter of the same minimum process geometry. Datagram
-    /// buffers are separately configured, but their per-connection sum and
-    /// aggregate multiplication are still checked explicitly. Fixed Quinn
-    /// object and allocator metadata is count-bounded by `max_incoming`, but is
-    /// not part of this payload/flow-credit byte geometry.
+    /// Pending handshakes get one flow-control granule after their first packet, plus a separate
+    /// granule for the first packet that Quinn excludes from both incoming-buffer limits. Since
+    /// [`flow_control_geometry`] requires four such granules per active connection, each aggregate
+    /// pending region fits within one quarter of the same minimum process geometry. Datagram
+    /// buffers are separately configured, but their per-connection sum and aggregate multiplication
+    /// are still checked explicitly. Fixed Quinn object and allocator metadata is count-bounded by
+    /// `max_incoming`, but is not part of this payload/flow-credit byte geometry.
     pub fn endpoint_buffer_geometry(
         flow_control: FlowControlConfig,
         max_incoming: usize,
@@ -290,11 +285,10 @@ pub mod quic {
     }
     /// Derive the per-connection QUIC flow-control geometry from a process budget.
     ///
-    /// A connection has two receive streams and may retain the same aggregate
-    /// amount for sending. Consequently, `4 * max_total_connections * W` is
-    /// bounded by `process_budget_bytes`, where `W` is the stream window. Large
-    /// frames do not require equally large static credit: QUIC replenishes the
-    /// window as the application consumes stream bytes.
+    /// A connection has two receive streams and may retain the same aggregate amount for sending.
+    /// Consequently, `4 * max_total_connections * W` is bounded by `process_budget_bytes`, where
+    /// `W` is the stream window. Large frames do not require equally large static credit: QUIC
+    /// replenishes the window as the application consumes stream bytes.
     pub fn flow_control_geometry(cfg: FlowControlConfig) -> io::Result<FlowControlGeometry> {
         if cfg.max_encrypted_frame_bytes == 0 {
             return Err(io::Error::new(
@@ -768,10 +762,9 @@ pub fn quic_peer_certificate_fingerprint(
 pub mod tls {
     //! TLS-over-TCP transport (feature-gated, optional).
     //!
-    //! Wraps a TCP stream with TLS 1.3 using rustls. Self-signed certificates
-    //! are accepted after TLS proves possession of their private key; peer
-    //! identity is then enforced by the application handshake signature bound
-    //! to the presented certificate fingerprint.
+    //! Wraps a TCP stream with TLS 1.3 using rustls. Self-signed certificates are accepted after
+    //! TLS proves possession of their private key; peer identity is then enforced by the
+    //! application handshake signature bound to the presented certificate fingerprint.
     use rustls::{ClientConfig, client::danger::ServerCertVerifier, pki_types::ServerName};
     use std::sync::Arc;
     use tokio::io::{AsyncRead, AsyncWrite};
@@ -1536,9 +1529,8 @@ pub mod ws {
 }
 /// Transport connector abstraction (scaffolding).
 ///
-/// The default implementation uses TCP; alternative transports should
-/// match semantics (ordered, reliable) and integrate with the same
-/// message framing.
+/// The default implementation uses TCP; alternative transports should match semantics (ordered,
+/// reliable) and integrate with the same message framing.
 #[allow(clippy::missing_errors_doc)]
 pub trait TransportConnector {
     /// Underlying stream type used by the transport.

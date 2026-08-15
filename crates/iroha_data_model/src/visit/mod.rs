@@ -47,9 +47,8 @@ macro_rules! visit_all {
         fn $visitor(&mut self, operation: $operation) { $visitor(self, operation); }
     )+ };
 }
-/// Trait to validate Iroha entities.
-/// Default implementation of non-leaf visitors runs `visit_` functions for leafs.
-/// Default implementation for leaf visitors is blank.
+/// Trait to validate Iroha entities. Default implementation of non-leaf visitors runs `visit_`
+/// functions for leafs. Default implementation for leaf visitors is blank.
 ///
 /// This trait is based on the visitor pattern.
 ///

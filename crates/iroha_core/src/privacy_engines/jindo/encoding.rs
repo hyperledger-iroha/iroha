@@ -56,10 +56,9 @@ pub(crate) fn decode_coefficient_slots_v1(
 /// Decode an exact balanced integer polynomial without first reducing it
 /// modulo the inner commitment modulus.
 ///
-/// Jindo's reference implementation uses an additional ambient CRT prime for
-/// the pre-challenge split evaluations. Keeping the exact coefficients in
-/// `i128` is equivalent for this fixed profile and makes the no-wrap argument
-/// explicit: the reviewed bound is below `2^93`, far inside `i128`.
+/// Jindo's reference implementation uses an additional ambient CRT prime for the pre-challenge
+/// split evaluations. Keeping the exact coefficients in `i128` is equivalent for this fixed profile
+/// and makes the no-wrap argument explicit: the reviewed bound is below `2^93`, far inside `i128`.
 pub(crate) fn decode_exact_coefficient_slots_v1(
     coefficients: &[i128; JINDO_RING_DEGREE_V1],
 ) -> [JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1] {

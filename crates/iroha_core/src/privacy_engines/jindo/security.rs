@@ -1,22 +1,19 @@
 //! Fail-closed security evidence for the experimental Jindo profile.
 //!
-//! Functional proof verification is not a theorem-backed knowledge-soundness
-//! certificate. The current complete uniform `S_35` challenge distribution
-//! contains distinct challenges whose difference is a zero divisor. A future
-//! certificate therefore needs a distribution-wide numerical bound, its exact
-//! extractor/composition loss, and pinned machine-checkable evidence.
+//! Functional proof verification is not a theorem-backed knowledge-soundness certificate. The
+//! current complete uniform `S_35` challenge distribution contains distinct challenges whose
+//! difference is a zero divisor. A future certificate therefore needs a distribution-wide numerical
+//! bound, its exact extractor/composition loss, and pinned machine-checkable evidence.
 use super::{
     JINDO_RING_DEGREE_V1,
     ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoRnsPolynomialV1},
 };
 use thiserror::Error;
 const JINDO_CHALLENGE_WEIGHT_V1: usize = 35;
-/// Requirements for issuing the first theorem-backed Jindo security
-/// certificate.
+/// Requirements for issuing the first theorem-backed Jindo security certificate.
 ///
-/// This descriptor is informational and is deliberately not an activation or
-/// transcript input. The current experimental profile remains unchanged and
-/// the sealed capability remains unavailable.
+/// This descriptor is informational and is deliberately not an activation or transcript input. The
+/// current experimental profile remains unchanged and the sealed capability remains unavailable.
 pub const JINDO_SECURITY_CERTIFICATE_REQUIREMENTS_V1: &[u8] = b"iroha-jindo-security-certificate-v1|status=blocked|challenge=complete-uniform-S35|required=distribution-wide-numerical-bound-on-Pr[distinct-challenge-difference-is-nonunit]-for-all-compiled-inner-and-outer-ring-factors;knowledge-extractor-and-alpha-c-composition-loss;fiat-shamir-qrom-loss;machine-checkable-artifact-and-pinned-source-digest";
 /// Sealed evidence that the compiled Jindo profile has met its complete
 /// theorem-backed knowledge-soundness requirements.
@@ -37,8 +34,7 @@ pub enum JindoSecurityCertificateErrorV1 {
     )]
     MissingDistributionWideKnowledgeSoundnessEvidence,
 }
-/// Request the theorem-backed security certificate for the compiled Jindo
-/// profile.
+/// Request the theorem-backed security certificate for the compiled Jindo profile.
 ///
 /// The current complete `S_35` profile has no pinned distribution-wide theorem
 /// or machine-checkable bound. This function therefore always fails closed;
@@ -47,8 +43,7 @@ pub enum JindoSecurityCertificateErrorV1 {
 /// # Errors
 ///
 /// Returns [`JindoSecurityCertificateErrorV1::MissingDistributionWideKnowledgeSoundnessEvidence`]
-/// until all requirements in [`JINDO_SECURITY_CERTIFICATE_REQUIREMENTS_V1`]
-/// are pinned and checked.
+/// until all requirements in [`JINDO_SECURITY_CERTIFICATE_REQUIREMENTS_V1`] are pinned and checked.
 pub const fn jindo_security_certificate_v1()
 -> Result<JindoSecurityCertificateV1, JindoSecurityCertificateErrorV1> {
     // TODO(jindo-security): issue the sealed capability only after a pinned,
@@ -106,10 +101,9 @@ pub enum JindoChallengePairErrorV1 {
 /// Check whether two canonical, distinct current `S_35` challenges have a unit
 /// difference in every compiled inner and outer ring factor.
 ///
-/// This is an exact deterministic diagnostic, not a distribution-wide
-/// security certificate. Checking any finite collection of pairs cannot bound
-/// the probability of a non-unit difference over the complete `S_35`
-/// distribution.
+/// This is an exact deterministic diagnostic, not a distribution-wide security certificate.
+/// Checking any finite collection of pairs cannot bound the probability of a non-unit difference
+/// over the complete `S_35` distribution.
 ///
 /// # Errors
 ///

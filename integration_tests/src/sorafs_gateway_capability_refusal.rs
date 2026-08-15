@@ -1,9 +1,8 @@
 //! Capability refusal fixture loader for the SoraFS gateway conformance suite (SF-5c).
 //!
-//! This module provides helpers for integration tests and tooling to consume the
-//! refusal scenario fixtures defined in `fixtures/sorafs_gateway/capability_refusal`.
-//! Scenarios drive the capability refusal conformance suite, operator
-//! self-certification kit, and SDK regression matrix.
+//! This module provides helpers for integration tests and tooling to consume the refusal scenario
+//! fixtures defined in `fixtures/sorafs_gateway/capability_refusal`. Scenarios drive the capability
+//! refusal conformance suite, operator self-certification kit, and SDK regression matrix.
 use eyre::{Result as EyreResult, WrapErr};
 use norito::json::{self, Value};
 use std::{
@@ -55,8 +54,7 @@ pub struct CapabilityRefusalResponse {
 ///
 /// # Errors
 ///
-/// Returns an error if the fixture directory cannot be read, parsed, or contains
-/// malformed entries.
+/// Returns an error if the fixture directory cannot be read, parsed, or contains malformed entries.
 pub fn load_scenarios() -> EyreResult<Vec<CapabilityRefusalScenario>> {
     let root = fixtures_root();
     let path = root.join(SCENARIOS_FILE);

@@ -396,10 +396,9 @@ pub enum MetadataVisibility {
 pub const DA_RENT_POLICY_VERSION_V1: u8 = 1;
 /// Maximum decimal scale accepted for configured DA rent rates.
 ///
-/// DA rates intentionally retain micro-XOR precision so basis-point splits
-/// are deterministic at the policy's accounting granularity. Quoted values
-/// still use [`XorQuantity`] at every boundary, preventing other DA amounts
-/// from exceeding XOR's independent nine-decimal ledger limit.
+/// DA rates intentionally retain micro-XOR precision so basis-point splits are deterministic at the
+/// policy's accounting granularity. Quoted values still use [`XorQuantity`] at every boundary,
+/// preventing other DA amounts from exceeding XOR's independent nine-decimal ledger limit.
 const DA_RENT_RATE_SCALE: u32 = 6;
 /// Rent and incentive policy for DA submissions (see roadmap task DA-7).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]

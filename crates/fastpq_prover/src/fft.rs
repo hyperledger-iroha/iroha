@@ -2,9 +2,8 @@
 //!
 //! Stage 1 promotes the domain helpers introduced in Stage 0 into a
 //! multicolumn planner that drives the prover’s polynomial pipeline.  The
-//! planner validates catalogue metadata, exposes parallel FFT/IFFT helpers,
-//! and evaluates coefficient columns onto the canonical low-degree extension
-//! coset.
+//! planner validates catalogue metadata, exposes parallel FFT/IFFT helpers, and evaluates
+//! coefficient columns onto the canonical low-degree extension coset.
 use crate::{
     backend,
     cyclotomic::{self, Domain},

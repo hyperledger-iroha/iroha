@@ -53,9 +53,8 @@ pub const PQ_MASP_MAX_STARK_PROOF_BYTES_V1: usize =
     PQ_MASP_MAX_AUTHORIZATION_PROOF_BYTES_V1 - PQ_MASP_AUTHORIZATION_HEADER_BYTES_V1;
 /// Exact wallet-visible encrypted-output, plaintext, and AAD schema.
 ///
-/// Keep this descriptor beside the codec: the compiled governance profile
-/// commits to these bytes and must not describe a stale or alternate wallet
-/// layout.
+/// Keep this descriptor beside the codec: the compiled governance profile commits to these bytes
+/// and must not describe a stale or alternate wallet layout.
 pub(crate) const PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1: &[u8] = b"typed-output:recipient-id32+encapsulation-digest32+output-commitment32+ciphertext[PQE1+mlkem768-ciphertext1088+nonce24+xchacha20poly1305[PQN1+value-u128be+authorization-key-digest32+recipient-id32+nullifier-key-digest32+rho32+blinding32+memo-digest32]+tag16]|mlkem768-domain-kdf|aad:domain+asset-definition-id-u64be-length+norito+pool-id32+output-commitment32+recipient-id32+encapsulation-digest32";
 pub(crate) const AUTHORIZATION_MAGIC_V1: &[u8; 4] = b"PQA1";
 pub(crate) const ENCRYPTED_OUTPUT_MAGIC_V1: &[u8; 4] = b"PQE1";

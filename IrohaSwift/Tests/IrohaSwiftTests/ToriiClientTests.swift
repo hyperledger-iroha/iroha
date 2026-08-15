@@ -6153,7 +6153,7 @@ final class ToriiClientTests: XCTestCase {
         let client = makeClient(baseURL: URL(string: "http://example.test")!)
         let sessionId = String(repeating: "11", count: 32)
         let auth = ToriiCanonicalRequestAuth(
-            accountId: "alice",
+            accountId: "alice@universal",
             privateKey: Data(repeating: 7, count: 32),
             timestampMs: 1_700_000_000_000,
             nonce: "vpn-https-test"
@@ -6275,7 +6275,7 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testRegisterAndUnregisterPushDeviceSignCanonicalBody() async throws {
-        let auth = ToriiCanonicalRequestAuth(accountId: "alice",
+        let auth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
                                              privateKey: Data(repeating: 7, count: 32),
                                              timestampMs: 1_700_000_000_010,
                                              nonce: "push-nonce-1")
@@ -6283,10 +6283,10 @@ final class ToriiClientTests: XCTestCase {
         StubURLProtocol.handler = { request in
             callCount += 1
             XCTAssertEqual(request.url?.path, "/v1/notify/devices")
-            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount), "alice")
+            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount), "alice@universal")
             XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature) == nil, false)
             let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["account_id"] as? String, "alice")
+            XCTAssertEqual(body["account_id"] as? String, "alice@universal")
             XCTAssertEqual(body["platform"] as? String, "FCM")
             XCTAssertEqual(body["token"] as? String, "token-1")
             XCTAssertEqual(body["topics"] as? [String], ["activity"])
@@ -6300,12 +6300,12 @@ final class ToriiClientTests: XCTestCase {
             return (response, Data())
         }
         let client = makeClient()
-        let request = ToriiPushDeviceRequest(accountId: " alice ",
+        let request = ToriiPushDeviceRequest(accountId: " alice@universal ",
                                              platform: "FCM",
                                              token: " token-1 ",
                                              topics: [" activity "])
         try await client.registerPushDevice(request, canonicalAuth: auth)
-        let deleteAuth = ToriiCanonicalRequestAuth(accountId: "alice",
+        let deleteAuth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
                                                    privateKey: Data(repeating: 7, count: 32),
                                                    timestampMs: 1_700_000_000_011,
                                                    nonce: "push-nonce-2")
@@ -6317,14 +6317,14 @@ final class ToriiClientTests: XCTestCase {
     func testCreateVpnQuoteSignsAndDeserializesOpenLeaseInstruction() async throws {
         let meteringKey = String(repeating: "ab", count: 32)
         let quoteId = String(repeating: "cd", count: 32)
-        let auth = ToriiCanonicalRequestAuth(accountId: "alice",
+        let auth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
                                              privateKey: Data(repeating: 7, count: 32),
                                              timestampMs: 1_700_000_000_000,
                                              nonce: "nonce-1")
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/vpn/quotes")
             XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount), "alice")
+            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount), "alice@universal")
             XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs), "1700000000000")
             XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerNonce), "nonce-1")
             XCTAssertNotNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
@@ -6336,7 +6336,7 @@ final class ToriiClientTests: XCTestCase {
                 "lease_id_hex": quoteId,
                 "session_id_hex": String(repeating: "ef", count: 16),
                 "payment_reference": quoteId,
-                "account_id": "alice",
+                "account_id": "alice@universal",
                 "exit_class": "standard",
                 "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                 "lease_secs": 900,
@@ -6408,7 +6408,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertFalse(called)
 
         let paddedNonce = ToriiCanonicalRequestAuth(
-            accountId: "alice",
+            accountId: "alice@universal",
             privateKey: Data(repeating: 7, count: 32),
             timestampMs: 1_700_000_000_000,
             nonce: "nonce-1 "
@@ -6428,7 +6428,7 @@ final class ToriiClientTests: XCTestCase {
         let paymentHash = String(repeating: "22", count: 32)
         let meteringKey = String(repeating: "33", count: 32)
         let helperTicketHex = "5356504e48543100" + String(repeating: "00", count: 656)
-        let auth = ToriiCanonicalRequestAuth(accountId: "alice",
+        let auth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
                                              privateKey: Data(repeating: 7, count: 32),
                                              timestampMs: 1_700_000_000_020,
                                              nonce: "vpn-session-nonce")
@@ -6448,7 +6448,7 @@ final class ToriiClientTests: XCTestCase {
             }
             let payload: [String: Any] = [
                 "session_id": quoteId,
-                "account_id": "alice",
+                "account_id": "alice@universal",
                 "exit_class": "standard",
                 "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                 "lease_secs": 900,
@@ -6560,7 +6560,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitListAndDeleteVpnReceiptsExposeSettlementInstruction() async throws {
         let quoteId = String(repeating: "44", count: 32)
-        let auth = ToriiCanonicalRequestAuth(accountId: "alice",
+        let auth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
                                              privateKey: Data(repeating: 7, count: 32),
                                              timestampMs: 1_700_000_000_030,
                                              nonce: "vpn-receipt-nonce")
@@ -6570,7 +6570,7 @@ final class ToriiClientTests: XCTestCase {
         ]
         let receiptPayload: [String: Any] = [
             "session_id": quoteId,
-            "account_id": "alice",
+            "account_id": "alice@universal",
             "exit_class": "standard",
             "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
             "meter_family": "vpn-standard",

@@ -171,9 +171,8 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
     ///
     /// This raw-digest constructor exists only for adversarial unit fixtures: a
     /// digest does not prove persistent-witness membership.  Production uses
-    /// `from_verified_binding_set`, which consumes the opaque ordered set whose
-    /// secret role mask covers CPK, both RKG rounds, normalization, every
-    /// Galois key, and decryption.
+    /// `from_verified_binding_set`, which consumes the opaque ordered set whose secret role mask
+    /// covers CPK, both RKG rounds, normalization, every Galois key, and decryption.
     #[cfg(test)]
     pub(super) fn new(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -1526,7 +1525,7 @@ pub struct ZkAmsMkheDirectPolynomialStreamV1 {
     party_index: u8,
     party: ZkAmsMkhePartyIdV1,
     role: ZkAmsMkheDirectPolynomialRoleV1,
-    expected_digest: [u8; 32],
+    expected_digest: Option<[u8; 32]>,
     next_limb: usize,
     canonical_bytes: usize,
     hash: Keccak256,
@@ -1555,10 +1554,51 @@ impl ZkAmsMkheDirectPolynomialStreamV1 {
         role: ZkAmsMkheDirectPolynomialRoleV1,
         expected_digest: [u8; 32],
     ) -> Result<Self, ZkAmsMkheErrorV1> {
+        Self::begin_inner(
+            roster,
+            context,
+            round,
+            party_index,
+            role,
+            Some(expected_digest),
+        )
+    }
+    /// Begin the sole creator-side stream which cannot know its digest before
+    /// hashing the exact H0/H1 payload. This remains private to the MKHE
+    /// candidate corridor and retains every ordinary stream-axis check.
+    pub(super) fn begin_rkg_one_creator_v1(
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        context: ZkAmsMkheDirectCeremonyContextV1,
+        party_index: usize,
+        role: ZkAmsMkheDirectPolynomialRoleV1,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        if !matches!(
+            role,
+            ZkAmsMkheDirectPolynomialRoleV1::RkgH0 | ZkAmsMkheDirectPolynomialRoleV1::RkgH1
+        ) {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        Self::begin_inner(
+            roster,
+            context,
+            ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne,
+            party_index,
+            role,
+            None,
+        )
+    }
+    fn begin_inner(
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        context: ZkAmsMkheDirectCeremonyContextV1,
+        round: ZkAmsMkheDirectCeremonyRoundV1,
+        party_index: usize,
+        role: ZkAmsMkheDirectPolynomialRoleV1,
+        expected_digest: Option<[u8; 32]>,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
         context.validate(roster)?;
         if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
             || !role.belongs_to(round)
-            || expected_digest == [0; 32]
+            || expected_digest == Some([0; 32])
             || matches!(
                 (context.target, round),
                 (
@@ -1663,7 +1703,11 @@ impl ZkAmsMkheDirectPolynomialStreamV1 {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
         }
         let polynomial_digest = self.hash.finalize();
-        if polynomial_digest != self.expected_digest {
+        if polynomial_digest == [0; 32]
+            || self
+                .expected_digest
+                .is_some_and(|expected| polynomial_digest != expected)
+        {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
         }
         Ok(ZkAmsMkheDirectPolynomialStreamReceiptV1 {
@@ -1869,6 +1913,43 @@ pub(super) fn direct_relation_contribution_statement_from_polynomials_v1(
         _ => return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
     }
     Ok(hash.finalize())
+}
+/// Bind the two creator-produced RKG1 stream receipts to their canonical
+/// contribution statement without accepting raw polynomial digests.
+pub(super) fn direct_rkg_one_creator_contribution_statement_v1(
+    context: ZkAmsMkheDirectCeremonyContextV1,
+    party_index: usize,
+    h0: &ZkAmsMkheDirectPolynomialStreamReceiptV1,
+    h1: &ZkAmsMkheDirectPolynomialStreamReceiptV1,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let resources = zk_ams_mkhe_direct_resource_certificate_v1()?;
+    let party_index_u8 =
+        u8::try_from(party_index).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
+    if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+        || h0.context_digest != context.digest()
+        || h1.context_digest != context.digest()
+        || h0.round != ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne
+        || h1.round != ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne
+        || h0.party_index != party_index_u8
+        || h1.party_index != party_index_u8
+        || h0.party != h1.party
+        || h0.role != ZkAmsMkheDirectPolynomialRoleV1::RkgH0
+        || h1.role != ZkAmsMkheDirectPolynomialRoleV1::RkgH1
+        || h0.polynomial_digest == [0; 32]
+        || h1.polynomial_digest == [0; 32]
+        || h0.canonical_bytes != resources.polynomial_bytes
+        || h1.canonical_bytes != resources.polynomial_bytes
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    direct_relation_contribution_statement_from_polynomials_v1(
+        context,
+        ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne,
+        context.initial_round_digest(),
+        party_index_u8,
+        h0.party,
+        &[h0.polynomial_digest, h1.polynomial_digest],
+    )
 }
 /// Sole constructor used after the exact proof verifier has consumed an
 /// actual-commitment relation capability.  It is unreachable while that
@@ -3161,6 +3242,95 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn rkg_one_creator_stream_uses_the_same_frame_and_returns_its_computed_digest() {
+        let (roster, _, _) = roster_fixture(b"direct-rkg1-creator-stream");
+        let context = context_fixture(
+            &roster,
+            ZkAmsMkheDirectEvaluatedKeyTargetV1::Relinearization,
+        );
+        let profile = release_profile_v1();
+        let mut limb = vec![0_u64; profile.ring_degree];
+        let mut creator = ZkAmsMkheDirectPolynomialStreamV1::begin_rkg_one_creator_v1(
+            &roster,
+            context,
+            0,
+            ZkAmsMkheDirectPolynomialRoleV1::RkgH0,
+        )
+        .unwrap();
+        for (index, modulus) in profile.moduli.iter().copied().enumerate() {
+            limb.fill(index as u64 % modulus);
+            creator.admit_limb(index, &limb).unwrap();
+        }
+        let creator_receipt = creator.finish().unwrap();
+        assert_ne!(creator_receipt.polynomial_digest(), [0; 32]);
+        assert_eq!(creator_receipt.canonical_bytes(), 39_845_888);
+
+        let mut ordinary = ZkAmsMkheDirectPolynomialStreamV1::begin(
+            &roster,
+            context,
+            ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne,
+            0,
+            ZkAmsMkheDirectPolynomialRoleV1::RkgH0,
+            creator_receipt.polynomial_digest(),
+        )
+        .unwrap();
+        for (index, modulus) in profile.moduli.iter().copied().enumerate() {
+            limb.fill(index as u64 % modulus);
+            ordinary.admit_limb(index, &limb).unwrap();
+        }
+        assert_eq!(ordinary.finish().unwrap(), creator_receipt);
+        assert!(
+            ZkAmsMkheDirectPolynomialStreamV1::begin(
+                &roster,
+                context,
+                ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne,
+                0,
+                ZkAmsMkheDirectPolynomialRoleV1::RkgH0,
+                [0; 32],
+            )
+            .is_err()
+        );
+        assert!(
+            ZkAmsMkheDirectPolynomialStreamV1::begin_rkg_one_creator_v1(
+                &roster,
+                context,
+                0,
+                ZkAmsMkheDirectPolynomialRoleV1::RkgK,
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn creator_stream_seam_has_one_frame_and_only_rkg_one_publication_callsites() {
+        let ceremony = include_str!("direct_collective_eval_ceremony.rs");
+        let production = ceremony.split("#[cfg(test)]\nmod tests {").next().unwrap();
+        assert_eq!(production.matches("fn begin_inner(").count(), 1);
+        assert_eq!(
+            production.matches("fn begin_rkg_one_creator_v1(").count(),
+            1
+        );
+        assert!(production.contains("Some(expected_digest)"));
+        assert!(production.contains("ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne"));
+        assert!(production.contains("role,\n            None,"));
+        let begin_inner = production.split("fn begin_inner(").nth(1).unwrap();
+        assert!(
+            begin_inner.find("context.validate(roster)?").unwrap()
+                < begin_inner
+                    .find("expected_digest == Some([0; 32])")
+                    .unwrap()
+        );
+
+        let publication = include_str!("collective/direct_rkg_one_publication_v1.rs");
+        assert_eq!(
+            publication
+                .matches("ZkAmsMkheDirectPolynomialStreamV1::begin_rkg_one_creator_v1(")
+                .count(),
+            2
+        );
+        let sealed = include_str!("collective/direct_rkg_one_sealed_candidate_v1.rs");
+        assert!(!sealed.contains("begin_rkg_one_creator_v1"));
     }
     fn fake_receipt(
         roster: &ZkAmsMkheGovernedActiveRosterV1,

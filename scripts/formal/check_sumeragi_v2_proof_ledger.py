@@ -8916,36 +8916,6 @@ def build_cross_tool_evidence(
     }
 
 
-def _first_json_mismatch(expected: Any, observed: Any, path: str = "$") -> str | None:
-    """Return the first path at which two evidence values differ."""
-
-    if type(expected) is not type(observed):
-        return path
-    if isinstance(expected, dict):
-        if set(expected) != set(observed):
-            return path
-        for key in sorted(expected):
-            mismatch = _first_json_mismatch(
-                expected[key], observed[key], f"{path}.{key}"
-            )
-            if mismatch is not None:
-                return mismatch
-        return None
-    if isinstance(expected, list):
-        if len(expected) != len(observed):
-            return path
-        # Exact lengths were checked above; plain zip keeps this verifier
-        # compatible with the repository's Python 3.9 floor.
-        for index, (expected_item, observed_item) in enumerate(zip(expected, observed)):
-            mismatch = _first_json_mismatch(
-                expected_item, observed_item, f"{path}[{index}]"
-            )
-            if mismatch is not None:
-                return mismatch
-        return None
-    return None if expected == observed else path
-
-
 def _cross_tool_evidence_errors(
     ledger: dict[str, Any],
     cross_tool_evidence: dict[str, Any] | None,
@@ -60093,9 +60063,24 @@ def _exact_output_production_source_fidelity_errors(
         errors,
         "production exact-output runner source",
     )
-    lifecycle_runner_source = lifecycle_runner_path.read_text(encoding="utf-8")
-    pending_runner_source = pending_runner_path.read_text(encoding="utf-8")
-    ordinary_ingress_consumer_source = ordinary_ingress_consumer_path.read_text(encoding="utf-8")
+    lifecycle_runner_path, lifecycle_runner_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        errors,
+        "production exact-output ordinary lifecycle runner source",
+    )
+    pending_runner_path, pending_runner_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        errors,
+        "production exact-output pending-Kura lifecycle runner source",
+    )
+    ordinary_ingress_consumer_path, ordinary_ingress_consumer_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        errors,
+        "production exact-output ordinary ingress consumer source",
+    )
     required_sources = (
         (network_message_path, "production network-message carrier source"),
         (merge_path, "production merge-sidecar source"),
@@ -68826,6 +68811,44 @@ let ownership_unit_capacity = shared_ownership_unit_capacity
         "reply-control units",
         errors,
     )
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        "const ATOMIC_PROPOSAL_FANOUT_COUNT: usize = 2;",
+        "one atomic Proposal admission may drive exactly its proposal and chunk fanouts",
+        errors,
+        count=1,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("PendingExactOutput::new"),
+        """
+let drive_attempt_budget = max_peers_per_fanout
+    .max(super::v2_core::MAX_EFFECTS_PER_STEP)
+    .checked_mul(ATOMIC_PROPOSAL_FANOUT_COUNT)
+    .ok_or_else(|| "Sumeragi v2 outbound drive budget overflowed".to_owned())?;
+""",
+        "exact-output construction must deterministically checked-multiply the two-fanout atomic Proposal drive budget by the larger protocol service bound",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("PendingExactOutput::new"),
+        """
+drive_attempt_budget,
+max_messages_per_fanout,
+max_peers_per_fanout,
+""",
+        "exact-output construction must retain its checked atomic Proposal drive budget",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get("PendingExactOutput::drive_bounded_with_ack"),
+        "self.drive_with_budget_ack(self.drive_attempt_budget, attempt)",
+        "the production exact-output driver must consume the checked atomic Proposal drive budget",
+        errors,
+    )
     _require_rust_token_sequence(
         worker_path,
         reservation_items.get("PendingExactOutput::ownership_addition_load"),
@@ -69154,6 +69177,21 @@ Self::start_inner(""",
     )
     _require_rust_token_sequence(
         worker_path,
+        reservation_items.get("ProductionV2Services::start"),
+        """
+chunk_root,
+body_store,
+None,
+state,
+kura,
+apply_service,
+consensus_io_capacity,
+""",
+        "ordinary startup must explicitly omit recovered Certified-Serve payload-store identity while transferring the live body and Apply owners",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
         reservation_items.get("ProductionV2Services::start_inner"),
         """
 let reply_route_source_capacity = network.reply_route_source_capacity().max(1);
@@ -69181,6 +69219,28 @@ let pending_exact_output = PendingExactOutput::new(
 )?;
 """,
         "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("ProductionV2Services::start_inner"),
+        """
+body_store: V2BodyStore,
+lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
+state: Arc<crate::state::State>,
+""",
+        "the shared worker constructor must receive recovered Certified-Serve payload-store identity beside the transferred body-store owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("ProductionV2Services::start_inner"),
+        """
+lifecycle_body_store_identity: Some(lifecycle_body_store_identity),
+lifecycle_payload_store_identity,
+fetches: BTreeMap::new(),
+""",
+        "the live worker must retain both exact recovered lifecycle store identities before accepting fetch work",
         errors,
     )
     _require_rust_token_sequence(
@@ -71209,6 +71269,14 @@ if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
     _require_rust_token_sequence(
         ordinary_ingress_consumer_path,
         ordinary_ingress_consumer,
+        "Some(ProductionPreparedCertifiedServeV1::Admitted(_)) | None => { "
+        'return Err(V2RunnerError::Service("".to_owned(),)); }',
+        "a Decision-superseded exact request may cross ingress removal only with its durable negative outcome",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ordinary_ingress_consumer_path,
+        ordinary_ingress_consumer,
         """
 match prepared_serve.take() {
     Some(ProductionPreparedCertifiedServeV1::Admitted(admission)) => {
@@ -71229,8 +71297,7 @@ match prepared_serve.take() {
     }
     None => {
         return Err(V2RunnerError::Service(
-            "current-height certified-body ingress crossed fair removal without an atomic Serve admission"
-                .to_owned(),
+            "current-height certified-body ingress crossed fair removal without an atomic Serve admission".to_owned(),
         ));
     }
 }

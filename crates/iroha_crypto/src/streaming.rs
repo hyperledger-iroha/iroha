@@ -400,9 +400,8 @@ impl StreamingKeyMaterial {
     ///
     /// # Errors
     ///
-    /// Returns the same [`HandshakeError`] variants as
-    /// [`StreamingSession::build_key_update`], including
-    /// [`HandshakeError::UnsupportedAlgorithm`] if the identity key is not Ed25519.
+    /// Returns the same [`HandshakeError`] variants as [`StreamingSession::build_key_update`],
+    /// including [`HandshakeError::UnsupportedAlgorithm`] if the identity key is not Ed25519.
     pub fn build_key_update(
         &self,
         session: &mut StreamingSession,
@@ -956,9 +955,8 @@ impl StreamingSession {
     ///
     /// # Errors
     ///
-    /// Returns [`HandshakeError::InvalidTransportCapabilities`] when the
-    /// supplied resolution does not match the negotiated DATAGRAM/fallback
-    /// transport shape.
+    /// Returns [`HandshakeError::InvalidTransportCapabilities`] when the supplied resolution does
+    /// not match the negotiated DATAGRAM/fallback transport shape.
     pub fn record_transport_capabilities(
         &mut self,
         resolution: TransportCapabilityResolution,
@@ -984,9 +982,8 @@ impl StreamingSession {
     ///
     /// # Errors
     ///
-    /// Returns [`HandshakeError::FeedbackStreamMismatch`] when the hint stream
-    /// identifier differs from the first feedback frame accepted for this
-    /// session.
+    /// Returns [`HandshakeError::FeedbackStreamMismatch`] when the hint stream identifier differs
+    /// from the first feedback frame accepted for this session.
     pub fn process_feedback_hint(
         &mut self,
         hint: &FeedbackHintFrame,
@@ -1012,9 +1009,8 @@ impl StreamingSession {
     ///
     /// # Errors
     ///
-    /// Returns [`HandshakeError::FeedbackStreamMismatch`] when the report stream
-    /// identifier differs from the first feedback frame accepted for this
-    /// session.
+    /// Returns [`HandshakeError::FeedbackStreamMismatch`] when the report stream identifier differs
+    /// from the first feedback frame accepted for this session.
     pub fn process_receiver_report(
         &mut self,
         report: &ReceiverReport,
@@ -1372,11 +1368,10 @@ impl StreamingSession {
     }
     /// Return the local ephemeral public key for the negotiated suite, generating it if needed.
     ///
-    /// For Kyber suites this returns the encapsulation ciphertext only. It does
-    /// not install transport keys or negotiated-suite state; callers must use
-    /// [`StreamingSession::build_key_update`] or
-    /// [`StreamingSession::process_remote_key_update`] to commit a signed
-    /// key-update exchange.
+    /// For Kyber suites this returns the encapsulation ciphertext only. It does not install
+    /// transport keys or negotiated-suite state; callers must use
+    /// [`StreamingSession::build_key_update`] or [`StreamingSession::process_remote_key_update`] to
+    /// commit a signed key-update exchange.
     ///
     /// # Errors
     ///
@@ -1406,8 +1401,7 @@ impl StreamingSession {
     }
     /// Override the locally generated X25519 ephemeral key with a deterministic value.
     ///
-    /// Returns the derived public key so callers can advertise it in outbound `KeyUpdate`
-    /// frames.
+    /// Returns the derived public key so callers can advertise it in outbound `KeyUpdate` frames.
     ///
     /// # Errors
     ///
@@ -1535,9 +1529,8 @@ impl StreamingSession {
     ///
     /// # Errors
     ///
-    /// Returns [`HandshakeError::UnsupportedAlgorithm`] if the signer is not
-    /// Ed25519 and propagates failures from suite-specific outbound ephemeral
-    /// generation and local `KeyUpdate` signing.
+    /// Returns [`HandshakeError::UnsupportedAlgorithm`] if the signer is not Ed25519 and propagates
+    /// failures from suite-specific outbound ephemeral generation and local `KeyUpdate` signing.
     pub fn build_key_update(
         &mut self,
         session_id: Hash,

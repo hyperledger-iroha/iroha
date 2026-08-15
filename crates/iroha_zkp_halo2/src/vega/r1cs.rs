@@ -571,8 +571,7 @@ impl Shape {
             && self.row_matches(&self.b, row, b)
             && self.row_matches(&self.c, row, c))
     }
-    /// Return whether every A/B/C row from `start` through the fixed padded
-    /// tail is empty.
+    /// Return whether every A/B/C row from `start` through the fixed padded tail is empty.
     pub(super) fn has_only_empty_rows_from(&self, start: usize) -> Result<bool, R1csError> {
         if start > self.constraint_count {
             return Err(R1csError::InvalidDimension);

@@ -1,5 +1,4 @@
-//! Generate or check the generated syscall list section in `docs/syscalls.md`.
-//! Usage:
+//! Generate or check the generated syscall list section in `docs/syscalls.md`. Usage:
 //!   cargo run -p ivm --features dev-tools --bin gen_syscalls_doc -- --write
 //!   cargo run -p ivm --features dev-tools --bin gen_syscalls_doc -- --check
 //!   cargo run -p ivm --features dev-tools --bin gen_syscalls_doc -- --write --root /tmp/ivm-doc-stage

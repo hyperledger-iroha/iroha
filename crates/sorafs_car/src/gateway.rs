@@ -229,9 +229,8 @@ impl GatewayFetchContext {
     ///
     /// # Errors
     ///
-    /// Returns [`GatewayBuildError`] when provider identifiers, stream tokens, or
-    /// headers are malformed, or when the stream token metadata is inconsistent
-    /// with the manifest context.
+    /// Returns [`GatewayBuildError`] when provider identifiers, stream tokens, or headers are
+    /// malformed, or when the stream token metadata is inconsistent with the manifest context.
     pub fn new(
         config: GatewayFetchConfig,
         providers: impl IntoIterator<Item = GatewayProviderInput>,

@@ -2828,9 +2828,8 @@ impl Supervisor {
     }
     /// Export the current network state into a timestamped snapshot directory.
     ///
-    /// The snapshot contains peer storage directories, rendered configs, and
-    /// the latest genesis manifest so users can quickly restore the network to
-    /// its present state.
+    /// The snapshot contains peer storage directories, rendered configs, and the latest genesis
+    /// manifest so users can quickly restore the network to its present state.
     pub fn export_snapshot(&mut self, label: Option<&str>) -> Result<PathBuf> {
         self.export_snapshot_inner(label, || {})
     }
@@ -4420,9 +4419,8 @@ pub fn sign_kagami_stub_genesis_from_config(
 }
 /// Derive the exact genesis policies selected by a finalized node config.
 ///
-/// This test-only companion keeps config parsing behind Mochi's existing
-/// orchestration dependency while allowing the Kagami mock to verify the
-/// canonical block it emitted.
+/// This test-only companion keeps config parsing behind Mochi's existing orchestration dependency
+/// while allowing the Kagami mock to verify the canonical block it emitted.
 ///
 /// # Errors
 ///

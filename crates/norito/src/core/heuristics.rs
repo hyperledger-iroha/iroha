@@ -1,10 +1,9 @@
 //! Heuristics and adaptive selection for Norito fast paths.
 //!
-//! This module exposes the canonical heuristics profile used by Norito for
-//! compression and adaptive layout selection. Thresholds are fixed at compile
-//! time; overriding them requires rebuilding Norito with a different profile.
-//! Decisions depend only on payload size and hardware capabilities and never
-//! affect on-wire layout semantics.
+//! This module exposes the canonical heuristics profile used by Norito for compression and adaptive
+//! layout selection. Thresholds are fixed at compile time; overriding them requires rebuilding
+//! Norito with a different profile. Decisions depend only on payload size and hardware capabilities
+//! and never affect on-wire layout semantics.
 use super::{Compression, hw};
 /// Adaptive compression plan produced by the selector.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,29 +41,21 @@ pub struct Heuristics {
     ///
     /// Default: 2 (only disable deltas for 1–2 rows with an empty element present).
     pub combo_no_delta_small_n_if_empty: usize,
-    /// Minimum rows to consider ID delta encoding for 4-column combos.
-    /// Default: 2
+    /// Minimum rows to consider ID delta encoding for 4-column combos. Default: 2
     pub combo_id_delta_min_rows: usize,
-    /// Minimum rows to consider u32 delta encoding for 4-column combos.
-    /// Default: 2
+    /// Minimum rows to consider u32 delta encoding for 4-column combos. Default: 2
     pub combo_u32_delta_min_rows: usize,
-    /// Enable/disable ID delta encoding in 4-column combos.
-    /// Default: true
+    /// Enable/disable ID delta encoding in 4-column combos. Default: true
     pub combo_enable_id_delta: bool,
-    /// Enable/disable u32 delta encoding in (u64, &str, u32, bool) combos.
-    /// Default: true
+    /// Enable/disable u32 delta encoding in (u64, &str, u32, bool) combos. Default: true
     pub combo_enable_u32_delta_names: bool,
-    /// Enable/disable u32 delta encoding in (u64, &[u8], u32, bool) combos.
-    /// Default: true
+    /// Enable/disable u32 delta encoding in (u64, &[u8], u32, bool) combos. Default: true
     pub combo_enable_u32_delta_bytes: bool,
-    /// Enable/disable name dictionary in (u64, &str, u32, bool) combos.
-    /// Default: true
+    /// Enable/disable name dictionary in (u64, &str, u32, bool) combos. Default: true
     pub combo_enable_name_dict: bool,
-    /// Maximum distinct/name-count ratio to allow building a dictionary.
-    /// Default: 0.40
+    /// Maximum distinct/name-count ratio to allow building a dictionary. Default: 0.40
     pub combo_dict_ratio_max: f64,
-    /// Minimum average string length to use the dictionary.
-    /// Default: 8.0
+    /// Minimum average string length to use the dictionary. Default: 8.0
     pub combo_dict_avg_len_min: f64,
     /// Maximum number of distinct strings to include in a combo dictionary.
     /// A value of `0` disables the cap (allow unbounded dictionary growth).

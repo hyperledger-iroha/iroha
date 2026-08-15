@@ -34,8 +34,7 @@ pub trait JsonWriteSink {
     fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError>;
     /// Reserve capacity for an ordinary unbounded sink.
     ///
-    /// Counted and exact sinks ignore this hint because their capacity is
-    /// admitted separately.
+    /// Counted and exact sinks ignore this hint because their capacity is admitted separately.
     fn reserve(&mut self, _additional: usize) -> Result<(), BoundedJsonError> {
         Ok(())
     }
@@ -296,21 +295,18 @@ where
 }
 /// Serialize `value` only when its compact JSON body fits in `max_bytes`.
 ///
-/// The first pass executes the checked serializer against an allocation-free
-/// counter. Only an admitted exact-layout destination is allocated, after
-/// which the same checked serializer runs again against a sink that rejects
-/// every overrun before it appends. The completed box is transferred into a
-/// `String` without copying or reallocating. Stateful serializers which
-/// produce a shorter second pass are rejected by the final equality check.
-/// When serialization runs inside an active decode scope, the admitted
-/// destination is charged before allocation.
+/// The first pass executes the checked serializer against an allocation-free counter. Only an
+/// admitted exact-layout destination is allocated, after which the same checked serializer runs
+/// again against a sink that rejects every overrun before it appends. The completed box is
+/// transferred into a `String` without copying or reallocating. Stateful serializers which produce
+/// a shorter second pass are rejected by the final equality check. When serialization runs inside
+/// an active decode scope, the admitted destination is charged before allocation.
 ///
-/// This is an output-only bound: it neither parses nor validates JSON input,
-/// and it cannot police allocations inside user-provided serializers or field
-/// predicates. An explicit custom checked serializer is a certification
-/// boundary: it must preserve JSON grammar and structural-depth accounting and
-/// control its own allocations. Built-in checked writers avoid
-/// destination-sized scratch data.
+/// This is an output-only bound: it neither parses nor validates JSON input, and it cannot police
+/// allocations inside user-provided serializers or field predicates. An explicit custom checked
+/// serializer is a certification boundary: it must preserve JSON grammar and structural-depth
+/// accounting and control its own allocations. Built-in checked writers avoid destination-sized
+/// scratch data.
 pub fn to_json_bounded<T: JsonSerialize + ?Sized>(
     value: &T,
     max_bytes: usize,
@@ -379,10 +375,9 @@ fn write_json_string_content_to<S: JsonWriteSink + ?Sized>(
 
 /// Stream one [`fmt::Display`] value as a JSON string without staging its text.
 ///
-/// The formatter's chunks are escaped with the same rules as
-/// [`write_json_string_to`]. A checked-sink failure stops formatting
-/// immediately and is returned unchanged, so an output limit cannot be hidden
-/// behind a later formatting error.
+/// The formatter's chunks are escaped with the same rules as [`write_json_string_to`]. A
+/// checked-sink failure stops formatting immediately and is returned unchanged, so an output limit
+/// cannot be hidden behind a later formatting error.
 #[doc(hidden)]
 pub fn write_json_display_to<T: fmt::Display + ?Sized, S: JsonWriteSink + ?Sized>(
     value: &T,

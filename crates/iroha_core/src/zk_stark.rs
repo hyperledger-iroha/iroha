@@ -1,7 +1,6 @@
 //! Native STARK/FRI (binary folding) verifier used by the `stark/fri/*` backends.
 //!
-//! This module provides a deterministic verifier over the Goldilocks prime field.
-//! It supports:
+//! This module provides a deterministic verifier over the Goldilocks prime field. It supports:
 //! - SHA-256 transcripts + SHA-256 Merkle commitments (`stark/fri/sha256-goldilocks`), and
 //! - Poseidon2 transcripts + Poseidon2 Merkle commitments (`stark/fri/poseidon2-goldilocks`).
 //!
@@ -35,10 +34,9 @@ pub const STARK_FRI_CONSENSUS_MIN_N_LOG2: u8 = 10;
 pub const STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2: u8 = 3;
 /// Minimum verifier query count accepted by generic STARK admission.
 ///
-/// With the fixed 8x blowup, 48 independent queries provide a conservative
-/// 144-bit proximity-sampling floor before accounting for the remaining FRI
-/// terms. The earlier 24-query development profile provided only a 72-bit
-/// floor and is not part of the first release.
+/// With the fixed 8x blowup, 48 independent queries provide a conservative 144-bit
+/// proximity-sampling floor before accounting for the remaining FRI terms. The earlier 24-query
+/// development profile provided only a 72-bit floor and is not part of the first release.
 pub const STARK_FRI_CONSENSUS_MIN_QUERIES: u16 = 48;
 /// Trace width of the generic OpenVerify binding AIR used by STARK/FRI v1 proofs.
 pub const STARK_BINDING_AIR_TRACE_WIDTH_V1: u16 = 6;
@@ -162,9 +160,8 @@ fn validate_stark_domain_tag(domain_tag: &str, max_len: usize) -> Result<(), &'s
 }
 /// Tunable limits applied during STARK envelope verification to prevent denial-of-service inputs.
 ///
-/// These values can tighten the built-in protocol caps for a caller, but they
-/// cannot relax canonical verifier structure limits. Values above the native
-/// caps are clamped internally.
+/// These values can tighten the built-in protocol caps for a caller, but they cannot relax
+/// canonical verifier structure limits. Values above the native caps are clamped internally.
 #[derive(Clone, Copy, Debug)]
 pub struct StarkVerifierLimits {
     /// Caller cap for domain log2, clamped to the native protocol maximum.
@@ -238,15 +235,13 @@ fn effective_max_envelope_bytes(limits: &StarkVerifierLimits) -> usize {
 }
 /// Goldilocks field element with canonical modular reduction.
 ///
-/// This backend keeps values in the range `[0, MOD_P)` and implements the
-/// minimal arithmetic required by the native STARK verifier. Although kept
-/// intentionally small, it now performs full modular reduction so that
-/// callers do not need to pre-normalise inputs.
+/// This backend keeps values in the range `[0, MOD_P)` and implements the minimal arithmetic
+/// required by the native STARK verifier. Although kept intentionally small, it now performs full
+/// modular reduction so that callers do not need to pre-normalise inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Fq(u64);
 impl Fq {
-    /// Construct an element from an arbitrary 64-bit integer by reducing it
-    /// modulo `MOD_P`.
+    /// Construct an element from an arbitrary 64-bit integer by reducing it modulo `MOD_P`.
     fn new(v: u64) -> Self {
         Self::reduce(v as u128)
     }
@@ -799,21 +794,15 @@ pub struct StarkFriVerifyingKeyV1 {
     /// Hash function selector (`1 = SHA-256`, `2 = Poseidon2`).
     pub hash_fn: u8,
 }
-/// Maximum canonical encoding accepted for a STARK/FRI V1 verifying key.
-///
-/// The payload contains one bounded circuit identifier and a fixed set of
-/// scalar parameters, so 4 KiB leaves ample format headroom without allowing
-/// registry input to inherit a caller-sized decode budget.
-pub const STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES: usize = 4 * 1024;
+pub use crate::zk::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES;
 const STARK_FRI_VERIFYING_KEY_V1_MAX_NESTING_DEPTH: usize = 8;
 /// Decode one exact canonical STARK/FRI V1 verifying-key payload under a
 /// schema-specific resource budget.
 ///
 /// # Errors
 ///
-/// Returns an error when the frame exceeds the V1 byte bound, advertises an
-/// oversized field or allocation, is not canonical Norito, or does not decode
-/// to [`StarkFriVerifyingKeyV1`].
+/// Returns an error when the frame exceeds the V1 byte bound, advertises an oversized field or
+/// allocation, is not canonical Norito, or does not decode to [`StarkFriVerifyingKeyV1`].
 pub fn decode_stark_fri_verifying_key_v1(bytes: &[u8]) -> Result<StarkFriVerifyingKeyV1, String> {
     if bytes.len() > STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES {
         return Err(format!(
@@ -1074,9 +1063,8 @@ pub struct FoldDecommitV1 {
     pub path_y1: MerklePath,
     /// Folded value at layer k+1, with Merkle path into root[k+1].
     ///
-    /// Current V1 semantics interpret the two adjacent openings as evaluations at
-    /// `(x, -x)` and require
-    /// `z = (y0 + y1) / 2 + r_k * (y0 - y1) / (2x)`.
+    /// Current V1 semantics interpret the two adjacent openings as evaluations at `(x, -x)` and
+    /// require `z = (y0 + y1) / 2 + r_k * (y0 - y1) / (2x)`.
     pub z: u64,
     /// Merkle path for the folded value z in the next layer (k+1)
     pub path_z: MerklePath,
@@ -2605,15 +2593,13 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
 /// Build a canonical BFV full-bootstrap native STARK/FRI AIR proof envelope for Core internals.
 ///
 /// The proof is synthesized from validated
-/// [`iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1`]. The
-/// wrapper binds the native STARK domain tag to the BFV execution statement
-/// hash and uses the crypto-derived explicit public-padding opening schedule.
-/// BFV execution AIR proofs are emitted under the canonical base transcript
-/// label only, so equivalent suffixed-label proof bytes cannot become
-/// alternate encodings of the same governed statement. Public native proof
-/// generation must use the Soracloud release/audit-aware entry points, which
-/// validate caller-owned governed artifacts before reaching this crate-scoped
-/// helper.
+/// [`iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1`]. The wrapper binds the native
+/// STARK domain tag to the BFV execution statement hash and uses the crypto-derived explicit
+/// public-padding opening schedule. BFV execution AIR proofs are emitted under the canonical base
+/// transcript label only, so equivalent suffixed-label proof bytes cannot become alternate
+/// encodings of the same governed statement. Public native proof generation must use the Soracloud
+/// release/audit-aware entry points, which validate caller-owned governed artifacts before reaching
+/// this crate-scoped helper.
 ///
 /// # Errors
 ///
@@ -2680,12 +2666,11 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope(
 }
 /// Verify a BFV full-bootstrap native STARK/FRI AIR proof from public padding data.
 ///
-/// This verifier-facing check does not require the private row-major trace. It
-/// validates the STARK/FRI envelope, the statement-bound BFV domain tag, the
-/// canonical BFV circuit/profile, duplicate-free public padding openings, and
-/// zero public-padding composition samples. Callers that hold governed trace
-/// material should still use [`verify_stark_fri_bfv_full_bootstrap_air_envelope`]
-/// for the stronger artifact-bound replay.
+/// This verifier-facing check does not require the private row-major trace. It validates the
+/// STARK/FRI envelope, the statement-bound BFV domain tag, the canonical BFV circuit/profile,
+/// duplicate-free public padding openings, and zero public-padding composition samples. Callers
+/// that hold governed trace material should still use
+/// [`verify_stark_fri_bfv_full_bootstrap_air_envelope`] for the stronger artifact-bound replay.
 #[must_use]
 pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
     bytes: &[u8],
@@ -2808,12 +2793,11 @@ fn bfv_full_bootstrap_air_openings_match_public_opening_material_v1(
 }
 /// Verify a BFV full-bootstrap native STARK/FRI AIR proof envelope with limits.
 ///
-/// Generic STARK verification is only the first stage. This BFV wrapper also
-/// requires the exact first-release BFV STARK parameters, the statement-bound
-/// domain tag, the canonical BFV circuit id, the statement hash as the public
-/// digest, the canonical opening count, sampled public-padding rows that match
-/// the BFV statement header, and the typed public-opening material carried by
-/// the governed execution prover-input package.
+/// Generic STARK verification is only the first stage. This BFV wrapper also requires the exact
+/// first-release BFV STARK parameters, the statement-bound domain tag, the canonical BFV circuit
+/// id, the statement hash as the public digest, the canonical opening count, sampled public-padding
+/// rows that match the BFV statement header, and the typed public-opening material carried by the
+/// governed execution prover-input package.
 #[must_use]
 pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
     bytes: &[u8],

@@ -1,20 +1,18 @@
 //! Canonical Phase-III terminal C1/C2 verification for ZK-AMS.
 //!
-//! Only the PBS prover consumes the six-family output of encrypted Phase II/III
-//! materialization. Settlement supplies the exact governed strict public
-//! inputs and verifies the complete public Nova history from a fresh relaxed
-//! mask through every strict witness and Equation-(7) cross-term commitment.
-//! The replayed final instance must equal the compact public batch anchor
-//! exactly before the native setup-free Relaxed Spartan proof is accepted.
-//! Plaintext `E,rE,W,rW` families never cross the verifier API or proof wire.
+//! Only the PBS prover consumes the six-family output of encrypted Phase II/III materialization.
+//! Settlement supplies the exact governed strict public inputs and verifies the complete public
+//! Nova history from a fresh relaxed mask through every strict witness and Equation-(7) cross-term
+//! commitment. The replayed final instance must equal the compact public batch anchor exactly
+//! before the native setup-free Relaxed Spartan proof is accepted. Plaintext `E,rE,W,rW` families
+//! never cross the verifier API or proof wire.
 //!
-//! Soundness and mask freshness are distinct obligations. Absorbing the mask,
-//! each strict instance, and each cross-term commitment before the nonzero
-//! Nova challenge makes an invalid mask/strict relation a degree-two random-
-//! oracle forgery. Privacy additionally requires the mask to be fresh; that is
-//! enforced at encrypted ingress by the authenticated full-roster mask-share
-//! ceremony bound to the roster/epoch/transcript context, not by trusting a
-//! prover-supplied digest at this terminal boundary.
+//! Soundness and mask freshness are distinct obligations. Absorbing the mask, each strict instance,
+//! and each cross-term commitment before the nonzero Nova challenge makes an invalid mask/strict
+//! relation a degree-two random- oracle forgery. Privacy additionally requires the mask to be
+//! fresh; that is enforced at encrypted ingress by the authenticated full-roster mask-share
+//! ceremony bound to the roster/epoch/transcript context, not by trusting a prover-supplied digest
+//! at this terminal boundary.
 use super::{
     Scalar, ZkAmsMkheErrorV1, keccak256,
     manifest::release_profile_v1,
@@ -439,8 +437,7 @@ pub struct ZkAmsPhase3TerminalImplementationV1 {
     /// Digest binding this fail-closed state.
     pub digest: [u8; 32],
 }
-/// Return the exact terminal implementation state without closing its release
-/// KAT gate.
+/// Return the exact terminal implementation state without closing its release KAT gate.
 #[must_use]
 pub fn zk_ams_phase3_terminal_implementation_v1() -> ZkAmsPhase3TerminalImplementationV1 {
     let mut implementation = ZkAmsPhase3TerminalImplementationV1 {
@@ -504,9 +501,8 @@ impl TerminalProfile {
         Ok(())
     }
 }
-/// Owns materialized scalars after they leave the single consuming accumulator
-/// owner and until they are transferred into the guarded folded witness.
-/// Deliberately neither `Clone` nor `Debug`.
+/// Owns materialized scalars after they leave the single consuming accumulator owner and until they
+/// are transferred into the guarded folded witness. Deliberately neither `Clone` nor `Debug`.
 struct ZeroizingTerminalScalarVecV1(Vec<Scalar>);
 #[cfg(test)]
 std::thread_local! {

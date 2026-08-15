@@ -9,8 +9,9 @@ use super::{
     Scalar, ZkAmsMkheErrorV1,
     active::{ZkAmsMkheGovernedActiveRosterV1, zk_ams_mkhe_active_rkg_linear_proof_security_v1},
     collective::{
-        ZkAmsMkheCollectivePartyStateV1, ZkAmsMkheCollectivePublicKeyShareV1,
-        ZkAmsMkhePreparedCollectivePublicAV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
+        ZK_AMS_MKHE_PERSISTENT_OPENING_RETAINED_POINT_BYTES_V1, ZkAmsMkheCollectivePartyStateV1,
+        ZkAmsMkheCollectivePublicKeyShareV1, ZkAmsMkhePreparedCollectivePublicAV1,
+        ZkAmsMkheStreamingCollectiveCiphertextV1,
         ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
         ZkAmsMkheStreamingCollectiveEvalKeyBindingV1,
         bind_zk_ams_mkhe_streaming_collective_eval_key_v1,
@@ -54,13 +55,14 @@ pub const ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1: usize =
     ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_BYTES_V1;
 /// Source-derived large-payload residency accounting for one CPK transition.
 ///
-/// This enumerates every simultaneous ring/proof/witness allocation owned by
-/// the ceremony, complete native relation verifier, and caller-retained prior
-/// admitted state successors. Fixed struct and
-/// allocator metadata are deliberately excluded, as in the neighboring
-/// decryption residency certificate. Caller-selected CAS storage, page cache,
-/// and filesystem buffering are explicitly not covered and keep release
-/// certification closed until an authenticated whole-worker peak exists.
+/// This enumerates the currently source-derived ring/proof/witness allocations
+/// owned by the ceremony, complete native relation verifier, and
+/// caller-retained prior admitted state successors.  The new state-owned
+/// membership producer workspace is named explicitly but remains unenumerated. Fixed struct and
+/// allocator metadata are deliberately excluded, as in the neighboring decryption residency
+/// certificate. Caller-selected CAS storage, page cache, and filesystem buffering are also not
+/// covered. This is not an RSS measurement, and release certification remains closed until all
+/// workspace and an authenticated whole-worker peak are pinned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCpkCeremonyResidencyEvidenceV1 {
     /// Sole builder-owned common-`a` residue payload.
@@ -69,8 +71,20 @@ pub struct ZkAmsMkheCpkCeremonyResidencyEvidenceV1 {
     pub live_party_b_bytes: u64,
     /// Two retained signed `i64` witnesses plus eight T256 blindings.
     pub live_party_state_witness_bytes: u64,
-    /// Up to seven already returned admitted state successors retained by the caller.
+    /// Exact canonical encodings of the eight retained public commitment points.
+    pub live_party_state_retained_point_bytes: u64,
+    /// Retained-point component in seven prior admitted state successors.
+    pub maximum_prior_admitted_state_retained_point_bytes: u64,
+    /// Up to seven prior state witnesses and retained points held by the caller.
     pub maximum_prior_admitted_state_bytes: u64,
+    /// One short-lived, erasing `i8` view of the persistent secret.
+    pub state_owned_secret_narrowing_bytes: u64,
+    /// False until the creator commitment-MSM and complete eight-chunk prover
+    /// workspace are source-enumerated.
+    ///
+    /// This certificate is not an RSS measurement and cannot claim release
+    /// while that producer-side workspace remains unenumerated.
+    pub state_owned_secret_membership_prover_workspace_enumerated: bool,
     /// Exact two-witness active-proof payload retained by the live share.
     pub live_active_share_proof_bytes: u64,
     /// Both fixed canonical membership frames retained by the owned input.
@@ -97,7 +111,7 @@ pub struct ZkAmsMkheCpkCeremonyResidencyEvidenceV1 {
     pub governed_workspace_ceiling_bytes: u64,
     /// False because arbitrary CAS/page-cache residency is not source-bounded.
     pub cas_backend_residency_enumerated: bool,
-    /// Whether the source-owned large-payload topology fits the ceiling.
+    /// Whether the currently enumerated source-owned payloads fit the ceiling.
     pub source_owned_ceiling_met: bool,
     /// Zero until an authenticated whole-worker peak run is pinned.
     pub authenticated_peak_residency_digest: [u8; 32],
@@ -112,6 +126,7 @@ impl ZkAmsMkheCpkCeremonyResidencyEvidenceV1 {
             || !self.source_owned_ceiling_met
             || self.enumerated_ceremony_peak_bytes > self.governed_workspace_ceiling_bytes
             || self.cas_backend_residency_enumerated
+            || self.state_owned_secret_membership_prover_workspace_enumerated
             || self.authenticated_peak_residency_digest != [0; 32]
             || self.release_certified
         {
@@ -154,8 +169,17 @@ fn derive_cpk_ceremony_residency_evidence_v1()
             value.checked_add((ZK_AMS_MKHE_CPK_CHUNKS_V1 * size_of::<Scalar>()) as u64)
         })
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let maximum_prior_admitted_state_bytes = live_party_state_witness_bytes
+    let live_party_state_retained_point_bytes =
+        ZK_AMS_MKHE_PERSISTENT_OPENING_RETAINED_POINT_BYTES_V1 as u64;
+    let maximum_prior_admitted_state_retained_point_bytes = live_party_state_retained_point_bytes
         .checked_mul((ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 - 1) as u64)
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let maximum_prior_admitted_state_bytes = live_party_state_witness_bytes
+        .checked_add(live_party_state_retained_point_bytes)
+        .and_then(|value| value.checked_mul((ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 - 1) as u64))
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let state_owned_secret_narrowing_bytes = degree
+        .checked_mul(size_of::<i8>() as u64)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let active_security = zk_ams_mkhe_active_rkg_linear_proof_security_v1()?;
     if u64::from(active_security.ring_degree) != degree
@@ -213,9 +237,11 @@ fn derive_cpk_ceremony_residency_evidence_v1()
     let party_transition_peak_bytes = builder_common_a_bytes
         .checked_add(live_party_b_bytes)
         .and_then(|value| value.checked_add(live_party_state_witness_bytes))
+        .and_then(|value| value.checked_add(live_party_state_retained_point_bytes))
         .and_then(|value| value.checked_add(maximum_prior_admitted_state_bytes))
         .and_then(|value| value.checked_add(live_active_share_proof_bytes))
         .and_then(|value| value.checked_add(membership_wire_bytes))
+        .and_then(|value| value.checked_add(state_owned_secret_narrowing_bytes))
         .and_then(|value| value.checked_add(complete_relation_verifier_scratch_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let final_native_collective_key_bytes = native_rns_polynomial_bytes
@@ -245,7 +271,11 @@ fn derive_cpk_ceremony_residency_evidence_v1()
         builder_common_a_bytes,
         live_party_b_bytes,
         live_party_state_witness_bytes,
+        live_party_state_retained_point_bytes,
+        maximum_prior_admitted_state_retained_point_bytes,
         maximum_prior_admitted_state_bytes,
+        state_owned_secret_narrowing_bytes,
+        state_owned_secret_membership_prover_workspace_enumerated: false,
         live_active_share_proof_bytes,
         membership_wire_bytes,
         relation_proof_decode_scratch_bytes,
@@ -625,12 +655,11 @@ impl ZkAmsMkheFinalizedCpkCeremonyV1 {
     ) -> ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
         self.streaming_collective_encryption_key_authority
     }
-    /// Consume the one-shot compact authority and bind a streaming decryption
-    /// statement without recreating any public-key share. Release admission
-    /// requires the provider to expose the CPK and ciphertext objects through
-    /// the same immutable snapshot. The authority is poisoned before any
-    /// provider-controlled preflight. A failed bind is terminal. It cannot be
-    /// retried, and no party-use capability escapes a failed admission.
+    /// Consume the one-shot compact authority and bind a streaming decryption statement without
+    /// recreating any public-key share. Release admission requires the provider to expose the CPK
+    /// and ciphertext objects through the same immutable snapshot. The authority is poisoned before
+    /// any provider-controlled preflight. A failed bind is terminal. It cannot be retried, and no
+    /// party-use capability escapes a failed admission.
     pub fn bind_streaming_decryption_statement_v1<'a, P>(
         &'a mut self,
         roster: &'a ZkAmsMkheGovernedRosterWireV1,
@@ -749,12 +778,11 @@ impl ZkAmsMkheCpkRuntimeV1 {
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
-    /// Consume the remaining one-shot authority into a compact streaming
-    /// decryption statement. Release admission requires the provider to expose
-    /// the CPK and ciphertext objects through the same immutable snapshot. The
-    /// authority is poisoned before any provider-controlled preflight. A failed
-    /// bind is terminal. It cannot be retried, and no party-use capability
-    /// escapes a failed admission.
+    /// Consume the remaining one-shot authority into a compact streaming decryption statement.
+    /// Release admission requires the provider to expose the CPK and ciphertext objects through the
+    /// same immutable snapshot. The authority is poisoned before any provider-controlled preflight.
+    /// A failed bind is terminal. It cannot be retried, and no party-use capability escapes a
+    /// failed admission.
     pub fn bind_streaming_decryption_statement_v1<'a, P>(
         &'a mut self,
         roster: &'a ZkAmsMkheGovernedRosterWireV1,

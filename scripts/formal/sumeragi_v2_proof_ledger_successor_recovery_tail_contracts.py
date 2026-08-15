@@ -1885,6 +1885,17 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
                 f"must retain exactly one {path_token!r} and {declaration!r}"
             )
 
+    launch_test_include = 'include!("v2_lifecycle_launch_tests.rs");'
+    if (
+        sources["launch"].count("#[cfg(test)]\nmod tests {") != 1
+        or sources["launch"].count(launch_test_include) != 1
+    ):
+        errors.append(
+            f"{paths['launch']}: sealed lifecycle test module wiring must "
+            "retain exactly one cfg(test) module with one authenticated "
+            f"{launch_test_include!r}"
+        )
+
     def item(source_name: str, name: str) -> RustItem | None:
         return _require_rust_item(
             paths[source_name], sources[source_name], name, errors
@@ -3554,7 +3565,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "preactivation_fail_stop_scope_closes_on_drop_and_disarms_on_complete",
     )
     require_order(
-        "startup_test",
+        "launch_tests",
         fail_stop_behavior,
         "preactivation non-permit fail-stop behavior",
         (
@@ -3565,7 +3576,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     require_tokens(
-        "startup_test",
+        "launch_tests",
         fail_stop_behavior,
         "preactivation non-permit fail-stop behavior",
         (

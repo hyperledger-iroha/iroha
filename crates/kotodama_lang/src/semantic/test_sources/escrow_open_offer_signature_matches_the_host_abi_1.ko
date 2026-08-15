@@ -1,0 +1,22 @@
+
+            seiyaku Escrow {
+                fn open(
+                    Name escrow,
+                    AssetDefinitionId asset,
+                    quantity amount,
+                    bytes evidence
+                ) {
+                    ledger::escrow::open_offer(
+                        offer: escrow,
+                        asset_definition: asset,
+                        amount: amount,
+                    );
+                    ledger::escrow::open_offer(
+                        offer: escrow,
+                        asset_definition: asset,
+                        amount: amount,
+                        evidence: evidence,
+                    );
+                }
+            }
+            

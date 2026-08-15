@@ -11,8 +11,7 @@ use std::{
 /// Kura inspector
 #[derive(Debug, ClapArgs, Clone)]
 pub struct Args {
-    /// Height of the block from which start the inspection.
-    /// Defaults to the latest block height
+    /// Height of the block from which start the inspection. Defaults to the latest block height
     #[clap(short, long, name = "BLOCK_HEIGHT")]
     from: Option<u64>,
     #[clap()]
@@ -24,12 +23,10 @@ pub struct Args {
 enum Command {
     /// Print contents of a certain length of the blocks
     Print {
-        /// Number of the blocks to print.
-        /// The excess will be truncated
+        /// Number of the blocks to print. The excess will be truncated
         #[clap(short = 'n', long, default_value_t = 1)]
         length: u64,
-        /// Where to write the results of the inspection
-        /// If omitted, writes to stdout
+        /// Where to write the results of the inspection If omitted, writes to stdout
         #[clap(short = 'o', long, value_name = "OUTPUT")]
         output: Option<PathBuf>,
     },

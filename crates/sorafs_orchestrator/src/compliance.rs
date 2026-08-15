@@ -1,16 +1,14 @@
 //! Compliance helpers for enforcing SoraNet Governance Action Report (GAR)
 //! policy constraints within the orchestrator.
 //!
-//! The roadmap item SNNet-9 introduces jurisdictional carve-outs and
-//! blinded-CID opt-out lists that require the orchestrator to force direct mode
-//! fetches even when SoraNet transports are otherwise available. This module
-//! centralises the data model so configuration surfaces can ingest governance
-//! policies and the fetch pipeline can make deterministic decisions.
+//! The roadmap item SNNet-9 introduces jurisdictional carve-outs and blinded-CID opt-out lists that
+//! require the orchestrator to force direct mode fetches even when SoraNet transports are otherwise
+//! available. This module centralises the data model so configuration surfaces can ingest
+//! governance policies and the fetch pipeline can make deterministic decisions.
 //!
-//! The compliance helpers now surface operator attestation artefacts alongside
-//! an auditable checklist so governance tooling can confirm why a SoraNet
-//! transport was overridden and which assurances were provided by each
-//! operator.
+//! The compliance helpers now surface operator attestation artefacts alongside an auditable
+//! checklist so governance tooling can confirm why a SoraNet transport was overridden and which
+//! assurances were provided by each operator.
 use iroha_core::prelude::Hash;
 use std::collections::BTreeSet;
 /// Decision emitted after evaluating the compliance policy.
@@ -111,10 +109,9 @@ impl CompliancePolicy {
     }
     /// Evaluate the compliance policy for the provided payload digest.
     ///
-    /// The digest corresponds to the payload manifest (blinded CID) handed to
-    /// the orchestrator. Jurisdictional opt-outs win over manifest-level
-    /// listings to make it explicit when an operator environment is forced into
-    /// direct-only mode.
+    /// The digest corresponds to the payload manifest (blinded CID) handed to the orchestrator.
+    /// Jurisdictional opt-outs win over manifest-level listings to make it explicit when an
+    /// operator environment is forced into direct-only mode.
     #[must_use]
     pub fn decision_for_digest(&self, digest: &[u8; Hash::LENGTH]) -> ComplianceDecision {
         if self
@@ -133,10 +130,9 @@ impl CompliancePolicy {
         }
         ComplianceDecision::Proceed
     }
-    /// Produce an audit checklist describing the decision, the matched
-    /// overrides, and relevant operator attestations. This enables upstream
-    /// tooling to render dashboards and compliance packages without duplicating
-    /// policy logic.
+    /// Produce an audit checklist describing the decision, the matched overrides, and relevant
+    /// operator attestations. This enables upstream tooling to render dashboards and compliance
+    /// packages without duplicating policy logic.
     #[must_use]
     pub fn checklist_for_digest(&self, digest: &[u8; Hash::LENGTH]) -> AuditChecklist {
         let decision = self.decision_for_digest(digest);

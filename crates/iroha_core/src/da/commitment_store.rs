@@ -70,10 +70,9 @@ impl DaCommitmentStore {
     /// Insert an entire bundle while independently filtering committed identities
     /// and query visibility.
     ///
-    /// The stored block bundle remains byte-for-byte intact. Records rejected by
-    /// `identity_visible` are treated as belonging to an earlier lane
-    /// incarnation: they remain available through [`Self::bundle_at`] but do not
-    /// reserve active commitment identities or query rows.
+    /// The stored block bundle remains byte-for-byte intact. Records rejected by `identity_visible`
+    /// are treated as belonging to an earlier lane incarnation: they remain available through
+    /// [`Self::bundle_at`] but do not reserve active commitment identities or query rows.
     pub fn insert_bundle_with_visibility_filter(
         &mut self,
         block_height: u64,

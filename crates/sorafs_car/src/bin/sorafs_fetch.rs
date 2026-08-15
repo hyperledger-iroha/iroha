@@ -14,11 +14,10 @@
 //! This lets developers validate the scheduling and verification logic of the
 //! orchestrator without standing up real storage nodes.
 //!
-//! JSON outputs (`--json-out`, `--provider-metrics-out`) now surface the SF-2d
-//! advert metadata captured during discovery. Each provider record includes
-//! `metadata.range_capability`, `metadata.stream_budget`, and
-//! `metadata.transport_hints` when the source advert supplied them so dashboards
-//! and fixtures can reason about the same scheduling inputs as the orchestrator.
+//! JSON outputs (`--json-out`, `--provider-metrics-out`) now surface the SF-2d advert metadata
+//! captured during discovery. Each provider record includes `metadata.range_capability`,
+//! `metadata.stream_budget`, and `metadata.transport_hints` when the source advert supplied them so
+//! dashboards and fixtures can reason about the same scheduling inputs as the orchestrator.
 use blake3::Hasher;
 use hex::encode as hex_encode;
 use iroha_crypto::HybridSuite;

@@ -763,9 +763,9 @@ mod tests {
                 < u64::try_from(PROVIDER_FETCH_MEMORY_MAX_BYTES_V1).expect("64 MiB fits u64")
         );
         assert!(
-            SOURCE_TREE_TRANSCRIPT_MAX_BYTES_V1
+            (SOURCE_TREE_TRANSCRIPT_MAX_BYTES_V1
                 + BUNDLE_METADATA_TOTAL_MAX_BYTES_V1 as usize
-                + MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize
+                + MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize)
                 < PROVIDER_FETCH_MEMORY_MAX_BYTES_V1
         );
     }

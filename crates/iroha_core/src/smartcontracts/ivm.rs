@@ -110,10 +110,9 @@ pub(crate) fn validate_generic_execution_context(
 }
 /// Validate the first-release runtime-upgrade ABI surface against this binary.
 ///
-/// Runtime records are persisted consensus state. A node must fail closed when
-/// that state selects an ABI descriptor different from the one compiled into
-/// the process; interpreting a block under a substituted local surface would
-/// fork consensus.
+/// Runtime records are persisted consensus state. A node must fail closed when that state selects
+/// an ABI descriptor different from the one compiled into the process; interpreting a block under a
+/// substituted local surface would fork consensus.
 pub(crate) fn validate_runtime_upgrade_manifest_abi(
     manifest: &RuntimeUpgradeManifest,
 ) -> Result<Hash, IvmAdmissionError> {
@@ -192,10 +191,9 @@ pub(crate) fn active_runtime_abi_hash(
 }
 /// Validate the consensus-binding hashes carried by a contract manifest.
 ///
-/// V1 manifests must bind both the complete artifact and the exact ABI
-/// descriptor. Missing fields are rejected before mismatches, and the code
-/// hash is checked before the ABI hash to give every node identical error
-/// precedence.
+/// V1 manifests must bind both the complete artifact and the exact ABI descriptor. Missing fields
+/// are rejected before mismatches, and the code hash is checked before the ABI hash to give every
+/// node identical error precedence.
 pub(crate) fn validate_manifest_hashes(
     manifest: &ContractManifest,
     actual_code_hash: Hash,
@@ -275,12 +273,11 @@ pub(crate) fn validate_cycle_limits(
 }
 /// Compute a conservative gas limit for a given cycle budget.
 ///
-/// The interpreter pads traces to exactly `max_cycles` when cycle limits are
-/// enabled, charging one unit of gas per padded cycle in addition to the
-/// per‑instruction gas schedule. To ensure padding cannot exhaust gas after
-/// executing costlier instructions, use the worst-case instruction cost as the
-/// multiplier. V1 requires a positive cycle limit, represented by
-/// [`NonZeroU64`], so this helper cannot manufacture an unbounded budget.
+/// The interpreter pads traces to exactly `max_cycles` when cycle limits are enabled, charging one
+/// unit of gas per padded cycle in addition to the per‑instruction gas schedule. To ensure padding
+/// cannot exhaust gas after executing costlier instructions, use the worst-case instruction cost as
+/// the multiplier. V1 requires a positive cycle limit, represented by [`NonZeroU64`], so this
+/// helper cannot manufacture an unbounded budget.
 #[must_use]
 pub fn gas_limit_for_cycles(cycles: NonZeroU64) -> u64 {
     cycles

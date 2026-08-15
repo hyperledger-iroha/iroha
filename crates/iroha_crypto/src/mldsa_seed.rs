@@ -21,8 +21,7 @@ pub mod mldsa65 {
     const FIPS_SEED_BYTES: usize = 32;
     const HKDF_SALT: &[u8] = b"iroha:ml-dsa:keygen:v1";
     const HKDF_INFO: &[u8] = b"iroha:ml-dsa:fips204:keypair";
-    /// Derive a canonical ML-DSA-65 keypair from arbitrary-length secret seed
-    /// material.
+    /// Derive a canonical ML-DSA-65 keypair from arbitrary-length secret seed material.
     pub fn keypair_from_seed(seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
         validate_seed_material_not_all_zero(seed)?;
         let seed_material = derive_seed_material(seed)?;
@@ -44,8 +43,7 @@ pub mod mldsa65 {
         validate_seed_material_not_all_zero(seed_material.as_slice())?;
         keypair_from_fips_seed(&seed_material)
     }
-    /// Reconstruct and validate the public key committed by a canonical
-    /// ML-DSA-65 secret key.
+    /// Reconstruct and validate the public key committed by a canonical ML-DSA-65 secret key.
     pub fn public_key_from_secret(
         secret_key: &pqcrypto_mldsa::mldsa65::SecretKey,
     ) -> Result<PublicKey, Error> {

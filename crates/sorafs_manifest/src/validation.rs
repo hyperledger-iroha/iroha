@@ -84,11 +84,10 @@ pub fn decode_manifest_v1_canonical(bytes: &[u8]) -> Result<ManifestV1, Manifest
 }
 /// Decode one exact canonical padded-base64 V1 manifest under resource limits.
 ///
-/// The encoded length is checked before base64 allocation. The decoded bytes
-/// then pass through [`decode_manifest_v1_canonical`], so alternate Norito
-/// layouts and trailing bytes are rejected as well. This verifies the wire
-/// representation only; callers must still use [`validate_manifest`] for
-/// semantic and policy validation.
+/// The encoded length is checked before base64 allocation. The decoded bytes then pass through
+/// [`decode_manifest_v1_canonical`], so alternate Norito layouts and trailing bytes are rejected as
+/// well. This verifies the wire representation only; callers must still use [`validate_manifest`]
+/// for semantic and policy validation.
 pub fn decode_manifest_v1_base64_canonical(
     encoded: &str,
 ) -> Result<ManifestV1, ManifestDecodeError> {

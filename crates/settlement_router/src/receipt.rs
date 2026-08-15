@@ -13,8 +13,7 @@ pub enum SettlementReceiptError {
     #[error("settlement receipt timestamp is out of range")]
     TimestampOutOfRange,
 }
-/// Receipt produced once a transaction has been admitted with an associated
-/// shadow price.
+/// Receipt produced once a transaction has been admitted with an associated shadow price.
 #[derive(
     Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]

@@ -2646,9 +2646,8 @@ pub(crate) fn zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
 }
 /// Typed composition of the six independently capped P-256 registrations.
 ///
-/// Child order is the canonical MAIN registration order: certificate
-/// arithmetic, wallet arithmetic, certificate execution, wallet execution,
-/// certificate sorted memory, and wallet sorted memory.
+/// Child order is the canonical MAIN registration order: certificate arithmetic, wallet arithmetic,
+/// certificate execution, wallet execution, certificate sorted memory, and wallet sorted memory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509P256FixedAlgebraicScheduleV1 {
     children: [ZkX509FixedAlgebraicScheduleV1; ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1],
@@ -2892,10 +2891,9 @@ static ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1: OnceLock<ZkX509P256FixedAlgebra
     OnceLock::new();
 /// Borrow the canonical verifier-derived P-256 schedule.
 ///
-/// Only a successful compilation is cached. A transient allocation failure or
-/// any fail-closed topology error therefore cannot poison the process-wide
-/// cell, while the raw compiler remains available for independent KAT
-/// reproduction.
+/// Only a successful compilation is cached. A transient allocation failure or any fail-closed
+/// topology error therefore cannot poison the process-wide cell, while the raw compiler remains
+/// available for independent KAT reproduction.
 pub(crate) fn zk_x509_p256_fixed_algebraic_schedule_v1()
 -> Result<&'static ZkX509P256FixedAlgebraicScheduleV1, ZkX509P256FixedAlgebraicErrorV1> {
     if let Some(schedule) = ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1.get() {

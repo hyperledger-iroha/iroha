@@ -75,9 +75,8 @@ const fn guard_directory_decode_limits_v1() -> DecodeLimits {
 }
 /// Read one guard-directory snapshot from a stable, direct regular file.
 ///
-/// The final path component is opened without following symbolic links or
-/// Windows reparse points. File identity, type, and length must remain stable
-/// across a read capped at one byte beyond
+/// The final path component is opened without following symbolic links or Windows reparse points.
+/// File identity, type, and length must remain stable across a read capped at one byte beyond
 /// [`GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1`].
 ///
 /// # Errors
@@ -230,8 +229,7 @@ impl GuardDirectorySnapshotV2 {
     /// Encode the snapshot to Norito bytes.
     ///
     /// # Errors
-    /// Returns an error if a first-release resource bound is exceeded or
-    /// serialization fails.
+    /// Returns an error if a first-release resource bound is exceeded or serialization fails.
     pub fn to_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         self.validate_resource_bounds()?;
         let bytes = to_bytes(self)?;
@@ -240,10 +238,9 @@ impl GuardDirectorySnapshotV2 {
     }
     /// Decode and inspect a snapshot without establishing external trust or freshness.
     ///
-    /// This verifies schema invariants and the self-consistency of signatures
-    /// against issuer keys embedded in the same snapshot. It must not be used
-    /// as an authentication decision. Use [`Self::authenticate_bytes_at`] at a
-    /// runtime trust boundary.
+    /// This verifies schema invariants and the self-consistency of signatures against issuer keys
+    /// embedded in the same snapshot. It must not be used as an authentication decision. Use
+    /// [`Self::authenticate_bytes_at`] at a runtime trust boundary.
     ///
     /// # Errors
     /// Returns an error if decoding or intrinsic validation fails.
@@ -254,10 +251,9 @@ impl GuardDirectorySnapshotV2 {
     }
     /// Authenticate an exact snapshot artifact and validate it at a supplied time.
     ///
-    /// `expected_snapshot_digest` must arrive over a trust path independent of
-    /// `bytes`. It is a domain-separated BLAKE3 digest of the exact Norito
-    /// snapshot bytes, so it commits to the embedded issuer set as well as all
-    /// relay certificates. Validity uses a half-open interval:
+    /// `expected_snapshot_digest` must arrive over a trust path independent of `bytes`. It is a
+    /// domain-separated BLAKE3 digest of the exact Norito snapshot bytes, so it commits to the
+    /// embedded issuer set as well as all relay certificates. Validity uses a half-open interval:
     /// `valid_after_unix <= at_unix < valid_until_unix`.
     ///
     /// # Errors

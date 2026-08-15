@@ -77,9 +77,8 @@ pub trait IpaBackend {
     fn group_from_scalar(scalar: Self::Scalar) -> Self::Group;
     /// Compute a variable-base multi-scalar multiplication.
     ///
-    /// Backends can override this with an optimized deterministic MSM. The
-    /// default path preserves correctness for simple backends by accumulating
-    /// one scalar multiplication per base.
+    /// Backends can override this with an optimized deterministic MSM. The default path preserves
+    /// correctness for simple backends by accumulating one scalar multiplication per base.
     fn msm(bases: &[Self::Group], scalars: &[Self::Scalar]) -> Result<Self::Group, Error> {
         if bases.len() != scalars.len() {
             return Err(Error::DimensionMismatch {

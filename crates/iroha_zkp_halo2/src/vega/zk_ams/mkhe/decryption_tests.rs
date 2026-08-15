@@ -276,11 +276,18 @@ fn release_tests_do_not_retain_full_roster_public_key_material() {
     }
     let evidence =
         super::super::cpk_ceremony::zk_ams_mkhe_cpk_ceremony_residency_evidence_v1().unwrap();
+    assert_eq!(evidence.live_party_state_retained_point_bytes, 264);
+    assert_eq!(
+        evidence.maximum_prior_admitted_state_retained_point_bytes,
+        1_848
+    );
+    assert_eq!(evidence.state_owned_secret_narrowing_bytes, 131_072);
+    assert!(!evidence.state_owned_secret_membership_prover_workspace_enumerated);
     assert_eq!(evidence.final_native_collective_key_bytes, 79_691_776);
     assert_eq!(evidence.streaming_key_publication_scratch_bytes, 8_192);
     assert_eq!(evidence.streaming_key_authority_heap_bytes, 59_584);
     assert_eq!(evidence.streaming_key_publication_peak_bytes, 79_759_552);
-    assert_eq!(evidence.enumerated_ceremony_peak_bytes, 115_383_120);
+    assert_eq!(evidence.enumerated_ceremony_peak_bytes, 115_516_304);
     assert!(evidence.enumerated_ceremony_peak_bytes <= 160 * 1024 * 1024);
     assert!(!evidence.cas_backend_residency_enumerated);
     assert_eq!(evidence.authenticated_peak_residency_digest, [0; 32]);

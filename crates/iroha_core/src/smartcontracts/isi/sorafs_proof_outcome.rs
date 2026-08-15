@@ -1290,14 +1290,12 @@ fn resolve_finalized_cursor(
     }
     Ok(ProofOutcomeFinalizedCursorV1 { height, block_hash })
 }
-/// Read the active provider proof/admission policy from one immutable finalized
-/// state view.
+/// Read the active provider proof/admission policy from one immutable finalized state view.
 ///
-/// The returned cursor and policy record are resolved from the same borrowed
-/// view. Callers must not combine the result with a record read from another
-/// view. Stored records are decoded canonically and their policy digest,
-/// provider binding, activation provenance, and key material are revalidated
-/// before this function returns.
+/// The returned cursor and policy record are resolved from the same borrowed view. Callers must not
+/// combine the result with a record read from another view. Stored records are decoded canonically
+/// and their policy digest, provider binding, activation provenance, and key material are
+/// revalidated before this function returns.
 ///
 /// # Errors
 ///

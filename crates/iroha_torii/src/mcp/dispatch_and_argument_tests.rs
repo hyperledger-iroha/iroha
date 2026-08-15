@@ -627,9 +627,10 @@ fn musubi_mcp_dispatch_requires_a_fresh_exact_target_account_proof() {
     .expect_err("outer MCP authentication must not become the inner Musubi proof");
     assert!(missing.contains("required"));
     assert!(forwarded.is_empty());
+    let account_header = test_account_header_hex();
     let incomplete = norito::json!({
-        "X-Iroha-Account": TEST_ACCOUNT_I105,
-        "X-Iroha-Signature": "target-signature"
+        "X-Iroha-Account": (account_header.clone()),
+        "X-Iroha-Signature": "AQ=="
     });
     let error = apply_extra_headers_with_policy(
         &mut forwarded,
@@ -639,9 +640,9 @@ fn musubi_mcp_dispatch_requires_a_fresh_exact_target_account_proof() {
     .expect_err("incomplete Musubi target proof must fail before route dispatch");
     assert!(error.contains("complete account/signature/timestamp/nonce tuple"));
     let complete = norito::json!({
-        "X-Iroha-Account": TEST_ACCOUNT_I105,
-        "X-Iroha-Signature": "target-signature",
-        "X-Iroha-Timestamp-Ms": 1725000000000_u64,
+        "X-Iroha-Account": account_header,
+        "X-Iroha-Signature": "AQ==",
+        "X-Iroha-Timestamp-Ms": "1725000000000",
         "X-Iroha-Nonce": "target-nonce"
     });
     apply_extra_headers_with_policy(
@@ -939,7 +940,17 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     let headers = HeaderMap::new();
     let proposal_id = "ab".repeat(32);
     let maximum_selector = "a".repeat(128);
-    let proposal = norito::json!({ "proposal_id": (proposal_id.clone()) });
+    let target_headers = norito::json!({
+        "X-Iroha-Witness": (canonical_test_witness_header())
+    });
+    let with_target_headers = |mut arguments: Value| {
+        arguments
+            .as_object_mut()
+            .expect("governance arguments")
+            .insert("headers".to_owned(), target_headers.clone());
+        arguments
+    };
+    let proposal = with_target_headers(norito::json!({ "proposal_id": (proposal_id.clone()) }));
     dispatch_iroha_gov_proposals_get(
         &app,
         &headers,
@@ -947,11 +958,13 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     )
     .await
     .expect("canonical proposal GET dispatches");
-    let locks = norito::json!({ "rid": "a" });
+    let locks = with_target_headers(norito::json!({ "rid": "a" }));
     dispatch_iroha_gov_locks_get(&app, &headers, locks.as_object().expect("lock arguments"))
         .await
         .expect("one-byte lock selector dispatches");
-    let referendum = norito::json!({ "referendum_id": (maximum_selector.clone()) });
+    let referendum = with_target_headers(norito::json!({
+        "referendum_id": (maximum_selector.clone())
+    }));
     dispatch_iroha_gov_referenda_get(
         &app,
         &headers,
@@ -959,15 +972,21 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     )
     .await
     .expect("128-byte referendum selector dispatches");
-    let tally = norito::json!({ "tally_id": "A9_selector~with.dots" });
+    let tally = with_target_headers(norito::json!({
+        "tally_id": "A9_selector~with.dots"
+    }));
     dispatch_iroha_gov_tally_get(&app, &headers, tally.as_object().expect("tally arguments"))
         .await
         .expect("canonical tally selector dispatches");
-    let zk = norito::json!({ "body": { "election_id": "election-1" } });
+    let zk = with_target_headers(norito::json!({
+        "body": { "election_id": "election-1" }
+    }));
     dispatch_iroha_gov_ballots_zk_v1(&app, &headers, zk.as_object().expect("ZK ballot arguments"))
         .await
         .expect("canonical ZK selector dispatches");
-    let zk_proof = norito::json!({ "election_id": (maximum_selector.clone()) });
+    let zk_proof = with_target_headers(norito::json!({
+        "election_id": (maximum_selector.clone())
+    }));
     dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
         &app,
         &headers,
@@ -975,7 +994,9 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     )
     .await
     .expect("canonical flat ZK proof selector dispatches");
-    let plain = norito::json!({ "referendum_id": "referendum-1" });
+    let plain = with_target_headers(norito::json!({
+        "referendum_id": "referendum-1"
+    }));
     dispatch_iroha_gov_ballots_plain(
         &app,
         &headers,
@@ -983,14 +1004,16 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     )
     .await
     .expect("canonical flat plain selector dispatches");
-    let enact = norito::json!({ "proposal_id": (proposal_id.clone()) });
+    let enact = with_target_headers(norito::json!({
+        "proposal_id": (proposal_id.clone())
+    }));
     dispatch_iroha_gov_enact(&app, &headers, enact.as_object().expect("enact arguments"))
         .await
         .expect("canonical flat enactment proposal dispatches");
-    let finalize = norito::json!({
+    let finalize = with_target_headers(norito::json!({
         "referendum_id": (proposal_id.clone()),
         "proposal_id": (proposal_id.clone())
-    });
+    }));
     dispatch_iroha_gov_finalize(
         &app,
         &headers,
@@ -1007,19 +1030,25 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     for (path, arguments) in [
         (
             "/v1/gov/proposals/{id}",
-            norito::json!({ "path": { "id": (proposal_id.clone()) } }),
+            with_target_headers(norito::json!({
+                "path": { "id": (proposal_id.clone()) }
+            })),
         ),
         (
             "/v1/gov/locks/{rid}",
-            norito::json!({ "path": { "rid": "a" } }),
+            with_target_headers(norito::json!({ "path": { "rid": "a" } })),
         ),
         (
             "/v1/gov/referenda/{id}",
-            norito::json!({ "path": { "id": (maximum_selector.clone()) } }),
+            with_target_headers(norito::json!({
+                "path": { "id": (maximum_selector.clone()) }
+            })),
         ),
         (
             "/v1/gov/tally/{id}",
-            norito::json!({ "path": { "id": "A9_selector~with.dots" } }),
+            with_target_headers(norito::json!({
+                "path": { "id": "A9_selector~with.dots" }
+            })),
         ),
     ] {
         let tool = sample_tool_at("torii.test", Method::GET, path, ToolEffect::Read);
@@ -1035,25 +1064,31 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     for (path, arguments) in [
         (
             "/v1/zk/vote/tally",
-            norito::json!({ "body": { "election_id": "a" } }),
+            with_target_headers(norito::json!({ "body": { "election_id": "a" } })),
         ),
         (
             "/v1/gov/ballots/zk-v1",
-            norito::json!({ "body": { "election_id": "election-1" } }),
+            with_target_headers(norito::json!({
+                "body": { "election_id": "election-1" }
+            })),
         ),
         (
             "/v1/gov/ballots/zk-v1/ballot-proof",
-            norito::json!({
+            with_target_headers(norito::json!({
                 "body": { "election_id": (maximum_selector.clone()) }
-            }),
+            })),
         ),
         (
             "/v1/gov/ballots/plain",
-            norito::json!({ "body": { "referendum_id": "referendum-1" } }),
+            with_target_headers(norito::json!({
+                "body": { "referendum_id": "referendum-1" }
+            })),
         ),
         (
             "/v1/gov/enact",
-            norito::json!({ "body": { "proposal_id": (proposal_id.clone()) } }),
+            with_target_headers(norito::json!({
+                "body": { "proposal_id": (proposal_id.clone()) }
+            })),
         ),
     ] {
         let tool = sample_tool_at("torii.test", Method::POST, path, ToolEffect::Write);
@@ -1066,12 +1101,12 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
         .await
         .expect("canonical OpenAPI-derived POST dispatches");
     }
-    let finalize_arguments = norito::json!({
+    let finalize_arguments = with_target_headers(norito::json!({
         "body": {
             "referendum_id": (proposal_id.clone()),
             "proposal_id": proposal_id
         }
-    });
+    }));
     let finalize_tool = sample_tool_at(
         "torii.test",
         Method::POST,
@@ -1197,6 +1232,17 @@ fn fill_path_template_substitutes_required_values() {
     });
     let path = fill_path_template("/v1/connect/session/{sid}/{role}", Some(&args)).expect("filled");
     assert_eq!(path, "/v1/connect/session/abc/wallet");
+}
+#[test]
+fn fill_path_template_percent_encodes_without_accepting_composites() {
+    let args = norito::json!({ "value": "a b/+~" });
+    assert_eq!(
+        fill_path_template("/v1/items/{value}", Some(&args)).expect("encoded path"),
+        "/v1/items/a%20b%2F%2B~"
+    );
+    let composite = norito::json!({ "value": { "nested": true } });
+    fill_path_template("/v1/items/{value}", Some(&composite))
+        .expect_err("composite path values must fail closed");
 }
 #[test]
 fn ws_ticket_uses_ws_url_and_protocol_token() {
@@ -1395,25 +1441,17 @@ fn extract_connect_sid_argument_accepts_path_session_id_alias() {
     assert_eq!(sid, "nested-sid");
 }
 #[test]
-fn connect_management_headers_maps_token_to_authorization() {
-    let args = norito::json!({
-        "token_management": "management-token",
-        "headers": {
-            "Accept": "application/json"
-        }
-    });
-    let headers = connect_management_headers(args.as_object().expect("object"))
-        .expect("headers")
-        .expect("headers value");
-    let headers = headers.as_object().expect("headers object");
+fn connect_management_authorization_requires_canonical_token() {
+    let token = "A".repeat(43);
+    let authorization =
+        connect_management_authorization_value(&token).expect("canonical management authorization");
+    let expected = format!("Bearer {token}");
     assert_eq!(
-        headers.get("Authorization").and_then(Value::as_str),
-        Some("Bearer management-token")
+        authorization.to_str().expect("ASCII authorization"),
+        expected.as_str()
     );
-    assert_eq!(
-        headers.get("Accept").and_then(Value::as_str),
-        Some("application/json")
-    );
+    connect_management_authorization_value("management-token")
+        .expect_err("noncanonical management tokens must be rejected");
 }
 #[test]
 fn vpn_tool_factories_expose_expected_names_and_routes() {
@@ -1584,30 +1622,64 @@ fn extract_vpn_session_id_argument_rejects_aliases() {
     }
 }
 #[test]
-fn collect_query_map_accepts_flat_query_fields_when_query_absent() {
+fn append_query_arguments_accepts_flat_query_fields_when_query_absent() {
     let args = norito::json!({
         "account_id": TEST_ACCOUNT_I105,
         "limit": 20,
         "offset": 0,
         "headers": {"x": "1"}
     });
-    let map = collect_query_map(
+    let route = append_query_arguments(
+        "/v1/test".to_owned(),
         args.as_object().expect("object"),
         &["account_id", "headers", "accept", "query"],
     )
-    .expect("query map");
-    assert_eq!(map.get("limit").and_then(Value::as_u64), Some(20));
-    assert_eq!(map.get("offset").and_then(Value::as_u64), Some(0));
-    assert!(!map.contains_key("account_id"));
-    assert!(!map.contains_key("headers"));
+    .expect("query route");
+    assert_eq!(route, "/v1/test?limit=20&offset=0");
 }
 #[test]
-fn collect_query_map_rejects_non_object_query() {
+fn append_query_arguments_rejects_non_object_query() {
     let args = norito::json!({
         "query": "not-an-object"
     });
-    let err = collect_query_map(args.as_object().expect("object"), &["query"]).expect_err("error");
+    let err = append_query_arguments(
+        "/v1/test".to_owned(),
+        args.as_object().expect("object"),
+        &["query"],
+    )
+    .expect_err("error");
     assert!(err.contains("`query` must be an object"));
+}
+#[test]
+fn append_query_arguments_preserves_form_wire_and_rejects_composites() {
+    let args = norito::json!({
+        "star": "*",
+        "tilde": "~",
+        "space": "a b",
+        "slash": "/"
+    });
+    let route = append_named_query_fields(
+        "/v1/test".to_owned(),
+        args.as_object().expect("object"),
+        &["star", "tilde", "space", "slash"],
+    )
+    .expect("form route");
+    assert_eq!(route, "/v1/test?star=*&tilde=%7E&space=a+b&slash=%2F");
+
+    let composite = norito::json!({ "query": { "nested": { "value": 1 } } });
+    append_query_arguments(
+        "/v1/test".to_owned(),
+        composite.as_object().expect("object"),
+        &["query"],
+    )
+    .expect_err("composite query values must fail closed");
+}
+#[test]
+fn query_projection_shard_catalog_fields_keep_legacy_lexical_order() {
+    assert_eq!(
+        QUERY_PROJECTION_SHARD_CATALOG_FIELDS,
+        &["asset_definition_id", "limit", "offset"]
+    );
 }
 #[test]
 fn extract_account_id_argument_accepts_top_level_shortcut() {
@@ -1666,7 +1738,6 @@ fn subscription_draft_arguments_reject_aliases_and_missing_body() {
         extract_exact_subscription_id_argument(exact).unwrap(),
         "sub-001"
     );
-    assert!(build_required_object_body(exact).is_ok());
     assert!(
         build_required_exact_object_body(
             exact,
@@ -1677,7 +1748,15 @@ fn subscription_draft_arguments_reject_aliases_and_missing_body() {
         .is_ok()
     );
     let missing_body = norito::json!({ "subscription_id": "sub-001" });
-    assert!(build_required_object_body(missing_body.as_object().expect("object")).is_err());
+    assert!(
+        build_required_exact_object_body(
+            missing_body.as_object().expect("object"),
+            &["authority"],
+            &["authority"],
+            "subscription action draft body",
+        )
+        .is_err()
+    );
     let private_key = norito::json!({
         "subscription_id": "sub-001",
         "body": {
@@ -2074,16 +2153,45 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
         assert_required(&schema, &["else", "required"], fields);
         if name.starts_with("iroha.gov.ballots.") {
             assert_required(&schema, &["required"], &["headers"]);
-            assert_required(
-                &schema,
-                &["properties", "headers", "required"],
-                &[
-                    "X-Iroha-Account",
-                    "X-Iroha-Signature",
-                    "X-Iroha-Timestamp-Ms",
-                    "X-Iroha-Nonce",
-                ],
+            let headers = schema_value_at(&schema, &["properties", "headers"])
+                .as_object()
+                .expect("governance canonical headers schema");
+            assert_eq!(
+                headers.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
             );
+            assert_eq!(
+                headers.get("oneOf").and_then(Value::as_array).map(Vec::len),
+                Some(2),
+                "governance auth schema must expose signature and witness branches"
+            );
+            let header_properties = headers
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("governance header properties");
+            for header in [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce",
+                "X-Iroha-Witness",
+            ] {
+                let property = header_properties
+                    .get(header)
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("missing strict governance header `{header}`"));
+                assert!(property.get("maxLength").is_some());
+                assert!(property.get("pattern").is_some());
+            }
+            let authority = schema_value_at(&schema, &["properties", "authority"])
+                .as_object()
+                .expect("governance authority schema");
+            let description = authority
+                .get("description")
+                .and_then(Value::as_str)
+                .expect("governance authority description");
+            assert!(description.contains("JSON ballot body"));
+            assert!(!description.contains("equal to X-Iroha-Account"));
         }
     }
 }
@@ -2194,7 +2302,7 @@ fn build_iso20022_payload_body_accepts_xml_shortcut() {
     let (body, content_type) =
         build_iso20022_payload_body(args.as_object().expect("object")).expect("iso body");
     assert_eq!(body, b"<Document>ok</Document>".to_vec());
-    assert_eq!(content_type.as_deref(), Some("application/xml"));
+    assert_eq!(content_type, Some("application/xml"));
 }
 #[test]
 fn extract_definition_id_argument_accepts_top_level_shortcut() {
@@ -2267,23 +2375,27 @@ fn extract_transaction_hash_argument_accepts_path_alias_shortcut() {
 }
 #[test]
 fn extract_optional_transaction_hash_argument_accepts_alias_shortcut() {
+    let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
     let args = norito::json!({
-        "transaction_hash": "deadbeef"
+        "transaction_hash": (canonical_hash.clone())
     });
     let hash = extract_optional_transaction_hash_argument(args.as_object().expect("object"))
+        .expect("valid hash")
         .expect("hash");
-    assert_eq!(hash, "deadbeef");
+    assert_eq!(hash, canonical_hash);
 }
 #[test]
 fn extract_optional_transaction_hash_argument_accepts_query_alias_shortcut() {
+    let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
     let args = norito::json!({
         "query": {
-            "transaction_hash": "deadbeef"
+            "transaction_hash": (canonical_hash.clone())
         }
     });
     let hash = extract_optional_transaction_hash_argument(args.as_object().expect("object"))
+        .expect("valid hash")
         .expect("hash");
-    assert_eq!(hash, "deadbeef");
+    assert_eq!(hash, canonical_hash);
 }
 #[test]
 fn extract_transaction_hash_from_submit_result_accepts_encoded_submission_receipt() {
@@ -2313,29 +2425,31 @@ fn extract_transaction_hash_from_submit_result_accepts_encoded_submission_receip
 }
 #[test]
 fn extract_transaction_hash_from_submit_result_accepts_tx_hash_hex_field() {
+    let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
     let submit_result = norito::json!({
         "status": 202,
         "body": {
             "ok": true,
-            "tx_hash_hex": "deadbeef"
+            "tx_hash_hex": (canonical_hash.clone())
         }
     });
     let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
-    assert_eq!(hash, "deadbeef");
+    assert_eq!(hash, canonical_hash);
 }
 #[test]
 fn extract_transaction_hash_from_submit_result_accepts_json_receipt_payload() {
+    let canonical_hash = format!("{}1", "a".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
     let submit_result = norito::json!({
         "status": 202,
         "body": {
             "payload": {
-                "tx_hash": "feedface"
+                "tx_hash": (canonical_hash.clone())
             },
             "signature": "ignored"
         }
     });
     let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
-    assert_eq!(hash, "feedface");
+    assert_eq!(hash, canonical_hash);
 }
 #[test]
 fn extract_transaction_hash_from_submit_result_normalizes_json_receipt_literal_hash() {
@@ -2354,9 +2468,68 @@ fn extract_transaction_hash_from_submit_result_normalizes_json_receipt_literal_h
     assert_eq!(hash, hash_body.to_ascii_lowercase());
 }
 #[test]
-fn normalize_submission_receipt_hash_preserves_bare_hash() {
-    let hash = normalize_submission_receipt_hash("deadbeef").expect("hash");
-    assert_eq!(hash, "deadbeef");
+fn normalize_submission_receipt_hash_preserves_canonical_bare_hash() {
+    let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
+    let hash = normalize_submission_receipt_hash(&canonical_hash).expect("hash");
+    assert_eq!(hash, canonical_hash);
+}
+#[test]
+fn canonical_transaction_hash_rejects_unbounded_or_noncanonical_inputs() {
+    let uppercase = format!("{}B", "A".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
+    let unmarked = "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES);
+    let oversized = "f".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES + 1);
+    for invalid in [
+        "deadbeef",
+        uppercase.as_str(),
+        unmarked.as_str(),
+        oversized.as_str(),
+    ] {
+        canonical_transaction_hash(invalid).expect_err("noncanonical transaction hash");
+    }
+}
+#[test]
+fn transaction_status_query_borrows_and_canonicalizes_hash_alias() {
+    let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
+    let arguments = norito::json!({
+        "query": {
+            "transaction_hash": (canonical_hash.clone()),
+            "scope": "local"
+        }
+    });
+    let route = append_transaction_status_query(
+        "/v1/pipeline/transactions/status".to_owned(),
+        arguments.as_object().expect("arguments"),
+        &canonical_hash,
+    )
+    .expect("status route");
+    assert_eq!(
+        route,
+        format!("/v1/pipeline/transactions/status?hash={canonical_hash}&scope=local")
+    );
+}
+#[test]
+fn dispatch_source_keeps_source_sized_request_clones_closed() {
+    let source = include_str!("../mcp.rs");
+    for forbidden in [
+        "let mut adapted = arguments.clone();",
+        "fn canonical_submit_arguments",
+        "let mut status_arguments = Map::new();",
+        "let headers = response.headers().clone();",
+        "json::to_vec(body_value)",
+    ] {
+        assert!(!source.contains(forbidden), "found `{forbidden}`");
+    }
+    let borrowed_source = include_str!("borrowed_dispatch.rs");
+    for forbidden in [
+        "form_urlencoded::Serializer",
+        "json::to_string(value)",
+        "urlencoding::encode",
+    ] {
+        assert!(
+            !source.contains(forbidden) && !borrowed_source.contains(forbidden),
+            "found `{forbidden}`"
+        );
+    }
 }
 #[test]
 fn extract_pipeline_status_kind_reads_top_level_status() {

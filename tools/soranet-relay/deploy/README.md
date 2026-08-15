@@ -300,13 +300,22 @@ command:
 soranet-vpn-settlement \
   --artifact /var/spool/soranet/vpn-receipts/vpn-settlement-...json \
   --account-id "$VPN_OPERATOR_ACCOUNT_ID" \
-  --private-key-seed-hex "$VPN_OPERATOR_PRIVATE_KEY_SEED_HEX" \
+  --network-id "$(cat /absolute/path/to/genesis.expected_hash)" \
+  --private-key-seed-file /run/secrets/vpn-operator-ed25519-seed.hex \
   --torii-root "$PUBLIC_TORII_ROOT" \
   --output curl
 ```
 
-The helper signs the exact compact JSON body it prints. Do not edit the body
-after signing; Torii verifies the body hash in the canonical request headers.
+Keep the absolute runtime-only seed file outside every repository with
+operator-only permissions (for example, mode `0600`). The helper rejects
+symlinks and, on Unix, any group or other permission bits; on other platforms
+it still requires a bounded direct regular file. It never accepts the seed
+through process arguments and signs only `POST /v1/vpn/receipts` with no query.
+The Torii root must be an absolute `http` or `https` origin with no credentials,
+base path, query, or fragment, and its UTF-8 representation is capped at 4,096
+bytes. The helper emits a compact, bounded JSON envelope and signs the exact
+compact JSON request body inside it. Do not edit the body after signing; Torii
+verifies the body hash in the canonical request headers.
 
 ## Runtime endpoints and persistence
 

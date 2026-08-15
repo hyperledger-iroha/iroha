@@ -1,9 +1,8 @@
 //! Embeds source identity into `iroha_core` binaries.
 //!
-//! Ordinary builds retain the lightweight Git-commit marker used by RBC. The
-//! opt-in Kagemusha candidate-build feature additionally requires and verifies
-//! an independently pinned reviewed clean signed source closure supplied by the
-//! dedicated build helper.
+//! Ordinary builds retain the lightweight Git-commit marker used by RBC. The opt-in Kagemusha
+//! candidate-build feature additionally requires and verifies an independently pinned reviewed
+//! clean signed source closure supplied by the dedicated build helper.
 use std::{env, ffi::OsStr, process::Command};
 
 const SEALED_FEATURE_ENV: &str = "CARGO_FEATURE_KAGEMUSHA_CANDIDATE_SOURCE_SEAL";

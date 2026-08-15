@@ -1,19 +1,18 @@
 //! First-release Musubi registry, signing, and production-publication boundary.
 //!
-//! Public finalized reads load the required exact-network account signer from the selected
-//! Iroha `client.toml` and sign every concrete query body/path. Mutations use the same required
-//! signing configuration and sign the concrete V1 instruction locally. Publication delegates
-//! clean-package validation, authenticated seed ingress, pin/order coordination, and
-//! provider readback to an explicit runtime service; the default service fails closed.
-//! Archive registration itself is not delegated: the signer prebuilds, fee-quotes, and
-//! signs one exact transaction, the publication journal persists it before submission,
-//! and recovery pairs that transaction identity with the authoritative archive embedded
-//! in a finalized archive-location page before any storage coordination begins.
-//! Release claims likewise reconstruct the journaled signature, query authoritative
-//! payload-hash status first, and replay the same locally verified Torii bytes only when
-//! the engine confirms that the signed location and readback floor is still current. The
-//! authorization-inclusive wire digest is a local replay-integrity binding; transaction
-//! status does not attest it.
+//! Public finalized reads load the required exact-network account signer from the selected Iroha
+//! `client.toml` and sign every concrete query body/path. Mutations use the same required signing
+//! configuration and sign the concrete V1 instruction locally. Publication delegates clean-package
+//! validation, authenticated seed ingress, pin/order coordination, and provider readback to an
+//! explicit runtime service; the default service fails closed. Archive registration itself is not
+//! delegated: the signer prebuilds, fee-quotes, and signs one exact transaction, the publication
+//! journal persists it before submission, and recovery pairs that transaction identity with the
+//! authoritative archive embedded in a finalized archive-location page before any storage
+//! coordination begins. Release claims likewise reconstruct the journaled signature, query
+//! authoritative payload-hash status first, and replay the same locally verified Torii bytes only
+//! when the engine confirms that the signed location and readback floor is still current. The
+//! authorization-inclusive wire digest is a local replay-integrity binding; transaction status does
+//! not attest it.
 use crate::{
     publication_runtime::read_bounded_platform_config_v1,
     publish::{
@@ -2214,9 +2213,8 @@ impl PublicationPollPolicyV1 {
 ///
 /// # Errors
 ///
-/// Returns an error when the polling policy is invalid, publication fails
-/// permanently, all attempts end in a retryable backend error, or no observable
-/// result is produced.
+/// Returns an error when the polling policy is invalid, publication fails permanently, all attempts
+/// end in a retryable backend error, or no observable result is produced.
 pub fn resume_with_bounded_polling(
     engine: &PublicationEngine<'_>,
     operation_id: PublicationOperationIdV1,
@@ -3998,11 +3996,6 @@ private_key = "{}"
     #[test]
     fn compact_release_reconstruction_matches_the_production_torii_body() {
         let (request, publisher_key, _, _) = publication_fixture();
-        let signing = signing_client_at(
-            &"http://127.0.0.1:9/".parse().expect("loopback URL"),
-            &publisher_key,
-            request.network_id(),
-        );
         let mut builder = TransactionBuilder::new(
             request.network_id(),
             request.publisher.clone(),
@@ -4017,8 +4010,8 @@ private_key = "{}"
         let reconstructed = envelope
             .reconstruct_signed_transaction(&request)
             .expect("reconstructed exact release transaction");
-        let submitted = signing.client.prepare_transaction_payload(&signed);
-        let replayed = signing.client.prepare_transaction_payload(&reconstructed);
+        let submitted = Client::prepare_transaction_payload(&signed);
+        let replayed = Client::prepare_transaction_payload(&reconstructed);
         assert_eq!(replayed.hash(), submitted.hash());
         assert_eq!(replayed.as_bytes(), submitted.as_bytes());
     }

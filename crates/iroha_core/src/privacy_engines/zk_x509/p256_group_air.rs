@@ -68,14 +68,12 @@ pub(crate) trait P256BaseFieldCircuitV1 {
 }
 /// Fixed four-bit point lookup used by the two-scalar multiplication layer.
 ///
-/// The production implementation is a 16-candidate one-hot AIR with a
-/// challenge-separated bit-copy bus. It may not select natively from secret
-/// bits.
+/// The production implementation is a 16-candidate one-hot AIR with a challenge-separated bit-copy
+/// bus. It may not select natively from secret bits.
 pub(crate) trait P256WindowCircuitV1: P256BaseFieldCircuitV1 {
     /// One algebraically constrained scalar bit.
     type Bit: Copy;
-    /// Select exactly one of sixteen projective points from four big-endian
-    /// nibble bits.
+    /// Select exactly one of sixteen projective points from four big-endian nibble bits.
     fn select_window_v1(
         &mut self,
         table: &[P256ProjectiveValueV1<Self::Value>; 16],
@@ -211,10 +209,9 @@ pub(crate) fn p256_variable_window_table_v1<C: P256BaseFieldCircuitV1>(
 }
 /// Emit fixed-topology Straus multiplication `[u1]G + [u2]Q`.
 ///
-/// Both scalars are consumed as 256 big-endian bits. Each of 64 rounds emits
-/// exactly four exception-free doublings, two fixed 16-way lookups, and two
-/// complete additions. The generator table is verifier-fixed; the variable
-/// table is constrained by [`p256_variable_window_table_v1`].
+/// Both scalars are consumed as 256 big-endian bits. Each of 64 rounds emits exactly four
+/// exception-free doublings, two fixed 16-way lookups, and two complete additions. The generator
+/// table is verifier-fixed; the variable table is constrained by [`p256_variable_window_table_v1`].
 pub(crate) fn p256_two_scalar_linear_combination_v1<C: P256WindowCircuitV1>(
     circuit: &mut C,
     generator_table: &[P256ProjectiveValueV1<C::Value>; 16],

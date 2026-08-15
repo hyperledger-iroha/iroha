@@ -1,9 +1,8 @@
 //! Shared local multi-fetch harness used by language bindings and tests.
 //!
-//! This module mirrors the behaviour of the developer tooling surfaces
-//! (`sorafsMultiFetchLocal`, FFI bindings) so that parity checks can rely on a
-//! single source of truth for converting plan/metadata JSON into orchestrator
-//! inputs.
+//! This module mirrors the behaviour of the developer tooling surfaces (`sorafsMultiFetchLocal`,
+//! FFI bindings) so that parity checks can rely on a single source of truth for converting
+//! plan/metadata JSON into orchestrator inputs.
 use crate::{
     CarBuildPlan, CarChunk, ChunkFetchSpec, FilePlan, chunker_registry,
     fetch_plan::{FetchPlanError, chunk_fetch_plan_from_json},

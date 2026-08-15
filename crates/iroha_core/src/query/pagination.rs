@@ -11,8 +11,7 @@ impl<I: Iterator> Paginate for I {
         Paginated::new(pagination, self)
     }
 }
-/// Paginated [`Iterator`].
-/// Not recommended to use directly, only use in iterator chains.
+/// Paginated [`Iterator`]. Not recommended to use directly, only use in iterator chains.
 #[derive(Debug)]
 pub struct Paginated<I: Iterator>(core::iter::Take<core::iter::Skip<I>>);
 impl<I: Iterator> Paginated<I> {

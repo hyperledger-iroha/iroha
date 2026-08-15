@@ -293,9 +293,8 @@ pub fn run_ds_validation(output: &Path) -> Result<()> {
     }
     Ok(())
 }
-/// Generate a full provisioning bundle for a PoP, including FRR config,
-/// resolver template, optional EDNS/DS evidence, PXE profile stub, health probe,
-/// and a manifest with checksums and timestamps.
+/// Generate a full provisioning bundle for a PoP, including FRR config, resolver template, optional
+/// EDNS/DS evidence, PXE profile stub, health probe, and a manifest with checksums and timestamps.
 pub fn build_pop_bundle(options: PopBundleOptions) -> Result<PopBundleOutcome> {
     let PopBundleOptions {
         descriptor,

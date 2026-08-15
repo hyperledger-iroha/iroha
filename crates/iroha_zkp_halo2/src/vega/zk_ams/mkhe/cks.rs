@@ -428,10 +428,9 @@ pub struct ZkAmsMkheCksProofV1 {
     public_key_error_response: Vec<i64>,
     /// Canonical fixed-stride signed-wide coefficients.
     ///
-    /// Keeping the wire representation is intentional: the release profile uses
-    /// 23 bytes per coefficient, while the arithmetic helper occupies 264 bytes.
-    /// Arithmetic decodes one coefficient into a stack-local value instead of
-    /// retaining the 33 MiB expanded table.
+    /// Keeping the wire representation is intentional: the release profile uses 23 bytes per
+    /// coefficient, while the arithmetic helper occupies 264 bytes. Arithmetic decodes one
+    /// coefficient into a stack-local value instead of retaining the 33 MiB expanded table.
     smudge_response: Vec<u8>,
 }
 impl core::fmt::Debug for ZkAmsMkheCksProofV1 {

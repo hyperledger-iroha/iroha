@@ -20,9 +20,8 @@ pub const WORKSPACE_SANDBOX_DIR: &str = ".mochi/sandbox";
 pub enum ProfilePreset {
     /// Historical preset name retained for saved-config compatibility.
     ///
-    /// Revision 4 launches the same four-validator committee as
-    /// [`ProfilePreset::FourPeerBft`]; it never creates a single-validator
-    /// network.
+    /// Revision 4 launches the same four-validator committee as [`ProfilePreset::FourPeerBft`]; it
+    /// never creates a single-validator network.
     SinglePeer,
     /// Four peers to exercise Sumeragi BFT locally.
     FourPeerBft,
@@ -212,9 +211,8 @@ impl NetworkProfile {
     }
     /// Signed block cadence suitable for this local topology.
     ///
-    /// Profiles use Kagami localnet's one-second cadence so crash-safe
-    /// consensus persistence has enough headroom when every validator runs on
-    /// the same developer machine.
+    /// Profiles use Kagami localnet's one-second cadence so crash-safe consensus persistence has
+    /// enough headroom when every validator runs on the same developer machine.
     pub const fn signed_block_cadence_ms(&self) -> NonZeroU64 {
         MULTI_PEER_BLOCK_CADENCE_MS
     }

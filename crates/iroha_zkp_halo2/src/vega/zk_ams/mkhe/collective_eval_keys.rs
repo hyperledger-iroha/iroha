@@ -206,11 +206,10 @@ fn seekable_evaluated_key_layout(
 }
 /// Conservative coefficient-limb passes for one hoisted decomposition.
 ///
-/// The CRT reconstruction and balanced-radix walk are performed once per
-/// bounded five-digit batch instead of once per digit. Each digit is then
-/// materialized into one RNS polynomial immediately before its evaluated-key
-/// record is streamed. This keeps both the 48.5 GB artifact and the complete
-/// 38-digit decomposition out of memory.
+/// The CRT reconstruction and balanced-radix walk are performed once per bounded five-digit batch
+/// instead of once per digit. Each digit is then materialized into one RNS polynomial immediately
+/// before its evaluated-key record is streamed. This keeps both the 48.5 GB artifact and the
+/// complete 38-digit decomposition out of memory.
 fn hoisted_hybrid_decomposition_passes(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErrorV1> {
     let per_batch = profile
         .moduli
@@ -1136,12 +1135,11 @@ impl ZkAmsMkheCollectiveEvaluatedKeyPublicationFooterV1 {
 }
 /// Transactional, seekable publication target for canonical evaluated keys.
 ///
-/// `begin_entry` selects and opens one unusable staging region. Any error
-/// causes `abort_entry`; only `flush_and_finalize_entry` may freeze that region.
-/// A session may then advance to another disjoint canonical entry while every
-/// previously finalized region remains immutable. Implementations must reject
-/// every exact reopen or partial byte-range overlap with a finalized region
-/// and must not expose any staging region through a provider.
+/// `begin_entry` selects and opens one unusable staging region. Any error causes `abort_entry`;
+/// only `flush_and_finalize_entry` may freeze that region. A session may then advance to another
+/// disjoint canonical entry while every previously finalized region remains immutable.
+/// Implementations must reject every exact reopen or partial byte-range overlap with a finalized
+/// region and must not expose any staging region through a provider.
 pub trait ZkAmsMkheCollectiveEvaluatedKeyPublicationSinkV1 {
     /// Non-zero identity of this exact publication session.
     fn publication_identity(&self) -> [u8; 32];
@@ -2066,10 +2064,9 @@ impl ZkAmsMkheCollectiveCksDigitEvidenceV1<'_> {
 }
 /// Compact move-only trusted context for streaming CKS evidence verification.
 ///
-/// The context retains only governed identity and polynomial digests. It is
-/// privately sealed after the collective key and all ordered shares have been
-/// validated, allowing their bulky polynomial owners to be dropped before a
-/// `ZACE` record is decoded.
+/// The context retains only governed identity and polynomial digests. It is privately sealed after
+/// the collective key and all ordered shares have been validated, allowing their bulky polynomial
+/// owners to be dropped before a `ZACE` record is decoded.
 pub struct ZkAmsMkheTrustedCksContextV1 {
     roster: ZkAmsMkheGovernedRosterWireV1,
     key_material_digest: [u8; 32],
@@ -2132,11 +2129,10 @@ impl ZkAmsMkheTrustedCksContextV1 {
             shares,
         )
     }
-    /// Crate-private mint seam for a staged CPK verifier that already checked
-    /// the exact governed key/share relation without materializing all owners.
-    /// TODO: keep the release RSS gate closed until the staged finalizer has a
-    /// production orchestration caller and its provider/page-cache peak is
-    /// independently measured; the finalizer already calls this seam.
+    /// Crate-private mint seam for a staged CPK verifier that already checked the exact governed
+    /// key/share relation without materializing all owners. TODO: keep the release RSS gate closed
+    /// until the staged finalizer has a production orchestration caller and its provider/page-cache
+    /// peak is independently measured; the finalizer already calls this seam.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn from_staged_verified_digests(
         roster: ZkAmsMkheGovernedRosterWireV1,
@@ -4563,11 +4559,10 @@ where
 }
 /// Stable, seekable view of the complete content-addressed evaluated-key artifact.
 ///
-/// The provider identity names one open provider session. The snapshot identity
-/// names the immutable content revision visible through that session and must
-/// not incorporate the mutable cursor position. Both identities are checked
-/// before and after validation and every digit loan. Implementations must fail
-/// rather than repair a seek or exact bounded read.
+/// The provider identity names one open provider session. The snapshot identity names the immutable
+/// content revision visible through that session and must not incorporate the mutable cursor
+/// position. Both identities are checked before and after validation and every digit loan.
+/// Implementations must fail rather than repair a seek or exact bounded read.
 pub trait ZkAmsMkheCollectiveEvaluatedKeyProviderV1 {
     /// Non-zero identity of this exact open provider session.
     fn provider_identity(&self) -> [u8; 32];

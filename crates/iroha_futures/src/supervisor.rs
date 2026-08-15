@@ -66,8 +66,7 @@ impl Supervisor {
     }
     /// Start actual supervision and wait until all children terminate.
     ///
-    /// Returns [`Ok`] if all children exited/aborted as expected after shutdown
-    /// signal being sent.
+    /// Returns [`Ok`] if all children exited/aborted as expected after shutdown signal being sent.
     ///
     /// # Errors
     /// If any child panicked during execution or exited/aborted before shutdown signal being sent.
@@ -389,10 +388,9 @@ where
 }
 /// Synchronously spawn an OS thread and return its completion future.
 ///
-/// Unlike [`spawn_os_thread_as_future`], thread creation happens before this
-/// function returns, so callers can propagate [`std::io::Error`] before
-/// publishing state that assumes the worker exists. The returned future still
-/// panics when the spawned thread panics.
+/// Unlike [`spawn_os_thread_as_future`], thread creation happens before this function returns, so
+/// callers can propagate [`std::io::Error`] before publishing state that assumes the worker exists.
+/// The returned future still panics when the spawned thread panics.
 ///
 /// # Errors
 ///

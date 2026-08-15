@@ -1,10 +1,9 @@
 //! Minimal Taikai viewer harness used for SN13-F/SN13-G validation.
 //!
-//! The tool validates Taikai segment envelopes against CAR archives, records
-//! playback telemetry (segments, rebuffer events, CEK fetch/rotation, PQ
-//! health), and emits Prometheus text along with an optional JSON summary.
-//! Multiple renditions can be supplied via repeated `--segment` flags to cover
-//! ABR ladders in one run.
+//! The tool validates Taikai segment envelopes against CAR archives, records playback telemetry
+//! (segments, rebuffer events, CEK fetch/rotation, PQ health), and emits Prometheus text along with
+//! an optional JSON summary. Multiple renditions can be supplied via repeated `--segment` flags to
+//! cover ABR ladders in one run.
 #![allow(unexpected_cfgs)]
 use blake3::hash as blake3_hash;
 use iroha_data_model::taikai::{CekRotationReceiptV1, TaikaiSegmentEnvelopeV1};

@@ -4,9 +4,8 @@
 //! into an actual [`halo2_proofs`] constraint system.  Historically the
 //! zero-knowledge flow reused the same plain-Rust routines that the runtime
 //! used for fast validation which meant no circuit ever got synthesised.  The
-//! implementation below keeps the ergonomics of the previous API but routes all
-//! checks through tiny Halo2 gadgets so the proving backend observes real
-//! constraints during tests and benchmarks.
+//! implementation below keeps the ergonomics of the previous API but routes all checks through tiny
+//! Halo2 gadgets so the proving backend observes real constraints during tests and benchmarks.
 use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     dev::MockProver,
@@ -972,8 +971,7 @@ pub struct Ed25519VerifyCircuit<'a> {
     pub result: bool,
 }
 impl<'a> Ed25519VerifyCircuit<'a> {
-    /// Verify the signature using `ed25519-dalek` and compare with the
-    /// expected `result` flag.
+    /// Verify the signature using `ed25519-dalek` and compare with the expected `result` flag.
     pub fn verify(&self) -> Result<(), &'static str> {
         use ed25519_dalek::Signature;
         let Some(pk) =

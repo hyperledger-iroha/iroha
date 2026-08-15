@@ -1,10 +1,9 @@
 //! Measure the non-shipping compact Kagemusha generator under its external guard.
 //!
-//! This diagnostic executes either the complete generate, bootstrap, live-prove,
-//! and terminal-verification lifecycle or a populated k17 circuit-shape probe.
-//! Proving keys are streamed into anonymous files, and the process emits only
-//! validated byte counts and shape summaries; it cannot frame or publish
-//! candidate or release artifacts.
+//! This diagnostic executes either the complete generate, bootstrap, live-prove, and
+//! terminal-verification lifecycle or a populated k17 circuit-shape probe. Proving keys are
+//! streamed into anonymous files, and the process emits only validated byte counts and shape
+//! summaries; it cannot frame or publish candidate or release artifacts.
 use iroha_core::zk::kagemusha_v2::{
     KagemushaGeneratedParityArtifactsV4, generate_kagemusha_pasta_cycle_artifacts_v4,
     run_kagemusha_k17_shape_probe_v5, start_kagemusha_generation_memory_guard_v4,

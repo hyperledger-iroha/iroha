@@ -69,13 +69,11 @@ pub enum FetchPlanRenderError {
     #[error("standalone chunk fetch plan payload digest must not be all zeroes")]
     ZeroPayloadDigest,
 }
-/// Parses a chunk-spec array already selected from a canonical versioned
-/// envelope.
+/// Parses a chunk-spec array already selected from a canonical versioned envelope.
 ///
-/// This helper deliberately does not accept an object or a standalone
-/// bare-array plan. Callers must first validate the containing envelope and
-/// select its typed `chunk_fetch_specs` field. Standalone interchange uses
-/// [`chunk_fetch_plan_from_json`] exclusively.
+/// This helper deliberately does not accept an object or a standalone bare-array plan. Callers must
+/// first validate the containing envelope and select its typed `chunk_fetch_specs` field.
+/// Standalone interchange uses [`chunk_fetch_plan_from_json`] exclusively.
 pub fn chunk_fetch_specs_from_embedded_array(
     value: &Value,
 ) -> Result<Vec<ChunkFetchSpec>, FetchPlanError> {
@@ -134,10 +132,9 @@ pub fn chunk_fetch_plan_from_json(value: &Value) -> Result<ChunkFetchPlanV1, Fet
 }
 /// Extracts an explicit expected payload digest from a JSON report, if present.
 ///
-/// V1 reports must carry the canonical whole-payload digest in the top-level
-/// `payload_digest_hex` field. `manifest.car_digest_hex` commits the complete
-/// CARv2 archive and is deliberately never accepted as a payload-digest
-/// fallback.
+/// V1 reports must carry the canonical whole-payload digest in the top-level `payload_digest_hex`
+/// field. `manifest.car_digest_hex` commits the complete CARv2 archive and is deliberately never
+/// accepted as a payload-digest fallback.
 ///
 /// # Errors
 ///
@@ -204,11 +201,9 @@ pub fn parse_digest_hex(hex: &str) -> Result<[u8; 32], FetchPlanError> {
         digest: hex.to_string(),
     })
 }
-/// Serialises chunk fetch specifications for a typed field in another
-/// canonical versioned envelope.
+/// Serialises chunk fetch specifications for a typed field in another canonical versioned envelope.
 ///
-/// This value is never a standalone plan. Use
-/// [`try_chunk_fetch_plan_to_json`] for interchange.
+/// This value is never a standalone plan. Use [`try_chunk_fetch_plan_to_json`] for interchange.
 pub fn try_chunk_fetch_specs_to_json(plan: &CarBuildPlan) -> Result<Value, CarPlanError> {
     let specs = plan.try_chunk_fetch_specs()?;
     Ok(Value::Array(chunk_fetch_specs_to_array(&specs)))

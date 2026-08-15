@@ -97,7 +97,7 @@ class ZkAssetMerklePathTest {
             ToriiZkAssetMerklePathProvider(
                 client,
                 ToriiCanonicalRequestAuth(
-                    "alice",
+                    "alice@universal",
                     keyPair.private,
                     1_700_000_000_000L,
                     "reused-provider-nonce",
@@ -244,7 +244,7 @@ class ZkAssetMerklePathTest {
     }
 
     private fun canonicalAuth(): ToriiCanonicalRequestAuth =
-        ToriiCanonicalRequestAuth("alice", keyPair.private)
+        ToriiCanonicalRequestAuth("alice@universal", keyPair.private)
 
     private data class MerklePathResponseEntry(
         val commitment: ByteArray,

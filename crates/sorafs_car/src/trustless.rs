@@ -1,9 +1,8 @@
 //! Trustless verification helpers for SoraNet gateway responses.
 //!
-//! The verifier consumes a manifest and CAR stream, rebuilds the chunk plan
-//! and PoR tree, and optionally cross-checks the results against a
-//! finalized native [`PinManifestFinalizedRecordV1`]. Config is sourced from
-//! the gateway verifier TOML used in the SNNet-15 pack so operators and CI
+//! The verifier consumes a manifest and CAR stream, rebuilds the chunk plan and PoR tree, and
+//! optionally cross-checks the results against a finalized native [`PinManifestFinalizedRecordV1`].
+//! Config is sourced from the gateway verifier TOML used in the SNNet-15 pack so operators and CI
 //! share the same thresholds.
 use crate::{CarVerificationReport, CarVerifier, StoredChunk};
 use hex::encode as hex_encode;

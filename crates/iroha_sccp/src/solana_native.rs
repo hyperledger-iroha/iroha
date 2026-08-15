@@ -1,21 +1,18 @@
 //! Consensus-verifiable Solana Agave source proofs for SCCP.
 //!
-//! Solana does not expose a compact native finality certificate that another
-//! chain can replay independently. The V1 lane therefore admits one governed
-//! recursive BN254 Groth16 circuit. Its trust-anchor preimage fixes the exact
-//! Solana testnet genesis, an Agave rooted-bank checkpoint, the audited Agave
-//! rules and feature set, the recursive circuit and witness generator, and the
-//! complete verification key. Governance stores the hash of that preimage;
-//! callers cannot select another circuit or key.
+//! Solana does not expose a compact native finality certificate that another chain can replay
+//! independently. The V1 lane therefore admits one governed recursive BN254 Groth16 circuit. Its
+//! trust-anchor preimage fixes the exact Solana testnet genesis, an Agave rooted-bank checkpoint,
+//! the audited Agave rules and feature set, the recursive circuit and witness generator, and the
+//! complete verification key. Governance stores the hash of that preimage; callers cannot select
+//! another circuit or key.
 //!
-//! The circuit statement is deliberately closed. It proves Agave replay from
-//! the governed checkpoint to a later rooted bank and proves inclusion and
-//! success of exactly one direct route instruction and exactly one matching
-//! program-owned burn receipt/event. That instruction is bound to the governed
-//! immutable program deployment and to every economic SCCP field. Canonical
-//! stake, vote-state, and replay-transcript commitments make the private
-//! finality witness independently identifiable without putting its unbounded
-//! contents in consensus state.
+//! The circuit statement is deliberately closed. It proves Agave replay from the governed
+//! checkpoint to a later rooted bank and proves inclusion and success of exactly one direct route
+//! instruction and exactly one matching program-owned burn receipt/event. That instruction is bound
+//! to the governed immutable program deployment and to every economic SCCP field. Canonical stake,
+//! vote-state, and replay-transcript commitments make the private finality witness independently
+//! identifiable without putting its unbounded contents in consensus state.
 use super::{
     H256, SCCP_CODEC_CANONICAL_TEXT, SCCP_CODEC_SOLANA_PUBKEY32, SCCP_DOMAIN_SOLANA,
     SCCP_DOMAIN_SORA, SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1, SCCP_TAIRA_XOR_ASSET_KEY_V1, SccpPayloadV1,
@@ -192,8 +189,7 @@ pub struct SccpSolanaAgaveTransferStatementV1 {
     /// Number of matching successful route instructions in the transaction.
     /// V1 requires exactly one.
     pub matching_route_instruction_count: u16,
-    /// Number of matching authenticated source events in the transaction.
-    /// V1 requires exactly one.
+    /// Number of matching authenticated source events in the transaction. V1 requires exactly one.
     pub matching_source_event_count: u16,
     /// Signing Solana wallet and token-account owner.
     #[norito(with = "crate::json_utils::hex32")]
@@ -566,10 +562,9 @@ pub fn sccp_solana_agave_public_signal_words_v1(
 }
 /// Verify one governed recursive Solana testnet source proof.
 ///
-/// The governed anchor hash authenticates the exact testnet genesis,
-/// checkpoint, Agave semantics, circuit, witness generator, and verification
-/// key. The pairing equation then authenticates the rooted bank and the full
-/// successful transfer instruction statement.
+/// The governed anchor hash authenticates the exact testnet genesis, checkpoint, Agave semantics,
+/// circuit, witness generator, and verification key. The pairing equation then authenticates the
+/// rooted bank and the full successful transfer instruction statement.
 ///
 /// # Errors
 ///

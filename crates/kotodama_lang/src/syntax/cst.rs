@@ -127,8 +127,7 @@ impl SyntaxTree {
         }
         output
     }
-    /// Return every leaf token in source order, including trivia, missing
-    /// tokens, and end-of-file.
+    /// Return every leaf token in source order, including trivia, missing tokens, and end-of-file.
     #[must_use]
     pub fn tokens(&self) -> Vec<&GreenToken> {
         self.token_iter().collect()
@@ -138,8 +137,7 @@ impl SyntaxTree {
             pending: self.root.children.iter().rev().collect(),
         }
     }
-    /// Consume the tree and return its tokens without recursively dropping
-    /// nested green nodes.
+    /// Consume the tree and return its tokens without recursively dropping nested green nodes.
     pub(crate) fn into_tokens(self) -> Vec<GreenToken> {
         let Self { source: _, root } = self;
         let mut pending = root.children.into_iter().rev().collect::<Vec<_>>();

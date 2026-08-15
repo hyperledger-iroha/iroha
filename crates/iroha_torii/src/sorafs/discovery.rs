@@ -130,9 +130,8 @@ impl ProviderAdvertValidationPolicy {
     ///
     /// # Errors
     ///
-    /// Returns an [`AdvertError`] when the advert is malformed, expired,
-    /// unsigned, outside the configured capability policy, or not authorized
-    /// by its provider admission envelope.
+    /// Returns an [`AdvertError`] when the advert is malformed, expired, unsigned, outside the
+    /// configured capability policy, or not authorized by its provider admission envelope.
     pub fn prepare(
         &self,
         advert: ProviderAdvertV1,
@@ -303,8 +302,7 @@ pub enum AdvertError {
     /// A prepared advert came from a different cache validation policy.
     #[error("prepared provider advert does not match the active validation policy")]
     ValidationPolicyChanged,
-    /// A provider attempted to replace a newer advert with an older or
-    /// conflicting advert.
+    /// A provider attempted to replace a newer advert with an older or conflicting advert.
     #[error(
         "provider advert issued_at is not monotonic for {provider_id:02x?} (current={current_issued_at}, incoming={incoming_issued_at})"
     )]
@@ -316,8 +314,7 @@ pub enum AdvertError {
         /// Issuance timestamp supplied by the rejected advert.
         incoming_issued_at: u64,
     },
-    /// Persisting the provider's replay high-water mark failed. The cache is
-    /// left unchanged.
+    /// Persisting the provider's replay high-water mark failed. The cache is left unchanged.
     #[error("provider advert replay checkpoint rejected update: {0}")]
     ReplayCheckpoint(#[from] ReplayCheckpointError),
     /// The advert referenced capability TLVs not present in the allow-list.
@@ -830,8 +827,7 @@ impl AdvertRecord {
         &self.fingerprint
     }
 }
-/// Provider advert cache propagated through Torii, with optional durable replay
-/// high-water storage.
+/// Provider advert cache propagated through Torii, with optional durable replay high-water storage.
 #[derive(Debug)]
 pub struct ProviderAdvertCache {
     known_capabilities: Vec<CapabilityType>,
@@ -865,9 +861,8 @@ impl ProviderAdvertCache {
     }
     /// Construct a cache backed by an atomic, bounded Norito replay checkpoint.
     ///
-    /// The constructor fails closed when the checkpoint is corrupt,
-    /// non-canonical, oversized, symlink-backed, or contains an identity absent
-    /// from the admission registry.
+    /// The constructor fails closed when the checkpoint is corrupt, non-canonical, oversized,
+    /// symlink-backed, or contains an identity absent from the admission registry.
     ///
     /// # Errors
     ///
@@ -916,10 +911,9 @@ impl ProviderAdvertCache {
     }
     /// Atomically commit a provider advert that was authenticated outside the cache lock.
     ///
-    /// The active policy identity, current-time validity, admission envelope,
-    /// replay high-water mark, and cache freshness are rechecked before any
-    /// mutation. Signature verification is deliberately absent from this
-    /// critical section and can only be represented by the opaque
+    /// The active policy identity, current-time validity, admission envelope, replay high-water
+    /// mark, and cache freshness are rechecked before any mutation. Signature verification is
+    /// deliberately absent from this critical section and can only be represented by the opaque
     /// [`PreparedProviderAdvert`] value.
     ///
     /// # Errors

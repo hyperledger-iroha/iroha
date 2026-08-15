@@ -1,10 +1,9 @@
 //! Schema-bound construction records for native Kotodama JSON expressions.
 //!
-//! A construction schema is emitted by the compiler in preorder. Object and
-//! array nodes describe source structure, while value nodes reuse the exact
-//! aggregate-state schema for the corresponding flattened VM words. This lets
-//! the host recursively convert bounded Lists and active-only Options without
-//! guessing runtime types or serializing an intermediate projection.
+//! A construction schema is emitted by the compiler in preorder. Object and array nodes describe
+//! source structure, while value nodes reuse the exact aggregate-state schema for the corresponding
+//! flattened VM words. This lets the host recursively convert bounded Lists and active-only Options
+//! without guessing runtime types or serializing an intermediate projection.
 use crate::state_value::{
     MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS, StateValueKindV1,
     StateValueNodeV1, StateValueSchemaV1,
@@ -110,8 +109,7 @@ struct JsonConstructionAnalysisV1 {
     words: usize,
     depth: usize,
 }
-/// Return whether an aggregate-state schema belongs to the nested
-/// JSON-convertible V1 subset.
+/// Return whether an aggregate-state schema belongs to the nested JSON-convertible V1 subset.
 #[must_use]
 pub fn json_value_schema_is_supported(schema: &StateValueSchemaV1) -> bool {
     const fn supported_leaf(kind: StateValueKindV1) -> bool {

@@ -27,8 +27,7 @@
 //! independent coefficients.  The exact response payload is 3.75 MiB per
 //! repetition and 41.25 MiB per full ciphertext chunk.
 //!
-//! The primitive is rejected for release for four independently decisive
-//! reasons:
+//! The primitive is rejected for release for four independently decisive reasons:
 //!
 //! 1. Correctly including evaluated-key CKS smudging gives a final residual
 //!    lower bound of 2287 bits, above the 2279-bit centered capacity.  The

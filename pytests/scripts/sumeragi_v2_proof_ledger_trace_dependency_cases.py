@@ -30,14 +30,7 @@ def test_retired_v1_corridor_is_absent() -> None:
 
 def test_release_gate_fails_closed_while_completion_is_false() -> None:
     module = load_checker()
-    ledger = copy.deepcopy(module.load_ledger())
-    ledger["machine_checked_completion"] = False
-    next(
-        obligation
-        for obligation in ledger["obligations"]
-        if obligation["id"] == "height-liveness"
-    )["status"] = "specified_unproved"
-    result = module.validate_ledger(ledger, release=True)
+    result = module.validate_ledger(module.load_ledger(), release=True)
 
     assert "release gate requires machine_checked_completion=true" in result.errors
     assert any(
@@ -53,7 +46,7 @@ def test_multilane_trace_dependencies_exclude_generic_liveness_debt() -> None:
     module = load_checker()
     ledger = module.load_ledger()
 
-    assert ledger["machine_checked_completion"] is True
+    assert ledger["machine_checked_completion"] is False
     snapshot = module._production_trace_extraction_ledger_dependency_snapshot(
         ledger
     )

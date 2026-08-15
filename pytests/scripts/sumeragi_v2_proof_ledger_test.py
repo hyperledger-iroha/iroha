@@ -75,8 +75,7 @@ PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_causal_fifo_cases.py",
     "sumeragi_v2_proof_ledger_post_component_cases.py",
 )
-assert len(PROOF_LEDGER_TEST_COMPONENT_FILES) == 22
-assert len(set(PROOF_LEDGER_TEST_COMPONENT_FILES)) == 22
+assert len(PROOF_LEDGER_TEST_COMPONENT_FILES) == len(set(PROOF_LEDGER_TEST_COMPONENT_FILES)) == 22
 
 def _execute_test_component(filename: str) -> None:
     """Execute one reviewed case component in this canonical test namespace."""
@@ -924,7 +923,7 @@ def test_reviewed_obligation_inventory_rejects_retargeting(
     assert expected_error in errors
 
 
-def test_repository_ledger_pins_exact_completion_statuses_and_dependencies() -> None:
+def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> None:
     module = load_checker()
     ledger = module.load_ledger()
 
@@ -938,8 +937,8 @@ def test_repository_ledger_pins_exact_completion_statuses_and_dependencies() -> 
         application["symbol"]
         == "AsyncTemporalClosureApplicationCompletionProgressObligation"
     )
-    assert application["status"] == "tlaps_proved"
-    assert ledger["machine_checked_completion"] is True
+    assert application["status"] == "specified_unproved"
+    assert ledger["machine_checked_completion"] is False
 
     by_id = {
         obligation["id"]: obligation for obligation in ledger["obligations"]
@@ -985,7 +984,16 @@ def test_repository_ledger_pins_exact_completion_statuses_and_dependencies() -> 
         obligation["id"]
         for obligation in ledger["obligations"]
         if obligation["status"] == "specified_unproved"
-    ) == ()
+    ) == (
+        "effective-lock-body-acquisition-production-refinement",
+        "progress-witness-production-refinement",
+        "post-gst-deadlock-freedom", "post-gst-starvation-freedom",
+        "timeout-view-liveness", "rotating-leader-liveness",
+        "locked-body-reproposal", "application-liveness",
+        "successor-activation-starvation-freedom",
+        "successor-activation-exact-recovery-production-refinement",
+        "genesis-height-successor-handoff", "height-liveness",
+    )
     assert module.PROOF_STATUS_DEPENDENCIES == {
         "effective-lock-body-acquisition-production-refinement": (
             "effective-lock-body-acquisition-model",
@@ -1123,9 +1131,9 @@ def test_repository_ledger_pins_exact_completion_statuses_and_dependencies() -> 
         for status in module.STATUS_VALUES
     }
     assert current_target_counts == {
-        "tlaps_proved": 44,
-        "cross_tool_proved": 3,
-        "specified_unproved": 0,
+        "tlaps_proved": 35,
+        "cross_tool_proved": 0,
+        "specified_unproved": 12,
         "trusted_contract": 6,
         "out_of_scope": 1,
     }
@@ -1410,8 +1418,6 @@ def test_completion_claim_rejects_unproved_debt_without_release_mode() -> None:
     )
 
 
-
-
 def test_release_gate_requires_every_deductive_module_and_positive_counts(
     tmp_path: Path,
 ) -> None:
@@ -1578,8 +1584,6 @@ def test_promotion_target_contract_rejects_mapping_and_order_mutations(
             for error in module._promotion_target_contract_errors()
         )
     monkeypatch.setattr(module, "PROMOTION_PROOF_TARGET_CONTRACTS", original)
-
-
 
 
 def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
@@ -14575,8 +14579,6 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
 def test_successor_production_source_is_bound() -> None:
     module = load_checker()
     assert module._successor_production_source_fidelity_errors(ROOT_DIR) == []
-
-
 
 
 def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mutants(
@@ -35744,8 +35746,6 @@ BY PTL
     assert any(
         "AsyncTypeInvariantObligation must state only" in error for error in errors
     )
-
-
 
 
 for _proof_ledger_test_component in PROOF_LEDGER_TEST_COMPONENT_FILES:

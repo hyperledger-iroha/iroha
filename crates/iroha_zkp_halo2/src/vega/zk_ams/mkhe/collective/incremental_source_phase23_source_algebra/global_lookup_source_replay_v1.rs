@@ -620,9 +620,8 @@ struct GlobalLookupSourceReplayRecordV1 {
     release_complete: bool,
     record_digest: [u8; 32],
 }
-/// Opaque move-only evidence that exact authenticated source replay completed.
-/// It cannot enter the downstream source-opening path until the later
-/// radix/quotient/Hyrax authority consumes it.
+/// Opaque move-only evidence that exact authenticated source replay completed. It cannot enter the
+/// downstream source-opening path until the later radix/quotient/Hyrax authority consumes it.
 #[must_use = "dropping this evidence closes the compact source and original prerequisite"]
 pub(in super::super) struct Phase23GlobalLookupSourceReplayEvidenceV1<K, P> {
     prerequisite: Phase23SourceAlgebraPrerequisiteV2<K, P>,
@@ -636,9 +635,8 @@ struct ReplayRadixHyraxBindingV2<K, P> {
     radix_hyrax_proof: Option<RadixHyraxProofSealV2>,
 }
 
-/// Future internal binding requires successful compact materialization as well
-/// as replay Evidence and proof authority. No materialized-owner transition is
-/// exposed in this slice.
+/// Future internal binding requires successful compact materialization as well as replay Evidence
+/// and proof authority. No materialized-owner transition is exposed in this slice.
 pub(in super::super) fn bind_radix_hyrax_replay_after_materialization_v2<K, P>(
     replay: Phase23GlobalLookupSourceReplayEvidenceV1<K, P>,
     materialization: RadixWitnessMaterializationSealV2,

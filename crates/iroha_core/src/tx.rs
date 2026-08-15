@@ -4,9 +4,8 @@
 //! using the configured routing policy (see `specs/nexus_transition_notes.md`)
 //! so telemetry, fraud monitoring, and queue accounting observe the real topology.
 //!
-//! Types represent various stages of a `Transaction`'s lifecycle. For
-//! example, `Transaction` is the start, when a transaction had been
-//! received by Torii.
+//! Types represent various stages of a `Transaction`'s lifecycle. For example, `Transaction` is the
+//! start, when a transaction had been received by Torii.
 //!
 //! This is also where the actual execution of instructions, as well
 //! as various forms of validation are performed.
@@ -2770,11 +2769,10 @@ impl StateBlock<'_> {
     }
     /// Validate recovered standalone lane-block execution input in descriptor order.
     ///
-    /// Successful transactions stage their state effects in this [`StateBlock`]
-    /// using the lane/dataspace routing context and the original fetched-batch
-    /// entrypoint indices from the lane descriptor. The caller owns the commit
-    /// boundary: dropping the block reverts the staged effects, while committing
-    /// the block must use a real consensus-approved block context.
+    /// Successful transactions stage their state effects in this [`StateBlock`] using the
+    /// lane/dataspace routing context and the original fetched-batch entrypoint indices from the
+    /// lane descriptor. The caller owns the commit boundary: dropping the block reverts the staged
+    /// effects, while committing the block must use a real consensus-approved block context.
     pub(crate) fn validate_lane_block_execution_input_with_routing_context(
         &mut self,
         artifact: &crate::kura::LaneBlockExecutionInputArtifact,

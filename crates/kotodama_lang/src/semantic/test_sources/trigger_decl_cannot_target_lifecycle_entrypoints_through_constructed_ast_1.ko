@@ -1,0 +1,10 @@
+
+                seiyaku C {
+                    hajimari() {}
+                    kaizen() {}
+                    kotoage fn run() authorize("Run") {}
+                    trigger wake -> run {
+                        on time pre_commit;
+                    }
+                }
+                

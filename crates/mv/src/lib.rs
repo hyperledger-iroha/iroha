@@ -2,9 +2,8 @@
 //! components. This crate defines the `Key` and `Value` marker traits and
 //! exposes simple cell and storage modules for multi-version concurrency.
 //!
-//! The abstractions here are intentionally small to avoid pulling heavy
-//! dependencies. They are suitable for in-memory testing or thin adapters in
-//! higher-level crates.
+//! The abstractions here are intentionally small to avoid pulling heavy dependencies. They are
+//! suitable for in-memory testing or thin adapters in higher-level crates.
 use core::fmt::Debug;
 /// MVCC cell primitives (versioned slots and helpers).
 pub mod cell;

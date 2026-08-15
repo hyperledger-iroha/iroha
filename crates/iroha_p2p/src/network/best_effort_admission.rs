@@ -49,9 +49,8 @@ pub enum NetworkPostAdmissionError<M> {
 impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// Construct a handle whose ordinary actor-byte corridor is saturated.
     ///
-    /// This deterministic fixture lets downstream protocol tests prove that a
-    /// recoverable post observes backpressure without binding sockets or
-    /// retaining a live actor receiver.
+    /// This deterministic fixture lets downstream protocol tests prove that a recoverable post
+    /// observes backpressure without binding sockets or retaining a live actor receiver.
     #[must_use]
     pub fn actor_backpressured_for_tests() -> Self {
         let mut handle = Self::closed_for_tests();
@@ -100,19 +99,17 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     }
     /// Admit a best-effort post while preserving exact source ownership on failure.
     ///
-    /// This is the outcome-returning counterpart of [`Self::post`]. It is
-    /// intended for bounded control protocols whose producer must not release a
-    /// response reservation until the network actor positively accepts the
-    /// exact message. Reliable semantic-progress routes must continue to use
-    /// [`Self::post_recoverable`] because they require source-keyed tickets.
+    /// This is the outcome-returning counterpart of [`Self::post`]. It is intended for bounded
+    /// control protocols whose producer must not release a response reservation until the network
+    /// actor positively accepts the exact message. Reliable semantic-progress routes must continue
+    /// to use [`Self::post_recoverable`] because they require source-keyed tickets.
     ///
     /// # Errors
     ///
-    /// Returns [`NetworkPostAdmissionError::Backpressured`] when actor byte/item
-    /// capacity is temporarily unavailable, [`NetworkPostAdmissionError::Closed`]
-    /// after actor shutdown, or [`NetworkPostAdmissionError::Rejected`] for an
-    /// outbound policy, wire-length, frame-cap, or corridor violation. Every
-    /// error owns the exact original post.
+    /// Returns [`NetworkPostAdmissionError::Backpressured`] when actor byte/item capacity is
+    /// temporarily unavailable, [`NetworkPostAdmissionError::Closed`] after actor shutdown, or
+    /// [`NetworkPostAdmissionError::Rejected`] for an outbound policy, wire-length, frame-cap, or
+    /// corridor violation. Every error owns the exact original post.
     #[allow(clippy::needless_pass_by_value)]
     pub fn post_best_effort_recoverable(
         &self,

@@ -1,8 +1,4 @@
-//! Canonical first-message reconstruction for one direct-response chunk.
-//!
-//! This is verifier-only arithmetic. It reuses the governed T256
-//! Bulletproof basis and emits one canonical point encoding, but grants no
-//! verification receipt, admission capability, or release authority.
+//! Canonical creator/verifier first-message arithmetic; grants no receipt, admission, or release.
 
 #![allow(dead_code, reason = "the semantic direct verifier is not wired yet")]
 
@@ -19,7 +15,9 @@ use crate::{
 };
 use thiserror::Error;
 
-use super::super::{RESPONSE_COEFFICIENT_BOUND_V1, WITNESS_CHUNK_COEFFICIENTS_V1};
+use super::super::{
+    MASK_COEFFICIENT_BOUND_V1, RESPONSE_COEFFICIENT_BOUND_V1, WITNESS_CHUNK_COEFFICIENTS_V1,
+};
 
 const DIRECT_RESPONSE_MSM_TERMS_V1: usize = WITNESS_CHUNK_COEFFICIENTS_V1 + 2;
 const DIRECT_RESPONSE_WORD_BYTES_V1: usize = WITNESS_CHUNK_COEFFICIENTS_V1 * 8;
@@ -42,6 +40,8 @@ const _: () = {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(in super::super) enum DirectResponseCommitmentErrorV1 {
+    #[error("direct mask coefficient {index} exceeds the release box")]
+    MaskOutOfRange { index: usize },
     #[error("direct response coefficient {index} exceeds the release bound")]
     ResponseOutOfRange { index: usize },
     #[error("direct response blind is not a canonical big-endian T256 scalar")]
@@ -50,6 +50,43 @@ pub(in super::super) enum DirectResponseCommitmentErrorV1 {
     SourceCommitmentIdentity,
     #[error(transparent)]
     Backend(#[from] GeneralizedBulletproofErrorV1),
+}
+
+/// Commit one creator mask chunk as `sum_i(y_i G_i) + sigma H`.
+///
+/// This is the forward counterpart of verifier reconstruction and returns
+/// only the canonical first-message encoding.
+pub(in super::super) fn commit_direct_response_mask_first_message_v1(
+    masks: &[i64],
+    mask_blinding: &Scalar,
+) -> Result<CanonicalDirectResponsePointV1, DirectResponseCommitmentErrorV1> {
+    if masks.len() != WITNESS_CHUNK_COEFFICIENTS_V1 {
+        return Err(DirectResponseCommitmentErrorV1::MaskOutOfRange { index: masks.len() });
+    }
+    if let Some(index) = masks
+        .iter()
+        .position(|mask| mask.unsigned_abs() > MASK_COEFFICIENT_BOUND_V1 as u64)
+    {
+        return Err(DirectResponseCommitmentErrorV1::MaskOutOfRange { index });
+    }
+    let generators =
+        ZkAmsT256BulletproofSuiteV1::generators().reduce(WITNESS_CHUNK_COEFFICIENTS_V1)?;
+    let mut terms = SecretMultiexpBuilder::<ZkAmsT256BulletproofSuiteV1>::new(
+        DIRECT_RESPONSE_MSM_TERMS_V1 - 1,
+    )?;
+    for (mask, generator) in masks.iter().zip(generators.g_bold) {
+        let mask = if *mask < 0 {
+            ZeroizingT256ScalarCopyV1::new(-Scalar::from_u64(mask.unsigned_abs()))
+        } else {
+            ZeroizingT256ScalarCopyV1::new(Scalar::from_u64(mask.unsigned_abs()))
+        };
+        terms.push(mask.as_ref(), generator)?;
+    }
+    terms.push(mask_blinding, &generators.h)?;
+    let committed = ZeroizingDirectResponsePointV1(terms.evaluate()?);
+    Ok(CanonicalDirectResponsePointV1(
+        committed.into_canonical_bytes()?,
+    ))
 }
 
 /// Move-only canonical encoding of one reconstructed first-message point.

@@ -1,10 +1,9 @@
 //! Best-effort Torii push notification bridge.
 //!
-//! Local device, delivery, and provider-credential files are consumed through
-//! bounded direct-file reads. Startup enumeration and dispatch are likewise
-//! count-bounded so corrupted local persistence cannot determine peak memory.
-//! Remote provider bodies are streamed under one source-coupled ceiling, and
-//! successful delivery responses are not buffered.
+//! Local device, delivery, and provider-credential files are consumed through bounded direct-file
+//! reads. Startup enumeration and dispatch are likewise count-bounded so corrupted local
+//! persistence cannot determine peak memory. Remote provider bodies are streamed under one
+//! source-coupled ceiling, and successful delivery responses are not buffered.
 use crate::account_activity::AccountActivityRole;
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD};

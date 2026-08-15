@@ -1,10 +1,9 @@
 //! Production adapter boundaries for the finalized-chain SoraFS moderation orchestrator.
 //!
-//! These adapters intentionally own no moderation consensus state. Transaction
-//! idempotency and terminal handoff deduplication are delegated to injected
-//! durable boundaries, while finalized projections are read from one immutable
-//! [`State::query_view`] and cross-checked through the native committed-event
-//! query.
+//! These adapters intentionally own no moderation consensus state. Transaction idempotency and
+//! terminal handoff deduplication are delegated to injected durable boundaries, while finalized
+//! projections are read from one immutable [`State::query_view`] and cross-checked through the
+//! native committed-event query.
 use iroha_core::{
     queue::Queue,
     smartcontracts::ValidSingularQuery,
@@ -386,12 +385,11 @@ pub enum ModerationStrictIngressFailureV1 {
 }
 /// Strict signed-transaction ingress used by the moderation adapter.
 ///
-/// The orchestrator has already persisted the exact operation-to-transaction
-/// binding before `submit_exact`. Ingress must run the canonical Torii
-/// signature, network, fee, queue-plan, and durable-admission checks without
-/// replacing that transaction. Distinct envelopes signed by racing replicas
-/// are resolved by native ledger CAS semantics and finalized reconciliation;
-/// no process-local operation map is authoritative.
+/// The orchestrator has already persisted the exact operation-to-transaction binding before
+/// `submit_exact`. Ingress must run the canonical Torii signature, network, fee, queue-plan, and
+/// durable-admission checks without replacing that transaction. Distinct envelopes signed by racing
+/// replicas are resolved by native ledger CAS semantics and finalized reconciliation; no
+/// process-local operation map is authoritative.
 pub trait ModerationStrictTransactionIngressV1: ModerationRuntimeProviderV1 {
     /// Durably admit or replay one exact signed transaction.
     ///
@@ -1543,11 +1541,10 @@ pub struct ModerationDurablePanelNotificationRequestV1 {
 }
 /// Durable, idempotent payload-free panel-notification boundary.
 ///
-/// Implementations must atomically bind `notification.notification_id` to the
-/// digest of `canonical_notification` and the stable receipt before returning.
-/// Exact replays return the same receipt; a conflicting byte stream is
-/// permanently rejected. Credentials and recipient-facing message bodies stay
-/// behind this runtime-only boundary.
+/// Implementations must atomically bind `notification.notification_id` to the digest of
+/// `canonical_notification` and the stable receipt before returning. Exact replays return the same
+/// receipt; a conflicting byte stream is permanently rejected. Credentials and recipient-facing
+/// message bodies stay behind this runtime-only boundary.
 pub trait ModerationDurablePanelNotificationBoundaryV1: ModerationRuntimeProviderV1 {
     /// Deliver or replay one exact payload-free notification.
     ///

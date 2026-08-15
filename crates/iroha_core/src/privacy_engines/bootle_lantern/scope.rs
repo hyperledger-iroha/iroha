@@ -32,9 +32,8 @@ pub const BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1: u32 = 4_096;
 pub const BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1: &[u8] = b"scope-xof:SHAKE256-framed-u32be-uniform-mod12289-accept<61445-max4096-per-coefficient|included:protocol+concrete-profile+version+network-id+canonical-genesis-hash+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+policy-id+epoch+policy-record-digest+issuer-parameter-id+issuer-parameter-digest|excluded:action-index+transaction-intent-digest|rotation:every-included-field-invalidates-existing-credential";
 /// Reusable governed scope permanently signed into one credential.
 ///
-/// Presentation-specific action index and transaction intent are deliberately
-/// absent. Every other reusable chain/governance artifact from the statement
-/// context is included.
+/// Presentation-specific action index and transaction intent are deliberately absent. Every other
+/// reusable chain/governance artifact from the statement context is included.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootleLanternCredentialScopeV1 {
     network_id: NetworkId,

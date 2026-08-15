@@ -232,13 +232,12 @@ fn decode_ivm_proved_view(proved: &IvmProved) -> Option<(IvmBytecode, Vec<Instru
 }
 /// Recognize the sole non-genesis path that may grant deployment authority.
 ///
-/// Torii can onboard a transaction authority that does not exist yet, but the
-/// ordinary `CanRegisterSmartContractCode` grant policy is genesis-only. Keep
-/// this exception bound to an auditable, ordered native-deployment prefix:
-/// register the transaction authority, grant that exact authority the exact
-/// deployment permission, then either upload code or register a manifest for
-/// code that is already present. Whether the account is actually absent is
-/// checked against pre-transaction state in [`visit_transaction`].
+/// Torii can onboard a transaction authority that does not exist yet, but the ordinary
+/// `CanRegisterSmartContractCode` grant policy is genesis-only. Keep this exception bound to an
+/// auditable, ordered native-deployment prefix: register the transaction authority, grant that
+/// exact authority the exact deployment permission, then either upload code or register a manifest
+/// for code that is already present. Whether the account is actually absent is checked against
+/// pre-transaction state in [`visit_transaction`].
 fn has_contract_deployment_self_bootstrap_prefix(
     authority: &AccountId,
     instructions: &[InstructionBox],
@@ -810,8 +809,7 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
         }
     }
 }
-/// Execute [`InstructionBox`] by delegating to the appropriate visitor
-/// implementation.
+/// Execute [`InstructionBox`] by delegating to the appropriate visitor implementation.
 pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &InstructionBox) {
     isi.dispatch(executor);
 }
@@ -2325,8 +2323,7 @@ pub mod sorafs {
     }
     /// Retire an account-owned `SoraFS` pin manifest.
     ///
-    /// Core requires the authenticated transaction authority to be the exact
-    /// original submitter.
+    /// Core requires the authenticated transaction authority to be the exact original submitter.
     pub fn visit_retire_pin_manifest<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RetirePinManifest,
@@ -2901,9 +2898,8 @@ pub mod domain {
     use iroha_smart_contract::data_model::{asset::AssetDefinitionId, domain::DomainId};
     /// Registers a domain only while applying genesis.
     ///
-    /// Ordinary signed transactions must use the declarative `EnsureAlias`
-    /// instruction so lease acquisition, catalog resolution, and ownership
-    /// checks stay atomic.
+    /// Ordinary signed transactions must use the declarative `EnsureAlias` instruction so lease
+    /// acquisition, catalog resolution, and ownership checks stay atomic.
     pub fn visit_register_domain<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Register<Domain>,

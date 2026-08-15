@@ -1689,9 +1689,8 @@ mod imp {
         });
         matches!(result, Some(root) if root == expected)
     }
-    /// Compute SHA-256 digests for many 64-byte blocks in parallel on the GPU.
-    /// Each block must be a fully padded single-block message. Returns digest
-    /// bytes (big-endian) per block on success.
+    /// Compute SHA-256 digests for many 64-byte blocks in parallel on the GPU. Each block must be a
+    /// fully padded single-block message. Returns digest bytes (big-endian) per block on success.
     pub fn sha256_leaves_cuda(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
         let count = blocks.len() as u32;
         if count == 0 {
@@ -2381,8 +2380,7 @@ mod imp {
     }
     /// Batch BN254 add: process many field-element pairs with one CUDA launch.
     ///
-    /// Returns `None` when CUDA is unavailable, disabled, or the input slices
-    /// differ in length.
+    /// Returns `None` when CUDA is unavailable, disabled, or the input slices differ in length.
     pub fn bn254_add_batch_cuda(
         lhs: &[[u64; BN254_LIMBS]],
         rhs: &[[u64; BN254_LIMBS]],
@@ -2399,8 +2397,7 @@ mod imp {
     }
     /// Batch BN254 subtract: process many field-element pairs with one CUDA launch.
     ///
-    /// Returns `None` when CUDA is unavailable, disabled, or the input slices
-    /// differ in length.
+    /// Returns `None` when CUDA is unavailable, disabled, or the input slices differ in length.
     pub fn bn254_sub_batch_cuda(
         lhs: &[[u64; BN254_LIMBS]],
         rhs: &[[u64; BN254_LIMBS]],
@@ -2417,8 +2414,7 @@ mod imp {
     }
     /// Batch BN254 multiply: process many field-element pairs with one CUDA launch.
     ///
-    /// Returns `None` when CUDA is unavailable, disabled, or the input slices
-    /// differ in length.
+    /// Returns `None` when CUDA is unavailable, disabled, or the input slices differ in length.
     pub fn bn254_mul_batch_cuda(
         lhs: &[[u64; BN254_LIMBS]],
         rhs: &[[u64; BN254_LIMBS]],
@@ -3640,8 +3636,7 @@ pub use imp::*;
 #[cfg(feature = "cuda")]
 /// Sort `(hi, lo)` key pairs lexicographically with the CUDA bitonic kernel.
 ///
-/// Returns `None` when CUDA is unavailable, disabled, or the input slices have
-/// different lengths.
+/// Returns `None` when CUDA is unavailable, disabled, or the input slices have different lengths.
 #[allow(dead_code)]
 pub fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
     imp::bitonic_sort_pairs(hi, lo)

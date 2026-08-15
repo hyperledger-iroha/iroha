@@ -1235,9 +1235,8 @@ impl PoseidonColumnBatch {
     }
     /// Materialise a batch containing a contiguous window of columns.
     ///
-    /// The returned batch copies only the payload region that covers the
-    /// requested columns and re-bases the column offsets so GPU kernels can
-    /// ingest the flattened buffer directly.
+    /// The returned batch copies only the payload region that covers the requested columns and
+    /// re-bases the column offsets so GPU kernels can ingest the flattened buffer directly.
     pub fn column_window(&self, offset: usize, count: usize) -> Option<Self> {
         if count == 0 {
             return Some(Self::empty());
@@ -1451,13 +1450,11 @@ pub fn hash_columns_cpu_batch_inputs(domains: &[&str], columns: &[Vec<u64>]) -> 
 /// Hash the supplied Poseidon column batch on the GPU, returning leaf digests
 /// alongside the fused depth-1 parent layer when acceleration succeeds.
 ///
-/// The public contract is a fused digest result; internally the implementation
-/// uses the parity-proven column batch kernel for leaves and the Merkle pair
-/// batch helper for parents.
+/// The public contract is a fused digest result; internally the implementation uses the
+/// parity-proven column batch kernel for leaves and the Merkle pair batch helper for parents.
 ///
-/// Returns `None` when GPU acceleration is unavailable, disabled via
-/// [`ExecutionMode`], or a batch dispatch encounters an error so callers
-/// can fall back to the scalar sponge.
+/// Returns `None` when GPU acceleration is unavailable, disabled via [`ExecutionMode`], or a batch
+/// dispatch encounters an error so callers can fall back to the scalar sponge.
 pub fn hash_columns_gpu_fused(
     batch: &PoseidonColumnBatch,
     mode: ExecutionMode,

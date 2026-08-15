@@ -1737,6 +1737,7 @@ fn classify_storage_error(error: &NodeStorageError) -> ProviderIngestLocalStorag
         }
     }
 }
+#[cfg(test)]
 fn classify_completed_attestation_manifest_lookup_error(
     error: &NodeStorageError,
 ) -> ProviderIngestLocalStorageErrorV1 {

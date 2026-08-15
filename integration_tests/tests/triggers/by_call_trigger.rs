@@ -516,7 +516,8 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
                     ExecuteTriggerEventFilter::new()
                         .for_trigger(trigger_id.clone())
                         .under_authority(account_id),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             ));
             submit_instruction_and_wait(
                 &network,
@@ -638,7 +639,8 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
                     ExecuteTriggerEventFilter::new()
                         .for_trigger(trigger_id.clone())
                         .under_authority(account_id),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             ));
             submit_instruction_and_wait(
                 &network,
@@ -1025,7 +1027,8 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
                     ExecuteTriggerEventFilter::new()
                         .for_trigger(trigger_id_unregister.clone())
                         .under_authority(account_id.clone()),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             ));
             submit_instruction_and_wait(
                 &network,
@@ -1045,7 +1048,8 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
                     ExecuteTriggerEventFilter::new()
                         .for_trigger(trigger_id_to_be_unregistered.clone())
                         .under_authority(account_id),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             ));
             submit_instruction_and_wait(
                 &network,
@@ -1172,7 +1176,8 @@ async fn trigger_burn_repetitions() -> Result<()> {
                     ExecuteTriggerEventFilter::new()
                         .for_trigger(trigger_id.clone())
                         .under_authority(account_id.clone()),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             ));
             match submit_instruction_and_wait(
                 &network,

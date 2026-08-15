@@ -1,5 +1,4 @@
-//! Appeal pricing and settlement utilities for moderation finance workflows
-//! (MINFO-7).
+//! Appeal pricing and settlement utilities for moderation finance workflows (MINFO-7).
 //!
 //! The congestion-aware deposit formula matches the specification in
 //! `specs/sorafs_appeal_pricing_plan.md`. The settlement helpers wire in

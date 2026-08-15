@@ -19,6 +19,13 @@ use crate::vega::{
         manifest::{ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, release_profile_v1},
     },
 };
+#[path = "direct_common_a_v1/creator_replay_v1.rs"]
+mod creator_replay_v1;
+pub(super) use creator_replay_v1::{
+    CompletedDirectCommonACreatorAuthorityV1, DirectCommonACreatorH0ReadyV1,
+    DirectCommonACreatorH0ReplayV1, DirectCommonACreatorH1ReadyV1, DirectCommonACreatorH1ReplayV1,
+    consume_completed_creator_authority_v1, prepare_direct_common_a_creator_h0_v1,
+};
 const DIRECT_COMMON_A_DERIVATION_ALGORITHM_V1: u8 = 1;
 const DIRECT_COMMON_A_SAMPLER_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-collective-common-a-limb";
@@ -263,7 +270,7 @@ struct VerifiedDirectCommonAStatementV1 {
 }
 impl VerifiedDirectCommonAStatementV1 {
     fn statement_digest_for(
-        self,
+        &self,
         context: ZkAmsMkheDirectCeremonyContextV1,
     ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         let axes = DirectCommonAAxesV1::from_context(context)?;
@@ -278,9 +285,8 @@ impl VerifiedDirectCommonAStatementV1 {
 }
 /// Single-use replay of the deterministic round-one common-`a` statement.
 ///
-/// The expected statement remains inside this transaction. Callers may borrow
-/// each derived limb for relation reconstruction, but cannot extract a digest
-/// or turn a partial replay into authority.
+/// The expected statement remains inside this transaction. Callers may borrow each derived limb for
+/// relation reconstruction, but cannot extract a digest or turn a partial replay into authority.
 pub(super) struct DirectCommonAReplayV1 {
     context: ZkAmsMkheDirectCeremonyContextV1,
     expected_statement_digest: [u8; 32],
@@ -369,9 +375,9 @@ fn derive_verified_direct_common_a_statement_v1(
     }
     stream.finish()
 }
-/// Consume one private common-`a` authority into the only valid round-one
-/// selector shape. Neither the authority nor its raw digest crosses this
-/// module boundary.
+
+/// Consume one private common-`a` authority into the only valid round-one selector shape. Neither
+/// the authority nor its raw digest crosses this module boundary.
 fn new_rkg_round_one_selector_v1(
     context: ZkAmsMkheDirectCeremonyContextV1,
     prior_round_digest: [u8; 32],
@@ -397,7 +403,9 @@ fn new_rkg_round_one_selector_v1(
     selector.validate()?;
     Ok(selector)
 }
-/// Mint the only production RKG-round-one selector from exact CPK authority.
+
+/// Legacy selector wrapper retained only for verifier-side compatibility tests.
+#[cfg(test)]
 pub(super) fn mint_rkg_round_one_selector_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     bindings: &VerifiedPersistentWitnessBindingSetV1,

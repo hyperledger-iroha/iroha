@@ -425,7 +425,7 @@ class ConfidentialAssetToriiClientTest {
         ?.firstOrNull()
 
     private fun canonicalAuth(nonce: String): ToriiCanonicalRequestAuth =
-        ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_000L, nonce)
+        ToriiCanonicalRequestAuth("alice@universal", keyPair.private, 1_700_000_000_000L, nonce)
 
     private fun assertCanonicalSignature(
         request: TransportRequest,

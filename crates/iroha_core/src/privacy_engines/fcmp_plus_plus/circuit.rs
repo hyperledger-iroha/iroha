@@ -2,10 +2,9 @@
 //!
 //! This is a concrete, allocation-bounded port of the circuit abstraction and
 //! EC discrete-log gadgets used by the pinned FCMP++ implementation.  The
-//! verifier builds the exact same constraints as the prover: hidden points
-//! are proved on their embedded curve, divisor evaluations bind every
-//! discrete logarithm, public rerandomizations are checked with incomplete
-//! addition, and every tree layer is checked with set membership.
+//! verifier builds the exact same constraints as the prover: hidden points are proved on their
+//! embedded curve, divisor evaluations bind every discrete logarithm, public rerandomizations are
+//! checked with incomplete addition, and every tree layer is checked with set membership.
 #[cfg(test)]
 use super::proof_math::FcmpProofRandomSource;
 use super::{
@@ -20,6 +19,7 @@ use super::{
         SecretPoint, VerifierTranscript,
     },
 };
+use zeroize::Zeroize;
 const COMMITMENT_WORD_LEN: usize = 128;
 const MAX_EMBEDDED_POINT_ATTEMPTS_V1: usize = 128;
 const MAX_DLOG_CHALLENGE_ATTEMPTS_V1: usize = 128;
@@ -259,6 +259,35 @@ struct ZeroizingScalarVec<F: ProofScalar> {
     logical_capacity: usize,
     allocation_capacity: usize,
 }
+/// Owns one secret-derived discrete-log coefficient until its field-scalar owner has been
+/// constructed. This type is intentionally neither `Copy` nor `Clone`.
+struct SecretDlogCoefficientV1(u64);
+#[cfg(test)]
+std::thread_local! {
+    static SECRET_DLOG_COEFFICIENT_DROPS_V1: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(0) };
+}
+impl SecretDlogCoefficientV1 {
+    fn copy_from_borrowed(value: &u64) -> Self {
+        Self(*value)
+    }
+    fn into_scalar_owner_v1<F: ProofScalar>(self) -> SecretScalarGuard<F> {
+        let scalar = SecretScalarGuard::new(F::from_u64(self.0));
+        drop(self);
+        scalar
+    }
+}
+impl Drop for SecretDlogCoefficientV1 {
+    fn drop(&mut self) {
+        self.0.zeroize();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut self.0);
+        #[cfg(test)]
+        let _ = SECRET_DLOG_COEFFICIENT_DROPS_V1.try_with(|drops| {
+            drops.set(drops.get().saturating_add(1));
+        });
+    }
+}
 /// Erases one callee-owned `Copy` scalar parameter on every exit path.
 struct BorrowedProofScalarSlot<'a, F: ProofScalar>(&'a mut F);
 impl<F: ProofScalar> BorrowedProofScalarSlot<'_, F> {
@@ -293,31 +322,54 @@ impl<F: ProofScalar> ZeroizingScalarVec<F> {
     fn as_slice(&self) -> &[F] {
         &self.values
     }
-    fn push_borrowed(&mut self, value: &F) -> Result<(), FcmpNativeErrorV1> {
-        let value = SecretScalarGuard::copy_from_borrowed(value);
-        if self.values.len() >= self.logical_capacity {
+    fn push_owned(&mut self, mut value: SecretScalarGuard<F>) -> Result<(), FcmpNativeErrorV1> {
+        let allocation_capacity = self.values.capacity();
+        let allocation_ptr = self.values.as_ptr();
+        if self.values.len() >= self.logical_capacity || self.values.len() >= allocation_capacity {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
-        debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
-        self.values.push(value.expose_copy());
-        // The retained element does not consume the guarded callee-owned copy.
-        // Explicitly erase it on success; the guard also covers an unwind.
+        debug_assert_eq!(allocation_capacity, self.allocation_capacity);
+        debug_assert_eq!(allocation_ptr, self.values.as_ptr());
+        self.values.push(F::ZERO);
+        let destination = self.values.len() - 1;
+        core::mem::swap(&mut self.values[destination], &mut value.0);
         drop(value);
-        debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
+        debug_assert_eq!(self.values.capacity(), allocation_capacity);
+        debug_assert_eq!(self.values.as_ptr(), allocation_ptr);
         Ok(())
     }
-    fn extend_from_slice(&mut self, values: &[F]) -> Result<(), FcmpNativeErrorV1> {
-        let end = self
-            .values
-            .len()
-            .checked_add(values.len())
-            .ok_or(FcmpNativeErrorV1::TreeFull)?;
-        if end > self.logical_capacity {
+    fn push_borrowed(&mut self, value: &F) -> Result<(), FcmpNativeErrorV1> {
+        let allocation_capacity = self.values.capacity();
+        let allocation_ptr = self.values.as_ptr();
+        if self.values.len() >= self.logical_capacity || self.values.len() >= allocation_capacity {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
-        debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
-        self.values.extend_from_slice(values);
-        debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
+        debug_assert_eq!(allocation_capacity, self.allocation_capacity);
+        debug_assert_eq!(self.values.as_ptr(), allocation_ptr);
+        let value = SecretScalarGuard::copy_from_borrowed(value);
+        self.push_owned(value)?;
+        debug_assert_eq!(self.values.capacity(), allocation_capacity);
+        debug_assert_eq!(self.values.as_ptr(), allocation_ptr);
+        Ok(())
+    }
+    fn extend_borrowed_v1(&mut self, values: &[F]) -> Result<(), FcmpNativeErrorV1> {
+        let start_len = self.values.len();
+        let allocation_capacity = self.values.capacity();
+        let allocation_ptr = self.values.as_ptr();
+        let end = start_len
+            .checked_add(values.len())
+            .ok_or(FcmpNativeErrorV1::TreeFull)?;
+        if end > self.logical_capacity || end > allocation_capacity {
+            return Err(FcmpNativeErrorV1::ArithmeticInvariant);
+        }
+        debug_assert_eq!(allocation_capacity, self.allocation_capacity);
+        debug_assert_eq!(self.values.as_ptr(), allocation_ptr);
+        for value in values {
+            self.push_borrowed(value)?;
+        }
+        debug_assert_eq!(self.values.len(), end);
+        debug_assert_eq!(self.values.capacity(), allocation_capacity);
+        debug_assert_eq!(self.values.as_ptr(), allocation_ptr);
         Ok(())
     }
     fn take(&mut self) -> Vec<F> {
@@ -389,13 +441,13 @@ impl<F: ProofScalar> ProverVectorCommitmentTape<F> {
             let mut destination = destination
                 .take()
                 .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
-            destination.extend_from_slice(values)?;
+            destination.extend_borrowed_v1(values)?;
             self.push_commitment(destination)?;
         } else {
             self.values
                 .last_mut()
                 .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?
-                .extend_from_slice(values)?;
+                .extend_borrowed_v1(values)?;
         }
         if self.values.len() != self.layout.commitments {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
@@ -411,7 +463,7 @@ impl<F: ProofScalar> ProverVectorCommitmentTape<F> {
         }
         let mut destination = ZeroizingScalarVec::new(self.layout.commitment_len)?;
         let variables = self.layout.append_branch(branch.len())?;
-        destination.extend_from_slice(branch)?;
+        destination.extend_borrowed_v1(branch)?;
         self.push_commitment(destination)?;
         if self.values.len() != self.layout.commitments {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
@@ -430,10 +482,12 @@ impl<F: ProofScalar> ProverVectorCommitmentTape<F> {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
         let mut witness = ZeroizingScalarVec::new(2 * COMMITMENT_WORD_LEN)?;
-        for value in dlog.iter().copied() {
-            witness.push_borrowed(&F::from_u64(value))?;
+        for coefficient in dlog {
+            let coefficient = SecretDlogCoefficientV1::copy_from_borrowed(coefficient);
+            let scalar = coefficient.into_scalar_owner_v1::<F>();
+            witness.push_owned(scalar)?;
         }
-        witness.extend_from_slice(padding)?;
+        witness.extend_borrowed_v1(padding)?;
         while witness.len() < (2 * COMMITMENT_WORD_LEN) - 1 {
             witness.push_borrowed(&F::ZERO)?;
         }
@@ -551,7 +605,7 @@ impl<F: ProofScalar> ProverVectorCommitmentTape<F> {
             return Err(FcmpNativeErrorV1::TreeFull);
         }
         let mut owned_masks = ZeroizingScalarVec::new(masks.len())?;
-        owned_masks.extend_from_slice(masks)?;
+        owned_masks.extend_borrowed_v1(masks)?;
         for (values, mask) in self.values.iter().zip(owned_masks.as_slice()) {
             if values.as_slice().is_empty() || values.len() > generators.g_bold.len() {
                 return Err(FcmpNativeErrorV1::ArithmeticInvariant);
@@ -572,10 +626,10 @@ impl<F: ProofScalar> ProverVectorCommitmentTape<F> {
             commitments.push(commitment);
             debug_assert_eq!(commitments.capacity(), commitments_allocation_capacity);
         }
-        for index in 0..self.values.len() {
-            openings.push(VectorCommitmentOpening::new(
-                self.values[index].take(),
-                owned_masks.as_slice()[index],
+        for (values, mask) in self.values.iter_mut().zip(owned_masks.values.iter_mut()) {
+            openings.push(VectorCommitmentOpening::take_mask_from_slot(
+                values.take(),
+                mask,
             ));
             debug_assert_eq!(openings.capacity(), openings_allocation_capacity);
         }
@@ -1602,6 +1656,7 @@ mod tests {
     std::thread_local! {
         static TRACKING_CLEAR_CALLS: Cell<usize> = const { Cell::new(0) };
         static TRACKING_PANIC_ON_ADD_ASSIGN: Cell<bool> = const { Cell::new(false) };
+        static TRACKING_PANIC_ON_FROM_U64: Cell<bool> = const { Cell::new(false) };
         static TRACKING_PANIC_ON_CLEAR_CALL: Cell<usize> = const { Cell::new(0) };
     }
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1653,6 +1708,9 @@ mod tests {
         const ONE: Self = Self(1);
         const SCALAR_BITS: usize = 64;
         fn from_u64(value: u64) -> Self {
+            if TRACKING_PANIC_ON_FROM_U64.with(|flag| flag.replace(false)) {
+                panic!("tracking scalar from-u64 panic");
+            }
             Self(value)
         }
         fn decode(bytes: [u8; 32]) -> Option<Self> {
@@ -1727,6 +1785,18 @@ mod tests {
     fn set_tracking_clear_panic(call: usize) {
         TRACKING_PANIC_ON_CLEAR_CALL.with(|pending| pending.set(call));
     }
+    fn set_tracking_from_u64_panic(enabled: bool) {
+        TRACKING_PANIC_ON_FROM_U64.with(|flag| flag.set(enabled));
+    }
+    fn tracking_from_u64_will_panic() -> bool {
+        TRACKING_PANIC_ON_FROM_U64.with(Cell::get)
+    }
+    fn reset_secret_dlog_coefficient_drops_v1() {
+        SECRET_DLOG_COEFFICIENT_DROPS_V1.with(|drops| drops.set(0));
+    }
+    fn secret_dlog_coefficient_drops_v1() -> usize {
+        SECRET_DLOG_COEFFICIENT_DROPS_V1.with(Cell::get)
+    }
     #[test]
     fn tape_layout_matches_first_release_word_packing() {
         let mut tape = VectorCommitmentTape::new(256).expect("tape");
@@ -1790,6 +1860,7 @@ mod tests {
         let (secret_commitments, openings) = tape
             .commitments_and_openings::<SeleneSuite>(generators, &masks)
             .expect("commitments");
+        assert_eq!(masks, [Field25519::from_u64(5), Field25519::from_u64(7)]);
         let mut circuit = Circuit::<SeleneSuite>::prove(openings, 128).expect("prover circuit");
         let (_, _, product) = circuit
             .mul(Some(LinComb::from(first[0])), Some(LinComb::from(first[1])))
@@ -1835,22 +1906,58 @@ mod tests {
             .expect("verification");
         assert!(scalar_commitments.is_empty());
         assert_eq!(verifier_transcript.consumed(), proof.len());
+
+        let generators = selene_bp_generators().reduce(128).expect("generators");
+        let mut identity_tape = ProverVectorCommitmentTape::new(128).expect("identity tape");
+        identity_tape
+            .append_branch(&[Field25519::ZERO])
+            .expect("zero branch");
+        let identity_masks = [Field25519::ZERO];
+        assert!(matches!(
+            identity_tape.commitments_and_openings::<SeleneSuite>(generators, &identity_masks),
+            Err(FcmpNativeErrorV1::CircuitProverCommitmentIdentity)
+        ));
+        assert_eq!(identity_masks, [Field25519::ZERO]);
     }
     #[test]
-    fn scalar_vector_borrowed_push_erases_success_and_overflow_copy_slots() {
+    fn scalar_vector_owned_and_borrowed_pushes_preserve_capacity_and_clear_every_exit() {
         reset_tracking_clears();
         let mut values = ZeroizingScalarVec::<TrackingScalar>::new(1).expect("bounded vector");
-        values
-            .push_borrowed(&TrackingScalar(41))
-            .expect("first value");
+        let allocation_capacity = values.values.capacity();
+        let allocation_ptr = values.values.as_ptr();
+        let first = SecretScalarGuard::copy_from_borrowed(&TrackingScalar(41));
+        values.push_owned(first).expect("first owned value");
         assert_eq!(tracking_clears(), 1);
+        assert_eq!(values.as_slice(), &[TrackingScalar(41)]);
+        assert_eq!(values.values.capacity(), allocation_capacity);
+        assert_eq!(values.values.as_ptr(), allocation_ptr);
         assert_eq!(
             values.push_borrowed(&TrackingScalar(43)),
             Err(FcmpNativeErrorV1::ArithmeticInvariant)
         );
+        assert_eq!(tracking_clears(), 1);
+        let rejected = SecretScalarGuard::copy_from_borrowed(&TrackingScalar(47));
+        assert_eq!(
+            values.push_owned(rejected),
+            Err(FcmpNativeErrorV1::ArithmeticInvariant)
+        );
         assert_eq!(tracking_clears(), 2);
+        assert_eq!(values.values.capacity(), allocation_capacity);
+        assert_eq!(values.values.as_ptr(), allocation_ptr);
         drop(values);
         assert_eq!(tracking_clears(), 3);
+
+        reset_tracking_clears();
+        let unwind = panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut values = ZeroizingScalarVec::<TrackingScalar>::new(1).expect("unwind vector");
+            let value = SecretScalarGuard::copy_from_borrowed(&TrackingScalar(53));
+            set_tracking_clear_panic(1);
+            let _ = values.push_owned(value);
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(tracking_clears(), 2);
+        set_tracking_clear_panic(0);
+
         let source = include_str!("circuit.rs");
         let owner = source
             .split_once("impl<F: ProofScalar> ZeroizingScalarVec<F> {")
@@ -1859,20 +1966,386 @@ mod tests {
             .split_once("impl<F: ProofScalar> Drop for ZeroizingScalarVec<F>")
             .expect("zeroizing scalar vector boundary")
             .0;
-        let guard = owner
-            .find("let value = SecretScalarGuard::copy_from_borrowed(value);")
-            .expect("direct borrowed-copy owner");
-        let capacity = owner
+        let push_owned = owner
+            .split_once("fn push_owned(")
+            .expect("owned scalar push")
+            .1
+            .split_once("fn push_borrowed(")
+            .expect("borrowed scalar push boundary")
+            .0;
+        for step in [
+            "let allocation_capacity = self.values.capacity()",
+            "let allocation_ptr = self.values.as_ptr()",
+            "if self.values.len() >= self.logical_capacity",
+            "self.values.push(F::ZERO)",
+            "core::mem::swap(&mut self.values[destination], &mut value.0)",
+            "drop(value)",
+            "debug_assert_eq!(self.values.capacity(), allocation_capacity)",
+            "debug_assert_eq!(self.values.as_ptr(), allocation_ptr)",
+        ] {
+            assert!(push_owned.contains(step), "missing owned-push step {step}");
+        }
+        assert!(!push_owned.contains("expose_copy"));
+        let push_borrowed = owner
+            .split_once("fn push_borrowed(")
+            .expect("borrowed scalar push")
+            .1
+            .split_once("fn extend_borrowed_v1(")
+            .expect("borrowed scalar push boundary")
+            .0;
+        let capacity = push_borrowed
             .find("if self.values.len() >= self.logical_capacity")
-            .expect("capacity check");
-        let retained = owner
-            .find("self.values.push(value.expose_copy());")
-            .expect("retained vector slot");
-        assert!(guard < capacity && capacity < retained);
-        assert!(!owner.contains("let mut value_copy = *value;"));
-        assert!(!owner.contains("SecretScalarGuard::take"));
-        assert!(owner.contains("fn push_borrowed(&mut self, value: &F)"));
-        assert!(!owner.contains("fn push(&mut self"));
+            .expect("borrowed capacity preflight");
+        let guard = push_borrowed
+            .find("let value = SecretScalarGuard::copy_from_borrowed(value)")
+            .expect("direct borrowed-copy owner");
+        let delegate = push_borrowed
+            .find("self.push_owned(value)?")
+            .expect("owned push delegation");
+        assert!(capacity < guard && guard < delegate);
+        assert!(!push_borrowed.contains("expose_copy"));
+        assert!(!push_borrowed.contains("self.values.push("));
+        assert!(!owner.contains("fn extend_from_slice("));
+    }
+    #[test]
+    fn scalar_vector_borrowed_extension_preflights_and_clears_every_exit() {
+        reset_tracking_clears();
+        let source = [TrackingScalar(59), TrackingScalar(61)];
+        let mut values = ZeroizingScalarVec::<TrackingScalar>::new(source.len())
+            .expect("borrowed-extension vector");
+        let allocation_capacity = values.values.capacity();
+        let allocation_ptr = values.values.as_ptr();
+        values
+            .extend_borrowed_v1(&source)
+            .expect("borrowed extension");
+        assert_eq!(source, [TrackingScalar(59), TrackingScalar(61)]);
+        assert_eq!(values.as_slice(), &source);
+        assert_eq!(values.values.capacity(), allocation_capacity);
+        assert_eq!(values.values.as_ptr(), allocation_ptr);
+        assert_eq!(tracking_clears(), 2);
+        drop(values);
+        assert_eq!(tracking_clears(), 4);
+
+        reset_tracking_clears();
+        let rejected_source = [TrackingScalar(67), TrackingScalar(71)];
+        let mut rejected =
+            ZeroizingScalarVec::<TrackingScalar>::new(1).expect("preflight-rejection vector");
+        let rejected_capacity = rejected.values.capacity();
+        let rejected_ptr = rejected.values.as_ptr();
+        assert_eq!(
+            rejected.extend_borrowed_v1(&rejected_source),
+            Err(FcmpNativeErrorV1::ArithmeticInvariant)
+        );
+        assert_eq!(rejected_source, [TrackingScalar(67), TrackingScalar(71)]);
+        assert!(rejected.as_slice().is_empty());
+        assert_eq!(rejected.values.capacity(), rejected_capacity);
+        assert_eq!(rejected.values.as_ptr(), rejected_ptr);
+        assert_eq!(tracking_clears(), 0);
+        drop(rejected);
+        assert_eq!(tracking_clears(), 0);
+
+        reset_tracking_clears();
+        let unwind_source = [TrackingScalar(73), TrackingScalar(79)];
+        let unwind = panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut values = ZeroizingScalarVec::<TrackingScalar>::new(unwind_source.len())
+                .expect("borrowed-extension unwind vector");
+            set_tracking_clear_panic(1);
+            let _ = values.extend_borrowed_v1(&unwind_source);
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(unwind_source, [TrackingScalar(73), TrackingScalar(79)]);
+        assert_eq!(tracking_clears(), 2);
+        set_tracking_clear_panic(0);
+
+        let production = include_str!("circuit.rs")
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("production circuit boundary")
+            .0;
+        let scalar_vector = production
+            .split_once("impl<F: ProofScalar> ZeroizingScalarVec<F> {")
+            .expect("zeroizing scalar vector")
+            .1
+            .split_once("impl<F: ProofScalar> Drop for ZeroizingScalarVec<F>")
+            .expect("zeroizing scalar vector boundary")
+            .0;
+        let borrowed_extension = scalar_vector
+            .split_once("fn extend_borrowed_v1(")
+            .expect("borrowed scalar extension")
+            .1
+            .split_once("fn take(")
+            .expect("borrowed scalar extension boundary")
+            .0;
+        let mut cursor = 0;
+        for step in [
+            "let start_len = self.values.len()",
+            "let allocation_capacity = self.values.capacity()",
+            "let allocation_ptr = self.values.as_ptr()",
+            "let end = start_len",
+            ".checked_add(values.len())",
+            "if end > self.logical_capacity || end > allocation_capacity",
+            "for value in values",
+            "self.push_borrowed(value)?",
+            "debug_assert_eq!(self.values.len(), end)",
+            "debug_assert_eq!(self.values.capacity(), allocation_capacity)",
+            "debug_assert_eq!(self.values.as_ptr(), allocation_ptr)",
+        ] {
+            let offset = borrowed_extension[cursor..]
+                .find(step)
+                .unwrap_or_else(|| panic!("missing borrowed-extension step {step}"));
+            cursor += offset + step.len();
+        }
+        assert_eq!(
+            borrowed_extension
+                .matches("self.push_borrowed(value)?")
+                .count(),
+            1
+        );
+        for forbidden in [
+            "self.values.extend_from_slice(",
+            "self.values.push(",
+            "SecretScalarGuard",
+            "*value",
+            ".copied(",
+            ".cloned(",
+            ".clone(",
+            "expose",
+            "fn get",
+            ".get(",
+            "callback",
+            "FnOnce",
+            "FnMut",
+            "Deref",
+            "Clone",
+        ] {
+            assert!(
+                !borrowed_extension.contains(forbidden),
+                "retained borrowed-extension path {forbidden}"
+            );
+        }
+    }
+    #[test]
+    fn dlog_coefficient_ingestion_owns_exact_counts_errors_and_unwind() {
+        let ed_coefficients = zeroize::Zeroizing::new(
+            (0..ED25519_DLOG_PARAMETERS.scalar_bits)
+                .map(|index| u64::try_from(index % 7).expect("small Ed coefficient"))
+                .collect::<Vec<_>>(),
+        );
+        let ed_padding_source = [TrackingScalar(61), TrackingScalar(67)];
+        reset_secret_dlog_coefficient_drops_v1();
+        let mut ed_tape =
+            ProverVectorCommitmentTape::<TrackingScalar>::new(2 * COMMITMENT_WORD_LEN)
+                .expect("Ed dlog tape");
+        let (ed_dlog, ed_padding, _) = ed_tape
+            .append_dlog(
+                ED25519_DLOG_PARAMETERS,
+                &ed_coefficients,
+                &ed_padding_source,
+                &TrackingScalar(73),
+            )
+            .expect("owned Ed dlog ingestion");
+        assert_eq!(ed_dlog.len(), 253);
+        assert_eq!(ed_padding.len(), 2);
+        assert_eq!(secret_dlog_coefficient_drops_v1(), 253);
+        let ed_values = ed_tape.values[0].as_slice();
+        assert_eq!(ed_values.len(), 256);
+        assert!(
+            ed_values[..253]
+                .iter()
+                .zip(ed_coefficients.iter())
+                .all(|(scalar, coefficient)| scalar.0 == *coefficient)
+        );
+        assert_eq!(ed_padding_source, [TrackingScalar(61), TrackingScalar(67)]);
+        assert_eq!(ed_values[253], TrackingScalar(61));
+        assert_eq!(ed_values[254], TrackingScalar(67));
+        assert_eq!(ed_values[255], TrackingScalar(73));
+
+        let cycle_coefficients = zeroize::Zeroizing::new(
+            (0..CYCLE_DLOG_PARAMETERS.scalar_bits)
+                .map(|index| u64::try_from(index % 11).expect("small cycle coefficient"))
+                .collect::<Vec<_>>(),
+        );
+        reset_secret_dlog_coefficient_drops_v1();
+        let mut cycle_tape =
+            ProverVectorCommitmentTape::<TrackingScalar>::new(2 * COMMITMENT_WORD_LEN)
+                .expect("cycle dlog tape");
+        let (cycle_dlog, cycle_padding, _) = cycle_tape
+            .append_dlog(
+                CYCLE_DLOG_PARAMETERS,
+                &cycle_coefficients,
+                &[],
+                &TrackingScalar(79),
+            )
+            .expect("owned cycle dlog ingestion");
+        assert_eq!(cycle_dlog.len(), 255);
+        assert!(cycle_padding.is_empty());
+        assert_eq!(secret_dlog_coefficient_drops_v1(), 255);
+        let cycle_values = cycle_tape.values[0].as_slice();
+        assert_eq!(cycle_values.len(), 256);
+        assert!(
+            cycle_values[..255]
+                .iter()
+                .zip(cycle_coefficients.iter())
+                .all(|(scalar, coefficient)| scalar.0 == *coefficient)
+        );
+        assert_eq!(cycle_values[255], TrackingScalar(79));
+
+        reset_secret_dlog_coefficient_drops_v1();
+        reset_tracking_clears();
+        let rejected_cycle_padding = [TrackingScalar(83)];
+        let rejected_cycle_extra = TrackingScalar(89);
+        let mut rejected_cycle_tape =
+            ProverVectorCommitmentTape::<TrackingScalar>::new(2 * COMMITMENT_WORD_LEN)
+                .expect("rejected cycle-padding tape");
+        assert!(matches!(
+            rejected_cycle_tape.append_dlog(
+                CYCLE_DLOG_PARAMETERS,
+                &cycle_coefficients,
+                &rejected_cycle_padding,
+                &rejected_cycle_extra,
+            ),
+            Err(FcmpNativeErrorV1::ArithmeticInvariant)
+        ));
+        assert_eq!(rejected_cycle_padding, [TrackingScalar(83)]);
+        assert_eq!(rejected_cycle_extra, TrackingScalar(89));
+        assert_eq!(secret_dlog_coefficient_drops_v1(), 0);
+        assert_eq!(tracking_clears(), 0);
+        assert!(rejected_cycle_tape.values.is_empty());
+
+        reset_secret_dlog_coefficient_drops_v1();
+        let mut rejected_tape =
+            ProverVectorCommitmentTape::<TrackingScalar>::new(2 * COMMITMENT_WORD_LEN)
+                .expect("rejected dlog tape");
+        assert!(matches!(
+            rejected_tape.append_dlog(
+                ED25519_DLOG_PARAMETERS,
+                &ed_coefficients[..252],
+                &[],
+                &TrackingScalar::ZERO,
+            ),
+            Err(FcmpNativeErrorV1::ArithmeticInvariant)
+        ));
+        assert_eq!(secret_dlog_coefficient_drops_v1(), 0);
+        assert!(rejected_tape.values.is_empty());
+
+        reset_secret_dlog_coefficient_drops_v1();
+        let unwind = panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut tape =
+                ProverVectorCommitmentTape::<TrackingScalar>::new(2 * COMMITMENT_WORD_LEN)
+                    .expect("dlog unwind tape");
+            set_tracking_from_u64_panic(true);
+            let _ = tape.append_dlog(
+                ED25519_DLOG_PARAMETERS,
+                &ed_coefficients,
+                &[],
+                &TrackingScalar::ZERO,
+            );
+        }));
+        assert!(unwind.is_err());
+        assert!(!tracking_from_u64_will_panic());
+        assert_eq!(secret_dlog_coefficient_drops_v1(), 1);
+
+        let production = include_str!("circuit.rs")
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("production circuit boundary")
+            .0;
+        let coefficient_declaration = production
+            .split_once("/// Owns one secret-derived discrete-log coefficient")
+            .expect("dlog coefficient declaration")
+            .1
+            .split_once("impl SecretDlogCoefficientV1")
+            .expect("dlog coefficient declaration boundary")
+            .0;
+        assert!(!coefficient_declaration.contains("#[derive"));
+        let coefficient_owner = production
+            .split_once("struct SecretDlogCoefficientV1")
+            .expect("dlog coefficient owner")
+            .1
+            .split_once("/// Erases one callee-owned `Copy` scalar parameter")
+            .expect("dlog coefficient owner boundary")
+            .0;
+        for step in [
+            "fn copy_from_borrowed(value: &u64) -> Self",
+            "fn into_scalar_owner_v1<F: ProofScalar>(self) -> SecretScalarGuard<F>",
+            "SecretScalarGuard::new(F::from_u64(self.0))",
+            "drop(self)",
+            "self.0.zeroize()",
+            "compiler_fence(core::sync::atomic::Ordering::SeqCst)",
+            "core::hint::black_box(&mut self.0)",
+        ] {
+            assert!(
+                coefficient_owner.contains(step),
+                "missing coefficient-owner step {step}"
+            );
+        }
+        for forbidden in [
+            "derive(",
+            "-> u64",
+            "fn expose",
+            "fn get",
+            "callback",
+            "FnOnce",
+            "FnMut",
+            "Deref",
+            "Clone",
+            ".clone(",
+            ".copied(",
+        ] {
+            assert!(
+                !coefficient_owner.contains(forbidden),
+                "retained coefficient-owner API {forbidden}"
+            );
+        }
+        let append_dlog = production
+            .split_once("dlog: &[u64],")
+            .expect("prover dlog ingestion")
+            .1
+            .split_once("pub(super) fn append_divisor(")
+            .expect("prover dlog ingestion boundary")
+            .0;
+        let validation = append_dlog
+            .find("parameters.validate()?")
+            .expect("dlog parameter validation");
+        let length = append_dlog
+            .find("if dlog.len() != parameters.scalar_bits")
+            .expect("dlog length validation");
+        let allocation = append_dlog
+            .find("let mut witness = ZeroizingScalarVec::new")
+            .expect("dlog witness allocation");
+        let borrow = append_dlog
+            .find("for coefficient in dlog")
+            .expect("borrowed dlog iteration");
+        let owner = append_dlog
+            .find("SecretDlogCoefficientV1::copy_from_borrowed(coefficient)")
+            .expect("coefficient owner construction");
+        let scalar = append_dlog
+            .find("coefficient.into_scalar_owner_v1::<F>()")
+            .expect("scalar owner conversion");
+        let insertion = append_dlog
+            .find("witness.push_owned(scalar)?")
+            .expect("owned scalar insertion");
+        let padding = append_dlog
+            .find("witness.extend_borrowed_v1(padding)?")
+            .expect("borrowed padding ingestion");
+        assert!(validation < length && length < allocation && allocation < borrow);
+        assert!(borrow < owner && owner < scalar && scalar < insertion && insertion < padding);
+        for forbidden in [
+            "dlog.iter().copied()",
+            "F::from_u64(value)",
+            "witness.push_borrowed(&F::from_u64",
+            "witness.extend_from_slice(padding)",
+            "coefficient.expose",
+            "coefficient.clone",
+            "callback",
+            "FnOnce",
+            "FnMut",
+            "Deref",
+            "Clone",
+        ] {
+            assert!(
+                !append_dlog.contains(forbidden),
+                "retained dlog path {forbidden}"
+            );
+        }
     }
     #[test]
     fn prover_tape_never_reallocates_scalar_buffers_and_clears_error_paths() {
@@ -1887,6 +2360,9 @@ mod tests {
         assert!(outer_allocation_capacity >= tape.values_logical_capacity);
         tape.append_word(&source.as_slice()[..COMMITMENT_WORD_LEN])
             .expect("first word");
+        assert_eq!(tracking_clears(), COMMITMENT_WORD_LEN);
+        assert_eq!(source.as_slice()[0], TrackingScalar(1));
+        assert_eq!(source.as_slice()[COMMITMENT_WORD_LEN], TrackingScalar(129));
         assert_eq!(tape.values.as_ptr(), outer_pointer);
         assert_eq!(tape.values.capacity(), outer_allocation_capacity);
         let pointer = tape.values[0].as_slice().as_ptr();
@@ -1894,13 +2370,19 @@ mod tests {
         assert_eq!(tape.values[0].logical_capacity, 256);
         tape.append_word(&source.as_slice()[COMMITMENT_WORD_LEN..])
             .expect("second word");
+        assert_eq!(tracking_clears(), 2 * COMMITMENT_WORD_LEN);
+        assert_eq!(source.as_slice()[0], TrackingScalar(1));
+        assert_eq!(
+            source.as_slice()[2 * COMMITMENT_WORD_LEN - 1],
+            TrackingScalar(256)
+        );
         assert_eq!(tape.values[0].as_slice().as_ptr(), pointer);
         assert_eq!(tape.values[0].allocation_capacity, allocation_capacity);
         assert_eq!(tape.values[0].len(), 256);
         drop(tape);
-        assert_eq!(tracking_clears(), 256);
-        drop(source);
         assert_eq!(tracking_clears(), 512);
+        drop(source);
+        assert_eq!(tracking_clears(), 768);
         reset_tracking_clears();
         let source = tracking_values(COMMITMENT_WORD_LEN, 7);
         let rejected = tracking_values(2, 99);
@@ -1909,14 +2391,16 @@ mod tests {
         let mut tape = ProverVectorCommitmentTape::<TrackingScalar>::new(256).expect("tape");
         tape.append_word(source.as_slice())
             .expect("partial commitment");
+        assert_eq!(tracking_clears(), COMMITMENT_WORD_LEN);
         assert_eq!(
             tape.append_branch(rejected.as_slice()),
             Err(FcmpNativeErrorV1::ArithmeticInvariant)
         );
+        assert_eq!(tracking_clears(), COMMITMENT_WORD_LEN);
         drop(tape);
         drop(source);
         drop(rejected);
-        assert_eq!(tracking_clears(), 258);
+        assert_eq!(tracking_clears(), 386);
         reset_tracking_clears();
         let branch = [TrackingScalar(41)];
         let mut tape = ProverVectorCommitmentTape::<TrackingScalar>::new(128).expect("tape");
@@ -1928,13 +2412,14 @@ mod tests {
             assert_eq!(tape.values.as_ptr(), outer_pointer);
             assert_eq!(tape.values.capacity(), outer_allocation_capacity);
         }
+        assert_eq!(branch, [TrackingScalar(41)]);
         assert_eq!(
             tape.append_branch(&branch),
             Err(FcmpNativeErrorV1::ArithmeticInvariant)
         );
-        assert_eq!(tracking_clears(), 0);
-        drop(tape);
         assert_eq!(tracking_clears(), 128);
+        drop(tape);
+        assert_eq!(tracking_clears(), 256);
         reset_tracking_clears();
         let unwind = panic::catch_unwind(AssertUnwindSafe(|| {
             let branch = [TrackingScalar(43), TrackingScalar(47)];
@@ -1943,7 +2428,266 @@ mod tests {
             panic!("exercise tape cleanup during unwind");
         }));
         assert!(unwind.is_err());
+        assert_eq!(tracking_clears(), 4);
+    }
+    #[test]
+    fn append_word_rejects_before_copy_and_clears_both_unwind_destinations() {
+        reset_tracking_clears();
+        let wrong_length = [TrackingScalar(101); COMMITMENT_WORD_LEN - 1];
+        let mut rejected =
+            ProverVectorCommitmentTape::<TrackingScalar>::new(256).expect("word-rejection tape");
+        let rejected_ptr = rejected.values.as_ptr();
+        let rejected_capacity = rejected.values.capacity();
+        assert_eq!(
+            rejected.append_word(&wrong_length),
+            Err(FcmpNativeErrorV1::ArithmeticInvariant)
+        );
+        assert_eq!(wrong_length, [TrackingScalar(101); COMMITMENT_WORD_LEN - 1]);
+        assert_eq!(tracking_clears(), 0);
+        assert!(rejected.values.is_empty());
+        assert_eq!(rejected.values.as_ptr(), rejected_ptr);
+        assert_eq!(rejected.values.capacity(), rejected_capacity);
+        assert_eq!(rejected.layout.current_j_offset, 0);
+        assert_eq!(rejected.layout.commitments, 0);
+        drop(rejected);
+        assert_eq!(tracking_clears(), 0);
+
+        let inconsistent_source = [TrackingScalar(103); COMMITMENT_WORD_LEN];
+        let mut inconsistent =
+            ProverVectorCommitmentTape::<TrackingScalar>::new(256).expect("inconsistent word tape");
+        inconsistent.layout.current_j_offset = COMMITMENT_WORD_LEN;
+        inconsistent.layout.commitments = 1;
+        let inconsistent_ptr = inconsistent.values.as_ptr();
+        let inconsistent_capacity = inconsistent.values.capacity();
+        assert_eq!(
+            inconsistent.append_word(&inconsistent_source),
+            Err(FcmpNativeErrorV1::ArithmeticInvariant)
+        );
+        assert_eq!(
+            inconsistent_source,
+            [TrackingScalar(103); COMMITMENT_WORD_LEN]
+        );
+        assert_eq!(tracking_clears(), 0);
+        assert!(inconsistent.values.is_empty());
+        assert_eq!(inconsistent.values.as_ptr(), inconsistent_ptr);
+        assert_eq!(inconsistent.values.capacity(), inconsistent_capacity);
+        drop(inconsistent);
+        assert_eq!(tracking_clears(), 0);
+
+        let new_destination_source = [TrackingScalar(107); COMMITMENT_WORD_LEN];
+        let unwind = panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut tape = ProverVectorCommitmentTape::<TrackingScalar>::new(256)
+                .expect("new-destination unwind tape");
+            set_tracking_clear_panic(1);
+            let _ = tape.append_word(&new_destination_source);
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            new_destination_source,
+            [TrackingScalar(107); COMMITMENT_WORD_LEN]
+        );
         assert_eq!(tracking_clears(), 2);
+        set_tracking_clear_panic(0);
+
+        reset_tracking_clears();
+        let first_word = [TrackingScalar(109); COMMITMENT_WORD_LEN];
+        let continuation_source = [TrackingScalar(113); COMMITMENT_WORD_LEN];
+        let unwind = panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut tape = ProverVectorCommitmentTape::<TrackingScalar>::new(256)
+                .expect("continuation unwind tape");
+            tape.append_word(&first_word).expect("first retained word");
+            reset_tracking_clears();
+            set_tracking_clear_panic(1);
+            let _ = tape.append_word(&continuation_source);
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(first_word, [TrackingScalar(109); COMMITMENT_WORD_LEN]);
+        assert_eq!(
+            continuation_source,
+            [TrackingScalar(113); COMMITMENT_WORD_LEN]
+        );
+        assert_eq!(tracking_clears(), 130);
+        set_tracking_clear_panic(0);
+
+        let production = include_str!("circuit.rs")
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("production circuit boundary")
+            .0;
+        let append_word = production
+            .split_once("fn append_word(&mut self, values: &[F])")
+            .expect("prover append-word ingestion")
+            .1
+            .split_once("pub(super) fn append_branch(")
+            .expect("prover append-word boundary")
+            .0;
+        let length = append_word
+            .find("if values.len() != COMMITMENT_WORD_LEN")
+            .expect("word length validation");
+        let capacity = append_word
+            .find("if starts_commitment && !self.has_commitment_capacity()")
+            .expect("word commitment-capacity preflight");
+        let allocation = append_word
+            .find("let mut destination = starts_commitment")
+            .expect("word destination allocation");
+        let layout = append_word
+            .find("let variables = self.layout.append_word()?")
+            .expect("word layout allocation");
+        let new_destination = append_word
+            .find("destination.extend_borrowed_v1(values)?")
+            .expect("new-destination borrowed ingestion");
+        let retained_destination = append_word
+            .rfind(".extend_borrowed_v1(values)?")
+            .expect("retained-destination borrowed ingestion");
+        assert!(
+            length < capacity
+                && capacity < allocation
+                && allocation < layout
+                && layout < new_destination
+                && new_destination < retained_destination
+        );
+        assert_eq!(
+            append_word.matches("extend_borrowed_v1(values)?").count(),
+            2
+        );
+        for forbidden in [
+            "extend_from_slice(values)",
+            "values.iter().copied",
+            "values.iter().cloned",
+            ".copied(",
+            ".cloned(",
+            ".clone(",
+            "self.values.push(",
+            "SecretScalarGuard",
+            "expose",
+            "fn get",
+            ".get(",
+            "callback",
+            "FnOnce",
+            "FnMut",
+            "Deref",
+            "Clone",
+        ] {
+            assert!(
+                !append_word.contains(forbidden),
+                "retained append-word path {forbidden}"
+            );
+        }
+        let prover_tape = production
+            .split_once("impl<F: ProofScalar> ProverVectorCommitmentTape<F> {")
+            .expect("prover tape implementation")
+            .1
+            .split_once("/// Exact verifier-side arithmetic circuit")
+            .expect("prover tape implementation boundary")
+            .0;
+        let append_branch = prover_tape
+            .split_once("pub(super) fn append_branch(\n        &mut self,\n        branch: &[F],")
+            .expect("prover append-branch ingestion")
+            .1
+            .split_once("pub(super) fn append_dlog(")
+            .expect("prover append-branch boundary")
+            .0;
+        let capacity = append_branch
+            .find("if !self.has_commitment_capacity()")
+            .expect("branch commitment-capacity preflight");
+        let allocation = append_branch
+            .find("let mut destination = ZeroizingScalarVec::new")
+            .expect("branch destination allocation");
+        let layout = append_branch
+            .find("let variables = self.layout.append_branch(branch.len())?")
+            .expect("branch layout allocation");
+        let ingestion = append_branch
+            .find("destination.extend_borrowed_v1(branch)?")
+            .expect("branch borrowed ingestion");
+        let retention = append_branch
+            .find("self.push_commitment(destination)?")
+            .expect("branch destination retention");
+        assert!(capacity < allocation && allocation < layout && layout < ingestion);
+        assert!(ingestion < retention);
+        assert_eq!(
+            append_branch
+                .matches("destination.extend_borrowed_v1(branch)?")
+                .count(),
+            1
+        );
+        for forbidden in [
+            "extend_from_slice(branch)",
+            "branch.iter().copied",
+            "branch.iter().cloned",
+            ".copied(",
+            ".cloned(",
+            ".clone(",
+            "SecretScalarGuard",
+            "expose",
+            "fn get",
+            ".get(",
+            "callback",
+            "FnOnce",
+            "FnMut",
+            "Deref",
+            "Clone",
+        ] {
+            assert!(
+                !append_branch.contains(forbidden),
+                "retained append-branch path {forbidden}"
+            );
+        }
+        let commitment_producer = prover_tape
+            .split_once("pub(super) fn commitments_and_openings<S: ProofSuite<Scalar = F>>")
+            .expect("commitment producer")
+            .1;
+        let shape = commitment_producer
+            .find("if self.values.len() != self.layout.commitments")
+            .expect("commitment shape preflight");
+        let commitment_allocation = commitment_producer
+            .find("let mut commitments = Vec::new()")
+            .expect("commitment result allocation");
+        let opening_allocation = commitment_producer
+            .find("let mut openings = Vec::new()")
+            .expect("opening result allocation");
+        let mask_allocation = commitment_producer
+            .find("ZeroizingScalarVec::new(masks.len())?")
+            .expect("mask owner allocation");
+        let ingestion = commitment_producer
+            .find("owned_masks.extend_borrowed_v1(masks)?")
+            .expect("borrowed mask ingestion");
+        let msm = commitment_producer
+            .find("for (values, mask) in self.values.iter().zip(owned_masks.as_slice())")
+            .expect("commitment MSM order");
+        let openings = commitment_producer
+            .find("for (values, mask) in self.values.iter_mut().zip(owned_masks.values.iter_mut())")
+            .expect("opening construction order");
+        assert!(shape < commitment_allocation && commitment_allocation < opening_allocation);
+        assert!(opening_allocation < mask_allocation && mask_allocation < ingestion);
+        assert!(ingestion < msm && msm < openings);
+        assert_eq!(
+            commitment_producer
+                .matches("owned_masks.extend_borrowed_v1(masks)?")
+                .count(),
+            1
+        );
+        for forbidden in [
+            "owned_masks.extend_from_slice(masks)",
+            "masks.to_vec()",
+            "Vec::from(masks)",
+            "copy_from_slice(masks)",
+            "masks.iter().copied",
+            "masks.iter().cloned",
+            "owned_masks.values.push",
+            "masks[index]",
+            "owned_masks.as_slice()[index]",
+            "VectorCommitmentOpening::new(",
+        ] {
+            assert!(
+                !commitment_producer.contains(forbidden),
+                "retained commitment mask path {forbidden}"
+            );
+        }
+        assert_eq!(
+            commitment_producer
+                .matches("VectorCommitmentOpening::take_mask_from_slot(")
+                .count(),
+            1
+        );
     }
     #[test]
     fn circuit_witness_bounds_and_eval_guard_clear_every_exit_path() {

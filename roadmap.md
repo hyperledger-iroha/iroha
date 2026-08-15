@@ -7,11 +7,12 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Workspace review closure
 
-- Freeze the shared worktree after the current optimization integration, then
-  complete the final governed-source/source-budget seal and authoritative full
-  formal proof-ledger checker before preparing a signed merge commit. Do not
-  treat validation from the earlier fifth integration merge as a receipt for
-  the current source tree.
+- Freeze the resolved, uncommitted merge with `HEAD`
+  `c46d08e7467ead46728a75eaff75021ec047ce57` and `MERGE_HEAD`
+  `9910c20d5eb68efce4dce7f2ef224178fceab639`, then complete the remaining
+  authoritative formal and workspace-wide validation before preparing a signed
+  descendant. The conflict-free staged index and historical mutable-tree
+  snapshots are not release receipts for the current source tree.
 - After that freeze, use the official workflows to regenerate and check the
   JavaScript current-Rust-contract fixture and generated-artifact registry.
   Preserve the green SDK release guard after its end-to-end closure repin and
@@ -21,14 +22,21 @@ Completed history lives in [`status.md`](./status.md).
   generated outputs in a descendant. Refresh SF1 rows and projections only
   with an authorized council re-sign over the current manifest digest.
 - Preserve the lock-compatible parking of the private confidential-spool ZKP
-  prototypes during authoritative workspace validation. Reconnect those roots
-  only with a reviewed lock-graph update supplied through the release process;
-  keep the current `Cargo.lock` byte-identical for this release.
+  prototypes: locked offline dependency resolution succeeds for the merged
+  manifests while those incompatible roots remain unwired. Reconnect them only
+  with a reviewed lock-graph update supplied through the release process, and
+  keep `Cargo.lock` byte-identical for this release.
 - Finish borrowed, cache-/scratch-audited admission verification for default
   w3f BLS, GOST, and SM2, and replace PQClean's heap-backed SHAKE workspace.
   Extend the source-proven ordinary iterable adapter beyond `FindPeers` only
   with producer-specific semantic parity and cold-Kura bounds. Then rerun the
   focused Rust suites and strict all-target Clippy from the frozen candidate.
+- Add a shared typed multisignature-witness construction and signing flow to
+  the primary SDKs. Rust currently hashes requests and bounded-encodes completed
+  witnesses; JavaScript and the `iroha_python` SoraFS reputation helpers can
+  forward an externally produced witness. The standalone `iroha_torii_client`
+  and the typed mobile/C# clients are intentionally signer-only; none of those
+  surfaces should be described as end-to-end multisignature construction yet.
 
 ## Nexus topology model closure
 
@@ -53,20 +61,29 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Build-efficiency closeout
 
-- Preserve the reviewed 5,067,263-line first-party Rust baseline and the
-  4,560,536-line ten-percent ceiling. The current 5,017,049-line count leaves
-  a 456,513-line gap; do not redefine the baseline, count moved test code as a
-  physical reduction, or weaken required runtime, security, consensus, SDK, or
-  release-evidence behavior to close it.
-- Add the new source and fixture files to the eventual signed commit, then rerun
-  the strict SDK source-closure guard from the tracked candidate. Keep the
-  staged merge-resolution and optimization changes reviewable until that
-  signed commit is prepared.
+- Preserve the immutable 5,067,263-line first-party Rust baseline, the
+  5,014,603-line active ratchet, and the 4,560,536-line ten-percent objective.
+  The resolved staged merge-tree audit counts 5,014,506 Rust lines, which is 97
+  lines below the active ratchet and 453,970 lines above the objective. Remove
+  at least 453 more lines to restore the required 550 lines of ratchet headroom;
+  do not redefine the baseline, count moved test code as a physical reduction,
+  or weaken required runtime, security, consensus, SDK, or release-evidence
+  behavior to close it. Keep deterministic oversized-file exceptions as exact
+  ratchets and require the source-budget gate to return to finding-free.
+- Track every reviewed production module and add the new source and fixture
+  files to the eventual signed commit, then rerun the strict SDK source-closure
+  guard from that frozen candidate. Keep the staged merge-resolution and
+  optimization changes reviewable until the signed commit is prepared.
 - Use the unchanged protected workspace lockfile now that the incompatible
   prototype manifest edge is withdrawn. From that immutable candidate, run the
   full locked workspace build and tests, strict all-target/all-feature
   Clippy, ABI and canonical wire goldens, focused Sumeragi/Kura recovery suites,
   and representative four-validator deterministic consensus tests.
+- Bring the static JavaScript bundles below their unchanged release ceilings
+  without hiding deferred code: Torii is currently 1,070,886/1,006,592 bytes,
+  transaction codec 304,228/304,128 bytes, and the public browser aggregate
+  563,467/480,256 bytes. Nexus, canonical request, IVM artifact, and Kotodama
+  browser targets already pass.
 - Capture comparable `valid: true` cold/warm and compiler-work reports for the
   baseline and candidate with identical source, lock, toolchain, arguments,
   environment, and host. Expand compile-unit coverage beyond the current
@@ -91,12 +108,13 @@ artifacts.
 ## MCP gateway and Torii content release closeout
 
 - Regenerate the OpenAPI provenance manifests from the final source seal and
-  run the focused locked/offline Torii tests for exact nested-target account
-  and operator authentication, retired async-job methods, closed VPN schemas,
-  active/unknown content download coercion, inert-media preservation, and the
-  documented content response boundary. Retain the existing VPN
-  auth-before-parse and protected content auth/cache/path tests in the same
-  validation lane.
+  close the inherited catalog/generated-artifact expectations exposed by the
+  broader MCP test profile. Focused locked/offline Torii library and test-binary
+  compilation, all app-auth tests, and the exact Connect-network/SID and
+  authenticated governance MCP regressions are green. Retain the exact
+  nested-target account/operator authentication, retired async-job, closed VPN,
+  active/unknown content coercion, inert-media, VPN auth-before-parse, and
+  protected content auth/cache/path tests in the final validation lane.
 
 ## Sumeragi v2 revision-4 release gates
 
@@ -1026,25 +1044,26 @@ evidence.
 
 ## Sumeragi V2 production multilane release closure
 
-The final proof-ledger statuses are precommitted at 44 `tlaps_proved`, 3
-`cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
-`out_of_scope`, with `machine_checked_completion: true`. This is the required
-byte-exact input to the release proof wave, not proof evidence by itself. The
-next formal step is to freeze a clean signed tree, run the strict TLAPS and
-pinned Verus targets, derive the canonical cross-tool and production-trace
-evidence, and validate the release receipt and completion marker against that
-same commit and ledger digest.
+The current proof ledger records 35 `tlaps_proved`, 12 `specified_unproved`,
+6 `trusted_contract`, and 1 `out_of_scope`, with
+`machine_checked_completion: false`. Completion requires 44 `tlaps_proved`,
+3 `cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope`. The next
+formal step is to freeze a clean signed tree, run the strict TLAPS and pinned
+Verus targets, derive the canonical cross-tool and production-trace evidence,
+and only then promote the byte-exact ledger and validate the release receipt
+and completion marker against that same commit and ledger digest.
 
 On the current tree, the independent 88-leg release inventory contract is
 sealed at 857 production tests across 40 modules, 525 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 The aggregate non-release proof checker and focused direct-Serve, same-round,
-Serve-regression, and trace-link mutation tests pass. The remaining full
-production inventory, Rust, network, and release-proof execution must run
-against the final frozen tree. The package-layout preflight and aggregate
-checker also bind the sole reviewed test-only `v2_core/refinement_cases.rs`
-source split and reject additional, parent-relative, non-test, or
-skipped-verifier mutations.
+Serve-regression, and trace-link mutation tests must be rerun against the final
+merge-resolved tree; earlier checkpoint results are not receipts for this
+source. The remaining full production inventory, Rust, network, and
+release-proof execution must run against the final frozen tree. The
+package-layout preflight and aggregate checker also bind the sole reviewed
+test-only `v2_core/refinement_cases.rs` source split and reject additional,
+parent-relative, non-test, or skipped-verifier mutations.
 The broader `check_sumeragi_v2_multilane_models.py` structural gate now passes
 after binding Kura's whole-plan route preflight, all-manifest readback,
 transition-checked latest-index publication, configured evidence-byte bounds,
@@ -1073,13 +1092,15 @@ The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
 
-A fresh source-budget run over the merged development tree inspected 7,979
-paths with 198 exceptions and counted 5,014,747 Rust lines. It reports zero
-findings and remains below the 5,254,807 ratchet ceiling; another 454,211 lines
-would be required to reach the 4,560,536 objective. The separate generic
-lifecycle-coordinator cutover receives no multilane credit toward that
-reduction. The static source-budget guard passes; the reduction objective and
-immutable-candidate evidence remain open.
+The earlier 8,029-path, 198-exception, 5,022,733-line source-budget snapshot is
+historical. It exceeded the active 5,014,603-line ratchet by 8,130 lines and
+was not a pass or a receipt for the current tree. The later 8,031-path,
+197-exception, 5,014,041-line zero-finding snapshot is also historical and has
+been superseded by the current merge-tree audit in the build-efficiency
+closeout above. Neither static snapshot replaces the pending focused, formal,
+or workspace validation. The separate generic lifecycle-coordinator cutover
+receives no multilane credit toward that reduction, and immutable-candidate
+evidence remains open.
 
 Historical autonomous recovery now uses one bounded canonical namespace
 scanner across startup replay binding, disk accounting, and lane-geometry
@@ -1117,22 +1138,22 @@ configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending source check;
 the final pre-self-documentation source manifest is
 `01754c06f060330a30cddd03c48203a55909832dfcb8475aee3f5b95651a4d5c`.
-The proof-ledger release-inventory subset passes `54/54`, the aggregate
-multilane model/source contract suite passes `171/171` under pinned Python 3.12
-with strict warnings, and the static
-Apalache-runner contract passes all 14 fail-closed controls. No current TLC or
-Apalache engine run is claimed. The newly bound non-retireable lane transport
-is intentionally fail-closed at applied-height handoff; formal operational
-correspondence plus drain/restart/liveness evidence remain mandatory.
+The proof-ledger release-inventory subset, aggregate multilane model/source
+contract suite, and static Apalache-runner contract have historical green
+receipts only; their final merged-tree reruns remain outstanding. No current
+TLC or Apalache engine run is claimed. The newly bound non-retireable lane
+transport is intentionally fail-closed at applied-height handoff; formal
+operational correspondence plus drain/restart/liveness evidence remain
+mandatory.
 
 The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
-its staged grouped and diagnostics suite-source manifests each contain 1,386
+its staged grouped and diagnostics suite-source manifests each contain 1,397
 records and hash respectively to
-`1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
+`a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
 and
-`1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`;
+`1bec39d7d0b9a08bf151c90e52a1d7d46d30bce2857a7726d939bf9ed1daf6ee`;
 the synchronized 48-line wire TSV hashes to
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
@@ -1225,11 +1246,11 @@ The remaining work is evidence-driven and must stay in order:
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 55 negative controls,
   fixture SHA-256
   `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
-  staged grouped/diagnostics suite-source manifests at exactly 1,386 records
+  staged grouped/diagnostics suite-source manifests at exactly 1,397 records
   each with SHA-256 values
-  `1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
+  `a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
   and
-  `1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`,
+  `1bec39d7d0b9a08bf151c90e52a1d7d46d30bce2857a7726d939bf9ed1daf6ee`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
   `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
@@ -27322,8 +27343,8 @@ runtime premise on the final signed source.
   ownership, and source manifests are structurally sealed, but source binding
   is not backend proof evidence. Run pinned Verus with `--no-cheating`, bind
   the fresh strict provider log, and generate the canonical cross-tool
-  document before the release gate accepts the precommitted
-  `cross_tool_proved` status;
+  document before the release gate permits promotion to
+  `cross_tool_proved`;
 - keep the standalone effect-capacity mutation matrix green and source-bound.
   Its 6 compact models and 28 pinned configurations cover the concrete
   A/B/TimeoutVote capacity trace, full-capacity Fetch reconstruction,
@@ -27357,7 +27378,7 @@ runtime premise on the final signed source.
   conflation, replay retention or loss, stale execution, Prepare authority, and
   non-singleton replay. Bounded TLC and source binding still do not discharge
   `ProgressWitnessProductionRefinementObligation`;
-- prove the nine precommitted TLAPS-target obligations in dependency order:
+- prove the nine outstanding TLAPS-target obligations in dependency order:
   post-GST deadlock freedom, post-GST starvation freedom, timeout/view
   liveness, rotating-leader liveness, retained-lock reproposal, per-validator
   application liveness, successor-activation starvation freedom, genesis
@@ -27372,8 +27393,8 @@ runtime premise on the final signed source.
   retained-lock release proof consumes independently established responsive
   Decision convergence and is rejected if it depends on any conditional
   direct-decomposition shard;
-- prove the three precommitted production seams only as the canonical cross-tool
-  obligations: effective-lock body acquisition, durable progress-witness
+- prove the three outstanding production seams only as the canonical
+  cross-tool obligations: effective-lock body acquisition, durable progress-witness
   refinement, and successor activation plus exact historical recovery. Their
   `4 + 7 + 6` production claims require fresh strict provider logs, the pinned
   Verus result, exact source manifests, proved transitive prerequisites, and

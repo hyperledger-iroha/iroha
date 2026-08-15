@@ -3,10 +3,9 @@
 //! This module is deliberately a child of `decryption`: it reuses the exact
 //! V1 transcript, response bounds, CRT decoder, and abort taxonomy instead of
 //! defining a second relation.  The native implementation remains a
-//! `cfg(test)` small-profile reference path. Release resource evidence may only
-//! refer to the streaming entry points below, and remains fail-closed until an
-//! authenticated peak-residency run is installed for the exact bounded CAS
-//! worker.
+//! `cfg(test)` small-profile reference path. Release resource evidence may only refer to the
+//! streaming entry points below, and remains fail-closed until an authenticated peak-residency run
+//! is installed for the exact bounded CAS worker.
 use super::super::super::MaskedRelaxedRandomErrorV1;
 #[cfg(test)]
 use super::super::negacyclic_multiply;
@@ -99,8 +98,7 @@ pub const ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1: [u8;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ZkAmsMkheDecryptionStreamingBlockerV1 {
-    /// Canonical empty blocker slot. Only slots at or above `blocker_count`
-    /// may contain this value.
+    /// Canonical empty blocker slot. Only slots at or above `blocker_count` may contain this value.
     NoBlocker = 0,
     /// Historical compatibility value retained for downstream exhaustive
     /// matches. The bounded prover no longer activates this blocker.
@@ -114,23 +112,20 @@ pub enum ZkAmsMkheDecryptionStreamingBlockerV1 {
 }
 /// Phase-specific source accounting for the bounded verifier topology.
 ///
-/// These are exact enumerated large-buffer payloads, not a peak-RSS claim.
-/// Allocator metadata, stacks, and the surrounding worker must still be covered
-/// by the zero-pinned authenticated residency certificate. Compact-authority
-/// figures count algorithm-owned buffers and the currently borrowed share, but
-/// deliberately do not count storage, caching, or duplicate immutable-object
-/// copies inside a caller-selected CAS provider. An in-process implementation
-/// that retains full stages/seals/publication caches can therefore exceed the
-/// governed worker ceiling even though this source topology fits it; release
-/// requires a separately bounded/external provider and the nonzero runtime
-/// residency certificate which is presently absent.
+/// These are exact enumerated large-buffer payloads, not a peak-RSS claim. Allocator metadata,
+/// stacks, and the surrounding worker must still be covered by the zero-pinned authenticated
+/// residency certificate. Compact-authority figures count algorithm-owned buffers and the currently
+/// borrowed share, but deliberately do not count storage, caching, or duplicate immutable-object
+/// copies inside a caller-selected CAS provider. An in-process implementation that retains full
+/// stages/seals/publication caches can therefore exceed the governed worker ceiling even though
+/// this source topology fits it; release requires a separately bounded/external provider and the
+/// nonzero runtime residency certificate which is presently absent.
 ///
-/// Work fields classify governed bulk units: ring/coefficient operations and
-/// bytes sampled, absorbed, scanned, folded, decoded, or emitted. Fixed control
-/// operations are not CPU-cycle estimates. The prepared common-`a` axis records
-/// one child constructor after separate statement/authority prevalidation; it
-/// is not a count of all profile/roster/PoP validation calls. The absent release
-/// KAT and worker certificate remain mandatory for whole-operation authority.
+/// Work fields classify governed bulk units: ring/coefficient operations and bytes sampled,
+/// absorbed, scanned, folded, decoded, or emitted. Fixed control operations are not CPU-cycle
+/// estimates. The prepared common-`a` axis records one child constructor after separate
+/// statement/authority prevalidation; it is not a count of all profile/roster/PoP validation calls.
+/// The absent release KAT and worker certificate remain mandatory for whole-operation authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     /// Exact payload bytes in one full native RNS polynomial.
@@ -180,10 +175,9 @@ pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     pub ciphertext_linear_passes: u8,
     /// Lower bound of the explicitly excluded native reference combine path.
     pub native_reference_lower_bound_bytes: u64,
-    /// Lower bound inherited by the current compact-authority bridge before
-    /// the returned compact statement exists. The legacy field name is kept;
-    /// it now records the exact enumerated large-buffer peak of the bounded
-    /// authority constructor.
+    /// Lower bound inherited by the current compact-authority bridge before the returned compact
+    /// statement exists. The legacy field name is kept; it now records the exact enumerated
+    /// large-buffer peak of the bounded authority constructor.
     pub compact_authority_construction_lower_bound_bytes: u64,
     /// One retained aggregate `b` construction buffer.
     pub compact_authority_aggregate_bytes: u64,
@@ -1194,9 +1188,8 @@ where
         scratch.as_mut_array(),
     )
 }
-/// Key-lineage axes checked only at live manifest admission. They deliberately
-/// do not enter the legacy statement/ZDSM transcript, whose canonical bytes
-/// remain unchanged.
+/// Key-lineage axes checked only at live manifest admission. They deliberately do not enter the
+/// legacy statement/ZDSM transcript, whose canonical bytes remain unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DecryptionCiphertextKeyLineageV1 {
     key_material_digest: [u8; 32],
@@ -1299,13 +1292,12 @@ where
 }
 /// Compact, context-minted release statement for the bounded verifier.
 ///
-/// The value retains only roster, ciphertext, compact bindings, and content
-/// addresses. In particular, it does not retain the aggregate key or any of the
-/// eight full public-key shares. Its production constructor consumes the
-/// move-only bounded CPK ceremony authority; no native aggregate-key/share
-/// bridge is exposed in production or included in verifier residency evidence.
-/// The persistent context remains borrowed for the statement's lifetime; there
-/// is no raw-digest, raw-pointer, codec, or decoder constructor.
+/// The value retains only roster, ciphertext, compact bindings, and content addresses. In
+/// particular, it does not retain the aggregate key or any of the eight full public-key shares. Its
+/// production constructor consumes the move-only bounded CPK ceremony authority; no native
+/// aggregate-key/share bridge is exposed in production or included in verifier residency evidence.
+/// The persistent context remains borrowed for the statement's lifetime; there is no raw-digest,
+/// raw-pointer, codec, or decoder constructor.
 pub struct ZkAmsMkheStreamingDecryptionStatementV1<'a> {
     roster: &'a ZkAmsMkheGovernedRosterWireV1,
     ciphertext: &'a ZkAmsMkheStreamingCollectiveCiphertextV1,
@@ -1337,13 +1329,12 @@ impl fmt::Debug for ZkAmsMkheStreamingDecryptionStatementV1<'_> {
 impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
     /// Mint a compact statement from the exact bounded CPK ceremony authority.
     ///
-    /// The one-shot authority is consumed here. Every pointer and key-context
-    /// axis comes from the retained persistent context; callers supply only the
-    /// canonical roster/ciphertext objects to which fresh party bindings are
-    /// minted. Release admission requires one unified immutable provider
-    /// snapshot serving both the staged CPK party-B objects and every C0/C1
-    /// output limb; an output published to a separate CAS is not admissible
-    /// until it is represented in that unified snapshot.
+    /// The one-shot authority is consumed here. Every pointer and key-context axis comes from the
+    /// retained persistent context; callers supply only the canonical roster/ciphertext objects to
+    /// which fresh party bindings are minted. Release admission requires one unified immutable
+    /// provider snapshot serving both the staged CPK party-B objects and every C0/C1 output limb;
+    /// an output published to a separate CAS is not admissible until it is represented in that
+    /// unified snapshot.
     pub fn from_verified_cpk_authority_v1<P>(
         roster: &'a ZkAmsMkheGovernedRosterWireV1,
         ciphertext: &'a ZkAmsMkheStreamingCollectiveCiphertextV1,
@@ -1586,11 +1577,10 @@ const STAGED_DECRYPTION_RELATION_ADMISSION_DOMAIN_V1: &[u8] =
 struct StagedDecryptionRelationAdmissionSealV1;
 /// Move-only canonical staged output for one semantically verified party share.
 ///
-/// Both large components have been sealed, content-addressed, atomically
-/// published, fully reread, and replayed through the exact streaming response
-/// equations before the `ZDSM` manifest is authenticated. The type has no
-/// decoder, raw-pointer constructor, `Clone`, or `Copy` implementation. CAS
-/// storage/cache residency remains outside the source-level bound and requires
+/// Both large components have been sealed, content-addressed, atomically published, fully reread,
+/// and replayed through the exact streaming response equations before the `ZDSM` manifest is
+/// authenticated. The type has no decoder, raw-pointer constructor, `Clone`, or `Copy`
+/// implementation. CAS storage/cache residency remains outside the source-level bound and requires
 /// the separate authenticated worker certificate.
 pub struct ZkAmsMkheStagedDecryptionShareV1 {
     _seal: StagedDecryptionRelationAdmissionSealV1,
@@ -1747,9 +1737,8 @@ impl<const N: usize> Drop for ZeroizingStagedBytesV1<N> {
         super::record_decryption_transient_zeroized_drop_v1(self.0.iter().all(|value| *value == 0));
     }
 }
-/// Fallibly allocated exact-length owner for a complete authenticated proof.
-/// It is move-only and erases its initialized capacity on success, error, and
-/// unwind before the allocation is released.
+/// Fallibly allocated exact-length owner for a complete authenticated proof. It is move-only and
+/// erases its initialized capacity on success, error, and unwind before the allocation is released.
 struct ZeroizingStagedByteVectorV1(Vec<u8>);
 impl ZeroizingStagedByteVectorV1 {
     fn new_zeroed_exact(length: usize) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -2682,15 +2671,13 @@ where
 }
 /// Create, publish, semantically replay, and authenticate one bounded release share.
 ///
-/// The move-only persistent use is consumed before randomness or staging. The
-/// polynomial is written limb-by-limb and the `ZADP` proof section-by-section;
-/// neither canonical component is ever retained by the prover. All prover-owned
-/// transient smudge, mask, response, NTT, and encoding buffers are erased on
-/// success, error, and unwind. Borrowed party-state and active-secret owners
+/// The move-only persistent use is consumed before randomness or staging. The polynomial is written
+/// limb-by-limb and the `ZADP` proof section-by-section; neither canonical component is ever
+/// retained by the prover. All prover-owned transient smudge, mask, response, NTT, and encoding
+/// buffers are erased on success, error, and unwind. Borrowed party-state and active-secret owners
 /// deliberately persist and enforce their own `Drop`. The manifest is suitable for
-/// [`verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1`], but the
-/// separately pinned whole-worker residency certificate remains mandatory for
-/// release qualification.
+/// [`verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1`], but the separately pinned
+/// whole-worker residency certificate remains mandatory for release qualification.
 #[allow(clippy::too_many_arguments)]
 pub fn prove_zk_ams_mkhe_decryption_share_staged_v1<R, P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
@@ -3888,10 +3875,9 @@ fn validate_streaming_manifest_slot_v1(
 /// Authenticate, verify, and combine the exact ordered eight split shares with
 /// at most three complete RNS polynomial payloads resident at once.
 ///
-/// Every manifest is authenticated and bound before the first large read. Each
-/// `b_i` and share is then consumed in two complete BLAKE3-authenticated passes
-/// from one immutable provider snapshot. The existing proof transcript and CRT
-/// correctness bound are unchanged.
+/// Every manifest is authenticated and bound before the first large read. Each `b_i` and share is
+/// then consumed in two complete BLAKE3-authenticated passes from one immutable provider snapshot.
+/// The existing proof transcript and CRT correctness bound are unchanged.
 pub fn verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1<P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
     manifest_bytes: &[&[u8]],

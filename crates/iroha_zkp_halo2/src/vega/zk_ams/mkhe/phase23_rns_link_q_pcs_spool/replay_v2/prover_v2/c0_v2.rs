@@ -1,9 +1,8 @@
 //! Bounded authenticated initial-C0-root prerequisite for qPCS V2.
 //!
-//! This child consumes the accepted masked-coefficient typestate, performs one
-//! exact-width Fq2 NTT row at a time, writes a purpose-bound column-major
-//! staging spool, transposes it into the already accepted block-major LDE
-//! spool, and streams that authenticated replay into the verifier-literal
+//! This child consumes the accepted masked-coefficient typestate, performs one exact-width Fq2 NTT
+//! row at a time, writes a purpose-bound column-major staging spool, transposes it into the already
+//! accepted block-major LDE spool, and streams that authenticated replay into the verifier-literal
 //! initial Merkle tree.  The only production authority is uninhabited.  The
 //! returned value is therefore a non-authorizing prerequisite and retains the
 //! accepted replay owner without exposing a file, path, key, slot, or snapshot.

@@ -29,11 +29,9 @@ mod model {
     }
 }
 use crate::common::{Owned, Ref};
-/// Read-only reference to [`Asset`].
-/// Used in query filters to avoid copying.
+/// Read-only reference to [`Asset`]. Used in query filters to avoid copying.
 pub type AssetEntry<'world> = Ref<'world, AssetId, AssetValue>;
-/// [`Asset`] without `id` field.
-/// Needed only for the world-state asset map to reduce memory usage.
+/// [`Asset`] without `id` field. Needed only for the world-state asset map to reduce memory usage.
 /// In other places use [`Asset`] directly.
 pub type AssetValue = Owned<Quantity>;
 impl Asset {

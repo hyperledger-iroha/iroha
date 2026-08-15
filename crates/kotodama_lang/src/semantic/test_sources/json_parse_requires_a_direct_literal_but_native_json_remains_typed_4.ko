@@ -1,0 +1,3 @@
+fn decode(string raw) -> Json {
+                json { amount: raw, typed: 7 }
+            }

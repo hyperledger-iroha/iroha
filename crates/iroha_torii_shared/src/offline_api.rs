@@ -585,9 +585,10 @@ mod tests {
             r#"{"fixed":"00AB10FF","dynamic":[],"keyed":{"00FF":7,"00ff":8}}"#,
         )
         .expect_err("lexically distinct keys must not alias one typed map key");
-        assert!(
-            error.to_string().contains("duplicate field"),
-            "unexpected duplicate-key error: {error}"
+        assert_eq!(
+            error.to_string(),
+            "duplicate JSON object field",
+            "unexpected duplicate-key error"
         );
     }
     fn universal_capability_status() -> OfflineStatus {
@@ -629,7 +630,7 @@ mod tests {
         let unknown = canonical.replacen('{', r#"{"future_metadata":null,"#, 1);
         let error = norito::json::from_str::<OfflineStatus>(&unknown)
             .expect_err("unknown universal capability members fail closed");
-        assert!(error.to_string().contains("unknown field"));
+        assert_eq!(error.to_string(), "unknown JSON field");
     }
     #[test]
     fn tagged_json_rejects_duplicate_discriminator_members() {
@@ -717,11 +718,7 @@ mod tests {
             r#"{"kind":"unknown_command","value":null}"#,
         )
         .expect_err("unknown operation kind must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("unknown variant `unknown_command`")
-        );
+        assert_eq!(error.to_string(), "unknown JSON enum variant");
     }
     #[test]
     fn operation_reference_golden_vector() {

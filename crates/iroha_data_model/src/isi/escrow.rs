@@ -367,9 +367,8 @@ isi! {
         pub amount: iroha_primitives::numeric::Quantity,
         /// Exact authoritative remaining amount observed before this drawdown.
         ///
-        /// The ledger rejects the instruction if another transaction changed
-        /// the lock first. This optimistic precondition makes independently
-        /// submitted retries economically exactly-once.
+        /// The ledger rejects the instruction if another transaction changed the lock first. This
+        /// optimistic precondition makes independently submitted retries economically exactly-once.
         pub expected_remaining_amount: iroha_primitives::numeric::Quantity,
     }
 }

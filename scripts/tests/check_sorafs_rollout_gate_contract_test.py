@@ -17012,10 +17012,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
         "moderation_panel policy-bound artifact fingerprints must match "
         in aggregate_checker
     )
-    assert (
-        "test_all_case_bound_artifacts_reject_appeal_case_mismatch"
-        in checker_test
-    )
+    assert "test_all_case_bound_artifacts_reject_appeal_case_mismatch" in checker_test
     assert (
         "test_all_roster_bound_artifacts_reject_sortition_tuple_mismatch"
         in checker_test
@@ -17024,10 +17021,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
         "test_all_tally_bound_artifacts_reject_commit_reveal_tuple_mismatch"
         in checker_test
     )
-    assert (
-        "test_all_policy_bound_artifacts_reject_e2e_policy_mismatch"
-        in checker_test
-    )
+    assert "test_all_policy_bound_artifacts_reject_e2e_policy_mismatch" in checker_test
     assert "test_multiple_valid_case_anchors_fail_closed" in checker_test
     assert "test_multiple_valid_roster_anchors_fail_closed" in checker_test
     assert "test_multiple_valid_tally_anchors_fail_closed" in checker_test
@@ -17084,10 +17078,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
     assert "test_evidence_viewer_session_count_must_match_unique_sessions" in checker_test
     assert "test_evidence_viewer_sessions_must_not_duplicate" in checker_test
     assert "test_evidence_viewer_sessions_must_use_reviewed_labels" in checker_test
-    assert (
-        "test_evidence_viewer_sessions_reject_non_production_markers"
-        in checker_test
-    )
+    assert "test_evidence_viewer_sessions_reject_non_production_markers" in checker_test
     assert "test_evidence_viewer_scalar_coverage_must_not_duplicate" in checker_test
     assert (
         "test_evidence_viewer_scalar_coverage_must_not_include_unknown_values"
@@ -17115,10 +17106,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
     assert "test_jurors_must_not_duplicate" in checker_test
     assert "test_jurors_must_use_reviewed_moderation_labels" in checker_test
     assert "test_jurors_reject_non_production_markers" in checker_test
-    assert (
-        "test_commit_reveal_commit_count_must_match_unique_commits"
-        in checker_test
-    )
+    assert "test_commit_reveal_commit_count_must_match_unique_commits" in checker_test
     assert "test_commit_reveal_commits_must_not_duplicate" in checker_test
     assert "test_commit_reveal_commits_must_use_reviewed_labels" in checker_test
     assert "test_commit_reveal_commits_reject_non_production_markers" in checker_test
@@ -17127,10 +17115,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
         "test_commit_reveal_scenarios_must_not_include_unknown_values"
         in checker_test
     )
-    assert (
-        "test_commit_reveal_reveal_count_must_match_unique_reveals"
-        in checker_test
-    )
+    assert "test_commit_reveal_reveal_count_must_match_unique_reveals" in checker_test
     assert "test_commit_reveal_reveals_must_not_duplicate" in checker_test
     assert "test_commit_reveal_reveals_must_use_reviewed_labels" in checker_test
     assert "test_commit_reveal_reveals_reject_non_production_markers" in checker_test
@@ -17142,10 +17127,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
         "test_settlement_integration_count_must_match_unique_settlements"
         in checker_test
     )
-    assert (
-        "test_settlement_integration_settlements_must_not_duplicate"
-        in checker_test
-    )
+    assert "test_settlement_integration_settlements_must_not_duplicate" in checker_test
     assert (
         "test_settlement_integration_settlements_must_use_reviewed_labels"
         in checker_test
@@ -17161,10 +17143,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
     )
     assert "test_moderation_scalar_counts_are_required" in checker_test
     assert "test_moderation_scalar_counts_must_match_inventory" in checker_test
-    assert (
-        "test_transparency_publication_targets_must_not_duplicate"
-        in checker_test
-    )
+    assert "test_transparency_publication_targets_must_not_duplicate" in checker_test
     assert (
         "test_transparency_publication_targets_must_not_include_unknown_values"
         in checker_test
@@ -17175,21 +17154,12 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
     assert "test_appeal_intake_cases_must_not_duplicate" in checker_test
     assert "test_appeal_intake_cases_must_use_reviewed_labels" in checker_test
     assert "test_appeal_intake_cases_reject_non_production_markers" in checker_test
-    assert (
-        "test_appeal_intake_accepted_case_count_must_match_inventory"
-        in checker_test
-    )
+    assert "test_appeal_intake_accepted_case_count_must_match_inventory" in checker_test
     assert "test_appeal_intake_case_acceptance_must_be_boolean" in checker_test
-    assert (
-        "test_sortition_roster_panel_size_must_match_unique_jurors"
-        in checker_test
-    )
+    assert "test_sortition_roster_panel_size_must_match_unique_jurors" in checker_test
     assert "test_sortition_roster_jurors_must_not_duplicate" in checker_test
     assert "test_sortition_roster_jurors_must_use_reviewed_labels" in checker_test
-    assert (
-        "test_sortition_roster_jurors_reject_non_production_markers"
-        in checker_test
-    )
+    assert "test_sortition_roster_jurors_reject_non_production_markers" in checker_test
     assert (
         "test_sortition_roster_eligible_juror_count_must_match_inventory"
         in checker_test

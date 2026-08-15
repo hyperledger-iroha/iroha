@@ -1,9 +1,8 @@
 //! Versioned SCCP network, lane, and source-identity wire types.
 //!
-//! These types deliberately model only the first-release network inventory.
-//! There is no catch-all network, emitter, or arbitrary network identifier:
-//! unsupported profiles must fail decoding instead of being interpreted by
-//! node-local policy.
+//! These types deliberately model only the first-release network inventory. There is no catch-all
+//! network, emitter, or arbitrary network identifier: unsupported profiles must fail decoding
+//! instead of being interpreted by node-local policy.
 use super::SccpNativeTrustAnchorV1;
 use core::cmp::Ordering;
 use iroha_schema::IntoSchema;
@@ -25,16 +24,14 @@ pub const SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1: usize = 4 * 1024;
 ///
 /// Commitment indices are consensus-visible and must be cheap to validate and reconstruct from
 /// durable state. The bound matches the first-release default consensus-v2 transaction cap while
-/// also limiting blocks whose transactions contain multiple SCCP instructions. A transaction
-/// that would exceed this bound is rejected atomically, so failed execution never consumes an
-/// index.
+/// also limiting blocks whose transactions contain multiple SCCP instructions. A transaction that
+/// would exceed this bound is rejected atomically, so failed execution never consumes an index.
 pub const SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1: u32 = 512;
 /// Canonical raw 32-byte genesis hash of the Solana testnet profile.
 ///
 /// The bytes are the Base58 decoding of Solana's published
-/// `4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY` genesis hash. Consensus
-/// encodings use these raw bytes directly; Base58 is presentation-only and is
-/// deliberately absent from the SCCP wire model.
+/// `4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY` genesis hash. Consensus encodings use these raw
+/// bytes directly; Base58 is presentation-only and is deliberately absent from the SCCP wire model.
 pub const SCCP_SOLANA_TESTNET_GENESIS_HASH_V1: [u8; 32] = [
     0x3a, 0x13, 0x2e, 0xce, 0x10, 0x30, 0x5e, 0xc1, 0x83, 0x07, 0x25, 0x50, 0x2f, 0xa2, 0xb7, 0xe7,
     0xeb, 0x81, 0x57, 0xe9, 0x12, 0x3d, 0x4c, 0x1f, 0x65, 0x4a, 0x71, 0x78, 0x71, 0x61, 0xdc, 0x21,
@@ -295,10 +292,9 @@ impl SccpOutboundMessageContextV1 {
 }
 /// Durable replay key for a SORA-origin SCCP message.
 ///
-/// Exact network profiles prevent messages on two networks in the same SCCP
-/// domain from aliasing each other. The destination binding is intentionally
-/// excluded so rotating a governed rollout cannot replay an already-recorded
-/// lane-bound message.
+/// Exact network profiles prevent messages on two networks in the same SCCP domain from aliasing
+/// each other. The destination binding is intentionally excluded so rotating a governed rollout
+/// cannot replay an already-recorded lane-bound message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -393,11 +389,10 @@ impl SccpOutboundMessageIndexKeyV1 {
     }
     /// Return the inclusive lower bound for a newest-first range at `height`.
     ///
-    /// This sentinel is only a search bound and must never be persisted: its
-    /// zero message identifier intentionally sorts before every well-formed
-    /// entry at the same height. Since index ordering reverses height, a
-    /// forward range beginning here contains exactly entries recorded at or
-    /// before `height`, newest first.
+    /// This sentinel is only a search bound and must never be persisted: its zero message
+    /// identifier intentionally sorts before every well-formed entry at the same height. Since
+    /// index ordering reverses height, a forward range beginning here contains exactly entries
+    /// recorded at or before `height`, newest first.
     #[must_use]
     pub const fn range_start_at_or_before(height: u64) -> Self {
         Self {
@@ -686,11 +681,10 @@ impl SccpOutboundProofRecordV1 {
 }
 /// Durable replay key for a native external-to-SORA SCCP message.
 ///
-/// The exact source and target profiles are part of the key. Consequently, a
-/// message identifier observed on a test network, another external chain, or a
-/// different SORA deployment cannot alias an admitted production message. A
-/// `BTreeMap` keyed by this type provides deterministic `O(log n)` replay
-/// checks in world state.
+/// The exact source and target profiles are part of the key. Consequently, a message identifier
+/// observed on a test network, another external chain, or a different SORA deployment cannot alias
+/// an admitted production message. A `BTreeMap` keyed by this type provides deterministic `O(log
+/// n)` replay checks in world state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -723,10 +717,9 @@ impl SccpInboundMessageKeyV1 {
 }
 /// Durable high-water key for admissions under one governed native trust anchor.
 ///
-/// The value stored under this key is the greatest authenticated
-/// backend-specific consensus-progress coordinate admitted for the exact lane
-/// and anchor. Governance uses it to prevent a successor checkpoint from
-/// retroactively excluding already accepted evidence.
+/// The value stored under this key is the greatest authenticated backend-specific
+/// consensus-progress coordinate admitted for the exact lane and anchor. Governance uses it to
+/// prevent a successor checkpoint from retroactively excluding already accepted evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -759,9 +752,8 @@ impl SccpInboundAnchorHighWaterKeyV1 {
 }
 /// Durable admission evidence bound to an inbound SCCP replay key.
 ///
-/// This record stores only fixed-size commitments. The accepted native proof
-/// remains reproducibly identifiable without retaining attacker-controlled
-/// proof bytes in the replay index.
+/// This record stores only fixed-size commitments. The accepted native proof remains reproducibly
+/// identifiable without retaining attacker-controlled proof bytes in the replay index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -955,11 +947,10 @@ impl SccpSourceEmitterV1 {
     /// Return whether reviewed material is complete enough for governance to
     /// activate native inbound settlement for `network`.
     ///
-    /// Solana testnet is the single explicit first-release exception to the
-    /// production-profile requirement: it remains testnet-classified while
-    /// governance may activate it after reviewing the closed Agave backend and
-    /// immutable deployment pins. Other staging profiles retain their existing
-    /// fail-closed activation policy.
+    /// Solana testnet is the single explicit first-release exception to the production-profile
+    /// requirement: it remains testnet-classified while governance may activate it after reviewing
+    /// the closed Agave backend and immutable deployment pins. Other staging profiles retain their
+    /// existing fail-closed activation policy.
     #[must_use]
     pub fn is_governance_activatable_source_for(&self, network: SccpNetworkV1) -> bool {
         network.is_external()
@@ -1035,10 +1026,9 @@ impl SccpSourceIdentityV1 {
     pub fn has_production_source(&self) -> bool {
         self.is_well_formed() && self.emitter.is_production_source_for(self.lane.source)
     }
-    /// Return whether exact reviewed source material satisfies the closed
-    /// governance-activation policy. This is true for production profiles and
-    /// for the explicit Solana-testnet first-release lane, without changing
-    /// that lane's environment classification.
+    /// Return whether exact reviewed source material satisfies the closed governance-activation
+    /// policy. This is true for production profiles and for the explicit Solana-testnet
+    /// first-release lane, without changing that lane's environment classification.
     #[must_use]
     pub fn has_governance_activatable_source(&self) -> bool {
         self.is_well_formed()

@@ -177,11 +177,10 @@ pub const MUSUBI_MAX_ALIAS_HISTORY_CURSOR_KEY_BYTES_V1: usize =
     MUSUBI_MAX_ALIAS_BYTES_V1 + 1 + MUSUBI_MAX_U64_DECIMAL_DIGITS_V1;
 /// Conservative text-byte ceiling for one maintainer-directory cursor key.
 ///
-/// Maintainer keys hex-encode the bare canonical account payload and append
-/// either `accepted` or the longer `pending-` plus a 32-byte invite identity.
-/// The shared account bound includes Norito framing, so applying its full value
-/// to the bare payload deliberately leaves headroom rather than claiming an
-/// attainable maximum cursor length.
+/// Maintainer keys hex-encode the bare canonical account payload and append either `accepted` or
+/// the longer `pending-` plus a 32-byte invite identity. The shared account bound includes Norito
+/// framing, so applying its full value to the bare payload deliberately leaves headroom rather than
+/// claiming an attainable maximum cursor length.
 pub const MUSUBI_MAX_MAINTAINER_CURSOR_KEY_BYTES_V1: usize =
     2 * MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 + 1 + "pending-".len() + 2 * 32;
 /// Maximum UTF-8 byte length of any finalized query cursor key.
@@ -197,14 +196,13 @@ pub const MUSUBI_MAX_SEARCH_QUERY_TERMS_V1: usize = 16;
 pub const MUSUBI_MAX_SEARCH_TERM_BYTES_V1: usize = 64;
 /// Validate a canonical Musubi source or complete bundle path set under the portable V1 policy.
 ///
-/// The caller supplies path components rather than platform paths. Every component must already
-/// be in the exact NFC representation used by Iroha [`Name`] values. The policy also excludes
-/// traversal, portable reserved names and characters, bidirectional controls, file/directory
-/// prefix conflicts, and Unicode case-fold collisions which would alias on a supported
-/// case-insensitive filesystem. Ordering is deliberately not required: package commitments order
-/// joined path bytes, while canonical `SoraFS` plans order structural component vectors.
-/// The fixed count ceiling accommodates the 4,096 committed source files plus the three mandatory
-/// bundle metadata entries.
+/// The caller supplies path components rather than platform paths. Every component must already be
+/// in the exact NFC representation used by Iroha [`Name`] values. The policy also excludes
+/// traversal, portable reserved names and characters, bidirectional controls, file/directory prefix
+/// conflicts, and Unicode case-fold collisions which would alias on a supported case-insensitive
+/// filesystem. Ordering is deliberately not required: package commitments order joined path bytes,
+/// while canonical `SoraFS` plans order structural component vectors. The fixed count ceiling
+/// accommodates the 4,096 committed source files plus the three mandatory bundle metadata entries.
 ///
 /// # Errors
 ///
@@ -1570,10 +1568,9 @@ impl MusubiArtifactDescriptorV1 {
 }
 /// Immutable archive-registration projection independent of renewable locations.
 ///
-/// Unlike [`MusubiArchiveRecordV1`], this projection deliberately excludes the
-/// mutable location revision and current location identities. A finalized
-/// registration can therefore be revalidated from a later exact archive read
-/// without requiring a historical copy of mutable registry state.
+/// Unlike [`MusubiArchiveRecordV1`], this projection deliberately excludes the mutable location
+/// revision and current location identities. A finalized registration can therefore be revalidated
+/// from a later exact archive read without requiring a historical copy of mutable registry state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
@@ -1744,8 +1741,7 @@ impl MusubiPinLocationReferenceV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if the pin-manifest digest, archive identity, or location identity is
-    /// zero.
+    /// Returns an error if the pin-manifest digest, archive identity, or location identity is zero.
     pub fn validate(&self) -> Result<(), ParseError> {
         if digest_is_zero(self.pin_manifest.as_bytes())
             || self.location.archive_id.is_zero()

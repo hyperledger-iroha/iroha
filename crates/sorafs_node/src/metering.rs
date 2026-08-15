@@ -1,10 +1,9 @@
 //! Capacity metering helpers for the embedded SoraFS node.
 //!
-//! This module provides a lightweight accumulator that tracks replication
-//! activity for the currently active provider declaration. The intent is to
-//! surface deterministic counters (GiB reserved, GiB released, order counts,
-//! uptime, PoR/PDP/PoTR health, and egress totals) that higher layers can
-//! translate into Norito telemetry payloads and fee accrual reports.
+//! This module provides a lightweight accumulator that tracks replication activity for the
+//! currently active provider declaration. The intent is to surface deterministic counters (GiB
+//! reserved, GiB released, order counts, uptime, PoR/PDP/PoTR health, and egress totals) that
+//! higher layers can translate into Norito telemetry payloads and fee accrual reports.
 use crate::capacity::{DeclarationWindow, OutstandingOrder, ReplicationPlan, ReplicationRelease};
 use iroha_data_model::prelude::{Numeric, Quantity};
 use std::{
@@ -345,10 +344,9 @@ impl FeeProjection {
 }
 /// Accumulates per-window capacity metrics for a provider.
 ///
-/// The meter is intentionally conservative: it only relies on deterministic
-/// inputs captured locally (scheduled/complete events, declarations) and applies
-/// optional exponential smoothing to the GiB·hour and PoR counters to minimise
-/// jitter in operator dashboards.
+/// The meter is intentionally conservative: it only relies on deterministic inputs captured locally
+/// (scheduled/complete events, declarations) and applies optional exponential smoothing to the
+/// GiB·hour and PoR counters to minimise jitter in operator dashboards.
 #[derive(Debug, Clone)]
 pub struct CapacityMeter {
     state: Arc<RwLock<MeterState>>,
@@ -375,9 +373,8 @@ impl CapacityMeter {
     }
     /// Reset counters for a freshly registered capacity declaration.
     ///
-    /// This clears outstanding allocations (they should be empty after a
-    /// declaration refresh) and seeds the window bounds using the declaration
-    /// validity range.
+    /// This clears outstanding allocations (they should be empty after a declaration refresh) and
+    /// seeds the window bounds using the declaration validity range.
     pub fn reset_for_declaration(&self, committed_gib: u64, window: DeclarationWindow) {
         let mut guard = self.state.write().expect("metering state poisoned");
         guard.outstanding.clear();

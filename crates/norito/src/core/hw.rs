@@ -1,9 +1,8 @@
 //! Hardware capability detection and caching.
 //!
-//! This module centralizes runtime detection of CPU SIMD features and optional
-//! GPU availability so higher-level code can make deterministic choices about
-//! accelerated paths. All detection is best-effort and never changes the
-//! observable Norito format — only performance.
+//! This module centralizes runtime detection of CPU SIMD features and optional GPU availability so
+//! higher-level code can make deterministic choices about accelerated paths. All detection is
+//! best-effort and never changes the observable Norito format — only performance.
 use std::sync::{
     OnceLock,
     atomic::{AtomicBool, Ordering},

@@ -140,23 +140,19 @@ impl AccountAddress {
             controller,
         })
     }
-    /// Encode the payload as a canonical I105 literal using the active
-    /// chain discriminant.
+    /// Encode the payload as a canonical I105 literal using the active chain discriminant.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if canonical payload construction or i105
-    /// encoding fails.
+    /// Returns [`AccountAddressError`] if canonical payload construction or i105 encoding fails.
     pub fn to_i105(&self) -> Result<String, AccountAddressError> {
         self.to_i105_for_discriminant(chain_discriminant())
     }
-    /// Encode the payload as a canonical I105 literal with a specific
-    /// chain discriminant.
+    /// Encode the payload as a canonical I105 literal with a specific chain discriminant.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if canonical payload construction or i105
-    /// encoding fails.
+    /// Returns [`AccountAddressError`] if canonical payload construction or i105 encoding fails.
     pub fn to_i105_for_discriminant(
         &self,
         discriminant: u16,
@@ -212,23 +208,20 @@ impl AccountAddress {
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if the string contains symbols outside
-    /// the canonical I105 alphabet, carries a mismatching chain discriminant,
-    /// or fails checksum validation.
+    /// Returns [`AccountAddressError`] if the string contains symbols outside the canonical I105
+    /// alphabet, carries a mismatching chain discriminant, or fails checksum validation.
     pub fn from_i105(encoded: &str) -> Result<Self, AccountAddressError> {
         let expected = chain_discriminant();
         let address = Self::from_i105_for_discriminant(encoded, Some(expected))?;
         address.ensure_canonical_i105_literal(encoded, expected)?;
         Ok(address)
     }
-    /// Decode the i105 representation, optionally enforcing an expected chain
-    /// discriminant.
+    /// Decode the i105 representation, optionally enforcing an expected chain discriminant.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if the string carries a mismatching
-    /// discriminant, has symbols outside the canonical I105 alphabet, or fails
-    /// checksum validation.
+    /// Returns [`AccountAddressError`] if the string carries a mismatching discriminant, has
+    /// symbols outside the canonical I105 alphabet, or fails checksum validation.
     pub fn from_i105_for_discriminant(
         encoded: &str,
         expected_discriminant: Option<u16>,
@@ -268,8 +261,7 @@ impl AccountAddress {
     /// non-i105 literals (including canonical-hex parser input). Once an i105
     /// sentinel is present, semantic i105 decode errors are preserved.
     ///
-    /// Preserves semantic decode failures such as checksum and discriminant
-    /// mismatches.
+    /// Preserves semantic decode failures such as checksum and discriminant mismatches.
     pub fn parse_encoded(
         input: &str,
         expected_discriminant: Option<u16>,

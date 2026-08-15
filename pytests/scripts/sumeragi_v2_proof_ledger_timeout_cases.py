@@ -1679,6 +1679,10 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
     prepare_regression_relative = Path(
         "crates/iroha_core/src/sumeragi/v2_core/tests.rs"
     )
+    prepare_regression_provider_relative = Path(
+        "crates/iroha_core/src/sumeragi/v2_core/tests/"
+        "committee_fallback_and_retransmit.rs"
+    )
     fixture_paths = {*source_relatives, prepare_regression_relative}
     pending_fixture_paths = list(fixture_paths)
     while pending_fixture_paths:
@@ -1740,10 +1744,10 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
         ),
         (
             "regression-stutter-weakened",
-            prepare_regression_relative,
+            prepare_regression_provider_relative,
             "delayed_lower_prepare_qc_cannot_downgrade_retransmitted_progress",
-            "&& reducer == before_older",
-            "&& reducer.current_tag() == before_older.current_tag()",
+            "assert_eq!(reducer, before_older);",
+            "assert_eq!(reducer.current_tag(), before_older.current_tag());",
             "the delayed lower PrepareQC regression must prove a complete ignored stutter",
             False,
         ),
@@ -1802,7 +1806,7 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
                     source_relative
                 ] = observed_sha256
                 changed_relatives.append(source_relative)
-        if relative == prepare_regression_relative:
+        if relative == prepare_regression_provider_relative:
             assert changed_relatives == [], (case, changed_relatives)
             source = path.read_text(encoding="utf-8")
             items = module.rust_items(source, item_name)

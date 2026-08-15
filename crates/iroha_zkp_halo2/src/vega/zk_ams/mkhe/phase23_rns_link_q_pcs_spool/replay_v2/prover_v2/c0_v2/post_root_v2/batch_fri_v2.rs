@@ -1,12 +1,11 @@
 //! Bounded B0 construction and authenticated B0-to-B1 fold prerequisite.
 //!
-//! This child pairs the exhausted C0 and Cq snapshots, consumes the one shared
-//! 760-value batch schedule, and writes B0 only in block-major order. It seals
-//! and replays the authenticated layer-0 file into the verifier-literal root.
-//! A second move-only boundary absorbs that root, derives exactly the verifier's
-//! 380 layer-0 alphas, authenticates paired B0 blocks, and roots B1. A bounded
-//! child continues B1 through B17 and the equal terminal. No proof, ZK, RSS,
-//! receipt, or release authority is produced.
+//! This child pairs the exhausted C0 and Cq snapshots, consumes the one shared 760-value batch
+//! schedule, and writes B0 only in block-major order. It seals and replays the authenticated
+//! layer-0 file into the verifier-literal root. A second move-only boundary absorbs that root,
+//! derives exactly the verifier's 380 layer-0 alphas, authenticates paired B0 blocks, and roots B1.
+//! A bounded child continues B1 through B17 and the equal terminal. No proof, ZK, RSS, receipt, or
+//! release authority is produced.
 use super::*;
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     ProverBatchChallengesV2, ProverBatchRowsCompleteV2, ProverFriLayer0ChallengesV2,

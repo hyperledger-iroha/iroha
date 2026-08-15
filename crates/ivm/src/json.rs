@@ -1,8 +1,7 @@
 //! Native, schema-bound Kotodama JSON construction and typed getters.
 //!
-//! Integers use canonical JSON number tokens across the complete `i64`/`u64`
-//! domain. Exact decimals and quantities use canonical strings so they never
-//! pass through floating-point conversion.
+//! Integers use canonical JSON number tokens across the complete `i64`/`u64` domain. Exact decimals
+//! and quantities use canonical strings so they never pass through floating-point conversion.
 use crate::{
     IVM, PointerType, VMError, host::preflight_reserved_syscall_gas, pointer_abi, syscalls,
 };
@@ -896,9 +895,8 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<(PointerType, Vec<u
 /// Execute one typed JSON getter and materialize `Option<T>` as an active-only
 /// compiler-owned sum handle in `r10`.
 ///
-/// Missing fields, non-object roots, and conversion/type mismatches produce
-/// `Option::none`. Malformed pointer envelopes or noncanonical root/key payloads
-/// remain deterministic VM errors.
+/// Missing fields, non-object roots, and conversion/type mismatches produce `Option::none`.
+/// Malformed pointer envelopes or noncanonical root/key payloads remain deterministic VM errors.
 pub fn typed_getter(
     vm: &mut IVM,
     number: u32,

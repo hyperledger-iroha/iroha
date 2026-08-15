@@ -13,13 +13,11 @@ use super::{
 };
 use curve25519_dalek::{edwards::EdwardsPoint, traits::Identity as _};
 use std::collections::BTreeSet;
-/// Verify the complete FCMP++ transaction relation needed before ledger
-/// effects may be derived.
+/// Verify the complete FCMP++ transaction relation needed before ledger effects may be derived.
 ///
-/// This combines native membership/SAL, the independent public
-/// commitment-conservation equation, and the ordered aggregate strict-positive
-/// output range proof. Callers admitting outputs must use this entry point;
-/// no production membership-only verifier is exposed.
+/// This combines native membership/SAL, the independent public commitment-conservation equation,
+/// and the ordered aggregate strict-positive output range proof. Callers admitting outputs must use
+/// this entry point; no production membership-only verifier is exposed.
 pub fn verify_fcmp_transaction_v1(
     context_hash: [u8; 32],
     proof_wire: &[u8],
@@ -35,13 +33,11 @@ pub fn verify_fcmp_transaction_v1(
     verify_fcmp_range_v1(context_hash, new_outputs, &parsed.range_proof)?;
     verify_fcmp_membership_parsed_v1(context_hash, &parsed, public_inputs, root)
 }
-/// Verify exact conservation of the public pseudo-out and new-output
-/// commitment aggregates.
+/// Verify exact conservation of the public pseudo-out and new-output commitment aggregates.
 ///
-/// The public transaction fee is intentionally absent from this equation:
-/// Iroha's canonical `FeePaymentIntent` is paid outside the confidential asset
-/// pool and is already bound through the statement's transaction-intent
-/// digest.
+/// The public transaction fee is intentionally absent from this equation: Iroha's canonical
+/// `FeePaymentIntent` is paid outside the confidential asset pool and is already bound through the
+/// statement's transaction-intent digest.
 pub fn verify_fcmp_commitment_balance_v1(
     public_inputs: &[FcmpProofInputPublicV1],
     new_outputs: &[FcmpOutputTupleV1],

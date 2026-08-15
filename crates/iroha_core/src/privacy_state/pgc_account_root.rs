@@ -43,11 +43,10 @@ pub enum PrivacyPgcAccountStateRootErrorV1 {
 }
 /// Deterministically derive one complete PGC encrypted account-state root.
 ///
-/// This is the public wallet/validator boundary for predicting the exact
-/// successor root committed by an Anonymous-PGC payment. `accounts` must be
-/// the complete table selected by `namespace`, in strict public-key order.
-/// The closed first-release cardinalities bound the operation to at most 64
-/// entries; no partial-table or caller-selected root form exists.
+/// This is the public wallet/validator boundary for predicting the exact successor root committed
+/// by an Anonymous-PGC payment. `accounts` must be the complete table selected by `namespace`, in
+/// strict public-key order. The closed first-release cardinalities bound the operation to at most
+/// 64 entries; no partial-table or caller-selected root form exists.
 pub fn derive_privacy_pgc_account_state_root_v1(
     namespace: PrivacyNamespaceV1,
     epoch: u64,

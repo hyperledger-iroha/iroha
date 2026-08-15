@@ -344,9 +344,8 @@ impl P256EcdsaTraceMaterialV1 {
             assigned: self.assigned,
         })
     }
-    /// Reject any witness-owned identifier, role, operation, window,
-    /// reduction, or comparison schedule that differs from the independently
-    /// compiled verifier topology.
+    /// Reject any witness-owned identifier, role, operation, window, reduction, or comparison
+    /// schedule that differs from the independently compiled verifier topology.
     pub(crate) fn validate_topology_v1(
         &self,
         expected: &P256EcdsaTopologyV1,

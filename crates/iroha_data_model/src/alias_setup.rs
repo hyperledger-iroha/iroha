@@ -522,9 +522,8 @@ pub struct AliasQuoteGuardV1 {
 /// Canonical signed request body for planning one atomic alias setup transaction.
 ///
 /// Each entry is the exact [`EnsureAlias`](crate::isi::alias_setup::EnsureAlias)
-/// instruction the client expects to submit. The planner reorders entries into
-/// dependency order, reclassifies them against live state, and returns the
-/// canonical framed instruction vector.
+/// instruction the client expects to submit. The planner reorders entries into dependency order,
+/// reclassifies them against live state, and returns the canonical framed instruction vector.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",

@@ -1,10 +1,9 @@
 //! Verifier-owned byte-channel declarations for the zk-X509 MAIN aggregate.
 //!
-//! The channel graph is public preprocessing. It depends only on the typed
-//! public statement and the closed first-release profile; no private witness,
-//! prover-selected channel metadata, or trace-derived length can change it.
-//! The MAIN assembler compares its witness-bearing declarations byte-for-byte
-//! with this plan before committing either I/O base table.
+//! The channel graph is public preprocessing. It depends only on the typed public statement and the
+//! closed first-release profile; no private witness, prover-selected channel metadata, or
+//! trace-derived length can change it. The MAIN assembler compares its witness-bearing declarations
+//! byte-for-byte with this plan before committing either I/O base table.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::io_air::ZkX509IoChannelWitnessV1;
 use super::{
@@ -304,10 +303,9 @@ fn logical_rows_v1(
 }
 /// Compile the exact verifier-owned MAIN byte-channel graph.
 ///
-/// The full typed statement is first validated against the Taira hard-ceiling
-/// profile. The resulting declarations depend only on its disclosure count
-/// and public projection digests. Every remaining statement field is bound by
-/// the other verifier-owned MAIN fixed-column providers.
+/// The full typed statement is first validated against the Taira hard-ceiling profile. The
+/// resulting declarations depend only on its disclosure count and public projection digests. Every
+/// remaining statement field is bound by the other verifier-owned MAIN fixed-column providers.
 pub(crate) fn compile_zk_x509_main_io_declarations_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<ZkX509MainIoDeclarationsV1, ZkX509MainIoPlanErrorV1> {

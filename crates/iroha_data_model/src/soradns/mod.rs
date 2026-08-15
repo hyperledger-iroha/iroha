@@ -1,10 +1,9 @@
 //! SoraDNS resolver attestation data structures.
 //!
-//! This module defines the Resolver Attestation Document (RAD) schema along
-//! with the directory records and pub/sub event payloads outlined in the
-//! SoraDNS roadmap. These types are shared between governance tooling, Torii
-//! APIs, SDKs, and the resolver implementation so all components agree on the
-//! canonical Norito encoding.
+//! This module defines the Resolver Attestation Document (RAD) schema along with the directory
+//! records and pub/sub event payloads outlined in the SoraDNS roadmap. These types are shared
+//! between governance tooling, Torii APIs, SDKs, and the resolver implementation so all components
+//! agree on the canonical Norito encoding.
 use crate::{account::AccountId, ipfs::IpfsPath};
 use iroha_crypto::{PublicKey, Signature};
 use iroha_primitives::soradns::GatewayHostBindings;

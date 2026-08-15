@@ -1,10 +1,9 @@
 //! Transparency ledger schemas and deterministic proof helpers for SoraFS.
 //!
-//! The SFM-4c transparency service publishes privacy-safe summaries of
-//! moderation, appeal, GAR, proof-token, and evidence-access activity. This
-//! module defines the canonical V1 entry, block, and inclusion-proof payloads
-//! plus the deterministic BLAKE3 Merkle helpers needed by publishers and public
-//! verifiers.
+//! The SFM-4c transparency service publishes privacy-safe summaries of moderation, appeal, GAR,
+//! proof-token, and evidence-access activity. This module defines the canonical V1 entry, block,
+//! and inclusion-proof payloads plus the deterministic BLAKE3 Merkle helpers needed by publishers
+//! and public verifiers.
 use blake3::Hasher;
 use iroha_schema::IntoSchema;
 use norito::{
@@ -235,10 +234,9 @@ pub struct ModerationPrivacyAggregateMetricV1 {
 }
 /// Typed noise-source evidence for one privacy aggregate release.
 ///
-/// Every aggregate carries this field on wire. Differential-privacy modes
-/// require a nonzero threshold-PRF commitment, while suppression-only
-/// aggregates use the explicit no-randomness variant. There is no absent or
-/// legacy metadata representation.
+/// Every aggregate carries this field on wire. Differential-privacy modes require a nonzero
+/// threshold-PRF commitment, while suppression-only aggregates use the explicit no-randomness
+/// variant. There is no absent or legacy metadata representation.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -747,9 +745,8 @@ impl ProofTokenIssuanceV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`TransparencyLedgerError`] when the issuance record or target
-    /// ledger identifiers are malformed, or when caller metadata collides with
-    /// reserved proof-token metadata keys.
+    /// Returns [`TransparencyLedgerError`] when the issuance record or target ledger identifiers
+    /// are malformed, or when caller metadata collides with reserved proof-token metadata keys.
     pub fn to_ledger_entry(
         &self,
         cycle_id: [u8; 16],
@@ -901,8 +898,7 @@ impl ModerationLedgerBlockV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`TransparencyLedgerError`] when the cycle metadata or entries
-    /// are malformed.
+    /// Returns [`TransparencyLedgerError`] when the cycle metadata or entries are malformed.
     pub fn build(
         cycle_id: [u8; 16],
         cycle_start_unix: u64,

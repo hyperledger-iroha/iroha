@@ -1,9 +1,8 @@
 //! Bounded variable-length signed integer with two's-complement encoding.
 //!
-//! The type wraps `num_bigint::BigInt`, enforces a signed 4,096-bit domain, and provides
-//! Norito and JSON codecs that use a length-prefixed two's-complement byte
-//! representation. Small values stay compact; larger values are allowed until
-//! the hard limit is reached.
+//! The type wraps `num_bigint::BigInt`, enforces a signed 4,096-bit domain, and provides Norito and
+//! JSON codecs that use a length-prefixed two's-complement byte representation. Small values stay
+//! compact; larger values are allowed until the hard limit is reached.
 //!
 //! Norito encoding: a little-endian `u32` byte length (not compact) followed by
 //! that many little-endian two's-complement bytes. A length of `0` represents
@@ -103,8 +102,7 @@ impl BigInt {
             self.inner.to_signed_bytes_le()
         }
     }
-    /// Exact length of [`Self::to_twos_bytes`] without allocating the byte
-    /// representation.
+    /// Exact length of [`Self::to_twos_bytes`] without allocating the byte representation.
     #[must_use]
     pub fn twos_byte_len(&self) -> usize {
         if self.inner.is_zero() {

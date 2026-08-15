@@ -82,10 +82,9 @@ impl Drop for ZeroizingMaterializedWireBufferV1 {
 }
 /// Stream the exact canonical materialized-accumulator representation.
 ///
-/// A writer failure can leave an unauthoritative canonical prefix in the
-/// supplied sink. Callers that require atomic persistence must provide a
-/// transactional sink and commit it only after this function returns `Ok`.
-/// The codec itself never prebuffers, but a caller-selected buffering writer
+/// A writer failure can leave an unauthoritative canonical prefix in the supplied sink. Callers
+/// that require atomic persistence must provide a transactional sink and commit it only after this
+/// function returns `Ok`. The codec itself never prebuffers, but a caller-selected buffering writer
 /// can still retain the complete wire as provider-owned residency.
 pub fn write_zk_ams_phase23_materialized_accumulators_canonical_v1<W: Write + ?Sized>(
     value: &ZkAmsPhase23MaterializedAccumulatorsV1,
@@ -139,11 +138,10 @@ pub fn write_zk_ams_phase23_materialized_accumulators_canonical_v1<W: Write + ?S
 }
 /// Read exactly one canonical materialized-accumulator representation.
 ///
-/// The fixed header is validated before any family allocation. All six final
-/// family owners are then reserved before the first family byte is read, so a
-/// partial read, malformed scalar, I/O error, or unwind zeroizes the partially
-/// populated final owner. Immediate EOF is required after the digest footer.
-/// The codec never prebuffers its source; a caller-selected reader such as a
+/// The fixed header is validated before any family allocation. All six final family owners are then
+/// reserved before the first family byte is read, so a partial read, malformed scalar, I/O error,
+/// or unwind zeroizes the partially populated final owner. Immediate EOF is required after the
+/// digest footer. The codec never prebuffers its source; a caller-selected reader such as a
 /// `Cursor<Vec<u8>>` can still retain the whole wire as provider-owned state.
 pub fn read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1<R: Read + ?Sized>(
     reader: &mut R,

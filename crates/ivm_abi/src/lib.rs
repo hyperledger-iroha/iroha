@@ -1,8 +1,7 @@
 //! Shared ABI definitions for the Iroha Virtual Machine.
 //!
-//! This crate hosts the canonical opcode tables, metadata layout, pointer-ABI
-//! helpers, syscall numbering, and related error types used by both the VM and
-//! the Kotodama compiler.
+//! This crate hosts the canonical opcode tables, metadata layout, pointer-ABI helpers, syscall
+//! numbering, and related error types used by both the VM and the Kotodama compiler.
 pub mod access_hints;
 pub mod axt;
 pub mod codec;

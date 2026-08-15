@@ -1,9 +1,8 @@
 //! Trustless verification helpers for SoraFS CAR streams.
 //!
-//! The verifier parses CARv2 archives, recomputes chunk digests, and rebuilds
-//! the Proof-of-Retrievability (PoR) tree so clients can validate responses
-//! from untrusted gateways. It supports both `dag-scope=full` downloads and
-//! `dag-scope=block` ranged responses.
+//! The verifier parses CARv2 archives, recomputes chunk digests, and rebuilds the
+//! Proof-of-Retrievability (PoR) tree so clients can validate responses from untrusted gateways. It
+//! supports both `dag-scope=full` downloads and `dag-scope=block` ranged responses.
 use crate::{
     BLAKE3_256_MULTIHASH_CODE, CarBuildPlan, CarChunk, CarPlanError, CarStreamingWriter,
     CarWriteError, CarWriteStats, ChunkProfile, ChunkStore, ChunkStoreError, DAG_CBOR_CODEC,
@@ -132,10 +131,9 @@ impl CarVerifier {
     }
     /// Verifies a `dag-scope=block` (range) CAR response.
     ///
-    /// The byte range derived from the plan must match `expected_range`
-    /// exactly; otherwise verification fails. The raw chunk order,
-    /// range-specific root, DAG nodes, index, and complete container encoding
-    /// must also equal the canonical CAR produced for that plan slice.
+    /// The byte range derived from the plan must match `expected_range` exactly; otherwise
+    /// verification fails. The raw chunk order, range-specific root, DAG nodes, index, and complete
+    /// container encoding must also equal the canonical CAR produced for that plan slice.
     pub fn verify_block_car(
         manifest: &ManifestV1,
         plan: &CarBuildPlan,

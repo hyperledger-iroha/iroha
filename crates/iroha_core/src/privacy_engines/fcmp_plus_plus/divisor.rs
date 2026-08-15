@@ -72,9 +72,8 @@ impl<F: ProofScalar> NormalizedDivisor<F> {
         result
     }
 }
-/// Decompose a canonical nonzero scalar into exactly `scalar_bits`
-/// coefficients whose weighted sum represents the scalar and whose ordinary
-/// sum is also `scalar_bits`.
+/// Decompose a canonical nonzero scalar into exactly `scalar_bits` coefficients whose weighted sum
+/// represents the scalar and whose ordinary sum is also `scalar_bits`.
 ///
 /// This is the FCMP divisor decomposition, not a binary decomposition:
 /// coefficients may exceed one.  The fixed coefficient sum makes the number

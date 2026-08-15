@@ -49,9 +49,8 @@ const LAYOUT_LENGTH_PREFIXED: u32 = 0;
 const LAYOUT_FIXED_OFFSETS: u32 = 1;
 /// Build a structural tape (offsets) for the given JSON input.
 ///
-/// This entry point reports Metal availability directly. Scalar fallback is
-/// owned by the Norito caller so helper registration cannot confuse CPU work
-/// with an accelerated backend.
+/// This entry point reports Metal availability directly. Scalar fallback is owned by the Norito
+/// caller so helper registration cannot confuse CPU work with an accelerated backend.
 ///
 /// # Safety
 /// The caller must ensure all pointers are valid for the given lengths and
@@ -155,8 +154,7 @@ pub unsafe extern "C" fn norito_crc64_metal(
 /// small, 3 when no helper backend is available, and 4 for backend failure.
 ///
 /// # Safety
-/// The caller must ensure the input and output pointers are valid for the
-/// supplied lengths.
+/// The caller must ensure the input and output pointers are valid for the supplied lengths.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn norito_binary_sequence_plan(
     input_ptr: *const u8,
