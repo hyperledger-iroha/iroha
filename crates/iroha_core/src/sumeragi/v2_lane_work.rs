@@ -2325,11 +2325,20 @@ fn autonomous_new_view_body_matches_payload(
     body: &crate::lane_consensus::LaneBlockNewViewBodyV1,
     payload: &LaneExecutablePayloadV1,
 ) -> bool {
-    let Ok(source) = crate::lane_consensus::retarget_lane_block_proposal_exact_view(
-        &payload.origin_proposal,
-        body.from_view,
-    ) else {
+    let origin_view = payload.origin_proposal.descriptor.lane_block_view;
+    if body.from_view < origin_view {
         return false;
+    }
+    let source = if body.from_view == origin_view {
+        payload.origin_proposal.clone()
+    } else {
+        let Ok(source) = crate::lane_consensus::retarget_lane_block_proposal_exact_view(
+            &payload.origin_proposal,
+            body.from_view,
+        ) else {
+            return false;
+        };
+        source
     };
     crate::lane_consensus::LaneBlockNewViewBodyV1::for_transition(
         &source,
@@ -5291,17 +5300,24 @@ impl V2LaneWorkAdapter {
             BlockMessage::LaneBlockProposal(proposal) => {
                 self.historical_autonomous_recovery_record_for_proposal(proposal)
                     .is_some()
+                    || self.historical_raw_proposal_can_solicit_certificate(proposal)
                     || self.proposal_is_bound_to_decided_carrier(proposal)
             }
             BlockMessage::LaneBlockVote(vote) => self
-                .canonical_proposal_for_vote_body(&vote.body)
+                .lane_sessions
+                .proposal_for_vote_body(&vote.body)
+                .or_else(|| self.historical_autonomous_recovery_proposal_for_vote_body(&vote.body))
+                .or_else(|| self.canonical_proposal_for_vote_body(&vote.body))
                 .is_some_and(|proposal| {
                     self.historical_autonomous_recovery_record_for_proposal(&proposal)
                         .is_some()
                         || self.proposal_is_bound_to_decided_carrier(&proposal)
                 }),
             BlockMessage::LaneBlockQc(qc) => self
-                .canonical_proposal_for_vote_body(&qc.body)
+                .lane_sessions
+                .proposal_for_vote_body(&qc.body)
+                .or_else(|| self.historical_autonomous_recovery_proposal_for_vote_body(&qc.body))
+                .or_else(|| self.canonical_proposal_for_vote_body(&qc.body))
                 .is_some_and(|proposal| {
                     self.historical_autonomous_recovery_record_for_proposal(&proposal)
                         .is_some()
@@ -5780,7 +5796,14 @@ impl V2LaneWorkAdapter {
             self.kura.as_ref(),
             &self.context,
             block,
-        );
+        ) || (canonical_decided
+            && canonical_v2_lane_payload_matches_kura_inner(
+                self.state.as_ref(),
+                self.kura.as_ref(),
+                &self.context,
+                block,
+                true,
+            ));
         if canonical_decided && !canonical_recovery {
             return V2LaneIngressOutcome::Rejected;
         }
@@ -6097,7 +6120,7 @@ impl V2LaneWorkAdapter {
             }
         }
         for proposal in locally_authored {
-            if !self.proposal_can_progress(&proposal) {
+            if !self.proposal_can_be_transported(&proposal) {
                 continue;
             }
             self.fanout_lane_message(
@@ -6158,6 +6181,10 @@ impl V2LaneWorkAdapter {
                 return Err(V2LaneWorkError::Persistence(
                     "lane certificate anchor is not committed in State".to_owned(),
                 ));
+            }
+            if !self.proposal_predecessor_is_ready_for_progress(&session.proposal) {
+                retained.push_back(session);
+                continue;
             }
             // A complete certificate may arrive through recovery without this
             // validator ever executing the local Prepare-to-Commit transition.
@@ -6869,13 +6896,32 @@ impl V2LaneWorkAdapter {
                 "finalized lane rollover still owns autonomous queue reservations".to_owned(),
             ));
         }
+        let predecessor_ready_effects = self
+            .effects
+            .iter()
+            .filter(|effect| match effect {
+                V2LaneWorkEffect::PostLaneBlock { message, .. } => {
+                    self.outbound_lane_message_predecessor_is_ready(message)
+                }
+                V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => {
+                    self.proposal_predecessor_is_ready_for_progress(&certificate.proposal)
+                }
+                _ => true,
+            })
+            .map(lane_work_effect_key)
+            .collect::<BTreeSet<_>>();
         self.effects.retain(|effect| match effect {
             V2LaneWorkEffect::PostLaneBlock { message, .. } => match message {
                 BlockMessage::LaneHistoricalRecoveryRequest(_)
                 | BlockMessage::LaneHistoricalRecoveryResponse(_) => true,
-                _ => authority.uses_retained_source(message),
+                _ => {
+                    predecessor_ready_effects.contains(&lane_work_effect_key(effect))
+                        && authority.uses_retained_source(message)
+                }
             },
-            V2LaneWorkEffect::PostDurableLaneCertificate { .. } => true,
+            V2LaneWorkEffect::PostDurableLaneCertificate { .. } => {
+                predecessor_ready_effects.contains(&lane_work_effect_key(effect))
+            }
             V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => true,
             V2LaneWorkEffect::PostNativeAmx { .. }
             | V2LaneWorkEffect::PostLaneDrainVote { .. }
@@ -6930,6 +6976,7 @@ impl V2LaneWorkAdapter {
             ) => {
                 self.historical_recovery_diagnostics.complete(identity);
                 self.retire_historical_recovery_request(identity);
+                self.drive_lane_sessions();
                 operation.complete();
                 Ok(HistoricalRecoveryServiceOutcome::Complete(identity))
             }
@@ -7486,6 +7533,17 @@ impl V2LaneWorkAdapter {
                 "historical lane payload differs from its committed canonical anchor".to_owned(),
             ));
         }
+        if !autonomous_payload
+            && !self
+                .state
+                .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                    &session.proposal,
+                )
+        {
+            return Ok(HistoricalRecoveryPersistence::Waiting(
+                HistoricalRecoveryWaitReason::PredecessorApplicationPending,
+            ));
+        }
         let descriptor = &session.proposal.descriptor;
         let durable = self
             .kura
@@ -7574,16 +7632,6 @@ impl V2LaneWorkAdapter {
             .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(session)
         {
             return Ok(HistoricalRecoveryPersistence::Complete);
-        }
-        if !self
-            .state
-            .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
-                &durable_proposal,
-            )
-        {
-            return Ok(HistoricalRecoveryPersistence::Waiting(
-                HistoricalRecoveryWaitReason::PredecessorApplicationPending,
-            ));
         }
         let receipt_persisted = self
             .kura
@@ -9118,6 +9166,9 @@ impl V2LaneWorkAdapter {
         proposal: &LaneBlockProposalV1,
         sender: &PeerId,
     ) -> Result<Option<LaneBlockCertificateV1>, ()> {
+        if !self.proposal_predecessor_is_ready_for_progress(proposal) {
+            return Ok(None);
+        }
         let artifact = self.kura.read_certified_lane_block_artifact(
             proposal.descriptor.lane_id,
             proposal.descriptor.lane_block_height,
@@ -10479,6 +10530,9 @@ impl V2LaneWorkAdapter {
         let committed_proposals = self
             .committed_lane_outputs
             .iter()
+            .filter(|output| {
+                self.proposal_predecessor_is_ready_for_progress(&output.session.proposal)
+            })
             .map(|output| output.session.proposal.proposal_hash)
             .collect::<BTreeSet<_>>();
         let commit_handoff_is_queued = self.effects.iter().any(|effect| {
@@ -10597,7 +10651,7 @@ impl V2LaneWorkAdapter {
             ));
         }
         for proposal in self.lane_sessions.proposals_without_commit_qc() {
-            if !self.proposal_can_progress(&proposal) {
+            if !self.proposal_can_be_transported(&proposal) {
                 continue;
             }
             lane_artifacts.push((
@@ -12092,6 +12146,7 @@ impl V2LaneWorkAdapter {
                     && self.decision_pending()
                     && !self.proposal_is_bound_to_decided_carrier(&proposal))
                 || !self.proposal_body_available(&proposal)
+                || !self.proposal_can_progress(&proposal)
             {
                 continue;
             }
@@ -12121,6 +12176,7 @@ impl V2LaneWorkAdapter {
                     && self.decision_pending()
                     && !self.proposal_is_bound_to_decided_carrier(&request.proposal))
                 || !self.proposal_body_available(&request.proposal)
+                || !self.proposal_can_progress(&request.proposal)
             {
                 continue;
             }
@@ -12186,7 +12242,8 @@ impl V2LaneWorkAdapter {
         proposal: &LaneBlockProposalV1,
         phase: CertPhase,
     ) -> Option<LaneBlockVoteV1> {
-        if !self.voting_enabled
+        if !self.proposal_predecessor_is_ready_for_progress(proposal)
+            || !self.voting_enabled
             || self.local_peer.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
         {
             return None;
@@ -12302,6 +12359,35 @@ impl V2LaneWorkAdapter {
         }
         Some(vote)
     }
+    fn outbound_lane_message_predecessor_is_ready(&self, message: &BlockMessage) -> bool {
+        let proposal = match message {
+            BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneHistoricalRecoveryRequest(_)
+            | BlockMessage::LaneHistoricalRecoveryResponse(_) => return true,
+            BlockMessage::LaneBlockVote(vote) => self
+                .lane_sessions
+                .proposal_for_vote_body(&vote.body)
+                .or_else(|| self.historical_autonomous_recovery_proposal_for_vote_body(&vote.body))
+                .or_else(|| self.canonical_proposal_for_vote_body(&vote.body)),
+            BlockMessage::LaneBlockQc(qc) => self
+                .lane_sessions
+                .proposal_for_vote_body(&qc.body)
+                .or_else(|| self.historical_autonomous_recovery_proposal_for_vote_body(&qc.body))
+                .or_else(|| self.canonical_proposal_for_vote_body(&qc.body)),
+            BlockMessage::LaneBlockCertificate(certificate) => Some(certificate.proposal.clone()),
+            BlockMessage::LaneExecutablePayload(payload) => Some(payload.origin_proposal.clone()),
+            BlockMessage::LaneBlockNewViewVote(vote) => self
+                .autonomous_payloads
+                .get(&AutonomousLanePayloadKey::from(&vote.body))
+                .map(|payload| payload.origin_proposal.clone()),
+            BlockMessage::LaneBlockNewViewCertificate(certificate) => self
+                .autonomous_payloads
+                .get(&AutonomousLanePayloadKey::from(&certificate.body))
+                .map(|payload| payload.origin_proposal.clone()),
+            _ => return true,
+        };
+        proposal.is_some_and(|proposal| self.proposal_predecessor_is_ready_for_progress(&proposal))
+    }
     fn fanout_lane_message(&mut self, message: BlockMessage, validators: &[PeerId]) {
         if matches!(&message, BlockMessage::LaneExecutablePayload(_)) {
             iroha_logger::error!(
@@ -12310,7 +12396,10 @@ impl V2LaneWorkAdapter {
             self.output_guard.close_admission_for_restart();
             return;
         }
-        let historical = self.historical_autonomous_recovery_message_is_authorized(&message);
+        if !self.outbound_lane_message_predecessor_is_ready(&message) {
+            return;
+        }
+        let historical = self.historical_lane_recovery_message_is_authorized(&message);
         if (lane_fanout_height(&message) != Some(self.context.height) && !historical)
             || (!historical
                 && self.decision_pending()
@@ -12446,6 +12535,18 @@ impl V2LaneWorkAdapter {
         &mut self,
         effect: &V2LaneWorkEffect,
     ) -> Result<Hash, LaneWorkEffectInsertionOutcome> {
+        let predecessor_ready = match effect {
+            V2LaneWorkEffect::PostLaneBlock { message, .. } => {
+                self.outbound_lane_message_predecessor_is_ready(message)
+            }
+            V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => {
+                self.proposal_predecessor_is_ready_for_progress(&certificate.proposal)
+            }
+            _ => true,
+        };
+        if !predecessor_ready {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
         if !lane_work_effect_reply_routes_have_valid_shape(effect) {
             return Err(LaneWorkEffectInsertionOutcome::Rejected);
         }
@@ -12520,6 +12621,9 @@ impl V2LaneWorkAdapter {
         let committed_proposals = self
             .committed_lane_outputs
             .iter()
+            .filter(|output| {
+                self.proposal_predecessor_is_ready_for_progress(&output.session.proposal)
+            })
             .map(|output| output.session.proposal.proposal_hash)
             .collect::<BTreeSet<_>>();
         let allowed_durable_certificates = self
@@ -12530,8 +12634,9 @@ impl V2LaneWorkAdapter {
                 else {
                     return None;
                 };
-                (certificate.proposal.descriptor.proposal_height < self.context.height
-                    || self.proposal_is_bound_to_decided_carrier(&certificate.proposal))
+                (self.proposal_predecessor_is_ready_for_progress(&certificate.proposal)
+                    && (certificate.proposal.descriptor.proposal_height < self.context.height
+                        || self.proposal_is_bound_to_decided_carrier(&certificate.proposal)))
                 .then(|| lane_work_effect_key(effect))
             })
             .collect::<BTreeSet<_>>();
@@ -12597,6 +12702,12 @@ impl V2LaneWorkAdapter {
         while consecutive_complete < output_count {
             let output_index = self.committed_lane_output_cursor % output_count;
             self.committed_lane_output_cursor = (output_index + 1) % output_count;
+            if !self.proposal_predecessor_is_ready_for_progress(
+                &self.committed_lane_outputs[output_index].session.proposal,
+            ) {
+                consecutive_complete = consecutive_complete.saturating_add(1);
+                continue;
+            }
             let attempt = {
                 let output = &self.committed_lane_outputs[output_index];
                 let validators = &output.session.commit_qc.validator_set;
@@ -12642,12 +12753,16 @@ impl V2LaneWorkAdapter {
         let committed_proposals = self
             .committed_lane_outputs
             .iter()
+            .filter(|output| {
+                self.proposal_predecessor_is_ready_for_progress(&output.session.proposal)
+            })
             .map(|output| output.session.proposal.proposal_hash)
             .collect::<BTreeSet<_>>();
         self.committed_lane_outputs.iter().any(|output| {
-            output.session.commit_qc.validator_set[output.next_validator..]
-                .iter()
-                .any(|peer| peer != &self.local_peer)
+            self.proposal_predecessor_is_ready_for_progress(&output.session.proposal)
+                && output.session.commit_qc.validator_set[output.next_validator..]
+                    .iter()
+                    .any(|peer| peer != &self.local_peer)
         }) || self.effects.iter().any(|effect| {
             matches!(
                 effect,
@@ -12724,20 +12839,91 @@ impl V2LaneWorkAdapter {
                 .get(&proposal.proposal_hash)
                 .is_some_and(|hint| proposal.payload_block_hint.as_ref() == Some(hint))
     }
-    fn proposal_can_progress(&self, proposal: &LaneBlockProposalV1) -> bool {
+    /// Return whether an exact historical raw proposal may be retransmitted as
+    /// an idempotent request for a peer's durable certificate.
+    ///
+    /// This is transport authority only. It never authorizes historical local
+    /// voting and it does not treat the raw artifact as applied lane progress.
+    fn historical_raw_proposal_can_solicit_certificate(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        let descriptor = &proposal.descriptor;
+        if descriptor.proposal_height >= self.context.height
+            || self.kura.lane_block_application_receipt_available(proposal)
+        {
+            return false;
+        }
+        let Some(anchor) = self.canonical_anchor_for_proposal(proposal) else {
+            return false;
+        };
+        if self
+            .state
+            .committed_block_hash_at_height(descriptor.proposal_height)
+            != Some(anchor.proposal_block_hash)
+        {
+            return false;
+        }
+        let canonical = self
+            .kura
+            .canonical_lane_block_artifacts_at_proposal_height_matching(
+                descriptor.proposal_height,
+                2,
+                |ownership| ownership == &anchor.ownership,
+            );
+        canonical.as_slice() == [anchor]
+    }
+    fn proposal_can_be_transported(&self, proposal: &LaneBlockProposalV1) -> bool {
         if self.kura.lane_block_application_receipt_available(proposal) {
             return false;
         }
+        let historical_autonomous = self
+            .historical_autonomous_recovery_record_for_proposal(proposal)
+            .is_some();
+        let historical_raw = self.historical_raw_proposal_can_solicit_certificate(proposal);
+        if proposal.descriptor.proposal_height != self.context.height
+            && !historical_autonomous
+            && !historical_raw
+        {
+            return false;
+        }
+        self.proposal_body_available(proposal)
+            && (historical_autonomous
+                || historical_raw
+                || !self.decision_pending()
+                || self.proposal_is_bound_to_decided_carrier(proposal))
+    }
+    /// Return whether this exact proposal's economic predecessor is durable
+    /// enough for fresh lane consensus output.
+    ///
+    /// Canonical raw ancestry deliberately does not satisfy this predicate. It
+    /// authenticates decided input and certificate solicitation only.
+    fn proposal_predecessor_is_ready_for_progress(&self, proposal: &LaneBlockProposalV1) -> bool {
+        if self
+            .historical_autonomous_recovery_record_for_proposal(proposal)
+            .is_some()
+            || self.autonomous_payload_is_expected_for(proposal)
+        {
+            self.state
+                .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(proposal)
+        } else {
+            self.state
+                .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(proposal)
+        }
+    }
+    fn proposal_can_progress(&self, proposal: &LaneBlockProposalV1) -> bool {
         let historical = self
             .historical_autonomous_recovery_record_for_proposal(proposal)
             .is_some();
         if proposal.descriptor.proposal_height != self.context.height && !historical {
             return false;
         }
-        self.proposal_body_available(proposal)
+        !self.kura.lane_block_application_receipt_available(proposal)
+            && self.proposal_body_available(proposal)
             && (historical
                 || !self.decision_pending()
                 || self.proposal_is_bound_to_decided_carrier(proposal))
+            && self.proposal_predecessor_is_ready_for_progress(proposal)
     }
     fn lane_vote_body_can_progress(
         &self,
@@ -13063,38 +13249,142 @@ impl V2LaneWorkAdapter {
             .unapplied_lane_block_artifact_heights_snapshot_cached();
         let ordinary_hydration_capacity =
             hydration_capacity.saturating_sub(self.lane_sessions.len());
-        for ((lane_id, dataspace_id), lane_block_height) in
-            pending.into_iter().take(ordinary_hydration_capacity)
-        {
-            let Some(artifact) = self
-                .kura
-                .read_lane_block_artifact(lane_id, lane_block_height)
-            else {
-                continue;
-            };
-            let ownership = &artifact.ownership;
-            if ownership.lane_id != lane_id
-                || ownership.dataspace_id != dataspace_id
-                || self
+        let mut raw_proposals = Vec::new();
+        let mut raw_slots = BTreeSet::new();
+        for ((lane_id, dataspace_id), tip_height) in pending {
+            let mut lane_block_height = tip_height;
+            let mut route_chain = Vec::new();
+            loop {
+                if !raw_slots.insert((lane_id, lane_block_height)) {
+                    self.output_guard.close_admission_for_restart();
+                    return Err(V2LaneWorkError::InvalidContext(
+                        "canonical raw lane hydration contains a duplicate or cyclic slot"
+                            .to_owned(),
+                    ));
+                }
+                if raw_proposals.len().saturating_add(route_chain.len())
+                    >= ordinary_hydration_capacity
+                {
+                    self.output_guard.close_admission_for_restart();
+                    return Err(V2LaneWorkError::InvalidContext(
+                        "canonical raw lane hydration exceeds bounded session capacity".to_owned(),
+                    ));
+                }
+                let artifact = self
+                    .kura
+                    .read_lane_block_artifact_without_sidecar_repair(lane_id, lane_block_height)
+                    .ok_or_else(|| {
+                        self.output_guard.close_admission_for_restart();
+                        V2LaneWorkError::Persistence(
+                            "canonical raw lane hydration is missing an indexed artifact"
+                                .to_owned(),
+                        )
+                    })?;
+                if self
                     .state
                     .lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact)
-                || !self.lane_route_active(
-                    ownership.lane_id,
-                    ownership.dataspace_id,
-                    ownership.lane_incarnation,
-                    ownership.proposal_height,
-                )
-            {
-                continue;
+                {
+                    break;
+                }
+                let ownership = &artifact.ownership;
+                let canonical_shape = ownership.lane_block_height != 0
+                    && ((ownership.lane_block_height == 1
+                        && ownership.previous_lane_block_height == 0
+                        && ownership.previous_lane_block_descriptor_hash.is_none())
+                        || (ownership.lane_block_height > 1
+                            && ownership.previous_lane_block_height.checked_add(1)
+                                == Some(ownership.lane_block_height)
+                            && ownership.previous_lane_block_descriptor_hash.is_some()));
+                if ownership.lane_id != lane_id
+                    || ownership.dataspace_id != dataspace_id
+                    || ownership.lane_block_height != lane_block_height
+                    || ownership.proposal_height == 0
+                    || ownership.proposal_height > self.context.height
+                    || !canonical_shape
+                    || !self.lane_route_active(
+                        ownership.lane_id,
+                        ownership.dataspace_id,
+                        ownership.lane_incarnation,
+                        ownership.proposal_height,
+                    )
+                    || self
+                        .state
+                        .committed_block_hash_at_height(ownership.proposal_height)
+                        != Some(artifact.proposal_block_hash)
+                {
+                    self.output_guard.close_admission_for_restart();
+                    return Err(V2LaneWorkError::InvalidContext(
+                        "canonical raw lane hydration found a stale or non-canonical artifact"
+                            .to_owned(),
+                    ));
+                }
+                let canonical = self
+                    .kura
+                    .canonical_lane_block_artifacts_at_proposal_height_matching(
+                        ownership.proposal_height,
+                        2,
+                        |candidate| candidate == ownership,
+                    );
+                if canonical.as_slice() != [artifact.clone()] {
+                    self.output_guard.close_admission_for_restart();
+                    return Err(V2LaneWorkError::InvalidContext(
+                        "canonical raw lane hydration found non-unique ownership".to_owned(),
+                    ));
+                }
+                let proposal = proposal_from_ownership(ownership, artifact.proposal_block_hash)
+                    .ok_or_else(|| {
+                        self.output_guard.close_admission_for_restart();
+                        V2LaneWorkError::InvalidContext(
+                            "canonical raw lane hydration cannot reconstruct its exact proposal"
+                                .to_owned(),
+                        )
+                    })?;
+                let previous_height = ownership.previous_lane_block_height;
+                route_chain.push(proposal.clone());
+                if previous_height == 0
+                    || self
+                        .state
+                        .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                            &proposal,
+                        )
+                {
+                    break;
+                }
+                if !canonical_raw_lane_predecessor_matches_proposal(
+                    self.state.as_ref(),
+                    self.kura.as_ref(),
+                    &proposal,
+                ) {
+                    self.output_guard.close_admission_for_restart();
+                    return Err(V2LaneWorkError::InvalidContext(
+                        "canonical raw lane hydration found a gap or conflicting predecessor"
+                            .to_owned(),
+                    ));
+                }
+                lane_block_height = previous_height;
             }
-            let Some(proposal) =
-                proposal_from_ownership(&artifact.ownership, artifact.proposal_block_hash)
-            else {
-                continue;
-            };
-            let _ = self
-                .lane_sessions
-                .insert_recovered_proposal_replacing_uncommitted_conflict(proposal);
+            route_chain.reverse();
+            raw_proposals.extend(route_chain);
+        }
+        raw_proposals.sort_by_key(|proposal| {
+            let descriptor = &proposal.descriptor;
+            (
+                descriptor.proposal_height,
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_block_height,
+                proposal.proposal_hash,
+            )
+        });
+        for proposal in raw_proposals {
+            self.lane_sessions
+                .insert_recovered_proposal_replacing_uncommitted_conflict(proposal)
+                .map_err(|error| {
+                    self.output_guard.close_admission_for_restart();
+                    V2LaneWorkError::InvalidContext(format!(
+                        "canonical raw lane hydration conflicts with retained session state: {error}"
+                    ))
+                })?;
         }
         Ok(())
     }
@@ -13136,11 +13426,13 @@ impl V2LaneWorkAdapter {
             .filter(|proposal| proposal.vote_body(body.phase) == *body)
             .cloned()
     }
-    fn historical_autonomous_recovery_message_is_authorized(&self, message: &BlockMessage) -> bool {
+    fn historical_lane_recovery_message_is_authorized(&self, message: &BlockMessage) -> bool {
         match message {
-            BlockMessage::LaneBlockProposal(proposal) => self
-                .historical_autonomous_recovery_record_for_proposal(proposal)
-                .is_some(),
+            BlockMessage::LaneBlockProposal(proposal) => {
+                self.historical_autonomous_recovery_record_for_proposal(proposal)
+                    .is_some()
+                    || self.historical_raw_proposal_can_solicit_certificate(proposal)
+            }
             BlockMessage::LaneBlockVote(vote) => self
                 .historical_autonomous_recovery_proposal_for_vote_body(&vote.body)
                 .is_some(),
@@ -16263,6 +16555,81 @@ pub(crate) fn canonical_v2_lane_payload_matches_kura(
     context: &wire::HeightContext,
     block: &SignedBlock,
 ) -> bool {
+    canonical_v2_lane_payload_matches_kura_inner(state, kura, context, block, false)
+}
+/// Authenticate one exact raw ordinary-lane predecessor without treating it as
+/// applied progress.
+///
+/// This predicate is intentionally narrower than the lane planner's validation
+/// fallback. It is used only while recovering an already-decided canonical
+/// carrier and while reconstructing its bounded raw predecessor chain. A valid
+/// receipt always wins: raw fallback is available only when that exact slot has
+/// no readable receipt at all.
+fn canonical_raw_lane_predecessor_matches_proposal(
+    state: &State,
+    kura: &Kura,
+    proposal: &LaneBlockProposalV1,
+) -> bool {
+    let descriptor = &proposal.descriptor;
+    let previous_height = descriptor.previous_lane_block_height;
+    let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
+        return false;
+    };
+    if previous_height == 0
+        || previous_height.checked_add(1) != Some(descriptor.lane_block_height)
+        || kura
+            .read_lane_block_application_receipt_without_sidecar_repair(
+                descriptor.lane_id,
+                previous_height,
+            )
+            .is_some()
+    {
+        return false;
+    }
+    let Some(artifact) =
+        kura.read_lane_block_artifact_without_sidecar_repair(descriptor.lane_id, previous_height)
+    else {
+        return false;
+    };
+    let predecessor = &artifact.ownership;
+    if predecessor.lane_id != descriptor.lane_id
+        || predecessor.dataspace_id != descriptor.dataspace_id
+        || predecessor.lane_incarnation != descriptor.lane_incarnation
+        || predecessor.lane_block_height != previous_height
+        || predecessor.proposal_height == 0
+        || predecessor.proposal_height >= descriptor.proposal_height
+        || predecessor.lane_block_descriptor_hash != Some(previous_descriptor_hash)
+        || !state.lane_route_and_incarnation_active_at_height(
+            predecessor.lane_id,
+            predecessor.dataspace_id,
+            predecessor.lane_incarnation,
+            predecessor.proposal_height,
+        )
+        || !state.lane_route_and_incarnation_active_at_height(
+            descriptor.lane_id,
+            descriptor.dataspace_id,
+            descriptor.lane_incarnation,
+            descriptor.proposal_height,
+        )
+        || state.committed_block_hash_at_height(predecessor.proposal_height)
+            != Some(artifact.proposal_block_hash)
+    {
+        return false;
+    }
+    let canonical = kura.canonical_lane_block_artifacts_at_proposal_height_matching(
+        predecessor.proposal_height,
+        2,
+        |ownership| ownership == predecessor,
+    );
+    canonical.as_slice() == [artifact]
+}
+fn canonical_v2_lane_payload_matches_kura_inner(
+    state: &State,
+    kura: &Kura,
+    context: &wire::HeightContext,
+    block: &SignedBlock,
+    allow_exact_raw_predecessor: bool,
+) -> bool {
     let block_hash = block.hash();
     let Some(height) = usize::try_from(context.height)
         .ok()
@@ -16272,6 +16639,8 @@ pub(crate) fn canonical_v2_lane_payload_matches_kura(
     };
     if block.header().height().get() != context.height
         || kura.block_hash_at_height(height) != Some(block_hash)
+        || (allow_exact_raw_predecessor
+            && state.committed_block_hash_at_height(context.height) != Some(block_hash))
     {
         return false;
     }
@@ -16279,6 +16648,9 @@ pub(crate) fn canonical_v2_lane_payload_matches_kura(
         return block.external_entrypoint_count() == 0;
     };
     let ownerships = &bundle.lane_payload_ownerships;
+    if allow_exact_raw_predecessor && ownerships.is_empty() {
+        return false;
+    }
     if ownerships.is_empty() {
         return bundle.external.is_empty();
     }
@@ -16347,8 +16719,10 @@ pub(crate) fn canonical_v2_lane_payload_matches_kura(
         };
         expected_author.is_some()
             && (!shared_committee || expected_author == Some(global_leader))
-            && state
+            && (state
                 .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(&proposal)
+                || (allow_exact_raw_predecessor
+                    && canonical_raw_lane_predecessor_matches_proposal(state, kura, &proposal)))
     };
     let artifacts = kura.canonical_lane_block_artifacts_at_proposal_height_matching(
         context.height,
@@ -16589,8 +16963,23 @@ pub(super) mod tests {
         persist_parent_chain: bool,
         kura: Arc<Kura>,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_with_kura_and_local_index(
+            mode,
+            height,
+            persist_parent_chain,
+            kura,
+            None,
+        )
+    }
+    fn fixture_at_height_inner_with_kura_and_local_index(
+        mode: wire::ConsensusMode,
+        height: u64,
+        persist_parent_chain: bool,
+        kura: Arc<Kura>,
+        local_validator_index: Option<usize>,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let nonzero = NonZeroUsize::new(8).expect("nonzero");
-        fixture_at_height_inner_with_limits_and_kura(
+        fixture_at_height_inner_with_limits_and_kura_and_local_index(
             mode,
             height,
             persist_parent_chain,
@@ -16624,6 +17013,7 @@ pub(super) mod tests {
                 .expect("default Native AMX signing limits"),
             ),
             kura,
+            local_validator_index,
         )
     }
     fn fixture_at_height_inner_with_limits(
@@ -16646,6 +17036,23 @@ pub(super) mod tests {
         persist_parent_chain: bool,
         limits: V2LaneWorkLimits,
         kura: Arc<Kura>,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_with_limits_and_kura_and_local_index(
+            mode,
+            height,
+            persist_parent_chain,
+            limits,
+            kura,
+            None,
+        )
+    }
+    fn fixture_at_height_inner_with_limits_and_kura_and_local_index(
+        mode: wire::ConsensusMode,
+        height: u64,
+        persist_parent_chain: bool,
+        limits: V2LaneWorkLimits,
+        kura: Arc<Kura>,
+        local_validator_index: Option<usize>,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let chain_id: ChainId = "v2-lane-work-display-name".into();
         let network_id = crate::sumeragi::synthetic_network_id("v2-lane-work-test");
@@ -16783,7 +17190,12 @@ pub(super) mod tests {
         if let Some(parent_qc) = context.parent_commit_qc.as_mut() {
             parent_qc.subject.block_hash = parent.expect("non-genesis fixture has a parent");
         }
-        let local_index = usize::try_from(context.leader(0)).expect("leader index");
+        let local_index = local_validator_index
+            .unwrap_or_else(|| usize::try_from(context.leader(0)).expect("leader index"));
+        assert!(
+            local_index < keys.len(),
+            "local validator index is in bounds"
+        );
         let local_key = keys[local_index].clone();
         let local_peer = PeerId::new(local_key.public_key().clone());
         let authenticated_genesis_nexus_amx_context = (height == 1).then(|| {
@@ -21593,12 +22005,34 @@ pub(super) mod tests {
                 .contains(&proposal),
             "successor startup must hydrate the exact unfinished canonical proposal"
         );
+        assert!(
+            adapter
+                .lane_sessions
+                .local_vote_rebroadcast_artifacts_for(&adapter.local_peer)
+                .iter()
+                .all(|(pending, _)| pending != &proposal),
+            "successor hydration must not mint a historical ordinary-lane vote"
+        );
+        let retained_vote = signed_lane_vote(
+            &proposal,
+            CertPhase::Prepare,
+            keys.iter()
+                .find(|key| key.public_key() == adapter.local_peer.public_key())
+                .expect("fixture retains the local validator key"),
+        );
+        assert_eq!(
+            adapter
+                .lane_sessions
+                .insert_vote(retained_vote.clone(), Some(&adapter.local_peer)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted),
+            "model one exact predecessor-owned vote retained from its live height"
+        );
         let retained_vote = adapter
             .lane_sessions
             .local_vote_rebroadcast_artifacts_for(&adapter.local_peer)
             .into_iter()
             .find_map(|(pending, vote)| (pending == proposal).then_some(vote))
-            .expect("successor hydration mints the local historical Prepare vote");
+            .expect("the explicitly retained historical Prepare vote remains available");
         assert!(
             adapter
                 .lane_sessions
@@ -23835,13 +24269,26 @@ pub(super) mod tests {
         ));
     }
     #[test]
-    fn locked_body_binding_accepts_canonical_successor_while_local_sidecars_lag() {
-        let (parent, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+    fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() {
+        let (mut parent, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let autonomous_lane_id = LaneId::new(1);
+        let autonomous_dataspace_id = DataSpaceId::new(7);
+        enable_multilane_nexus(
+            &mut parent,
+            &keys,
+            autonomous_lane_id,
+            autonomous_dataspace_id,
+        );
         let (parent_block, parent_proposal) = globally_anchored_lane_block_fixture(&parent, &keys);
         parent
             .kura
             .store_block(parent_block.clone())
             .expect("persist exact raw lane predecessor");
+        let parent_finality = verified_finality_artifact_for_block(&parent, &keys, &parent_block);
+        let _ = parent
+            .kura
+            .store_v2_finality_artifact(&parent_finality)
+            .expect("persist raw predecessor finality authority");
         let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
         commit_test_block_to_state(parent.state.as_ref(), &committed_parent, &parent.context);
         assert_eq!(
@@ -23879,6 +24326,106 @@ pub(super) mod tests {
             None,
         )
         .expect("open successor while predecessor sidecars remain pending");
+        let (autonomous_source_block, mut autonomous_proposal) =
+            planned_lane_candidate_block_for_route_at_view(
+                &successor,
+                &keys,
+                0,
+                autonomous_lane_id,
+                autonomous_dataspace_id,
+            );
+        autonomous_proposal.payload_block_hint = None;
+        let autonomous_entrypoint = autonomous_source_block
+            .external_entrypoints_cloned()
+            .next()
+            .expect("autonomous mixed-carrier entrypoint");
+        let autonomous_accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+            std::borrow::Cow::Owned(autonomous_entrypoint.clone()),
+        );
+        let autonomous_routing_plan = RoutingPlan::single(RoutingDecision::new(
+            autonomous_lane_id,
+            autonomous_dataspace_id,
+        ));
+        let mut autonomous_reservation = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash: autonomous_accepted.hash(),
+            entrypoint_hash: autonomous_entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"mixed-raw-successor-queue-plan-admission-binding",
+            ),
+            routing_plan_digest: autonomous_routing_plan.digest(),
+            coordinator_leg: autonomous_routing_plan.coordinator_leg(),
+            lane_id: autonomous_lane_id,
+            dataspace_id: autonomous_dataspace_id,
+            lane_incarnation: autonomous_proposal.descriptor.lane_incarnation,
+            proposal_height: autonomous_proposal.descriptor.proposal_height,
+            lane_block_height: autonomous_proposal.descriptor.lane_block_height,
+            lane_block_view: autonomous_proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"mixed-raw-successor-reservation-owner"),
+            proposal_identity_hash: autonomous_proposal.proposal_hash,
+        };
+        let autonomous_producer = successor
+            .expected_autonomous_lane_author(&autonomous_proposal)
+            .expect("deterministic mixed-carrier autonomous producer")
+            .clone();
+        bind_canonical_autonomous_reservation_identity(
+            &successor,
+            &autonomous_proposal,
+            &autonomous_producer,
+            &mut autonomous_reservation,
+        );
+        let autonomous_producer_key = keys
+            .iter()
+            .find(|key| key.public_key() == autonomous_producer.public_key())
+            .expect("mixed-carrier fixture contains its autonomous producer");
+        let autonomous_payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+            successor.native_network_id(),
+            successor.context.epoch,
+            autonomous_proposal.clone(),
+            vec![autonomous_entrypoint],
+            vec![autonomous_reservation],
+            vec![autonomous_routing_plan],
+            vec![None],
+            autonomous_producer.clone(),
+            autonomous_producer_key.private_key(),
+        )
+        .expect("construct exact autonomous mixed-carrier payload");
+        successor
+            .kura
+            .persist_lane_executable_payload(
+                &autonomous_payload,
+                successor.native_network_id(),
+                successor.context.epoch,
+            )
+            .expect("persist autonomous mixed-carrier payload");
+        assert_eq!(
+            successor.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneExecutablePayload(autonomous_payload.clone()),
+                    Some(autonomous_producer),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        let autonomous_envelope = autonomous_lane_payload_envelope(
+            &autonomous_payload,
+            successor.native_network_id(),
+            successor.context.epoch,
+        )
+        .expect("encode exact autonomous mixed-carrier envelope");
+        let mut malformed_autonomous_envelope = autonomous_envelope.clone();
+        malformed_autonomous_envelope.proposal_hash =
+            Hash::new(b"malformed mixed-carrier autonomous proposal");
+        assert!(
+            decode_autonomous_lane_payload_envelope(
+                &malformed_autonomous_envelope,
+                successor.native_network_id(),
+                successor.context.epoch,
+            )
+            .is_err(),
+            "the unchanged autonomous envelope validator must reject a malformed mixed-carrier member"
+        );
         let transaction_key = KeyPair::try_from_seed(vec![0xD4; 32], Algorithm::Ed25519)
             .expect("deterministic successor transaction key");
         let transaction = TransactionBuilder::new(
@@ -23944,7 +24491,8 @@ pub(super) mod tests {
                 route.lane_id,
                 route.dataspace_id,
             )])
-            .with_lane_payload_ownerships(recovered.ownerships),
+            .with_lane_payload_ownerships(recovered.ownerships)
+            .with_autonomous_lane_payloads(vec![autonomous_envelope]),
         ));
         let successor_block = builder
             .build_with_signature(
@@ -23952,6 +24500,27 @@ pub(super) mod tests {
                 keys[leader_index].private_key(),
             )
             .canonical_resultless_proposal();
+        let successor_ownership = successor_block
+            .execution_context()
+            .expect("successor execution context")
+            .lane_payload_ownerships[0]
+            .clone();
+        let successor_proposal =
+            proposal_from_ownership(&successor_ownership, successor_block.hash())
+                .expect("reconstruct exact raw successor proposal");
+        let mut wrong_raw_successor = successor_proposal.clone();
+        wrong_raw_successor
+            .descriptor
+            .previous_lane_block_descriptor_hash =
+            Some(Hash::new(b"wrong canonical raw predecessor descriptor"));
+        assert!(
+            !canonical_raw_lane_predecessor_matches_proposal(
+                successor.state.as_ref(),
+                successor.kura.as_ref(),
+                &wrong_raw_successor,
+            ),
+            "raw fallback must reject a mismatched predecessor descriptor"
+        );
         let (locked_round, locked_subject) = global_lock_for_block(&successor, &successor_block);
         assert_eq!(
             successor.mark_global_body_locked(locked_round, locked_subject),
@@ -23961,6 +24530,387 @@ pub(super) mod tests {
             successor.bind_locked_global_body(&successor_block),
             V2LaneIngressOutcome::Rejected,
             "an exact PrepareQC-locked successor must not kill a validator merely because its independent predecessor sidecars are catching up"
+        );
+        assert!(!successor.proposal_can_progress(&successor_proposal));
+        assert!(
+            successor
+                .lane_sessions
+                .local_vote_rebroadcast_artifacts_for(&successor.local_peer)
+                .iter()
+                .all(|(proposal, _)| proposal != &successor_proposal),
+            "raw predecessor authentication must not authorize a local successor vote"
+        );
+        let _ = successor.drain_effects(usize::MAX);
+        successor
+            .kura
+            .store_block(successor_block.clone())
+            .expect("persist exact raw successor carrier");
+        let successor_finality =
+            verified_finality_artifact_for_block(&successor, &keys, &successor_block);
+        let successor_receipt = KuraV2CommitReceipt::for_test(&successor_finality);
+        let committed_successor =
+            ValidBlock::committed_from_replay_signed_block(successor_block.clone());
+        commit_test_block_to_state(
+            successor.state.as_ref(),
+            &committed_successor,
+            &successor.context,
+        );
+        assert!(
+            !canonical_v2_lane_payload_matches_kura(
+                successor.state.as_ref(),
+                successor.kura.as_ref(),
+                &successor.context,
+                &successor_block,
+            ),
+            "the strict canonical matcher must retain applied-predecessor semantics"
+        );
+        assert!(canonical_v2_lane_payload_matches_kura_inner(
+            successor.state.as_ref(),
+            successor.kura.as_ref(),
+            &successor.context,
+            &successor_block,
+            true,
+        ));
+        successor
+            .retain_merge_sidecars_for_global_view(
+                locked_round.view,
+                Some(locked_subject),
+                Some(locked_subject),
+            )
+            .expect("install exact raw-successor Decision");
+        assert_ne!(
+            successor
+                .recover_decided_canonical_lane_body(&successor_receipt, &successor_finality,)
+                .expect("recover decided carrier over exact raw predecessor"),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert!(
+            successor
+                .lane_sessions
+                .proposals_without_commit_qc()
+                .contains(&parent_proposal),
+            "decided recovery hydrates the oldest exact raw predecessor"
+        );
+        assert!(
+            successor
+                .lane_sessions
+                .proposals_without_commit_qc()
+                .contains(&successor_proposal),
+            "decided recovery retains the exact raw successor"
+        );
+        let successor_session = CommittedLaneBlockSession {
+            proposal: successor_proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&successor_proposal, &keys[..3], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&successor_proposal, &keys[..3], CertPhase::Commit),
+        };
+        successor
+            .pending_committed_lanes
+            .push_back(successor_session.clone());
+        assert_eq!(
+            successor
+                .persist_anchored_sessions()
+                .expect("defer successor certificate behind raw predecessor"),
+            0
+        );
+        assert!(
+            successor
+                .kura
+                .read_certified_lane_block_artifact(
+                    successor_proposal.descriptor.lane_id,
+                    successor_proposal.descriptor.lane_block_height,
+                )
+                .is_none(),
+            "the successor certificate must not become durable before its predecessor receipt"
+        );
+        assert!(
+            !successor
+                .kura
+                .lane_block_application_receipt_available(&successor_proposal)
+        );
+        successor
+            .schedule_retransmission()
+            .expect("solicit raw predecessor certificate without consensus progress");
+        let effects = successor.drain_effects(usize::MAX);
+        assert!(effects.iter().any(|effect| {
+            matches!(
+                effect,
+                V2LaneWorkEffect::PostLaneBlock {
+                    message: BlockMessage::LaneBlockProposal(proposal),
+                    ..
+                } if proposal == &parent_proposal
+            )
+        }));
+        assert!(effects.iter().all(|effect| match effect {
+            V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneBlockVote(vote),
+                ..
+            } => vote.body.proposal_hash != successor_proposal.proposal_hash,
+            V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneBlockQc(qc),
+                ..
+            } => qc.body.proposal_hash != successor_proposal.proposal_hash,
+            V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => {
+                certificate.proposal.proposal_hash != successor_proposal.proposal_hash
+            }
+            _ => true,
+        }));
+        let parent_certificate = LaneBlockCertificateV1 {
+            proposal: parent_proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&parent_proposal, &keys[..3], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&parent_proposal, &keys[..3], CertPhase::Commit),
+        };
+        assert_eq!(
+            successor.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneBlockCertificate(Box::new(parent_certificate)),
+                    Some(PeerId::new(keys[1].public_key().clone())),
+                ),
+                locked_round.view,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert!(matches!(
+            successor
+                .service_next_historical_recovery()
+                .expect("persist exact predecessor certificate and receipt"),
+            HistoricalRecoveryServiceOutcome::Complete(_)
+        ));
+        assert!(
+            successor
+                .kura
+                .lane_block_application_receipt_available(&parent_proposal)
+        );
+        assert!(successor.proposal_can_progress(&successor_proposal));
+        assert!(
+            successor
+                .lane_sessions
+                .local_vote_rebroadcast_artifacts_for(&successor.local_peer)
+                .iter()
+                .any(|(proposal, _)| proposal == &successor_proposal),
+            "predecessor receipt completion wakes the retained successor session"
+        );
+        let resumed_effects = successor.drain_effects(usize::MAX);
+        assert!(
+            resumed_effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostLaneBlock {
+                        message: BlockMessage::LaneBlockVote(vote),
+                        ..
+                    } if vote.body == successor_proposal.vote_body(CertPhase::Prepare)
+                )
+            }),
+            "the unblocked exact H2 Prepare vote must cross the decided-carrier fanout gate"
+        );
+        assert_eq!(
+            successor
+                .persist_anchored_sessions()
+                .expect("persist unblocked successor certificate and receipt"),
+            1
+        );
+        assert!(
+            successor
+                .kura
+                .lane_block_application_receipt_available(&successor_proposal)
+        );
+    }
+    #[test]
+    fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
+        let (first, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (first_block, first_proposal) = globally_anchored_lane_block_fixture(&first, &keys);
+        first
+            .kura
+            .store_block(first_block.clone())
+            .expect("persist first raw lane artifact");
+        let committed_first = ValidBlock::committed_from_replay_signed_block(first_block.clone());
+        commit_test_block_to_state(first.state.as_ref(), &committed_first, &first.context);
+        assert!(
+            first
+                .kura
+                .read_lane_block_application_receipt_without_sidecar_repair(
+                    first_proposal.descriptor.lane_id,
+                    first_proposal.descriptor.lane_block_height,
+                )
+                .is_none(),
+            "the first raw artifact must not gain an application receipt"
+        );
+        let second_context = successor_context_for_parent(&first, &first_block);
+        let local_peer = first.local_peer.clone();
+        let local_key = first.key_pair.clone();
+        let state = Arc::clone(&first.state);
+        let kura = Arc::clone(&first.kura);
+        let mut limits = first.limits;
+        limits.session_capacity = NonZeroUsize::new(2).expect("two-link hydration bound");
+        drop(first);
+        let second = V2LaneWorkAdapter::new(
+            second_context,
+            local_peer.clone(),
+            local_key.clone(),
+            true,
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            limits,
+            None,
+        )
+        .expect("open second height over an unreceipted raw predecessor");
+        let transaction_key = KeyPair::try_from_seed(vec![0xD5; 32], Algorithm::Ed25519)
+            .expect("deterministic second-link transaction key");
+        let transaction = TransactionBuilder::new(
+            second.context.network_id,
+            AccountId::new(transaction_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(transaction_key.private_key());
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let global_view = 0;
+        let leader_index = usize::try_from(second.context.leader(global_view))
+            .expect("second-link leader index fits usize");
+        let global_leader = &second.context.roster[leader_index].validator;
+        let strict = prepare_v2_lane_payload_plan(
+            state.as_ref(),
+            kura.as_ref(),
+            &second.context,
+            global_view,
+            global_leader,
+            std::slice::from_ref(&route),
+            std::slice::from_ref(&Hash::from(entrypoint_hash)),
+        )
+        .expect("strict second-link producer planning remains deterministic");
+        assert_eq!(strict.unavailable_indices, BTreeSet::from([0]));
+        let recovered = prepare_v2_lane_payload_validation_plan(
+            state.as_ref(),
+            kura.as_ref(),
+            &second.context,
+            global_view,
+            global_leader,
+            std::slice::from_ref(&route),
+            std::slice::from_ref(&Hash::from(entrypoint_hash)),
+        )
+        .expect("recover second-link ownership from the exact raw predecessor");
+        assert!(recovered.unavailable_indices.is_empty());
+        assert_eq!(recovered.ownerships.len(), 1);
+        assert_eq!(
+            recovered.ownerships[0].previous_lane_block_height,
+            first_proposal.descriptor.lane_block_height
+        );
+        assert_eq!(
+            recovered.ownerships[0].previous_lane_block_descriptor_hash,
+            Some(first_proposal.descriptor.descriptor_hash)
+        );
+        let header = BlockHeader::new(
+            NonZeroU64::new(second.context.height).expect("non-zero second-link height"),
+            Some(first_block.hash()),
+            None,
+            None,
+            second.context.height,
+            global_view,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                entrypoint_hash,
+                route.lane_id,
+                route.dataspace_id,
+            )])
+            .with_lane_payload_ownerships(recovered.ownerships),
+        ));
+        let second_block = builder
+            .build_with_signature(
+                u64::try_from(leader_index).expect("second-link leader index fits u64"),
+                keys[leader_index].private_key(),
+            )
+            .canonical_resultless_proposal();
+        let second_ownership = second_block
+            .execution_context()
+            .expect("second-link block carries execution context")
+            .lane_payload_ownerships[0]
+            .clone();
+        let second_proposal = proposal_from_ownership(&second_ownership, second_block.hash())
+            .expect("reconstruct exact second raw proposal");
+        second
+            .kura
+            .store_block(second_block.clone())
+            .expect("persist second raw lane artifact");
+        let committed_second = ValidBlock::committed_from_replay_signed_block(second_block.clone());
+        commit_test_block_to_state(second.state.as_ref(), &committed_second, &second.context);
+        assert!(canonical_v2_lane_payload_matches_kura_inner(
+            second.state.as_ref(),
+            second.kura.as_ref(),
+            &second.context,
+            &second_block,
+            true,
+        ));
+        assert!(canonical_raw_lane_predecessor_matches_proposal(
+            second.state.as_ref(),
+            second.kura.as_ref(),
+            &second_proposal,
+        ));
+        assert_eq!(
+            second
+                .state
+                .unapplied_lane_block_artifact_heights_snapshot_cached()
+                .get(&(route.lane_id, route.dataspace_id)),
+            Some(&second_proposal.descriptor.lane_block_height)
+        );
+        for proposal in [&first_proposal, &second_proposal] {
+            assert!(
+                second
+                    .kura
+                    .read_lane_block_application_receipt_without_sidecar_repair(
+                        proposal.descriptor.lane_id,
+                        proposal.descriptor.lane_block_height,
+                    )
+                    .is_none(),
+                "neither raw link may gain an application receipt before restart"
+            );
+        }
+        let third_context = successor_context_for_parent(&second, &second_block);
+        drop(second);
+        let third = V2LaneWorkAdapter::new(
+            third_context,
+            local_peer,
+            local_key,
+            true,
+            state,
+            kura,
+            limits,
+            None,
+        )
+        .expect("cold-open the third height over a two-link raw chain");
+        assert!(
+            !third.output_guard.restart_required() && third.output_guard.acquire().is_some(),
+            "bounded raw-chain hydration must leave authoritative admission healthy"
+        );
+        assert_eq!(
+            third.lane_sessions.proposals_without_commit_qc(),
+            vec![first_proposal.clone(), second_proposal.clone()],
+            "cold hydration must reconstruct the exact raw chain oldest first"
+        );
+        for proposal in [&first_proposal, &second_proposal] {
+            assert!(third.canonical_anchor_for_proposal(proposal).is_some());
+            assert!(third.historical_raw_proposal_can_solicit_certificate(proposal));
+            assert!(!third.proposal_can_progress(proposal));
+            assert!(
+                third
+                    .kura
+                    .read_lane_block_application_receipt_without_sidecar_repair(
+                        proposal.descriptor.lane_id,
+                        proposal.descriptor.lane_block_height,
+                    )
+                    .is_none()
+            );
+        }
+        assert!(
+            third
+                .lane_sessions
+                .local_vote_rebroadcast_artifacts_for(&third.local_peer)
+                .iter()
+                .all(|(proposal, _)| {
+                    proposal != &first_proposal && proposal != &second_proposal
+                }),
+            "cold hydration must not mint votes for either unreceipted raw link"
         );
     }
     #[test]
@@ -26538,8 +27488,21 @@ pub(super) mod tests {
     ) {
         enable_multilane_nexus(adapter, keys, lane_id, dataspace_id);
     }
-    fn select_autonomous_test_role(
-        adapter: &mut V2LaneWorkAdapter,
+    fn autonomous_test_fixture(
+        mode: wire::ConsensusMode,
+        author: bool,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        let local_validator_index = if author { 0 } else { 1 };
+        fixture_at_height_inner_with_kura_and_local_index(
+            mode,
+            9,
+            true,
+            locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
+            Some(local_validator_index),
+        )
+    }
+    fn assert_autonomous_test_role(
+        adapter: &V2LaneWorkAdapter,
         keys: &[KeyPair],
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -26553,13 +27516,16 @@ pub(super) mod tests {
             dataspace_id,
         )
         .expect("plan deterministic autonomous lane slot");
-        let key = keys
-            .iter()
-            .find(|key| (key.public_key() == slot.author.public_key()) == author)
-            .expect("fixture contains the requested autonomous lane role")
-            .clone();
-        adapter.local_peer = PeerId::new(key.public_key().clone());
-        adapter.key_pair = key;
+        assert!(
+            keys.iter()
+                .any(|key| key.public_key() == adapter.local_peer.public_key()),
+            "the local fixture peer belongs to the frozen validator keys"
+        );
+        assert_eq!(
+            adapter.local_peer == slot.author,
+            author,
+            "the fixture must bind its local peer before claiming the autonomous lifecycle generation"
+        );
     }
     fn install_autonomous_test_queue(
         adapter: &mut V2LaneWorkAdapter,
@@ -26726,11 +27692,11 @@ pub(super) mod tests {
     }
     #[test]
     fn pre_kura_direct_release_projection_is_four_validator_bound_and_fail_closed() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
         prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        select_autonomous_test_role(&mut adapter, &keys, lane_id, dataspace_id, true);
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
         let journal_dir = tempfile::tempdir().expect("pre-Kura release journal directory");
         let journal_path = journal_dir.path().join("lane-reservations.norito");
         let queue =
@@ -26901,11 +27867,11 @@ pub(super) mod tests {
     }
     #[test]
     fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
         prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        select_autonomous_test_role(&mut adapter, &keys, lane_id, dataspace_id, true);
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
         let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
         let journal_path = journal_dir.path().join("lane-reservations.norito");
         let queue =
@@ -27240,11 +28206,11 @@ pub(super) mod tests {
     }
     #[test]
     fn autonomous_non_author_does_not_take_queue_ownership() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, false);
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
         prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        select_autonomous_test_role(&mut adapter, &keys, lane_id, dataspace_id, false);
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, false);
         let slot = plan_autonomous_lane_reservation_slot(
             adapter.state.as_ref(),
             adapter.kura.as_ref(),
@@ -27278,11 +28244,11 @@ pub(super) mod tests {
     }
     #[test]
     fn generic_fanout_cannot_publish_an_autonomous_producer_payload() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
         prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        select_autonomous_test_role(&mut adapter, &keys, lane_id, dataspace_id, true);
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
         let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
         let journal_path = journal_dir.path().join("lane-reservations.norito");
         let queue =
@@ -27308,11 +28274,11 @@ pub(super) mod tests {
     }
     #[test]
     fn autonomous_restart_hydrates_durable_hint_free_payload_and_queue_owner() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
         prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        select_autonomous_test_role(&mut adapter, &keys, lane_id, dataspace_id, true);
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
         let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
         let journal_path = journal_dir.path().join("lane-reservations.norito");
         let queue =
@@ -27370,11 +28336,11 @@ pub(super) mod tests {
     }
     #[test]
     fn autonomous_restart_rejects_conflicting_in_memory_payload_for_durable_slot() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
         prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        select_autonomous_test_role(&mut adapter, &keys, lane_id, dataspace_id, true);
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
         let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
         let journal_path = journal_dir.path().join("lane-reservations.norito");
         let queue =
@@ -27433,11 +28399,11 @@ pub(super) mod tests {
     }
     #[test]
     fn autonomous_small_payload_and_scan_limits_cannot_over_reserve() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
         prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
-        select_autonomous_test_role(&mut adapter, &keys, lane_id, dataspace_id, true);
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
         let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
         let journal_path = journal_dir.path().join("lane-reservations.norito");
         let queue =
@@ -28097,98 +29063,148 @@ pub(super) mod tests {
     }
     #[test]
     fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-        let (losing_block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
-        let entrypoint = losing_block
-            .external_entrypoints_cloned()
-            .next()
-            .expect("losing autonomous entrypoint");
-        let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
-            std::borrow::Cow::Owned(entrypoint.clone()),
-        );
-        let routing_plan = RoutingPlan::single(RoutingDecision::new(
-            proposal.descriptor.lane_id,
-            proposal.descriptor.dataspace_id,
-        ));
-        let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
-            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: accepted.hash(),
-            entrypoint_hash: entrypoint.hash(),
-            queue_plan_admission_binding_hash: Hash::new(
-                b"losing-autonomous-queue-plan-admission-binding",
-            ),
-            routing_plan_digest: routing_plan.digest(),
-            coordinator_leg: routing_plan.coordinator_leg(),
-            lane_id: proposal.descriptor.lane_id,
-            dataspace_id: proposal.descriptor.dataspace_id,
-            lane_incarnation: proposal.descriptor.lane_incarnation,
-            proposal_height: proposal.descriptor.proposal_height,
-            lane_block_height: proposal.descriptor.lane_block_height,
-            lane_block_view: proposal.descriptor.lane_block_view,
-            reservation_owner_hash: Hash::new(b"losing-autonomous-reservation-owner"),
-            proposal_identity_hash: proposal.proposal_hash,
-        };
-        let producer = adapter
-            .expected_lane_author(&proposal)
-            .expect("deterministic losing autonomous producer")
+        let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+        assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+        let journal_dir = tempfile::tempdir().expect("autonomous reservation journal directory");
+        let journal_path = journal_dir.path().join("lane-reservations.norito");
+        let queue =
+            install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+        let original_fifo = queue.fifo_snapshot_for_test();
+        adapter
+            .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+            .expect("produce one Queue-owned autonomous payload");
+        let payload = adapter
+            .pending_autonomous_anchor_payloads
+            .values()
+            .find(|payload| {
+                payload.origin_proposal.descriptor.lane_id == lane_id
+                    && payload.origin_proposal.descriptor.dataspace_id == dataspace_id
+            })
+            .expect("local producer publishes one pending autonomous payload")
             .clone();
-        bind_canonical_autonomous_reservation_identity(
-            &adapter,
-            &proposal,
-            &producer,
-            &mut reservation,
+        let producer = payload.producer.clone();
+        assert_eq!(payload.origin_proposal.payload_block_hint, None);
+        assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
+        assert_eq!(
+            adapter
+                .kura
+                .read_autonomous_lane_block_artifact(
+                    lane_id,
+                    payload.origin_proposal.descriptor.lane_block_height,
+                    adapter.native_network_id(),
+                    adapter.context.epoch,
+                )
+                .expect("read durable losing autonomous attempt")
+                .executable_payload,
+            payload
         );
-        let producer_key = keys
-            .iter()
-            .find(|key| key.public_key() == producer.public_key())
-            .expect("losing autonomous producer key");
-        let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+        let _ = adapter.drain_effects(usize::MAX);
+        let envelope = autonomous_lane_payload_envelope(
+            &payload,
             adapter.native_network_id(),
             adapter.context.epoch,
-            proposal.clone(),
-            vec![entrypoint],
-            vec![reservation],
-            vec![routing_plan],
-            vec![None],
-            producer.clone(),
-            producer_key.private_key(),
         )
-        .expect("signed losing autonomous payload");
-        assert_eq!(
-            adapter.accept_lane_message(
-                InboundBlockMessage::new(
-                    BlockMessage::LaneExecutablePayload(payload.clone()),
-                    Some(producer.clone()),
-                ),
-                0,
-            ),
-            V2LaneIngressOutcome::Inserted
-        );
-        let queue = Arc::new(Queue::test(
-            iroha_config::parameters::actual::Queue::default(),
-            &iroha_primitives::time::TimeSource::new_system(),
+        .expect("encode the exact losing autonomous carrier envelope");
+        let leader_index =
+            usize::try_from(adapter.context.leader(0)).expect("execution-carrier leader index");
+        let losing_header = adapter
+            .merge_carrier_context_header(0)
+            .expect("exact losing-carrier round header");
+        let mut losing_builder = BlockBuilder::new(losing_header);
+        losing_builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(Vec::new())
+                .with_autonomous_lane_payloads(vec![envelope]),
         ));
-        adapter
-            .install_lane_drain_queue(Arc::clone(&queue))
-            .expect("install live queue before retiring losing ownership");
-        let (round, losing_subject) = global_lock_for_block(&adapter, &losing_block);
-        let winning_subject = wire::BlockSubject {
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"winning-control-only-carrier-block",
-            )),
-            payload_hash: Hash::new(b"winning-control-only-carrier-payload"),
-            ..losing_subject
-        };
+        let losing_carrier = losing_builder
+            .build_with_signature(
+                u64::try_from(leader_index).expect("leader index fits u64"),
+                keys[leader_index].private_key(),
+            )
+            .canonical_resultless_proposal();
+        let (losing_round, losing_subject) = global_lock_for_block(&adapter, &losing_carrier);
         assert_eq!(
-            adapter.mark_global_body_locked(round, winning_subject),
+            adapter.mark_global_body_locked(losing_round, losing_subject),
+            Ok(GlobalBodyLockOutcome::Inserted)
+        );
+        assert!(
+            adapter
+                .pending_autonomous_anchor_payloads
+                .values()
+                .any(|pending| pending == &payload),
+            "the lock alone cannot release a hint-free Queue owner"
+        );
+        assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
+        assert_ne!(
+            adapter.bind_locked_global_body(&losing_carrier),
+            V2LaneIngressOutcome::Rejected,
+            "the exact losing body must bind its hint-free autonomous payload"
+        );
+        let anchored_payload = adapter
+            .autonomous_payloads
+            .values()
+            .find(|anchored| anchored.payload_hash == payload.payload_hash)
+            .expect("losing carrier retains its exact anchored payload")
+            .clone();
+        assert_eq!(
+            anchored_payload
+                .origin_proposal
+                .payload_block_hint
+                .expect("bound payload carries the losing global hint")
+                .proposal_block_hash,
+            losing_carrier.hash()
+        );
+        assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
+        assert_eq!(
+            queue.live_lane_reservations(),
+            anchored_payload.reservation_keys
+        );
+        assert!(
+            adapter
+                .kura
+                .read_autonomous_lane_slot_retirement(
+                    lane_id,
+                    anchored_payload
+                        .origin_proposal
+                        .descriptor
+                        .lane_block_height,
+                    adapter.native_network_id(),
+                    adapter.context.epoch,
+                )
+                .expect("read pre-supersession autonomous retirement")
+                .is_none(),
+            "the exact losing carrier remains live until a higher lock supersedes it"
+        );
+        let _ = adapter.drain_effects(usize::MAX);
+        let winning_view = losing_round.view.saturating_add(1);
+        let winning_leader_index = usize::try_from(adapter.context.leader(winning_view))
+            .expect("winning execution-carrier leader index");
+        let winning_header = adapter
+            .merge_carrier_context_header(winning_view)
+            .expect("exact winning-carrier round header");
+        let winning_carrier = BlockBuilder::new(winning_header)
+            .build_with_signature(
+                u64::try_from(winning_leader_index).expect("winning leader index fits u64"),
+                keys[winning_leader_index].private_key(),
+            )
+            .canonical_resultless_proposal();
+        let (winning_round, winning_subject) = global_lock_for_block(&adapter, &winning_carrier);
+        assert_eq!(
+            adapter.mark_global_body_locked(winning_round, winning_subject),
             Ok(GlobalBodyLockOutcome::Inserted)
         );
         assert!(adapter.autonomous_payloads.is_empty());
         let retirement = adapter
             .kura
             .read_autonomous_lane_slot_retirement(
-                proposal.descriptor.lane_id,
-                proposal.descriptor.lane_block_height,
+                lane_id,
+                anchored_payload
+                    .origin_proposal
+                    .descriptor
+                    .lane_block_height,
                 adapter.native_network_id(),
                 adapter.context.epoch,
             )
@@ -28196,17 +29212,18 @@ pub(super) mod tests {
             .expect("losing autonomous slot is durably retired");
         assert_eq!(
             retirement,
-            crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload)
+            crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&anchored_payload)
         );
         assert!(queue.live_lane_reservations().is_empty());
+        assert_eq!(queue.fifo_snapshot_for_test(), original_fifo);
         assert!(!adapter.output_guard.restart_required());
         assert_eq!(
             adapter.accept_lane_message(
                 InboundBlockMessage::new(
-                    BlockMessage::LaneExecutablePayload(payload),
+                    BlockMessage::LaneExecutablePayload(anchored_payload),
                     Some(producer),
                 ),
-                round.view,
+                winning_round.view,
             ),
             V2LaneIngressOutcome::Rejected,
             "a delayed payload from the retired carrier must not reclaim the slot"
@@ -28246,7 +29263,7 @@ pub(super) mod tests {
             proposal_identity_hash: proposal.proposal_hash,
         };
         let producer = adapter
-            .expected_lane_author(&proposal)
+            .expected_autonomous_lane_author(&proposal)
             .expect("deterministic autonomous producer")
             .clone();
         bind_canonical_autonomous_reservation_identity(
