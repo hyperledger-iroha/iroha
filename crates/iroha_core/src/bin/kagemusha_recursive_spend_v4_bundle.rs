@@ -229,10 +229,8 @@ const AUTHENTICATED_SOURCE_SEAL_PROJECTION_SCHEMA: &str =
     "iroha.kagemusha.authenticated_source_seal_projection.v1";
 const SOURCE_SEAL_BUILD_SCRIPT_OBSERVED_SCHEMA: &str =
     "iroha.kagemusha.source_seal_build_script_observed.v1";
-const SOURCE_SEAL_OUTER_POLICY_SCHEMA: &str =
-    "iroha.kagemusha.cprime_source_seal_outer_policy.v1";
-const SOURCE_SEAL_UNIT_GRAPH_NORMALIZATION: &str =
-    "cargo-unit-graph-v1-package-root-relative-src-path-source-cache-placeholders-sorted-compact-lf-v1";
+const SOURCE_SEAL_OUTER_POLICY_SCHEMA: &str = "iroha.kagemusha.cprime_source_seal_outer_policy.v1";
+const SOURCE_SEAL_UNIT_GRAPH_NORMALIZATION: &str = "cargo-unit-graph-v1-package-root-relative-src-path-source-cache-placeholders-sorted-compact-lf-v1";
 const SOURCE_SEAL_RESOLVED_FEATURES: &[&str] = &[
     "bls",
     "circuit-params",

@@ -27,6 +27,9 @@ mode = sys.argv[2]
 script = Path(sys.argv[3]).resolve()
 paths = {
     "data_model": Path("crates/iroha_data_model/src/offline/mod.rs"),
+    "data_model_model": Path(
+        "crates/iroha_data_model/src/offline/kagemusha_model.rs"
+    ),
     "rust": Path("crates/connect_norito_bridge/src/lib.rs"),
     "header": Path("crates/connect_norito_bridge/include/connect_norito_bridge.h"),
     "swift": Path("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"),
@@ -93,6 +96,7 @@ for label, relative in paths.items():
     if not absolute.is_file():
         raise SystemExit(f"required ABI21 contract file is missing: {relative}")
     texts[label] = absolute.read_text(encoding="utf-8")
+texts["data_model"] += "\n" + texts["data_model_model"]
 
 # The check is dormant on branches that have no ABI21 SDK work. As soon as a
 # V4 lifecycle method or carrier is introduced, the entire boundary must land

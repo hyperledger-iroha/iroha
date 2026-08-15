@@ -343,6 +343,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/lane_artifact_budget.rs",
     "kura/autonomous_lifecycle_terminal_outcomes.rs",
     "kura/autonomous_release_authority.rs",
+    "kura/autonomous_retired_attempt.rs",
     "kura/autonomous_application_evidence.rs",
     "kura/indexed_sidecar_io.rs",
     "kura/indexed_sidecar_rewrite.rs",
@@ -599,6 +600,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2_worker.rs': (
         'v2_worker/exact_output_rollover_claim.rs',
+        'v2_worker/autonomous_lane_output_retirement.rs',
         'v2_worker/kura_replica_advert_refresh.rs',
         'v2_worker/current_lane_output_rollover_claim.rs',
         'tests/v2_worker_main_00.rs',
@@ -674,9 +676,12 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lane_work/native_amx_route_and_receipt_tests.rs',
         'tests/v2_lane_work_observer_role.rs',
         'tests/v2_lane_work_native_body_recovery.rs',
-        'tests/v2_lane_work_effect_queue.rs',
+        'tests/v2_lane_work_lifecycle_and_recovery_cases.rs',
         'v2_lane_work/historical_recovery_and_carrier_tests.rs',
         'v2_lane_work_autonomous_ready_durability_tests.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs': (
+        'v2_lane_work_effect_queue.rs',
     ),
     'integration_tests/tests/sumeragi_v2_runner.rs': (
         'sumeragi_v2_runner/restart_timing_test.rs',
@@ -2104,13 +2109,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 856
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 857
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27"
+    "fc038b30180549cc6002db8ec5630ebf8ad5bb04a06be6dd19774d2b6ea5f433"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "b91f42798377695a51ecfbc3b52e45f93e80f2aa943b57ea62cce5f4d86e5e94"
+    "70034e3368c9a9b369851e529e31f49c38899441bba723619e04e34f388ace77"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2241,7 +2246,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         5,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 134),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 135),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -2478,6 +2483,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_worker::tests::exact_output_retry_rejects_a_different_message_identity",
     "sumeragi::v2_worker::tests::full_exact_output_corridor_does_not_disguise_non_progress_routes_as_backpressure",
     "sumeragi::v2_worker::tests::applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor",
+    "sumeragi::v2_worker::tests::applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only",
     "sumeragi::v2_worker::tests::applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically",
     "sumeragi::v2_worker::tests::applied_height_handoff_rejects_output_without_reconstruction",
     "sumeragi::v2_worker::tests::applied_height_handoff_rejects_unbound_lane_output_atomically",
@@ -2860,8 +2866,22 @@ _PRODUCTION_EFFECT_SCHEDULER_HANDOFF_ITEM_SHA256 = {
 # target-local/global FIFO ownership, round-robin service, and exact returned
 # post retention.  The retirement digests bind the narrow Retransmit whitelist
 # and the Kura receipt/finality-artifact authority checked before output is
-# handed to durable reconstruction.
+# handed to durable reconstruction. Autonomous retirement additionally binds
+# the current-height noncanonical fallback to one immutable retired attempt and
+# the same finalized carrier's nonwinning authority.
 _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
+    "autonomous_new_view_body_matches_durable_payload": (
+        "d1720512781a97bde960a6467e59016e15310cf69047787a5176350386e371e8"
+    ),
+    "autonomous_lane_output_matches_payload_identity": (
+        "6ad31433c9592ac390c299fb4bc0d7174b9dc36cde05a8168f208482a6ac9d18"
+    ),
+    "autonomous_lane_output_has_exact_retirement_source": (
+        "f160be0e0bcce5a09813d9b1ce971c361991bff4ac9a33469a5130bbd11b80f6"
+    ),
+    "autonomous_lane_output_has_durable_reconstruction_source": (
+        "201b33a705d475efd18a2b3eda36b9a7997d7d1e7f947c7aaa4f81e200409f5b"
+    ),
     "take_attempt": "acc18d3997a0cc6fcca4926b72a63fedf5d0987ecb33c1114e93e0da3b2254d7",
     "mark_admitted": "c6e502433ef5249540446d75e0f88f665a7ffc456bf4014216f808fd123f072c",
     "retain_returned": "8f1436db10edaa22360b416024817e8da58752a2fa7b604d97b0f6819976b0cd",
@@ -2897,6 +2917,12 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
     ),
     "handoff_applied_height_output_to_durable_reconstruction": (
         "7444ffcb40c52af925865f03520de3eac64f59d1c31ae6e549c5bf92e17aaf84"
+    ),
+}
+
+_AUTONOMOUS_RETIREMENT_HANDOFF_TEST_SHA256 = {
+    "applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only": (
+        "a5d1b6452466c325c8b019b45b249e755c8529e55ee3e3a3abf3036ac473bc32"
     ),
 }
 

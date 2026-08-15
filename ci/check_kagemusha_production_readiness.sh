@@ -32,6 +32,7 @@ mode = sys.argv[2]
 self_test = sys.argv[3] == "true"
 
 MODEL = "crates/iroha_data_model/src/offline/mod.rs"
+MODEL_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_model.rs"
 PRIVACY = "crates/iroha_data_model/src/privacy.rs"
 PRIVACY_PROTOCOL = "crates/iroha_data_model/src/privacy/protocol.rs"
 BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
@@ -367,6 +368,8 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             WORKFLOW,
         )
     }
+    if MODEL not in overrides:
+        texts[MODEL] += "\n" + read(MODEL_COMPONENT, errors)
     model = texts[MODEL]
     require(
         model,
@@ -1033,7 +1036,7 @@ if mode == "promotion":
 
 if self_test:
     baseline = {
-        MODEL: read(MODEL, []),
+        MODEL: read(MODEL, []) + "\n" + read(MODEL_COMPONENT, []),
         PRIVACY: read(PRIVACY, []),
         PRIVACY_PROTOCOL: read(PRIVACY_PROTOCOL, []),
         CATALOG: read(CATALOG, []),

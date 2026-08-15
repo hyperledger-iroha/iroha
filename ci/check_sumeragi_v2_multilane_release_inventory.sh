@@ -57,7 +57,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=856
+readonly canonical_production_test_count=857
 
 for release_support_component in \
   "$release_runner_support" \
@@ -955,7 +955,7 @@ expected_changed_module_counts = {
     "sumeragi::v2_lane_work::tests": 61,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
     "sumeragi::v2_runner::tests": 37,
-    "sumeragi::v2_worker::tests": 134,
+    "sumeragi::v2_worker::tests": 135,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
@@ -982,8 +982,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "58a7316ef7991977ab2a414ec89fa19c"
-    "193f1464f443b3427522dbcf9b951e27"
+    "fc038b30180549cc6002db8ec5630ebf"
+    "8ad5bb04a06be6dd19774d2b6ea5f433"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "

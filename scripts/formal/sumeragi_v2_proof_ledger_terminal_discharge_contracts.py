@@ -961,10 +961,10 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "6c0b97dd5a966ef280bd493495180113bd708160cf70b2a68081d2418636522e"
+        "5a5ac264475341dbae708893cea4aebbc079a1d0c02b8b62bd297aa72d7cc733"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "14e8bdbc1b747e07742046730b5f7a41dfa2b16840d517b6868594cae7a300d5"
+        "78a7ea401f595b7e8a8eee94b4d193229bc53494b4798594bc011d24cb277f80"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "0f614047f766802dd95ffb30e73a748c9cc0520f077527959b1ea99648f52197"
@@ -979,7 +979,7 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "3baec4153ff10b1f5ec64208f7e3ca82a3b301ea044847ee8b0bc81cdb8f7955"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "12e6948a85771f9d4976c98652ba501688d50ba7bf77d0777cd79aa7021def80"
+        "6edee399b579feab5cb8347425285286d12f9cf2073611904708c2f7810259c2"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "2097b08c8f2d4989b8426985ecaa4544d5f43b9bf31f6bac8cfefc5a25ad3f1f"
@@ -988,6 +988,11 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
 _INSTALLED_TC_SELECTOR_PROOF_SHA256 = (
     "99743a47d15918454ec638c35556ed1a7d985247d982ecd31032d7dfec0292bf"
 )
+_PREPARE_CACHE_REGRESSION_TEST_SHA256 = {
+    "delayed_lower_prepare_qc_cannot_downgrade_retransmitted_progress": (
+        "12d3bf10b9c49921dcd5625c67cd3c6f20f1aa34055d94ccd4469c3f00e0878f"
+    ),
+}
 
 
 _LOCAL_PROPOSAL_TIMEOUT_RUST_ITEM_SHA256 = {
@@ -1104,6 +1109,14 @@ def _same_round_semantic_kernel_source_fidelity_errors(
 
     required_sequences = {
         "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
+            (
+                """
+&& $summary.pending_prepare <= 1u64
+&& $summary.pending_prepare <= $summary.known_prepare
+&& $summary.known_prepare <= 3u64
+""",
+                "volatile PrepareQC ownership must remain one live pipeline plus durable high and lock references",
+            ),
             (
                 "macro_rules! vote_statement_identity_equal_body",
                 "production must define one shared signer-independent vote-statement kernel",
@@ -1282,6 +1295,49 @@ self.phase == Phase::Commit
             ),
         ),
         "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
+            (
+                """
+if let Some(existing) = self.durable.highest_prepare() {
+    if existing.round().view() == certificate.round().view()
+        && existing.subject() != certificate.subject()
+    {
+        return Err(ReducerError::ConflictingPrepareCertificates);
+    }
+    if certificate.round().view() < existing.round().view() {
+        return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
+    }
+}
+let reference = certificate.reference();
+""",
+                "PrepareQC admission must reject durable-high conflicts and stale views before mutating volatile caches",
+            ),
+            (
+                """
+let current_view = self.durable.current_view();
+self.pending_prepare
+    .retain(|_, certificate| certificate.round().view() == current_view);
+self.known_prepare = self
+    .durable
+    .highest_prepare()
+    .into_iter()
+    .chain(self.durable.locked())
+    .chain(self.pending_prepare.values())
+    .map(|certificate| (certificate.reference(), certificate.clone()))
+    .collect();
+""",
+                "PrepareQC pruning must retain only the current live owner and reconstruct known evidence from durable high and lock",
+            ),
+            (
+                """
+let mut durable = self.durable.clone();
+durable.apply(&self.context, self.local_validator, &pending.entry)?;
+self.durable = durable;
+if matches!(pending.entry.record(), WalRecord::ObservePrepare(_)) {
+    self.prune_observed_prepare_caches();
+}
+""",
+                "ObservePrepare acknowledgement must apply durable state before pruning volatile PrepareQC ownership",
+            ),
             (
                 "vote.same_statement(intent)",
                 "Commit vote admission must compare the exact signer-independent statement",
@@ -1778,6 +1834,47 @@ if facts.install_view_unchanged {
             _require_rust_source_token_sequence(
                 path, source, sequence, description, errors
             )
+    prepare_tests_path, prepare_tests_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_core/tests.rs",
+        errors,
+        "bounded PrepareQC cache regression source",
+    )
+    prepare_regression_name = (
+        "delayed_lower_prepare_qc_cannot_downgrade_retransmitted_progress"
+    )
+    prepare_regression = _require_rust_item(
+        prepare_tests_path,
+        prepare_tests_source,
+        prepare_regression_name,
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        prepare_tests_path,
+        prepare_regression,
+        _PREPARE_CACHE_REGRESSION_TEST_SHA256[prepare_regression_name],
+        "bounded PrepareQC cache regression",
+        errors,
+    )
+    _require_rust_token_sequence(
+        prepare_tests_path,
+        prepare_regression,
+        """
+let before_older = reducer.clone();
+let event = Event::QuorumCertificateReceived {
+    tag: reducer.current_tag(),
+    certificate: older,
+};
+let ignored = reducer.step(event).expect("ignore old PrepareQC");
+assert!(
+    ignored.disposition() == StepDisposition::Ignored(IgnoreReason::IrrelevantView)
+        && ignored.effects().is_empty()
+        && reducer == before_older
+);
+""",
+        "the delayed lower PrepareQC regression must prove a complete ignored stutter with no effects",
+        errors,
+    )
     worker_path_source = sources.get(
         "crates/iroha_core/src/sumeragi/v2_worker.rs"
     )
