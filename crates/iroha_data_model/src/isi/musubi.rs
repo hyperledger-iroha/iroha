@@ -801,7 +801,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
-    use norito::core::DecodeFromSlice;
+    use crate::isi::test_support::assert_slice_roundtrip;
     fn package() -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(7),
@@ -884,16 +884,6 @@ mod tests {
                 > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1
         );
         account
-    }
-    fn assert_slice_roundtrip<T>(value: T)
-    where
-        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
-        for<'a> T: DecodeFromSlice<'a>,
-    {
-        let bytes = value.encode();
-        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
-        assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
     }
     #[test]
     fn exact_digest_and_reversible_yank_roundtrip() {

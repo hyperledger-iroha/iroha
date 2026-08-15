@@ -1,4 +1,4 @@
-//! Generate Kotodama V1 lexical tables and validated translation offsets.
+//! Generate Kotodama V1 lexical, diagnostic, and translation tables.
 use std::{
     collections::BTreeSet,
     env,
@@ -11,6 +11,18 @@ const TRANSLATION_OFFSET_OUTPUT: &str = "kotodama_i18n_v1_offsets.bin";
 const TRANSLATION_HEADER: &str = "kotodama-i18n-v1\t76\t15";
 const TRANSLATION_LANGUAGE_COUNT: usize = 76;
 const TRANSLATION_MESSAGE_COUNT: usize = 15;
+const DIAGNOSTIC_EXPLANATIONS_SPEC_PATH: &str =
+    "src/assets/diagnostics_v1/diagnostic_explanations_v1.tsv";
+const COMPILE_FAIL_CASES_SPEC_PATH: &str =
+    "src/assets/diagnostics_v1/compile_fail_cases_v1.tsv";
+const SECRET_REJECT_CASES_SPEC_PATH: &str =
+    "src/assets/diagnostics_v1/secret_reject_cases_v1.tsv";
+const DIAGNOSTIC_EXPLANATIONS_ASSET: &str =
+    include_str!("src/assets/diagnostics_v1/diagnostic_explanations_v1.tsv");
+const COMPILE_FAIL_CASES_ASSET: &str =
+    include_str!("src/assets/diagnostics_v1/compile_fail_cases_v1.tsv");
+const SECRET_REJECT_CASES_ASSET: &str =
+    include_str!("src/assets/diagnostics_v1/secret_reject_cases_v1.tsv");
 const TRANSLATION_LANGUAGES: &str = "English\tJapanese\tSimplifiedChinese\tTraditionalChinese\tThai\tKhmer\tVietnamese\tKorean\tArabic\tHebrew\tRussian\tBurmese\tHindi\tUrdu\tSinhala\tTamil\tFrench\tUkrainian\tPolish\tSwedish\tGerman\tGreek\tItalian\tKazakh\tMongolian\tJavanese\tMadurese\tBalinese\tMinangkabau\tAncientEgyptianHieroglyph\tDzongkha\tSerbian\tTurkish\tArmenian\tAmharic\tHausa\tTibetan\tKashmiri\tNepali\tAfrikaans\tSpanish\tFarsi\tOldAkkadian\tQuechua\tAymara\tBengali\tBalochi\tBashkir\tBrahui\tPortuguese\tPunjabi\tSindhi\tPashto\tSaraiki\tTatar\tSomali\tSundanese\tShona\tSwahili\tOromo\tIgbo\tYoruba\tZulu\tDutch\tDanish\tNorse\tFinnish\tEstonian\tLatvian\tHungarian\tCzech\tLao\tIndonesian\tPijin\tDivehi\tManchurian";
 const TRANSLATION_FIELDS: [(&str, &[&str]); TRANSLATION_MESSAGE_COUNT] = [
     ("no_functions", &[]),
@@ -29,6 +41,194 @@ const TRANSLATION_FIELDS: [(&str, &[&str]); TRANSLATION_MESSAGE_COUNT] = [
     ("lint_usage", &[]),
     ("lint_usage_help", &[]),
 ];
+fn decode_table_field(raw: &str, path: &str, line: usize, column: usize) -> String {
+    let mut decoded = String::with_capacity(raw.len());
+    let mut characters = raw.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            assert!(
+                !character.is_control(),
+                "{path}:{line}:{column} contains an unescaped control character"
+            );
+            decoded.push(character);
+            continue;
+        }
+        let escaped = characters.next().unwrap_or_else(|| {
+            panic!("{path}:{line}:{column} ends with an incomplete escape")
+        });
+        decoded.push(match escaped {
+            '\\' => '\\',
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            _ => panic!("{path}:{line}:{column} has unsupported escape `\\{escaped}`"),
+        });
+    }
+    decoded
+}
+fn parse_versioned_table(
+    path: &str,
+    asset: &str,
+    expected_header: &str,
+    expected_schema: &[&str],
+    expected_rows: usize,
+) -> Vec<Vec<String>> {
+    println!("cargo:rerun-if-changed={path}");
+    assert!(asset.ends_with('\n'), "{path} must end with a newline");
+    assert!(
+        !asset.contains('\r'),
+        "{path} must use canonical LF line endings"
+    );
+    let mut lines = asset.split_terminator('\n');
+    assert_eq!(
+        lines.next(),
+        Some(expected_header),
+        "unexpected version/count header in {path}"
+    );
+    let schema = lines.next().expect("versioned table schema row");
+    assert!(
+        schema.split('\t').eq(expected_schema.iter().copied()),
+        "unexpected field schema in {path}"
+    );
+    let mut rows = Vec::with_capacity(expected_rows);
+    for (row_index, record) in lines.enumerate() {
+        assert!(!record.is_empty(), "{path} has an empty record");
+        let columns = record
+            .split('\t')
+            .enumerate()
+            .map(|(column_index, value)| {
+                decode_table_field(value, path, row_index + 3, column_index + 1)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            columns.len(),
+            expected_schema.len(),
+            "{path}:{} has the wrong field count",
+            row_index + 3
+        );
+        assert!(
+            columns.iter().all(|column| !column.is_empty()),
+            "{path}:{} has an empty field",
+            row_index + 3
+        );
+        rows.push(columns);
+    }
+    assert_eq!(
+        rows.len(),
+        expected_rows,
+        "{path} has the wrong record count"
+    );
+    rows
+}
+fn is_diagnostic_phase(value: &str) -> bool {
+    matches!(
+        value,
+        "Lex" | "Parse" | "Resolve" | "Semantic" | "Lowering" | "Artifact"
+    )
+}
+fn write_diagnostic_tables(out_dir: &Path) {
+    let explanations = parse_versioned_table(
+        DIAGNOSTIC_EXPLANATIONS_SPEC_PATH,
+        DIAGNOSTIC_EXPLANATIONS_ASSET,
+        "kotodama-diagnostic-explanations-v1\t235",
+        &["code", "phase", "summary", "help"],
+        235,
+    );
+    let mut seen_codes = BTreeSet::new();
+    let mut generated = String::from(
+        "// @generated by crates/kotodama_lang/build.rs from the versioned diagnostic asset.\n\
+         // Do not edit this file directly.\n\n\
+         /// Canonical diagnostic explanation registry used by `koto explain` and docs.\n\
+         pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[\n",
+    );
+    for row in explanations {
+        assert!(is_diagnostic_phase(&row[1]), "unknown diagnostic phase");
+        assert!(
+            row[0]
+                .chars()
+                .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'),
+            "invalid diagnostic code `{}`",
+            row[0]
+        );
+        assert!(seen_codes.insert(row[0].clone()), "duplicate diagnostic code");
+        writeln!(
+            &mut generated,
+            "    DiagnosticExplanation {{ code: {:?}, phase: DiagnosticPhase::{}, summary: {:?}, help: {:?} }},",
+            row[0], row[1], row[2], row[3]
+        )
+        .expect("write diagnostic explanation table");
+    }
+    generated.push_str("];\n");
+    fs::write(
+        out_dir.join("kotodama_diagnostic_explanations.rs"),
+        generated,
+    )
+    .expect("write generated Kotodama diagnostic explanations");
+
+    let compile_fail_cases = parse_versioned_table(
+        COMPILE_FAIL_CASES_SPEC_PATH,
+        COMPILE_FAIL_CASES_ASSET,
+        "kotodama-compile-fail-cases-v1\t59",
+        &["name", "source", "phase", "code", "message", "line"],
+        59,
+    );
+    let mut seen_names = BTreeSet::new();
+    let mut generated = String::from(
+        "// @generated by crates/kotodama_lang/build.rs from the versioned compile-fail asset.\n\
+         // Do not edit this file directly.\n\n\
+         const CASES: &[CompileFailCase] = &[\n",
+    );
+    for row in compile_fail_cases {
+        assert!(seen_names.insert(row[0].clone()), "duplicate compile-fail case name");
+        assert!(is_diagnostic_phase(&row[2]), "unknown compile-fail phase");
+        let line = row[5]
+            .parse::<usize>()
+            .expect("compile-fail source line must be an unsigned integer");
+        assert!(
+            line > 0 && line <= row[1].lines().count(),
+            "compile-fail source line is outside the fixture"
+        );
+        writeln!(
+            &mut generated,
+            "    CompileFailCase {{ name: {:?}, source: {:?}, phase: DiagnosticPhase::{}, code: {:?}, message: {:?}, line: {} }},",
+            row[0], row[1], row[2], row[3], row[4], line
+        )
+        .expect("write compile-fail case table");
+    }
+    generated.push_str("];\n");
+    fs::write(out_dir.join("kotodama_compile_fail_cases.rs"), generated)
+        .expect("write generated Kotodama compile-fail cases");
+
+    let reject_cases = parse_versioned_table(
+        SECRET_REJECT_CASES_SPEC_PATH,
+        SECRET_REJECT_CASES_ASSET,
+        "kotodama-secret-reject-cases-v1\t13",
+        &["name", "source", "code", "primary"],
+        13,
+    );
+    let mut seen_names = BTreeSet::new();
+    let mut generated = String::from(
+        "// @generated by crates/kotodama_lang/build.rs from the versioned secret-flow asset.\n\
+         // Do not edit this file directly.\n\n\
+         const REJECT_CASES: &[RejectCase] = &[\n",
+    );
+    for row in reject_cases {
+        assert!(seen_names.insert(row[0].clone()), "duplicate secret-flow case name");
+        assert!(
+            row[1].contains(&row[3]),
+            "secret-flow primary text is absent from the source fixture"
+        );
+        writeln!(
+            &mut generated,
+            "    RejectCase {{ name: {:?}, source: {:?}, code: {:?}, primary: {:?} }},",
+            row[0], row[1], row[2], row[3]
+        )
+        .expect("write secret-flow rejection table");
+    }
+    generated.push_str("];\n");
+    fs::write(out_dir.join("kotodama_secret_reject_cases.rs"), generated)
+        .expect("write generated Kotodama secret-flow cases");
+}
 fn validate_translation_placeholders(
     message: &str,
     required: &[&str],
@@ -386,6 +586,7 @@ fn main() {
     )
     .expect("write generated operator documentation constant");
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
+    write_diagnostic_tables(&out_dir);
     write_translation_offsets(&out_dir);
     fs::write(out_dir.join("kotodama_v1_lexical.rs"), generated)
         .expect("write generated Kotodama lexical tables");

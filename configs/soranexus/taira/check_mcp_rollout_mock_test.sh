@@ -7,6 +7,18 @@ SOURCE_CONFIG="${SCRIPT_DIR}/config.toml"
 
 cleanup_paths=()
 
+make_temp_dir() {
+  if [[ -n "${TMPDIR:-}" ]]; then
+    [[ -d "$TMPDIR" ]] || {
+      echo "TMPDIR is not an existing directory: ${TMPDIR}" >&2
+      return 1
+    }
+    mktemp -d "${TMPDIR%/}/taira-mcp-rollout-mock.XXXXXX"
+    return
+  fi
+  mktemp -d
+}
+
 cleanup() {
   local path
   for path in "${cleanup_paths[@]:-}"; do
@@ -321,12 +333,13 @@ elif [[ -n "$validator_index" && "$method" == "GET" && "$url" == "https://valida
     body="${body/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee}"
   fi
 elif [[ -n "$validator_index" && "$method" == "GET" && "$url" == "https://validator-${validator_index}.test/status" ]]; then
-  body="$(python3 - "$validator_height" "$scenario" <<'PY'
+  body="$(python3 - "$validator_height" "$scenario" "$validator_sample" <<'PY'
 import json
 import sys
 
 height = int(sys.argv[1])
 scenario = sys.argv[2]
+sample = int(sys.argv[3])
 if scenario == "fleet_lagging_status_blocks":
     height -= 1
 
@@ -350,6 +363,19 @@ if scenario == "fleet_repeated_dataspace_roster":
     rosters["is2"] = rosters["is"].copy()
 if scenario == "fleet_repeated_universal_roster":
     rosters["dpn"] = rosters["universal"].copy()
+if scenario == "fleet_partial_account_reuse":
+    rosters["dpn"][0] = rosters["universal"][0]
+
+
+def manifest_bindings(dataspace_alias, validators):
+    return [
+        {
+            "validator": validator,
+            "peer_id": f"{dataspace_alias}-peer-{index}",
+            "torii_url": f"https://{dataspace_alias}-validator-{index}.test",
+        }
+        for index, validator in enumerate(validators, start=1)
+    ]
 
 teu_lane_commit = []
 dataspace_catalog = []
@@ -362,18 +388,52 @@ for lane_id, lane_alias, dataspace_id, dataspace_alias in lane_specs:
     if scenario == "fleet_missing_universal_roster" and dataspace_alias == "universal":
         has_manifest = False
     validators = rosters[dataspace_alias].copy() if has_manifest else []
+    bindings = manifest_bindings(dataspace_alias, validators) if has_manifest else []
     quorum = 3 if has_manifest else None
     manifest_path = f"/manifests/{lane_alias}.manifest.json" if has_manifest else None
     if scenario == "fleet_missing_dataspace_roster" and dataspace_alias == "cbsi":
         validators = []
+        bindings = []
         quorum = None
     if scenario == "fleet_invalid_dataspace_quorum" and dataspace_alias == "dpn":
         quorum = 2
     if scenario == "fleet_same_dataspace_roster_mismatch" and lane_alias == "zk":
         has_manifest = True
         validators = [f"other-universal-validator-{index}" for index in range(1, 5)]
+        bindings = manifest_bindings("other-universal", validators)
         quorum = 3
         manifest_path = "/manifests/zk.manifest.json"
+    if scenario == "fleet_missing_binding_projection" and lane_alias == "dpn":
+        bindings = None
+    if scenario == "fleet_binding_unknown_field" and lane_alias == "dpn":
+        bindings[0]["unexpected"] = True
+    if scenario == "fleet_binding_missing_field" and lane_alias == "dpn":
+        bindings[0].pop("torii_url")
+    if scenario == "fleet_binding_account_mismatch" and lane_alias == "dpn":
+        bindings[0]["validator"] = "unlisted-validator"
+    if scenario == "fleet_duplicate_binding_peer" and lane_alias == "dpn":
+        bindings[1]["peer_id"] = bindings[0]["peer_id"]
+    if scenario == "fleet_duplicate_binding_torii" and lane_alias == "dpn":
+        bindings[1]["torii_url"] = bindings[0]["torii_url"]
+    if scenario == "fleet_same_dataspace_binding_mismatch" and lane_alias == "zk":
+        has_manifest = True
+        validators = rosters["universal"].copy()
+        bindings = manifest_bindings("universal", validators)
+        bindings[0]["peer_id"] = "remapped-universal-peer"
+        quorum = 3
+        manifest_path = "/manifests/zk.manifest.json"
+    if scenario == "fleet_partial_peer_reuse" and lane_alias == "dpn":
+        bindings[0]["peer_id"] = "universal-peer-1"
+    if scenario == "fleet_partial_torii_reuse" and lane_alias == "dpn":
+        bindings[0]["torii_url"] = "https://universal-validator-1.test"
+    if scenario == "fleet_noncanonical_torii" and lane_alias == "dpn":
+        bindings[0]["torii_url"] = "https://DPN-validator-1.test:443/"
+    if (
+        scenario == "fleet_bindings_change_between_samples"
+        and sample > 1
+        and lane_alias == "dpn"
+    ):
+        bindings[0]["peer_id"] = "dpn-peer-1-rotated"
     lane = {
         "lane_id": lane_id,
         "alias": lane_alias,
@@ -383,8 +443,11 @@ for lane_id, lane_alias, dataspace_id, dataspace_alias in lane_specs:
         "manifest_ready": has_manifest,
         "manifest_path": manifest_path,
         "manifest_validators": validators,
+        "manifest_validator_bindings": bindings,
         "manifest_quorum": quorum,
     }
+    if scenario == "fleet_missing_binding_projection" and lane_alias == "dpn":
+        lane.pop("manifest_validator_bindings")
     teu_lane_commit.append(lane)
     dataspace_catalog.append({
         "lane_id": lane_id,
@@ -849,7 +912,7 @@ run_case() {
   local expected_git_sha="${4:-}"
   local root output_file
 
-  root="$(mktemp -d)"
+  root="$(make_temp_dir)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
   output_file="${root}/output.log"
@@ -889,7 +952,7 @@ run_invalid_canary_identity_case() {
   local expected_pattern="$2"
   local root output_file config_path
 
-  root="$(mktemp -d)"
+  root="$(make_temp_dir)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
   output_file="${root}/invalid-${mutation}.log"
@@ -942,7 +1005,7 @@ run_invalid_topology_config_case() {
   local forbidden_id="$2"
   local root output_file config_path
 
-  root="$(mktemp -d)"
+  root="$(make_temp_dir)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
   output_file="${root}/invalid-${forbidden_dataspace}-dataspace.log"
@@ -1030,11 +1093,23 @@ run_case fleet_catalog_changes_between_samples 'disagrees with validator-1 on da
 run_case fleet_missing_dataspace_roster "physical dataspace 'cbsi' lacks a non-empty manifest validator roster"
 run_case fleet_missing_universal_roster "lane 'governance' requires a ready manifest with a non-empty validator roster"
 run_case fleet_invalid_dataspace_quorum "lane 'dpn' manifest quorum 2 is invalid for 4 validators"
+run_case fleet_missing_binding_projection 'manifest_validator_bindings is not an array'
+run_case fleet_binding_unknown_field 'fields must be exactly'
+run_case fleet_binding_missing_field 'fields must be exactly'
+run_case fleet_binding_account_mismatch 'roster does not exactly match its validator-binding account set'
+run_case fleet_duplicate_binding_peer 'contains duplicate PeerIds'
+run_case fleet_duplicate_binding_torii 'contains duplicate Torii origins'
+run_case fleet_same_dataspace_binding_mismatch "lanes in physical dataspace 'universal' project different validator rosters, bindings, or quorums"
+run_case fleet_partial_account_reuse 'same manifest validator account'
+run_case fleet_partial_peer_reuse 'same manifest PeerId'
+run_case fleet_partial_torii_reuse 'same manifest Torii origin'
+run_case fleet_noncanonical_torii 'torii_url is not canonical'
 run_case fleet_repeated_dataspace_roster "physical dataspaces 'is' and 'is2' reuse the same validator roster"
 run_case fleet_repeated_universal_roster "physical dataspaces 'universal' and 'dpn' reuse the same validator roster"
-run_case fleet_same_dataspace_roster_mismatch "lanes in physical dataspace 'universal' project different validator rosters or quorums"
+run_case fleet_same_dataspace_roster_mismatch "lanes in physical dataspace 'universal' project different validator rosters, bindings, or quorums"
 run_case fleet_missing_routing_policy '/status.nexus.routing_policy is not an object'
 run_case fleet_wrong_routing_matcher 'expected exact ordered rule tuples'
+run_case fleet_bindings_change_between_samples 'validator fleet changed dataspace_rosters between progress samples'
 run_case fleet_stale_commit_progress 'validator fleet did not advance a common committed height'
 run_case fleet_lagging_status_blocks '/status.blocks 706 does not match the durable committed height 707'
 run_case fleet_committed_hash_trailing_bytes 'durable committed subject omitted a canonical block hash'
@@ -1047,7 +1122,7 @@ run_invalid_canary_identity_case \
 run_invalid_topology_config_case governance 1
 run_invalid_topology_config_case zk 2
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if ! PATH="${root}/mockbin:${PATH}" \
@@ -1070,7 +1145,7 @@ grep -qx 'https://validator-2.test/readyz' "${root}/state/readyz_seen"
 grep -qx 'https://validator-3.test/readyz' "${root}/state/readyz_seen"
 grep -qx 'https://validator-4.test/readyz' "${root}/state/readyz_seen"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 archived_chain_id="809574f5-fee7-5e69-bfcf-52451e42d50f"
@@ -1098,7 +1173,7 @@ grep -q 'Taira MCP rollout checks passed.' \
   "${root}/archived-chain-override-output.log"
 test -f "${root}/state/faucet_seen"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
@@ -1117,14 +1192,21 @@ fi
 grep -q -- '--expected-chain-id must be one canonical UUID' \
   "${root}/invalid-chain-id-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 release_script="${root}/configs/soranexus/taira/check_mcp_rollout.real.sh"
+release_operator_args=(
+  --operator-network-id
+  "hash:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#0000"
+  --operator-private-key-file
+  "${root}/state/operator-private-key"
+)
 if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="cargo_success" \
     MOCK_STATE_DIR="${root}/state" \
     "$release_script" \
+      "${release_operator_args[@]}" \
       --skip-local \
       --public-root https://taira.sora.org \
       --skip-write-canary \
@@ -1146,6 +1228,7 @@ if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="cargo_success" \
     MOCK_STATE_DIR="${root}/state" \
     "$release_script" \
+      "${release_operator_args[@]}" \
       --skip-local \
       --public-root https://taira.sora.org \
       "${release_fleet_args[@]}" \
@@ -1161,6 +1244,7 @@ if PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="cargo_success" \
     MOCK_STATE_DIR="${root}/state" \
     "$release_script" \
+      "${release_operator_args[@]}" \
       --skip-local \
       --public-root https://taira.sora.org \
       "${release_fleet_args[@]}" \
@@ -1178,6 +1262,7 @@ if PATH="${root}/mockbin:${PATH}" \
     MOCK_STATE_DIR="${root}/state" \
     VALIDATOR_PROGRESS_SAMPLES=2 \
     "$release_script" \
+      "${release_operator_args[@]}" \
       --skip-local \
       --public-root https://taira.sora.org \
       "${release_fleet_args[@]}" \
@@ -1191,7 +1276,7 @@ fi
 grep -q 'public Taira rollout requires at least three advancing validator fleet samples' \
   "${root}/release-too-few-samples-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
@@ -1209,7 +1294,7 @@ if PATH="${root}/mockbin:${PATH}" \
 fi
 grep -q 'write canary config not found:' "${root}/missing-canary-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
@@ -1229,7 +1314,7 @@ fi
 grep -q 'automatic canary bootstrap requires --onboarding-token-file ABSOLUTE_PATH' \
   "${root}/missing-onboarding-token-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 "${root}/scripts/taira_bootstrap_canary.py" \
@@ -1255,7 +1340,7 @@ after_hash="$(shasum -a 256 "${root}/explicit-canary.toml" | awk '{print $1}')"
 [[ "$before_hash" == "$after_hash" ]]
 grep -q 'Taira MCP rollout checks passed.' "${root}/explicit-canary-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 "${root}/scripts/taira_bootstrap_canary.py" \
@@ -1282,7 +1367,7 @@ test -f "${root}/state/faucet_seen"
 grep -q '^34567$' "${root}/state/faucet_status_timeout_seen"
 grep -q '^2$' "${root}/state/ping_calls"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
@@ -1301,7 +1386,7 @@ fi
 grep -q -- '--expected-git-sha must be a 7 to 40 character hexadecimal git SHA prefix' \
   "${root}/invalid-sha-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
@@ -1320,7 +1405,7 @@ fi
 grep -q 'MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS must be a positive integer' \
   "${root}/invalid-connect-timeout-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
@@ -1339,7 +1424,7 @@ fi
 grep -q 'MCP_ROLLOUT_CURL_MAX_TIME_SECONDS must be a positive integer' \
   "${root}/invalid-max-time-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
@@ -1358,7 +1443,7 @@ fi
 grep -q 'POST_CANARY_STATUS_RECHECK_DELAY_SECONDS must be a non-negative integer' \
   "${root}/invalid-recheck-delay-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
@@ -1377,7 +1462,7 @@ fi
 grep -q 'PUBLIC_LANE_ID must be a non-negative integer' \
   "${root}/invalid-public-lane-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if PATH="${root}/mockbin:${PATH}" \
@@ -1396,7 +1481,7 @@ if PATH="${root}/mockbin:${PATH}" \
 fi
 grep -q 'write canary failed: transaction expired' "${root}/resolve-output.log"
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 if ! PATH="${root}/mockbin:${PATH}" \
@@ -1420,7 +1505,7 @@ if grep -vq '^7 33$' "${root}/state/curl_timeouts"; then
   exit 1
 fi
 
-root="$(mktemp -d)"
+root="$(make_temp_dir)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 rm -f "${root}/mockbin/iroha"

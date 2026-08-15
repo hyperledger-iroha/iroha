@@ -46,17 +46,22 @@ Completed history lives in [`status.md`](./status.md).
   dataspace, archive deployment evidence for its distinct validator/server
   cohort, storage boundary, and dataspace manifest. A catalog entry or repeated
   lane-manifest roster is insufficient evidence.
-- Expose each dataspace manifest's canonical validator-to-`PeerId`/Torii
-  bindings in operator status so rollout validation can prove disjoint machine
-  cohorts directly. The V1 gate can compare manifest validator-account rosters
-  and quorum projections, but account identities alone are not host evidence.
+- Preserve the schema-closed manifest validator-account/`PeerId`/Torii binding
+  projection now exposed in operator status. The V1 Taira gate requires exact
+  roster-to-binding equality, stable same-dataspace and advancing-sample
+  projections, and no account, peer, or canonical HTTPS origin reuse across
+  dataspaces. This proves disjoint declared identities and routes, not disjoint
+  physical machines; release qualification still needs independently archived
+  deployment evidence for the physical server and storage boundaries.
 
 ## Build-efficiency closeout
 
-- Preserve the reviewed 5,067,263-line first-party Rust baseline and the
-  4,560,536-line ten-percent ceiling. The current 5,017,049-line count leaves
-  a 456,513-line gap; do not redefine the baseline, count moved test code as a
-  physical reduction, or weaken required runtime, security, consensus, SDK, or
+- Preserve the reviewed 5,067,263-line first-party Rust baseline, the current
+  4,540,000 aggregate ceiling, and the 4,500,000 working target. The mutable
+  tree has not passed the source-budget gate because unrelated findings remain;
+  derive its exact aggregate count and remaining gap again only after source
+  freeze. Do not redefine the baseline, count moved test code as a physical
+  reduction, or weaken required runtime, security, consensus, SDK, or
   release-evidence behavior to close it.
 - Add the new source and fixture files to the eventual signed commit, then rerun
   the strict SDK source-closure guard from the tracked candidate. Keep the
@@ -1035,16 +1040,18 @@ pinned Verus targets, derive the canonical cross-tool and production-trace
 evidence, and validate the release receipt and completion marker against that
 same commit and ledger digest.
 
-On the current tree, the independent 88-leg release inventory contract is
-sealed at 856 production tests across 40 modules, 525 G-UNIT rows, and four
-mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
-The aggregate non-release proof checker and focused direct-Serve, same-round,
-Serve-regression, and trace-link mutation tests pass. The remaining full
-production inventory, Rust, network, and release-proof execution must run
-against the final frozen tree. The package-layout preflight and aggregate
-checker also bind the sole reviewed test-only `v2_core/refinement_cases.rs`
-source split and reject additional, parent-relative, non-test, or
-skipped-verifier mutations.
+On the current mutable tree, the independent static release inventory contract
+enumerates 88 legs, 860 production tests across 40 modules, 441 named
+ownership/regression cases, 525 G-UNIT rows, and four mandatory four-peer
+gates. The affected module totals are 18 Kura tests, 63 lane-work tests, and 135
+worker tests. This is source inventory, not a sealed receipt. The structural
+model/source checker and source-only causal-FIFO seam check pass, as do all 26
+checked-token real-source tests. The aggregate proof-ledger checker remains
+under current-source validation; no aggregate result is claimed. The complete
+production inventory, Cargo, network, and release-proof execution must run
+against the final frozen tree. The package-layout contract permits only the reviewed
+test-only `v2_core/refinement_cases.rs` source split and rejects additional,
+parent-relative, non-test, or skipped-verifier mutations.
 The broader `check_sumeragi_v2_multilane_models.py` structural gate now passes
 after binding Kura's whole-plan route preflight, all-manifest readback,
 transition-checked latest-index publication, configured evidence-byte bounds,
@@ -1073,37 +1080,41 @@ The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
 
-A fresh source-budget run over the merged development tree inspected 7,979
-paths with 198 exceptions and counted 5,014,747 Rust lines. It reports zero
-findings and remains below the 5,254,807 ratchet ceiling; another 454,211 lines
-would be required to reach the 4,560,536 objective. The separate generic
-lifecycle-coordinator cutover receives no multilane credit toward that
-reduction. The static source-budget guard passes; the reduction objective and
-immutable-candidate evidence remain open.
+The current source-budget gate is not green because unrelated findings remain.
+Its configured aggregate baseline is 5,067,263 lines, its ratchet ceiling is
+5,254,807, its current aggregate ceiling is 4,540,000, and its working target is
+4,500,000. Recompute the mutable-tree count and remaining gap after source
+freeze. The separate generic lifecycle-coordinator cutover receives no
+multilane credit toward that reduction, and immutable-candidate evidence
+remains open.
 
 Historical autonomous recovery now uses one bounded canonical namespace
 scanner across startup replay binding, disk accounting, and lane-geometry
 reconstruction. It identity-binds the exact nested directory and its records,
 counts the bytes once, rejects noncanonical, temporary, nested, symlinked,
 hardlinked, or oversized artifacts, and removes the former unbounded
-directory-list collection. Pinned Rust 1.93.1 locked/offline execution in
-isolated source/target space passed 12 current-source focused restart,
+directory-list collection. An earlier mutable-tree pinned Rust 1.93.1
+locked/offline execution in isolated source/target space passed 12 focused restart,
 accounting, crash-window, Native-retention, and B/A/B recreation tests. Earlier
 same-day isolated slices passed 18 Kura replica tests and four configuration
 tests. The isolated `iroha_core` library check also passed before the final
 reader deduplication, with post-edit startup-binding and B/A/B regressions
-green. This focused evidence does not replace the complete release gates.
+green at that checkpoint. No Cargo result against the current split source is
+claimed, and this historical focused evidence does not replace the complete
+release gates.
 
-The static release inventory now matches `856/856` production tests across 40
+The static release inventory contract now enumerates `860/860` production tests across 40
 modules and `525/525` focused `G-UNIT` entries. Its canonical 526-line TSV has
 SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The separate canonical production module/test TSV has SHA-256
-`58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27`;
-the newest rows bind crash-safe autonomous lifecycle terminal completion,
-startup reconciliation before lane-work activation, and the exact pre-mutation
-terminal-sweep partition. The duplicate inline V2 core network simulations
-are retired; the standalone `iroha_sumeragi_core` harness remains.
+`43488145df2b3d502786684c24ce5ebf7c709289f6b76bc667f22484daff5746`;
+the newest rows bind the proposal-height namespace for exact retired attempts,
+canonical successor acceptance while local sidecars lag, two-link raw
+lane-chain hydration on receipt-free cold restart, and exact noncanonical
+autonomous-output retirement at applied-height handoff. The duplicate inline
+V2 core network simulations are retired; the standalone
+`iroha_sumeragi_core` harness remains.
 The 319-entry core group additionally source-seals grouped Native prevote
 budget rejection before Kura/WSV mutation, historical source-bundle
 authentication, crash-safe latest-index and prune-V2 recovery, cross-route
@@ -1114,14 +1125,14 @@ historical autonomous recovery into exactly-once merge application. This is
 source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
-symbols, three ordered checks, and 14 mutations with no pending source check;
-the final pre-self-documentation source manifest is
-`01754c06f060330a30cddd03c48203a55909832dfcb8475aee3f5b95651a4d5c`.
-The proof-ledger release-inventory subset passes `54/54`, the aggregate
-multilane model/source contract suite passes `171/171` under pinned Python 3.12
-with strict warnings, and the static
-Apalache-runner contract passes all 14 fail-closed controls. No current TLC or
-Apalache engine run is claimed. The newly bound non-retireable lane transport
+symbols, three ordered checks, and 14 mutations with no pending structural
+source check. The reviewed Rust include topology contains 48 parents and 301
+direct entries; its canonical payload SHA-256 is
+`1511236eb4b62cbd8ce687714f3aa6afd522c6e56179b000f83b5119e8c696f1`.
+The release-inventory contract is statically reconciled at 88/860/525, and the
+structural model/source contract suite passes. The aggregate proof-ledger
+checker and static Apalache-runner contract remain under current-source
+validation. No current TLC or Apalache engine run is claimed. The newly bound non-retireable lane transport
 is intentionally fail-closed at applied-height handoff; formal operational
 correspondence plus drain/restart/liveness evidence remain mandatory.
 
@@ -1129,10 +1140,10 @@ The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 its staged grouped and diagnostics suite-source manifests each contain 1,386
-records and hash respectively to
-`1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
+records. Their current mutable-tree suite-source digests are respectively
+`06b376a41dcbbac50b815c0730b1316c311a51fe3696b6b9d80b3d3995e88ead`
 and
-`1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`;
+`b8b1fdf05093aec8c4038fcb5a383e4685243550ac8dd4a1f298b65df3fb017f`;
 the synchronized 48-line wire TSV hashes to
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
@@ -1140,14 +1151,14 @@ The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
 OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
 fixture and do not attest it; one archived aggregate source/distribution replay
 remains open under `G-SDK`. The release receipt must reproduce the exact staged
-record totals and suite-source SHA-256 values above from its immutable
-candidate; the staged values are not execution evidence. The
+record totals and derive the suite-source SHA-256 values from its immutable
+candidate; no transient digest is release evidence. The
 diagnostics runner inventories Rust `14`, Python `121`, JavaScript
 source/distribution `88`, Swift `33`, Kotlin `42`, and Java `41` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required legacy-version-before-signing regression preserves the exact
-856-production-test and 525-G-UNIT-test counts. Rust's separated client test
+860-production-test and 525-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -1163,10 +1174,11 @@ multilane binding ledger keeps this as the
 `inflight_first_release_layout_contract`, with the explicit
 `composed_state_action_relation_with_source_bound_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
-and release-receipt consumers. The schema-5 structural/source-binding checks,
-exact 856-test production inventory, 525-test G-UNIT source inventory, 12
-fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
-contract controls require a fresh source-bound rerun. The ledger retains the
+and release-receipt consumers. The schema-5 structural/source-binding checker
+passes on the mutable tree. The exact 860-test production inventory, 525-test
+G-UNIT source inventory, 12 fail-closed layout tests, two receipt parser tests,
+and 12 Apalache-runner contract controls still require a final source-bound
+rerun. The ledger retains the
 distinct fifth layout-only Apalache result after the four refinement rows. The
 G-UNIT inventory has 526 TSV lines and SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
@@ -1212,11 +1224,12 @@ The remaining work is evidence-driven and must stay in order:
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
   mutations before release evidence is accepted, then finish the remaining
-  856-test,
+  860-test,
   40-module production inventory legs and archived G-UNIT execution.
-  The asynchronous reply-route product's 54/54 structural TLAPS projection is
-  complete; its V2 inductive-safety, successor-isolation, and temporal-product
-  obligations remain in the formal dependency queue.
+  The asynchronous reply-route product assigns all 54 structural TLAPS
+  projection rows; that is source inventory only. Its V2 inductive-safety,
+  successor-isolation, and temporal-product obligations remain in the formal
+  dependency queue.
 - Finish `G-UNIT` with a fresh archived run of all 525 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
@@ -1226,11 +1239,12 @@ The remaining work is evidence-driven and must stay in order:
   fixture SHA-256
   `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
   staged grouped/diagnostics suite-source manifests at exactly 1,386 records
-  each with SHA-256 values
-  `1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
+  each whose current mutable-tree digests are
+  `06b376a41dcbbac50b815c0730b1316c311a51fe3696b6b9d80b3d3995e88ead`
   and
-  `1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`,
-  to be regenerated and receipt-bound from the exact immutable candidate, and
+  `b8b1fdf05093aec8c4038fcb5a383e4685243550ac8dd4a1f298b65df3fb017f`;
+  both must be regenerated and receipt-bound from the exact immutable
+  candidate. The
   wire-TSV SHA-256
   `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
   The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,
@@ -1329,6 +1343,14 @@ and `signer_qualification=software-key-qualified`.
 Promotion is allowed only when both deterministic runs emit `status=ready`,
 `summary_file_count=17`, `recognized_summary_count=17`, every lane is valid,
 no critical/high vulnerability remains, and rollback is usable.
+The read-only final control is
+`scripts/check_sorafs_production_promotion_bundle.py`. It is the conjunctive
+consumer of those two-run/22-input replay outputs, the exact six-case negative
+archive, and fresh externally authenticated software-Ed25519 plus cosign/OIDC
+provenance. A local archive alone remains blocked. Closure still requires an
+independent administrator to produce that genuine signed provenance over the
+final pinned release bytes; synthetic tests and unsigned local receipts do not
+advance L2.
 Gateway-compliance trust policy now rejects any catalog-approval and regional-
 acknowledgement role reuse by signer identifier or Ed25519 key before provider
 or checkpoint access. Deployment closure still requires the audited feed and
@@ -26613,6 +26635,10 @@ validation path.
 
 **Status:** active first-release verification and release validation.
 
+Unless tied to one immutable candidate, Cargo, TLAPS, Verus, and network
+pass/count statements below are historical mutable-tree checkpoints; none
+attests the current working tree.
+
 The release target is the single serialized Sumeragi v2 reducer and wire
 revision 4. Permissioned and NPoS contexts use the same Prepare/Commit state
 machine, dual count-and-power quorums, durable grouped timeout certificates,
@@ -26621,17 +26647,14 @@ height-context identity. Mixed-version operation, rolling protocol upgrades,
 global RBC, collectors, adaptive pacing, missing-QC shortcuts, and runtime
 mode flips are not first-release architecture and must not return.
 
-The post-Decision timeout frontier is now mechanically closed: the complete
-Core action induction covers crash and durable `ResumeTimeout` replay, brackets
-Core-stuttering scheduler steps, and lifts through the asynchronous temporal
-specification without assuming async type closure. Certified responses also
-require an exact currently registered request, with duplicate, restart, and
-historical-catch-up mutation coverage. Exact certified-request authority and
-the abstract effective-lock acquisition owner are now proved. Production runner
-preservation and async type closure are also proved. Remaining formal work
-proceeds through production effective-lock refinement, progress ownership,
-protected service ranks and starvation freedom, then timeout/view/leader,
-application, successor, and indexed-height composition.
+The checked-in ledger precommits the post-Decision timeout frontier and its
+dependent Core action, certified-request, effective-lock, runner-preservation,
+and async-type obligations. Historical strict runs support those entries, but
+fresh same-candidate proof validation is still pending and the aggregate proof
+checker remains under validation. Remaining formal work proceeds through
+production effective-lock refinement, progress ownership, protected service
+ranks and starvation freedom, then timeout/view/leader, application,
+successor, and indexed-height composition.
 
 The Apply boundary now requires the exact durable current-context Commit
 Decision in both execution and readiness; it no longer permits an old-context
@@ -26840,7 +26863,8 @@ after checked prefix arithmetic. Remaining consensus work is evidence and
 mechanization: this
 closure does not make the strict TLAPS runner, clean release corridor,
 100,000-height chaos receipt, or 24-hour Taira soak complete, and
-`machine_checked_completion` remains false.
+the checked-in `machine_checked_completion: true` value remains a precommit,
+not a current aggregate proof result.
 
 Every Commit vote now requires the exact active durable lock, including votes
 from the current view. A pre-lock current Commit is a recoverable ignore. Once
@@ -26939,8 +26963,9 @@ and terminal readiness checks all three deferred queues. A production-capacity
 regression saturates certified-request, Normal, and Progress ownership while
 preserving the Completion reserve, then uses durable reducer retransmission to
 reconstruct the blocked Fetch after the exact authenticated response with a
-still-live matching logical request registration releases capacity. The gate
-pins 477 required tests across 30 modules, including exact composite
+still-live matching logical request registration releases capacity. At that
+historical checkpoint, the gate pinned 477 required tests across 30 modules,
+including exact composite
 replay-FIFO ordering, its source-linked refinement projection, and
 recovery-derived successor identity plus sequential missing-height discovery
 and catch-up. A four-validator restart diagnostic showed that the recovering
@@ -27109,11 +27134,12 @@ seconds. The checked formal baseline and SANY analysis are recorded in
 `status.md`. The complete
 timeout-envelope DOMAIN/adapter boundary is TLAPS-proved, and the
 deferred-owner replacement mutation now pins scheduler-wide exact-envelope
-coalescing. The proof ledger still reports `machine_checked_completion: false`.
-Strict proof completion therefore remains pending, and post-GST height liveness
-remains a conditional target and paper argument rather than a machine-checked
-completion. The PR gate inventories 477 production-liveness tests across 30
-Rust modules before network startup. Exact regressions cover
+coalescing. At that checkpoint, the proof ledger reported
+`machine_checked_completion: false`. Strict proof completion therefore
+remained pending, and post-GST height liveness remained a conditional target
+and paper argument rather than a machine-checked completion. The then-current
+PR gate inventoried 477 production-liveness tests across 30 Rust modules before
+network startup. Exact regressions covered
 completion coalescing, conflicting evidence, production Busy transfer,
 transactional cross-queue retirement/duplicate rejection,
 installed/destination rebind, certified cleanup plan/commit boundaries, and
@@ -27175,7 +27201,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and their exact
-856-test inventory plus the separate exact 525-test G-UNIT inventory, the
+860-test inventory plus the separate exact 525-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
@@ -27196,8 +27222,8 @@ versions, and hashes are receipt-bound.
 
 The current release-support suites collect 367 aggregate release-receipt and
 258 protected-bootstrap tests without selector inflation. The source-bound
-release gate now requires exactly 5,291 proof-fidelity cases and 27
-formal-launcher cases. The source-derived proof-fidelity composition is 5,189 ledger/checker
+release gate now requires exactly 5,446 proof-fidelity cases and 27
+formal-launcher cases. The source-derived proof-fidelity composition is 5,344 ledger/checker
 cases, 28 pinned-Verus evidence cases, 15 TLC-normalizer cases, eight
 reviewed-Rust closure cases, 31 Native/passive multilane source-contract cases,
 and twenty selected layout/wire cases. It includes
@@ -27226,24 +27252,25 @@ ancestor owners, or storage which violates `fsync`. The remaining work is to
 discharge the proof debts below and then execute the hardened gates, not to
 accept evidence from the mutable caller.
 
-Runner scheduler preservation and the dependent async type invariant are now
-`tlaps_proved`. Fresh hash-guarded strict TLAPS slices exited 0 for
-transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
-(305/305), its strong caller and bracket (63/63), the exact type obligation
-(16/16), and the named always-strong wrapper (10/10).
+In a historical pre-precommit proof wave, runner scheduler preservation and
+the dependent async type invariant were recorded as `tlaps_proved`.
+Hash-guarded strict TLAPS slices exited 0 for transport/runner closure (186/186
+and 204/204), the recovery execution hierarchy (305/305), its strong caller
+and bracket (63/63), the exact type obligation (16/16), and the named
+always-strong wrapper (10/10).
 
-The 54-entry top-level ledger contains 35 `tlaps_proved`, 12
-`specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope` entries;
-machine-checked completion remains false. Sixteen source-bound decomposition
-leaves are checked transitively through those reviewed consumers rather than
-being additional release claims. Historical recovery now accounts for exactly
-three unpromoted temporal leaves—authority acquisition, certificate-rank
-progress, and Decision/body rank progress—with source proof bodies, plus one
-proved Decision-stage ownership safety leaf. Composition derives that
-ownership property from `IndexedChainSpec`; it is not a fourth temporal
-premise. The three temporal
-leaves and top-level `height-liveness` remain `specified_unproved`, so this
-accounting repair changes neither the 54-row ledger nor its status counts. In
+That 54-entry snapshot contained 35 `tlaps_proved`, 12
+`specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope` entries, and
+reported machine-checked completion as false. Sixteen source-bound
+decomposition leaves were checked transitively through those reviewed
+consumers rather than being additional release claims. Historical recovery at
+that checkpoint accounted for exactly three unpromoted temporal
+leaves—authority acquisition, certificate-rank progress, and Decision/body
+rank progress—with source proof bodies, plus one proved Decision-stage
+ownership safety leaf. Composition derived that ownership property from
+`IndexedChainSpec`; it was not a fourth temporal premise. The three temporal
+leaves and top-level `height-liveness` remained `specified_unproved`, so this
+accounting repair changed neither the 54-row ledger nor its status counts. In
 particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` have explicit source
@@ -27300,14 +27327,14 @@ runtime premise on the final signed source.
   for a missing certificate. A canonical empty ownership set is already
   complete even for result-bearing genesis or external-only blocks; external
   entries alone are not lane obligations.
-  The formal source and production source seals now encode that Kura-first
+  The current mutable source bindings encode that Kura-first
   rollover and tip-only recovery rule. The production handoff also binds
   Native AMX, merge-share, and certified-sidecar traffic to typed scopes and
   exact identities. Finalized-sidecar pruning retains winning data in the
   committed merge log and supersedes losing pending work. Manual,
   wrong-source, substituted, or otherwise untyped `Exact` output must remain
   owned and fail closed. Release acceptance still requires the pinned Verus
-  run and derived cross-tool evidence from this unchanged source;
+  run and derived cross-tool evidence from the final frozen, unchanged source;
 - preserve fresh strict evidence for the already-ledgered progress-ownership,
   Stage-2/3/4/5/6, Serve-FIFO, and aggregate protected-service-rank theorems.
   Their source bodies now include the doubled causal FIFO/source-cursor rank,
@@ -27318,9 +27345,10 @@ runtime premise on the final signed source.
   regenerated after every source change;
 - discharge the production admission/runtime/ingress/actor-to-flush mapping
   only through `progress-witness-production-refinement`. Its seven shared
-  Rust/Verus kernels, authoritative call sites, reliable writer-flush
-  ownership, and source manifests are structurally sealed, but source binding
-  is not backend proof evidence. Run pinned Verus with `--no-cheating`, bind
+  Rust/Verus kernels, authoritative call sites, and reliable writer-flush
+  ownership are present. The current mutable tree is structurally bound, while
+  source-manifest digests await freeze; source binding is not backend proof
+  evidence. Run pinned Verus with `--no-cheating`, bind
   the fresh strict provider log, and generate the canonical cross-tool
   document before the release gate accepts the precommitted
   `cross_tool_proved` status;

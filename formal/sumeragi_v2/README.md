@@ -13,28 +13,40 @@ The production protocol admits only unit-vote committees with exact
 validators with quorum `q = 2f + 1`. Stake may affect election or eligibility;
 it never weights a consensus or timeout vote.
 
-The production source guard also binds the durable adapter seam to one opened
-post-open safety-WAL directory owner. WAL append and the serviced-candidate and
-leader-wire sibling snapshots use descriptor-relative, bounded operations;
-the two sibling authorities are distinct and one-shot, and raw-path store
-constructors remain test-only. This is a source-refinement contract, not a
-formal filesystem proof. It does not yet authenticate pre-open ancestry back
-to an opened Kura root, which remains a runner-cutover obligation. Non-Unix
-basic WAL I/O keeps its legacy path implementation, while adjacent-store
-authority minting fails closed until a handle-relative implementation exists.
+## Current proof-ledger status
 
-The same production source guard seals the pre-cutover lifecycle activation
-type state. It requires one fail-stop interval to order live clocks, status
-projection, completion-observer installation, exact ingress opening, typed
-status publication, and readiness release. The CompleteTip branch consumes its
-retained retired-predecessor authority at that boundary, while the generic
-activated owner remains accessible only through a private runner borrow key.
-The guarded source mapping now also covers the consuming finalization chain:
-joint ingress retirement, exact executor/Kura finality, adapter-WAL retirement,
-the existing durable output handoff, refreshed live Serve census, opaque
-all-row LedgerV1 publication, coordinator/registry consumption, and the sole
-cleanup-ready shutdown permit. This is a source-refinement contract;
-`run_inner` has not switched to the new owner or minted these type states.
+The final ledger is precommitted at 44 `tlaps_proved`, 3
+`cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
+`out_of_scope`, with `machine_checked_completion: true`. This declaration is
+the byte-exact input to the release proof wave, not proof evidence by itself.
+Release completion still requires strict TLAPS, pinned Verus, derived
+cross-tool and production-trace evidence, and receipt/completion-marker checks
+against one frozen signed candidate. Mechanization-status statements below
+that report the earlier 35/12 split, call an obligation `specified_unproved`,
+or set `machine_checked_completion: false` are historical snapshots retained
+as provenance; they do not override this current precommit.
+
+The production source guard binds the durable adapter seam to the retained
+opened Kura store-root handle. The lifecycle runner mints one move-only
+safety-WAL directory authority from that handle; WAL append and the
+serviced-candidate and leader-wire sibling snapshots then use bounded,
+descriptor-relative operations. The sibling authorities are distinct and
+one-shot, raw-path store constructors remain test-only, and platforms without
+the required handle-relative storage contract fail closed. This is a
+source-refinement contract, not a formal filesystem proof.
+
+The same production source guard binds lifecycle-owned activation and
+finalization. Ordinary and recovered PendingKura paths enter their production
+lifecycle owners before ordering live clocks, status projection,
+completion-observer installation, exact ingress opening, typed status
+publication, and readiness release. The CompleteTip branch consumes its
+retained retired-predecessor authority at that boundary. The guarded source
+mapping also covers joint ingress retirement, exact executor/Kura finality,
+adapter-WAL retirement, durable output handoff, refreshed live Serve census,
+opaque all-row LedgerV1 publication, coordinator/registry consumption, and the
+sole cleanup-ready shutdown permit. These remain mutable-tree
+source-refinement contracts, not current Cargo, formal-engine, or release
+evidence.
 
 Revision 4 deterministically rotates a height-seeded roster permutation. Set A
 contains the first `q` members, with the leader first and proxy tail last; Set B
@@ -1491,8 +1503,10 @@ regressions and the governance-unlock audit bring the 861-test checkpoint
 across 41 modules. The production-adapter activation guard and two deferred-
 canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
-brings the current
-inventory to 856 tests across 40 modules.
+brings the historical inventory to the 856-test, 40-module checkpoint. The
+exact retired-attempt accessor, mixed-carrier successor, two-link cold-restart
+hydration, and noncanonical autonomous-output retirement regressions bring the current
+inventory to 860 tests across 40 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 88 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1567,7 +1581,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27`.
+`43488145df2b3d502786684c24ce5ebf7c709289f6b76bc667f22484daff5746`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1603,7 +1617,7 @@ anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
-regression. The five integration names execute under one module-filtered leg;
+regression. The four integration names execute under one module-filtered leg;
 the complete pre-network corridor now spans 88 legs, including the governance-
 unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
@@ -1765,7 +1779,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and the exact
-856-test inventory, the pinned harness lock and resolved toolchain, the formal
+860-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer. The protected archived validator first publishes a no-clobber
@@ -1857,9 +1871,13 @@ and the projected scheduler filter excludes prior owners, retains every fresh
 emitted identity exactly once in stable order, and conditionally appends them
 after an unchanged old queue.
 The condition is material: the supplied owner set must include the old queue
-and every scheduler owner. No theorem yet maps concrete effect identities and
-that complete owner union to TLA+ candidates, so this evidence remains
-unpromoted.
+and every scheduler owner. `ProductionEffectToCandidateTraceProjection`,
+`check_production_effect_to_candidate_transition`, and
+`production_effect_to_candidate_trace_refines_async_ownership` now bind
+concrete effect identities and that complete owner union to the abstract
+candidate projection. The source-only causal-FIFO seam check passes, but this
+is not pinned Verus, TLAPS, or derived cross-tool evidence and does not by
+itself close the release claim.
 
 The production exact-output seam is also source-bound by comment/literal-free
 whole-item digests. The binding covers per-target and cross-fanout FIFO heads,

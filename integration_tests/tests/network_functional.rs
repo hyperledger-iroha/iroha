@@ -7,6 +7,9 @@ mod extra_functional;
 #[path = "observer_sync.rs"]
 mod observer_sync;
 #[cfg(feature = "zk-stark")]
+#[path = "zk_ace_localnet.rs"]
+mod zk_ace_localnet;
+#[cfg(feature = "zk-stark")]
 #[path = "privacy_exact12_activation_network.rs"]
 mod privacy_exact12_activation_network;
 #[path = "privacy_exact12_jindo_network.rs"]

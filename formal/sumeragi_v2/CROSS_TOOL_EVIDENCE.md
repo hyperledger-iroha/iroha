@@ -178,44 +178,35 @@ override lets validation read the immutable archived copy instead of mutable
 
 ## Current status
 
-The evidence architecture does not itself prove a production refinement. The
-three ledger obligations above remain `specified_unproved`, but the code-owned
-`4 + 7 + 6` inventory now has exact named Verus signatures, non-vacuous
-postconditions, shared Rust/Verus kernels, sealed projection builders and
-identity extractors, and fail-closed production call-site expressions. The
-checker seals all 22 primary production call-site contracts and the two
-supplemental reliable-flush kernel/call-site contracts. Those 24 triples span
-23 unique production call items; no call site remains intentionally unfrozen.
-Read-only reconstruction of the current source-bound claim payload succeeds
-for all `4/4`, `7/7`, and `6/6` claims. This is structural/source-fidelity
-validation, not backend proof evidence, so none of the three obligations is
-promoted.
+The final ledger precommits the three eligible obligations as
+`cross_tool_proved`:
 
-- Effective-lock verification covers the serialized post-install lock,
-  immutable body owner, exact retirement accounting, and bounded class
-  selector through live production invocations. Its only ledger prerequisite,
-  `effective-lock-body-acquisition-model`, is `tlaps_proved`. Repeated host
-  invocation and terminating local work remain explicit runtime assumptions.
-  Promotion still requires one frozen-source strict TLAPS provider log, the
-  pinned Verus run, and derived cross-tool evidence.
-- Progress-witness verification covers seven pure reducer/WAL, timer/FIFO,
-  ingress, two-stage relay retry, writer-flush, and application kernels. The
-  writer-flush claim additionally binds two supplemental kernels to the same
-  exact `MergeSidecarTransport::acknowledge_outbound_chunk` item. Its entire
-  transitive proof dependency closure is `tlaps_proved`. Promotion remains
-  blocked only on a fresh frozen-source strict TLAPS plus pinned Verus evidence
-  set and the derived cross-tool document.
-- Successor verification covers six pure status, runner, startup, historical
-  block-sync, and terminal Apply-boundary kernels. Its production source
-  binding is complete, but `successor-activation-starvation-freedom` remains
-  `specified_unproved`; the newly strengthened ChainEpoch-premised proof
-  source has not yet received release-grade strict TLAPS evidence or ledger
-  promotion. This prerequisite must close before the successor cross-tool
-  obligation can be promoted.
+- `effective-lock-body-acquisition-production-refinement`;
+- `progress-witness-production-refinement`;
+- `successor-activation-exact-recovery-production-refinement`.
+
+This status declaration is the byte-exact input to the release proof wave, not
+backend proof evidence. The code-owned `4 + 7 + 6` claim inventory has exact
+named Verus signatures, non-vacuous postconditions, shared Rust/Verus kernels,
+sealed projection builders and identity extractors, and fail-closed production
+call-site expressions. The checker seals 24 triples across 23 unique production
+call items, and read-only reconstruction succeeds for all `4/4`, `7/7`, and
+`6/6` claims. The structural model/source and source-only causal-FIFO checks
+pass, as do the 26 checked-token real-source tests. The aggregate proof-ledger
+checker remains under validation.
+
+- Effective-lock acquisition has
+  `effective-lock-body-acquisition-model` precommitted as `tlaps_proved`.
+- The durable-progress dependency closure is precommitted at accepted proof
+  statuses.
+- Successor activation has
+  `successor-activation-starvation-freedom` precommitted as `tlaps_proved`.
+
+Those prerequisite and cross-tool statuses still require strict same-candidate
+TLAPS, pinned Verus, and derived cross-tool validation before release.
 
 `target/formal/sumeragi_v2` is currently absent, so no current
 `proof_evidence.json`, provider TLAPS logs, `verus.log`,
 `verus_evidence.json`, or `cross_tool_evidence.json` exists. Earlier results
-remain diagnostic. Because no ledger entry is yet `cross_tool_proved`,
-`--print-cross-tool-obligations` remains empty and cross-tool evidence must
-remain absent until the final source-bound promotion run.
+remain diagnostic. `--print-cross-tool-obligations` therefore has the exact
+three-entry inventory above, but that ledger-derived inventory is not evidence.

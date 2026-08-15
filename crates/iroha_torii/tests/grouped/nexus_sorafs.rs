@@ -6,6 +6,8 @@ mod bridge_finality_endpoint;
 mod contracts_call_integration;
 #[path = "../kaigi_endpoints.rs"]
 mod kaigi_endpoints;
+#[path = "../kaigi_operator_reads.rs"]
+mod kaigi_operator_reads;
 #[path = "../nexus_dataspaces_summary.rs"]
 mod nexus_dataspaces_summary;
 #[path = "../nexus_lifecycle_endpoint.rs"]

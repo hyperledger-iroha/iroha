@@ -589,7 +589,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "3e87cffe611d61fb2e9a7a6d921cc263794238c57c3d22121025b74423b6468d"
+        "bdbc42d8a01b1336de822cf428acf16184ba782894c3e934835702597207ed2d"
     )
     python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
     python_launcher = (

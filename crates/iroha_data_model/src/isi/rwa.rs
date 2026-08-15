@@ -402,7 +402,7 @@ mod tests {
         numeric::{Numeric, NumericSpec},
     };
     use norito::codec::Encode;
-    use norito::core::DecodeFromSlice;
+    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     #[derive(Encode)]
     struct ForgedTransferRwa {
         source: AccountId,
@@ -448,35 +448,6 @@ mod tests {
     }
     fn key() -> Name {
         "quality".parse().expect("metadata key")
-    }
-    fn assert_slice_roundtrip<T>(value: T)
-    where
-        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
-        for<'a> T: DecodeFromSlice<'a>,
-    {
-        let bytes = value.encode();
-        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
-        assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
-    }
-    fn assert_registry_decodes<T>(
-        registry: &crate::isi::InstructionRegistry,
-        wire_id: &str,
-        value: T,
-    ) where
-        T: crate::isi::Instruction
-            + norito::codec::Encode
-            + 'static
-            + norito::core::NoritoSerialize,
-        for<'de> T: norito::core::NoritoDeserialize<'de>,
-    {
-        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
-        let framed =
-            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
-        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
-            .expect("registered")
-            .expect("decode");
-        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
     #[test]
     #[allow(clippy::too_many_lines)]

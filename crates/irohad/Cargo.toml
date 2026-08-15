@@ -33,6 +33,8 @@ daemon = [
     "ivm/runtime",
     "norito/node-codec",
 ]
+# Build the standalone external signer only in release lanes that request it.
+external-software-signer-bin = ["daemon"]
 dev-tools = ["daemon", "zk-stark"]
 accel-metal = ["fastpq-gpu", "ivm/metal", "norito/codec-gpu-metal"]
 accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cuda"]
@@ -94,7 +96,7 @@ required-features = ["daemon"]
 [[bin]]
 name = "sorafs_external_software_signer"
 path = "src/bin/sorafs_external_software_signer.rs"
-required-features = ["daemon"]
+required-features = ["external-software-signer-bin"]
 
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }

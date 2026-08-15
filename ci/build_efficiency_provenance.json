@@ -1,0 +1,307 @@
+{
+  "ancestry": [
+    {
+      "ancestor": "implementation_origin",
+      "descendant": "donor"
+    },
+    {
+      "ancestor": "donor",
+      "descendant": "protected_integration"
+    },
+    {
+      "ancestor": "source_budget_baseline",
+      "descendant": "protected_integration"
+    },
+    {
+      "ancestor": "protected_integration",
+      "descendant": "signed_lock_anchor"
+    },
+    {
+      "ancestor": "signed_lock_anchor",
+      "descendant": "HEAD"
+    }
+  ],
+  "lineage": {
+    "donor": {
+      "commit": "d130c985b46ff8beb99c20b25b36bbdeb506e4c9",
+      "parents": [
+        "57ed7edcdf1991a453e2e7ae461bc041401b1b86",
+        "c47b9fa3ef2e839420fc7a63184159608cd50a4c"
+      ],
+      "rust": {
+        "lines": 4638696,
+        "paths": 3506
+      },
+      "tree": "49fe7427beee1a3c8ea86583017762c30222b5f8"
+    },
+    "implementation_origin": {
+      "commit": "6552815b5abb0ebe8921bcfcdbcec76f464216ae",
+      "parents": [
+        "6844e76e3890b51584a98070904fec926de05390"
+      ],
+      "rust": {
+        "lines": 4587275,
+        "paths": 3379
+      },
+      "tree": "479ec571316207b3791adf21b293adf8341faa12"
+    },
+    "protected_integration": {
+      "commit": "d248cbd127b0188282b761c85239a62c0c4c3d80",
+      "parents": [
+        "dd10f01c8e2f38819eaf2fbc794b600e3c86815e"
+      ],
+      "rust": {
+        "lines": 5014603,
+        "paths": 3936
+      },
+      "tree": "f7c0a5b889dffc76f5aec821bc35cd20472178d4"
+    },
+    "signed_lock_anchor": {
+      "commit": "233586bbed47228c0de87709d5d95d2f50be1837",
+      "parents": [
+        "5ae8aaee16d8f7a1a2d8796c56a69c9ff494d2a3"
+      ],
+      "rust": {
+        "lines": 5021673,
+        "paths": 4398
+      },
+      "tree": "d7855ccab157918401c6dc3e9e634602220db054"
+    },
+    "source_budget_baseline": {
+      "commit": "cd05eebfc07c9742734b9d684394c4fe89cdb7c5",
+      "parents": [
+        "41fbfeeff20ee509f1c0a0e4bf013246badddc81",
+        "56bc80b664980e7928c72ad9ac8a77f7aff1e959"
+      ],
+      "rust": {
+        "lines": 5067263,
+        "paths": 3982
+      },
+      "tree": "67b16bb3afd241b83cb651ed1d435092928c00bb"
+    }
+  },
+  "object_format": "sha1",
+  "schema_version": 1,
+  "selected_paths": [
+    {
+      "donor": {
+        "blob": "69df7fc90588985e9b3e2303d7c36d44d7d0cf31",
+        "mode": "100644"
+      },
+      "origin": "donor",
+      "path": ".github/workflows/pr.yml",
+      "protected_integration": {
+        "blob": "6e5f328d64133231d07cd08cb060666454e3a501",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": {
+        "blob": "47e9c8b312ec25e7127fc0c59b583c8e19295ac9",
+        "mode": "100644"
+      },
+      "origin": "donor",
+      "path": "ci/README.md",
+      "protected_integration": {
+        "blob": "1b86b319fea40c3d3af46c959f85dc3779465b99",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": {
+        "blob": "bce06a3385726f031c258a4ede62df3ab173732c",
+        "mode": "100644"
+      },
+      "origin": "donor",
+      "path": "ci/compile_unit_baselines.json",
+      "protected_integration": {
+        "blob": "b9f0412335c3b3c9b7343a3db5cb6bf8884b0876",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": null,
+      "origin": "protected_integration",
+      "path": "ci/dependency_budget.json",
+      "protected_integration": {
+        "blob": "3a63d96db5ca63e3d3420e596b763850838d872a",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": {
+        "blob": "a856f8d2914cca02aa7c27bd55476d6b9fed9e2e",
+        "mode": "100644"
+      },
+      "origin": "donor",
+      "path": "ci/source_file_budget.json",
+      "protected_integration": {
+        "blob": "04eff0d491bf49915207a398aa9dd26c5f8f539e",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": {
+        "blob": "d1d281d74ddf7ee5b3df848f2bb6c9a8b911cafa",
+        "mode": "100644"
+      },
+      "origin": "donor",
+      "path": "docs/profile_build.md",
+      "protected_integration": {
+        "blob": "3d52133fb0587ddcd071024ba23417ebe4a13a5a",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": {
+        "blob": "27fb65c13d1e7aad7dcdc5a2540f93b5de7355ad",
+        "mode": "100755"
+      },
+      "origin": "donor",
+      "path": "scripts/check_compile_unit_budget.py",
+      "protected_integration": {
+        "blob": "fe8f448b077914cbf9279383584502b6cf6d4d74",
+        "mode": "100755"
+      }
+    },
+    {
+      "donor": {
+        "blob": "2a6b2ff71db600d630ef30eebffad8376a6d0dea",
+        "mode": "100755"
+      },
+      "origin": "donor",
+      "path": "scripts/check_dependency_budget.py",
+      "protected_integration": {
+        "blob": "8a0eb909e9551036fb300a91950bfee72ca59c4a",
+        "mode": "100755"
+      }
+    },
+    {
+      "donor": {
+        "blob": "747a6fc3307a01bb51be09730b39d2ff3dadcd59",
+        "mode": "100644"
+      },
+      "origin": "donor",
+      "path": "scripts/check_source_file_budget.py",
+      "protected_integration": {
+        "blob": "f1a5b88f919ea2355f5fc6f7ea7625d2f0ab42a9",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": {
+        "blob": "5e647ef677e78cf874b5355ccd0f9b2d9d675d3d",
+        "mode": "100755"
+      },
+      "origin": "donor",
+      "path": "scripts/profile_build.py",
+      "protected_integration": {
+        "blob": "ed109951d2f875d3be31a944f4c1980550050e86",
+        "mode": "100755"
+      }
+    },
+    {
+      "donor": {
+        "blob": "972d109e32c319162fdc033e0ec74b4cf5360961",
+        "mode": "100755"
+      },
+      "origin": "donor",
+      "path": "scripts/profile_build.sh",
+      "protected_integration": {
+        "blob": "972d109e32c319162fdc033e0ec74b4cf5360961",
+        "mode": "100755"
+      }
+    },
+    {
+      "donor": null,
+      "origin": "protected_integration",
+      "path": "scripts/profile_cargo_build.py",
+      "protected_integration": {
+        "blob": "9bf2acf1b3ce02df2460b820774b68dbeee4c49a",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": {
+        "blob": "ea420b4a6b24371fc61a4fab63e6c9b99264ad79",
+        "mode": "100644"
+      },
+      "origin": "donor",
+      "path": "scripts/tests/check_compile_unit_budget_test.py",
+      "protected_integration": {
+        "blob": "07f1a5e88bc68646d6ce752230fe4a9c3c9142f9",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": null,
+      "origin": "protected_integration",
+      "path": "scripts/tests/check_dependency_budget_test.py",
+      "protected_integration": {
+        "blob": "b21afd42990e949fb5e28be04e29c6c49f1440d6",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": {
+        "blob": "a423125f1f8c54bbbfda64ba3066036b0c040c5a",
+        "mode": "100644"
+      },
+      "origin": "donor",
+      "path": "scripts/tests/check_source_file_budget_test.py",
+      "protected_integration": {
+        "blob": "5b98c11af1775a01efd89432e097d6ac80804ab6",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": {
+        "blob": "acd521a8f2d538ada6656b19dbf6b4fb63da509b",
+        "mode": "100644"
+      },
+      "origin": "donor",
+      "path": "scripts/tests/profile_build_test.py",
+      "protected_integration": {
+        "blob": "4213a162cc70f7d405c7f8b96fd66d5dfee811c6",
+        "mode": "100644"
+      }
+    },
+    {
+      "donor": null,
+      "origin": "protected_integration",
+      "path": "scripts/tests/profile_cargo_build_test.py",
+      "protected_integration": {
+        "blob": "ee6510ccaf1628c84d5f67c2759d97b2f3cbf51a",
+        "mode": "100644"
+      }
+    }
+  ],
+  "signed_lock_anchor": {
+    "cargo_lock": {
+      "blob": "bf7633694c3f2fdca07de4d99743a09bad2daa12",
+      "bytes": 315333,
+      "mode": "100644",
+      "path": "Cargo.lock",
+      "sha256": "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+    },
+    "commit_role": "signed_lock_anchor",
+    "signature": {
+      "cryptographic_signer_authentication": false,
+      "issuer_fingerprint": "9d1c8bfa5a0c1fef5a8b1e5f552c2d0fd7c40beb",
+      "issuer_key_id": "552c2d0fd7c40beb",
+      "kind": "openpgp_v4_issuer_structure"
+    }
+  },
+  "source_budget": {
+    "baseline": 5067263,
+    "ceiling": 4540000,
+    "commit_role": "source_budget_baseline",
+    "excluded_prefixes": [
+      "docs/portal/node_modules/",
+      "target/",
+      "vendor/"
+    ],
+    "path": "ci/source_file_budget.json",
+    "schema_version": 1
+  }
+}

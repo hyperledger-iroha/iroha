@@ -398,6 +398,68 @@ async fn run_soracloud_command(
         .envs(config.envs());
     Ok(tokio_output_with_timeout(&mut command, timeout).await?)
 }
+
+struct SoracloudCli<'a> {
+    cwd: &'a Path,
+    config: &'a ProgramConfig,
+}
+
+impl<'a> SoracloudCli<'a> {
+    const fn new(cwd: &'a Path, config: &'a ProgramConfig) -> Self {
+        Self { cwd, config }
+    }
+
+    fn command(&self) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(program());
+        command.current_dir(self.cwd).arg("soracloud");
+        command
+    }
+
+    async fn bounded_output(
+        &self,
+        mut command: tokio::process::Command,
+    ) -> eyre::Result<std::process::Output> {
+        command.envs(self.config.envs());
+        Ok(command.bounded_output().await?)
+    }
+}
+
+struct SoracloudSuccessCase {
+    failure_context: &'static str,
+}
+
+impl SoracloudSuccessCase {
+    const fn new(failure_context: &'static str) -> Self {
+        Self { failure_context }
+    }
+}
+
+fn assert_soracloud_success(output: &std::process::Output, context: &str) {
+    assert!(
+        output.status.success(),
+        "{context} failed with status {} and stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+macro_rules! run_bounded_soracloud_command {
+    ($cli:expr; $($arg:expr),+ $(,)?) => {{
+        let mut command = $cli.command();
+        $(command.arg($arg);)+
+        $cli.bounded_output(command).await?
+    }};
+}
+
+macro_rules! run_bounded_soracloud_success {
+    ($cli:expr, $case:expr; $($arg:expr),+ $(,)?) => {{
+        let case = $case;
+        let output = run_bounded_soracloud_command!($cli; $($arg),+);
+        assert_soracloud_success(&output, case.failure_context);
+        output
+    }};
+}
+
 async fn wait_for_soracloud_json_command(
     cwd: &Path,
     config: &ProgramConfig,
@@ -882,12 +944,7 @@ async fn advertise_soracloud_model_host(
         ],
     )
     .await?;
-    assert!(
-        advertise.status.success(),
-        "model-host-advertise failed with status {} and stderr: {}",
-        advertise.status,
-        String::from_utf8_lossy(&advertise.stderr)
-    );
+    assert_soracloud_success(&advertise, "model-host-advertise");
     Ok(())
 }
 fn assert_requires_torii_url(output: &std::process::Output) {
@@ -1090,16 +1147,12 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-    let output = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("status")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
+    let cli = SoracloudCli::new(dir.path(), &config);
+    let output = run_bounded_soracloud_command!(
+        cli;
+        "service", "status",
+        "--torii-url", network.client().torii_url.to_string(),
+    );
     assert!(
         output.status.success(),
         "CLI exited with status {} and stderr: {}",
@@ -1198,12 +1251,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         ],
     )
     .await?;
-    assert!(
-        deploy.status.success(),
-        "deploy failed with status {} and stderr: {}",
-        deploy.status,
-        String::from_utf8_lossy(&deploy.stderr)
-    );
+    assert_soracloud_success(&deploy, "deploy");
     let deploy_payload: Value =
         json::from_slice(&deploy.stdout).expect("CLI should emit deploy JSON payload");
     assert_eq!(
@@ -1226,12 +1274,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         ],
     )
     .await?;
-    assert!(
-        upgrade.status.success(),
-        "upgrade failed with status {} and stderr: {}",
-        upgrade.status,
-        String::from_utf8_lossy(&upgrade.stderr)
-    );
+    assert_soracloud_success(&upgrade, "upgrade");
     let upgrade_payload: Value =
         json::from_slice(&upgrade.stdout).expect("CLI should emit upgrade JSON payload");
     assert_eq!(
@@ -1271,12 +1314,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         ],
     )
     .await?;
-    assert!(
-        rollout.status.success(),
-        "rollout failed with status {} and stderr: {}",
-        rollout.status,
-        String::from_utf8_lossy(&rollout.stderr)
-    );
+    assert_soracloud_success(&rollout, "rollout");
     let rollout_payload: Value =
         json::from_slice(&rollout.stdout).expect("CLI should emit rollout JSON payload");
     assert_eq!(
@@ -1311,12 +1349,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         ],
     )
     .await?;
-    assert!(
-        rollback.status.success(),
-        "rollback failed with status {} and stderr: {}",
-        rollback.status,
-        String::from_utf8_lossy(&rollback.stderr)
-    );
+    assert_soracloud_success(&rollback, "rollback");
     let rollback_payload: Value =
         json::from_slice(&rollback.stdout).expect("CLI should emit rollback JSON payload");
     assert_eq!(
@@ -1442,20 +1475,14 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         norito::json::to_vec_pretty(&over_cap_service).expect("encode over-cap service"),
     )
     .await?;
-    let over_cap_deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("deploy")
-        .arg("--container")
-        .arg(over_cap_container_path.to_string_lossy().into_owned())
-        .arg("--service")
-        .arg(over_cap_service_path.to_string_lossy().into_owned())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
+    let cli = SoracloudCli::new(dir.path(), &config);
+    let over_cap_deploy = run_bounded_soracloud_command!(
+        cli;
+        "service", "deploy",
+        "--container", over_cap_container_path.to_string_lossy().into_owned(),
+        "--service", over_cap_service_path.to_string_lossy().into_owned(),
+        "--torii-url", network.client().torii_url.to_string(),
+    );
     assert!(
         !over_cap_deploy.status.success(),
         "deploy with over-cap cpu should fail, stdout: {}, stderr: {}",
@@ -1497,20 +1524,13 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         norito::json::to_vec_pretty(&no_write_service).expect("encode no-write service"),
     )
     .await?;
-    let no_write_deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("deploy")
-        .arg("--container")
-        .arg(no_write_container_path.to_string_lossy().into_owned())
-        .arg("--service")
-        .arg(no_write_service_path.to_string_lossy().into_owned())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
+    let no_write_deploy = run_bounded_soracloud_command!(
+        cli;
+        "service", "deploy",
+        "--container", no_write_container_path.to_string_lossy().into_owned(),
+        "--service", no_write_service_path.to_string_lossy().into_owned(),
+        "--torii-url", network.client().torii_url.to_string(),
+    );
     assert!(
         !no_write_deploy.status.success(),
         "deploy with allow_state_writes=false should fail, stdout: {}, stderr: {}",
@@ -1590,136 +1610,63 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         norito::json::to_vec_pretty(&service).expect("encode service"),
     )
     .await?;
-    let deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("deploy")
-        .arg("--container")
-        .arg(container_path.to_string_lossy().into_owned())
-        .arg("--service")
-        .arg(service_path.to_string_lossy().into_owned())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        deploy.status.success(),
-        "deploy for training lifecycle failed with status {} and stderr: {}",
-        deploy.status,
-        String::from_utf8_lossy(&deploy.stderr)
+    let cli = SoracloudCli::new(dir.path(), &config);
+    let deploy = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("deploy for training lifecycle");
+        "service", "deploy",
+        "--container", container_path.to_string_lossy().into_owned(),
+        "--service", service_path.to_string_lossy().into_owned(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let service_name = service.service_name.to_string();
     let model_name = "ops_model";
     let dataset_ref = "dataset://ops/synthetic-v1";
-    let training_start_1 = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("training-job-start")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--model-name")
-        .arg(model_name)
-        .arg("--job-id")
-        .arg("job-001")
-        .arg("--worker-group-size")
-        .arg("2")
-        .arg("--target-steps")
-        .arg("4")
-        .arg("--checkpoint-interval-steps")
-        .arg("2")
-        .arg("--max-retries")
-        .arg("2")
-        .arg("--step-compute-units")
-        .arg("25")
-        .arg("--compute-budget-units")
-        .arg("200")
-        .arg("--storage-budget-bytes")
-        .arg("8192")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        training_start_1.status.success(),
-        "training-job-start #1 failed with status {} and stderr: {}",
-        training_start_1.status,
-        String::from_utf8_lossy(&training_start_1.stderr)
+    let training_start_1 = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("training-job-start #1");
+        "model", "training-job-start",
+        "--service-name", &service_name,
+        "--model-name", model_name,
+        "--job-id", "job-001",
+        "--worker-group-size", "2",
+        "--target-steps", "4",
+        "--checkpoint-interval-steps", "2",
+        "--max-retries", "2",
+        "--step-compute-units", "25",
+        "--compute-budget-units", "200",
+        "--storage-budget-bytes", "8192",
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let checkpoint_1a = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("training-job-checkpoint")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--job-id")
-        .arg("job-001")
-        .arg("--completed-step")
-        .arg("2")
-        .arg("--checkpoint-size-bytes")
-        .arg("1024")
-        .arg("--metrics-hash")
-        .arg(Hash::new(b"metrics-job-001-step-2").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        checkpoint_1a.status.success(),
-        "training-job-checkpoint #1a failed with status {} and stderr: {}",
-        checkpoint_1a.status,
-        String::from_utf8_lossy(&checkpoint_1a.stderr)
+    let checkpoint_1a = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("training-job-checkpoint #1a");
+        "model", "training-job-checkpoint",
+        "--service-name", &service_name,
+        "--job-id", "job-001",
+        "--completed-step", "2",
+        "--checkpoint-size-bytes", "1024",
+        "--metrics-hash", Hash::new(b"metrics-job-001-step-2").to_string(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let checkpoint_1b = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("training-job-checkpoint")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--job-id")
-        .arg("job-001")
-        .arg("--completed-step")
-        .arg("4")
-        .arg("--checkpoint-size-bytes")
-        .arg("1536")
-        .arg("--metrics-hash")
-        .arg(Hash::new(b"metrics-job-001-step-4").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        checkpoint_1b.status.success(),
-        "training-job-checkpoint #1b failed with status {} and stderr: {}",
-        checkpoint_1b.status,
-        String::from_utf8_lossy(&checkpoint_1b.stderr)
+    let checkpoint_1b = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("training-job-checkpoint #1b");
+        "model", "training-job-checkpoint",
+        "--service-name", &service_name,
+        "--job-id", "job-001",
+        "--completed-step", "4",
+        "--checkpoint-size-bytes", "1536",
+        "--metrics-hash", Hash::new(b"metrics-job-001-step-4").to_string(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let training_status_1 = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("training-job-status")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--job-id")
-        .arg("job-001")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        training_status_1.status.success(),
-        "training-job-status #1 failed with status {} and stderr: {}",
-        training_status_1.status,
-        String::from_utf8_lossy(&training_status_1.stderr)
+    let training_status_1 = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("training-job-status #1");
+        "model", "training-job-status",
+        "--service-name", &service_name,
+        "--job-id", "job-001",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let training_status_payload_1: Value =
         json::from_slice(&training_status_1.stdout).expect("training-job-status #1 json payload");
@@ -1732,272 +1679,121 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         job_1.get("completed_steps").and_then(Value::as_u64),
         Some(4)
     );
-    let artifact_register_1 = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("artifact-register")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--model-name")
-        .arg(model_name)
-        .arg("--training-job-id")
-        .arg("job-001")
-        .arg("--weight-artifact-hash")
-        .arg(Hash::new(b"weight-artifact-v1").to_string())
-        .arg("--dataset-ref")
-        .arg(dataset_ref)
-        .arg("--training-config-hash")
-        .arg(Hash::new(b"training-config-v1").to_string())
-        .arg("--reproducibility-hash")
-        .arg(Hash::new(b"repro-v1").to_string())
-        .arg("--provenance-attestation-hash")
-        .arg(Hash::new(b"attestation-v1").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        artifact_register_1.status.success(),
-        "model-artifact-register #1 failed with status {} and stderr: {}",
-        artifact_register_1.status,
-        String::from_utf8_lossy(&artifact_register_1.stderr)
+    let artifact_register_1 = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("model-artifact-register #1");
+        "model", "artifact-register",
+        "--service-name", &service_name,
+        "--model-name", model_name,
+        "--training-job-id", "job-001",
+        "--weight-artifact-hash", Hash::new(b"weight-artifact-v1").to_string(),
+        "--dataset-ref", dataset_ref,
+        "--training-config-hash", Hash::new(b"training-config-v1").to_string(),
+        "--reproducibility-hash", Hash::new(b"repro-v1").to_string(),
+        "--provenance-attestation-hash", Hash::new(b"attestation-v1").to_string(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let weight_register_1 = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("weight-register")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--model-name")
-        .arg(model_name)
-        .arg("--weight-version")
-        .arg("1.0.0")
-        .arg("--training-job-id")
-        .arg("job-001")
-        .arg("--weight-artifact-hash")
-        .arg(Hash::new(b"weight-artifact-v1").to_string())
-        .arg("--dataset-ref")
-        .arg(dataset_ref)
-        .arg("--training-config-hash")
-        .arg(Hash::new(b"training-config-v1").to_string())
-        .arg("--reproducibility-hash")
-        .arg(Hash::new(b"repro-v1").to_string())
-        .arg("--provenance-attestation-hash")
-        .arg(Hash::new(b"attestation-v1").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        weight_register_1.status.success(),
-        "model-weight-register #1 failed with status {} and stderr: {}",
-        weight_register_1.status,
-        String::from_utf8_lossy(&weight_register_1.stderr)
+    let weight_register_1 = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("model-weight-register #1");
+        "model", "weight-register",
+        "--service-name", &service_name,
+        "--model-name", model_name,
+        "--weight-version", "1.0.0",
+        "--training-job-id", "job-001",
+        "--weight-artifact-hash", Hash::new(b"weight-artifact-v1").to_string(),
+        "--dataset-ref", dataset_ref,
+        "--training-config-hash", Hash::new(b"training-config-v1").to_string(),
+        "--reproducibility-hash", Hash::new(b"repro-v1").to_string(),
+        "--provenance-attestation-hash", Hash::new(b"attestation-v1").to_string(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let training_start_2 = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("training-job-start")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--model-name")
-        .arg(model_name)
-        .arg("--job-id")
-        .arg("job-002")
-        .arg("--worker-group-size")
-        .arg("2")
-        .arg("--target-steps")
-        .arg("4")
-        .arg("--checkpoint-interval-steps")
-        .arg("2")
-        .arg("--max-retries")
-        .arg("2")
-        .arg("--step-compute-units")
-        .arg("25")
-        .arg("--compute-budget-units")
-        .arg("220")
-        .arg("--storage-budget-bytes")
-        .arg("8192")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        training_start_2.status.success(),
-        "training-job-start #2 failed with status {} and stderr: {}",
-        training_start_2.status,
-        String::from_utf8_lossy(&training_start_2.stderr)
+    let training_start_2 = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("training-job-start #2");
+        "model", "training-job-start",
+        "--service-name", &service_name,
+        "--model-name", model_name,
+        "--job-id", "job-002",
+        "--worker-group-size", "2",
+        "--target-steps", "4",
+        "--checkpoint-interval-steps", "2",
+        "--max-retries", "2",
+        "--step-compute-units", "25",
+        "--compute-budget-units", "220",
+        "--storage-budget-bytes", "8192",
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let checkpoint_2a = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("training-job-checkpoint")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--job-id")
-        .arg("job-002")
-        .arg("--completed-step")
-        .arg("2")
-        .arg("--checkpoint-size-bytes")
-        .arg("1024")
-        .arg("--metrics-hash")
-        .arg(Hash::new(b"metrics-job-002-step-2").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        checkpoint_2a.status.success(),
-        "training-job-checkpoint #2a failed with status {} and stderr: {}",
-        checkpoint_2a.status,
-        String::from_utf8_lossy(&checkpoint_2a.stderr)
+    let checkpoint_2a = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("training-job-checkpoint #2a");
+        "model", "training-job-checkpoint",
+        "--service-name", &service_name,
+        "--job-id", "job-002",
+        "--completed-step", "2",
+        "--checkpoint-size-bytes", "1024",
+        "--metrics-hash", Hash::new(b"metrics-job-002-step-2").to_string(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let checkpoint_2b = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("training-job-checkpoint")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--job-id")
-        .arg("job-002")
-        .arg("--completed-step")
-        .arg("4")
-        .arg("--checkpoint-size-bytes")
-        .arg("1536")
-        .arg("--metrics-hash")
-        .arg(Hash::new(b"metrics-job-002-step-4").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        checkpoint_2b.status.success(),
-        "training-job-checkpoint #2b failed with status {} and stderr: {}",
-        checkpoint_2b.status,
-        String::from_utf8_lossy(&checkpoint_2b.stderr)
+    let checkpoint_2b = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("training-job-checkpoint #2b");
+        "model", "training-job-checkpoint",
+        "--service-name", &service_name,
+        "--job-id", "job-002",
+        "--completed-step", "4",
+        "--checkpoint-size-bytes", "1536",
+        "--metrics-hash", Hash::new(b"metrics-job-002-step-4").to_string(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let artifact_register_2 = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("artifact-register")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--model-name")
-        .arg(model_name)
-        .arg("--training-job-id")
-        .arg("job-002")
-        .arg("--weight-artifact-hash")
-        .arg(Hash::new(b"weight-artifact-v2").to_string())
-        .arg("--dataset-ref")
-        .arg(dataset_ref)
-        .arg("--training-config-hash")
-        .arg(Hash::new(b"training-config-v2").to_string())
-        .arg("--reproducibility-hash")
-        .arg(Hash::new(b"repro-v2").to_string())
-        .arg("--provenance-attestation-hash")
-        .arg(Hash::new(b"attestation-v2").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        artifact_register_2.status.success(),
-        "model-artifact-register #2 failed with status {} and stderr: {}",
-        artifact_register_2.status,
-        String::from_utf8_lossy(&artifact_register_2.stderr)
+    let artifact_register_2 = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("model-artifact-register #2");
+        "model", "artifact-register",
+        "--service-name", &service_name,
+        "--model-name", model_name,
+        "--training-job-id", "job-002",
+        "--weight-artifact-hash", Hash::new(b"weight-artifact-v2").to_string(),
+        "--dataset-ref", dataset_ref,
+        "--training-config-hash", Hash::new(b"training-config-v2").to_string(),
+        "--reproducibility-hash", Hash::new(b"repro-v2").to_string(),
+        "--provenance-attestation-hash", Hash::new(b"attestation-v2").to_string(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let weight_register_2 = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("weight-register")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--model-name")
-        .arg(model_name)
-        .arg("--weight-version")
-        .arg("1.1.0")
-        .arg("--training-job-id")
-        .arg("job-002")
-        .arg("--parent-version")
-        .arg("1.0.0")
-        .arg("--weight-artifact-hash")
-        .arg(Hash::new(b"weight-artifact-v2").to_string())
-        .arg("--dataset-ref")
-        .arg(dataset_ref)
-        .arg("--training-config-hash")
-        .arg(Hash::new(b"training-config-v2").to_string())
-        .arg("--reproducibility-hash")
-        .arg(Hash::new(b"repro-v2").to_string())
-        .arg("--provenance-attestation-hash")
-        .arg(Hash::new(b"attestation-v2").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        weight_register_2.status.success(),
-        "model-weight-register #2 failed with status {} and stderr: {}",
-        weight_register_2.status,
-        String::from_utf8_lossy(&weight_register_2.stderr)
+    let weight_register_2 = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("model-weight-register #2");
+        "model", "weight-register",
+        "--service-name", &service_name,
+        "--model-name", model_name,
+        "--weight-version", "1.1.0",
+        "--training-job-id", "job-002",
+        "--parent-version", "1.0.0",
+        "--weight-artifact-hash", Hash::new(b"weight-artifact-v2").to_string(),
+        "--dataset-ref", dataset_ref,
+        "--training-config-hash", Hash::new(b"training-config-v2").to_string(),
+        "--reproducibility-hash", Hash::new(b"repro-v2").to_string(),
+        "--provenance-attestation-hash", Hash::new(b"attestation-v2").to_string(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let promote_v2 = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("weight-promote")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--model-name")
-        .arg(model_name)
-        .arg("--weight-version")
-        .arg("1.1.0")
-        .arg("--gate-approved")
-        .arg("--gate-report-hash")
-        .arg(Hash::new(b"gate-report-v2").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        promote_v2.status.success(),
-        "model-weight-promote failed with status {} and stderr: {}",
-        promote_v2.status,
-        String::from_utf8_lossy(&promote_v2.stderr)
+    let promote_v2 = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("model-weight-promote");
+        "model", "weight-promote",
+        "--service-name", &service_name,
+        "--model-name", model_name,
+        "--weight-version", "1.1.0",
+        "--gate-approved",
+        "--gate-report-hash", Hash::new(b"gate-report-v2").to_string(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let status_after_promote = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("weight-status")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--model-name")
-        .arg(model_name)
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        status_after_promote.status.success(),
-        "model-weight-status after promote failed with status {} and stderr: {}",
-        status_after_promote.status,
-        String::from_utf8_lossy(&status_after_promote.stderr)
+    let status_after_promote = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("model-weight-status after promote");
+        "model", "weight-status",
+        "--service-name", &service_name,
+        "--model-name", model_name,
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let status_after_promote_payload: Value =
         json::from_slice(&status_after_promote.stdout).expect("model-weight-status promote json");
@@ -2017,49 +1813,23 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
             .and_then(Value::as_u64),
         Some(2)
     );
-    let rollback = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("weight-rollback")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--model-name")
-        .arg(model_name)
-        .arg("--target-version")
-        .arg("1.0.0")
-        .arg("--reason")
-        .arg("roll back to baseline")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        rollback.status.success(),
-        "model-weight-rollback failed with status {} and stderr: {}",
-        rollback.status,
-        String::from_utf8_lossy(&rollback.stderr)
+    let rollback = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("model-weight-rollback");
+        "model", "weight-rollback",
+        "--service-name", &service_name,
+        "--model-name", model_name,
+        "--target-version", "1.0.0",
+        "--reason", "roll back to baseline",
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let status_after_rollback = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("weight-status")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--model-name")
-        .arg(model_name)
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        status_after_rollback.status.success(),
-        "model-weight-status after rollback failed with status {} and stderr: {}",
-        status_after_rollback.status,
-        String::from_utf8_lossy(&status_after_rollback.stderr)
+    let status_after_rollback = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("model-weight-status after rollback");
+        "model", "weight-status",
+        "--service-name", &service_name,
+        "--model-name", model_name,
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let status_after_rollback_payload: Value =
         json::from_slice(&status_after_rollback.stdout).expect("model-weight-status rollback json");
@@ -2073,25 +1843,13 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
             .and_then(Value::as_str),
         Some("1.0.0")
     );
-    let artifact_status_2 = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("model")
-        .arg("artifact-status")
-        .arg("--service-name")
-        .arg(&service_name)
-        .arg("--training-job-id")
-        .arg("job-002")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        artifact_status_2.status.success(),
-        "model-artifact-status #2 failed with status {} and stderr: {}",
-        artifact_status_2.status,
-        String::from_utf8_lossy(&artifact_status_2.stderr)
+    let artifact_status_2 = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("model-artifact-status #2");
+        "model", "artifact-status",
+        "--service-name", &service_name,
+        "--training-job-id", "job-002",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let artifact_status_payload_2: Value =
         json::from_slice(&artifact_status_2.stdout).expect("model-artifact-status #2 json");
@@ -2191,12 +1949,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         ],
     )
     .await?;
-    assert!(
-        deploy.status.success(),
-        "hf-deploy failed with status {} and stderr: {}",
-        deploy.status,
-        String::from_utf8_lossy(&deploy.stderr)
-    );
+    assert_soracloud_success(&deploy, "hf-deploy");
     let deploy_payload: Value = json::from_slice(&deploy.stdout).expect("hf-deploy json");
     assert_eq!(
         deploy_payload
@@ -2246,12 +1999,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         &["status", "--torii-url", torii_url.as_str()],
     )
     .await?;
-    assert!(
-        service_status.status.success(),
-        "soracloud status after hf-deploy failed with status {} and stderr: {}",
-        service_status.status,
-        String::from_utf8_lossy(&service_status.stderr)
-    );
+    assert_soracloud_success(&service_status, "soracloud status after hf-deploy");
     let service_status_payload: Value =
         json::from_slice(&service_status.stdout).expect("soracloud status json");
     let services = service_status_payload
@@ -2280,12 +2028,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         ],
     )
     .await?;
-    assert!(
-        agent_status.status.success(),
-        "agent status after hf-deploy failed with status {} and stderr: {}",
-        agent_status.status,
-        String::from_utf8_lossy(&agent_status.stderr)
-    );
+    assert_soracloud_success(&agent_status, "agent status after hf-deploy");
     let agent_status_payload: Value =
         json::from_slice(&agent_status.stdout).expect("agent status after hf-deploy json");
     let apartments = agent_status_payload
@@ -2318,12 +2061,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         ],
     )
     .await?;
-    assert!(
-        rebind.status.success(),
-        "hf-deploy rebind failed with status {} and stderr: {}",
-        rebind.status,
-        String::from_utf8_lossy(&rebind.stderr)
-    );
+    assert_soracloud_success(&rebind, "hf-deploy rebind");
     let rebind_payload: Value = json::from_slice(&rebind.stdout).expect("hf rebind json");
     assert_eq!(
         rebind_payload
@@ -2372,12 +2110,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         ],
     )
     .await?;
-    assert!(
-        status.status.success(),
-        "hf-status failed with status {} and stderr: {}",
-        status.status,
-        String::from_utf8_lossy(&status.stderr)
-    );
+    assert_soracloud_success(&status, "hf-status");
     let status_payload: Value = json::from_slice(&status.stdout).expect("hf-status json");
     let status_pool = status_payload
         .get("pool")
@@ -2416,12 +2149,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         ],
     )
     .await?;
-    assert!(
-        leave.status.success(),
-        "hf-lease-leave failed with status {} and stderr: {}",
-        leave.status,
-        String::from_utf8_lossy(&leave.stderr)
-    );
+    assert_soracloud_success(&leave, "hf-lease-leave");
     let leave_payload: Value = json::from_slice(&leave.stdout).expect("hf leave json");
     assert_eq!(
         leave_payload
@@ -2469,12 +2197,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         ],
     )
     .await?;
-    assert!(
-        renew.status.success(),
-        "hf-lease-renew failed with status {} and stderr: {}",
-        renew.status,
-        String::from_utf8_lossy(&renew.stderr)
-    );
+    assert_soracloud_success(&renew, "hf-lease-renew");
     let renew_payload: Value = json::from_slice(&renew.stdout).expect("hf renew json");
     assert_eq!(
         renew_payload
@@ -2514,12 +2237,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         ],
     )
     .await?;
-    assert!(
-        status_after_renew.status.success(),
-        "hf-status after renew failed with status {} and stderr: {}",
-        status_after_renew.status,
-        String::from_utf8_lossy(&status_after_renew.stderr)
-    );
+    assert_soracloud_success(&status_after_renew, "hf-status after renew");
     let status_after_renew_payload: Value =
         json::from_slice(&status_after_renew.stdout).expect("hf status after renew json");
     let renewed_member = status_after_renew_payload
@@ -2620,12 +2338,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         ],
     )
     .await?;
-    assert!(
-        deploy.status.success(),
-        "initial hf-deploy failed with status {} and stderr: {}",
-        deploy.status,
-        String::from_utf8_lossy(&deploy.stderr)
-    );
+    assert_soracloud_success(&deploy, "initial hf-deploy");
     let deploy_payload: Value = json::from_slice(&deploy.stdout).expect("initial deploy json");
     assert_eq!(
         deploy_payload
@@ -2655,12 +2368,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         ],
     )
     .await?;
-    assert!(
-        renew.status.success(),
-        "pre-expiry hf-lease-renew failed with status {} and stderr: {}",
-        renew.status,
-        String::from_utf8_lossy(&renew.stderr)
-    );
+    assert_soracloud_success(&renew, "pre-expiry hf-lease-renew");
     let renew_payload: Value = json::from_slice(&renew.stdout).expect("renew json");
     assert_eq!(
         renew_payload
@@ -2768,12 +2476,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         ],
     )
     .await?;
-    assert!(
-        promote.status.success(),
-        "promotion hf-deploy failed with status {} and stderr: {}",
-        promote.status,
-        String::from_utf8_lossy(&promote.stderr)
-    );
+    assert_soracloud_success(&promote, "promotion hf-deploy");
     let promote_payload: Value = json::from_slice(&promote.stdout).expect("promote json");
     assert_eq!(
         promote_payload
@@ -2805,12 +2508,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         ],
     )
     .await?;
-    assert!(
-        status.status.success(),
-        "post-promotion hf-status failed with status {} and stderr: {}",
-        status.status,
-        String::from_utf8_lossy(&status.stderr)
-    );
+    assert_soracloud_success(&status, "post-promotion hf-status");
     let status_payload: Value = json::from_slice(&status.stdout).expect("status json");
     let status_source = status_payload
         .get("source")
@@ -2973,12 +2671,7 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         ],
     )
     .await?;
-    assert!(
-        alice_deploy.status.success(),
-        "alice hf-deploy failed with status {} and stderr: {}",
-        alice_deploy.status,
-        String::from_utf8_lossy(&alice_deploy.stderr)
-    );
+    assert_soracloud_success(&alice_deploy, "alice hf-deploy");
     let alice_deploy_payload: Value =
         json::from_slice(&alice_deploy.stdout).expect("alice hf-deploy json");
     assert_eq!(
@@ -3015,12 +2708,7 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         ],
     )
     .await?;
-    assert!(
-        bob_deploy.status.success(),
-        "bob hf-deploy failed with status {} and stderr: {}",
-        bob_deploy.status,
-        String::from_utf8_lossy(&bob_deploy.stderr)
-    );
+    assert_soracloud_success(&bob_deploy, "bob hf-deploy");
     let bob_deploy_payload: Value = json::from_slice(&bob_deploy.stdout).expect("bob deploy json");
     assert_eq!(
         bob_deploy_payload
@@ -3121,12 +2809,7 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         ],
     )
     .await?;
-    assert!(
-        carpenter_deploy.status.success(),
-        "carpenter hf-deploy failed with status {} and stderr: {}",
-        carpenter_deploy.status,
-        String::from_utf8_lossy(&carpenter_deploy.stderr)
-    );
+    assert_soracloud_success(&carpenter_deploy, "carpenter hf-deploy");
     let carpenter_deploy_payload: Value =
         json::from_slice(&carpenter_deploy.stdout).expect("carpenter deploy json");
     assert_eq!(
@@ -3395,49 +3078,24 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     .await?;
     let site_dir = dir.path().join("soracloud_site");
     let webapp_dir = dir.path().join("soracloud_webapp");
-    let site_init = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("init")
-        .arg("--template")
-        .arg("site")
-        .arg("--service-name")
-        .arg("docs_portal")
-        .arg("--service-version")
-        .arg("1.0.0")
-        .arg("--output-dir")
-        .arg(site_dir.to_string_lossy().into_owned())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        site_init.status.success(),
-        "site init failed with status {} and stderr: {}",
-        site_init.status,
-        String::from_utf8_lossy(&site_init.stderr)
+    let cli = SoracloudCli::new(dir.path(), &config);
+    let site_init = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("site init");
+        "service", "init",
+        "--template", "site",
+        "--service-name", "docs_portal",
+        "--service-version", "1.0.0",
+        "--output-dir", site_dir.to_string_lossy().into_owned(),
     );
-    let webapp_init = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("init")
-        .arg("--template")
-        .arg("webapp")
-        .arg("--service-name")
-        .arg("agent_console")
-        .arg("--service-version")
-        .arg("1.0.0")
-        .arg("--output-dir")
-        .arg(webapp_dir.to_string_lossy().into_owned())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        webapp_init.status.success(),
-        "webapp init failed with status {} and stderr: {}",
-        webapp_init.status,
-        String::from_utf8_lossy(&webapp_init.stderr)
+    let webapp_init = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("webapp init");
+        "service", "init",
+        "--template", "webapp",
+        "--service-name", "agent_console",
+        "--service-version", "1.0.0",
+        "--output-dir", webapp_dir.to_string_lossy().into_owned(),
     );
     let site_service_path = site_dir.join("service_manifest.json");
     let webapp_service_path = webapp_dir.join("service_manifest.json");
@@ -3470,30 +3128,13 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
             .map(|route| route.path_prefix.as_str()),
         Some("/api")
     );
-    let site_deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("deploy")
-        .arg("--container")
-        .arg(
-            site_dir
-                .join("container_manifest.json")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .arg("--service")
-        .arg(site_service_path.to_string_lossy().into_owned())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        site_deploy.status.success(),
-        "site deploy failed with status {} and stderr: {}",
-        site_deploy.status,
-        String::from_utf8_lossy(&site_deploy.stderr)
+    let site_deploy = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("site deploy");
+        "service", "deploy",
+        "--container",  site_dir .join("container_manifest.json") .to_string_lossy() .into_owned(), ,
+        "--service", site_service_path.to_string_lossy().into_owned(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let site_deploy_payload: Value =
         json::from_slice(&site_deploy.stdout).expect("site deploy JSON payload");
@@ -3503,30 +3144,13 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
             .and_then(Value::as_str),
         Some("1.0.0")
     );
-    let webapp_deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("deploy")
-        .arg("--container")
-        .arg(
-            webapp_dir
-                .join("container_manifest.json")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .arg("--service")
-        .arg(webapp_service_path.to_string_lossy().into_owned())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        webapp_deploy.status.success(),
-        "webapp deploy failed with status {} and stderr: {}",
-        webapp_deploy.status,
-        String::from_utf8_lossy(&webapp_deploy.stderr)
+    let webapp_deploy = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("webapp deploy");
+        "service", "deploy",
+        "--container",  webapp_dir .join("container_manifest.json") .to_string_lossy() .into_owned(), ,
+        "--service", webapp_service_path.to_string_lossy().into_owned(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let webapp_deploy_payload: Value =
         json::from_slice(&webapp_deploy.stdout).expect("webapp deploy JSON payload");
@@ -3544,30 +3168,13 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         norito::json::to_vec_pretty(&site_service_v2).expect("encode site service v2"),
     )
     .await?;
-    let site_upgrade = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("upgrade")
-        .arg("--container")
-        .arg(
-            site_dir
-                .join("container_manifest.json")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .arg("--service")
-        .arg(site_service_v2_path.to_string_lossy().into_owned())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        site_upgrade.status.success(),
-        "site upgrade failed with status {} and stderr: {}",
-        site_upgrade.status,
-        String::from_utf8_lossy(&site_upgrade.stderr)
+    let site_upgrade = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("site upgrade");
+        "service", "upgrade",
+        "--container",  site_dir .join("container_manifest.json") .to_string_lossy() .into_owned(), ,
+        "--service", site_service_v2_path.to_string_lossy().into_owned(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let site_upgrade_payload: Value =
         json::from_slice(&site_upgrade.stdout).expect("site upgrade JSON payload");
@@ -3581,29 +3188,15 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         .get("rollout_handle")
         .and_then(Value::as_str)
         .expect("site upgrade should emit rollout handle");
-    let site_rollout = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("rollout")
-        .arg("--service-name")
-        .arg("docs_portal")
-        .arg("--rollout-handle")
-        .arg(rollout_handle)
-        .arg("--promote-to-percent")
-        .arg("100")
-        .arg("--governance-tx-hash")
-        .arg(Hash::new(b"site-template-rollout").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        site_rollout.status.success(),
-        "site rollout failed with status {} and stderr: {}",
-        site_rollout.status,
-        String::from_utf8_lossy(&site_rollout.stderr)
+    let site_rollout = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("site rollout");
+        "service", "rollout",
+        "--service-name", "docs_portal",
+        "--rollout-handle", rollout_handle,
+        "--promote-to-percent", "100",
+        "--governance-tx-hash", Hash::new(b"site-template-rollout").to_string(),
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let site_rollout_payload: Value =
         json::from_slice(&site_rollout.stdout).expect("site rollout JSON payload");
@@ -3615,23 +3208,12 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
             .and_then(Value::as_str),
         Some("Promoted")
     );
-    let site_rollback = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("rollback")
-        .arg("--service-name")
-        .arg("docs_portal")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        site_rollback.status.success(),
-        "site rollback failed with status {} and stderr: {}",
-        site_rollback.status,
-        String::from_utf8_lossy(&site_rollback.stderr)
+    let site_rollback = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("site rollback");
+        "service", "rollback",
+        "--service-name", "docs_portal",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let site_rollback_payload: Value =
         json::from_slice(&site_rollback.stdout).expect("site rollback JSON payload");
@@ -3641,21 +3223,11 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
             .and_then(Value::as_str),
         Some("1.0.0")
     );
-    let status = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("service")
-        .arg("status")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        status.status.success(),
-        "status failed with status {} and stderr: {}",
-        status.status,
-        String::from_utf8_lossy(&status.stderr)
+    let status = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("status");
+        "service", "status",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let status_payload: Value =
         json::from_slice(&status.stdout).expect("CLI should emit soracloud status payload");
@@ -3759,27 +3331,15 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         norito::json::to_vec_pretty(&manifest).expect("encode apartment manifest"),
     )
     .await?;
-    let deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("deploy")
-        .arg("--manifest")
-        .arg(manifest_path.to_string_lossy().into_owned())
-        .arg("--lease-ticks")
-        .arg("30")
-        .arg("--autonomy-budget-units")
-        .arg("500")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        deploy.status.success(),
-        "agent deploy failed with status {} and stderr: {}",
-        deploy.status,
-        String::from_utf8_lossy(&deploy.stderr)
+    let cli = SoracloudCli::new(dir.path(), &config);
+    let deploy = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("agent deploy");
+        "agent", "deploy",
+        "--manifest", manifest_path.to_string_lossy().into_owned(),
+        "--lease-ticks", "30",
+        "--autonomy-budget-units", "500",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let deploy_payload: Value =
         json::from_slice(&deploy.stdout).expect("agent deploy JSON payload");
@@ -3797,27 +3357,14 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_u64),
         Some(500)
     );
-    let allow = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("artifact-allow")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--artifact-hash")
-        .arg("hash:ABCD0123#01")
-        .arg("--provenance-hash")
-        .arg("hash:PROV0001#01")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        allow.status.success(),
-        "artifact allow failed with status {} and stderr: {}",
-        allow.status,
-        String::from_utf8_lossy(&allow.stderr)
+    let allow = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("artifact allow");
+        "agent", "artifact-allow",
+        "--apartment-name", "ops_agent",
+        "--artifact-hash", "hash:ABCD0123#01",
+        "--provenance-hash", "hash:PROV0001#01",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let allow_payload: Value = json::from_slice(&allow.stdout).expect("agent allow JSON payload");
     assert_eq!(
@@ -3830,31 +3377,16 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_u64),
         Some(500)
     );
-    let run = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("autonomy-run")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--artifact-hash")
-        .arg("hash:ABCD0123#01")
-        .arg("--provenance-hash")
-        .arg("hash:PROV0001#01")
-        .arg("--budget-units")
-        .arg("120")
-        .arg("--run-label")
-        .arg("nightly-train-step-1")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        run.status.success(),
-        "autonomy run failed with status {} and stderr: {}",
-        run.status,
-        String::from_utf8_lossy(&run.stderr)
+    let run = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("autonomy run");
+        "agent", "autonomy-run",
+        "--apartment-name", "ops_agent",
+        "--artifact-hash", "hash:ABCD0123#01",
+        "--provenance-hash", "hash:PROV0001#01",
+        "--budget-units", "120",
+        "--run-label", "nightly-train-step-1",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let run_payload: Value = json::from_slice(&run.stdout).expect("agent run JSON payload");
     assert_eq!(
@@ -3873,23 +3405,12 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_str)
             .is_some_and(|run_id| !run_id.is_empty())
     );
-    let status = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("autonomy-status")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        status.status.success(),
-        "autonomy status failed with status {} and stderr: {}",
-        status.status,
-        String::from_utf8_lossy(&status.stderr)
+    let status = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("autonomy status");
+        "agent", "autonomy-status",
+        "--apartment-name", "ops_agent",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let status_payload: Value =
         json::from_slice(&status.stdout).expect("autonomy status JSON payload");
@@ -3909,27 +3430,14 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_u64),
         Some(380)
     );
-    let revoke = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("policy-revoke")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--capability")
-        .arg("agent.autonomy.run")
-        .arg("--reason")
-        .arg("manual-review")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        revoke.status.success(),
-        "policy revoke failed with status {} and stderr: {}",
-        revoke.status,
-        String::from_utf8_lossy(&revoke.stderr)
+    let revoke = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("policy revoke");
+        "agent", "policy-revoke",
+        "--apartment-name", "ops_agent",
+        "--capability", "agent.autonomy.run",
+        "--reason", "manual-review",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let revoke_payload: Value =
         json::from_slice(&revoke.stdout).expect("policy revoke JSON payload");
@@ -3939,26 +3447,16 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_u64),
         Some(1)
     );
-    let revoked_run = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("autonomy-run")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--artifact-hash")
-        .arg("hash:ABCD0123#01")
-        .arg("--provenance-hash")
-        .arg("hash:PROV0001#01")
-        .arg("--budget-units")
-        .arg("1")
-        .arg("--run-label")
-        .arg("revoked")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
+    let revoked_run = run_bounded_soracloud_command!(
+        cli;
+        "agent", "autonomy-run",
+        "--apartment-name", "ops_agent",
+        "--artifact-hash", "hash:ABCD0123#01",
+        "--provenance-hash", "hash:PROV0001#01",
+        "--budget-units", "1",
+        "--run-label", "revoked",
+        "--torii-url", network.client().torii_url.to_string(),
+    );
     assert!(
         !revoked_run.status.success(),
         "autonomy run with revoked capability should fail, stdout: {}, stderr: {}",
@@ -4030,62 +3528,31 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         norito::json::to_vec_pretty(&recipient).expect("encode recipient manifest"),
     )
     .await?;
-    let sender_deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("deploy")
-        .arg("--manifest")
-        .arg(sender_manifest_path.to_string_lossy().into_owned())
-        .arg("--lease-ticks")
-        .arg("1")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        sender_deploy.status.success(),
-        "sender deploy failed with status {} and stderr: {}",
-        sender_deploy.status,
-        String::from_utf8_lossy(&sender_deploy.stderr)
+    let cli = SoracloudCli::new(dir.path(), &config);
+    let sender_deploy = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("sender deploy");
+        "agent", "deploy",
+        "--manifest", sender_manifest_path.to_string_lossy().into_owned(),
+        "--lease-ticks", "1",
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let recipient_deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("deploy")
-        .arg("--manifest")
-        .arg(recipient_manifest_path.to_string_lossy().into_owned())
-        .arg("--lease-ticks")
-        .arg("30")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        recipient_deploy.status.success(),
-        "recipient deploy failed with status {} and stderr: {}",
-        recipient_deploy.status,
-        String::from_utf8_lossy(&recipient_deploy.stderr)
+    let recipient_deploy = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("recipient deploy");
+        "agent", "deploy",
+        "--manifest", recipient_manifest_path.to_string_lossy().into_owned(),
+        "--lease-ticks", "30",
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let expired_wallet = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("wallet-spend")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--asset-definition")
-        .arg("61CtjvNd9T3THAR65GsMVHr82Bjc")
-        .arg("--amount-nanos")
-        .arg("1000")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
+    let expired_wallet = run_bounded_soracloud_command!(
+        cli;
+        "agent", "wallet-spend",
+        "--apartment-name", "ops_agent",
+        "--asset-definition", "61CtjvNd9T3THAR65GsMVHr82Bjc",
+        "--amount-nanos", "1000",
+        "--torii-url", network.client().torii_url.to_string(),
+    );
     assert!(
         !expired_wallet.status.success(),
         "wallet spend with expired lease should fail, stdout: {}, stderr: {}",
@@ -4097,68 +3564,33 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "unexpected lease-expiry rejection error: {}",
         String::from_utf8_lossy(&expired_wallet.stderr)
     );
-    let renew = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("lease-renew")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--lease-ticks")
-        .arg("20")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        renew.status.success(),
-        "lease renew failed with status {} and stderr: {}",
-        renew.status,
-        String::from_utf8_lossy(&renew.stderr)
+    let renew = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("lease renew");
+        "agent", "lease-renew",
+        "--apartment-name", "ops_agent",
+        "--lease-ticks", "20",
+        "--torii-url", network.client().torii_url.to_string(),
     );
-    let restart = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("restart")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--reason")
-        .arg("manual-restart")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        restart.status.success(),
-        "restart failed with status {} and stderr: {}",
-        restart.status,
-        String::from_utf8_lossy(&restart.stderr)
+    let restart = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("restart");
+        "agent", "restart",
+        "--apartment-name", "ops_agent",
+        "--reason", "manual-restart",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let restart_payload: Value = json::from_slice(&restart.stdout).expect("restart JSON payload");
     assert_eq!(
         restart_payload.get("restart_count").and_then(Value::as_u64),
         Some(1)
     );
-    let status = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("status")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        status.status.success(),
-        "agent status failed with status {} and stderr: {}",
-        status.status,
-        String::from_utf8_lossy(&status.stderr)
+    let status = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("agent status");
+        "agent", "status",
+        "--apartment-name", "ops_agent",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let status_payload: Value =
         json::from_slice(&status.stdout).expect("agent status JSON payload");
@@ -4180,27 +3612,14 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         apartment.get("restart_count").and_then(Value::as_u64),
         Some(1)
     );
-    let wallet_request = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("wallet-spend")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--asset-definition")
-        .arg("61CtjvNd9T3THAR65GsMVHr82Bjc")
-        .arg("--amount-nanos")
-        .arg("1000000")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        wallet_request.status.success(),
-        "wallet spend failed with status {} and stderr: {}",
-        wallet_request.status,
-        String::from_utf8_lossy(&wallet_request.stderr)
+    let wallet_request = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("wallet spend");
+        "agent", "wallet-spend",
+        "--apartment-name", "ops_agent",
+        "--asset-definition", "61CtjvNd9T3THAR65GsMVHr82Bjc",
+        "--amount-nanos", "1000000",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let wallet_request_payload: Value =
         json::from_slice(&wallet_request.stdout).expect("wallet request JSON payload");
@@ -4215,25 +3634,13 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
             .and_then(Value::as_u64),
         Some(1)
     );
-    let wallet_approve = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("wallet-approve")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--request-id")
-        .arg(request_id)
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        wallet_approve.status.success(),
-        "wallet approve failed with status {} and stderr: {}",
-        wallet_approve.status,
-        String::from_utf8_lossy(&wallet_approve.stderr)
+    let wallet_approve = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("wallet approve");
+        "agent", "wallet-approve",
+        "--apartment-name", "ops_agent",
+        "--request-id", request_id,
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let wallet_approve_payload: Value =
         json::from_slice(&wallet_approve.stdout).expect("wallet approve JSON payload");
@@ -4243,29 +3650,15 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
             .and_then(Value::as_u64),
         Some(0)
     );
-    let message_send = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("message-send")
-        .arg("--from-apartment")
-        .arg("ops_agent")
-        .arg("--to-apartment")
-        .arg("worker_agent")
-        .arg("--channel")
-        .arg("ops.sync")
-        .arg("--payload")
-        .arg("rotate-key-42")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        message_send.status.success(),
-        "message send failed with status {} and stderr: {}",
-        message_send.status,
-        String::from_utf8_lossy(&message_send.stderr)
+    let message_send = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("message send");
+        "agent", "message-send",
+        "--from-apartment", "ops_agent",
+        "--to-apartment", "worker_agent",
+        "--channel", "ops.sync",
+        "--payload", "rotate-key-42",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let message_send_payload: Value =
         json::from_slice(&message_send.stdout).expect("message send JSON payload");
@@ -4280,23 +3673,12 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
             .and_then(Value::as_u64),
         Some(1)
     );
-    let mailbox_status_queued = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("mailbox-status")
-        .arg("--apartment-name")
-        .arg("worker_agent")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        mailbox_status_queued.status.success(),
-        "mailbox status (queued) failed with status {} and stderr: {}",
-        mailbox_status_queued.status,
-        String::from_utf8_lossy(&mailbox_status_queued.stderr)
+    let mailbox_status_queued = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("mailbox status (queued)");
+        "agent", "mailbox-status",
+        "--apartment-name", "worker_agent",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let mailbox_status_queued_payload: Value =
         json::from_slice(&mailbox_status_queued.stdout).expect("mailbox status JSON payload");
@@ -4315,25 +3697,13 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         queued_messages[0].get("message_id").and_then(Value::as_str),
         Some(message_id.as_str())
     );
-    let message_ack = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("message-ack")
-        .arg("--apartment-name")
-        .arg("worker_agent")
-        .arg("--message-id")
-        .arg(message_id)
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        message_ack.status.success(),
-        "message ack failed with status {} and stderr: {}",
-        message_ack.status,
-        String::from_utf8_lossy(&message_ack.stderr)
+    let message_ack = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("message ack");
+        "agent", "message-ack",
+        "--apartment-name", "worker_agent",
+        "--message-id", message_id,
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let message_ack_payload: Value =
         json::from_slice(&message_ack.stdout).expect("message ack JSON payload");
@@ -4343,23 +3713,12 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
             .and_then(Value::as_u64),
         Some(0)
     );
-    let mailbox_status_empty = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("mailbox-status")
-        .arg("--apartment-name")
-        .arg("worker_agent")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        mailbox_status_empty.status.success(),
-        "mailbox status (empty) failed with status {} and stderr: {}",
-        mailbox_status_empty.status,
-        String::from_utf8_lossy(&mailbox_status_empty.stderr)
+    let mailbox_status_empty = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("mailbox status (empty)");
+        "agent", "mailbox-status",
+        "--apartment-name", "worker_agent",
+        "--torii-url", network.client().torii_url.to_string(),
     );
     let mailbox_status_empty_payload: Value =
         json::from_slice(&mailbox_status_empty.stdout).expect("mailbox status JSON payload");
@@ -4441,97 +3800,44 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     .await?;
     let restart_peer = network.peers().first().expect("network peer").clone();
     let restart_torii_url = restart_peer.torii_url();
-    let sender_deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("deploy")
-        .arg("--manifest")
-        .arg(sender_manifest_path.to_string_lossy().into_owned())
-        .arg("--lease-ticks")
-        .arg("80")
-        .arg("--autonomy-budget-units")
-        .arg("500")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        sender_deploy.status.success(),
-        "sender deploy failed with status {} and stderr: {}",
-        sender_deploy.status,
-        String::from_utf8_lossy(&sender_deploy.stderr)
+    let cli = SoracloudCli::new(dir.path(), &config);
+    let sender_deploy = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("sender deploy");
+        "agent", "deploy",
+        "--manifest", sender_manifest_path.to_string_lossy().into_owned(),
+        "--lease-ticks", "80",
+        "--autonomy-budget-units", "500",
+        "--torii-url", &restart_torii_url,
     );
-    let recipient_deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("deploy")
-        .arg("--manifest")
-        .arg(recipient_manifest_path.to_string_lossy().into_owned())
-        .arg("--lease-ticks")
-        .arg("80")
-        .arg("--autonomy-budget-units")
-        .arg("250")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        recipient_deploy.status.success(),
-        "recipient deploy failed with status {} and stderr: {}",
-        recipient_deploy.status,
-        String::from_utf8_lossy(&recipient_deploy.stderr)
+    let recipient_deploy = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("recipient deploy");
+        "agent", "deploy",
+        "--manifest", recipient_manifest_path.to_string_lossy().into_owned(),
+        "--lease-ticks", "80",
+        "--autonomy-budget-units", "250",
+        "--torii-url", &restart_torii_url,
     );
-    let allow = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("artifact-allow")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--artifact-hash")
-        .arg("hash:ABCD0123#01")
-        .arg("--provenance-hash")
-        .arg("hash:PROV0001#01")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        allow.status.success(),
-        "artifact allow failed with status {} and stderr: {}",
-        allow.status,
-        String::from_utf8_lossy(&allow.stderr)
+    let allow = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("artifact allow");
+        "agent", "artifact-allow",
+        "--apartment-name", "ops_agent",
+        "--artifact-hash", "hash:ABCD0123#01",
+        "--provenance-hash", "hash:PROV0001#01",
+        "--torii-url", &restart_torii_url,
     );
-    let run_before_restart = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("autonomy-run")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--artifact-hash")
-        .arg("hash:ABCD0123#01")
-        .arg("--provenance-hash")
-        .arg("hash:PROV0001#01")
-        .arg("--budget-units")
-        .arg("120")
-        .arg("--run-label")
-        .arg("before-restart")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        run_before_restart.status.success(),
-        "autonomy run before restart failed with status {} and stderr: {}",
-        run_before_restart.status,
-        String::from_utf8_lossy(&run_before_restart.stderr)
+    let run_before_restart = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("autonomy run before restart");
+        "agent", "autonomy-run",
+        "--apartment-name", "ops_agent",
+        "--artifact-hash", "hash:ABCD0123#01",
+        "--provenance-hash", "hash:PROV0001#01",
+        "--budget-units", "120",
+        "--run-label", "before-restart",
+        "--torii-url", &restart_torii_url,
     );
     let run_before_restart_payload: Value =
         json::from_slice(&run_before_restart.stdout).expect("autonomy run JSON payload");
@@ -4561,27 +3867,14 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         persistent_bytes_after_first_run > 0,
         "first autonomy run should create a persisted checkpoint"
     );
-    let wallet_request = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("wallet-spend")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--asset-definition")
-        .arg("61CtjvNd9T3THAR65GsMVHr82Bjc")
-        .arg("--amount-nanos")
-        .arg("1000000")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        wallet_request.status.success(),
-        "wallet request failed with status {} and stderr: {}",
-        wallet_request.status,
-        String::from_utf8_lossy(&wallet_request.stderr)
+    let wallet_request = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("wallet request");
+        "agent", "wallet-spend",
+        "--apartment-name", "ops_agent",
+        "--asset-definition", "61CtjvNd9T3THAR65GsMVHr82Bjc",
+        "--amount-nanos", "1000000",
+        "--torii-url", &restart_torii_url,
     );
     let wallet_request_payload: Value =
         json::from_slice(&wallet_request.stdout).expect("wallet request JSON payload");
@@ -4596,29 +3889,15 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64),
         Some(1)
     );
-    let message_send = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("message-send")
-        .arg("--from-apartment")
-        .arg("ops_agent")
-        .arg("--to-apartment")
-        .arg("worker_agent")
-        .arg("--channel")
-        .arg("ops.sync")
-        .arg("--payload")
-        .arg("rotate-key-42")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        message_send.status.success(),
-        "message send failed with status {} and stderr: {}",
-        message_send.status,
-        String::from_utf8_lossy(&message_send.stderr)
+    let message_send = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("message send");
+        "agent", "message-send",
+        "--from-apartment", "ops_agent",
+        "--to-apartment", "worker_agent",
+        "--channel", "ops.sync",
+        "--payload", "rotate-key-42",
+        "--torii-url", &restart_torii_url,
     );
     let message_send_payload: Value =
         json::from_slice(&message_send.stdout).expect("message send JSON payload");
@@ -4641,23 +3920,12 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             restart_timeout
         )
     })??;
-    let status_after_restart = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("status")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        status_after_restart.status.success(),
-        "agent status after restart failed with status {} and stderr: {}",
-        status_after_restart.status,
-        String::from_utf8_lossy(&status_after_restart.stderr)
+    let status_after_restart = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("agent status after restart");
+        "agent", "status",
+        "--apartment-name", "ops_agent",
+        "--torii-url", &restart_torii_url,
     );
     let status_after_restart_payload: Value =
         json::from_slice(&status_after_restart.stdout).expect("agent status JSON payload");
@@ -4715,25 +3983,13 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .get("process_generation")
         .and_then(Value::as_u64)
         .expect("process_generation in status after peer restart");
-    let manual_restart = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("restart")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--reason")
-        .arg("resume-after-peer-restart")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        manual_restart.status.success(),
-        "manual agent restart after peer restart failed with status {} and stderr: {}",
-        manual_restart.status,
-        String::from_utf8_lossy(&manual_restart.stderr)
+    let manual_restart = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("manual agent restart after peer restart");
+        "agent", "restart",
+        "--apartment-name", "ops_agent",
+        "--reason", "resume-after-peer-restart",
+        "--torii-url", &restart_torii_url,
     );
     let manual_restart_payload: Value =
         json::from_slice(&manual_restart.stdout).expect("manual restart payload");
@@ -4745,23 +4001,12 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         process_generation_after_manual_restart,
         process_generation_before_manual_restart.saturating_add(1)
     );
-    let autonomy_status_after_restart = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("autonomy-status")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        autonomy_status_after_restart.status.success(),
-        "autonomy status after restart failed with status {} and stderr: {}",
-        autonomy_status_after_restart.status,
-        String::from_utf8_lossy(&autonomy_status_after_restart.stderr)
+    let autonomy_status_after_restart = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("autonomy status after restart");
+        "agent", "autonomy-status",
+        "--apartment-name", "ops_agent",
+        "--torii-url", &restart_torii_url,
     );
     let autonomy_status_after_restart_payload: Value =
         json::from_slice(&autonomy_status_after_restart.stdout).expect("autonomy status payload");
@@ -4801,23 +4046,12 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64)
             .is_some_and(|bytes| bytes >= persistent_bytes_after_first_run)
     );
-    let mailbox_status_after_restart = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("mailbox-status")
-        .arg("--apartment-name")
-        .arg("worker_agent")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        mailbox_status_after_restart.status.success(),
-        "mailbox status after restart failed with status {} and stderr: {}",
-        mailbox_status_after_restart.status,
-        String::from_utf8_lossy(&mailbox_status_after_restart.stderr)
+    let mailbox_status_after_restart = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("mailbox status after restart");
+        "agent", "mailbox-status",
+        "--apartment-name", "worker_agent",
+        "--torii-url", &restart_torii_url,
     );
     let mailbox_status_after_restart_payload: Value =
         json::from_slice(&mailbox_status_after_restart.stdout).expect("mailbox status payload");
@@ -4836,25 +4070,13 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         queued_messages[0].get("message_id").and_then(Value::as_str),
         Some(message_id.as_str())
     );
-    let wallet_approve_after_restart = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("wallet-approve")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--request-id")
-        .arg(request_id)
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        wallet_approve_after_restart.status.success(),
-        "wallet approve after restart failed with status {} and stderr: {}",
-        wallet_approve_after_restart.status,
-        String::from_utf8_lossy(&wallet_approve_after_restart.stderr)
+    let wallet_approve_after_restart = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("wallet approve after restart");
+        "agent", "wallet-approve",
+        "--apartment-name", "ops_agent",
+        "--request-id", request_id,
+        "--torii-url", &restart_torii_url,
     );
     let wallet_approve_after_restart_payload: Value =
         json::from_slice(&wallet_approve_after_restart.stdout).expect("wallet approve payload");
@@ -4864,25 +4086,13 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64),
         Some(0)
     );
-    let message_ack_after_restart = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("message-ack")
-        .arg("--apartment-name")
-        .arg("worker_agent")
-        .arg("--message-id")
-        .arg(message_id)
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        message_ack_after_restart.status.success(),
-        "message ack after restart failed with status {} and stderr: {}",
-        message_ack_after_restart.status,
-        String::from_utf8_lossy(&message_ack_after_restart.stderr)
+    let message_ack_after_restart = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("message ack after restart");
+        "agent", "message-ack",
+        "--apartment-name", "worker_agent",
+        "--message-id", message_id,
+        "--torii-url", &restart_torii_url,
     );
     let message_ack_after_restart_payload: Value =
         json::from_slice(&message_ack_after_restart.stdout).expect("message ack payload");
@@ -4892,31 +4102,16 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64),
         Some(0)
     );
-    let run_after_restart = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("autonomy-run")
-        .arg("--apartment-name")
-        .arg("ops_agent")
-        .arg("--artifact-hash")
-        .arg("hash:ABCD0123#01")
-        .arg("--provenance-hash")
-        .arg("hash:PROV0001#01")
-        .arg("--budget-units")
-        .arg("50")
-        .arg("--run-label")
-        .arg("after-restart")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        run_after_restart.status.success(),
-        "autonomy run after restart failed with status {} and stderr: {}",
-        run_after_restart.status,
-        String::from_utf8_lossy(&run_after_restart.stderr)
+    let run_after_restart = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("autonomy run after restart");
+        "agent", "autonomy-run",
+        "--apartment-name", "ops_agent",
+        "--artifact-hash", "hash:ABCD0123#01",
+        "--provenance-hash", "hash:PROV0001#01",
+        "--budget-units", "50",
+        "--run-label", "after-restart",
+        "--torii-url", &restart_torii_url,
     );
     let run_after_restart_payload: Value =
         json::from_slice(&run_after_restart.stdout).expect("autonomy run after restart payload");
@@ -4956,23 +4151,12 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64)
             .is_some_and(|bytes| bytes > persistent_bytes_after_first_run)
     );
-    let mailbox_status_empty = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("soracloud")
-        .arg("agent")
-        .arg("mailbox-status")
-        .arg("--apartment-name")
-        .arg("worker_agent")
-        .arg("--torii-url")
-        .arg(&restart_torii_url)
-        .envs(config.envs())
-        .bounded_output()
-        .await?;
-    assert!(
-        mailbox_status_empty.status.success(),
-        "mailbox status final check failed with status {} and stderr: {}",
-        mailbox_status_empty.status,
-        String::from_utf8_lossy(&mailbox_status_empty.stderr)
+    let mailbox_status_empty = run_bounded_soracloud_success!(
+        cli,
+        SoracloudSuccessCase::new("mailbox status final check");
+        "agent", "mailbox-status",
+        "--apartment-name", "worker_agent",
+        "--torii-url", &restart_torii_url,
     );
     let mailbox_status_empty_payload: Value =
         json::from_slice(&mailbox_status_empty.stdout).expect("mailbox status payload");

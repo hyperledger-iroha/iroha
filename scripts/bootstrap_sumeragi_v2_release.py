@@ -157,7 +157,7 @@ _RUNNER_TOOL_PROBE_OPERATION_IDS = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "6ff2d5337414bbbf74a9530cc1b2bd59bc62141a82a1319fa2a270b84e64ce8c"
+        "9d2e5b25788fb98c43a8f2f409229181bf58a80b36a15415dc9847a6fe8b8a87"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"

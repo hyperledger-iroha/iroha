@@ -292,9 +292,15 @@ barriers into multi-second stalls.
   from an exact-NetworkId operator-signed `/v1/sumeragi/status` request and an
   optional signed write canary for final public cutover. It verifies ordinary
   node/consensus health, the common `is` and `is2` dataspace catalog, and
-  universal ABI-21 `cash_handoff_v1` discovery. It never treats an asset,
-  application proof release, or device UI state as a validator admission
-  condition.
+  universal ABI-21 `cash_handoff_v1` discovery. The validator-fleet gate also
+  requires each roster-bearing manifest projection to publish the exact
+  schema-closed validator-account/`PeerId`/canonical HTTPS Torii bindings,
+  keeps those projections identical within one physical dataspace and across
+  advancing samples, and rejects identity or route reuse between dataspaces.
+  These checks prove the declared identities and routes are disjoint; they do
+  not attest that the routes terminate on distinct physical machines. The
+  script never treats an asset, application proof release, or device UI state
+  as a validator admission condition.
 - `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
   canary that catches stale validators still missing the capacity/order ISI
   dispatch table.

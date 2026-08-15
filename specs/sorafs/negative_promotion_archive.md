@@ -96,6 +96,82 @@ inventory, this negative-archive runner, and the Python runtime environment.
 Hashing the executable alone does not bind its dynamic libraries or operating
 system.
 
+The fail-closed final conjunction is
+`scripts/check_sorafs_production_promotion_bundle.py`. It is read-only and
+accepts the two aggregate files, their deterministic replay manifest, the
+negative-archive directory, one externally signed promotion-provenance receipt,
+the exact cosign JSON bundle named by that receipt, an explicit clock, and the
+operator trust tuple. It reuses the positive runner's aggregate/replay
+validators and this runner's manifest/receipt validators. It also reopens all
+six exact receipt files, rejects extra archive members, and requires the
+positive replay and negative baseline to share the same ordered 22-input digest
+and the same aggregate, replay, and replay-manifest hashes.
+
+The external receipt uses the schema
+`sorafs.production_readiness.production_promotion_provenance.v1`. It is closed
+over `status=verified`,
+`attestation_scope=production-promotion-bundle`,
+`signing_provider=authenticated_external_signer`,
+`signing_backend=software`,
+`signer_qualification=software-key-qualified`, a fresh explicit timestamp,
+the exact negative-manifest SHA-256, the six full ordered manifest receipt
+rows, baseline input count and digest, runner/checker/toolchain hashes, the
+closed Python-runtime object, and the four positive hashes (both aggregates,
+their canonical semantics, and the replay manifest). It also binds the exact
+cosign-bundle SHA-256, a canonical public HTTPS certificate identity and OIDC
+issuer, and exact `verified` OIDC and cosign statuses. The external
+administrator verifies cosign/OIDC before signing; an unsigned status or an
+unbound bundle is not accepted.
+
+Its `authentication` object has the same closed external-software Ed25519
+shape as resilience qualification: `kind`, `algorithm`, `backend`, distinct
+`service_id` and `administrator_id`, positive key and policy revisions,
+non-zero policy SHA-256, public-key fingerprint, and signature. Every value is
+matched to independent command-line trust. The signature covers the ASCII
+canonical JSON object with only `authentication.signature_hex` removed,
+prefixed by the domain
+`iroha:sorafs:production-readiness:production-promotion-provenance:v1\0`.
+Unknown fields, stale or future provenance, HSM/local/test signer metadata,
+failed cosign/OIDC status, receipt reordering, digest substitution, or a bad
+signature blocks promotion.
+
+This direct operator-pinned Ed25519 boundary is for the additional final
+provenance receipt. It matches the independently trusted topology and
+resilience receipt model. It does not weaken or replace the foundational
+software-signer receipt boundary: the validated positive aggregate has already
+rerun the independently pinned offline signer-receipt verifier over the exact
+foundational payload, signature, binding, and service receipt. That verifier's
+role/domain contract is deliberately foundational-specific and is not reused
+under a false final-provenance domain. Final eligibility therefore requires
+both authenticated layers.
+
+For example, after external administration has produced the signed receipt:
+
+```text
+python3 scripts/check_sorafs_production_promotion_bundle.py \
+  --first-aggregate /runtime/evidence/aggregate.json \
+  --second-aggregate /runtime/evidence/sorafs-production-readiness-replay-summary.json \
+  --replay-manifest /runtime/evidence/sorafs-production-readiness-replay-manifest.json \
+  --negative-archive-dir /runtime/evidence/sorafs-negative-promotion-archive \
+  --promotion-provenance /runtime/evidence/production-promotion-provenance.json \
+  --cosign-bundle /runtime/evidence/production-promotion.sigstore.json \
+  --provenance-verification-public-key-hex <REVIEWED-RAW-ED25519-PUBLIC-KEY> \
+  --provenance-signer-service-id <REVIEWED-SERVICE-ID> \
+  --provenance-signer-administrator-id <REVIEWED-INDEPENDENT-ADMIN-ID> \
+  --provenance-signer-key-revision <POSITIVE-REVISION> \
+  --provenance-signer-policy-revision <POSITIVE-REVISION> \
+  --provenance-signer-policy-digest-hex <NONZERO-SHA256> \
+  --provenance-certificate-identity <REVIEWED-PUBLIC-HTTPS-IDENTITY> \
+  --provenance-oidc-issuer <REVIEWED-PUBLIC-HTTPS-ISSUER> \
+  --now-unix <REVIEWED-UTC-SECONDS>
+```
+
+Exit code 0 and the stdout summary's exact `status=ready`,
+`externally_authenticated=true`, `promotion_eligible=true`, and
+`signer_qualification=software-key-qualified` are conjunctive. Exit code 1
+emits a schema-closed `status=blocked` summary. Supplying only the locally
+qualified negative archive can never produce a promotable result.
+
 The receipts attest that the fixed rejection paths were exercised against one
 already-ready baseline only within that enclosing externally authenticated
 provenance. They do not create lane evidence, replace the external software

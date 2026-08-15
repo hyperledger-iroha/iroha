@@ -847,6 +847,14 @@ foundational envelope, and the 17 lane summaries. The nine prerequisite package
 manifests are transitively committed by the foundational envelope; they are not
 extra aggregate input slots.
 
+Final acceptance is performed only by the read-only
+`scripts/check_sorafs_production_promotion_bundle.py` conjunction. It reuses
+the positive replay and fixed six-case negative-archive validators, cross-binds
+their input and output hashes, and requires fresh operator-pinned external
+software-Ed25519 plus cosign/OIDC provenance over the exact manifest, ordered
+receipts, runner/checker/toolchain/runtime, and positive hashes. The local
+archive's deliberate `promotion_eligible=false` cannot satisfy this control.
+
 The release-signing evidence consumed by promotion pins
 `signing_provider=authenticated_external_signer`,
 `signing_backend=software`, and

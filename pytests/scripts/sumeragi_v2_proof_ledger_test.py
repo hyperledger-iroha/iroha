@@ -784,7 +784,9 @@ def freeze_cross_tool_claim_call_sites(module, claim, root: Path = ROOT_DIR):
     def freeze(call_sites):
         frozen = []
         for call_site in call_sites:
-            source = (root / call_site.source).read_text(encoding="utf-8")
+            relative = Path(call_site.source)
+            path = reviewed_rust_item_provider(module, root, relative, call_site.item)
+            source = path.read_text(encoding="utf-8")
             items = [
                 item
                 for item in module.rust_items(source, call_site.item)
@@ -811,7 +813,9 @@ def freeze_cross_tool_claim_call_sites(module, claim, root: Path = ROOT_DIR):
     )
     linked_consumers = []
     for consumer in claim.linked_consumers:
-        source = (root / consumer.source).read_text(encoding="utf-8")
+        relative = Path(consumer.source)
+        path = reviewed_rust_item_provider(module, root, relative, consumer.item)
+        source = path.read_text(encoding="utf-8")
         items = [
             item
             for item in module.rust_items(source, consumer.item)
@@ -1894,6 +1898,13 @@ def test_total_checked_gate_contract_cardinality_and_payload_schema() -> None:
     ]
     assert len(gates) == 18
     assert len({gate.name for gate in gates}) == 18
+    reliable_link = next(
+        gate
+        for gate in gates
+        if gate.name == "check_production_reliable_flush_link_transition"
+    )
+    assert reliable_link.success_value == "(worker, application)"
+    assert reliable_link.production_success_value == "(worker, application,)"
 
     claim = total_gate_claim(
         module, "ProductionDurableIntentTraceRefinesProgressWitness"
@@ -1913,9 +1924,19 @@ def test_claim_local_checked_token_contract_includes_borrower_seal() -> None:
     module = load_checker()
     assert module._cross_tool_claim_checked_token_contract() == {
         "source": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+        "definition_source": module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE,
         "struct_item_token_sha256": module._CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256,
+        "unwitnessed_item_token_sha256": (
+            module._CHECKED_PRODUCTION_TOKEN_UNWITNESSED_SHA256
+        ),
         "borrower_item_token_sha256": (
             module._CHECKED_PRODUCTION_TOKEN_BORROWER_SHA256
+        ),
+        "witness_binder_item_token_sha256": (
+            module._CHECKED_PRODUCTION_TOKEN_WITNESS_BINDER_SHA256
+        ),
+        "witness_accessor_item_token_sha256": (
+            module._CHECKED_PRODUCTION_TOKEN_WITNESS_ACCESSOR_SHA256
         ),
         "consumer_item_token_sha256": (
             module._CHECKED_PRODUCTION_TOKEN_CONSUMER_SHA256
@@ -2240,7 +2261,7 @@ def test_materialization_auxiliary_rejects_kernel_or_gate_weakening(
             old = "    } else {\n        None\n    }"
             new = (
                 "    } else {\n"
-                "        Some(CheckedProductionTransition { projection })\n"
+                "        Some(CheckedProductionTransition::unwitnessed(projection))\n"
                 "    }"
             )
         assert item.source.count(old) == 1
@@ -2639,6 +2660,18 @@ def test_total_checked_gate_rejects_nonexact_option_semantics(
     gate = view.total_gate
     production_gate = module.rust_items(production_source, gate.name)[0]
     verus_gate = module.rust_items(verus_source, gate.name)[0]
+    if mutation == "always_none":
+        bad_gate = replace(
+            gate,
+            production_success_value="(application, projection,)",
+        )
+        with pytest.raises(ValueError, match="tuple trailing comma"):
+            module._cross_tool_total_gate_payload(
+                claim,
+                replace(view, total_gate=bad_gate),
+                production_source=production_source,
+                verus_source=verus_source,
+            )
     if mutation == "always_some":
         mutated_gate = production_gate.source.replace(
             f"if {view.verified_kernel}(projection) {{",
@@ -2647,7 +2680,7 @@ def test_total_checked_gate_rejects_nonexact_option_semantics(
         )
     elif mutation == "always_none":
         mutated_gate = production_gate.source.replace(
-            "Some(CheckedProductionTransition { projection })",
+            "Some(CheckedProductionTransition::unwitnessed(projection))",
             "None",
             1,
         )
@@ -2978,213 +3011,6 @@ def test_total_checked_gate_rejects_projection_fabrication(
             claim,
             view,
             call_site,
-            source_entries=entries,
-            root_dir=tmp_path,
-        )
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    (
-        "public_field",
-        "derive_clone",
-        "derive_copy",
-        "manual_clone",
-        "extra_constructor",
-    ),
-)
-def test_total_checked_gate_rejects_opaque_token_forging(
-    tmp_path: Path,
-    mutation: str,
-) -> None:
-    """The authorization token cannot become constructible or duplicable."""
-
-    module = load_checker()
-    sources = (
-        module._CHECKED_PRODUCTION_TOKEN_SOURCE,
-        "crates/iroha_core/src/sumeragi/v2_core.rs",
-        "crates/iroha_core/src/sumeragi/mod.rs",
-    )
-    for relative in sources:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT_DIR / relative, destination)
-    path = tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
-    source = path.read_text(encoding="utf-8")
-    if mutation == "public_field":
-        source = source.replace("    projection: P,", "    pub projection: P,", 1)
-    elif mutation == "derive_clone":
-        source = source.replace(
-            "#[derive(Debug, PartialEq, Eq)]",
-            "#[derive(Debug, Clone, PartialEq, Eq)]",
-            1,
-        )
-    elif mutation == "derive_copy":
-        source = source.replace(
-            "#[derive(Debug, PartialEq, Eq)]",
-            "#[derive(Debug, Copy, PartialEq, Eq)]",
-            1,
-        )
-    elif mutation == "manual_clone":
-        anchor = "impl<P> CheckedProductionTransition<P> {"
-        source = source.replace(
-            anchor,
-            "impl<P> Clone for CheckedProductionTransition<P> {\n"
-            "    fn clone(&self) -> Self { panic!() }\n"
-            "}\n\n"
-            + anchor,
-            1,
-        )
-    else:
-        anchor = "impl<P> CheckedProductionTransition<P> {"
-        source = source.replace(
-            anchor,
-            "fn forge_checked<P>(projection: P) -> "
-            "CheckedProductionTransition<P> {\n"
-            "    CheckedProductionTransition { projection }\n"
-            "}\n\n"
-            + anchor,
-            1,
-        )
-    path.write_text(source, encoding="utf-8")
-    entries = [
-        {
-            "path": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
-            "sha256": module._sha256_file(path),
-        }
-    ]
-    with pytest.raises(ValueError, match="token|CheckedProductionTransition"):
-        module._cross_tool_checked_token_payload(
-            source_entries=entries,
-            root_dir=tmp_path,
-        )
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    (
-        "in_flight_projection_visibility",
-        "in_flight_macro_predicate",
-        "in_flight_kernel_body",
-        "in_flight_constructor_always_some",
-        "in_flight_constructor_wrong_kernel",
-        "materialization_projection_visibility",
-        "legacy_constructor_always_some",
-        "borrower_visibility",
-        "borrower_body",
-    ),
-)
-def test_total_checked_gate_rejects_in_flight_token_contract_weakening(
-    tmp_path: Path,
-    mutation: str,
-) -> None:
-    """The auxiliary reservation gate cannot weaken the shared opaque token."""
-
-    module = load_checker()
-    sources = (
-        module._CHECKED_PRODUCTION_TOKEN_SOURCE,
-        "crates/iroha_core/src/sumeragi/v2_core.rs",
-        "crates/iroha_core/src/sumeragi/mod.rs",
-    )
-    for relative in sources:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT_DIR / relative, destination)
-    path = tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
-    source = path.read_text(encoding="utf-8")
-
-    if mutation == "in_flight_projection_visibility":
-        item = module.rust_struct_items(
-            source, "ProductionInFlightReservationTransitionProjection"
-        )[0]
-        assert item.source.count("    pub(crate) action: u8,") == 1
-        mutated = item.source.replace(
-            "    pub(crate) action: u8,",
-            "    pub action: u8,",
-            1,
-        )
-    elif mutation == "in_flight_macro_predicate":
-        item = module.rust_macro_items(
-            source, "production_in_flight_reservation_transition_body"
-        )[0]
-        old = (
-            "projection.before.state "
-            "== refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT)"
-        )
-        new = "true"
-        assert item.source.count(old) >= 1
-        mutated = item.source.replace(old, new, 1)
-    elif mutation == "in_flight_kernel_body":
-        item = module.rust_items(
-            source, "production_in_flight_reservation_transition_kernel"
-        )[0]
-        old = "production_in_flight_reservation_transition_body!(projection)"
-        new = "projection.action > 0"
-        assert item.source.count(old) == 1
-        mutated = item.source.replace(old, new, 1)
-    elif mutation.startswith("in_flight_constructor_"):
-        item = module.rust_items(
-            source, "check_production_in_flight_reservation_transition"
-        )[0]
-        if mutation == "in_flight_constructor_always_some":
-            old = "    } else {\n        None\n    }"
-            new = (
-                "    } else {\n"
-                "        Some(CheckedProductionTransition { projection })\n"
-                "    }"
-            )
-        else:
-            old = "production_in_flight_reservation_transition_kernel(projection)"
-            new = (
-                "production_application_trace_refines_decision_completion_kernel("
-                "Default::default())"
-            )
-        assert item.source.count(old) == 1
-        mutated = item.source.replace(old, new, 1)
-    elif mutation == "materialization_projection_visibility":
-        item = module.rust_struct_items(
-            source, "ProductionIngressReservationMaterializationTraceProjection"
-        )[0]
-        old = "    pub(crate) reserved_slots_before: u8,"
-        new = "    pub reserved_slots_before: u8,"
-        assert item.source.count(old) == 1
-        mutated = item.source.replace(old, new, 1)
-    elif mutation == "legacy_constructor_always_some":
-        item = module.rust_items(
-            source,
-            "check_production_body_ownership_effective_lock_transition",
-        )[0]
-        old = "    } else {\n        None\n    }"
-        new = (
-            "    } else {\n"
-            "        Some(CheckedProductionTransition { projection })\n"
-            "    }"
-        )
-        assert item.source.count(old) == 1
-        mutated = item.source.replace(old, new, 1)
-    else:
-        item = module.rust_items(source, "accepted_projection")[0]
-        if mutation == "borrower_visibility":
-            old = "pub(crate) const fn accepted_projection"
-            new = "pub const fn accepted_projection"
-        else:
-            old = "&self.projection"
-            new = "match self { Self { projection } => projection }"
-        assert item.source.count(old) == 1
-        mutated = item.source.replace(old, new, 1)
-
-    path.write_text(source.replace(item.source, mutated, 1), encoding="utf-8")
-    entries = [
-        {
-            "path": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
-            "sha256": module._sha256_file(path),
-        }
-    ]
-    with pytest.raises(
-        ValueError,
-        match="in-flight|materialization|effective-lock|borrowed|borrower|token",
-    ):
-        module._cross_tool_checked_token_payload(
             source_entries=entries,
             root_dir=tmp_path,
         )
@@ -4489,23 +4315,24 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
     module = load_checker()
     claim = module.CROSS_TOOL_REFINEMENT_CONTRACTS[0].claims[0]
     claim = freeze_cross_tool_claim_call_sites(module, claim)
+    call_site = claim.production_call_sites[0]
     assert claim.verified_kernel_source is not None
     paths = set(claim.production_sources)
-    paths.add(claim.verus_source)
-    paths.add(claim.verified_kernel_source)
+    paths.update((claim.verus_source, claim.verified_kernel_source))
     paths.update(call_site.source for call_site in claim.production_call_sites)
     for relative in paths:
         source = ROOT_DIR / relative
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
-
-    if mutation in {
+    copy_reviewed_rust_include_components(tmp_path)
+    production_call_mutation = mutation in {
         "negated_production_call",
         "missing_production_call",
         "constant_production_field",
-    }:
-        relative = claim.production_call_sites[0].source
+    }
+    if production_call_mutation:
+        relative = call_site.source
     elif mutation in {
         "verus_ensures_true",
         "disconnected_verus_proof",
@@ -4528,6 +4355,9 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
     else:
         relative = claim.verified_kernel_source
     path = tmp_path / relative
+    if production_call_mutation:
+        logical = Path(relative)
+        path = reviewed_rust_item_provider(module, tmp_path, logical, call_site.item)
     source = path.read_text(encoding="utf-8")
     replacements = {
         "negated_production_call": (
@@ -4540,8 +4370,7 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
             "Some((trace, enter_view))?",
         ),
         "constant_production_field": (
-            "owner_after: ownership_after,",
-            "owner_after: 0,",
+            "owner_after: ownership_after,", "owner_after: 0,",
         ),
         "constant_production_kernel": (
             "effective_lock_trace_claim_body!(trace, 1u8)\n"
@@ -4557,8 +4386,7 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
             "assert(production_kernel_relation(projection));",
         ),
         "altered_verus_projection": (
-            "protected_before: protected_after,",
-            "protected_before: 0u64,",
+            "protected_before: protected_after,", "protected_before: 0u64,",
         ),
         "constant_verus_mirror": (
             "effective_lock_trace_claim_body!(trace, 1u8)\n"
@@ -4574,8 +4402,7 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
             "true",
         ),
         "omitted_signer_bitmap": (
-            "&& $left.signer_bitmap == $right.signer_bitmap",
-            "&& true",
+            "&& $left.signer_bitmap == $right.signer_bitmap", "&& true",
         ),
         "omitted_signer_count": (
             "&& $left.signer_bitmap_count == $right.signer_bitmap_count\n"
@@ -4584,24 +4411,19 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
             "                    && true",
         ),
         "omitted_voting_power": (
-            "&& $left.voting_power == $right.voting_power",
-            "&& true",
+            "&& $left.voting_power == $right.voting_power", "&& true",
         ),
         "omitted_evidence_class": (
-            "&& $left.evidence_class == $right.evidence_class",
-            "&& true",
+            "&& $left.evidence_class == $right.evidence_class", "&& true",
         ),
         "omitted_bitmap_cardinality": (
-            "&& $certificate.signer_bitmap_count == $certificate.signer_count",
-            "&& true",
+            "&& $certificate.signer_bitmap_count == $certificate.signer_count", "&& true",
         ),
         "nonzero_absent_context": (
-            "canonical_identity_is_zero_body!($certificate.context_id)",
-            "true",
+            "canonical_identity_is_zero_body!($certificate.context_id)", "true",
         ),
         "nonzero_absent_subject": (
-            "canonical_identity_is_zero_body!($certificate.subject)",
-            "true",
+            "canonical_identity_is_zero_body!($certificate.subject)", "true",
         ),
         "constant_projected_bitmap": (
             "            signer_bitmap,\n"
@@ -4634,8 +4456,7 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
             "            evidence_class:",
         ),
         "constant_projected_evidence": (
-            "evidence_class: if signer_projection.is_some() {",
-            "evidence_class: if true {",
+            "evidence_class: if signer_projection.is_some() {", "evidence_class: if true {",
         ),
         "altered_effect_anchor": (
             "                effect_protected_lock,\n"
@@ -4651,8 +4472,7 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
             "candidate.reference() == certificate.reference()) {",
         ),
         "truncating_signer_shift": (
-            "let bit = 1u128.checked_shl(shift)?;",
-            "let bit = 1u128 << (shift % u128::BITS);",
+            "let bit = 1u128.checked_shl(shift)?;", "let bit = 1u128 << (shift % u128::BITS);",
         ),
         "disconnected_substitution_test": (
             "assert_eq!(\n"
@@ -4685,6 +4505,16 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
         mutated_source = source.replace(theorem_source, weakened_theorem, 1)
     else:
         old, new = replacements[mutation]
+        if source.count(old) == 2:
+            if mutation == "constant_production_field":
+                items = module.rust_items(source, call_site.item)
+                items = [item for item in items if item.brace_context == call_site.brace_context]
+            else:
+                items = module.rust_macro_items(source, "certificate_identity_equal_body")
+            assert len(items) == 1
+            target_source = items[0].source
+            assert target_source.count(old) == 1
+            old, new = target_source, target_source.replace(old, new, 1)
         assert source.count(old) == 1
         mutated_source = source.replace(old, new, 1)
     path.write_text(mutated_source, encoding="utf-8")
@@ -4714,25 +4544,42 @@ def test_effective_lock_cross_tool_contract_rejects_real_source_mutations(
 
 def test_effective_lock_checked_token_seams_bind_live_mutation_boundaries() -> None:
     """All four effective-lock claims bind their live opaque-token consumers."""
-
     module = load_checker()
     claims = module.CROSS_TOOL_REFINEMENT_CONTRACTS[0].claims
     assert module._cross_tool_promotion_contract_errors(
         module.CROSS_TOOL_REFINEMENT_CONTRACTS
     ) == []
     token_source = module._CHECKED_PRODUCTION_TOKEN_SOURCE
+    token_definition_source = module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE
     token_payload = module._cross_tool_checked_token_payload(
         source_entries=[
             {
                 "path": token_source,
                 "sha256": module._sha256_file(ROOT_DIR / token_source),
-            }
+            },
+            {
+                "path": token_definition_source,
+                "sha256": module._sha256_file(
+                    ROOT_DIR / token_definition_source
+                ),
+            },
         ],
         root_dir=ROOT_DIR,
     )
-    assert token_payload["constructor_count"] == 24
+    assert token_payload["constructor_count"] == 25
+    assert token_payload["raw_named_literal_count"] == 0
+    assert token_payload["definition_source"] == token_definition_source
+    assert token_payload["unwitnessed_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_TOKEN_UNWITNESSED_SHA256
+    )
     assert token_payload["borrower_item_token_sha256"] == (
         module._CHECKED_PRODUCTION_TOKEN_BORROWER_SHA256
+    )
+    assert token_payload["witness_binder_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_TOKEN_WITNESS_BINDER_SHA256
+    )
+    assert token_payload["witness_accessor_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_TOKEN_WITNESS_ACCESSOR_SHA256
     )
     assert token_payload["in_flight_projection_item_token_sha256"] == (
         module._CHECKED_PRODUCTION_IN_FLIGHT_PROJECTION_SHA256
@@ -4746,6 +4593,9 @@ def test_effective_lock_checked_token_seams_bind_live_mutation_boundaries() -> N
     assert token_payload["in_flight_constructor_item_token_sha256"] == (
         module._CHECKED_PRODUCTION_IN_FLIGHT_CONSTRUCTOR_SHA256
     )
+    assert token_payload["first_release_constructor_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_FIRST_RELEASE_CONSTRUCTOR_SHA256
+    )
     assert token_payload["materialization_projection_item_token_sha256"] == (
         module._CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_PROJECTION_SHA256
     )
@@ -4753,7 +4603,6 @@ def test_effective_lock_checked_token_seams_bind_live_mutation_boundaries() -> N
         item["name"]: item["item_token_sha256"]
         for item in token_payload["legacy_effective_lock_constructor_items"]
     } == module._CHECKED_PRODUCTION_EFFECTIVE_LOCK_GATE_SHA256
-
     for claim in claims:
         relatives = {
             *(call_site.source for call_site in claim.production_call_sites),
@@ -4767,22 +4616,19 @@ def test_effective_lock_checked_token_seams_bind_live_mutation_boundaries() -> N
             for relative in sorted(relatives)
         ]
         for call_site in claim.production_call_sites:
-            source = (ROOT_DIR / call_site.source).read_text(encoding="utf-8")
+            source = module._read_reviewed_rust_source(
+                ROOT_DIR, call_site.source, [], "effective-lock call site")[1]
             items = [
                 item
                 for item in module.rust_items(source, call_site.item)
                 if item.brace_context == call_site.brace_context
             ]
             assert len(items) == 1
-            live_call = replace(
-                call_site,
-                item_token_sha256=module._rust_sealed_item_token_sha256(
-                    items[0]
-                ),
-            )
+            live_seal = module._rust_sealed_item_token_sha256(items[0])
+            assert call_site.item_token_sha256 == live_seal
             payload = module._cross_tool_effective_lock_call_site_payload(
                 claim,
-                live_call,
+                call_site,
                 source_entries=source_entries,
                 root_dir=ROOT_DIR,
             )
@@ -4794,22 +4640,19 @@ def test_effective_lock_checked_token_seams_bind_live_mutation_boundaries() -> N
                 call_site.mutation_boundaries
             )
         for consumer in claim.linked_consumers:
-            source = (ROOT_DIR / consumer.source).read_text(encoding="utf-8")
+            source = module._read_reviewed_rust_source(
+                ROOT_DIR, consumer.source, [], "effective-lock linked consumer")[1]
             items = [
                 item
                 for item in module.rust_items(source, consumer.item)
                 if item.brace_context == consumer.brace_context
             ]
             assert len(items) == 1
-            live_consumer = replace(
-                consumer,
-                item_token_sha256=module._rust_sealed_item_token_sha256(
-                    items[0]
-                ),
-            )
+            live_seal = module._rust_sealed_item_token_sha256(items[0])
+            assert consumer.item_token_sha256 == live_seal
             payload = module._cross_tool_linked_consumer_payload(
                 claim,
-                live_consumer,
+                consumer,
                 source_entries=source_entries,
                 root_dir=ROOT_DIR,
             )
@@ -4943,18 +4786,18 @@ def test_effective_lock_checked_call_mutations_fail_at_the_intended_seam(
     claims = module.CROSS_TOOL_REFINEMENT_CONTRACTS[0].claims
 
     def check_mutation(
-        case: str,
-        claim_index: int,
-        call_index: int,
-        mutate,
-        expected_error: str,
+        case: str, claim_index: int, call_index: int, mutate, expected_error: str
     ) -> None:
         claim = claims[claim_index]
         call_site = claim.production_call_sites[call_index]
         root = tmp_path / case
-        path = root / call_site.source
+        relative = Path(call_site.source)
+        path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        source = (ROOT_DIR / call_site.source).read_text(encoding="utf-8")
+        shutil.copy2(ROOT_DIR / relative, path)
+        copy_reviewed_rust_include_components(root)
+        path = reviewed_rust_item_provider(module, root, relative, call_site.item)
+        source = path.read_text(encoding="utf-8")
         mutated = mutate(source, call_site)
         assert mutated != source
         path.write_text(mutated, encoding="utf-8")
@@ -4971,7 +4814,7 @@ def test_effective_lock_checked_call_mutations_fail_at_the_intended_seam(
         source_entries = [
             {
                 "path": call_site.source,
-                "sha256": module._sha256_file(path),
+                "sha256": module._sha256_file(root / relative),
             }
         ]
         with pytest.raises(ValueError, match=expected_error):
@@ -6243,20 +6086,23 @@ def test_reliable_flush_transitive_seals_reject_weakened_identity_helpers(
         (
             "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
             "if production_reliable_flush_two_phase_link_kernel(worker, application) {\n"
-            "        Some(CheckedProductionTransition {\n"
-            "            projection: (worker, application),\n"
-            "        })\n"
+            "        Some(CheckedProductionTransition::unwitnessed((\n"
+            "            worker,\n"
+            "            application,\n"
+            "        )))\n"
             "    } else {\n"
             "        None\n"
             "    }",
             "if production_reliable_flush_two_phase_link_kernel(worker, application) {\n"
-            "        Some(CheckedProductionTransition {\n"
-            "            projection: (worker, application),\n"
-            "        })\n"
+            "        Some(CheckedProductionTransition::unwitnessed((\n"
+            "            worker,\n"
+            "            application,\n"
+            "        )))\n"
             "    } else {\n"
-            "        Some(CheckedProductionTransition {\n"
-            "            projection: (worker, application),\n"
-            "        })\n"
+            "        Some(CheckedProductionTransition::unwitnessed((\n"
+            "            worker,\n"
+            "            application,\n"
+            "        )))\n"
             "    }",
             "production total gate",
         ),

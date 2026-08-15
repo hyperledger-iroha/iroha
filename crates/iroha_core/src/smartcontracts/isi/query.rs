@@ -6365,85 +6365,263 @@ mod tests {
         };
         assert_eq!(v_ad.len(), 2);
     }
-    #[tokio::test]
-    async fn iter_dispatch_accounts_sort_desc_end_to_end() {
-        use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
-        use iroha_data_model::query::parameters::{
-            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
-        };
-        use iroha_futures::supervisor::ShutdownSignal;
-        use iroha_primitives::json::Json;
-        // Create a domain and three accounts in it with ranked metadata
-        let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let (a_id, _) = iroha_test_samples::gen_account_in("w");
-        let (b_id, _) = iroha_test_samples::gen_account_in("w");
-        let (c_id, _) = iroha_test_samples::gen_account_in("w");
-        let a = Account::new(a_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-                m
-            })
-            .build(&a_id);
-        let b = Account::new(b_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-                m
-            })
-            .build(&b_id);
-        let c = Account::new(c_id.clone()).build(&c_id);
-        let world = World::with([w], [a.clone(), b.clone(), c.clone()], []);
-        let kura = Kura::blank_kura_for_testing();
-        let store = std::sync::Arc::new(LiveQueryStore::from_config(
-            StoreCfg::default(),
-            ShutdownSignal::new(),
-        ));
-        let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
-        let state_view = state.view();
-        // Desc by rank
-        let params = QueryParams {
-            pagination: Pagination::default(),
-            sorting: Sorting {
-                sort_by_metadata_key: Some("rank".parse().unwrap()),
-                order: Some(SortOrder::Desc),
-            },
-            fetch_size: FetchSize::default(),
-        };
-        let payload =
-            norito::codec::Encode::encode(&iroha_data_model::query::account::prelude::FindAccounts);
-        let qbox: iroha_data_model::query::QueryBox<_> =
-            Box::new(iroha_data_model::query::ErasedIterQuery::<Account>::new(
-                iroha_data_model::query::dsl::CompoundPredicate::<Account>::PASS,
-                SelectorTuple::<Account>::default(),
-                payload,
-            ));
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        let request = QueryRequest::Start(qwp);
-        let validated = ValidQueryRequest::validate_for_client_parts(
-            request,
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch, _rem, _cur) = first.into_parts();
-        let v = match batch.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v.len(), 3);
-        // Desc → a(rank=2), b(rank=1), c(no-rank)
-        assert_eq!(v[0].id(), &a_id);
-        assert_eq!(v[1].id(), &b_id);
-        assert_eq!(v[2].id(), &c_id);
+    #[derive(Clone, Copy)]
+    enum IterDispatchRankFixture {
+        Sparse,
+        Dense,
     }
+
+    struct IterDispatchRankSortCase {
+        fixture: IterDispatchRankFixture,
+        order: SortOrder,
+        offset: u64,
+        limit: Option<NonZeroU64>,
+        fetch_size: Option<NonZeroU64>,
+        expected_pages: &'static [&'static [usize]],
+    }
+
+    fn ranked_account(id: &AccountId, rank: Option<u32>) -> Account {
+        let account = Account::new(id.clone());
+        let Some(rank) = rank else {
+            return account.build(id);
+        };
+        account
+            .with_metadata({
+                let mut metadata = Metadata::default();
+                metadata.insert(
+                    "rank".parse().unwrap(),
+                    iroha_primitives::json::Json::from(norito::json!(rank)),
+                );
+                metadata
+            })
+            .build(id)
+    }
+
+    fn ranked_account_fixture(
+        fixture: IterDispatchRankFixture,
+    ) -> (World, [AccountId; 3]) {
+        let domain =
+            Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
+        let account_ids = [
+            iroha_test_samples::gen_account_in("w").0,
+            iroha_test_samples::gen_account_in("w").0,
+            iroha_test_samples::gen_account_in("w").0,
+        ];
+        let ranks = match fixture {
+            IterDispatchRankFixture::Sparse => [Some(2), Some(1), None],
+            IterDispatchRankFixture::Dense => [Some(0), Some(1), Some(2)],
+        };
+        let first = ranked_account(&account_ids[0], ranks[0]);
+        let second = ranked_account(&account_ids[1], ranks[1]);
+        let third = ranked_account(&account_ids[2], ranks[2]);
+        (
+            World::with([domain], [first, second, third], []),
+            account_ids,
+        )
+    }
+
+    fn ranked_asset_definition(name: &str, rank: Option<u32>) -> AssetDefinition {
+        let mut definition = AssetDefinition::numeric(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("w", "universal").unwrap(),
+                name.parse().unwrap(),
+            ),
+            name.to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
+        let Some(rank) = rank else {
+            return definition;
+        };
+        definition.metadata_mut().insert(
+            "rank".parse().unwrap(),
+            iroha_primitives::json::Json::from(norito::json!(rank)),
+        );
+        definition
+    }
+
+    fn ranked_asset_definition_fixture(
+        fixture: IterDispatchRankFixture,
+    ) -> (
+        World,
+        [iroha_data_model::asset::AssetDefinitionId; 3],
+    ) {
+        let domain =
+            Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let (names, ranks) = match fixture {
+            IterDispatchRankFixture::Sparse => (
+                ["rose", "tulip", "peony"],
+                [Some(1), Some(2), None],
+            ),
+            IterDispatchRankFixture::Dense => (
+                ["a0", "a1", "a2"],
+                [Some(0), Some(1), Some(2)],
+            ),
+        };
+        let first = ranked_asset_definition(names[0], ranks[0]);
+        let second = ranked_asset_definition(names[1], ranks[1]);
+        let third = ranked_asset_definition(names[2], ranks[2]);
+        let ids = [
+            first.id().clone(),
+            second.id().clone(),
+            third.id().clone(),
+        ];
+        (
+            World::with([domain], [account], [first, second, third]),
+            ids,
+        )
+    }
+
+    macro_rules! define_iter_dispatch_rank_sort_runner {
+        ($runner:ident, $item:ty, $fixture:ident, $query:expr, $variant:ident) => {
+            async fn $runner(case: IterDispatchRankSortCase) {
+                use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
+                use iroha_data_model::query::parameters::{
+                    FetchSize, Pagination, QueryParams, Sorting,
+                };
+                use iroha_futures::supervisor::ShutdownSignal;
+
+                let IterDispatchRankSortCase {
+                    fixture,
+                    order,
+                    offset,
+                    limit,
+                    fetch_size,
+                    expected_pages,
+                } = case;
+                let (world, ids) = $fixture(fixture);
+                let kura = Kura::blank_kura_for_testing();
+                let store = std::sync::Arc::new(LiveQueryStore::from_config(
+                    StoreCfg::default(),
+                    ShutdownSignal::new(),
+                ));
+                let handle = crate::query::store::LiveQueryStoreHandle::new(store);
+                let state = State::new(world, kura, handle.clone());
+                let state_view = state.view();
+                let params = QueryParams {
+                    pagination: Pagination::new(limit, offset),
+                    sorting: Sorting {
+                        sort_by_metadata_key: Some("rank".parse().unwrap()),
+                        order: Some(order),
+                    },
+                    fetch_size: FetchSize::new(fetch_size),
+                };
+                let payload = norito::codec::Encode::encode(&$query);
+                let query: iroha_data_model::query::QueryBox<_> =
+                    Box::new(iroha_data_model::query::ErasedIterQuery::<$item>::new(
+                        iroha_data_model::query::dsl::CompoundPredicate::<$item>::PASS,
+                        SelectorTuple::<$item>::default(),
+                        payload,
+                    ));
+                let request = QueryRequest::Start(
+                    iroha_data_model::query::QueryWithParams::new(&query, params),
+                );
+                let validated = ValidQueryRequest::validate_for_client_parts(
+                    request,
+                    &ALICE_ID,
+                    &state_view,
+                    QueryLimits::default(),
+                )
+                .unwrap();
+                let QueryResponse::Iterable(first) =
+                    validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
+                else {
+                    panic!("expected iterable")
+                };
+                let mut output = Some(first);
+                let assert_progress = expected_pages.len() > 1;
+                for (page_index, expected_indices) in expected_pages.iter().enumerate() {
+                    let (batch, remaining, cursor) =
+                        output.take().expect("expected query page").into_parts();
+                    let values = match batch.into_iter().next().expect("slice") {
+                        iroha_data_model::query::QueryOutputBatchBox::$variant(values) => values,
+                        other => panic!("unexpected batch variant: {other:?}"),
+                    };
+                    assert_eq!(values.len(), expected_indices.len());
+                    for (value, expected_position) in values.iter().zip(expected_indices.iter()) {
+                        assert_eq!(value.id(), &ids[*expected_position]);
+                    }
+                    let has_next_page = page_index + 1 < expected_pages.len();
+                    if assert_progress {
+                        let mut expected_remaining = 0_u64;
+                        for page in &expected_pages[page_index + 1..] {
+                            let page_len = u64::try_from(page.len())
+                                .expect("expected page length fits u64");
+                            expected_remaining = expected_remaining
+                                .checked_add(page_len)
+                                .expect("expected remaining count fits u64");
+                        }
+                        assert_eq!(remaining, expected_remaining);
+                        assert_eq!(cursor.is_some(), has_next_page);
+                    }
+                    if has_next_page {
+                        output = Some(
+                            handle
+                                .handle_iter_continue(
+                                    cursor.expect("should continue"),
+                                    &ALICE_ID,
+                                )
+                                .unwrap(),
+                        );
+                    }
+                }
+            }
+        };
+    }
+
+    define_iter_dispatch_rank_sort_runner!(
+        run_account_rank_sort_case,
+        Account,
+        ranked_account_fixture,
+        iroha_data_model::query::account::prelude::FindAccounts,
+        Account
+    );
+    define_iter_dispatch_rank_sort_runner!(
+        run_asset_definition_rank_sort_case,
+        AssetDefinition,
+        ranked_asset_definition_fixture,
+        iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
+        AssetDefinition
+    );
+
+    macro_rules! iter_dispatch_rank_sort_test {
+        (
+            $name:ident,
+            $runner:ident,
+            $fixture:ident,
+            $order:ident,
+            $offset:expr,
+            $limit:expr,
+            $fetch_size:expr,
+            $expected_pages:expr
+        ) => {
+            #[tokio::test]
+            async fn $name() {
+                $runner(IterDispatchRankSortCase {
+                    fixture: IterDispatchRankFixture::$fixture,
+                    order: SortOrder::$order,
+                    offset: $offset,
+                    limit: $limit,
+                    fetch_size: $fetch_size,
+                    expected_pages: $expected_pages,
+                })
+                .await;
+            }
+        };
+    }
+
+    iter_dispatch_rank_sort_test!(
+        iter_dispatch_accounts_sort_desc_end_to_end,
+        run_account_rank_sort_case,
+        Sparse,
+        Desc,
+        0,
+        None,
+        None,
+        &[&[0, 1, 2]]
+    );
     #[tokio::test]
     async fn iter_dispatch_accounts_sort_ties_stable_by_id() {
         use iroha_data_model::query::parameters::{
@@ -6551,101 +6729,16 @@ mod tests {
         assert_eq!(v[1].id(), &ids[1]);
         assert_eq!(v[2].id(), &ids[2]);
     }
-    #[tokio::test]
-    async fn iter_dispatch_asset_definitions_sort_desc() {
-        use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
-        use iroha_data_model::query::parameters::{
-            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
-        };
-        use iroha_futures::supervisor::ShutdownSignal;
-        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            ),
-            "rose".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "tulip".parse().unwrap(),
-            ),
-            "tulip".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "peony".parse().unwrap(),
-            ),
-            "peony".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID); // no rank
-        ad1.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-        ad2.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-        let world = World::with([domain], [account], [ad1.clone(), ad2.clone(), ad3.clone()]);
-        let kura = Kura::blank_kura_for_testing();
-        let store = std::sync::Arc::new(LiveQueryStore::from_config(
-            StoreCfg::default(),
-            ShutdownSignal::new(),
-        ));
-        let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
-        let state_view = state.view();
-        let params = QueryParams {
-            pagination: Pagination::default(),
-            sorting: Sorting {
-                sort_by_metadata_key: Some("rank".parse().unwrap()),
-                order: Some(SortOrder::Desc),
-            },
-            fetch_size: FetchSize::default(),
-        };
-        let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-        );
-        let qbox: iroha_data_model::query::QueryBox<_> = Box::new(
-            iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
-                iroha_data_model::query::dsl::CompoundPredicate::<AssetDefinition>::PASS,
-                SelectorTuple::<AssetDefinition>::default(),
-                payload,
-            ),
-        );
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        let request = QueryRequest::Start(qwp);
-        let validated = ValidQueryRequest::validate_for_client_parts(
-            request,
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch, _rem, _cur) = first.into_parts();
-        let v = match batch.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v.len(), 3);
-        // Desc → ad2(rank=2), ad1(rank=1), ad3(no-rank)
-        assert_eq!(v[0].id(), ad2.id());
-        assert_eq!(v[1].id(), ad1.id());
-        assert_eq!(v[2].id(), ad3.id());
-    }
+    iter_dispatch_rank_sort_test!(
+        iter_dispatch_asset_definitions_sort_desc,
+        run_asset_definition_rank_sort_case,
+        Sparse,
+        Desc,
+        0,
+        None,
+        None,
+        &[&[1, 0, 2]]
+    );
     #[tokio::test]
     async fn iter_dispatch_find_triggers_full() {
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
@@ -8728,781 +8821,85 @@ mod tests {
         assert!(ids.iter().any(|id| id == &"t1".parse().unwrap()));
         assert!(ids.iter().any(|id| id == &"t2".parse().unwrap()));
     }
-    #[tokio::test]
-    async fn iter_dispatch_asset_definitions_sort_asc() {
-        use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
-        use iroha_data_model::query::parameters::{
-            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
-        };
-        use iroha_futures::supervisor::ShutdownSignal;
-        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            ),
-            "rose".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "tulip".parse().unwrap(),
-            ),
-            "tulip".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "peony".parse().unwrap(),
-            ),
-            "peony".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID); // no rank
-        ad1.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-        ad2.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-        let world = World::with([domain], [account], [ad1.clone(), ad2.clone(), ad3.clone()]);
-        let kura = Kura::blank_kura_for_testing();
-        let store = std::sync::Arc::new(LiveQueryStore::from_config(
-            StoreCfg::default(),
-            ShutdownSignal::new(),
-        ));
-        let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
-        let state_view = state.view();
-        let params = QueryParams {
-            pagination: Pagination::default(),
-            sorting: Sorting {
-                sort_by_metadata_key: Some("rank".parse().unwrap()),
-                order: Some(SortOrder::Asc),
-            },
-            fetch_size: FetchSize::default(),
-        };
-        let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-        );
-        let qbox: iroha_data_model::query::QueryBox<_> = Box::new(
-            iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
-                iroha_data_model::query::dsl::CompoundPredicate::<AssetDefinition>::PASS,
-                SelectorTuple::<AssetDefinition>::default(),
-                payload,
-            ),
-        );
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        let request = QueryRequest::Start(qwp);
-        let validated = ValidQueryRequest::validate_for_client_parts(
-            request,
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch, _rem, _cur) = first.into_parts();
-        let v = match batch.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v.len(), 3);
-        assert_eq!(v[0].id(), ad1.id());
-        assert_eq!(v[1].id(), ad2.id());
-        assert_eq!(v[2].id(), ad3.id());
-    }
-    #[tokio::test]
-    async fn iter_dispatch_accounts_sort_asc_end_to_end() {
-        use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
-        use iroha_data_model::query::parameters::{
-            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
-        };
-        use iroha_futures::supervisor::ShutdownSignal;
-        use iroha_primitives::json::Json;
-        let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let (a_id, _) = iroha_test_samples::gen_account_in("w");
-        let (b_id, _) = iroha_test_samples::gen_account_in("w");
-        let (c_id, _) = iroha_test_samples::gen_account_in("w");
-        let a = Account::new(a_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-                m
-            })
-            .build(&a_id);
-        let b = Account::new(b_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-                m
-            })
-            .build(&b_id);
-        let c = Account::new(c_id.clone()).build(&c_id);
-        let world = World::with([w], [a.clone(), b.clone(), c.clone()], []);
-        let kura = Kura::blank_kura_for_testing();
-        let store = std::sync::Arc::new(LiveQueryStore::from_config(
-            StoreCfg::default(),
-            ShutdownSignal::new(),
-        ));
-        let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
-        let state_view = state.view();
-        let params = QueryParams {
-            pagination: Pagination::default(),
-            sorting: Sorting {
-                sort_by_metadata_key: Some("rank".parse().unwrap()),
-                order: Some(SortOrder::Asc),
-            },
-            fetch_size: FetchSize::default(),
-        };
-        let payload =
-            norito::codec::Encode::encode(&iroha_data_model::query::account::prelude::FindAccounts);
-        let qbox: iroha_data_model::query::QueryBox<_> =
-            Box::new(iroha_data_model::query::ErasedIterQuery::<Account>::new(
-                iroha_data_model::query::dsl::CompoundPredicate::<Account>::PASS,
-                SelectorTuple::<Account>::default(),
-                payload,
-            ));
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        let request = QueryRequest::Start(qwp);
-        let validated = ValidQueryRequest::validate_for_client_parts(
-            request,
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch, _rem, _cur) = first.into_parts();
-        let v = match batch.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v.len(), 3);
-        assert_eq!(v[0].id(), &b_id);
-        assert_eq!(v[1].id(), &a_id);
-        assert_eq!(v[2].id(), &c_id);
-    }
-    #[tokio::test]
-    async fn iter_dispatch_accounts_sort_desc_batched() {
-        use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
-        use iroha_data_model::query::parameters::{
-            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
-        };
-        use iroha_futures::supervisor::ShutdownSignal;
-        use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
-        let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let (a_id, _) = iroha_test_samples::gen_account_in("w");
-        let (b_id, _) = iroha_test_samples::gen_account_in("w");
-        let (c_id, _) = iroha_test_samples::gen_account_in("w");
-        let a = Account::new(a_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-                m
-            })
-            .build(&a_id);
-        let b = Account::new(b_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-                m
-            })
-            .build(&b_id);
-        let c = Account::new(c_id.clone()).build(&c_id);
-        let world = World::with([w], [a.clone(), b.clone(), c.clone()], []);
-        let kura = Kura::blank_kura_for_testing();
-        let store = std::sync::Arc::new(LiveQueryStore::from_config(
-            StoreCfg::default(),
-            ShutdownSignal::new(),
-        ));
-        let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
-        let state_view = state.view();
-        let params = QueryParams {
-            pagination: Pagination::default(),
-            sorting: Sorting {
-                sort_by_metadata_key: Some("rank".parse().unwrap()),
-                order: Some(SortOrder::Desc),
-            },
-            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
-        };
-        let payload =
-            norito::codec::Encode::encode(&iroha_data_model::query::account::prelude::FindAccounts);
-        let qbox: iroha_data_model::query::QueryBox<_> =
-            Box::new(iroha_data_model::query::ErasedIterQuery::<Account>::new(
-                iroha_data_model::query::dsl::CompoundPredicate::<Account>::PASS,
-                SelectorTuple::<Account>::default(),
-                payload,
-            ));
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        let request = QueryRequest::Start(qwp);
-        let validated = ValidQueryRequest::validate_for_client_parts(
-            request,
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch1, remaining, cursor) = first.into_parts();
-        let v1 = match batch1.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v1.len(), 2);
-        assert_eq!(v1[0].id(), &a_id);
-        assert_eq!(v1[1].id(), &b_id);
-        assert_eq!(remaining, 1);
-        let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
-        let (batch2, remaining2, cursor2) = next.into_parts();
-        let v2 = match batch2.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v2.len(), 1);
-        assert_eq!(v2[0].id(), &c_id);
-        assert_eq!(remaining2, 0);
-        assert!(cursor2.is_none());
-    }
-    #[tokio::test]
-    async fn iter_dispatch_asset_definitions_sort_desc_batched() {
-        use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
-        use iroha_data_model::query::parameters::{
-            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
-        };
-        use iroha_futures::supervisor::ShutdownSignal;
-        use nonzero_ext::nonzero;
-        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            ),
-            "rose".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "tulip".parse().unwrap(),
-            ),
-            "tulip".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let ad3 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "peony".parse().unwrap(),
-            ),
-            "peony".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID); // no rank
-        ad1.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-        ad2.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-        let world = World::with([domain], [account], [ad1.clone(), ad2.clone(), ad3.clone()]);
-        let kura = Kura::blank_kura_for_testing();
-        let store = std::sync::Arc::new(LiveQueryStore::from_config(
-            StoreCfg::default(),
-            ShutdownSignal::new(),
-        ));
-        let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
-        let state_view = state.view();
-        let params = QueryParams {
-            pagination: Pagination::default(),
-            sorting: Sorting {
-                sort_by_metadata_key: Some("rank".parse().unwrap()),
-                order: Some(SortOrder::Desc),
-            },
-            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
-        };
-        let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-        );
-        let qbox: iroha_data_model::query::QueryBox<_> = Box::new(
-            iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
-                iroha_data_model::query::dsl::CompoundPredicate::<AssetDefinition>::PASS,
-                SelectorTuple::<AssetDefinition>::default(),
-                payload,
-            ),
-        );
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        let request = QueryRequest::Start(qwp);
-        let validated = ValidQueryRequest::validate_for_client_parts(
-            request,
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch1, remaining, cursor) = first.into_parts();
-        let v1 = match batch1.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v1.len(), 2);
-        assert_eq!(v1[0].id(), ad2.id());
-        assert_eq!(v1[1].id(), ad1.id());
-        assert_eq!(remaining, 1);
-        let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
-        let (batch2, remaining2, cursor2) = next.into_parts();
-        let v2 = match batch2.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v2.len(), 1);
-        assert_eq!(v2[0].id(), ad3.id());
-        assert_eq!(remaining2, 0);
-        assert!(cursor2.is_none());
-    }
-    #[tokio::test]
-    async fn iter_dispatch_asset_definitions_offset_and_fetch_size_interplay_asc() {
-        use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
-        use iroha_data_model::query::parameters::{
-            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
-        };
-        use iroha_futures::supervisor::ShutdownSignal;
-        use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
-        // Build three asset definitions with rank metadata: 0,1,2
-        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut ad0 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "a0".parse().unwrap(),
-            ),
-            "a0".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "a1".parse().unwrap(),
-            ),
-            "a1".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "a2".parse().unwrap(),
-            ),
-            "a2".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        ad0.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(0)));
-        ad1.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-        ad2.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-        let world = World::with([domain], [account], [ad0.clone(), ad1.clone(), ad2.clone()]);
-        let kura = Kura::blank_kura_for_testing();
-        let store = std::sync::Arc::new(LiveQueryStore::from_config(
-            StoreCfg::default(),
-            ShutdownSignal::new(),
-        ));
-        let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
-        let state_view = state.view();
-        // Asc by rank, offset=1, limit=2, fetch_size=1 => expect a1 then a2
-        let params = QueryParams {
-            pagination: Pagination::new(Some(nonzero!(2_u64)), 1),
-            sorting: Sorting {
-                sort_by_metadata_key: Some("rank".parse().unwrap()),
-                order: Some(SortOrder::Asc),
-            },
-            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
-        };
-        let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-        );
-        let qbox: iroha_data_model::query::QueryBox<_> = Box::new(
-            iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
-                iroha_data_model::query::dsl::CompoundPredicate::<AssetDefinition>::PASS,
-                SelectorTuple::<AssetDefinition>::default(),
-                payload,
-            ),
-        );
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        let request = QueryRequest::Start(qwp);
-        let validated = ValidQueryRequest::validate_for_client_parts(
-            request,
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch1, remaining, cursor) = first.into_parts();
-        let v1 = match batch1.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v1.len(), 1);
-        assert_eq!(v1[0].id(), ad1.id());
-        assert_eq!(remaining, 1);
-        let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
-        let (batch2, remaining2, cursor2) = next.into_parts();
-        let v2 = match batch2.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v2.len(), 1);
-        assert_eq!(v2[0].id(), ad2.id());
-        assert_eq!(remaining2, 0);
-        assert!(cursor2.is_none());
-    }
-    #[tokio::test]
-    async fn iter_dispatch_asset_definitions_offset_and_fetch_size_interplay_desc() {
-        use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
-        use iroha_data_model::query::parameters::{
-            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
-        };
-        use iroha_futures::supervisor::ShutdownSignal;
-        use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
-        // Build three asset definitions with rank metadata: 0,1,2
-        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let mut ad0 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "a0".parse().unwrap(),
-            ),
-            "a0".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let mut ad1 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "a1".parse().unwrap(),
-            ),
-            "a1".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let mut ad2 = AssetDefinition::numeric(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("w", "universal").unwrap(),
-                "a2".parse().unwrap(),
-            ),
-            "a2".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        ad0.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(0)));
-        ad1.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-        ad2.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-        let world = World::with([domain], [account], [ad0.clone(), ad1.clone(), ad2.clone()]);
-        let kura = Kura::blank_kura_for_testing();
-        let store = std::sync::Arc::new(LiveQueryStore::from_config(
-            StoreCfg::default(),
-            ShutdownSignal::new(),
-        ));
-        let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
-        let state_view = state.view();
-        // Desc by rank: list is [2,1,0]; offset=1 -> start from rank=1; limit=2 -> ranks [1,0]; fetch_size=1 -> first rank=1, then rank=0
-        let params = QueryParams {
-            pagination: Pagination::new(Some(nonzero!(2_u64)), 1),
-            sorting: Sorting {
-                sort_by_metadata_key: Some("rank".parse().unwrap()),
-                order: Some(SortOrder::Desc),
-            },
-            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
-        };
-        let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-        );
-        let qbox: iroha_data_model::query::QueryBox<_> = Box::new(
-            iroha_data_model::query::ErasedIterQuery::<AssetDefinition>::new(
-                iroha_data_model::query::dsl::CompoundPredicate::<AssetDefinition>::PASS,
-                SelectorTuple::<AssetDefinition>::default(),
-                payload,
-            ),
-        );
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        let request = QueryRequest::Start(qwp);
-        let validated = ValidQueryRequest::validate_for_client_parts(
-            request,
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch1, remaining, cursor) = first.into_parts();
-        let v1 = match batch1.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v1.len(), 1);
-        assert_eq!(v1[0].id(), ad1.id());
-        assert_eq!(remaining, 1);
-        let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
-        let (batch2, remaining2, cursor2) = next.into_parts();
-        let v2 = match batch2.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v2.len(), 1);
-        assert_eq!(v2[0].id(), ad0.id());
-        assert_eq!(remaining2, 0);
-        assert!(cursor2.is_none());
-    }
-    #[tokio::test]
-    async fn iter_dispatch_accounts_offset_and_fetch_size_interplay() {
-        use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
-        use iroha_data_model::query::parameters::{
-            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
-        };
-        use iroha_futures::supervisor::ShutdownSignal;
-        use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
-        // Build three accounts with explicit rank metadata: a(0), b(1), c(2)
-        let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let (a_id, _) = iroha_test_samples::gen_account_in("w");
-        let (b_id, _) = iroha_test_samples::gen_account_in("w");
-        let (c_id, _) = iroha_test_samples::gen_account_in("w");
-        let a = Account::new(a_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(0)));
-                m
-            })
-            .build(&a_id);
-        let b = Account::new(b_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-                m
-            })
-            .build(&b_id);
-        let c = Account::new(c_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-                m
-            })
-            .build(&c_id);
-        let world = World::with([w], [a.clone(), b.clone(), c.clone()], []);
-        let kura = Kura::blank_kura_for_testing();
-        let store = std::sync::Arc::new(LiveQueryStore::from_config(
-            StoreCfg::default(),
-            ShutdownSignal::new(),
-        ));
-        let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
-        let state_view = state.view();
-        // Asc sort by rank, offset=1, limit=2, fetch_size=1
-        let params = QueryParams {
-            pagination: Pagination::new(Some(nonzero!(2_u64)), 1),
-            sorting: Sorting {
-                sort_by_metadata_key: Some("rank".parse().unwrap()),
-                order: Some(SortOrder::Asc),
-            },
-            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
-        };
-        let payload =
-            norito::codec::Encode::encode(&iroha_data_model::query::account::prelude::FindAccounts);
-        let qbox: iroha_data_model::query::QueryBox<_> =
-            Box::new(iroha_data_model::query::ErasedIterQuery::<Account>::new(
-                iroha_data_model::query::dsl::CompoundPredicate::<Account>::PASS,
-                SelectorTuple::<Account>::default(),
-                payload,
-            ));
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        let request = QueryRequest::Start(qwp);
-        // First batch: should contain rank=1 (b)
-        let validated = ValidQueryRequest::validate_for_client_parts(
-            request,
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch1, remaining, cursor) = first.into_parts();
-        let v1 = match batch1.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v1.len(), 1);
-        assert_eq!(v1[0].id(), &b_id);
-        assert_eq!(remaining, 1);
-        // Second batch: should contain rank=2 (c)
-        let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
-        let (batch2, remaining2, cursor2) = next.into_parts();
-        let v2 = match batch2.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v2.len(), 1);
-        assert_eq!(v2[0].id(), &c_id);
-        assert_eq!(remaining2, 0);
-        assert!(cursor2.is_none());
-    }
-    #[tokio::test]
-    async fn iter_dispatch_accounts_offset_and_fetch_size_interplay_desc() {
-        use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
-        use iroha_data_model::query::parameters::{
-            FetchSize, Pagination, QueryParams, SortOrder, Sorting,
-        };
-        use iroha_futures::supervisor::ShutdownSignal;
-        use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
-        // Build three accounts with rank metadata: 0,1,2
-        let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let (a0_id, _) = iroha_test_samples::gen_account_in("w");
-        let (a1_id, _) = iroha_test_samples::gen_account_in("w");
-        let (a2_id, _) = iroha_test_samples::gen_account_in("w");
-        let a0 = Account::new(a0_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(0)));
-                m
-            })
-            .build(&a0_id);
-        let a1 = Account::new(a1_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-                m
-            })
-            .build(&a1_id);
-        let a2 = Account::new(a2_id.clone())
-            .with_metadata({
-                let mut m = Metadata::default();
-                m.insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-                m
-            })
-            .build(&a2_id);
-        let world = World::with([w], [a0.clone(), a1.clone(), a2.clone()], []);
-        let kura = Kura::blank_kura_for_testing();
-        let store = std::sync::Arc::new(LiveQueryStore::from_config(
-            StoreCfg::default(),
-            ShutdownSignal::new(),
-        ));
-        let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
-        let state_view = state.view();
-        // Desc order gives [2,1,0]; offset=1 -> start at rank=1; limit=2 -> [1,0]; fetch_size=1 splits into two batches
-        let params = QueryParams {
-            pagination: Pagination::new(Some(nonzero!(2_u64)), 1),
-            sorting: Sorting {
-                sort_by_metadata_key: Some("rank".parse().unwrap()),
-                order: Some(SortOrder::Desc),
-            },
-            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
-        };
-        let payload =
-            norito::codec::Encode::encode(&iroha_data_model::query::account::prelude::FindAccounts);
-        let qbox: iroha_data_model::query::QueryBox<_> =
-            Box::new(iroha_data_model::query::ErasedIterQuery::<Account>::new(
-                iroha_data_model::query::dsl::CompoundPredicate::<Account>::PASS,
-                SelectorTuple::<Account>::default(),
-                payload,
-            ));
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
-        let request = QueryRequest::Start(qwp);
-        let validated = ValidQueryRequest::validate_for_client_parts(
-            request,
-            &ALICE_ID,
-            &state_view,
-            QueryLimits::default(),
-        )
-        .unwrap();
-        let QueryResponse::Iterable(first) =
-            validated.execute(&handle, &state_view, &ALICE_ID).unwrap()
-        else {
-            panic!("expected iterable")
-        };
-        let (batch1, remaining, cursor) = first.into_parts();
-        let v1 = match batch1.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v1.len(), 1);
-        assert_eq!(v1[0].id(), &a1_id);
-        assert_eq!(remaining, 1);
-        let cursor = cursor.expect("should continue");
-        let next = handle.handle_iter_continue(cursor, &ALICE_ID).unwrap();
-        let (batch2, remaining2, cursor2) = next.into_parts();
-        let v2 = match batch2.into_iter().next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::Account(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v2.len(), 1);
-        assert_eq!(v2[0].id(), &a0_id);
-        assert_eq!(remaining2, 0);
-        assert!(cursor2.is_none());
-    }
+    iter_dispatch_rank_sort_test!(
+        iter_dispatch_asset_definitions_sort_asc,
+        run_asset_definition_rank_sort_case,
+        Sparse,
+        Asc,
+        0,
+        None,
+        None,
+        &[&[0, 1, 2]]
+    );
+    iter_dispatch_rank_sort_test!(
+        iter_dispatch_accounts_sort_asc_end_to_end,
+        run_account_rank_sort_case,
+        Sparse,
+        Asc,
+        0,
+        None,
+        None,
+        &[&[1, 0, 2]]
+    );
+    iter_dispatch_rank_sort_test!(
+        iter_dispatch_accounts_sort_desc_batched,
+        run_account_rank_sort_case,
+        Sparse,
+        Desc,
+        0,
+        None,
+        Some(nonzero!(2_u64)),
+        &[&[0, 1], &[2]]
+    );
+    iter_dispatch_rank_sort_test!(
+        iter_dispatch_asset_definitions_sort_desc_batched,
+        run_asset_definition_rank_sort_case,
+        Sparse,
+        Desc,
+        0,
+        None,
+        Some(nonzero!(2_u64)),
+        &[&[1, 0], &[2]]
+    );
+    iter_dispatch_rank_sort_test!(
+        iter_dispatch_asset_definitions_offset_and_fetch_size_interplay_asc,
+        run_asset_definition_rank_sort_case,
+        Dense,
+        Asc,
+        1,
+        Some(nonzero!(2_u64)),
+        Some(nonzero!(1_u64)),
+        &[&[1], &[2]]
+    );
+    iter_dispatch_rank_sort_test!(
+        iter_dispatch_asset_definitions_offset_and_fetch_size_interplay_desc,
+        run_asset_definition_rank_sort_case,
+        Dense,
+        Desc,
+        1,
+        Some(nonzero!(2_u64)),
+        Some(nonzero!(1_u64)),
+        &[&[1], &[0]]
+    );
+    iter_dispatch_rank_sort_test!(
+        iter_dispatch_accounts_offset_and_fetch_size_interplay,
+        run_account_rank_sort_case,
+        Dense,
+        Asc,
+        1,
+        Some(nonzero!(2_u64)),
+        Some(nonzero!(1_u64)),
+        &[&[1], &[2]]
+    );
+    iter_dispatch_rank_sort_test!(
+        iter_dispatch_accounts_offset_and_fetch_size_interplay_desc,
+        run_account_rank_sort_case,
+        Dense,
+        Desc,
+        1,
+        Some(nonzero!(2_u64)),
+        Some(nonzero!(1_u64)),
+        &[&[1], &[0]]
+    );
     include!("query_find_transaction_test.rs");
 }

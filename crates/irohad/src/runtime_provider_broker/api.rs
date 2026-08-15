@@ -907,6 +907,23 @@ impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
             .finish()
     }
 }
+macro_rules! define_optional_runtime_provider_backends_v1 {
+    (
+        $(
+            $(#[$attribute:meta])*
+            $name:ident($argument:ident: $backend:ty,) => $field:ident;
+        )+
+    ) => {
+        $(
+            $(#[$attribute])*
+            #[must_use]
+            pub fn $name(mut self, $argument: $backend) -> Self {
+                self.$field = Some($argument);
+                self
+            }
+        )+
+    };
+}
 impl RuntimeProviderBrokerBackendsV1 {
     /// Construct an empty injection set.
     ///
@@ -985,141 +1002,71 @@ impl RuntimeProviderBrokerBackendsV1 {
             || self.potr_provider_signer.is_some()
             || self.evidence_viewer_receipt_signer.is_some()
     }
-    /// Attach the deployment-owned native Bootle/Lantern issuer and authenticator.
-    #[must_use]
-    pub fn with_bootle_lantern_issuance(
-        mut self,
-        backend: Arc<dyn BootleLanternIssuanceBrokerBackendV1>,
-    ) -> Self {
-        self.bootle_lantern_issuance = Some(backend);
-        self
-    }
-    /// Attach the deployment-owned Soracloud transaction and provenance signer.
-    #[must_use]
-    pub fn with_soracloud_runtime_mutation_signer(
-        mut self,
-        signer: Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,
-    ) -> Self {
-        self.soracloud_runtime_mutation_signer = Some(signer);
-        self
-    }
-    /// Attach the deployment-owned authenticated HF credential provider.
-    #[must_use]
-    pub fn with_soracloud_hf_inference_credential_provider(
-        mut self,
-        provider: Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>,
-    ) -> Self {
-        self.soracloud_hf_inference_credential_provider = Some(provider);
-        self
-    }
-    /// Attach the deployment-owned PKCS#11/KMS quarantine-DEK wrapper.
-    #[must_use]
-    pub fn with_moderation_quarantine_key_wrapper(
-        mut self,
-        key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>,
-    ) -> Self {
-        self.moderation_quarantine_key_wrapper = Some(key_wrapper);
-        self
-    }
-    /// Attach the deployment-owned threshold-PRF provider used for privacy cycles.
-    #[must_use]
-    pub fn with_privacy_cycle_prf_provider(
-        mut self,
-        provider: Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1>,
-    ) -> Self {
-        self.privacy_cycle_prf_provider = Some(provider);
-        self
-    }
-    /// Attach the independently administered finalized privacy-release anchor.
-    #[must_use]
-    pub fn with_privacy_release_anchor(
-        mut self,
-        anchor: Arc<dyn sorafs_node::ProductionPrivacyReleaseAnchorV1>,
-    ) -> Self {
-        self.privacy_release_anchor = Some(anchor);
-        self
-    }
-    /// Attach the external sealed-CAS transparency leader-lease provider.
-    #[must_use]
-    pub fn with_transparency_leader_lease_provider(
-        mut self,
-        provider: Arc<dyn sorafs_node::ProductionTransparencyLeaderLeaseProviderV1>,
-    ) -> Self {
-        self.transparency_leader_lease_provider = Some(provider);
-        self
-    }
-    /// Attach the deployment-owned fused privacy Governance target writer.
-    #[must_use]
-    pub fn with_fenced_privacy_publisher(
-        mut self,
-        publisher: Arc<dyn sorafs_node::FencedTransparencyPublisherV1>,
-    ) -> Self {
-        self.fenced_privacy_publisher = Some(publisher);
-        self
-    }
-    /// Attach the authenticated fused-privacy authoritative-head reader.
-    #[must_use]
-    pub fn with_fenced_privacy_head_reader(
-        mut self,
-        reader: Arc<dyn sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1>,
-    ) -> Self {
-        self.fenced_privacy_head_reader = Some(reader);
-        self
-    }
-    /// Attach the deployment-owned authenticated external Governance DAG signer.
-    #[must_use]
-    pub fn with_governance_dag_signer(
-        mut self,
-        signer: Arc<dyn sorafs_node::GovernanceDagRuntimeSigner>,
-    ) -> Self {
-        self.governance_dag_signer = Some(signer);
-        self
-    }
-    /// Attach the deployment-owned Governance DAG IPFS request authenticator.
-    #[must_use]
-    pub fn with_governance_dag_ipfs_authenticator(
-        mut self,
-        authenticator: Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator>,
-    ) -> Self {
-        self.governance_dag_ipfs_authenticator = Some(authenticator);
-        self
-    }
-    /// Attach the independently administered signed-head request authenticator.
-    #[must_use]
-    pub fn with_governance_dag_head_authenticator(
-        mut self,
-        authenticator: Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator>,
-    ) -> Self {
-        self.governance_dag_head_authenticator = Some(authenticator);
-        self
-    }
-    /// Attach the deployment-owned Governance DAG sealed checkpoint store.
-    #[must_use]
-    pub fn with_governance_dag_checkpoint_store(
-        mut self,
-        store: Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>,
-    ) -> Self {
-        self.governance_dag_checkpoint_store = Some(store);
-        self
-    }
-    /// Attach the deployment-owned stream-token Ed25519 signer.
-    #[must_use]
-    pub fn with_stream_token_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>,
-    ) -> Self {
-        self.stream_token_signer = Some(signer);
-        self
-    }
-    /// Attach the deployment-owned stream-token quota, sealed-sequence, and
-    /// ordered callback-outbox provider.
-    #[must_use]
-    pub fn with_stream_token_gateway_admission(
-        mut self,
-        provider: Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1>,
-    ) -> Self {
-        self.stream_token_gateway_admission = Some(provider);
-        self
+    define_optional_runtime_provider_backends_v1! {
+        /// Attach the deployment-owned native Bootle/Lantern issuer and authenticator.
+        with_bootle_lantern_issuance(
+            backend: Arc<dyn BootleLanternIssuanceBrokerBackendV1>,
+        ) => bootle_lantern_issuance;
+        /// Attach the deployment-owned Soracloud transaction and provenance signer.
+        with_soracloud_runtime_mutation_signer(
+            signer: Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,
+        ) => soracloud_runtime_mutation_signer;
+        /// Attach the deployment-owned authenticated HF credential provider.
+        with_soracloud_hf_inference_credential_provider(
+            provider: Arc<
+                dyn crate::soracloud_hf_credential::
+                    SoracloudHfInferenceCredentialProviderV1,
+            >,
+        ) => soracloud_hf_inference_credential_provider;
+        /// Attach the deployment-owned PKCS#11/KMS quarantine-DEK wrapper.
+        with_moderation_quarantine_key_wrapper(
+            key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>,
+        ) => moderation_quarantine_key_wrapper;
+        /// Attach the deployment-owned threshold-PRF provider used for privacy cycles.
+        with_privacy_cycle_prf_provider(
+            provider: Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1>,
+        ) => privacy_cycle_prf_provider;
+        /// Attach the independently administered finalized privacy-release anchor.
+        with_privacy_release_anchor(
+            anchor: Arc<dyn sorafs_node::ProductionPrivacyReleaseAnchorV1>,
+        ) => privacy_release_anchor;
+        /// Attach the external sealed-CAS transparency leader-lease provider.
+        with_transparency_leader_lease_provider(
+            provider: Arc<dyn sorafs_node::ProductionTransparencyLeaderLeaseProviderV1>,
+        ) => transparency_leader_lease_provider;
+        /// Attach the deployment-owned fused privacy Governance target writer.
+        with_fenced_privacy_publisher(
+            publisher: Arc<dyn sorafs_node::FencedTransparencyPublisherV1>,
+        ) => fenced_privacy_publisher;
+        /// Attach the authenticated fused-privacy authoritative-head reader.
+        with_fenced_privacy_head_reader(
+            reader: Arc<dyn sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1>,
+        ) => fenced_privacy_head_reader;
+        /// Attach the deployment-owned authenticated external Governance DAG signer.
+        with_governance_dag_signer(
+            signer: Arc<dyn sorafs_node::GovernanceDagRuntimeSigner>,
+        ) => governance_dag_signer;
+        /// Attach the deployment-owned Governance DAG IPFS request authenticator.
+        with_governance_dag_ipfs_authenticator(
+            authenticator: Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator>,
+        ) => governance_dag_ipfs_authenticator;
+        /// Attach the independently administered signed-head request authenticator.
+        with_governance_dag_head_authenticator(
+            authenticator: Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator>,
+        ) => governance_dag_head_authenticator;
+        /// Attach the deployment-owned Governance DAG sealed checkpoint store.
+        with_governance_dag_checkpoint_store(
+            store: Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>,
+        ) => governance_dag_checkpoint_store;
+        /// Attach the deployment-owned stream-token Ed25519 signer.
+        with_stream_token_signer(
+            signer: Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>,
+        ) => stream_token_signer;
+        /// Attach the deployment-owned stream-token quota, sealed-sequence, and
+        /// ordered callback-outbox provider.
+        with_stream_token_gateway_admission(
+            provider: Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1>,
+        ) => stream_token_gateway_admission;
     }
     /// Attach one independently administered appeal-finance transaction signer.
     ///
@@ -1133,387 +1080,202 @@ impl RuntimeProviderBrokerBackendsV1 {
         self.appeal_finance_transaction_signers.push(signer);
         self
     }
-    /// Attach the appeal-finance external signer and sealed monotonic checkpoint store.
-    #[must_use]
-    pub fn with_appeal_finance_checkpoint(
-        mut self,
-        checkpoint: Arc<
-            dyn sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointRuntime,
-        >,
-    ) -> Self {
-        self.appeal_finance_checkpoint = Some(checkpoint);
-        self
-    }
-    /// Attach the independently administered proof-outcome transaction signer.
-    #[must_use]
-    pub fn with_proof_outcome_transaction_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::SoraFsProofOutcomeTransactionSigner>,
-    ) -> Self {
-        self.proof_outcome_transaction_signer = Some(signer);
-        self
-    }
-    /// Attach the independently administered native repair transaction signer.
-    #[must_use]
-    pub fn with_repair_transaction_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::SoraFsRepairTransactionSigner>,
-    ) -> Self {
-        self.repair_transaction_signer = Some(signer);
-        self
-    }
-    /// Attach the independently administered reserve/rent transaction signer.
-    #[must_use]
-    pub fn with_reserve_transaction_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::SoraFsReserveTransactionSigner>,
-    ) -> Self {
-        self.reserve_transaction_signer = Some(signer);
-        self
-    }
-    /// Attach the independently administered orderbook transaction signer.
-    #[must_use]
-    pub fn with_orderbook_transaction_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::SoraFsOrderbookTransactionSigner>,
-    ) -> Self {
-        self.orderbook_transaction_signer = Some(signer);
-        self
-    }
-    /// Attach the independently administered moderation transaction signer.
-    #[must_use]
-    pub fn with_moderation_transaction_signer(
-        mut self,
-        signer: Arc<
-            dyn iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1,
-        >,
-    ) -> Self {
-        self.moderation_transaction_signer = Some(signer);
-        self
-    }
-    /// Attach the durable exactly-once moderation settlement boundary.
-    #[must_use]
-    pub fn with_moderation_settlement_handoff(
-        mut self,
-        boundary: Arc<
-            dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1,
-        >,
-    ) -> Self {
-        self.moderation_settlement_handoff = Some(boundary);
-        self
-    }
-    /// Attach the durable exactly-once moderation publication boundary.
-    #[must_use]
-    pub fn with_moderation_publication_handoff(
-        mut self,
-        boundary: Arc<
-            dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1,
-        >,
-    ) -> Self {
-        self.moderation_publication_handoff = Some(boundary);
-        self
-    }
-    /// Attach the durable payload-free moderation panel notification boundary.
-    #[must_use]
-    pub fn with_moderation_panel_notification(
-        mut self,
-        boundary: Arc<
-            dyn iroha_torii::sorafs::moderation_runtime::
-                ModerationDurablePanelNotificationBoundaryV1,
-        >,
-    ) -> Self {
-        self.moderation_panel_notification = Some(boundary);
-        self
-    }
-    /// Attach the deployment-owned sealed monotonic moderation checkpoint store.
-    #[must_use]
-    pub fn with_moderation_checkpoint_store(
-        mut self,
-        store: Arc<dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1>,
-    ) -> Self {
-        self.moderation_checkpoint_store = Some(store);
-        self
-    }
-    /// Attach the authenticated governed provider-ingest source pool.
-    #[must_use]
-    pub fn with_provider_ingest_authenticated_source(
-        mut self,
-        source: Arc<
-            dyn crate::sorafs_provider_ingest_runtime::ProviderIngestAuthenticatedSourceRuntimeV1,
-        >,
-    ) -> Self {
-        self.provider_ingest_authenticated_source = Some(source);
-        self
-    }
-    /// Attach the governed provider-ingest completion-signer resolver.
-    #[must_use]
-    pub fn with_provider_ingest_signer_resolver(
-        mut self,
-        resolver: Arc<
-            dyn crate::sorafs_provider_ingest_runtime::
-                ProviderIngestGovernedSignerResolverRuntimeV1,
-        >,
-    ) -> Self {
-        self.provider_ingest_signer_resolver = Some(resolver);
-        self
-    }
-    /// Attach the provider-ingest sealed monotonic checkpoint store.
-    #[must_use]
-    pub fn with_provider_ingest_checkpoint_store(
-        mut self,
-        store: Arc<dyn sorafs_node::ProviderIngestCheckpointRuntimeV1>,
-    ) -> Self {
-        self.provider_ingest_checkpoint_store = Some(store);
-        self
-    }
-    /// Attach the provider-ingest finalized-archive retention authority.
-    #[must_use]
-    pub fn with_provider_ingest_retention_authority(
-        mut self,
-        authority: Arc<
-            dyn iroha_core::query::provider_ingest_finalized::
-                ProviderIngestFinalizedArchiveRetentionAuthorityV1,
-        >,
-    ) -> Self {
-        self.provider_ingest_retention_authority = Some(authority);
-        self
-    }
-    /// Attach the reputation finalized-archive sealed retention authority.
-    #[must_use]
-    pub fn with_reputation_finalized_archive_retention_authority(
-        mut self,
-        authority: Arc<
-            dyn iroha_core::query::reputation_finalized::
-                ReputationFinalizedArchiveRetentionAuthorityV1,
-        >,
-    ) -> Self {
-        self.reputation_finalized_archive_retention_authority = Some(authority);
-        self
-    }
-    /// Attach the runtime-only native reputation-journal transaction submitter.
-    #[must_use]
-    pub fn with_reputation_journal_transaction_submitter(
-        mut self,
-        submitter: Arc<
-            dyn sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1,
-        >,
-    ) -> Self {
-        self.reputation_journal_transaction_submitter = Some(submitter);
-        self
-    }
-    /// Attach the externally sealed monotonic reputation-journal checkpoint provider.
-    #[must_use]
-    pub fn with_reputation_journal_checkpoint(
-        mut self,
-        checkpoint: Arc<dyn sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1>,
-    ) -> Self {
-        self.reputation_journal_checkpoint = Some(checkpoint);
-        self
-    }
-    /// Attach the independently administered reputation threshold signer.
-    #[must_use]
-    pub fn with_reputation_threshold_signer(
-        mut self,
-        signer: Arc<dyn sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1>,
-    ) -> Self {
-        self.reputation_threshold_signer = Some(signer);
-        self
-    }
-    /// Attach the authenticated reputation Governance DAG publication/readback provider.
-    #[must_use]
-    pub fn with_reputation_governance_dag(
-        mut self,
-        governance_dag: Arc<dyn sorafs_node::reputation::runtime::ReputationGovernanceDagClientV1>,
-    ) -> Self {
-        self.reputation_governance_dag = Some(governance_dag);
-        self
-    }
-    /// Attach the immutable finalized-ledger billing query.
-    #[must_use]
-    pub fn with_billing_finalized_query(
-        mut self,
-        query: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingFinalizedQuery>,
-    ) -> Self {
-        self.billing_finalized_query = Some(query);
-        self
-    }
-    /// Attach the consensus billing-journal proof verifier.
-    #[must_use]
-    pub fn with_billing_journal_verifier(
-        mut self,
-        verifier: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingJournalVerifier>,
-    ) -> Self {
-        self.billing_journal_verifier = Some(verifier);
-        self
-    }
-    /// Attach the independently administered external billing statement signer.
-    #[must_use]
-    pub fn with_billing_statement_signer(
-        mut self,
-        signer: Arc<dyn sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner>,
-    ) -> Self {
-        self.billing_statement_signer = Some(signer);
-        self
-    }
-    /// Attach the immutable billing statement publication/readback provider.
-    #[must_use]
-    pub fn with_billing_statement_publisher(
-        mut self,
-        publisher: Arc<dyn sorafs_node::hedging_billing_service::BillingStatementPublisher>,
-    ) -> Self {
-        self.billing_statement_publisher = Some(publisher);
-        self
-    }
-    /// Attach the authenticated acknowledgement/reconciliation authority.
-    #[must_use]
-    pub fn with_billing_acknowledgement_authority(
-        mut self,
-        authority: Arc<
-            dyn sorafs_node::hedging_billing_service::BillingStatementAcknowledgementAuthority,
-        >,
-    ) -> Self {
-        self.billing_acknowledgement_authority = Some(authority);
-        self
-    }
-    /// Attach the sealed monotonic billing epoch-witness store.
-    #[must_use]
-    pub fn with_billing_epoch_witness_store(
-        mut self,
-        store: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessStore>,
-    ) -> Self {
-        self.billing_epoch_witness_store = Some(store);
-        self
-    }
-    /// Attach the deployment-owned PoP private-runtime provider registry.
-    #[must_use]
-    pub fn with_pop_credential_provider_registry(
-        mut self,
-        registry: Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>,
-    ) -> Self {
-        self.pop_credential_provider_registry = Some(registry);
-        self
-    }
-    /// Attach the independently administered PoTR gateway Ed25519 signer.
-    #[must_use]
-    pub fn with_potr_gateway_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::sorafs::PotrGatewaySignerV1>,
-    ) -> Self {
-        self.potr_gateway_signer = Some(signer);
-        self
-    }
-    /// Attach the independently administered PoTR provider ML-DSA-65 signer.
-    #[must_use]
-    pub fn with_potr_provider_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::sorafs::PotrProviderSignerV1>,
-    ) -> Self {
-        self.potr_provider_signer = Some(signer);
-        self
-    }
-    /// Attach the deployment-owned authenticated ACME client.
-    #[must_use]
-    pub fn with_gateway_acme_client(
-        mut self,
-        client: Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>,
-    ) -> Self {
-        self.gateway_acme_client = Some(client);
-        self
-    }
-    /// Attach the deployment-owned pinned DNS/HTTPS compliance-feed transport.
-    #[must_use]
-    pub fn with_gateway_compliance_feed_transport(
-        mut self,
-        transport: Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
-    ) -> Self {
-        self.gateway_compliance_feed_transport = Some(transport);
-        self
-    }
-    /// Attach the deployment-owned authenticated finalized-PoR replay archive.
-    #[must_use]
-    pub fn with_por_finalized_replay_archive(
-        mut self,
-        archive: Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1>,
-    ) -> Self {
-        self.por_finalized_replay_archive = Some(archive);
-        self
-    }
-    /// Attach the deployment-owned evidence-viewer WebAuthn boundary.
-    #[must_use]
-    pub fn with_evidence_viewer_webauthn(
-        mut self,
-        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>,
-    ) -> Self {
-        self.evidence_viewer_webauthn = Some(boundary);
-        self
-    }
-    /// Attach the deployment-owned evidence-viewer rotating-grant authority.
-    #[must_use]
-    pub fn with_evidence_viewer_grants(
-        mut self,
-        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1>,
-    ) -> Self {
-        self.evidence_viewer_grants = Some(boundary);
-        self
-    }
-    /// Attach the deployment-owned evidence-viewer receipt signer.
-    #[must_use]
-    pub fn with_evidence_viewer_receipt_signer(
-        mut self,
-        signer: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1>,
-    ) -> Self {
-        self.evidence_viewer_receipt_signer = Some(signer);
-        self
-    }
-    /// Attach the deployment-owned evidence-viewer erasure boundary.
-    #[must_use]
-    pub fn with_evidence_viewer_erasure(
-        mut self,
-        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1>,
-    ) -> Self {
-        self.evidence_viewer_erasure = Some(boundary);
-        self
-    }
-    /// Attach the deployment-owned evidence-viewer authoritative checkpoint store.
-    #[must_use]
-    pub fn with_evidence_viewer_checkpoint_store(
-        mut self,
-        store: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreV1>,
-    ) -> Self {
-        self.evidence_viewer_checkpoint_store = Some(store);
-        self
-    }
-    /// Attach the deployment-owned evidence-viewer immutable compaction archive.
-    #[must_use]
-    pub fn with_evidence_viewer_compaction_archive(
-        mut self,
-        archive: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>,
-    ) -> Self {
-        self.evidence_viewer_compaction_archive = Some(archive);
-        self
-    }
-    /// Attach the deployment-owned immutable moderation notification archive.
-    #[must_use]
-    pub fn with_moderation_panel_notification_archive(
-        mut self,
-        archive: Arc<
-            dyn sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1,
-        >,
-    ) -> Self {
-        self.moderation_panel_notification_archive = Some(archive);
-        self
-    }
-    /// Attach the deployment-owned signed monotonic evidence transparency publisher.
-    #[must_use]
-    pub fn with_evidence_viewer_transparency_publisher(
-        mut self,
-        publisher: Arc<
-            dyn sorafs_node::evidence_viewer::transparency_producer::
-                EvidenceViewerTransparencyPublisherV1,
-        >,
-    ) -> Self {
-        self.evidence_viewer_transparency_publisher = Some(publisher);
-        self
+    define_optional_runtime_provider_backends_v1! {
+        /// Attach the appeal-finance external signer and sealed monotonic checkpoint store.
+        with_appeal_finance_checkpoint(
+            checkpoint: Arc<
+                dyn sorafs_node::appeal_finance_transaction_forwarder::
+                    AppealFinanceCheckpointRuntime,
+            >,
+        ) => appeal_finance_checkpoint;
+        /// Attach the independently administered proof-outcome transaction signer.
+        with_proof_outcome_transaction_signer(
+            signer: Arc<dyn iroha_torii::SoraFsProofOutcomeTransactionSigner>,
+        ) => proof_outcome_transaction_signer;
+        /// Attach the independently administered native repair transaction signer.
+        with_repair_transaction_signer(
+            signer: Arc<dyn iroha_torii::SoraFsRepairTransactionSigner>,
+        ) => repair_transaction_signer;
+        /// Attach the independently administered reserve/rent transaction signer.
+        with_reserve_transaction_signer(
+            signer: Arc<dyn iroha_torii::SoraFsReserveTransactionSigner>,
+        ) => reserve_transaction_signer;
+        /// Attach the independently administered orderbook transaction signer.
+        with_orderbook_transaction_signer(
+            signer: Arc<dyn iroha_torii::SoraFsOrderbookTransactionSigner>,
+        ) => orderbook_transaction_signer;
+        /// Attach the independently administered moderation transaction signer.
+        with_moderation_transaction_signer(
+            signer: Arc<
+                dyn iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1,
+            >,
+        ) => moderation_transaction_signer;
+        /// Attach the durable exactly-once moderation settlement boundary.
+        with_moderation_settlement_handoff(
+            boundary: Arc<
+                dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1,
+            >,
+        ) => moderation_settlement_handoff;
+        /// Attach the durable exactly-once moderation publication boundary.
+        with_moderation_publication_handoff(
+            boundary: Arc<
+                dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1,
+            >,
+        ) => moderation_publication_handoff;
+        /// Attach the durable payload-free moderation panel notification boundary.
+        with_moderation_panel_notification(
+            boundary: Arc<
+                dyn iroha_torii::sorafs::moderation_runtime::
+                    ModerationDurablePanelNotificationBoundaryV1,
+            >,
+        ) => moderation_panel_notification;
+        /// Attach the deployment-owned sealed monotonic moderation checkpoint store.
+        with_moderation_checkpoint_store(
+            store: Arc<dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1>,
+        ) => moderation_checkpoint_store;
+        /// Attach the authenticated governed provider-ingest source pool.
+        with_provider_ingest_authenticated_source(
+            source: Arc<
+                dyn crate::sorafs_provider_ingest_runtime::
+                    ProviderIngestAuthenticatedSourceRuntimeV1,
+            >,
+        ) => provider_ingest_authenticated_source;
+        /// Attach the governed provider-ingest completion-signer resolver.
+        with_provider_ingest_signer_resolver(
+            resolver: Arc<
+                dyn crate::sorafs_provider_ingest_runtime::
+                    ProviderIngestGovernedSignerResolverRuntimeV1,
+            >,
+        ) => provider_ingest_signer_resolver;
+        /// Attach the provider-ingest sealed monotonic checkpoint store.
+        with_provider_ingest_checkpoint_store(
+            store: Arc<dyn sorafs_node::ProviderIngestCheckpointRuntimeV1>,
+        ) => provider_ingest_checkpoint_store;
+        /// Attach the provider-ingest finalized-archive retention authority.
+        with_provider_ingest_retention_authority(
+            authority: Arc<
+                dyn iroha_core::query::provider_ingest_finalized::
+                    ProviderIngestFinalizedArchiveRetentionAuthorityV1,
+            >,
+        ) => provider_ingest_retention_authority;
+        /// Attach the reputation finalized-archive sealed retention authority.
+        with_reputation_finalized_archive_retention_authority(
+            authority: Arc<
+                dyn iroha_core::query::reputation_finalized::
+                    ReputationFinalizedArchiveRetentionAuthorityV1,
+            >,
+        ) => reputation_finalized_archive_retention_authority;
+        /// Attach the runtime-only native reputation-journal transaction submitter.
+        with_reputation_journal_transaction_submitter(
+            submitter: Arc<
+                dyn sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1,
+            >,
+        ) => reputation_journal_transaction_submitter;
+        /// Attach the externally sealed monotonic reputation-journal checkpoint provider.
+        with_reputation_journal_checkpoint(
+            checkpoint: Arc<
+                dyn sorafs_node::reputation::runtime::
+                    ReputationJournalCheckpointRuntimeV1,
+            >,
+        ) => reputation_journal_checkpoint;
+        /// Attach the independently administered reputation threshold signer.
+        with_reputation_threshold_signer(
+            signer: Arc<dyn sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1>,
+        ) => reputation_threshold_signer;
+        /// Attach the authenticated reputation Governance DAG publication/readback provider.
+        with_reputation_governance_dag(
+            governance_dag: Arc<
+                dyn sorafs_node::reputation::runtime::
+                    ReputationGovernanceDagClientV1,
+            >,
+        ) => reputation_governance_dag;
+        /// Attach the immutable finalized-ledger billing query.
+        with_billing_finalized_query(
+            query: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingFinalizedQuery>,
+        ) => billing_finalized_query;
+        /// Attach the consensus billing-journal proof verifier.
+        with_billing_journal_verifier(
+            verifier: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingJournalVerifier>,
+        ) => billing_journal_verifier;
+        /// Attach the independently administered external billing statement signer.
+        with_billing_statement_signer(
+            signer: Arc<dyn sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner>,
+        ) => billing_statement_signer;
+        /// Attach the immutable billing statement publication/readback provider.
+        with_billing_statement_publisher(
+            publisher: Arc<dyn sorafs_node::hedging_billing_service::BillingStatementPublisher>,
+        ) => billing_statement_publisher;
+        /// Attach the authenticated acknowledgement/reconciliation authority.
+        with_billing_acknowledgement_authority(
+            authority: Arc<
+                dyn sorafs_node::hedging_billing_service::BillingStatementAcknowledgementAuthority,
+            >,
+        ) => billing_acknowledgement_authority;
+        /// Attach the sealed monotonic billing epoch-witness store.
+        with_billing_epoch_witness_store(
+            store: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessStore>,
+        ) => billing_epoch_witness_store;
+        /// Attach the deployment-owned PoP private-runtime provider registry.
+        with_pop_credential_provider_registry(
+            registry: Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>,
+        ) => pop_credential_provider_registry;
+        /// Attach the independently administered PoTR gateway Ed25519 signer.
+        with_potr_gateway_signer(
+            signer: Arc<dyn iroha_torii::sorafs::PotrGatewaySignerV1>,
+        ) => potr_gateway_signer;
+        /// Attach the independently administered PoTR provider ML-DSA-65 signer.
+        with_potr_provider_signer(
+            signer: Arc<dyn iroha_torii::sorafs::PotrProviderSignerV1>,
+        ) => potr_provider_signer;
+        /// Attach the deployment-owned authenticated ACME client.
+        with_gateway_acme_client(
+            client: Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>,
+        ) => gateway_acme_client;
+        /// Attach the deployment-owned pinned DNS/HTTPS compliance-feed transport.
+        with_gateway_compliance_feed_transport(
+            transport: Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
+        ) => gateway_compliance_feed_transport;
+        /// Attach the deployment-owned authenticated finalized-PoR replay archive.
+        with_por_finalized_replay_archive(
+            archive: Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1>,
+        ) => por_finalized_replay_archive;
+        /// Attach the deployment-owned evidence-viewer WebAuthn boundary.
+        with_evidence_viewer_webauthn(
+            boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>,
+        ) => evidence_viewer_webauthn;
+        /// Attach the deployment-owned evidence-viewer rotating-grant authority.
+        with_evidence_viewer_grants(
+            boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1>,
+        ) => evidence_viewer_grants;
+        /// Attach the deployment-owned evidence-viewer receipt signer.
+        with_evidence_viewer_receipt_signer(
+            signer: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1>,
+        ) => evidence_viewer_receipt_signer;
+        /// Attach the deployment-owned evidence-viewer erasure boundary.
+        with_evidence_viewer_erasure(
+            boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1>,
+        ) => evidence_viewer_erasure;
+        /// Attach the deployment-owned evidence-viewer authoritative checkpoint store.
+        with_evidence_viewer_checkpoint_store(
+            store: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreV1>,
+        ) => evidence_viewer_checkpoint_store;
+        /// Attach the deployment-owned evidence-viewer immutable compaction archive.
+        with_evidence_viewer_compaction_archive(
+            archive: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>,
+        ) => evidence_viewer_compaction_archive;
+        /// Attach the deployment-owned immutable moderation notification archive.
+        with_moderation_panel_notification_archive(
+            archive: Arc<
+                dyn sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1,
+            >,
+        ) => moderation_panel_notification_archive;
+        /// Attach the deployment-owned signed monotonic evidence transparency publisher.
+        with_evidence_viewer_transparency_publisher(
+            publisher: Arc<
+                dyn sorafs_node::evidence_viewer::transparency_producer::
+                    EvidenceViewerTransparencyPublisherV1,
+            >,
+        ) => evidence_viewer_transparency_publisher;
     }
 }
 /// Payload-free stock broker-server startup or transport failure.

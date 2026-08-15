@@ -5042,12 +5042,6 @@ fn signed_properties_reference_c14n_mode_with_namespaces(
     }
     c14n_mode.ok_or(MsgError::ValidationFailed)
 }
-fn ensure_xml_signature_reference_shape(
-    reference_xml: &str,
-    allowed_attributes: &[&str],
-) -> Result<(), MsgError> {
-    ensure_xml_signature_reference_shape_with_namespaces(reference_xml, allowed_attributes, &[])
-}
 fn ensure_xml_signature_reference_shape_with_namespaces(
     reference_xml: &str,
     allowed_attributes: &[&str],
@@ -5118,11 +5112,6 @@ fn ensure_xml_signature_reference_shape_with_namespaces(
     }
     Ok(())
 }
-fn xml_signature_reference_transform_algorithms(
-    reference_xml: &str,
-) -> Result<Vec<String>, MsgError> {
-    xml_signature_reference_transform_algorithms_with_namespaces(reference_xml, &[])
-}
 fn xml_signature_reference_transform_algorithms_with_namespaces(
     reference_xml: &str,
     inherited_namespaces: &[CanonicalXmlNamespaceBinding],
@@ -5179,9 +5168,6 @@ fn xml_signature_reference_transform_algorithms_with_namespaces(
         cursor = absolute.end;
     }
     Ok(transform_algorithms)
-}
-fn ensure_signed_properties_reference_target(target_xml: &str) -> Result<(), MsgError> {
-    ensure_signed_properties_reference_target_with_namespaces(target_xml, &[])
 }
 fn ensure_signed_properties_reference_target_with_namespaces(
     target_xml: &str,
@@ -5892,187 +5878,6 @@ fn xml_signature_x509_revocation_values_with_namespaces(
         ocsp_responses,
     })
 }
-fn validate_x509_certificate_chain(
-    certificate_chain: &[Vec<u8>],
-    x509_trust_anchor_sha256_pins: &[String],
-    evaluation_time: ASN1Time,
-) -> Result<(), MsgError> {
-    if certificate_chain.is_empty() || x509_trust_anchor_sha256_pins.is_empty() {
-        return Err(MsgError::ValidationFailed);
-    }
-    let mut seen = HashSet::new();
-    for certificate_der in certificate_chain {
-        if !seen.insert(sha256_hex(certificate_der)) {
-            return Err(MsgError::ValidationFailed);
-        }
-        let certificate = parse_x509_certificate_der(certificate_der)?;
-        validate_x509_certificate_critical_extensions(&certificate)?;
-        ensure_xml_signature_certificate_valid_at(&certificate, evaluation_time)?;
-    }
-    for index in 0..certificate_chain.len() {
-        let certificate = parse_x509_certificate_der(&certificate_chain[index])?;
-        if let Some(issuer_der) = certificate_chain.get(index + 1) {
-            let issuer = parse_x509_certificate_der(issuer_der)?;
-            if certificate.issuer() != issuer.subject() || !x509_certificate_is_ca(&issuer)? {
-                return Err(MsgError::ValidationFailed);
-            }
-            verify_x509_certificate_signature(&certificate, &issuer)?;
-        } else {
-            if !certificate_der_pin_matches(
-                &certificate_chain[index],
-                x509_trust_anchor_sha256_pins,
-            ) || !x509_certificate_is_ca(&certificate)?
-            {
-                return Err(MsgError::ValidationFailed);
-            }
-            if certificate.issuer() == certificate.subject() {
-                verify_x509_certificate_signature(&certificate, &certificate)?;
-            }
-        }
-    }
-    validate_x509_authority_key_identifiers(certificate_chain)?;
-    validate_x509_path_length_constraints(certificate_chain)?;
-    Ok(())
-}
-fn validate_x509_authority_key_identifiers(certificate_chain: &[Vec<u8>]) -> Result<(), MsgError> {
-    let parsed_chain = certificate_chain
-        .iter()
-        .map(|certificate| parse_x509_certificate_der(certificate))
-        .collect::<Result<Vec<_>, _>>()?;
-    for chain_pair in parsed_chain.windows(2) {
-        let [certificate, issuer] = chain_pair else {
-            continue;
-        };
-        validate_x509_authority_issuer_and_serial(certificate, issuer)?;
-        let Some(authority_key_identifier) =
-            x509_certificate_authority_key_identifier(certificate)?
-        else {
-            continue;
-        };
-        let Some(subject_key_identifier) = x509_certificate_subject_key_identifier(issuer)? else {
-            continue;
-        };
-        if authority_key_identifier != subject_key_identifier {
-            return Err(MsgError::ValidationFailed);
-        }
-    }
-    Ok(())
-}
-fn validate_x509_authority_issuer_and_serial(
-    certificate: &X509Certificate<'_>,
-    issuer: &X509Certificate<'_>,
-) -> Result<(), MsgError> {
-    let mut authority_key_identifier_count = 0usize;
-    for extension in certificate.extensions() {
-        let ParsedExtension::AuthorityKeyIdentifier(authority_key) = extension.parsed_extension()
-        else {
-            continue;
-        };
-        authority_key_identifier_count += 1;
-        if authority_key_identifier_count > 1 {
-            return Err(MsgError::ValidationFailed);
-        }
-        let has_issuer = authority_key.authority_cert_issuer.is_some();
-        let has_serial = authority_key.authority_cert_serial.is_some();
-        if has_issuer != has_serial {
-            return Err(MsgError::ValidationFailed);
-        }
-        let Some(authority_cert_issuer) = &authority_key.authority_cert_issuer else {
-            continue;
-        };
-        let Some(authority_cert_serial) = authority_key.authority_cert_serial else {
-            return Err(MsgError::ValidationFailed);
-        };
-        if authority_cert_serial != issuer.raw_serial() {
-            return Err(MsgError::ValidationFailed);
-        }
-        let mut matched_directory_name = false;
-        for issuer_name in authority_cert_issuer {
-            match issuer_name {
-                GeneralName::DirectoryName(name) if name == issuer.subject() => {
-                    matched_directory_name = true;
-                }
-                GeneralName::DirectoryName(_) => {}
-                GeneralName::Invalid(_, _)
-                | GeneralName::DNSName(_)
-                | GeneralName::EDIPartyName(_)
-                | GeneralName::IPAddress(_)
-                | GeneralName::OtherName(_, _)
-                | GeneralName::RFC822Name(_)
-                | GeneralName::RegisteredID(_)
-                | GeneralName::URI(_)
-                | GeneralName::X400Address(_) => return Err(MsgError::ValidationFailed),
-            }
-        }
-        if !matched_directory_name {
-            return Err(MsgError::ValidationFailed);
-        }
-    }
-    Ok(())
-}
-fn x509_certificate_authority_key_identifier(
-    certificate: &X509Certificate<'_>,
-) -> Result<Option<Vec<u8>>, MsgError> {
-    let mut key_identifier = None;
-    for extension in certificate.extensions() {
-        if let ParsedExtension::AuthorityKeyIdentifier(authority_key) = extension.parsed_extension()
-        {
-            if key_identifier.is_some() {
-                return Err(MsgError::ValidationFailed);
-            }
-            key_identifier = authority_key
-                .key_identifier
-                .as_ref()
-                .map(|identifier| identifier.0.to_vec());
-        }
-    }
-    Ok(key_identifier)
-}
-fn x509_certificate_subject_key_identifier(
-    certificate: &X509Certificate<'_>,
-) -> Result<Option<Vec<u8>>, MsgError> {
-    let mut key_identifier = None;
-    for extension in certificate.extensions() {
-        if let ParsedExtension::SubjectKeyIdentifier(subject_key) = extension.parsed_extension() {
-            if key_identifier.is_some() {
-                return Err(MsgError::ValidationFailed);
-            }
-            key_identifier = Some(subject_key.0.to_vec());
-        }
-    }
-    Ok(key_identifier)
-}
-fn validate_x509_path_length_constraints(certificate_chain: &[Vec<u8>]) -> Result<(), MsgError> {
-    let parsed_chain = certificate_chain
-        .iter()
-        .map(|certificate| parse_x509_certificate_der(certificate))
-        .collect::<Result<Vec<_>, _>>()?;
-    for issuer_index in 1..parsed_chain.len() {
-        let Some(basic_constraints) = parsed_chain[issuer_index]
-            .basic_constraints()
-            .map_err(|_| MsgError::ValidationFailed)?
-        else {
-            return Err(MsgError::ValidationFailed);
-        };
-        if !basic_constraints.value.ca {
-            return Err(MsgError::ValidationFailed);
-        }
-        let Some(path_len_constraint) = basic_constraints.value.path_len_constraint else {
-            continue;
-        };
-        let mut subordinate_ca_count = 0usize;
-        for subordinate in &parsed_chain[1..issuer_index] {
-            if x509_certificate_is_ca(subordinate)? && subordinate.subject() != subordinate.issuer()
-            {
-                subordinate_ca_count += 1;
-            }
-        }
-        if subordinate_ca_count > path_len_constraint as usize {
-            return Err(MsgError::ValidationFailed);
-        }
-    }
-    Ok(())
-}
 fn validate_x509_name_constraints(certificate_chain: &[Vec<u8>]) -> Result<(), MsgError> {
     let parsed_chain = certificate_chain
         .iter()
@@ -6553,9 +6358,6 @@ fn ensure_xml_signature_certificate_chain_bounds(certificates: &[Vec<u8>]) -> Re
         }
     }
     Ok(())
-}
-fn ensure_xml_signature_public_key_info_shape(key_info_xml: &str) -> Result<(), MsgError> {
-    ensure_xml_signature_public_key_info_shape_with_namespaces(key_info_xml, &[])
 }
 fn ensure_xml_signature_p256_public_key(public_key: &[u8]) -> Result<(), MsgError> {
     if public_key.len() != P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN
@@ -7180,17 +6982,6 @@ fn x509_certificate_is_ca(certificate: &X509Certificate<'_>) -> Result<bool, Msg
     }
     Ok(key_usage.value.key_cert_sign())
 }
-fn x509_certificate_is_end_entity_signer(
-    certificate: &X509Certificate<'_>,
-) -> Result<bool, MsgError> {
-    let Some(basic_constraints) = certificate
-        .basic_constraints()
-        .map_err(|_| MsgError::ValidationFailed)?
-    else {
-        return Ok(false);
-    };
-    Ok(!basic_constraints.value.ca)
-}
 fn x509_certificate_allows_crl_sign(certificate: &X509Certificate<'_>) -> Result<bool, MsgError> {
     let Some(key_usage) = certificate
         .key_usage()
@@ -7199,20 +6990,6 @@ fn x509_certificate_allows_crl_sign(certificate: &X509Certificate<'_>) -> Result
         return Ok(false);
     };
     Ok(key_usage.value.crl_sign())
-}
-fn x509_certificate_allows_digital_signature(
-    certificate: &X509Certificate<'_>,
-) -> Result<bool, MsgError> {
-    let Some(key_usage) = certificate
-        .key_usage()
-        .map_err(|_| MsgError::ValidationFailed)?
-    else {
-        return Ok(false);
-    };
-    if !key_usage.critical {
-        return Ok(false);
-    }
-    Ok(key_usage.value.digital_signature())
 }
 fn x509_certificate_allows_xml_signature_purpose(
     certificate: &X509Certificate<'_>,
@@ -7351,16 +7128,6 @@ fn verify_x509_crl_signature(
         .verify(crl.tbs_cert_list.as_ref(), &signature)
         .map_err(|_| MsgError::ValidationFailed)
 }
-fn public_key_pin_matches(public_key: &[u8], pins: &[String]) -> bool {
-    let public_key_pin = sha256_hex(public_key);
-    pins.iter()
-        .any(|pin| pin.eq_ignore_ascii_case(&public_key_pin))
-}
-fn certificate_der_pin_matches(certificate_der: &[u8], pins: &[String]) -> bool {
-    let certificate_pin = sha256_hex(certificate_der);
-    pins.iter()
-        .any(|pin| pin.eq_ignore_ascii_case(&certificate_pin))
-}
 fn decode_required_child_base64(container: &str, child: &str) -> Result<Vec<u8>, MsgError> {
     let span = required_single_xml_element(container, child)?;
     ensure_xml_element_attributes_allowed(container, span, &[])?;
@@ -7372,9 +7139,6 @@ fn decode_required_child_base64(container: &str, child: &str) -> Result<Vec<u8>,
     BASE64_STANDARD
         .decode(value)
         .map_err(|_| MsgError::ValidationFailed)
-}
-fn decode_child_base64_values(container: &str, child: &str) -> Result<Vec<Vec<u8>>, MsgError> {
-    decode_child_base64_values_with_namespaces(container, child, &[])
 }
 fn decode_child_base64_values_with_namespaces(
     container: &str,
@@ -7863,28 +7627,6 @@ fn find_supported_xml_comment_end(xml: &str, start: usize) -> Result<usize, MsgE
         return Err(MsgError::ValidationFailed);
     }
     Ok(comment_end)
-}
-fn xml_root_namespace_declarations(xml: &str) -> Result<Vec<CanonicalXmlAttribute>, MsgError> {
-    if !xml.starts_with('<') {
-        return Err(MsgError::ValidationFailed);
-    }
-    let tag_end = find_xml_tag_end(xml.as_bytes(), 1).ok_or(MsgError::ValidationFailed)?;
-    let raw_tag = xml[1..tag_end].trim();
-    if raw_tag.is_empty()
-        || raw_tag.starts_with('/')
-        || raw_tag.starts_with('?')
-        || raw_tag.starts_with('!')
-    {
-        return Err(MsgError::ValidationFailed);
-    }
-    let tag_body = raw_tag.trim_end_matches('/').trim_end();
-    let (_, attributes) = split_supported_xml_tag(tag_body)?;
-    let mut attributes = parse_supported_xml_attributes(attributes)?;
-    sort_and_validate_canonical_xml_attributes(&mut attributes, &[])?;
-    Ok(attributes
-        .into_iter()
-        .filter(|attribute| attribute.kind == CanonicalXmlAttributeKind::Namespace)
-        .collect())
 }
 fn split_supported_xml_tag(tag_body: &str) -> Result<(&str, &str), MsgError> {
     if let Some((name, attributes)) = tag_body.split_once(char::is_whitespace) {
@@ -8596,23 +8338,6 @@ fn decode_direct_child_base64(
         .decode(value)
         .map_err(|_| MsgError::ValidationFailed)
 }
-fn optional_direct_child_text_compact(
-    container: &str,
-    parent_span: XmlElementSpan,
-    child: &str,
-) -> Result<Option<String>, MsgError> {
-    let Some(span) = optional_direct_xml_child_element(container, parent_span, child)? else {
-        return Ok(None);
-    };
-    ensure_xml_element_attributes_allowed(container, span, &[])?;
-    ensure_xml_element_text_only(container, span)?;
-    Ok(Some(
-        container[span.content_start..span.content_end]
-            .chars()
-            .filter(|ch| !ch.is_whitespace())
-            .collect(),
-    ))
-}
 fn ensure_xml_element_attributes_allowed(
     container: &str,
     span: XmlElementSpan,
@@ -8707,34 +8432,6 @@ fn optional_single_child_text_compact(
     container: &str,
     child: &str,
 ) -> Result<Option<String>, MsgError> {
-    let Some(span) = find_first_xml_element(container, child) else {
-        return Ok(None);
-    };
-    if find_first_xml_element(&container[span.end..], child).is_some() {
-        return Err(MsgError::ValidationFailed);
-    }
-    Ok(Some(
-        container[span.content_start..span.content_end]
-            .chars()
-            .filter(|ch| !ch.is_whitespace())
-            .collect(),
-    ))
-}
-fn child_texts_compact(container: &str, child: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    let mut rest = container;
-    while let Some(span) = find_first_xml_element(rest, child) {
-        values.push(
-            rest[span.content_start..span.content_end]
-                .chars()
-                .filter(|ch| !ch.is_whitespace())
-                .collect(),
-        );
-        rest = &rest[span.end..];
-    }
-    values
-}
-fn single_child_text_compact(container: &str, child: &str) -> Result<Option<String>, MsgError> {
     let Some(span) = find_first_xml_element(container, child) else {
         return Ok(None);
     };

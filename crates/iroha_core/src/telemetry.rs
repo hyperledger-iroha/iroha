@@ -6,6 +6,7 @@
 //! by swapping in the real scheduler hooks once they land; until then we keep
 //! the fallback values in this module to avoid breaking operator dashboards.
 pub mod capability;
+mod manifest_status;
 #[cfg(feature = "telemetry")]
 use crate::pipeline::access::AccessSetSource;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
@@ -85,8 +86,9 @@ pub use iroha_telemetry::metrics::{
     GOVERNANCE_MANIFEST_RECENT_CAP, GovernanceManifestActivation, Halo2Status,
     LaneSettlementBuffer, LaneSettlementSnapshot, LaneSwaplineSnapshot, Metrics,
     MicropaymentCreditSnapshot, MicropaymentSampleStatus, MicropaymentTicketCounters,
-    NexusDataspaceTeuStatus, NexusLaneRuntimeUpgradeHookStatus, NexusLaneTeuBuckets,
-    NexusLaneTeuStatus, SchedulerLayerWidthBuckets, SorafsGatewayRequestMetricLabels,
+    NexusDataspaceTeuStatus, NexusLaneManifestValidatorBindingStatus,
+    NexusLaneRuntimeUpgradeHookStatus, NexusLaneTeuBuckets, NexusLaneTeuStatus,
+    SchedulerLayerWidthBuckets, SorafsGatewayRequestMetricLabels,
     SorafsGatewayResponseMetricLabels, SorafsReserveFinalizedProjection, TxGossipCaps,
     TxGossipSnapshot, TxGossipStatus,
 };
@@ -1849,31 +1851,12 @@ impl StateTelemetry {
                 .as_ref()
                 .map(|path| path.display().to_string());
             entry.manifest_validators = Vec::new();
+            entry.manifest_validator_bindings = Vec::new();
             entry.manifest_quorum = None;
             entry.manifest_protected_namespaces = Vec::new();
             entry.manifest_runtime_upgrade = None;
             if let Some(rules) = status.rules() {
-                entry.manifest_validators =
-                    rules.validators.iter().map(ToString::to_string).collect();
-                entry.manifest_quorum = rules.quorum;
-                entry.manifest_protected_namespaces = rules
-                    .protected_namespaces
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect();
-                entry.manifest_runtime_upgrade = rules.hooks.runtime_upgrade.as_ref().map(|hook| {
-                    let allowed_ids = hook
-                        .allowed_ids
-                        .as_ref()
-                        .map(|ids| ids.iter().cloned().collect())
-                        .unwrap_or_default();
-                    NexusLaneRuntimeUpgradeHookStatus {
-                        allow: hook.allow,
-                        require_metadata: hook.require_metadata,
-                        metadata_key: hook.metadata_key.as_ref().map(ToString::to_string),
-                        allowed_ids,
-                    }
-                });
+                manifest_status::populate_manifest_rules(entry, rules);
             }
             return;
         }
@@ -1881,6 +1864,7 @@ impl StateTelemetry {
         entry.manifest_ready = true;
         entry.manifest_path = None;
         entry.manifest_validators = Vec::new();
+        entry.manifest_validator_bindings = Vec::new();
         entry.manifest_quorum = None;
         entry.manifest_protected_namespaces = Vec::new();
         entry.manifest_runtime_upgrade = None;

@@ -11,6 +11,7 @@ mod tests {
     use iroha_primitives::addr::SocketAddr;
     use norito::codec::{DecodeAll, Encode};
     use tokio::io::AsyncWrite;
+    use super::test_network_id;
     use super::{Connection, SoranetHandshakeConfig, cryptographer::Cryptographer, state::*};
     use crate::{ConfidentialHandshakeCaps, ConsensusConfigCaps, ConsensusMode, RelayRole};
     const TEST_SORANET_TRANSPORT_BINDING: [u8; iroha_crypto::Hash::LENGTH] =

@@ -192,7 +192,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
-    use norito::core::DecodeFromSlice;
+    use crate::isi::test_support::assert_slice_roundtrip;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked alias ISI fixture keypair");
@@ -222,16 +222,6 @@ mod tests {
             max_amount: amount(10),
             valid_until_ms: 50_000,
         }
-    }
-    fn assert_slice_roundtrip<T>(value: T)
-    where
-        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
-        for<'a> T: DecodeFromSlice<'a>,
-    {
-        let bytes = value.encode();
-        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
-        assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
     }
     #[test]
     fn alias_setup_instructions_decode_from_slice_roundtrip() {

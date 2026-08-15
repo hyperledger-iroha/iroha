@@ -1770,6 +1770,31 @@ if [[ "$profile" == "--release" ]]; then
   done
 fi
 
+# Prove that the sealed candidate descends from the protected build-efficiency
+# lineage before consulting any mutable budget or starting the first build.
+# The pinned isolated Python, read-only log, and identity checkpoints keep this
+# structural-only provenance result inside the sealed-manifest boundary.
+if [[ "$profile" == "--release" ]]; then
+  readonly build_efficiency_provenance_log="${release_source_bound_root}/build-efficiency-provenance.log"
+  mkdir -m 700 -p -- "$release_source_bound_root"
+  verify_release_identity "before build-efficiency provenance guard"
+  release_gate_boundary "build-efficiency-provenance:before" || exit $?
+  set +e
+  "$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_build_efficiency_provenance.py \
+    2>&1 | tee "$build_efficiency_provenance_log"
+  build_efficiency_provenance_pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  release_gate_boundary "build-efficiency-provenance:after-natural-completion" \
+    || exit $?
+  if ((build_efficiency_provenance_pipeline_status[0] != 0 \
+    || build_efficiency_provenance_pipeline_status[1] != 0)); then
+    echo "production build-efficiency provenance guard failed closed" >&2
+    exit 1
+  fi
+  chmod 0400 "$build_efficiency_provenance_log"
+  verify_release_identity "after build-efficiency provenance guard"
+fi
+
 # Reject an oversized or newly unbudgeted production source before the first
 # build command. The log and both identity checkpoints are sealed-manifest-bound.
 if [[ "$profile" == "--release" ]]; then
@@ -1779,6 +1804,7 @@ if [[ "$profile" == "--release" ]]; then
   release_gate_boundary "source-file-budget:before" || exit $?
   set +e
   "$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/check_source_file_budget.py \
+    --require-objective \
     2>&1 | tee "$source_budget_log"
   source_budget_pipeline_status=("${PIPESTATUS[@]}")
   set -e
@@ -1850,6 +1876,7 @@ required_production_liveness_tests=(
   kura::tests::autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation
   kura::tests::unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart
   kura::tests::merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal
+  kura::tests::exact_retired_autonomous_attempt_accessor_uses_proposal_height_namespace
   kura::lane_geometry::tests::first_release_retirement_classifies_recovery_sync_failure_as_retryable
   kura::lane_geometry::tests::first_release_retirement_discards_unpublished_temp_for_every_fixed_pair
   kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
@@ -2227,6 +2254,8 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::same_proposal_shortcut_rejects_unvalidated_certificate_variants
   sumeragi::v2_lane_work::tests::planner_view_one_binds_rotated_global_leader_to_fresh_lane_view
   sumeragi::v2_lane_work::tests::enabled_nexus_binds_independent_lane_author_distinct_from_global_leader
+  sumeragi::v2_lane_work::tests::decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag
+  sumeragi::v2_lane_work::tests::cold_restart_hydrates_two_link_raw_lane_chain_without_receipts
   sumeragi::v2_lane_work::tests::lane_work_stays_quiescent_until_the_exact_global_prepare_lock
   sumeragi::v2_lane_work::tests::global_body_lock_replacement_requires_higher_prepare_round_and_exact_subject
   sumeragi::v2_lane_work::tests::superseded_commit_protected_lane_session_cannot_retransmit
@@ -2500,6 +2529,7 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically
   sumeragi::v2_worker::tests::applied_height_handoff_rejects_output_without_reconstruction
   sumeragi::v2_worker::tests::applied_height_handoff_rejects_unbound_lane_output_atomically
+  sumeragi::v2_worker::tests::applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only
   sumeragi::v2_worker::tests::applied_height_handoff_rejects_wrong_height_global_output
   sumeragi::v2_worker::tests::applied_height_handoff_accepts_historical_kura_global_responses_atomically
   sumeragi::v2_worker::tests::applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate
@@ -2690,7 +2720,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=856
+readonly expected_production_liveness_test_count=860
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2781,7 +2811,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 856-test liveness inventory above. The later
+# not belong to the canonical 860-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -4383,7 +4413,7 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 5,189 ledger/checker cases (including the
+# Collection is source-bound as 5,344 ledger/checker cases (including the
 # lexically executed case components), 28 pinned-Verus evidence cases,
 # 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 31 Native/passive
 # multilane source-contract cases, and twenty cases from twelve selected
@@ -4396,15 +4426,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^5291 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^5446 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5291 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5446 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 5291 \
+  preflight-proof-fidelity pytest 5446 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"

@@ -5319,6 +5319,7 @@ fn validate_lane_block_validator_set_fields(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use LaneBlockSessionInsertOutcome::{Duplicate, Inserted};
     use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove};
     use iroha_data_model::{
         account::AccountId,
@@ -7076,15 +7077,47 @@ mod tests {
         proposal.proposal_hash = proposal.computed_proposal_hash();
         proposal
     }
+    fn lane_block_validator_fixture(count: u8) -> (Vec<KeyPair>, Vec<PeerId>) {
+        let keys = (1..=count).map(checked_bls_keypair).collect::<Vec<_>>();
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        (keys, validator_set)
+    }
+    fn assert_proposal_insert(
+        cache: &mut LaneBlockSessionCache,
+        proposal: LaneBlockProposalV1,
+        expected: LaneBlockSessionInsertOutcome,
+    ) {
+        assert_eq!(cache.insert_proposal(proposal), Ok(expected));
+    }
+    fn assert_vote_insert(
+        cache: &mut LaneBlockSessionCache,
+        vote: &LaneBlockVoteV1,
+        expected: LaneBlockSessionInsertOutcome,
+    ) {
+        assert_eq!(
+            cache.insert_vote(vote.clone(), Some(&vote.signer)),
+            Ok(expected)
+        );
+    }
+    fn assert_qc_insert(
+        cache: &mut LaneBlockSessionCache,
+        qc: LaneBlockQcV1,
+        expected: LaneBlockSessionInsertOutcome,
+    ) {
+        assert_eq!(cache.insert_qc(qc), Ok(expected));
+    }
+    fn assert_qc_insert_with_pops(
+        cache: &mut LaneBlockSessionCache,
+        qc: LaneBlockQcV1,
+        pops: &BTreeMap<PublicKey, Vec<u8>>,
+        expected: LaneBlockSessionInsertOutcome,
+    ) {
+        assert_eq!(cache.insert_qc_with_pops(qc, pops), Ok(expected));
+    }
     #[test]
     fn lane_block_proposal_ingress_accepts_canonical_artifact() {
-        let keypairs = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keypairs, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         validate_lane_block_proposal(&proposal).expect("canonical proposal is valid");
         let body = proposal.vote_body(CertPhase::Prepare);
@@ -7098,13 +7131,7 @@ mod tests {
     }
     #[test]
     fn lane_block_proposal_ingress_accepts_coordinate_boundaries() {
-        let keypairs = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keypairs, validator_set) = lane_block_validator_fixture(3);
         let mut first = lane_block_proposal(&validator_set);
         first.descriptor.proposal_height = 1;
         first.descriptor.previous_lane_block_height = 0;
@@ -7125,13 +7152,7 @@ mod tests {
     }
     #[test]
     fn lane_block_proposal_ingress_rejects_adversarial_coordinates() {
-        let keypairs = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keypairs, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let mut zero_proposal_height = proposal.clone();
         zero_proposal_height.descriptor.proposal_height = 0;
@@ -7188,13 +7209,7 @@ mod tests {
     }
     #[test]
     fn lane_block_proposal_ingress_rejects_shape_and_committee_drift() {
-        let keypairs = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keypairs, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let mut empty_work = proposal.clone();
         empty_work.descriptor.accepted_candidate_indices.clear();
@@ -7244,13 +7259,7 @@ mod tests {
     }
     #[test]
     fn lane_block_consensus_rejects_work_above_global_merge_capacity() {
-        let keypairs = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keypairs, validator_set) = lane_block_validator_fixture(3);
         let indices = (0..u64::try_from(MAX_LANE_EXECUTABLE_ENTRYPOINTS)
             .expect("entrypoint ceiling fits u64"))
             .collect::<Vec<_>>();
@@ -7292,13 +7301,7 @@ mod tests {
     }
     #[test]
     fn lane_block_proposal_ingress_rejects_hash_drift() {
-        let keypairs = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keypairs, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let mut validator_hash_drift = proposal.clone();
         validator_hash_drift.descriptor.validator_set_hash =
@@ -7322,9 +7325,7 @@ mod tests {
     }
     #[test]
     fn lane_block_vote_ingress_accepts_matching_signed_bls_vote() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let body = vote_body(&validator_set);
         let vote = signed_vote(&body, &keys[0]);
         vote.validate_ingress(CertPhase::Prepare)
@@ -7338,9 +7339,7 @@ mod tests {
             signer: PeerId,
             bls_signature: Vec<u8>,
         }
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let vote = signed_vote(&vote_body(&validator_set), &keys[0]);
         assert_eq!(vote.payload_availability_vote, None);
         let legacy = LegacyLaneBlockVoteV1 {
@@ -7381,9 +7380,7 @@ mod tests {
     }
     #[test]
     fn lane_block_vote_and_qc_ingress_require_nonzero_proposal_height() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let mut highest_body = vote_body(&validator_set);
         highest_body.proposal_height = 1;
         highest_body.lane_block_height = u64::MAX;
@@ -7508,13 +7505,7 @@ mod tests {
     }
     #[test]
     fn lane_block_qc_ingress_accepts_aggregate_shape() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
         let vote_b = signed_vote(&body, &keys[1]);
@@ -7525,13 +7516,7 @@ mod tests {
     }
     #[test]
     fn lane_block_qc_aggregate_verifier_requires_valid_pops_and_signature() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
         let vote_b = signed_vote(&body, &keys[1]);
@@ -7566,13 +7551,7 @@ mod tests {
     }
     #[test]
     fn lane_block_qc_ingress_rejects_adversarial_shapes() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
         let vote_b = signed_vote(&body, &keys[1]);
@@ -7617,13 +7596,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_accepts_out_of_order_artifacts() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let body = proposal.vote_body(CertPhase::Prepare);
         let vote_a = signed_vote(&body, &keys[0]);
@@ -7637,18 +7610,9 @@ mod tests {
         .expect("lane block QC");
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_vote(vote_a.clone(), Some(&vote_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc(qc),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &vote_a, Inserted);
+        assert_qc_insert(&mut cache, qc, Inserted);
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
         let session = cache.get(&key).expect("session cached");
         assert_eq!(session.proposal.as_ref(), Some(&proposal));
         assert_eq!(session.prepare_votes.len(), 1);
@@ -7658,9 +7622,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_seals_qc_when_vote_quorum_arrives() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let proposal = lane_block_proposal(&validator_set);
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
@@ -7671,14 +7633,8 @@ mod tests {
         let commit_vote_b = signed_vote(&commit_body, &keys[1]);
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(prepare_vote_a.clone(), Some(&prepare_vote_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
+        assert_vote_insert(&mut cache, &prepare_vote_a, Inserted);
         assert!(
             cache
                 .get(&key)
@@ -7687,10 +7643,7 @@ mod tests {
                 .is_none(),
             "below-quorum prepare votes must not seal a QC"
         );
-        assert_eq!(
-            cache.insert_vote(prepare_vote_b.clone(), Some(&prepare_vote_b.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &prepare_vote_b, Inserted);
         let prepare_qc = cache
             .get(&key)
             .expect("session cached")
@@ -7700,18 +7653,12 @@ mod tests {
         assert_eq!(prepare_qc.body.phase, CertPhase::Prepare);
         validate_lane_block_qc_aggregate(prepare_qc, &pops)
             .expect("sealed prepare QC aggregate verifies");
-        assert_eq!(
-            cache.insert_vote(commit_vote_a.clone(), Some(&commit_vote_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &commit_vote_a, Inserted);
         assert!(
             cache.get(&key).expect("session cached").commit_qc.is_none(),
             "below-quorum commit votes must not seal a QC"
         );
-        assert_eq!(
-            cache.insert_vote(commit_vote_b.clone(), Some(&commit_vote_b.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &commit_vote_b, Inserted);
         let commit_qc = cache
             .get(&key)
             .expect("session cached")
@@ -7742,9 +7689,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_drains_committed_session_once_from_sealed_qcs() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let proposal = lane_block_proposal(&validator_set);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
@@ -7754,30 +7699,15 @@ mod tests {
         let commit_vote_b = signed_vote(&commit_body, &keys[1]);
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(prepare_vote_a.clone(), Some(&prepare_vote_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(prepare_vote_b.clone(), Some(&prepare_vote_b.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
+        assert_vote_insert(&mut cache, &prepare_vote_a, Inserted);
+        assert_vote_insert(&mut cache, &prepare_vote_b, Inserted);
         assert!(
             cache.drain_committed_sessions().is_empty(),
             "prepare QC alone is not enough to execute a lane block"
         );
-        assert_eq!(
-            cache.insert_vote(commit_vote_a.clone(), Some(&commit_vote_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(commit_vote_b.clone(), Some(&commit_vote_b.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &commit_vote_a, Inserted);
+        assert_vote_insert(&mut cache, &commit_vote_b, Inserted);
         assert!(
             cache
                 .drain_committed_sessions_up_to_matching(usize::MAX, &BTreeSet::new())
@@ -7800,13 +7730,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_rejects_conflicting_commit_vote_after_view_change() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal_a = lane_block_proposal_at_height(&validator_set, 13);
         let proposal_b = conflicting_lane_block_proposal_next_view(proposal_a.clone(), 0x51);
         assert_eq!(
@@ -7829,49 +7753,19 @@ mod tests {
         let prepare_b_other_signer =
             signed_vote(&proposal_b.vote_body(CertPhase::Prepare), &keys[1]);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal_a),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_proposal(proposal_b.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(
-                prepare_a_same_signer.clone(),
-                Some(&prepare_a_same_signer.signer)
-            ),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(
-                prepare_a_other_signer.clone(),
-                Some(&prepare_a_other_signer.signer)
-            ),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal_a, Inserted);
+        assert_proposal_insert(&mut cache, proposal_b.clone(), Inserted);
+        assert_vote_insert(&mut cache, &prepare_a_same_signer, Inserted);
+        assert_vote_insert(&mut cache, &prepare_a_other_signer, Inserted);
         assert_eq!(
             cache.insert_vote(prepare_b_same_signer, Some(&commit_b_same_signer.signer)),
             Ok(LaneBlockSessionInsertOutcome::Inserted),
             "prepare votes may move to a later lane view before any commit lock is taken"
         );
-        assert_eq!(
-            cache.insert_vote(
-                prepare_b_other_signer.clone(),
-                Some(&prepare_b_other_signer.signer)
-            ),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(commit_a.clone(), Some(&commit_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &prepare_b_other_signer, Inserted);
+        assert_vote_insert(&mut cache, &commit_a, Inserted);
         let duplicate_snapshot = cache.clone();
-        assert_eq!(
-            cache.insert_vote(commit_a.clone(), Some(&commit_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Duplicate)
-        );
+        assert_vote_insert(&mut cache, &commit_a, Duplicate);
         assert_eq!(
             cache, duplicate_snapshot,
             "duplicate commit votes must not mutate replay state or signer locks"
@@ -7904,14 +7798,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_rejects_conflicting_commit_qc_with_overlapping_signer() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-            checked_bls_keypair(4),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(4);
         let proposal_a = lane_block_proposal_at_height(&validator_set, 13);
         let proposal_b = conflicting_lane_block_proposal_next_view(proposal_a.clone(), 0x61);
         let prepare_body_a = proposal_a.vote_body(CertPhase::Prepare);
@@ -7957,31 +7844,13 @@ mod tests {
             aggregate_lane_block_votes_to_qc(commit_body_b, validator_set, &commit_votes_b)
                 .expect("conflicting commit QC with quorum intersection");
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal_a),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_proposal(proposal_b),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc(prepare_qc_a),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc(prepare_qc_b),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc(commit_qc_a.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal_a, Inserted);
+        assert_proposal_insert(&mut cache, proposal_b, Inserted);
+        assert_qc_insert(&mut cache, prepare_qc_a, Inserted);
+        assert_qc_insert(&mut cache, prepare_qc_b, Inserted);
+        assert_qc_insert(&mut cache, commit_qc_a.clone(), Inserted);
         let duplicate_snapshot = cache.clone();
-        assert_eq!(
-            cache.insert_qc(commit_qc_a),
-            Ok(LaneBlockSessionInsertOutcome::Duplicate)
-        );
+        assert_qc_insert(&mut cache, commit_qc_a, Duplicate);
         assert_eq!(
             cache, duplicate_snapshot,
             "duplicate commit QCs must not mutate replay state or signer locks"
@@ -7999,9 +7868,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_drains_committed_session_from_inbound_qcs() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let proposal = lane_block_proposal(&validator_set);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
@@ -8023,19 +7890,10 @@ mod tests {
         .expect("commit QC");
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc.clone(), &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
+        assert_qc_insert_with_pops(&mut cache, prepare_qc.clone(), &pops, Inserted);
         assert!(cache.drain_committed_sessions().is_empty());
-        assert_eq!(
-            cache.insert_qc_with_pops(commit_qc.clone(), &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, commit_qc.clone(), &pops, Inserted);
         assert!(
             cache.drain_newly_sealed_qcs().is_empty(),
             "inbound QCs must not become transport broadcast work"
@@ -8049,13 +7907,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_drains_commit_vote_request_once_after_prepare_qc() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
@@ -8070,18 +7922,12 @@ mod tests {
         let signer = peer(&keys[2]);
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc.clone(), &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, prepare_qc.clone(), &pops, Inserted);
         assert!(
             cache.drain_commit_vote_requests_for(&signer).is_empty(),
             "prepare QC without proposal must not request a commit vote"
         );
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
         let requests = cache.drain_commit_vote_requests_for(&signer);
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].proposal, proposal);
@@ -8093,22 +7939,13 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_lists_prepare_vote_opportunities_until_vote_or_qc_arrives() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let signer = peer(&keys[2]);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote = signed_vote(&prepare_body, &keys[2]);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
         assert_eq!(
             cache.local_prepare_vote_proposals_for(&signer),
             vec![proposal.clone()],
@@ -8123,10 +7960,7 @@ mod tests {
             vec![proposal.clone()],
             "prepare vote scans must be non-consuming so readiness retries can poll"
         );
-        assert_eq!(
-            cache.insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &prepare_vote, Inserted);
         assert!(
             cache.local_prepare_vote_proposals_for(&signer).is_empty(),
             "an already cached local prepare vote must not be requested again"
@@ -8138,13 +7972,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_lists_commit_vote_opportunities_without_draining() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
@@ -8161,14 +7989,8 @@ mod tests {
         let commit_vote = signed_vote(&commit_body, &keys[2]);
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc.clone(), &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
+        assert_qc_insert_with_pops(&mut cache, prepare_qc.clone(), &pops, Inserted);
         let requests = cache.local_commit_vote_requests_for(&signer);
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].proposal, proposal);
@@ -8178,10 +8000,7 @@ mod tests {
             1,
             "commit vote scans must be non-consuming so readiness retries can poll"
         );
-        assert_eq!(
-            cache.insert_vote(commit_vote.clone(), Some(&commit_vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &commit_vote, Inserted);
         assert!(
             cache.local_commit_vote_requests_for(&signer).is_empty(),
             "an already cached local commit vote must not be requested again"
@@ -8189,9 +8008,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_lists_proposals_without_commit_qc_for_rebroadcast() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let proposal = lane_block_proposal(&validator_set);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
@@ -8213,28 +8030,19 @@ mod tests {
         .expect("commit QC");
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
         assert_eq!(
             cache.proposals_without_commit_qc(),
             vec![proposal.clone()],
             "uncertified cached proposals should remain eligible for lane-committee fanout"
         );
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, prepare_qc, &pops, Inserted);
         assert_eq!(
             cache.proposals_without_commit_qc(),
             vec![proposal],
             "prepared sessions still need proposal fanout until commit QC arrives"
         );
-        assert_eq!(
-            cache.insert_qc_with_pops(commit_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, commit_qc, &pops, Inserted);
         assert!(
             cache.proposals_without_commit_qc().is_empty(),
             "committed sessions should not keep rebroadcasting proposals"
@@ -8242,13 +8050,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_lists_local_vote_rebroadcast_artifacts() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let signer = peer(&keys[0]);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
@@ -8277,41 +8079,26 @@ mod tests {
         .expect("commit QC");
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(prepare_vote_a.clone(), Some(&prepare_vote_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
+        assert_vote_insert(&mut cache, &prepare_vote_a, Inserted);
         assert_eq!(
             cache.local_vote_rebroadcast_artifacts_for(&signer),
             vec![(proposal.clone(), prepare_vote_a.clone())],
             "local prepare vote should remain eligible for retry until prepare QC arrives"
         );
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, prepare_qc, &pops, Inserted);
         assert_eq!(
             cache.local_vote_rebroadcast_artifacts_for(&signer),
             Vec::new(),
             "prepare vote retry should stop after prepare QC arrives"
         );
-        assert_eq!(
-            cache.insert_vote(commit_vote_a.clone(), Some(&commit_vote_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &commit_vote_a, Inserted);
         assert_eq!(
             cache.local_vote_rebroadcast_artifacts_for(&signer),
             vec![(proposal, commit_vote_a)],
             "local commit vote should remain eligible for retry until commit QC arrives"
         );
-        assert_eq!(
-            cache.insert_qc_with_pops(commit_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, commit_qc, &pops, Inserted);
         assert!(
             cache
                 .local_vote_rebroadcast_artifacts_for(&signer)
@@ -8321,13 +8108,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_lists_qcs_for_incomplete_session_rebroadcast() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
@@ -8351,27 +8132,18 @@ mod tests {
         .expect("commit QC");
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal, Inserted);
         assert!(
             cache.qcs_for_incomplete_sessions().is_empty(),
             "proposal-only sessions should not rebroadcast QCs"
         );
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc.clone(), &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, prepare_qc.clone(), &pops, Inserted);
         assert_eq!(
             cache.qcs_for_incomplete_sessions(),
             vec![prepare_qc.clone()],
             "prepared sessions should rebroadcast prepare QC until commit QC arrives"
         );
-        assert_eq!(
-            cache.insert_qc_with_pops(commit_qc.clone(), &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, commit_qc.clone(), &pops, Inserted);
         assert_eq!(
             cache.qcs_for_incomplete_sessions(),
             vec![prepare_qc, commit_qc],
@@ -8406,14 +8178,8 @@ mod tests {
         .expect("prepare QC");
         let pops = signer_pops(&keys);
         let mut nonmember_cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            nonmember_cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            nonmember_cache.insert_qc_with_pops(prepare_qc.clone(), &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut nonmember_cache, proposal.clone(), Inserted);
+        assert_qc_insert_with_pops(&mut nonmember_cache, prepare_qc.clone(), &pops, Inserted);
         assert!(
             nonmember_cache
                 .drain_commit_vote_requests_for(&peer(&outsider))
@@ -8429,21 +8195,9 @@ mod tests {
         let commit_body = proposal.vote_body(CertPhase::Commit);
         let existing_commit_vote = signed_vote(&commit_body, &keys[2]);
         let mut existing_vote_cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            existing_vote_cache.insert_proposal(proposal),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            existing_vote_cache.insert_qc_with_pops(prepare_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            existing_vote_cache.insert_vote(
-                existing_commit_vote.clone(),
-                Some(&existing_commit_vote.signer)
-            ),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut existing_vote_cache, proposal, Inserted);
+        assert_qc_insert_with_pops(&mut existing_vote_cache, prepare_qc, &pops, Inserted);
+        assert_vote_insert(&mut existing_vote_cache, &existing_commit_vote, Inserted);
         assert!(
             existing_vote_cache
                 .drain_commit_vote_requests_for(&existing_commit_vote.signer)
@@ -8453,9 +8207,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_does_not_drain_until_proposal_and_both_qcs() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let proposal = lane_block_proposal(&validator_set);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
@@ -8477,47 +8229,25 @@ mod tests {
         .expect("commit QC");
         let pops = signer_pops(&keys);
         let mut proposal_first = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            proposal_first.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            proposal_first.insert_qc_with_pops(prepare_qc.clone(), &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut proposal_first, proposal.clone(), Inserted);
+        assert_qc_insert_with_pops(&mut proposal_first, prepare_qc.clone(), &pops, Inserted);
         assert!(
             proposal_first.drain_committed_sessions().is_empty(),
             "one QC plus proposal is still incomplete"
         );
         let mut qcs_first = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            qcs_first.insert_qc_with_pops(prepare_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            qcs_first.insert_qc_with_pops(commit_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut qcs_first, prepare_qc, &pops, Inserted);
+        assert_qc_insert_with_pops(&mut qcs_first, commit_qc, &pops, Inserted);
         assert!(
             qcs_first.drain_committed_sessions().is_empty(),
             "QCs without the proposal are not executable"
         );
-        assert_eq!(
-            qcs_first.insert_proposal(proposal),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut qcs_first, proposal, Inserted);
         assert_eq!(qcs_first.drain_committed_sessions().len(), 1);
     }
     #[test]
     fn lane_block_session_cache_treats_same_body_alternate_quorum_qc_as_duplicate() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-            checked_bls_keypair(4),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(4);
         let proposal = lane_block_proposal(&validator_set);
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
@@ -8547,14 +8277,8 @@ mod tests {
         );
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc_ab.clone(), &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal, Inserted);
+        assert_qc_insert_with_pops(&mut cache, prepare_qc_ab.clone(), &pops, Inserted);
         assert_eq!(
             cache.insert_qc_with_pops(prepare_qc_bc, &pops),
             Ok(LaneBlockSessionInsertOutcome::Duplicate),
@@ -8571,9 +8295,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_reconciles_orphan_qc_drift_before_commit_drain() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let proposal = lane_block_proposal(&validator_set);
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
@@ -8606,18 +8328,9 @@ mod tests {
         .expect("commit QC");
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc_with_pops(drift_commit_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_proposal(proposal),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, prepare_qc, &pops, Inserted);
+        assert_qc_insert_with_pops(&mut cache, drift_commit_qc, &pops, Inserted);
+        assert_proposal_insert(&mut cache, proposal, Inserted);
         assert!(
             cache.drain_committed_sessions().is_empty(),
             "proposal reconciliation must drop body-drifted orphan commit QCs"
@@ -8629,17 +8342,12 @@ mod tests {
                 .commit_qc
                 .is_none()
         );
-        assert_eq!(
-            cache.insert_qc_with_pops(commit_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, commit_qc, &pops, Inserted);
         assert_eq!(cache.drain_committed_sessions().len(), 1);
     }
     #[test]
     fn lane_block_session_cache_seals_reconciled_orphan_vote_quorum() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let proposal = lane_block_proposal(&validator_set);
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let body = proposal.vote_body(CertPhase::Prepare);
@@ -8647,14 +8355,8 @@ mod tests {
         let vote_b = signed_vote(&body, &keys[1]);
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_vote(vote_a.clone(), Some(&vote_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(vote_b.clone(), Some(&vote_b.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &vote_a, Inserted);
+        assert_vote_insert(&mut cache, &vote_b, Inserted);
         assert!(
             cache
                 .get(&key)
@@ -8663,10 +8365,7 @@ mod tests {
                 .is_none(),
             "orphan votes cannot seal before the proposal binds the validator set"
         );
-        assert_eq!(
-            cache.insert_proposal(proposal),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal, Inserted);
         let prepare_qc = cache
             .get(&key)
             .expect("proposal session cached")
@@ -8681,13 +8380,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_preflight_rejects_conflicting_proposal_without_mutation() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let conflicting = retag_lane_block_proposal_payload(proposal.clone(), 0x88);
         assert_ne!(
@@ -8701,10 +8394,7 @@ mod tests {
             Ok(()),
             "empty cache should preflight the canonical proposal"
         );
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
         assert_eq!(
             cache.can_accept_proposal(&proposal),
             Ok(()),
@@ -8728,13 +8418,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_preflight_rejects_conflicting_vote_without_mutation() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let body = proposal.vote_body(CertPhase::Prepare);
@@ -8752,10 +8436,7 @@ mod tests {
             Ok(()),
             "empty cache should preflight an orphan vote"
         );
-        assert_eq!(
-            cache.insert_vote(drift_vote.clone(), Some(&drift_vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &drift_vote, Inserted);
         assert_eq!(
             cache.can_accept_vote(&vote, Some(&vote.signer)),
             Err(LaneBlockSessionError::ConflictingVote),
@@ -8771,27 +8452,15 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_tracks_exact_duplicate_artifacts() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let body = proposal.vote_body(CertPhase::Prepare);
         let vote = signed_vote(&body, &keys[0]);
         let mut cache = LaneBlockSessionCache::new(4);
         assert!(!cache.contains_proposal(&proposal));
         assert!(!cache.contains_vote(&vote));
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(vote.clone(), Some(&vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
+        assert_vote_insert(&mut cache, &vote, Inserted);
         assert!(cache.contains_proposal(&proposal));
         assert!(cache.contains_vote(&vote));
         assert!(
@@ -8804,13 +8473,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_merges_payload_hint_for_duplicate_proposal() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let hinted = proposal
             .clone()
@@ -8823,10 +8486,7 @@ mod tests {
             });
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
         assert!(!cache.contains_proposal(&hinted));
         assert!(
             cache.contains_proposal_identity(&hinted),
@@ -8848,16 +8508,11 @@ mod tests {
                 .and_then(|proposal| proposal.payload_block_hint.as_ref()),
             hinted.payload_block_hint.as_ref()
         );
-        assert_eq!(
-            cache.insert_proposal(hinted),
-            Ok(LaneBlockSessionInsertOutcome::Duplicate)
-        );
+        assert_proposal_insert(&mut cache, hinted, Duplicate);
     }
     #[test]
     fn lane_block_session_cache_refreshes_commit_drain_after_payload_hint_merge() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let proposal = lane_block_proposal(&validator_set);
         let hinted = proposal
             .clone()
@@ -8889,27 +8544,15 @@ mod tests {
         let pops = signer_pops(&keys);
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc_with_pops(commit_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal, Inserted);
+        assert_qc_insert_with_pops(&mut cache, prepare_qc, &pops, Inserted);
+        assert_qc_insert_with_pops(&mut cache, commit_qc, &pops, Inserted);
         cache
             .sessions
             .get_mut(&key)
             .expect("session")
             .pending_committed_session_drain = false;
-        assert_eq!(
-            cache.insert_proposal(hinted.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, hinted.clone(), Inserted);
         let committed = cache.drain_committed_sessions();
         assert_eq!(committed.len(), 1);
         assert_eq!(
@@ -8919,9 +8562,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_does_not_drain_inbound_qc() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let proposal = lane_block_proposal(&validator_set);
         let body = proposal.vote_body(CertPhase::Prepare);
         let vote_a = signed_vote(&body, &keys[0]);
@@ -8930,10 +8571,7 @@ mod tests {
             .expect("lane block QC");
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_qc_with_pops(qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert_with_pops(&mut cache, qc, &pops, Inserted);
         assert!(
             cache.drain_newly_sealed_qcs().is_empty(),
             "inbound QCs should not be treated as locally sealed transport work"
@@ -8954,22 +8592,10 @@ mod tests {
         let vote = signed_vote(&body, &keys[0]);
         let outsider_vote = signed_vote(&body, &outsider);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Duplicate)
-        );
-        assert_eq!(
-            cache.insert_vote(vote.clone(), Some(&vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(vote.clone(), Some(&vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Duplicate)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
+        assert_proposal_insert(&mut cache, proposal.clone(), Duplicate);
+        assert_vote_insert(&mut cache, &vote, Inserted);
+        assert_vote_insert(&mut cache, &vote, Duplicate);
         assert_eq!(
             cache.insert_vote(outsider_vote, None),
             Err(LaneBlockSessionError::VoteSignerNotInValidatorSet)
@@ -8985,13 +8611,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_rejects_cross_session_entrypoint_replays() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let mut later_height = lane_block_proposal_at_height(&validator_set, 14);
         later_height.descriptor.accepted_transaction_hashes =
@@ -9011,10 +8631,7 @@ mod tests {
             different_incarnation.descriptor.computed_descriptor_hash();
         different_incarnation.proposal_hash = different_incarnation.computed_proposal_hash();
         let mut cache = LaneBlockSessionCache::new(8);
-        assert_eq!(
-            cache.insert_proposal(proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
         for replay in [&later_height, &different_route, &different_incarnation] {
             assert_eq!(
                 cache.can_accept_proposal(replay),
@@ -9034,10 +8651,7 @@ mod tests {
             "an exact view transition must retain the immutable payload claim"
         );
         let mut reordered = LaneBlockSessionCache::new(8);
-        assert_eq!(
-            reordered.insert_proposal(later_height.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut reordered, later_height.clone(), Inserted);
         assert_eq!(
             reordered.insert_proposal(proposal.clone()),
             Err(LaneBlockSessionError::EntrypointAlreadyClaimed),
@@ -9057,13 +8671,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_recovered_proposal_replaces_uncertified_conflicting_slot() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let recovered = lane_block_proposal(&validator_set);
         let conflicting = retag_lane_block_proposal_payload(recovered.clone(), 0xB0);
         let recovered_key = LaneBlockSessionKey::from_proposal(&recovered);
@@ -9072,14 +8680,8 @@ mod tests {
         let recovered_vote = signed_vote(&recovered_vote_body, &keys[0]);
         let mut cache = LaneBlockSessionCache::new(4);
         assert_ne!(recovered.proposal_hash, conflicting.proposal_hash);
-        assert_eq!(
-            cache.insert_vote(recovered_vote.clone(), Some(&recovered_vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_proposal(conflicting),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &recovered_vote, Inserted);
+        assert_proposal_insert(&mut cache, conflicting, Inserted);
         assert_eq!(
             cache.insert_recovered_proposal_replacing_uncommitted_conflict(recovered.clone()),
             Ok(LaneBlockSessionInsertOutcome::Inserted)
@@ -9152,13 +8754,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_single_orphan_vote_cannot_displace_slot_proposal() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let conflicting = retag_lane_block_proposal_payload(proposal.clone(), 0xB1);
         let conflicting_key = LaneBlockSessionKey::from_proposal(&conflicting);
@@ -9166,14 +8762,8 @@ mod tests {
         let proposal_vote = signed_vote(&proposal_vote_body, &keys[0]);
         let mut cache = LaneBlockSessionCache::new(4);
         assert_ne!(proposal.proposal_hash, conflicting.proposal_hash);
-        assert_eq!(
-            cache.insert_vote(proposal_vote.clone(), Some(&proposal_vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_proposal(conflicting.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &proposal_vote, Inserted);
+        assert_proposal_insert(&mut cache, conflicting.clone(), Inserted);
         assert_eq!(
             cache.can_accept_proposal(&proposal),
             Err(LaneBlockSessionError::ConflictingProposal),
@@ -9196,13 +8786,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_recovered_proposal_replaces_prepare_voted_conflicting_slot() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let recovered = lane_block_proposal(&validator_set);
         let conflicting = retag_lane_block_proposal_payload(recovered.clone(), 0xB0);
         let recovered_key = LaneBlockSessionKey::from_proposal(&recovered);
@@ -9211,10 +8795,7 @@ mod tests {
         let prepare_vote = signed_vote(&prepare_body, &keys[0]);
         let signer = prepare_vote.signer.clone();
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(conflicting.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, conflicting.clone(), Inserted);
         assert_eq!(
             cache.insert_vote(prepare_vote, Some(&signer)),
             Ok(LaneBlockSessionInsertOutcome::Inserted)
@@ -9238,9 +8819,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_recovered_proposal_preserves_prepared_conflicting_slot() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let recovered = lane_block_proposal(&validator_set);
         let conflicting = retag_lane_block_proposal_payload(recovered.clone(), 0xB0);
         let recovered_key = LaneBlockSessionKey::from_proposal(&recovered);
@@ -9256,14 +8835,8 @@ mod tests {
         .expect("prepare QC");
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(conflicting.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, conflicting.clone(), Inserted);
+        assert_qc_insert_with_pops(&mut cache, prepare_qc, &pops, Inserted);
         assert_eq!(
             cache.insert_recovered_proposal_replacing_uncommitted_conflict(recovered),
             Err(LaneBlockSessionError::ConflictingProposal)
@@ -9278,13 +8851,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_recovered_proposal_preserves_commit_voted_conflicting_slot() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let recovered = lane_block_proposal(&validator_set);
         let conflicting = retag_lane_block_proposal_payload(recovered.clone(), 0xB0);
         let recovered_key = LaneBlockSessionKey::from_proposal(&recovered);
@@ -9296,18 +8863,9 @@ mod tests {
         let commit_vote = signed_vote(&commit_body, &keys[0]);
         let signer = commit_vote.signer.clone();
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(conflicting.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(prepare_vote_a.clone(), Some(&prepare_vote_a.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_vote(prepare_vote_b.clone(), Some(&prepare_vote_b.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, conflicting.clone(), Inserted);
+        assert_vote_insert(&mut cache, &prepare_vote_a, Inserted);
+        assert_vote_insert(&mut cache, &prepare_vote_b, Inserted);
         assert_eq!(
             cache.insert_vote(commit_vote, Some(&signer)),
             Ok(LaneBlockSessionInsertOutcome::Inserted)
@@ -9327,9 +8885,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_recovered_proposal_preserves_committed_conflicting_slot() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let recovered = lane_block_proposal(&validator_set);
         let conflicting = retag_lane_block_proposal_payload(recovered.clone(), 0xB0);
         let recovered_key = LaneBlockSessionKey::from_proposal(&recovered);
@@ -9354,18 +8910,9 @@ mod tests {
         .expect("commit QC");
         let pops = signer_pops(&keys);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(conflicting.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc_with_pops(prepare_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_qc_with_pops(commit_qc, &pops),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, conflicting.clone(), Inserted);
+        assert_qc_insert_with_pops(&mut cache, prepare_qc, &pops, Inserted);
+        assert_qc_insert_with_pops(&mut cache, commit_qc, &pops, Inserted);
         assert_eq!(
             cache.insert_recovered_proposal_replacing_uncommitted_conflict(recovered),
             Err(LaneBlockSessionError::ConflictingProposal)
@@ -9380,9 +8927,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_rejects_forged_aggregate_qc() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(2);
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
         let vote_b = signed_vote(&body, &keys[1]);
@@ -9404,23 +8949,14 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_reconciles_orphan_vote_drift_on_proposal() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let proposal = lane_block_proposal(&validator_set);
         let key = LaneBlockSessionKey::from_proposal(&proposal);
         let mut drift_body = proposal.vote_body(CertPhase::Prepare);
         drift_body.descriptor_hash = Hash::prehashed([0xC0; Hash::LENGTH]);
         let drift_vote = signed_vote(&drift_body, &keys[0]);
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_vote(drift_vote.clone(), Some(&drift_vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &drift_vote, Inserted);
         assert_eq!(
             cache
                 .get(&key)
@@ -9429,10 +8965,7 @@ mod tests {
                 .len(),
             1
         );
-        assert_eq!(
-            cache.insert_proposal(proposal),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal, Inserted);
         assert!(
             cache
                 .get(&key)
@@ -9444,23 +8977,15 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_enforces_capacity() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keys, validator_set) = lane_block_validator_fixture(2);
         let proposal_a = lane_block_proposal_at_height(&validator_set, 13);
         let key_a = LaneBlockSessionKey::from_proposal(&proposal_a);
         let proposal_b = lane_block_proposal_at_height(&validator_set, 14);
         let key_b = LaneBlockSessionKey::from_proposal(&proposal_b);
         let mut cache = LaneBlockSessionCache::new(1);
         assert!(cache.is_empty());
-        assert_eq!(
-            cache.insert_proposal(proposal_a),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_proposal(proposal_b),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, proposal_a, Inserted);
+        assert_proposal_insert(&mut cache, proposal_b, Inserted);
         assert_eq!(cache.len(), 1);
         assert!(cache.get(&key_a).is_none());
         assert!(cache.get(&key_b).is_some());
@@ -9546,13 +9071,7 @@ mod tests {
     }
     #[test]
     fn lane_block_rollover_preserves_partial_votes_prepare_qc_and_commit_lock() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let partial = lane_block_proposal_at_height(&validator_set, 13);
         let canonical_partial =
             partial
@@ -9619,13 +9138,7 @@ mod tests {
     }
     #[test]
     fn lane_block_rollover_prunes_unanchored_finalized_and_inactive_evidence() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let active = lane_block_proposal_at_height(&validator_set, 13);
         let unanchored = lane_block_proposal_at_height(&validator_set, 14);
         let inactive = rebind_lane_block_proposal_route(
@@ -9675,13 +9188,7 @@ mod tests {
     }
     #[test]
     fn lane_block_rollover_fails_atomically_on_certified_canonical_conflict() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let canonical = lane_block_proposal_at_height(&validator_set, 13);
         let conflicting = retag_lane_block_proposal_payload(canonical.clone(), 0xD4);
         let mut cache = LaneBlockSessionCache::new(4);
@@ -9708,13 +9215,7 @@ mod tests {
     }
     #[test]
     fn lane_block_rollover_fails_on_pruned_certified_commit_locks() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let canonical = lane_block_proposal_at_height(&validator_set, 13);
         let conflicting = retag_lane_block_proposal_payload(canonical.clone(), 0xD5);
         let mut cache = LaneBlockSessionCache::new(4);
@@ -9752,13 +9253,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_prunes_inadmissible_lane_sessions_and_slot_claims() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (_keys, validator_set) = lane_block_validator_fixture(3);
         let active_lane = LaneId::new(7);
         let active_dataspace = DataSpaceId::new(11);
         let inactive_lane = LaneId::new(8);
@@ -9787,14 +9282,8 @@ mod tests {
             conflicting_inactive_proposal.proposal_hash
         );
         let mut cache = LaneBlockSessionCache::new(4);
-        assert_eq!(
-            cache.insert_proposal(active_proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        assert_eq!(
-            cache.insert_proposal(inactive_proposal.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, active_proposal.clone(), Inserted);
+        assert_proposal_insert(&mut cache, inactive_proposal.clone(), Inserted);
         assert_eq!(cache.len(), 2);
         assert_eq!(
             cache.retain_sessions_for_admissible_lanes(
@@ -9819,13 +9308,7 @@ mod tests {
     #[test]
     fn lane_block_session_cache_prunes_noncanonical_prepared_siblings_but_preserves_commit_evidence()
      {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(3);
         let loser = lane_block_proposal_at_height(&validator_set, 13);
         let winner = conflicting_lane_block_proposal_next_view(loser.clone(), 0xD1);
         let protected = conflicting_lane_block_proposal_next_view(winner.clone(), 0xE1);
@@ -9884,10 +9367,7 @@ mod tests {
             cache.prune_uncommitted_sessions_conflicting_with_canonical_proposal(&winner),
             1
         );
-        assert_eq!(
-            cache.insert_proposal(protected.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_proposal_insert(&mut cache, protected.clone(), Inserted);
         for signer in &keys {
             let prepare_vote = signed_vote(&protected.vote_body(CertPhase::Prepare), signer);
             assert_eq!(
@@ -9896,10 +9376,7 @@ mod tests {
             );
         }
         let commit_vote = signed_vote(&protected.vote_body(CertPhase::Commit), &keys[2]);
-        assert_eq!(
-            cache.insert_vote(commit_vote.clone(), Some(&commit_vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &commit_vote, Inserted);
         assert_eq!(
             cache.prune_uncommitted_sessions_conflicting_with_canonical_proposal(&winner),
             0,
@@ -9909,14 +9386,7 @@ mod tests {
     }
     #[test]
     fn lane_block_session_cache_bounds_speculative_siblings_by_historical_context() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-            checked_bls_keypair(4),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
+        let (keys, validator_set) = lane_block_validator_fixture(4);
         let base = lane_block_proposal_at_height(&validator_set, 13);
         let mut siblings = Vec::new();
         let mut cache = LaneBlockSessionCache::new(256);
@@ -9942,10 +9412,7 @@ mod tests {
             }
         }
         let commit_vote = signed_vote(&siblings[0].vote_body(CertPhase::Commit), &keys[0]);
-        assert_eq!(
-            cache.insert_vote(commit_vote.clone(), Some(&commit_vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_vote_insert(&mut cache, &commit_vote, Inserted);
         let commit_body = siblings[1].vote_body(CertPhase::Commit);
         let commit_votes = [
             signed_vote(&commit_body, &keys[1]),
@@ -9955,10 +9422,7 @@ mod tests {
         let commit_qc =
             aggregate_lane_block_votes_to_qc(commit_body, validator_set.clone(), &commit_votes)
                 .expect("disjoint-signer commit QC");
-        assert_eq!(
-            cache.insert_qc(commit_qc),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
+        assert_qc_insert(&mut cache, commit_qc, Inserted);
         let canonical_key = LaneBlockSessionKey::from_proposal(&siblings[2]);
         let canonical = BTreeSet::from([canonical_key]);
         let mut other_height_base = base.clone();

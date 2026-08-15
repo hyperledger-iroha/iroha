@@ -1555,6 +1555,13 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
     assert validate_fixture(tmp_path, module, contract) == ()
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    constructor = "Some(CheckedProductionTransition::unwitnessed(projection))"
+    symbol = "check_production_in_flight_reservation_transition"
+    replace_once_after(path, f"pub(crate) fn {symbol}(", constructor,
+                       "Some(CheckedProductionTransition { projection })")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(symbol in error and constructor in error for error in errors), errors
 
 
 def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(
@@ -1836,22 +1843,26 @@ def test_inflight_layout_contract_rejects_queue_cleanup_before_evidence_repair(
     copy_layout_fixture(tmp_path, module, contract)
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
     source = path.read_text(encoding="utf-8")
-    start = source.index("    pub(crate) fn execute(")
+    start = source.index("    fn execute_exact_apply(")
     end = source.index("\n    fn finish_durable_apply_completion_against(", start)
     method = source[start:end]
-    promote = "promote_kagemusha_topup_finality_sidecar"
-    finalize = "finalize_committed_block_merge_reservations"
-    assert method.count(promote) == 1
-    assert method.count(finalize) == 1
+    promote, finalize = "promote_kagemusha_topup_finality_sidecar", "finalize_committed_block_merge_reservations"
+    assert method.count(promote) == 1 and method.count(finalize) == 1
     marker = "__SWAP_POST_CARRIER_REPAIR_ORDER__"
-    method = method.replace(promote, marker, 1)
-    method = method.replace(finalize, promote, 1)
-    method = method.replace(marker, finalize, 1)
-    path.write_text(source[:start] + method + source[end:], encoding="utf-8")
+    method = method.replace(promote, marker, 1).replace(finalize, promote, 1).replace(marker, finalize, 1)
+    source = source[:start] + method + source[end:]
+    delegate = source.index("self.execute_exact_apply(", source.index("    pub(crate) fn execute("), start)
+    path.write_text(source[:delegate] + source[delegate:].replace(
+        "self.execute_exact_apply(", "self.execute_exact_application(", 1), encoding="utf-8")
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
-        "ordered in-flight item V2ApplyService::execute" in error
+        "ordered in-flight item V2ApplyService::execute_exact_apply" in error
         and "missing or reorders token" in error
+        for error in errors
+    ), errors
+    assert any(
+        "in-flight production item V2ApplyService::execute" in error
+        and "self.execute_exact_apply(" in error
         for error in errors
     ), errors
 

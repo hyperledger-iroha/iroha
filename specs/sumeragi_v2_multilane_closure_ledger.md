@@ -50,13 +50,14 @@ statements in this document describe the mutable development checkout. They are
 inventories and source-consistency observations, not immutable-candidate
 execution or release receipts.
 
-## 2026-08-14 mutable-development closure snapshot
+## 2026-08-15 mutable-development closure snapshot
 
-- The bound inventory contains exactly 856 production tests across 40 modules,
-  including 436 source-sealed ownership/regression names, plus 525 G-UNIT
+- The bound inventory contains exactly 860 production tests across 40 modules,
+  including 441 source-sealed ownership/regression names, plus 525 G-UNIT
   tests and 55 grouped Native negative controls. Its source-sealed pre-network
-  corridor contains 88 legs. These are source counts, not claims that any suite
-  was executed for this reconciliation.
+  corridor contains 88 legs. The affected module totals are 18 Kura tests, 63
+  lane-work tests, and 135 worker tests. These are source counts, not claims
+  that any suite was executed for this reconciliation.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
   former lifecycle-cursor and SafetyWal filesystem-identity markers are gone:
   the production runner now consumes a move-only authority minted from Kura's
@@ -68,25 +69,30 @@ execution or release receipts.
   remain explicitly out of scope below.
 - The schema-5 formal registry names all 27 production actions, and the
   structural production-trace extraction reports no open action name. This is
-  a source partition only; no fresh TLC, Apalache, TLAPS, Verus, trace-replay,
-  mutation, or cross-tool certificate is claimed.
-- A fresh checker run over the merged development tree inspected 7,979 paths
-  with 198 exceptions and counted 5,014,747 Rust lines. It reports zero
-  findings and remains below the 5,254,807 ratchet ceiling; the 4,560,536
-  objective remains 454,211 lines away. The static source-budget guard passes,
-  while the reduction objective and immutable-candidate evidence remain Open.
-  The reviewed Rust include topology contains 48 parents and 296 direct entries;
-  its canonical payload SHA-256 is
-  `df2fe00c80e0b300bee7e044451f4d7a8f0f893cb4a130e582a19ba8547a6402`.
-  The SDK closure resolver and complete transitive manifests are mutable
-  development inputs, not release evidence.
+  a source partition only. The structural checker and source-only causal-FIFO
+  seam check pass on the current mutable tree, as do the 26 checked-token
+  real-source tests. The aggregate proof checker remains under validation. No
+  current Cargo, TLC, Apalache, TLAPS, Verus, network, formal-engine mutation
+  or trace-replay, cross-tool certificate, or immutable-candidate evidence is
+  claimed.
+- The current source budget is not green because unrelated findings remain.
+  Its configuration records a 5,067,263-line baseline, a 5,254,807 ratchet
+  ceiling, a 4,540,000 current aggregate ceiling, and a 4,500,000 working
+  target; the mutable-tree count must be recomputed after freeze. The reviewed
+  Rust include topology contains 48 parents and 301 direct entries, while its
+  canonical payload SHA-256 is
+  `1511236eb4b62cbd8ce687714f3aa6afd522c6e56179b000f83b5119e8c696f1`.
+  The SDK closure resolver and
+  complete transitive manifests are mutable development inputs, not release
+  evidence.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
   distribution source and Kotlin/Java Native model dependencies, are present in
   the development tree. The SoraFS orderbook JavaScript declaration,
   implementation, and standalone Python module are tracked. The recursive
-  resolver currently enumerates exactly 1,386 grouped and 1,386 diagnostics
-  records. The canonical suite-source hashes are recorded with the owning
-  corpus row (`ML-API-04`) and release gate (`G-SDK`) below.
+  resolver's staged shape expects exactly 1,386 grouped and 1,386 diagnostics
+  records. The current development-tree suite-source digests are published in
+  the inventory sections below; both still require immutable-candidate
+  regeneration and receipt binding.
   Diagnostics suite counts are Rust 14, Python 121, JavaScript 88, Swift 33,
   Kotlin 42, and Java 41. Rust's source-separated client controls reject both
   complete endpoint-payload swaps without changing its 14-test count; the
@@ -1629,10 +1635,14 @@ status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
 and Kotlin/Java Native model dependencies. The staged inventory is exactly
-1,386 grouped and 1,386 diagnostics records. Their canonical hashes are
-recorded once in the owning corpus row and once in the release gate. The
-release receipt must reproduce those values from its immutable candidate;
-the staged values alone are not evidence. The two specialized static Python modules are canonically
+1,386 grouped and 1,386 diagnostics records. Their current mutable-tree
+suite-source SHA-256 values are
+`06b376a41dcbbac50b815c0730b1316c311a51fe3696b6b9d80b3d3995e88ead`
+and
+`b8b1fdf05093aec8c4038fcb5a383e4685243550ac8dd4a1f298b65df3fb017f`.
+The release receipt must derive them again from its immutable candidate; these
+development values alone are not evidence. The two specialized
+static Python modules are canonically
 runner-bound and the browser distribution matches its source. The release
 corridor and receipt bind the Rust wire consumer directly; the Swift, Kotlin,
 and Java wire suites are included in the diagnostics runner and its receipt
@@ -1719,11 +1729,12 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The staged recursive closure contains exactly
-1,386 grouped and 1,386 diagnostics records. Its grouped and diagnostics
-suite-source SHA-256 values are
-`1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
+1,386 grouped and 1,386 diagnostics records. The current grouped and
+diagnostics suite-source SHA-256 values are respectively
+`06b376a41dcbbac50b815c0730b1316c311a51fe3696b6b9d80b3d3995e88ead`
 and
-`1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`.
+`b8b1fdf05093aec8c4038fcb5a383e4685243550ac8dd4a1f298b65df3fb017f`;
+the immutable-candidate receipt must regenerate and bind both values.
 The checked-in grouped fixture has SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -1860,7 +1871,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 856 tests across 40 modules, including 436
+inventory contains exactly 860 tests across 40 modules, including 441
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -1895,7 +1906,7 @@ checkpoint also passed `cargo check -p iroha_core --lib`; later focused reruns
 covered startup binding, B/A/B recovery, the 18 Kura replica tests, and four
 configuration tests. These are historical partial results, not fresh archived
 execution of all 525 required tests. This reconciliation claims no immutable-
-candidate Cargo run or full matrix execution: the 856 production, 525 G-UNIT,
+candidate Cargo run or full matrix execution: the 860 production, 525 G-UNIT,
 and 55-control counts are mutable-development source inventory only. `G-UNIT`
 remains Open until the exact no-skip suites run through the compliant isolated
 wrapper and their logs and candidate identity are archived.
@@ -2015,11 +2026,8 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The staged
-closure contains exactly 1,386 records for each suite, with grouped and
-diagnostics suite-source SHA-256 values
-`1a5e0d8b419a85da7a7fff2332d787961d13931b239ac0266f852d71797c2d23`
-and
-`1ed242333a7d140003907dea779a40c55a760844b61236ce6f15220196582510`.
+closure expects exactly 1,386 records for each suite. The current values above
+are mutable-tree inventory facts, not release evidence.
 The current grouped JSON and wire TSV SHA-256 values are
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
 and
@@ -2110,7 +2118,7 @@ TODOs remain out of scope as recorded below.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 856-production-test,
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 860-production-test,
   525-G-UNIT-test, and 55-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not
@@ -2213,16 +2221,17 @@ TODOs remain out of scope as recorded below.
   liveness, not the multilane kernels in
   `multilane_source_bindings.json`. They remain proof debt, but cannot stand in
   for or block the lane-specific safety/evidence rows.
-- **Generic causal-scheduler projection and liveness:** the TODO on
-  `production_fresh_causal_successors` in
-  `crates/iroha_sumeragi_core/src/verus_proofs.rs`, mirrored in
-  `crates/iroha_sumeragi_core/VERIFICATION.md`, concerns the machine-checked
-  production effect-to-TLA candidate identity/ownership mapping and
-  Completion-capacity product-rank proof needed for temporal liveness. It is a
-  generic scheduler-refinement obligation, already recorded as
-  `specified_unproved` in `formal/sumeragi_v2/PROOF.md`; it does not model
-  lane reservations, autonomous merge carriers, Native participant evidence,
-  autoscale, drain, or retirement and is outside this multilane ledger.
+- **Generic causal-scheduler projection and liveness:** production now contains
+  `ProductionEffectToCandidateTraceProjection`,
+  `check_production_effect_to_candidate_transition`,
+  `production_effect_to_candidate_trace_refines_async_ownership`, and the
+  `production_fresh_causal_successors` sequence lemmas. The source-only
+  causal-FIFO seam check passes. This establishes source binding only: it is not
+  pinned Verus, TLAPS, or derived cross-tool evidence and does not discharge
+  Completion-capacity temporal liveness. The generic scheduler refinement does
+  not model lane reservations, autonomous merge carriers, Native participant
+  evidence, autoscale, drain, or retirement and remains outside this multilane
+  ledger.
 - **Unrelated source markers:** the TODOs in
   `crates/iroha_core/src/privacy_profiles.rs`, the Kagemusha SHA-256 table
   implementation, and `crates/ivm/build.rs` concern privacy-engine activation,

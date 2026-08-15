@@ -2407,6 +2407,401 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
         tmp_path, relative, "method", item_name, context, old, new, expected_error
     )
 
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "public_field",
+        "derive_clone",
+        "derive_copy",
+        "manual_clone",
+        "extra_constructor",
+    ),
+)
+def test_total_checked_gate_rejects_opaque_token_forging(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    """The authorization token cannot become constructible or duplicable."""
+
+    module = load_checker()
+    sources = (
+        module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+        "crates/iroha_core/src/sumeragi/v2_core.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
+    )
+    for relative in sources:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+    path = tmp_path / module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE
+    source = path.read_text(encoding="utf-8")
+    if mutation == "public_field":
+        source = source.replace("    projection: P,", "    pub projection: P,", 1)
+    elif mutation == "derive_clone":
+        source = source.replace(
+            "#[derive(Debug, PartialEq, Eq)]",
+            "#[derive(Debug, Clone, PartialEq, Eq)]",
+            1,
+        )
+    elif mutation == "derive_copy":
+        source = source.replace(
+            "#[derive(Debug, PartialEq, Eq)]",
+            "#[derive(Debug, Copy, PartialEq, Eq)]",
+            1,
+        )
+    elif mutation == "manual_clone":
+        anchor = "impl<P> CheckedProductionTransition<P> {"
+        source = source.replace(
+            anchor,
+            "impl<P> Clone for CheckedProductionTransition<P> {\n"
+            "    fn clone(&self) -> Self { panic!() }\n"
+            "}\n\n"
+            + anchor,
+            1,
+        )
+    else:
+        anchor = "impl<P> CheckedProductionTransition<P> {"
+        forged_source = source.replace(
+            anchor,
+            anchor
+            + "\n    fn forge_checked(projection: P) -> Self {\n"
+            "        Self {\n"
+            "            projection,\n"
+            "            first_release_witness: None,\n"
+            "        }\n"
+            "    }\n",
+            1,
+        )
+        generic_literal_source = source.replace(
+            anchor,
+            "fn forge_checked_generic() -> "
+            "CheckedProductionTransition<[u8; (1 < 2) as usize]> {\n"
+            "    CheckedProductionTransition::<[u8; (1 < 2) as usize]> {\n"
+            "        projection: [0],\n"
+            "        first_release_witness: None,\n"
+            "    }\n"
+            "}\n\n"
+            + anchor,
+            1,
+        )
+        alias_source = source.replace(
+            anchor,
+            "type Forgeable<P> = CheckedProductionTransition<P>;\n\n"
+            "impl<P> Forgeable<P> {\n"
+            "    fn forge_checked(projection: P) -> Self {\n"
+            "        Self {\n"
+            "            projection,\n"
+            "            first_release_witness: None,\n"
+            "        }\n"
+            "    }\n"
+            "}\n\n"
+            + anchor,
+            1,
+        )
+        grouped_alias_source = source.replace(
+            anchor,
+            "mod alias_child {\n"
+            "    use super::CheckedProductionTransition::{\n"
+            "        self, self as Forgeable,\n"
+            "    };\n\n"
+            "    impl<P> Forgeable<P> {\n"
+            "        fn forge_checked(projection: P) -> Self {\n"
+            "            Self {\n"
+            "                projection,\n"
+            "                first_release_witness: None,\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            "}\n\n"
+            + anchor,
+            1,
+        )
+        macro_alias_source = source.replace(
+            anchor,
+            "macro_rules! define_forgeable {\n"
+            "    ($name:ident, $target:ident) => {\n"
+            "        type $name<P> = $target<P>;\n"
+            "        impl<P> $name<P> {\n"
+            "            fn forge_checked(projection: P) -> Self {\n"
+            "                Self {\n"
+            "                    projection,\n"
+            "                    first_release_witness: None,\n"
+            "                }\n"
+            "            }\n"
+            "        }\n"
+            "    };\n"
+            "}\n"
+            "define_forgeable!(Forgeable, CheckedProductionTransition);\n\n"
+            + anchor,
+            1,
+        )
+        helper_source = source.replace(
+            "    const fn unwitnessed(projection: P) -> Self {",
+            "    pub(crate) const fn unwitnessed(projection: P) -> Self {",
+            1,
+        )
+        path.write_text(helper_source, encoding="utf-8")
+        helper_entries = [
+            {
+                "path": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+                "sha256": module._sha256_file(
+                    tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
+                ),
+            },
+            {
+                "path": module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE,
+                "sha256": module._sha256_file(path),
+            },
+        ]
+        with pytest.raises(ValueError, match="unwitnessed|constructor|token"):
+            module._cross_tool_checked_token_payload(
+                source_entries=helper_entries,
+                root_dir=tmp_path,
+            )
+        path.write_text(alias_source, encoding="utf-8")
+        alias_entries = [
+            {
+                "path": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+                "sha256": module._sha256_file(
+                    tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
+                ),
+            },
+            {
+                "path": module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE,
+                "sha256": module._sha256_file(path),
+            },
+        ]
+        with pytest.raises(ValueError, match="alias|token"):
+            module._cross_tool_checked_token_payload(
+                source_entries=alias_entries,
+                root_dir=tmp_path,
+            )
+        path.write_text(grouped_alias_source, encoding="utf-8")
+        grouped_alias_entries = [
+            {
+                "path": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+                "sha256": module._sha256_file(
+                    tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
+                ),
+            },
+            {
+                "path": module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE,
+                "sha256": module._sha256_file(path),
+            },
+        ]
+        with pytest.raises(ValueError, match="alias|token"):
+            module._cross_tool_checked_token_payload(
+                source_entries=grouped_alias_entries,
+                root_dir=tmp_path,
+            )
+        path.write_text(macro_alias_source, encoding="utf-8")
+        macro_alias_entries = [
+            {
+                "path": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+                "sha256": module._sha256_file(
+                    tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
+                ),
+            },
+            {
+                "path": module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE,
+                "sha256": module._sha256_file(path),
+            },
+        ]
+        with pytest.raises(ValueError, match="alias|macro|token"):
+            module._cross_tool_checked_token_payload(
+                source_entries=macro_alias_entries,
+                root_dir=tmp_path,
+            )
+        path.write_text(generic_literal_source, encoding="utf-8")
+        generic_entries = [
+            {
+                "path": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+                "sha256": module._sha256_file(
+                    tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
+                ),
+            },
+            {
+                "path": module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE,
+                "sha256": module._sha256_file(path),
+            },
+        ]
+        with pytest.raises(ValueError, match="literal|token"):
+            module._cross_tool_checked_token_payload(
+                source_entries=generic_entries,
+                root_dir=tmp_path,
+            )
+        source = forged_source
+    path.write_text(source, encoding="utf-8")
+    entries = [
+        {
+            "path": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+            "sha256": module._sha256_file(
+                tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
+            ),
+        },
+        {
+            "path": module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE,
+            "sha256": module._sha256_file(path),
+        },
+    ]
+    with pytest.raises(ValueError, match="token|CheckedProductionTransition"):
+        module._cross_tool_checked_token_payload(
+            source_entries=entries,
+            root_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "in_flight_projection_visibility",
+        "in_flight_macro_predicate",
+        "in_flight_kernel_body",
+        "in_flight_constructor_always_some",
+        "in_flight_constructor_wrong_kernel",
+        "materialization_projection_visibility",
+        "legacy_constructor_always_some",
+        "borrower_visibility",
+        "borrower_body",
+    ),
+)
+def test_total_checked_gate_rejects_in_flight_token_contract_weakening(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    """The auxiliary reservation gate cannot weaken the shared opaque token."""
+
+    module = load_checker()
+    sources = (
+        module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+        "crates/iroha_core/src/sumeragi/v2_core.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
+    )
+    for relative in sources:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+    path = tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
+    source = path.read_text(encoding="utf-8")
+
+    if mutation == "in_flight_projection_visibility":
+        item = module.rust_struct_items(
+            source, "ProductionInFlightReservationTransitionProjection"
+        )[0]
+        assert item.source.count("    pub(crate) action: u8,") == 1
+        mutated = item.source.replace(
+            "    pub(crate) action: u8,",
+            "    pub action: u8,",
+            1,
+        )
+    elif mutation == "in_flight_macro_predicate":
+        item = module.rust_macro_items(
+            source, "production_in_flight_reservation_transition_body"
+        )[0]
+        old = (
+            "projection.before.state "
+            "== refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT)"
+        )
+        new = "true"
+        assert item.source.count(old) >= 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation == "in_flight_kernel_body":
+        item = module.rust_items(
+            source, "production_in_flight_reservation_transition_kernel"
+        )[0]
+        old = "production_in_flight_reservation_transition_body!(projection)"
+        new = "projection.action > 0"
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation.startswith("in_flight_constructor_"):
+        item = module.rust_items(
+            source, "check_production_in_flight_reservation_transition"
+        )[0]
+        if mutation == "in_flight_constructor_always_some":
+            old = "    } else {\n        None\n    }"
+            new = (
+                "    } else {\n"
+                "        Some(CheckedProductionTransition::unwitnessed(projection))\n"
+                "    }"
+            )
+        else:
+            old = "production_in_flight_reservation_transition_kernel(projection)"
+            new = (
+                "production_application_trace_refines_decision_completion_kernel("
+                "Default::default())"
+            )
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation == "materialization_projection_visibility":
+        item = module.rust_struct_items(
+            source, "ProductionIngressReservationMaterializationTraceProjection"
+        )[0]
+        old = "    pub(crate) reserved_slots_before: u8,"
+        new = "    pub reserved_slots_before: u8,"
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation == "legacy_constructor_always_some":
+        item = module.rust_items(
+            source,
+            "check_production_body_ownership_effective_lock_transition",
+        )[0]
+        old = "    } else {\n        None\n    }"
+        new = (
+            "    } else {\n"
+            "        Some(CheckedProductionTransition::unwitnessed(projection))\n"
+            "    }"
+        )
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+    else:
+        path = tmp_path / module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE
+        source = path.read_text(encoding="utf-8")
+        item = module.rust_items(source, "accepted_projection")[0]
+        if mutation == "borrower_visibility":
+            old = "pub(crate) const fn accepted_projection"
+            new = "pub const fn accepted_projection"
+        else:
+            old = "&self.projection"
+            new = "match self { Self { projection } => projection }"
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+
+    mutated_source = source.replace(item.source, mutated, 1)
+    if mutation == "borrower_body":
+        mutated_source = mutated_source.replace(
+            "            first_release_witness: None,",
+            "            first_release_witness: panic!(),",
+            1,
+        )
+    path.write_text(mutated_source, encoding="utf-8")
+    entries = [
+        {
+            "path": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+            "sha256": module._sha256_file(
+                tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
+            ),
+        },
+        {
+            "path": module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE,
+            "sha256": module._sha256_file(
+                tmp_path / module._CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE
+            ),
+        },
+    ]
+    with pytest.raises(
+        ValueError,
+        match="in-flight|materialization|effective-lock|borrowed|borrower|token",
+    ):
+        module._cross_tool_checked_token_payload(
+            source_entries=entries,
+            root_dir=tmp_path,
+        )
+
+
+
 @pytest.mark.parametrize(
     ("relative", "item_name", "context", "old", "new", "expected_error"),
     (

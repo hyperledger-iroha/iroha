@@ -437,7 +437,8 @@ mod slice_tests {
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::Decode;
-    use norito::core::{DecodeFlagsGuard, DecodeFromSlice, header_flags, read_len_dyn_slice};
+    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
+    use norito::core::{DecodeFlagsGuard, header_flags, read_len_dyn_slice};
     #[derive(norito::codec::Encode)]
     struct ForgedRegisterPublicLaneValidator {
         lane_id: LaneId,
@@ -485,35 +486,6 @@ mod slice_tests {
                 receipts: vec![receipt],
             },
         }
-    }
-    fn assert_slice_roundtrip<T>(value: T)
-    where
-        T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
-        for<'a> T: DecodeFromSlice<'a>,
-    {
-        let bytes = value.encode();
-        let (decoded, used) = T::decode_from_slice(&bytes).expect("decode from slice");
-        assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
-    }
-    fn assert_registry_decodes<T>(
-        registry: &crate::isi::InstructionRegistry,
-        wire_id: &str,
-        value: T,
-    ) where
-        T: crate::isi::Instruction
-            + norito::codec::Encode
-            + 'static
-            + norito::core::NoritoSerialize,
-        for<'de> T: norito::core::NoritoDeserialize<'de>,
-    {
-        let (payload, flags) = norito::codec::encode_with_header_flags(&value);
-        let framed =
-            norito::core::frame_bare_with_header_flags::<T>(&payload, flags).expect("frame");
-        let decoded = crate::isi::InstructionRegistry::decode(registry, wire_id, &framed)
-            .expect("registered")
-            .expect("decode");
-        assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
     #[test]
     fn staking_decode_from_slice_roundtrips() {

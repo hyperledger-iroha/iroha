@@ -992,11 +992,9 @@
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn hydrate_canonical_lane_artifacts(",
-            "let _ = self\n"
-            "                .lane_sessions\n"
-            "                .insert_recovered_proposal_replacing_uncommitted_conflict(proposal);",
-            "let _ = proposal;",
-            "late canonical lane hydration must retain the exact proposal as bounded recovery work",
+            "for proposal in raw_proposals {",
+            "for proposal in raw_proposals.into_iter().rev() {",
+            "canonical raw lane hydration must replay the complete predecessor chain in deterministic order and fail closed on conflicts",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
@@ -2428,6 +2426,13 @@ def _apply_exact_output_non_runtime_extended_mutations(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn preflight_effect_insertion(",
+            "if !predecessor_ready {",
+            "if false {",
+            "ordinary lane effect preflight must retain applied-predecessor readiness, exact identity, bounded capacity, and complete reply-route history",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn validate_winning_lane_output(",
             "validate_lane_vote_for_proposal(vote, proposal)?;",
             "let _ = (vote, proposal);",
@@ -2589,14 +2594,14 @@ def _apply_exact_output_non_runtime_extended_mutations(
             "must consume the typed strict or superseded receipt",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker/autonomous_lane_output_reconstruction.rs",
             "fn applied_height_reconstruction_covers(",
             "if proposal_height >= artifact.height {",
             "if false {",
             "lane output retirement must require exact typed durable or independently readable historical lane authority",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker/autonomous_lane_output_reconstruction.rs",
             "let covered = match envelope.as_message() {",
             "lane_output_is_covered(lane_message)?",
             "false",

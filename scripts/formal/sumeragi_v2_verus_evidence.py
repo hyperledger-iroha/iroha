@@ -73,6 +73,7 @@ REQUIRED_SOURCE_PATHS = (
     "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+    "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs",
     "crates/iroha_core/src/sumeragi/v2_core/scheduler.rs",
     "crates/iroha_core/src/sumeragi/v2_core/tests.rs",
     "crates/iroha_core/src/sumeragi/v2_core/wal.rs",

@@ -256,37 +256,40 @@ impl AnyPermission {
         }
     }
 }
+macro_rules! impl_validate_grant_revoke_via {
+    ($provider:path => $($permission:ty),+ $(,)?) => {
+        $(
+            impl ValidateGrantRevoke for $permission {
+                fn validate_grant(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    $provider(self).validate(authority, host, context)
+                }
+
+                fn validate_revoke(
+                    &self,
+                    authority: &AccountId,
+                    context: &Context,
+                    host: &Iroha,
+                ) -> Result {
+                    $provider(self).validate(authority, host, context)
+                }
+            }
+        )+
+    };
+}
 mod query {
     use super::*;
     use iroha_executor_data_model::permission::query::{
         CanReadAllLedgerData, CanReadRestrictedDataspace,
     };
-    impl ValidateGrantRevoke for CanReadRestrictedDataspace {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanReadAllLedgerData {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(OnlyGenesis::from =>
+        CanReadRestrictedDataspace,
+        CanReadAllLedgerData,
+    );
 }
 /// Trait that enables using permissions on the blockchain
 pub trait ExecutorPermission: Permission + PartialEq {
@@ -386,38 +389,14 @@ macro_rules! impl_owned_permission {
 mod executor {
     use super::*;
     use iroha_executor_data_model::permission::executor::CanUpgradeExecutor;
-    impl ValidateGrantRevoke for CanUpgradeExecutor {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanUpgradeExecutor);
 }
 mod smart_contract {
     use super::*;
     use iroha_executor_data_model::permission::smart_contract::{
         CanInvokeContractEntrypoint, CanRegisterSmartContractCode,
     };
-    impl ValidateGrantRevoke for CanRegisterSmartContractCode {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanRegisterSmartContractCode);
     pub(super) fn validate_contract_entrypoint_payload(
         permission: &CanInvokeContractEntrypoint,
     ) -> Result {
@@ -465,19 +444,7 @@ mod settlement {
     use iroha_executor_data_model::permission::settlement::{
         CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy,
     };
-    impl ValidateGrantRevoke for CanManageFxCorridors {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanManageFxCorridors);
     fn validate_bilateral_settlement_consent(
         permission: &CanExecuteSettlement,
         authority: &AccountId,
@@ -859,49 +826,15 @@ mod peer {
     use iroha_executor_data_model::permission::peer::{
         CanManageLaneRelayEmergency, CanManagePeers,
     };
-    impl ValidateGrantRevoke for CanManagePeers {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanManageLaneRelayEmergency {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(OnlyGenesis::from =>
+        CanManagePeers,
+        CanManageLaneRelayEmergency,
+    );
 }
 mod role {
     use super::*;
     use iroha_executor_data_model::permission::role::CanManageRoles;
-    impl ValidateGrantRevoke for CanManageRoles {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanManageRoles);
 }
 mod parameter {
     //! Module with pass conditions for parameter related tokens
@@ -998,31 +931,7 @@ mod offline {
         CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
         CanManageOfflineEscrow,
     };
-    macro_rules! impl_genesis_only_offline_permission {
-        ($($permission:ty),+ $(,)?) => {
-            $(
-                impl ValidateGrantRevoke for $permission {
-                    fn validate_grant(
-                        &self,
-                        authority: &AccountId,
-                        context: &Context,
-                        host: &Iroha,
-                    ) -> Result {
-                        OnlyGenesis::from(self).validate(authority, host, context)
-                    }
-                    fn validate_revoke(
-                        &self,
-                        authority: &AccountId,
-                        context: &Context,
-                        host: &Iroha,
-                    ) -> Result {
-                        OnlyGenesis::from(self).validate(authority, host, context)
-                    }
-                }
-            )+
-        }
-    }
-    impl_genesis_only_offline_permission!(
+    impl_validate_grant_revoke_via!(OnlyGenesis::from =>
         CanManageOfflineEscrow,
         CanActivateKagemushaRecursiveReleaseV4,
         CanManageOfflineDeviceAttestationPolicy,
@@ -1062,83 +971,15 @@ pub mod asset {
             ))
         }
     }
-    impl ValidateGrantRevoke for CanMintAssetWithDefinition {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            super::asset_definition::Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            super::asset_definition::Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanBurnAssetWithDefinition {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            super::asset_definition::Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            super::asset_definition::Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanTransferAssetWithDefinition {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            super::asset_definition::Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            super::asset_definition::Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanModifyAssetMetadataWithDefinition {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            super::asset_definition::Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            super::asset_definition::Owner::from(self).validate(authority, host, context)
-        }
-    }
-    macro_rules! impl_asset_definition_control_permission {
-        ($ty:ty) => {
-            impl ValidateGrantRevoke for $ty {
-                fn validate_grant(
-                    &self,
-                    authority: &AccountId,
-                    context: &Context,
-                    host: &Iroha,
-                ) -> Result {
-                    super::asset_definition::Owner::from(self).validate(authority, host, context)
-                }
-                fn validate_revoke(
-                    &self,
-                    authority: &AccountId,
-                    context: &Context,
-                    host: &Iroha,
-                ) -> Result {
-                    super::asset_definition::Owner::from(self).validate(authority, host, context)
-                }
-            }
-        };
-    }
-    impl_asset_definition_control_permission!(CanSetAssetTransferAvailability);
-    impl_asset_definition_control_permission!(CanSetAssetTransferDailyLimit);
-    impl_asset_definition_control_permission!(CanSetAssetHoldingLimit);
+    impl_validate_grant_revoke_via!(super::asset_definition::Owner::from =>
+        CanMintAssetWithDefinition,
+        CanBurnAssetWithDefinition,
+        CanTransferAssetWithDefinition,
+        CanModifyAssetMetadataWithDefinition,
+        CanSetAssetTransferAvailability,
+        CanSetAssetTransferDailyLimit,
+        CanSetAssetHoldingLimit,
+    );
     impl ValidateGrantRevoke for CanMintAssetToAccount {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             super::asset_definition::Owner {
@@ -1171,19 +1012,7 @@ pub mod asset {
             validate_asset_or_definition_owner(&self.asset, authority, context, host)
         }
     }
-    impl ValidateGrantRevoke for CanTransferAsset {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(Owner::from => CanTransferAsset);
     macro_rules! impl_froms {
         ($($name:ty),+ $(,)?) => {$(
             impl<'t> From<&'t $name> for Owner<'t> {
@@ -1348,45 +1177,11 @@ pub mod asset_definition {
             ))
         }
     }
-    impl ValidateGrantRevoke for CanUnregisterAssetDefinition {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanModifyAssetDefinitionMetadata {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanManageAssetDefinitionConfidentialPolicy {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(Owner::from =>
+        CanUnregisterAssetDefinition,
+        CanModifyAssetDefinitionMetadata,
+        CanManageAssetDefinitionConfidentialPolicy,
+    );
     impl ValidateGrantRevoke for CanManageAssetDefinitionAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             match &self.scope {
@@ -1535,19 +1330,7 @@ pub mod nft {
             ))
         }
     }
-    impl ValidateGrantRevoke for CanRegisterNft {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            super::domain::Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            super::domain::Owner::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(super::domain::Owner::from => CanRegisterNft);
     macro_rules! impl_froms_and_validate_grant_revoke {
         ($owner:ident : $($name:ty),+ $(,)?) => {$(
             impl<'t> From<&'t $name> for $owner<'t> {
@@ -1683,71 +1466,13 @@ pub mod account {
             ))
         }
     }
-    impl ValidateGrantRevoke for CanRegisterAccount {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            super::domain::Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            super::domain::Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanUnregisterAccount {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanModifyAccountMetadata {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanReplaceAccountController {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanReadAccountData {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(super::domain::Owner::from => CanRegisterAccount);
+    impl_validate_grant_revoke_via!(Owner::from =>
+        CanUnregisterAccount,
+        CanModifyAccountMetadata,
+        CanReplaceAccountController,
+        CanReadAccountData,
+    );
     impl ValidateGrantRevoke for CanResolveAccountAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             if can_delegate_account_alias_resolve(authority, &self.scope, context, host) {
@@ -1869,71 +1594,13 @@ pub mod trigger {
             ))
         }
     }
-    impl ValidateGrantRevoke for CanRegisterTrigger {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            super::account::Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            super::account::Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanExecuteTrigger {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanUnregisterTrigger {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanModifyTrigger {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanModifyTriggerMetadata {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(super::account::Owner::from => CanRegisterTrigger);
+    impl_validate_grant_revoke_via!(Owner::from =>
+        CanExecuteTrigger,
+        CanUnregisterTrigger,
+        CanModifyTrigger,
+        CanModifyTriggerMetadata,
+    );
     impl<'t> From<&'t CanRegisterTrigger> for super::account::Owner<'t> {
         fn from(value: &'t CanRegisterTrigger) -> Self {
             Self {
@@ -2009,45 +1676,11 @@ pub mod domain {
             ))
         }
     }
-    impl ValidateGrantRevoke for CanRegisterDomain {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanUnregisterDomain {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
-    impl ValidateGrantRevoke for CanModifyDomainMetadata {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            Owner::from(self).validate(authority, host, context)
-        }
-    }
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanRegisterDomain);
+    impl_validate_grant_revoke_via!(Owner::from =>
+        CanUnregisterDomain,
+        CanModifyDomainMetadata,
+    );
     macro_rules! impl_froms {
         ($($name:ty),+ $(,)?) => {$(
             impl<'t> From<&'t $name> for Owner<'t> {

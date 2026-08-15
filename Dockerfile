@@ -20,7 +20,7 @@ COPY . /build-context/
 ARG PROFILE="deploy"
 ARG CONFIG_PROFILE="single"
 ARG RUSTFLAGS=""
-ARG FEATURES=""
+ARG FEATURES="external-software-signer-bin"
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
 ARG BINARIES="iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
@@ -150,7 +150,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         fi; \
         if [ "${CONFIG_PROFILE}" = "taira" ]; then \
             test "${PROFILE}" = "release" || { echo "Taira native privacy evidence requires PROFILE=release" >&2; exit 1; }; \
-            test "${FEATURES}" = "embedded-soracloud-runtime,zk-stark" || { echo "Taira images require the exact embedded-soracloud-runtime,zk-stark feature set" >&2; exit 1; }; \
+            test "${FEATURES}" = "embedded-soracloud-runtime,external-software-signer-bin,zk-stark" || { echo "Taira images require the exact embedded-soracloud-runtime,external-software-signer-bin,zk-stark feature set" >&2; exit 1; }; \
             validator_privacy_features="$(cargo ${CARGOFLAGS} tree ${locked_arg} -e features,no-dev -p irohad --features "${FEATURES}" -i iroha_core)"; \
             case "${validator_privacy_features}" in *privacy-release-evidence*) echo "Taira irohad must not contain privacy-release-evidence" >&2; exit 1;; esac; \
             validator_fixture_features="$(cargo ${CARGOFLAGS} tree ${locked_arg} -e features,no-dev -p irohad --features "${FEATURES}" -i iroha_data_model)"; \

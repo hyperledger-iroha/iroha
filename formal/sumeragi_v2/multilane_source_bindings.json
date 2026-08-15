@@ -1525,7 +1525,7 @@
         "symbol": "check_production_in_flight_reservation_transition",
         "required_tokens": [
           "production_in_flight_reservation_transition_kernel(projection)",
-          "Some(CheckedProductionTransition { projection })",
+          "Some(CheckedProductionTransition::unwitnessed(projection))",
           "None"
         ]
       },
@@ -1671,7 +1671,7 @@
         "symbol": "check_production_in_flight_first_release_transition",
         "required_tokens": [
           "production_in_flight_first_release_transition_kernel(projection)",
-          "Some(CheckedProductionTransition { projection })",
+          "Some(CheckedProductionTransition::unwitnessed(projection))",
           "None"
         ]
       },
@@ -3079,14 +3079,24 @@
       {
         "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
         "kind": "method",
-        "symbol": "V2ApplyService::execute",
+        "symbol": "V2ApplyService::execute_exact_apply",
         "required_tokens": [
+          "self.validate_and_apply(",
           "store_v2_finality_artifact",
           "persist_post_apply_metadata",
           "repair_native_amx_participant_application_evidence",
           "publish_committed_block_merge_entry",
           "promote_kagemusha_topup_finality_sidecar",
           "finalize_committed_block_merge_reservations"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "kind": "method",
+        "symbol": "V2ApplyService::execute",
+        "required_tokens": [
+          "self.execute_exact_apply(",
+          "finish_durable_apply_completion_against"
         ]
       },
       {
@@ -3649,7 +3659,7 @@
         "symbol": "check_production_in_flight_reservation_transition",
         "tokens": [
           "production_in_flight_reservation_transition_kernel(projection)",
-          "Some(CheckedProductionTransition { projection })",
+          "Some(CheckedProductionTransition::unwitnessed(projection))",
           "None"
         ]
       },
@@ -4231,14 +4241,24 @@
       {
         "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
         "kind": "method",
-        "symbol": "V2ApplyService::execute",
+        "symbol": "V2ApplyService::execute_exact_apply",
         "tokens": [
+          "self.validate_and_apply(",
           "store_v2_finality_artifact",
           "persist_post_apply_metadata",
           "repair_native_amx_participant_application_evidence",
           "publish_committed_block_merge_entry",
           "promote_kagemusha_topup_finality_sidecar",
           "finalize_committed_block_merge_reservations"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "kind": "method",
+        "symbol": "V2ApplyService::execute",
+        "tokens": [
+          "self.execute_exact_apply(",
+          "finish_durable_apply_completion_against"
         ]
       },
       {
@@ -8449,15 +8469,24 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
           "kind": "method",
-          "symbol": "V2ApplyService::execute",
+          "symbol": "V2ApplyService::execute_exact_apply",
           "required_tokens": [
-            "validate_and_apply",
+            "self.validate_and_apply(",
             "store_v2_finality_artifact",
             "persist_post_apply_metadata",
             "repair_native_amx_participant_application_evidence",
             "publish_committed_block_merge_entry",
             "promote_kagemusha_topup_finality_sidecar",
             "finalize_committed_block_merge_reservations"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "method",
+          "symbol": "V2ApplyService::execute",
+          "required_tokens": [
+            "self.execute_exact_apply(",
+            "finish_durable_apply_completion_against"
           ]
         },
         {

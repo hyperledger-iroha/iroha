@@ -26,6 +26,55 @@ macro_rules! assert_error_matrix_row {
         assert_error_matrix!($diagnostics, $start, [$($result),+])
     };
 }
+
+#[test]
+fn canonical_material_byte_digest_accessor_inventory_is_complete() {
+    let source: String = include_str!("../fhe_bfv.rs")
+        .split_whitespace()
+        .collect();
+    let families = [
+        "bfv_exact_residual_public_key_proof_input_material",
+        "bfv_bounded_noise_public_key_proof_input_material",
+        "bfv_exact_residual_ciphertext_proof_input_material",
+        "bfv_bounded_noise_ciphertext_proof_input_material",
+        "bfv_full_bootstrap_arithmetic_trace_profile",
+        "bfv_full_bootstrap_arithmetic_air_constraint_system",
+        "bfv_full_bootstrap_release_audit_evidence",
+        "bfv_full_bootstrap_material_proof_input_material",
+        "bfv_full_bootstrap_execution_witness_digest_material",
+        "bfv_full_bootstrap_execution_proof_input_material",
+        "bfv_full_bootstrap_arithmetic_trace_public_opening_material",
+        "bfv_full_bootstrap_arithmetic_trace_material",
+        "bfv_full_bootstrap_arithmetic_air_evaluation_material",
+        "bfv_full_bootstrap_execution_prover_input_material",
+    ];
+    let pair_only = "bfv_full_bootstrap_execution_witness_digest_material";
+
+    assert_eq!(
+        source
+            .matches("define_canonical_material_byte_digest_accessors!{")
+            .count(),
+        families.len(),
+    );
+    assert_eq!(source.matches("digest_only=bfv_").count(), 13);
+    for family in families {
+        if family != pair_only {
+            let marker = format!("digest_only={family}_digest_from_bytes_v1=>");
+            assert_eq!(
+                source.matches(marker.as_str()).count(),
+                1,
+                "missing or duplicate digest accessor for `{family}`",
+            );
+        }
+        let marker = format!("pair={family}_and_digest_from_bytes_v1=>");
+        assert_eq!(
+            source.matches(marker.as_str()).count(),
+            1,
+            "missing or duplicate paired accessor for `{family}`",
+        );
+    }
+}
+
 use super::{
     bfv_full_bootstrap_arithmetic_air_composition_challenge_v1 as arithmetic_air_composition_challenge_v1,
     bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transcript_v1 as arithmetic_trace_canonical_opening_indices_from_transcript_v1,

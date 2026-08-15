@@ -599,6 +599,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2_worker.rs': (
         'v2_worker/exact_output_rollover_claim.rs',
+        'v2_worker/autonomous_lane_output_reconstruction.rs',
         'v2_worker/kura_replica_advert_refresh.rs',
         'v2_worker/current_lane_output_rollover_claim.rs',
         'tests/v2_worker_main_00.rs',
@@ -637,12 +638,14 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_apply/error_recovery.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_core/reducer.rs': (
+        'reducer/prepare_certificate_handling.rs',
         'tests/reducer_timeout_and_projection.rs',
         'tests/v2_core_reducer_primitive_projection.rs',
         'reducer/counterfeit_boundary_capability_test.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_core/refinement.rs': (
         'refinement/first_release_witness.rs',
+        'refinement/volatile_summary_well_formed.rs',
         'refinement_constructor_test_helpers.rs',
         'refinement/transition_gate_tail.rs',
     ),
@@ -654,6 +657,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/committee_fallback_and_retransmit.rs',
         'tests/v2_core_view_zero_parent_binding.rs',
         'tests/empty_replay_resume_test.rs',
+        'tests/delayed_prepare_qc_cache_bounds.rs',
         'tests/v2_core_terminal_transactionality.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_effects.rs': (
@@ -675,6 +679,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lane_work_observer_role.rs',
         'tests/v2_lane_work_native_body_recovery.rs',
         'tests/v2_lane_work_effect_queue.rs',
+        'v2_lane_work/canonical_lock_and_recovery_tests.rs',
         'v2_lane_work/historical_recovery_and_carrier_tests.rs',
         'v2_lane_work_autonomous_ready_durability_tests.rs',
     ),
@@ -2104,13 +2109,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 856
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 860
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "58a7316ef7991977ab2a414ec89fa19c193f1464f443b3427522dbcf9b951e27"
+    "43488145df2b3d502786684c24ce5ebf7c709289f6b76bc667f22484daff5746"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "b91f42798377695a51ecfbc3b52e45f93e80f2aa943b57ea62cce5f4d86e5e94"
+    "7889178b600c6d35b4782ae76bd914616ec3b8c7224bd71db97d34de8be3da36"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2194,7 +2199,7 @@ _LATE_LANE_RECOVERY_TEST_SHA256 = (
     "b0457ed9453abd1999e7246c3cd2d96aa1dc6e4763466a5f7c76635699997344"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
-    ("production-kura-progress-durability", "kura::tests", 17),
+    ("production-kura-progress-durability", "kura::tests", 18),
     ("production-kura-lane-geometry", "kura::lane_geometry::tests", 8),
     ("production-lane-relay-exact-ownership", "nexus::lane_relay::tests", 4),
     (
@@ -2231,7 +2236,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 61),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -2241,7 +2246,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         5,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 134),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 135),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -2802,6 +2807,10 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_matches_decoded_replay_entry",
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_height_participant_identity_conflict",
+    "kura::tests::exact_retired_autonomous_attempt_accessor_uses_proposal_height_namespace",
+    "sumeragi::v2_lane_work::tests::decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag",
+    "sumeragi::v2_lane_work::tests::cold_restart_hydrates_two_link_raw_lane_chain_without_receipts",
+    "sumeragi::v2_worker::tests::applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only",
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
     test_name
@@ -3154,13 +3163,13 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::stranded_retryable_sidecar_control_index": "09ed26efa19aefc39d448b1bee81d5b070c272557137e89a51c4f1dc6334419b",
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "ac05dcfd3b1457f5632cbd3eb9fc337ee2a1200b6ce02e2cd154c392a3f5cc32",
-    "V2LaneWorkAdapter::persist_anchored_sessions": "a8ea64ed2657d6fa38b586cdbc6e8804ae7a7ac381d2ee4d7aa133257342ddbd",
-    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "15bb7473773ab07cf8f68557c3ce443defa60fac45c9697aaef3945a3b5a24cf",
+    "V2LaneWorkAdapter::persist_anchored_sessions": "ac81d09b993cf6c83cfcf157d87de1873395bfb240bdc256159243dc05387ee1",
+    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "0df3ea8e18a50206465b35407003a6e3606e67da1d4edeaebde620301fac2a54",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
     "V2LaneWorkAdapter::drain_effects": "478982ec7c7cec9990a70993011e34e0cf79f57fb903b3c7cbabc040052b1aba",
-    "V2LaneWorkAdapter::preflight_effect_insertion": "568289d7497ed37ca03cd91e1fc222bfa010109de640b5d3244672d0a9cf41b3",
+    "V2LaneWorkAdapter::preflight_effect_insertion": "ed3875247788398142bf50a42def4acd00988688e272a94a4dddffc8a2c9bf87",
     "V2LaneWorkAdapter::push_effect": "8974bca860609c853efe07e78397cb4be80e8bf1a688831bf1c28b1807293441",
     "V2LaneWorkAdapter::schedule_retransmission": "7468d25a90d61258242527880622e74ff38143c0f75c2e7bf572c9792c9f6232",
     "V2LaneWorkAdapter::schedule_retransmission_at": "5f5ccf9a1f78a69d064ed99331a452571d0379497e28cd67daac836effbecd51",
@@ -3174,6 +3183,35 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::push_merge_sidecar_effect": "08a2b77d14faf80060a2ca76a491df474dbbf548b3f0f4a5f95c13d14102c750",
     "retryable_sidecar_server_control_has_writable_route": "4f7ac1895057d195e13c094178010703e09198a4b6824a96b75739072c1362eb",
 }
+
+_PRODUCTION_LANE_EFFECT_PREFLIGHT_EXACT_SOURCE = """
+fn preflight_effect_insertion(
+    &mut self,
+    effect: &V2LaneWorkEffect,
+) -> Result<Hash, LaneWorkEffectInsertionOutcome> {
+    let predecessor_ready = match effect {
+        V2LaneWorkEffect::PostLaneBlock { message, .. } => { self.outbound_lane_message_predecessor_is_ready(message) }
+        V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => { self.proposal_predecessor_is_ready_for_progress(&certificate.proposal) }
+        _ => true,
+    };
+    if !predecessor_ready { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    if !lane_work_effect_reply_routes_have_valid_shape(effect) { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    let key = lane_work_effect_key(effect);
+    if self.effect_keys.contains(&key) {
+        return Err(if self.effects.iter_mut()
+            .find(|queued| lane_work_effect_key(queued) == key)
+            .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, effect))
+        {
+            LaneWorkEffectInsertionOutcome::Duplicate
+        } else {
+            LaneWorkEffectInsertionOutcome::Rejected
+        },);
+    }
+    if !lane_work_effect_reply_routes_are_valid(effect) { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    if self.effects.len() >= self.limits.effect_capacity.get() { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
+    Ok(key)
+}
+"""
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "claim_runner_lifecycle_process_generation": "b4bb67413cbfce25355d34b5342d81a96ad7674614e4134b48f7c74cd49af315",
@@ -3737,7 +3775,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
         "bcab2428b4a2d43dd23989bebe917077e84b069c4e120808f6b25ce4503ce52f"
     ),
     "reconstruct_durable_lane_certificate": (
-        "adf988938c94e9869ec4f26c9942cea89fb0cc0669677688640f9c7567dc2a59"
+        "d0f552b3786458048dfb987c161bc37f3a55e92680a92d1818a11b658f64396b"
     ),
     "reply_routes_are_live_for_peer": (
         "cdca18bef9df99c77e3698622c9cf6941dd249967bb587f60e9fd381a4f8b235"

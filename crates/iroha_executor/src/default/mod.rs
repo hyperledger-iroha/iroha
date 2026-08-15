@@ -113,6 +113,59 @@ use iroha_smart_contract::data_model::{
     query::error::{FindError, QueryExecutionFail},
     visit::Visit,
 };
+macro_rules! declare_execute_visitors {
+    (
+        $(
+            $(#[$attribute:meta])*
+            $name:ident($instruction:ty);
+        )+
+    ) => {
+        $(
+            $(#[$attribute])*
+            pub fn $name<V: Execute + Visit + ?Sized>(
+                executor: &mut V,
+                isi: &$instruction,
+            ) {
+                execute!(executor, isi);
+            }
+        )+
+    };
+}
+macro_rules! declare_query_visitors {
+    (
+        no_op;
+        $(
+            $(#[$attribute:meta])*
+            $name:ident($query:ty);
+        )+
+    ) => {
+        $(
+            $(#[$attribute])*
+            pub fn $name<V: Execute + Visit + ?Sized>(
+                _executor: &mut V,
+                _query: &$query,
+            ) {
+            }
+        )+
+    };
+    (
+        via $helper:ident;
+        $(
+            $(#[$attribute:meta])*
+            $name:ident($query:ty);
+        )+
+    ) => {
+        $(
+            $(#[$attribute])*
+            pub fn $name<V: Execute + Visit + ?Sized>(
+                executor: &mut V,
+                _query: &$query,
+            ) {
+                $helper(executor);
+            }
+        )+
+    };
+}
 /// Re-export dispatch for custom instructions.
 pub use isi::visit_custom_instruction;
 /// Re-export logging instruction visitor helper.
@@ -815,37 +868,17 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
 pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &InstructionBox) {
     isi.dispatch(executor);
 }
-/// Forward declarative alias setup to Core's consensus-critical classifier and executor.
-pub fn visit_ensure_alias<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &EnsureAlias) {
-    execute!(executor, isi);
-}
-/// Forward guarded alias lease renewal to Core's expiry-CAS executor.
-pub fn visit_renew_alias_lease<V: Execute + Visit + ?Sized>(
-    executor: &mut V,
-    isi: &RenewAliasLease,
-) {
-    execute!(executor, isi);
-}
-/// Forward alias auto-renew configuration to Core's owner-only CAS executor.
-pub fn visit_configure_alias_auto_renew<V: Execute + Visit + ?Sized>(
-    executor: &mut V,
-    isi: &ConfigureAliasAutoRenew,
-) {
-    execute!(executor, isi);
-}
-/// Forward explicit alias rebinding to Core's target-account CAS executor.
-pub fn visit_rebind_account_alias<V: Execute + Visit + ?Sized>(
-    executor: &mut V,
-    isi: &RebindAccountAlias,
-) {
-    execute!(executor, isi);
-}
-/// Forward primary-alias compare-and-set to Core's lifecycle executor.
-pub fn visit_compare_and_set_primary_account_alias<V: Execute + Visit + ?Sized>(
-    executor: &mut V,
-    isi: &CompareAndSetPrimaryAccountAlias,
-) {
-    execute!(executor, isi);
+declare_execute_visitors! {
+    /// Forward declarative alias setup to Core's consensus-critical classifier and executor.
+    visit_ensure_alias(EnsureAlias);
+    /// Forward guarded alias lease renewal to Core's expiry-CAS executor.
+    visit_renew_alias_lease(RenewAliasLease);
+    /// Forward alias auto-renew configuration to Core's owner-only CAS executor.
+    visit_configure_alias_auto_renew(ConfigureAliasAutoRenew);
+    /// Forward explicit alias rebinding to Core's target-account CAS executor.
+    visit_rebind_account_alias(RebindAccountAlias);
+    /// Forward primary-alias compare-and-set to Core's lifecycle executor.
+    visit_compare_and_set_primary_account_alias(CompareAndSetPrimaryAccountAlias);
 }
 trait InstructionDispatch {
     fn dispatch<V: Execute + Visit + ?Sized>(&self, executor: &mut V);
@@ -1703,80 +1736,32 @@ mod core_authorization_dispatch_tests {
 /// Permission-aware dispatch for SCCP governance proposal instructions.
 pub mod governance {
     use super::*;
-    /// Dispatch a typed SCCP route-governance proposal to Core, which admits registered citizens
-    /// or holders of `CanProposeSccpRouteGovernance` (including role grants).
-    pub fn visit_propose_sccp_route_governance<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &ProposeSccpRouteGovernance,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch a typed SoraFS provider-owner proposal to Core.
-    ///
-    /// Core admits proposal authors separately; only a successful referendum
-    /// enactment can mutate the owner registry.
-    pub fn visit_propose_sorafs_provider_governance<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &ProposeSorafsProviderGovernance,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch a bonded-citizen validation-fee proposal to the Parliament lifecycle in Core.
-    pub fn visit_propose_validation_fee_policy<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &ProposeValidationFeePolicy,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch a bonded-citizen payout-lifecycle proposal to the Parliament lifecycle in Core.
-    pub fn visit_propose_validation_fee_payout_lifecycle<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &ProposeValidationFeePayoutLifecycle,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch a body-specific Parliament approval to Core.
-    pub fn visit_approve_governance_proposal<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &ApproveGovernanceProposal,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch a body-specific Parliament ballot to Core.
-    pub fn visit_cast_parliament_ballot<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &CastParliamentBallot,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch permissionless referendum finalization to Core.
-    pub fn visit_finalize_referendum<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &FinalizeReferendum,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch permissionless referendum enactment to Core.
-    pub fn visit_enact_referendum<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &EnactReferendum,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch the full-preimage SCCP referendum enactment to Core.
-    pub fn visit_enact_sccp_route_governance<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &EnactSccpRouteGovernance,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch citizen registration to Core, which enforces self-registration and the configured
-    /// citizenship bond floor against committed governance parameters.
-    pub fn visit_register_citizen<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RegisterCitizen,
-    ) {
-        execute!(executor, isi)
+    declare_execute_visitors! {
+        /// Dispatch a typed SCCP route-governance proposal to Core, which admits registered citizens
+        /// or holders of `CanProposeSccpRouteGovernance` (including role grants).
+        visit_propose_sccp_route_governance(ProposeSccpRouteGovernance);
+        /// Dispatch a typed SoraFS provider-owner proposal to Core.
+        ///
+        /// Core admits proposal authors separately; only a successful referendum
+        /// enactment can mutate the owner registry.
+        visit_propose_sorafs_provider_governance(ProposeSorafsProviderGovernance);
+        /// Dispatch a bonded-citizen validation-fee proposal to the Parliament lifecycle in Core.
+        visit_propose_validation_fee_policy(ProposeValidationFeePolicy);
+        /// Dispatch a bonded-citizen payout-lifecycle proposal to the Parliament lifecycle in Core.
+        visit_propose_validation_fee_payout_lifecycle(ProposeValidationFeePayoutLifecycle);
+        /// Dispatch a body-specific Parliament approval to Core.
+        visit_approve_governance_proposal(ApproveGovernanceProposal);
+        /// Dispatch a body-specific Parliament ballot to Core.
+        visit_cast_parliament_ballot(CastParliamentBallot);
+        /// Dispatch permissionless referendum finalization to Core.
+        visit_finalize_referendum(FinalizeReferendum);
+        /// Dispatch permissionless referendum enactment to Core.
+        visit_enact_referendum(EnactReferendum);
+        /// Dispatch the full-preimage SCCP referendum enactment to Core.
+        visit_enact_sccp_route_governance(EnactSccpRouteGovernance);
+        /// Dispatch citizen registration to Core, which enforces self-registration and the configured
+        /// citizenship bond floor against committed governance parameters.
+        visit_register_citizen(RegisterCitizen);
     }
 }
 /// Permission-checked visitors for peer management instructions.
@@ -1902,49 +1887,30 @@ pub mod sorafs {
         FindSorafsReserveAppealById, FindSorafsReserveEvents, FindSorafsReserveMovementById,
         FindSorafsReservePolicy, FindSorafsReserveProviderById,
     };
-    /// Authoritative repair tasks are public operational state.
-    pub fn visit_find_sorafs_repair_task<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsRepairTask,
-    ) {
-    }
-    /// Authoritative repair-task pages are public operational state.
-    pub fn visit_find_sorafs_repair_tasks<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsRepairTasks,
-    ) {
-    }
-    /// Authoritative repair counters are public operational state.
-    pub fn visit_find_sorafs_repair_status<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsRepairStatus,
-    ) {
-    }
-    /// Committed repair-ledger event pages are public operational state.
-    pub fn visit_find_sorafs_repair_events<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsRepairEvents,
-    ) {
-    }
-    /// The payload-free finalized reputation journal is public transparency state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_reputation_journal_events<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsReputationJournalEvents,
-    ) {
-    }
-    /// One payload-free finalized reputation source result is public transparency state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_reputation_journal_event_by_source_id<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsReputationJournalEventBySourceId,
-    ) {
+    declare_query_visitors! {
+        no_op;
+        /// Authoritative repair tasks are public operational state.
+        visit_find_sorafs_repair_task(FindSorafsRepairTask);
+        /// Authoritative repair-task pages are public operational state.
+        visit_find_sorafs_repair_tasks(FindSorafsRepairTasks);
+        /// Authoritative repair counters are public operational state.
+        visit_find_sorafs_repair_status(FindSorafsRepairStatus);
+        /// Committed repair-ledger event pages are public operational state.
+        visit_find_sorafs_repair_events(FindSorafsRepairEvents);
+        /// The payload-free finalized reputation journal is public transparency state.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_reputation_journal_events(FindSorafsReputationJournalEvents);
+        /// One payload-free finalized reputation source result is public transparency state.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_reputation_journal_event_by_source_id(
+            FindSorafsReputationJournalEventBySourceId
+        );
     }
     /// Validate permission to read the active reputation-journal authority policy.
     #[expect(
@@ -1980,97 +1946,42 @@ pub mod sorafs {
         }
         deny!(executor, "Can't read authoritative SoraFS orderbook state");
     }
-    /// Validate permission to read the active authoritative orderbook policy.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_orderbook_policy<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookPolicy,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to read an authoritative order.
-    pub fn visit_find_sorafs_orderbook_order_by_id<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookOrderById,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to read an authoritative cancellation.
-    pub fn visit_find_sorafs_orderbook_cancellation_by_order_id<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookCancellationByOrderId,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to read an authoritative settlement receipt.
-    pub fn visit_find_sorafs_orderbook_receipt_by_id<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookReceiptById,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to read an authoritative matched trade.
-    pub fn visit_find_sorafs_orderbook_trade_by_id<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookTradeById,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to read an authoritative settlement channel.
-    pub fn visit_find_sorafs_orderbook_channel_by_id<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookChannelById,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to read authoritative orderbook counters.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_orderbook_status<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookStatus,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to list authoritative orders.
-    pub fn visit_find_sorafs_orderbook_orders<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookOrders,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to list authoritative settlement receipts.
-    pub fn visit_find_sorafs_orderbook_receipts<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookReceipts,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to list authoritative matched trades.
-    pub fn visit_find_sorafs_orderbook_trades<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookTrades,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to list authoritative settlement channels.
-    pub fn visit_find_sorafs_orderbook_channels<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookChannels,
-    ) {
-        visit_orderbook_read(executor);
-    }
-    /// Validate permission to list committed authoritative orderbook events.
-    pub fn visit_find_sorafs_orderbook_events<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsOrderbookEvents,
-    ) {
-        visit_orderbook_read(executor);
+    declare_query_visitors! {
+        via visit_orderbook_read;
+        /// Validate permission to read the active authoritative orderbook policy.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_orderbook_policy(FindSorafsOrderbookPolicy);
+        /// Validate permission to read an authoritative order.
+        visit_find_sorafs_orderbook_order_by_id(FindSorafsOrderbookOrderById);
+        /// Validate permission to read an authoritative cancellation.
+        visit_find_sorafs_orderbook_cancellation_by_order_id(
+            FindSorafsOrderbookCancellationByOrderId
+        );
+        /// Validate permission to read an authoritative settlement receipt.
+        visit_find_sorafs_orderbook_receipt_by_id(FindSorafsOrderbookReceiptById);
+        /// Validate permission to read an authoritative matched trade.
+        visit_find_sorafs_orderbook_trade_by_id(FindSorafsOrderbookTradeById);
+        /// Validate permission to read an authoritative settlement channel.
+        visit_find_sorafs_orderbook_channel_by_id(FindSorafsOrderbookChannelById);
+        /// Validate permission to read authoritative orderbook counters.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_orderbook_status(FindSorafsOrderbookStatus);
+        /// Validate permission to list authoritative orders.
+        visit_find_sorafs_orderbook_orders(FindSorafsOrderbookOrders);
+        /// Validate permission to list authoritative settlement receipts.
+        visit_find_sorafs_orderbook_receipts(FindSorafsOrderbookReceipts);
+        /// Validate permission to list authoritative matched trades.
+        visit_find_sorafs_orderbook_trades(FindSorafsOrderbookTrades);
+        /// Validate permission to list authoritative settlement channels.
+        visit_find_sorafs_orderbook_channels(FindSorafsOrderbookChannels);
+        /// Validate permission to list committed authoritative orderbook events.
+        visit_find_sorafs_orderbook_events(FindSorafsOrderbookEvents);
     }
     fn visit_reserve_read<V: Execute + Visit + ?Sized>(executor: &mut V) {
         if executor.context().curr_block.is_genesis()
@@ -2080,143 +1991,79 @@ pub mod sorafs {
         }
         deny!(executor, "Can't read authoritative SoraFS reserve state");
     }
-    /// Validate permission to read the active reserve policy.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_reserve_policy<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsReservePolicy,
-    ) {
-        visit_reserve_read(executor);
+    declare_query_visitors! {
+        via visit_reserve_read;
+        /// Validate permission to read the active reserve policy.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_reserve_policy(FindSorafsReservePolicy);
+        /// Validate permission to read a provider reserve account.
+        visit_find_sorafs_reserve_provider_by_id(FindSorafsReserveProviderById);
+        /// Validate permission to read a reserve custody movement.
+        visit_find_sorafs_reserve_movement_by_id(FindSorafsReserveMovementById);
+        /// Validate permission to read a reserve lifecycle appeal.
+        visit_find_sorafs_reserve_appeal_by_id(FindSorafsReserveAppealById);
+        /// Validate permission to list provider reserve accounts.
+        visit_find_sorafs_reserve_providers(FindSorafsReserveProviders);
+        /// Validate permission to list reserve custody movements.
+        visit_find_sorafs_reserve_movements(FindSorafsReserveMovements);
+        /// Validate permission to list reserve lifecycle appeals.
+        visit_find_sorafs_reserve_appeals(FindSorafsReserveAppeals);
+        /// Validate permission to list committed authoritative reserve events.
+        visit_find_sorafs_reserve_events(FindSorafsReserveEvents);
     }
-    /// Validate permission to read a provider reserve account.
-    pub fn visit_find_sorafs_reserve_provider_by_id<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsReserveProviderById,
-    ) {
-        visit_reserve_read(executor);
-    }
-    /// Validate permission to read a reserve custody movement.
-    pub fn visit_find_sorafs_reserve_movement_by_id<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsReserveMovementById,
-    ) {
-        visit_reserve_read(executor);
-    }
-    /// Validate permission to read a reserve lifecycle appeal.
-    pub fn visit_find_sorafs_reserve_appeal_by_id<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsReserveAppealById,
-    ) {
-        visit_reserve_read(executor);
-    }
-    /// Validate permission to list provider reserve accounts.
-    pub fn visit_find_sorafs_reserve_providers<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsReserveProviders,
-    ) {
-        visit_reserve_read(executor);
-    }
-    /// Validate permission to list reserve custody movements.
-    pub fn visit_find_sorafs_reserve_movements<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsReserveMovements,
-    ) {
-        visit_reserve_read(executor);
-    }
-    /// Validate permission to list reserve lifecycle appeals.
-    pub fn visit_find_sorafs_reserve_appeals<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsReserveAppeals,
-    ) {
-        visit_reserve_read(executor);
-    }
-    /// Validate permission to list committed authoritative reserve events.
-    pub fn visit_find_sorafs_reserve_events<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        _query: &FindSorafsReserveEvents,
-    ) {
-        visit_reserve_read(executor);
-    }
-    /// `PoP` issuer policy is public transparency state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_pop_issuer_policy<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsPopIssuerPolicy,
-    ) {
-    }
-    /// Payload-free credential commitments are public transparency state.
-    pub fn visit_find_sorafs_pop_credential_commitment_by_digest<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsPopCredentialCommitmentByDigest,
-    ) {
-    }
-    /// Signed commitment-root publications are public transparency state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_pop_commitment_root_by_version<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsPopCommitmentRootByVersion,
-    ) {
-    }
-    /// Signed revocation publications are public transparency state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_pop_revocation_publication_by_version<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsPopRevocationPublicationByVersion,
-    ) {
-    }
-    /// Payload-free revocation commitments are public transparency state.
-    pub fn visit_find_sorafs_pop_revocation_by_nonce_commitment<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsPopRevocationByNonceCommitment,
-    ) {
-    }
-    /// Registry audit links are public transparency state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_pop_audit_digest_by_sequence<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsPopAuditDigestBySequence,
-    ) {
-    }
-    /// Registry anchors and counters are public transparency state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_pop_registry_status<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsPopRegistryStatus,
-    ) {
-    }
-    /// Authoritative moderation policy is public transparency state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_moderation_policy<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsModerationPolicy,
-    ) {
-    }
-    /// Appeal intake, pinned roots, and deterministic roster are public transparency state.
-    pub fn visit_find_sorafs_moderation_appeal<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsModerationAppeal,
-    ) {
+    declare_query_visitors! {
+        no_op;
+        /// `PoP` issuer policy is public transparency state.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_pop_issuer_policy(FindSorafsPopIssuerPolicy);
+        /// Payload-free credential commitments are public transparency state.
+        visit_find_sorafs_pop_credential_commitment_by_digest(
+            FindSorafsPopCredentialCommitmentByDigest
+        );
+        /// Signed commitment-root publications are public transparency state.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_pop_commitment_root_by_version(FindSorafsPopCommitmentRootByVersion);
+        /// Signed revocation publications are public transparency state.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_pop_revocation_publication_by_version(
+            FindSorafsPopRevocationPublicationByVersion
+        );
+        /// Payload-free revocation commitments are public transparency state.
+        visit_find_sorafs_pop_revocation_by_nonce_commitment(
+            FindSorafsPopRevocationByNonceCommitment
+        );
+        /// Registry audit links are public transparency state.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_pop_audit_digest_by_sequence(FindSorafsPopAuditDigestBySequence);
+        /// Registry anchors and counters are public transparency state.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_pop_registry_status(FindSorafsPopRegistryStatus);
+        /// Authoritative moderation policy is public transparency state.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_moderation_policy(FindSorafsModerationPolicy);
+        /// Appeal intake, pinned roots, and deterministic roster are public transparency state.
+        visit_find_sorafs_moderation_appeal(FindSorafsModerationAppeal);
     }
     /// A payload-free eligibility record is visible to its juror and moderation operators.
     pub fn visit_find_sorafs_moderation_juror_eligibility<V: Execute + Visit + ?Sized>(
@@ -2234,51 +2081,26 @@ pub mod sorafs {
             "Can't read another juror's moderation PoP eligibility record"
         );
     }
-    /// Authoritative moderation case headers are public transparency state.
-    pub fn visit_find_sorafs_moderation_case<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsModerationCase,
-    ) {
-    }
-    /// Sealed commitment digests and provenance are public transparency state.
-    pub fn visit_find_sorafs_moderation_commit<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsModerationCommit,
-    ) {
-    }
-    /// Accepted reveals are public after their commit-bound submission.
-    pub fn visit_find_sorafs_moderation_reveal<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsModerationReveal,
-    ) {
-    }
-    /// Payload-free challenge records are public transparency state.
-    pub fn visit_find_sorafs_moderation_challenge<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsModerationChallenge,
-    ) {
-    }
-    /// Terminal moderation outcomes are public transparency state.
-    pub fn visit_find_sorafs_moderation_outcome<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsModerationOutcome,
-    ) {
-    }
-    /// Derived no-show penalty records are public transparency state.
-    pub fn visit_find_sorafs_moderation_no_show<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsModerationNoShow,
-    ) {
-    }
-    /// Authoritative moderation counters are public transparency state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
-    pub fn visit_find_sorafs_moderation_status<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsModerationStatus,
-    ) {
+    declare_query_visitors! {
+        no_op;
+        /// Authoritative moderation case headers are public transparency state.
+        visit_find_sorafs_moderation_case(FindSorafsModerationCase);
+        /// Sealed commitment digests and provenance are public transparency state.
+        visit_find_sorafs_moderation_commit(FindSorafsModerationCommit);
+        /// Accepted reveals are public after their commit-bound submission.
+        visit_find_sorafs_moderation_reveal(FindSorafsModerationReveal);
+        /// Payload-free challenge records are public transparency state.
+        visit_find_sorafs_moderation_challenge(FindSorafsModerationChallenge);
+        /// Terminal moderation outcomes are public transparency state.
+        visit_find_sorafs_moderation_outcome(FindSorafsModerationOutcome);
+        /// Derived no-show penalty records are public transparency state.
+        visit_find_sorafs_moderation_no_show(FindSorafsModerationNoShow);
+        /// Authoritative moderation counters are public transparency state.
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+        )]
+        visit_find_sorafs_moderation_status(FindSorafsModerationStatus);
     }
     /// A complete snapshot includes every juror eligibility record and requires moderation access.
     #[expect(
@@ -2297,41 +2119,27 @@ pub mod sorafs {
             "Can't read the complete authoritative SoraFS moderation snapshot"
         );
     }
-    /// Payload-free committed moderation events are public transparency state.
-    pub fn visit_find_sorafs_moderation_events<V: Execute + Visit + ?Sized>(
-        _executor: &mut V,
-        _query: &FindSorafsModerationEvents,
-    ) {
+    declare_query_visitors! {
+        no_op;
+        /// Payload-free committed moderation events are public transparency state.
+        visit_find_sorafs_moderation_events(FindSorafsModerationEvents);
     }
-    /// Register a `SoraFS` pin manifest.
-    ///
-    /// Public submissions rely on the universal-lane Nexus fee schedule instead
-    /// of an additional executor permission gate.
-    pub fn visit_register_pin_manifest<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RegisterPinManifest,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Submit a threshold-signed approval for a pending `SoraFS` pin manifest.
-    ///
-    /// Core validates the governed approval envelope. The submitting account
-    /// does not receive broad pin-registry authority merely by relaying it.
-    pub fn visit_approve_pin_manifest<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &ApprovePinManifest,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Retire an account-owned `SoraFS` pin manifest.
-    ///
-    /// Core requires the authenticated transaction authority to be the exact
-    /// original submitter.
-    pub fn visit_retire_pin_manifest<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RetirePinManifest,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Register a `SoraFS` pin manifest.
+        ///
+        /// Public submissions rely on the universal-lane Nexus fee schedule instead
+        /// of an additional executor permission gate.
+        visit_register_pin_manifest(RegisterPinManifest);
+        /// Submit a threshold-signed approval for a pending `SoraFS` pin manifest.
+        ///
+        /// Core validates the governed approval envelope. The submitting account
+        /// does not receive broad pin-registry authority merely by relaying it.
+        visit_approve_pin_manifest(ApprovePinManifest);
+        /// Retire an account-owned `SoraFS` pin manifest.
+        ///
+        /// Core requires the authenticated transaction authority to be the exact
+        /// original submitter.
+        visit_retire_pin_manifest(RetirePinManifest);
     }
     /// Bind or update a `SoraFS` manifest alias when permitted.
     pub fn visit_bind_manifest_alias<V: Execute + Visit + ?Sized>(
@@ -2346,19 +2154,11 @@ pub mod sorafs {
         }
         deny!(executor, "Can't bind SoraFS manifest alias");
     }
-    /// Register a capacity declaration when permitted.
-    pub fn visit_register_capacity_declaration<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RegisterCapacityDeclaration,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Record a capacity telemetry snapshot when permitted.
-    pub fn visit_record_capacity_telemetry<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RecordCapacityTelemetry,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Register a capacity declaration when permitted.
+        visit_register_capacity_declaration(RegisterCapacityDeclaration);
+        /// Record a capacity telemetry snapshot when permitted.
+        visit_record_capacity_telemetry(RecordCapacityTelemetry);
     }
     /// File a capacity dispute when permitted.
     pub fn visit_register_capacity_dispute<V: Execute + Visit + ?Sized>(
@@ -2498,33 +2298,17 @@ pub mod sorafs {
         }
         deny!(executor, "Can't expire SoraFS replication order");
     }
-    /// Dispatch the retired direct owner-registration surface so Core can reject it uniformly.
-    pub fn visit_register_provider_owner<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RegisterProviderOwner,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch the retired direct owner-removal surface so Core can reject it uniformly.
-    pub fn visit_unregister_provider_owner<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &UnregisterProviderOwner,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch completion-authority rotation; Core requires the exact governed owner.
-    pub fn visit_set_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &SetProviderIngestCompletionAuthority,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch completion-authority revocation; Core requires the exact governed owner.
-    pub fn visit_revoke_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RevokeProviderIngestCompletionAuthority,
-    ) {
-        execute!(executor, isi)
+    declare_execute_visitors! {
+        /// Dispatch the retired direct owner-registration surface so Core can reject it uniformly.
+        visit_register_provider_owner(RegisterProviderOwner);
+        /// Dispatch the retired direct owner-removal surface so Core can reject it uniformly.
+        visit_unregister_provider_owner(UnregisterProviderOwner);
+        /// Dispatch completion-authority rotation; Core requires the exact governed owner.
+        visit_set_provider_ingest_completion_authority(SetProviderIngestCompletionAuthority);
+        /// Dispatch completion-authority revocation; Core requires the exact governed owner.
+        visit_revoke_provider_ingest_completion_authority(
+            RevokeProviderIngestCompletionAuthority
+        );
     }
     /// Update the `SoraFS` pricing schedule when permitted.
     pub fn visit_set_pricing_schedule<V: Execute + Visit + ?Sized>(
@@ -2553,28 +2337,15 @@ pub mod sorafs {
         }
         deny!(executor, "Can't upsert SoraFS provider credit");
     }
-    /// Submit an authority-bound repair report; native execution enforces the
-    /// provider-scoped operator permission and source identity.
-    pub fn visit_submit_repair_task<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &SubmitSorafsRepairTask,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Apply a revision-checked repair action; native execution enforces lease
-    /// ownership, expiry, and provider scope.
-    pub fn visit_apply_repair_task_action<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &ApplySorafsRepairTaskAction,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Submit the single provider-owner appeal against an escalated repair.
-    pub fn visit_submit_repair_appeal<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &SubmitSorafsRepairAppeal,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Submit an authority-bound repair report; native execution enforces the
+        /// provider-scoped operator permission and source identity.
+        visit_submit_repair_task(SubmitSorafsRepairTask);
+        /// Apply a revision-checked repair action; native execution enforces lease
+        /// ownership, expiry, and provider scope.
+        visit_apply_repair_task_action(ApplySorafsRepairTaskAction);
+        /// Submit the single provider-owner appeal against an escalated repair.
+        visit_submit_repair_appeal(SubmitSorafsRepairAppeal);
     }
     /// Activate the next authoritative orderbook policy revision when permitted.
     pub fn visit_set_orderbook_policy<V: Execute + Visit + ?Sized>(
@@ -2589,19 +2360,11 @@ pub mod sorafs {
         }
         deny!(executor, "Can't set SoraFS orderbook policy");
     }
-    /// Submit a signed order; native execution enforces owner and signer binding.
-    pub fn visit_submit_orderbook_order<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &SubmitSorafsOrderbookOrder,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Cancel an order; native execution enforces owner and signer binding.
-    pub fn visit_cancel_orderbook_order<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &CancelSorafsOrderbookOrder,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Submit a signed order; native execution enforces owner and signer binding.
+        visit_submit_orderbook_order(SubmitSorafsOrderbookOrder);
+        /// Cancel an order; native execution enforces owner and signer binding.
+        visit_cancel_orderbook_order(CancelSorafsOrderbookOrder);
     }
     /// Record a settlement receipt when the matcher/settlement authority is permitted.
     pub fn visit_record_orderbook_settlement_receipt<V: Execute + Visit + ?Sized>(
@@ -2668,68 +2431,25 @@ pub mod sorafs {
     ) {
         execute_with_reserve_governance(executor, isi);
     }
-    /// Register a provider reserve partition through the exact governed service account.
-    pub fn visit_register_reserve_account<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RegisterSorafsReserveAccount,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Admit a provider-signed reserve movement request.
-    pub fn visit_request_reserve_movement<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RequestSorafsReserveMovement,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Decide a reserve movement through the exact governed decision account.
-    pub fn visit_decide_reserve_movement<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &DecideSorafsReserveMovement,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Charge deterministic provider rent through the exact governed operations account.
-    pub fn visit_charge_reserve_rent<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &ChargeSorafsReserveRent,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Advance reserve lifecycle state through the exact governed operations account.
-    pub fn visit_advance_reserve_lifecycle<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &AdvanceSorafsReserveLifecycle,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Draw protocol reserve credit through the exact governed operations account.
-    pub fn visit_draw_reserve_credit<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &DrawSorafsReserveCredit,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Admit a provider-signed credit repayment.
-    pub fn visit_repay_reserve_credit<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RepaySorafsReserveCredit,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Admit a provider-signed reserve lifecycle appeal.
-    pub fn visit_submit_reserve_appeal<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &SubmitSorafsReserveAppeal,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Decide a reserve lifecycle appeal through the exact governed decision account.
-    pub fn visit_decide_reserve_appeal<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &DecideSorafsReserveAppeal,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Register a provider reserve partition through the exact governed service account.
+        visit_register_reserve_account(RegisterSorafsReserveAccount);
+        /// Admit a provider-signed reserve movement request.
+        visit_request_reserve_movement(RequestSorafsReserveMovement);
+        /// Decide a reserve movement through the exact governed decision account.
+        visit_decide_reserve_movement(DecideSorafsReserveMovement);
+        /// Charge deterministic provider rent through the exact governed operations account.
+        visit_charge_reserve_rent(ChargeSorafsReserveRent);
+        /// Advance reserve lifecycle state through the exact governed operations account.
+        visit_advance_reserve_lifecycle(AdvanceSorafsReserveLifecycle);
+        /// Draw protocol reserve credit through the exact governed operations account.
+        visit_draw_reserve_credit(DrawSorafsReserveCredit);
+        /// Admit a provider-signed credit repayment.
+        visit_repay_reserve_credit(RepaySorafsReserveCredit);
+        /// Admit a provider-signed reserve lifecycle appeal.
+        visit_submit_reserve_appeal(SubmitSorafsReserveAppeal);
+        /// Decide a reserve lifecycle appeal through the exact governed decision account.
+        visit_decide_reserve_appeal(DecideSorafsReserveAppeal);
     }
     /// Activate a `PoP` issuer policy when governance permission is present.
     pub fn visit_set_pop_issuer_policy<V: Execute + Visit + ?Sized>(
@@ -2794,19 +2514,11 @@ pub mod sorafs {
             "Can't manage authoritative SoraFS moderation state"
         );
     }
-    /// Submit an authority-bound appeal intake; native execution checks appellant identity.
-    pub fn visit_submit_moderation_appeal<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &SubmitSorafsModerationAppeal,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Register an authority-bound private `PoP` eligibility proof.
-    pub fn visit_register_moderation_juror_eligibility<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RegisterSorafsModerationJurorEligibility,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Submit an authority-bound appeal intake; native execution checks appellant identity.
+        visit_submit_moderation_appeal(SubmitSorafsModerationAppeal);
+        /// Register an authority-bound private `PoP` eligibility proof.
+        visit_register_moderation_juror_eligibility(RegisterSorafsModerationJurorEligibility);
     }
     /// Finalize deterministic panel sortition when the caller is authorised.
     pub fn visit_finalize_moderation_sortition<V: Execute + Visit + ?Sized>(
@@ -2821,12 +2533,9 @@ pub mod sorafs {
             "Can't manage authoritative SoraFS moderation sortition"
         );
     }
-    /// Accept an authority-bound primary juror assignment.
-    pub fn visit_accept_moderation_juror_assignment<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &AcceptSorafsModerationJurorAssignment,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Accept an authority-bound primary juror assignment.
+        visit_accept_moderation_juror_assignment(AcceptSorafsModerationJurorAssignment);
     }
     /// Apply deterministic failover and activate the case when authorised.
     pub fn visit_activate_moderation_case<V: Execute + Visit + ?Sized>(
@@ -2841,19 +2550,11 @@ pub mod sorafs {
             "Can't activate authoritative SoraFS moderation cases"
         );
     }
-    /// Submit a juror commitment; native execution binds it to the authority.
-    pub fn visit_submit_moderation_commit<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &SubmitSorafsModerationCommit,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Raise an authenticated payload-free moderation challenge.
-    pub fn visit_raise_moderation_challenge<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RaiseSorafsModerationChallenge,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Submit a juror commitment; native execution binds it to the authority.
+        visit_submit_moderation_commit(SubmitSorafsModerationCommit);
+        /// Raise an authenticated payload-free moderation challenge.
+        visit_raise_moderation_challenge(RaiseSorafsModerationChallenge);
     }
     /// Resolve a moderation challenge when the caller is authorised.
     pub fn visit_resolve_moderation_challenge<V: Execute + Visit + ?Sized>(
@@ -2868,12 +2569,9 @@ pub mod sorafs {
             "Can't manage authoritative SoraFS moderation state"
         );
     }
-    /// Submit a juror reveal; native execution verifies the stored commitment.
-    pub fn visit_submit_moderation_reveal<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &SubmitSorafsModerationReveal,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Submit a juror reveal; native execution verifies the stored commitment.
+        visit_submit_moderation_reveal(SubmitSorafsModerationReveal);
     }
     /// Finalize a closed case when the caller is authorised.
     pub fn visit_finalize_moderation_case<V: Execute + Visit + ?Sized>(
@@ -3199,12 +2897,9 @@ pub mod account {
     use iroha_executor_data_model::permission::account::{
         CanModifyAccountMetadata, CanReplaceAccountController, CanUnregisterAccount,
     };
-    /// Registers a canonical account.
-    pub fn visit_register_account<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &Register<Account>,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Registers a canonical account.
+        visit_register_account(Register<Account>);
     }
     /// Unregisters an account when the caller owns it or has the unregister permission.
     pub fn visit_unregister_account<V: Execute + Visit + ?Sized>(
@@ -3351,33 +3046,15 @@ pub mod account {
         }
         deny!(executor, "Can't clear another account recovery policy");
     }
-    /// Delegates proposal authorisation to the core recovery state machine.
-    pub fn visit_propose_account_recovery<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &ProposeAccountRecovery,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Delegates approval authorisation to the core recovery state machine.
-    pub fn visit_approve_account_recovery<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &ApproveAccountRecovery,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Delegates cancellation authorisation to the core recovery state machine.
-    pub fn visit_cancel_account_recovery<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &CancelAccountRecovery,
-    ) {
-        execute!(executor, isi);
-    }
-    /// Delegates finalization authorisation to the core recovery state machine.
-    pub fn visit_finalize_account_recovery<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &FinalizeAccountRecovery,
-    ) {
-        execute!(executor, isi);
+    declare_execute_visitors! {
+        /// Delegates proposal authorisation to the core recovery state machine.
+        visit_propose_account_recovery(ProposeAccountRecovery);
+        /// Delegates approval authorisation to the core recovery state machine.
+        visit_approve_account_recovery(ApproveAccountRecovery);
+        /// Delegates cancellation authorisation to the core recovery state machine.
+        visit_cancel_account_recovery(CancelAccountRecovery);
+        /// Delegates finalization authorisation to the core recovery state machine.
+        visit_finalize_account_recovery(FinalizeAccountRecovery);
     }
     pub(crate) fn is_permission_account_associated(
         permission: &Permission,
@@ -6484,20 +6161,17 @@ pub mod executor {
 /// Visitor for log instructions which are always permitted.
 pub mod log {
     use super::*;
-    /// Emits a log instruction directly because logging has no permission gates.
-    pub fn visit_log<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Log) {
-        execute!(executor, isi)
+    declare_execute_visitors! {
+        /// Emits a log instruction directly because logging has no permission gates.
+        visit_log(Log);
     }
 }
 /// Permission-checked visitors for bridge instructions.
 pub mod bridge {
     use super::*;
-    /// Records a bridge receipt without additional permission gates.
-    pub fn visit_record_bridge_receipt<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RecordBridgeReceipt,
-    ) {
-        execute!(executor, isi)
+    declare_execute_visitors! {
+        /// Records a bridge receipt without additional permission gates.
+        visit_record_bridge_receipt(RecordBridgeReceipt);
     }
     /// Applies one typed governed SCCP registry action.
     pub fn visit_apply_sccp_route_governance<V: Execute + Visit + ?Sized>(
@@ -6509,18 +6183,10 @@ pub mod bridge {
             "direct SCCP route mutation is retired; enact a finalized threshold referendum"
         )
     }
-    /// Dispatch owner-bound route escrow funding to Core.
-    pub fn visit_fund_sccp_route_escrow<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &FundSccpRouteEscrow,
-    ) {
-        execute!(executor, isi)
-    }
-    /// Dispatch owner-bound inactive-route escrow refund to Core.
-    pub fn visit_refund_sccp_route_escrow<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &RefundSccpRouteEscrow,
-    ) {
-        execute!(executor, isi)
+    declare_execute_visitors! {
+        /// Dispatch owner-bound route escrow funding to Core.
+        visit_fund_sccp_route_escrow(FundSccpRouteEscrow);
+        /// Dispatch owner-bound inactive-route escrow refund to Core.
+        visit_refund_sccp_route_escrow(RefundSccpRouteEscrow);
     }
 }

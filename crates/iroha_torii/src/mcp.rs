@@ -7273,13 +7273,13 @@ fn iroha_connect_session_delete_tool() -> ToolSpec {
     tool.description = "Alias for connect.session.delete.".to_owned();
     tool
 }
-fn iroha_vpn_profile_tool() -> ToolSpec {
+fn simple_manual_get_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
     ToolSpec {
-        name: "iroha.vpn.profile".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.vpn.profile"),
-        description: "Fetch the public Sora VPN profile advertised by Torii.".to_owned(),
+        name: name.to_owned(),
+        effect: manual_tool_effect_from_name(name),
+        description: description.to_owned(),
         method: Method::GET,
-        path_template: "/v1/vpn/profile".to_owned(),
+        path_template: path_template.to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -7292,6 +7292,43 @@ fn iroha_vpn_profile_tool() -> ToolSpec {
             }
         }),
     }
+}
+fn simple_manual_raw_body_post_tool(
+    name: &str,
+    description: &str,
+    path_template: &str,
+    body_description: &str,
+) -> ToolSpec {
+    ToolSpec {
+        name: name.to_owned(),
+        effect: manual_tool_effect_from_name(name),
+        description: description.to_owned(),
+        method: Method::POST,
+        path_template: path_template.to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": body_description
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+fn iroha_vpn_profile_tool() -> ToolSpec {
+    simple_manual_get_tool(
+        "iroha.vpn.profile",
+        "Fetch the public Sora VPN profile advertised by Torii.",
+        "/v1/vpn/profile",
+    )
 }
 fn vpn_canonical_auth_schema() -> Value {
     norito::json!({
@@ -7494,84 +7531,32 @@ fn iroha_vpn_receipts_list_tool() -> ToolSpec {
     }
 }
 fn iroha_health_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.health".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.health"),
-        description: "Get node liveness status (`/health`).".to_owned(),
-        method: Method::GET,
-        path_template: "/health".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.health",
+        "Get node liveness status (`/health`).",
+        "/health",
+    )
 }
 fn iroha_status_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.status".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.status"),
-        description: "Get node status snapshot (`/status`).".to_owned(),
-        method: Method::GET,
-        path_template: "/status".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.status",
+        "Get node status snapshot (`/status`).",
+        "/status",
+    )
 }
 fn iroha_parameters_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.parameters.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.parameters.get"),
-        description: "Get node parameters snapshot (`/v1/parameters`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/parameters".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.parameters.get",
+        "Get node parameters snapshot (`/v1/parameters`).",
+        "/v1/parameters",
+    )
 }
 fn iroha_node_capabilities_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.node.capabilities".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.node.capabilities"),
-        description: "Get node capability metadata (`/v1/node/capabilities`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/node/capabilities".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.node.capabilities",
+        "Get node capability metadata (`/v1/node/capabilities`).",
+        "/v1/node/capabilities",
+    )
 }
 fn iroha_node_query_projection_checkpoint_plan_tool() -> ToolSpec {
     ToolSpec {
@@ -7723,154 +7708,54 @@ fn iroha_node_query_projection_shard_catalog_tool() -> ToolSpec {
     }
 }
 fn iroha_node_query_projection_checkpoint_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.node.query_projection_checkpoint".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.node.query_projection_checkpoint"),
-        description:
-            "Fetch the latest query projection checkpoint descriptor (`/v1/node/query/projection/checkpoint`)."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/node/query/projection/checkpoint".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.node.query_projection_checkpoint",
+        "Fetch the latest query projection checkpoint descriptor (`/v1/node/query/projection/checkpoint`).",
+        "/v1/node/query/projection/checkpoint",
+    )
 }
 fn iroha_time_now_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.time.now".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.time.now"),
-        description: "Get node wall-clock snapshot (`/v1/time/now`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/time/now".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.time.now",
+        "Get node wall-clock snapshot (`/v1/time/now`).",
+        "/v1/time/now",
+    )
 }
 fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.pacemaker".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.pacemaker"),
-        description: "Fetch pacemaker status (`/v1/sumeragi/pacemaker`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/pacemaker".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.sumeragi.pacemaker",
+        "Fetch pacemaker status (`/v1/sumeragi/pacemaker`).",
+        "/v1/sumeragi/pacemaker",
+    )
 }
 fn iroha_sumeragi_phases_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.phases".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.phases"),
-        description: "Fetch phase status (`/v1/sumeragi/phases`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/phases".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.sumeragi.phases",
+        "Fetch phase status (`/v1/sumeragi/phases`).",
+        "/v1/sumeragi/phases",
+    )
 }
 fn iroha_da_ingest_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.da.ingest".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.da.ingest"),
-        description:
-            "Ingest DA payload (`/v1/da/ingest`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/da/ingest".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw DA ingest request payload."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_raw_body_post_tool(
+        "iroha.da.ingest",
+        "Ingest DA payload (`/v1/da/ingest`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/da/ingest",
+        "Raw DA ingest request payload.",
+    )
 }
 fn iroha_da_proof_policies_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.da.proof_policies".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.da.proof_policies"),
-        description: "Fetch DA proof policies (`/v1/da/proof-policies`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/da/proof-policies".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.da.proof_policies",
+        "Fetch DA proof policies (`/v1/da/proof-policies`).",
+        "/v1/da/proof-policies",
+    )
 }
 fn iroha_da_proof_policy_snapshot_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.da.proof_policy_snapshot".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.da.proof_policy_snapshot"),
-        description: "Fetch DA proof policy snapshot (`/v1/da/proof-policies/snapshot`)."
-            .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/da/proof-policies/snapshot".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.da.proof_policy_snapshot",
+        "Fetch DA proof policy snapshot (`/v1/da/proof-policies/snapshot`).",
+        "/v1/da/proof-policies/snapshot",
+    )
 }
 fn iroha_da_manifests_get_tool() -> ToolSpec {
     ToolSpec {
@@ -7915,273 +7800,88 @@ fn iroha_da_manifests_get_tool() -> ToolSpec {
     }
 }
 fn iroha_da_commitments_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.da.commitments.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.da.commitments.list"),
-        description:
-            "List DA commitments (`/v1/da/commitments`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/da/commitments".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw DA commitment list request payload."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_raw_body_post_tool(
+        "iroha.da.commitments.list",
+        "List DA commitments (`/v1/da/commitments`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/da/commitments",
+        "Raw DA commitment list request payload.",
+    )
 }
 fn iroha_da_commitments_prove_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.da.commitments.prove".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.da.commitments.prove"),
-        description:
-            "Compute a DA commitment Merkle proof (`/v1/da/commitments/prove`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/da/commitments/prove".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw DA commitment proof request payload."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_raw_body_post_tool(
+        "iroha.da.commitments.prove",
+        "Compute a DA commitment Merkle proof (`/v1/da/commitments/prove`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/da/commitments/prove",
+        "Raw DA commitment proof request payload.",
+    )
 }
 fn iroha_da_commitments_verify_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.da.commitments.verify".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.da.commitments.verify"),
-        description:
-            "Verify DA commitment payload (`/v1/da/commitments/verify`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/da/commitments/verify".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw DA commitment verification request payload."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_raw_body_post_tool(
+        "iroha.da.commitments.verify",
+        "Verify DA commitment payload (`/v1/da/commitments/verify`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/da/commitments/verify",
+        "Raw DA commitment verification request payload.",
+    )
 }
 fn iroha_da_pin_intents_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.da.pin_intents.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.da.pin_intents.list"),
-        description:
-            "List DA pin intents (`/v1/da/pin-intents`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/da/pin-intents".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw DA pin-intents listing request payload."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_raw_body_post_tool(
+        "iroha.da.pin_intents.list",
+        "List DA pin intents (`/v1/da/pin-intents`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/da/pin-intents",
+        "Raw DA pin-intents listing request payload.",
+    )
 }
 fn iroha_da_pin_intents_prove_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.da.pin_intents.prove".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.da.pin_intents.prove"),
-        description:
-            "Build a DA pin-intent Merkle membership proof bound to the exact committed block bundle (`/v1/da/pin-intents/prove`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/da/pin-intents/prove".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw DA pin-intents prove request payload."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_raw_body_post_tool(
+        "iroha.da.pin_intents.prove",
+        "Build a DA pin-intent Merkle membership proof bound to the exact committed block bundle (`/v1/da/pin-intents/prove`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/da/pin-intents/prove",
+        "Raw DA pin-intents prove request payload.",
+    )
 }
 fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.da.pin_intents.verify".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.da.pin_intents.verify"),
-        description:
-            "Verify a DA pin-intent Merkle membership proof against its committed block header (`/v1/da/pin-intents/verify`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/da/pin-intents/verify".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw DA pin-intents verification request payload."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_raw_body_post_tool(
+        "iroha.da.pin_intents.verify",
+        "Verify a DA pin-intent Merkle membership proof against its committed block header (`/v1/da/pin-intents/verify`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/da/pin-intents/verify",
+        "Raw DA pin-intents verification request payload.",
+    )
 }
 fn iroha_runtime_abi_active_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.runtime.abi.active".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.runtime.abi.active"),
-        description: "Fetch the active runtime ABI version (`/v1/runtime/abi/active`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/runtime/abi/active".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.runtime.abi.active",
+        "Fetch the active runtime ABI version (`/v1/runtime/abi/active`).",
+        "/v1/runtime/abi/active",
+    )
 }
 fn iroha_runtime_abi_hash_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.runtime.abi.hash".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.runtime.abi.hash"),
-        description: "Fetch active runtime ABI hash (`/v1/runtime/abi/hash`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/runtime/abi/hash".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.runtime.abi.hash",
+        "Fetch active runtime ABI hash (`/v1/runtime/abi/hash`).",
+        "/v1/runtime/abi/hash",
+    )
 }
 fn iroha_runtime_metrics_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.runtime.metrics".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.runtime.metrics"),
-        description: "Fetch runtime metrics (`/v1/runtime/metrics`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/runtime/metrics".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.runtime.metrics",
+        "Fetch runtime metrics (`/v1/runtime/metrics`).",
+        "/v1/runtime/metrics",
+    )
 }
 fn iroha_runtime_upgrades_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.runtime.upgrades.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.runtime.upgrades.list"),
-        description: "List runtime upgrades (`/v1/runtime/upgrades`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/runtime/upgrades".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.runtime.upgrades.list",
+        "List runtime upgrades (`/v1/runtime/upgrades`).",
+        "/v1/runtime/upgrades",
+    )
 }
 fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.runtime.upgrades.propose".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.runtime.upgrades.propose"),
-        description:
-            "Propose a runtime upgrade (`/v1/runtime/upgrades/propose`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/runtime/upgrades/propose".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw runtime-upgrade proposal payload."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_raw_body_post_tool(
+        "iroha.runtime.upgrades.propose",
+        "Propose a runtime upgrade (`/v1/runtime/upgrades/propose`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/runtime/upgrades/propose",
+        "Raw runtime-upgrade proposal payload.",
+    )
 }
 fn iroha_runtime_upgrades_activate_tool() -> ToolSpec {
     ToolSpec {
@@ -8525,31 +8225,12 @@ fn iroha_proofs_get_tool() -> ToolSpec {
     }
 }
 fn iroha_proofs_query_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.proofs.query".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.proofs.query"),
-        description:
-            "Query proof records (`/v1/proofs/query`); accepts raw `body` or flat top-level body shortcuts."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/proofs/query".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw proof query payload."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_raw_body_post_tool(
+        "iroha.proofs.query",
+        "Query proof records (`/v1/proofs/query`); accepts raw `body` or flat top-level body shortcuts.",
+        "/v1/proofs/query",
+        "Raw proof query payload.",
+    )
 }
 fn governance_proposal_id_v1_schema(description: &str) -> Value {
     norito::json!({
@@ -8843,25 +8524,11 @@ fn iroha_gov_tally_get_tool() -> ToolSpec {
     tool
 }
 fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.protected_namespaces.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.gov.protected_namespaces.list"),
-        description: "List protected governance namespaces (`/v1/gov/protected-namespaces`)."
-            .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/gov/protected-namespaces".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.gov.protected_namespaces.list",
+        "List protected governance namespaces (`/v1/gov/protected-namespaces`).",
+        "/v1/gov/protected-namespaces",
+    )
 }
 fn iroha_gov_protected_namespaces_update_tool() -> ToolSpec {
     iroha_gov_post_tool(
@@ -8871,65 +8538,25 @@ fn iroha_gov_protected_namespaces_update_tool() -> ToolSpec {
     )
 }
 fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.unlocks.stats".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.gov.unlocks.stats"),
-        description: "Fetch governance unlock statistics (`/v1/gov/unlocks/stats`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/gov/unlocks/stats".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.gov.unlocks.stats",
+        "Fetch governance unlock statistics (`/v1/gov/unlocks/stats`).",
+        "/v1/gov/unlocks/stats",
+    )
 }
 fn iroha_gov_council_current_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.council.current".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.gov.council.current"),
-        description: "Fetch current governance council set (`/v1/gov/council/current`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/gov/council/current".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.gov.council.current",
+        "Fetch current governance council set (`/v1/gov/council/current`).",
+        "/v1/gov/council/current",
+    )
 }
 fn iroha_gov_citizens_count_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.gov.citizens.count".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.gov.citizens.count"),
-        description: "Fetch exact governance citizenship registry count (`/v1/gov/citizens`)."
-            .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/gov/citizens".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.gov.citizens.count",
+        "Fetch exact governance citizenship registry count (`/v1/gov/citizens`).",
+        "/v1/gov/citizens",
+    )
 }
 fn iroha_gov_enact_tool() -> ToolSpec {
     iroha_gov_post_tool_with_fields(
@@ -10567,24 +10194,11 @@ fn iroha_nfts_list_tool() -> ToolSpec {
     }
 }
 fn iroha_nfts_chain_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.nfts.chain.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.nfts.chain.list"),
-        description: "List NFTs from chain state (`/v1/nfts`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/nfts".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.nfts.chain.list",
+        "List NFTs from chain state (`/v1/nfts`).",
+        "/v1/nfts",
+    )
 }
 fn iroha_nfts_get_tool() -> ToolSpec {
     ToolSpec {
@@ -10687,24 +10301,11 @@ fn iroha_rwas_list_tool() -> ToolSpec {
     }
 }
 fn iroha_rwas_chain_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.rwas.chain.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.rwas.chain.list"),
-        description: "List RWA lots from chain state (`/v1/rwas`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/rwas".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
+    simple_manual_get_tool(
+        "iroha.rwas.chain.list",
+        "List RWA lots from chain state (`/v1/rwas`).",
+        "/v1/rwas",
+    )
 }
 fn iroha_rwas_get_tool() -> ToolSpec {
     ToolSpec {
@@ -11253,6 +10854,99 @@ mod tests {
     include!("mcp/dispatch_and_argument_tests.rs");
     include!("mcp/iso20022_operator_auth_tests.rs");
     include!("mcp/body_builder_tests.rs");
+
+    #[test]
+    fn simple_manual_get_tools_share_the_exact_read_contract() {
+        let tools = [
+            iroha_vpn_profile_tool(),
+            iroha_health_tool(),
+            iroha_status_tool(),
+            iroha_parameters_get_tool(),
+            iroha_node_capabilities_tool(),
+            iroha_node_query_projection_checkpoint_tool(),
+            iroha_time_now_tool(),
+            iroha_sumeragi_pacemaker_tool(),
+            iroha_sumeragi_phases_tool(),
+            iroha_da_proof_policies_tool(),
+            iroha_da_proof_policy_snapshot_tool(),
+            iroha_runtime_abi_active_tool(),
+            iroha_runtime_abi_hash_tool(),
+            iroha_runtime_metrics_tool(),
+            iroha_runtime_upgrades_list_tool(),
+            iroha_gov_protected_namespaces_list_tool(),
+            iroha_gov_unlocks_stats_tool(),
+            iroha_gov_council_current_tool(),
+            iroha_gov_citizens_count_tool(),
+            iroha_nfts_chain_list_tool(),
+            iroha_rwas_chain_list_tool(),
+        ];
+        let expected_schema = norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        });
+
+        assert_eq!(tools.len(), 21);
+        for tool in tools {
+            assert_eq!(tool.effect, manual_tool_effect_from_name(&tool.name));
+            assert_eq!(tool.method, Method::GET);
+            assert_eq!(tool.input_schema, expected_schema);
+            assert!(!tool.name.is_empty());
+            assert!(!tool.description.is_empty());
+            assert!(tool.path_template.starts_with('/'));
+        }
+    }
+
+    #[test]
+    fn simple_manual_raw_body_tools_share_the_exact_post_contract() {
+        let tools = [
+            iroha_da_ingest_tool(),
+            iroha_da_commitments_list_tool(),
+            iroha_da_commitments_prove_tool(),
+            iroha_da_commitments_verify_tool(),
+            iroha_da_pin_intents_list_tool(),
+            iroha_da_pin_intents_prove_tool(),
+            iroha_da_pin_intents_verify_tool(),
+            iroha_runtime_upgrades_propose_tool(),
+            iroha_proofs_query_tool(),
+        ];
+
+        assert_eq!(tools.len(), 9);
+        for tool in tools {
+            assert_eq!(tool.effect, manual_tool_effect_from_name(&tool.name));
+            assert_eq!(tool.method, Method::POST);
+            let schema = tool.input_schema.as_object().expect("input schema");
+            assert_eq!(
+                schema.get("additionalProperties").and_then(Value::as_bool),
+                Some(true)
+            );
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("input properties");
+            let body = properties
+                .get("body")
+                .and_then(Value::as_object)
+                .expect("body schema");
+            assert_eq!(
+                body.get("additionalProperties").and_then(Value::as_bool),
+                Some(true)
+            );
+            assert!(
+                body.get("description")
+                    .and_then(Value::as_str)
+                    .is_some_and(|description| !description.is_empty())
+            );
+            assert!(properties.contains_key("headers"));
+            assert!(properties.contains_key("accept"));
+        }
+    }
 
     #[test]
     fn vpn_canonical_auth_emits_ascii_account_headers() {

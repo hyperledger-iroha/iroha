@@ -65,6 +65,36 @@ macro_rules! invalid {
         BfvError::InvalidParameters(format!($($arg)*))
     };
 }
+macro_rules! define_canonical_material_byte_digest_accessors {
+    (
+        type = $material:ty;
+        decode = $decode:ident;
+        digest = $typed_digest:ident;
+        $(digest_only = $digest_only:ident => $digest_summary:literal;)?
+        pair = $pair:ident => $pair_summary:literal;
+        errors = $errors:literal;
+    ) => {
+        $(
+            #[doc = $digest_summary]
+            #[doc = ""]
+            #[doc = "# Errors"]
+            #[doc = $errors]
+            pub fn $digest_only(bytes: &[u8]) -> Result<Hash, BfvError> {
+                let (_, digest) = $pair(bytes)?;
+                Ok(digest)
+            }
+        )?
+        #[doc = $pair_summary]
+        #[doc = ""]
+        #[doc = "# Errors"]
+        #[doc = $errors]
+        pub fn $pair(bytes: &[u8]) -> Result<($material, Hash), BfvError> {
+            let material = $decode(bytes)?;
+            let digest = $typed_digest(&material)?;
+            Ok((material, digest))
+        }
+    };
+}
 const KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.v1";
 const BOUNDED_NOISE_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.bounded_noise.v1";
 /// Seed-derivation domain for exact-lift BFV encryption and rotation refreshes.
@@ -7235,27 +7265,15 @@ pub fn decode_bfv_exact_residual_public_key_proof_input_material_bytes_v1(
         validate_bfv_exact_residual_public_key_proof_input_material_v1,
     )
 }
-/// Hash canonical exact-residual BFV public-key proof input material bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or proof input digesting fails.
-pub fn bfv_exact_residual_public_key_proof_input_material_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode exact-residual BFV public-key proof input bytes and return their digest.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or proof input digesting fails.
-pub fn bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvExactResidualPublicKeyProofInputMaterialV1, Hash), BfvError> {
-    let material = decode_bfv_exact_residual_public_key_proof_input_material_bytes_v1(bytes)?;
-    let digest = bfv_exact_residual_public_key_proof_input_material_digest_v1(&material)?;
-    Ok((material, digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvExactResidualPublicKeyProofInputMaterialV1;
+    decode = decode_bfv_exact_residual_public_key_proof_input_material_bytes_v1;
+    digest = bfv_exact_residual_public_key_proof_input_material_digest_v1;
+    digest_only = bfv_exact_residual_public_key_proof_input_material_digest_from_bytes_v1 =>
+        "Hash canonical exact-residual BFV public-key proof input material bytes.";
+    pair = bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_v1 =>
+        "Decode exact-residual BFV public-key proof input bytes and return their digest.";
+    errors = "Returns [`BfvError`] when byte admission fails or proof input digesting fails.";
 }
 /// Hash exact-residual public-key proof input bytes for a caller-owned key.
 ///
@@ -7423,27 +7441,15 @@ pub fn decode_bfv_bounded_noise_public_key_proof_input_material_bytes_v1(
         validate_bfv_bounded_noise_public_key_proof_input_material_v1,
     )
 }
-/// Hash canonical bounded-noise BFV public-key proof input material bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or proof input digesting fails.
-pub fn bfv_bounded_noise_public_key_proof_input_material_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode bounded-noise BFV public-key proof input bytes and return their digest.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or proof input digesting fails.
-pub fn bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvBoundedNoisePublicKeyProofInputMaterialV1, Hash), BfvError> {
-    let material = decode_bfv_bounded_noise_public_key_proof_input_material_bytes_v1(bytes)?;
-    let digest = bfv_bounded_noise_public_key_proof_input_material_digest_v1(&material)?;
-    Ok((material, digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvBoundedNoisePublicKeyProofInputMaterialV1;
+    decode = decode_bfv_bounded_noise_public_key_proof_input_material_bytes_v1;
+    digest = bfv_bounded_noise_public_key_proof_input_material_digest_v1;
+    digest_only = bfv_bounded_noise_public_key_proof_input_material_digest_from_bytes_v1 =>
+        "Hash canonical bounded-noise BFV public-key proof input material bytes.";
+    pair = bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_v1 =>
+        "Decode bounded-noise BFV public-key proof input bytes and return their digest.";
+    errors = "Returns [`BfvError`] when byte admission fails or proof input digesting fails.";
 }
 /// Hash bounded-noise public-key proof input bytes for a caller-owned key.
 ///
@@ -7611,27 +7617,15 @@ pub fn decode_bfv_exact_residual_ciphertext_proof_input_material_bytes_v1(
         validate_bfv_exact_residual_ciphertext_proof_input_material_v1,
     )
 }
-/// Hash canonical exact-residual BFV ciphertext proof input material bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or proof input digesting fails.
-pub fn bfv_exact_residual_ciphertext_proof_input_material_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode exact-residual BFV ciphertext proof input bytes and return their digest.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or proof input digesting fails.
-pub fn bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvExactResidualCiphertextProofInputMaterialV1, Hash), BfvError> {
-    let material = decode_bfv_exact_residual_ciphertext_proof_input_material_bytes_v1(bytes)?;
-    let digest = bfv_exact_residual_ciphertext_proof_input_material_digest_v1(&material)?;
-    Ok((material, digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvExactResidualCiphertextProofInputMaterialV1;
+    decode = decode_bfv_exact_residual_ciphertext_proof_input_material_bytes_v1;
+    digest = bfv_exact_residual_ciphertext_proof_input_material_digest_v1;
+    digest_only = bfv_exact_residual_ciphertext_proof_input_material_digest_from_bytes_v1 =>
+        "Hash canonical exact-residual BFV ciphertext proof input material bytes.";
+    pair = bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_v1 =>
+        "Decode exact-residual BFV ciphertext proof input bytes and return their digest.";
+    errors = "Returns [`BfvError`] when byte admission fails or proof input digesting fails.";
 }
 /// Hash exact-residual ciphertext proof input bytes for caller-owned inputs.
 ///
@@ -7871,27 +7865,15 @@ pub fn decode_bfv_bounded_noise_ciphertext_proof_input_material_bytes_v1(
         validate_bfv_bounded_noise_ciphertext_proof_input_material_v1,
     )
 }
-/// Hash canonical bounded-noise BFV ciphertext proof input material bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or proof input digesting fails.
-pub fn bfv_bounded_noise_ciphertext_proof_input_material_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode bounded-noise BFV ciphertext proof input bytes and return their digest.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or proof input digesting fails.
-pub fn bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvBoundedNoiseCiphertextProofInputMaterialV1, Hash), BfvError> {
-    let material = decode_bfv_bounded_noise_ciphertext_proof_input_material_bytes_v1(bytes)?;
-    let digest = bfv_bounded_noise_ciphertext_proof_input_material_digest_v1(&material)?;
-    Ok((material, digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvBoundedNoiseCiphertextProofInputMaterialV1;
+    decode = decode_bfv_bounded_noise_ciphertext_proof_input_material_bytes_v1;
+    digest = bfv_bounded_noise_ciphertext_proof_input_material_digest_v1;
+    digest_only = bfv_bounded_noise_ciphertext_proof_input_material_digest_from_bytes_v1 =>
+        "Hash canonical bounded-noise BFV ciphertext proof input material bytes.";
+    pair = bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_v1 =>
+        "Decode bounded-noise BFV ciphertext proof input bytes and return their digest.";
+    errors = "Returns [`BfvError`] when byte admission fails or proof input digesting fails.";
 }
 /// Hash bounded-noise ciphertext proof input bytes for caller-owned inputs.
 ///
@@ -12494,32 +12476,15 @@ pub fn decode_bfv_full_bootstrap_arithmetic_trace_profile_bytes_v1(
         validate_bfv_full_bootstrap_arithmetic_trace_profile_v1,
     )
 }
-/// Return the digest for canonical BFV full-bootstrap arithmetic trace profile bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or trace-profile digesting
-/// fails.
-pub fn bfv_full_bootstrap_arithmetic_trace_profile_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) = bfv_full_bootstrap_arithmetic_trace_profile_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical BFV full-bootstrap arithmetic trace profile bytes.
-///
-/// This byte-admission helper keeps the decoded arithmetic trace profile and
-/// its domain-separated profile digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or trace-profile digesting
-/// fails.
-pub fn bfv_full_bootstrap_arithmetic_trace_profile_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapArithmeticTraceProfileV1, Hash), BfvError> {
-    let profile = decode_bfv_full_bootstrap_arithmetic_trace_profile_bytes_v1(bytes)?;
-    let profile_digest =
-        bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1(&profile)?;
-    Ok((profile, profile_digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvFullBootstrapArithmeticTraceProfileV1;
+    decode = decode_bfv_full_bootstrap_arithmetic_trace_profile_bytes_v1;
+    digest = bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1;
+    digest_only = bfv_full_bootstrap_arithmetic_trace_profile_digest_from_bytes_v1 =>
+        "Return the digest for canonical BFV full-bootstrap arithmetic trace profile bytes.";
+    pair = bfv_full_bootstrap_arithmetic_trace_profile_and_digest_from_bytes_v1 =>
+        "Decode and digest canonical BFV full-bootstrap arithmetic trace profile bytes.";
+    errors = "Returns [`BfvError`] when byte admission fails or trace-profile digesting fails.";
 }
 /// Return the canonical BFV full-bootstrap arithmetic trace profile digest.
 ///
@@ -12834,40 +12799,15 @@ pub fn decode_bfv_full_bootstrap_arithmetic_air_constraint_system_material_bytes
         validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1,
     )
 }
-/// Return the digest for canonical BFV full-bootstrap arithmetic AIR material bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or AIR contract digesting
-/// fails.
-pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_full_bootstrap_arithmetic_air_constraint_system_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical BFV full-bootstrap arithmetic AIR material bytes.
-///
-/// This byte-admission helper keeps the decoded AIR constraint-system material
-/// and its domain-separated digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or AIR contract digesting
-/// fails.
-pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<
-    (
-        BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1,
-        Hash,
-    ),
-    BfvError,
-> {
-    let material =
-        decode_bfv_full_bootstrap_arithmetic_air_constraint_system_material_bytes_v1(bytes)?;
-    let material_digest =
-        bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(&material)?;
-    Ok((material, material_digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1;
+    decode = decode_bfv_full_bootstrap_arithmetic_air_constraint_system_material_bytes_v1;
+    digest = bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1;
+    digest_only = bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_bytes_v1 =>
+        "Return the digest for canonical BFV full-bootstrap arithmetic AIR material bytes.";
+    pair = bfv_full_bootstrap_arithmetic_air_constraint_system_and_digest_from_bytes_v1 =>
+        "Decode and digest canonical BFV full-bootstrap arithmetic AIR material bytes.";
+    errors = "Returns [`BfvError`] when byte admission fails or AIR contract digesting fails.";
 }
 /// Return the digest for the canonical BFV full-bootstrap arithmetic AIR contract.
 ///
@@ -15957,29 +15897,15 @@ pub fn decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1(
         validate_bfv_full_bootstrap_release_audit_evidence_v1,
     )
 }
-/// Return the digest of canonical BFV full-bootstrap release audit evidence bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_evidence_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) = bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical BFV full-bootstrap release audit evidence bytes.
-///
-/// This byte-admission helper keeps the decoded evidence and
-/// domain-separated evidence digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or canonical digesting fails.
-pub fn bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapReleaseAuditEvidenceV1, Hash), BfvError> {
-    let evidence = decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1(bytes)?;
-    let evidence_digest = bfv_full_bootstrap_release_audit_evidence_digest_v1(&evidence)?;
-    Ok((evidence, evidence_digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvFullBootstrapReleaseAuditEvidenceV1;
+    decode = decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1;
+    digest = bfv_full_bootstrap_release_audit_evidence_digest_v1;
+    digest_only = bfv_full_bootstrap_release_audit_evidence_digest_from_bytes_v1 =>
+        "Return the digest of canonical BFV full-bootstrap release audit evidence bytes.";
+    pair = bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1 =>
+        "Decode and digest canonical BFV full-bootstrap release audit evidence bytes.";
+    errors = "Returns [`BfvError`] when byte admission fails or canonical digesting fails.";
 }
 /// Derive and digest deterministic BFV full-bootstrap release audit evidence.
 ///
@@ -25663,32 +25589,15 @@ pub fn decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1(
     validate_bfv_full_bootstrap_material_proof_input_material_v1(&material)?;
     Ok(material)
 }
-/// Hash canonical material proof input material bytes for BFV full-bootstrap governance.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or material proof input
-/// digesting fails.
-pub fn bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical material proof input material bytes.
-///
-/// This byte-admission helper keeps the decoded material proof input and its
-/// domain-separated digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or material proof input
-/// digesting fails.
-pub fn bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapMaterialProofInputMaterialV1, Hash), BfvError> {
-    let material = decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1(bytes)?;
-    let material_digest = bfv_full_bootstrap_material_proof_input_material_digest_v1(&material)?;
-    Ok((material, material_digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvFullBootstrapMaterialProofInputMaterialV1;
+    decode = decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1;
+    digest = bfv_full_bootstrap_material_proof_input_material_digest_v1;
+    digest_only = bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_v1 =>
+        "Hash canonical material proof input material bytes for BFV full-bootstrap governance.";
+    pair = bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1 =>
+        "Decode and digest canonical material proof input material bytes.";
+    errors = "Returns [`BfvError`] when byte admission fails or material proof input digesting fails.";
 }
 /// Hash material proof input material after matching it to caller-owned artifacts.
 ///
@@ -26767,16 +26676,13 @@ pub fn bfv_full_bootstrap_execution_witness_digest_from_material_bytes_v1(
         bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-/// Decode canonical deterministic witness material bytes and return their digest.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or witness digesting fails.
-pub fn bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapExecutionWitnessDigestMaterialV1, Hash), BfvError> {
-    let material = decode_bfv_full_bootstrap_execution_witness_digest_material_bytes_v1(bytes)?;
-    let digest = bfv_full_bootstrap_execution_witness_digest_from_material_v1(&material)?;
-    Ok((material, digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvFullBootstrapExecutionWitnessDigestMaterialV1;
+    decode = decode_bfv_full_bootstrap_execution_witness_digest_material_bytes_v1;
+    digest = bfv_full_bootstrap_execution_witness_digest_from_material_v1;
+    pair = bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_bytes_v1 =>
+        "Decode canonical deterministic witness material bytes and return their digest.";
+    errors = "Returns [`BfvError`] when byte admission fails or witness digesting fails.";
 }
 /// Hash externally held typed witness material after replaying it against artifacts.
 ///
@@ -27265,30 +27171,15 @@ pub fn decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
     validate_bfv_full_bootstrap_execution_proof_input_material_v1(&material)?;
     Ok(material)
 }
-/// Hash canonical execution proof input material bytes for a BFV full-bootstrap proof.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or proof input digesting fails.
-pub fn bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical execution proof input material bytes.
-///
-/// This byte-admission helper keeps the decoded proof input material and its
-/// domain-separated digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or proof input digesting fails.
-pub fn bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapExecutionProofInputMaterialV1, Hash), BfvError> {
-    let material = decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(bytes)?;
-    let material_digest = bfv_full_bootstrap_execution_proof_input_material_digest_v1(&material)?;
-    Ok((material, material_digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvFullBootstrapExecutionProofInputMaterialV1;
+    decode = decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1;
+    digest = bfv_full_bootstrap_execution_proof_input_material_digest_v1;
+    digest_only = bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1 =>
+        "Hash canonical execution proof input material bytes for a BFV full-bootstrap proof.";
+    pair = bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_v1 =>
+        "Decode and digest canonical execution proof input material bytes.";
+    errors = "Returns [`BfvError`] when byte admission fails or proof input digesting fails.";
 }
 /// Hash typed proof input material after replaying it against governed artifacts.
 ///
@@ -28696,34 +28587,15 @@ pub fn decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_
     validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(&material)?;
     Ok(material)
 }
-/// Hash canonical transcript-derived public opening material bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or material digesting fails.
-pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_from_bytes_v1(
-            bytes,
-        )?;
-    Ok(digest)
-}
-/// Decode and digest canonical transcript-derived public opening material bytes.
-///
-/// This byte-admission helper keeps the decoded public opening material and
-/// its stable digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or material digesting fails.
-pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1, Hash), BfvError> {
-    let material =
-        decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(bytes)?;
-    let material_digest =
-        bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(&material)?;
-    Ok((material, material_digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1;
+    decode = decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1;
+    digest = bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1;
+    digest_only = bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_v1 =>
+        "Hash canonical transcript-derived public opening material bytes.";
+    pair = bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_from_bytes_v1 =>
+        "Decode and digest canonical transcript-derived public opening material bytes.";
+    errors = "Returns [`BfvError`] when byte admission fails or material digesting fails.";
 }
 /// Hash typed public opening material after checking it belongs to a trace.
 ///
@@ -28864,30 +28736,15 @@ pub fn decode_bfv_full_bootstrap_arithmetic_trace_material_bytes_v1(
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&material)?;
     Ok(material)
 }
-/// Hash canonical row-major native arithmetic trace material bytes.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or trace material digesting fails.
-pub fn bfv_full_bootstrap_arithmetic_trace_material_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) = bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical row-major native arithmetic trace material bytes.
-///
-/// This byte-admission helper keeps the decoded trace material and its
-/// domain-separated digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or trace material digesting
-/// fails.
-pub fn bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapArithmeticTraceMaterialV1, Hash), BfvError> {
-    let material = decode_bfv_full_bootstrap_arithmetic_trace_material_bytes_v1(bytes)?;
-    let material_digest = bfv_full_bootstrap_arithmetic_trace_material_digest_v1(&material)?;
-    Ok((material, material_digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvFullBootstrapArithmeticTraceMaterialV1;
+    decode = decode_bfv_full_bootstrap_arithmetic_trace_material_bytes_v1;
+    digest = bfv_full_bootstrap_arithmetic_trace_material_digest_v1;
+    digest_only = bfv_full_bootstrap_arithmetic_trace_material_digest_from_bytes_v1 =>
+        "Hash canonical row-major native arithmetic trace material bytes.";
+    pair = bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_v1 =>
+        "Decode and digest canonical row-major native arithmetic trace material bytes.";
+    errors = "Returns [`BfvError`] when byte admission fails or trace material digesting fails.";
 }
 /// Hash canonical arithmetic trace material bytes after binding them to proof input material.
 ///
@@ -29380,31 +29237,15 @@ pub fn decode_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_v1(
     validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(&material)?;
     Ok(material)
 }
-/// Hash canonical typed AIR evaluation material bytes for a BFV full-bootstrap trace.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or material digesting fails.
-pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical typed AIR evaluation material bytes.
-///
-/// This byte-admission helper keeps the decoded AIR evaluation material and
-/// its domain-separated digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or material digesting fails.
-pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapArithmeticAirEvaluationMaterialV1, Hash), BfvError> {
-    let material = decode_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_v1(bytes)?;
-    let material_digest =
-        bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_v1(&material)?;
-    Ok((material, material_digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvFullBootstrapArithmeticAirEvaluationMaterialV1;
+    decode = decode_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_v1;
+    digest = bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_v1;
+    digest_only = bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_from_bytes_v1 =>
+        "Hash canonical typed AIR evaluation material bytes for a BFV full-bootstrap trace.";
+    pair = bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_v1 =>
+        "Decode and digest canonical typed AIR evaluation material bytes.";
+    errors = "Returns [`BfvError`] when byte admission fails or material digesting fails.";
 }
 /// Hash typed AIR evaluation material after binding it to a BFV full-bootstrap trace.
 ///
@@ -30055,30 +29896,15 @@ pub fn decode_bfv_full_bootstrap_execution_prover_input_material_bytes_v1(
     validate_bfv_full_bootstrap_execution_prover_input_material_v1(&material)?;
     Ok(material)
 }
-/// Hash canonical release-prover input material bytes for a BFV full-bootstrap proof.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or prover input digesting fails.
-pub fn bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<Hash, BfvError> {
-    let (_, digest) =
-        bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_v1(bytes)?;
-    Ok(digest)
-}
-/// Decode and digest canonical release-prover input material bytes.
-///
-/// This byte-admission helper keeps the decoded prover input material and its
-/// domain-separated digest bound to the same canonical byte stream.
-///
-/// # Errors
-/// Returns [`BfvError`] when byte admission fails or prover input digesting fails.
-pub fn bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_v1(
-    bytes: &[u8],
-) -> Result<(BfvFullBootstrapExecutionProverInputMaterialV1, Hash), BfvError> {
-    let material = decode_bfv_full_bootstrap_execution_prover_input_material_bytes_v1(bytes)?;
-    let material_digest = bfv_full_bootstrap_execution_prover_input_material_digest_v1(&material)?;
-    Ok((material, material_digest))
+define_canonical_material_byte_digest_accessors! {
+    type = BfvFullBootstrapExecutionProverInputMaterialV1;
+    decode = decode_bfv_full_bootstrap_execution_prover_input_material_bytes_v1;
+    digest = bfv_full_bootstrap_execution_prover_input_material_digest_v1;
+    digest_only = bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_v1 =>
+        "Hash canonical release-prover input material bytes for a BFV full-bootstrap proof.";
+    pair = bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_v1 =>
+        "Decode and digest canonical release-prover input material bytes.";
+    errors = "Returns [`BfvError`] when byte admission fails or prover input digesting fails.";
 }
 /// Hash typed release-prover input material after replaying it against governed artifacts.
 ///

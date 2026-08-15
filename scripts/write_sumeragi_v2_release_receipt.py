@@ -62,7 +62,7 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "6ff2d5337414bbbf74a9530cc1b2bd59bc62141a82a1319fa2a270b84e64ce8c"
+        "9d2e5b25788fb98c43a8f2f409229181bf58a80b36a15415dc9847a6fe8b8a87"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
         "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
@@ -194,7 +194,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "3e87cffe611d61fb2e9a7a6d921cc263794238c57c3d22121025b74423b6468d"
+    "bdbc42d8a01b1336de822cf428acf16184ba782894c3e934835702597207ed2d"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -239,7 +239,7 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "6ff2d5337414bbbf74a9530cc1b2bd59bc62141a82a1319fa2a270b84e64ce8c"
+        "9d2e5b25788fb98c43a8f2f409229181bf58a80b36a15415dc9847a6fe8b8a87"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
@@ -504,7 +504,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 856
+_PRODUCTION_TEST_COUNT = 860
 _G_UNIT_TEST_COUNT = 525
 _G_UNIT_GROUPS = (
     (
@@ -572,7 +572,7 @@ _G_UNIT_GROUPS = (
     ),
 )
 _PRODUCTION_MODULES = (
-    ("production-kura-progress-durability", "kura::tests", 17),
+    ("production-kura-progress-durability", "kura::tests", 18),
     (
         "production-kura-lane-geometry",
         "kura::lane_geometry::tests",
@@ -617,7 +617,7 @@ _PRODUCTION_MODULES = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 61),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -627,7 +627,7 @@ _PRODUCTION_MODULES = (
         5,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 134),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 135),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",

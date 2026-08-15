@@ -1918,4 +1918,5 @@ mod tests {
                 .any(|route| route.stable_route_id() == "sorafs.reputation_snapshot.publish")
         );
     }
+    include!("authentication_routes_test.rs");
 }
