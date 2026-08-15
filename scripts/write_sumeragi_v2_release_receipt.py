@@ -62,10 +62,10 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "6ff2d5337414bbbf74a9530cc1b2bd59bc62141a82a1319fa2a270b84e64ce8c"
+        "8eacf29414f086c4df8ba469a2dce3a71ad247d1d18f6295cefa277a342c6e07"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
+        "da76e1fadb876b9b1da0fa67a6ec33b93b10587a5a157a8c1ab6f42f53d86277"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
         "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
@@ -505,13 +505,13 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "command",
 )
 _PRODUCTION_TEST_COUNT = 857
-_G_UNIT_TEST_COUNT = 525
+_G_UNIT_TEST_COUNT = 532
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        319,
+        321,
         "lib",
     ),
     (
@@ -547,6 +547,13 @@ _G_UNIT_GROUPS = (
         "g-unit-iroha-data-model",
         "iroha_data_model",
         8,
+        "lib",
+    ),
+    (
+        "required_multilane_zkp_halo2_focus_tests",
+        "g-unit-iroha-zkp-halo2",
+        "iroha_zkp_halo2",
+        5,
         "lib",
     ),
     (

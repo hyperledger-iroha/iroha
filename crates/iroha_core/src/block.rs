@@ -3424,7 +3424,6 @@ fn default_test_execution_context(
     header: &BlockHeader,
     validator: PeerId,
 ) -> BlockExecutionContextBundle {
-    const STATIC_LANE_INCARNATION_DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v1\0";
     let external = transactions
         .iter()
         .map(|tx| {
@@ -3435,28 +3434,25 @@ fn default_test_execution_context(
             )
         })
         .collect::<Vec<_>>();
-    let network_id = transactions.iter().find_map(|tx| match tx.entrypoint() {
-        TransactionEntrypoint::External(tx) => tx.network_id(),
-        TransactionEntrypoint::SealedCommitment(commitment) => {
-            Some(&commitment.payload().network_id)
+    let has_network_transaction = transactions.iter().any(|tx| {
+        match tx.entrypoint() {
+            TransactionEntrypoint::External(tx) => tx.network_id(),
+            TransactionEntrypoint::SealedCommitment(commitment) => {
+                Some(&commitment.payload().network_id)
+            }
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().network_id(),
+            TransactionEntrypoint::Time(_) => None,
         }
-        TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().network_id(),
-        TransactionEntrypoint::Time(_) => None,
+        .is_some()
     });
-    let Some(network_id) = network_id else {
+    if !has_network_transaction {
         return BlockExecutionContextBundle::new(external);
-    };
+    }
     let catalog = iroha_data_model::nexus::LaneCatalog::default();
-    let lane = catalog
-        .lanes()
-        .first()
+    let lane_incarnation = crate::state::derive_static_lane_incarnations(&catalog)
+        .get(&LaneId::SINGLE)
+        .copied()
         .expect("default test catalog contains lane zero");
-    let catalog_hash = iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog);
-    let incarnation_preimage = (*network_id, catalog_hash, lane.id, lane.clone()).encode();
-    let lane_incarnation = Hash::new_from_chunks(&[
-        STATIC_LANE_INCARNATION_DOMAIN,
-        incarnation_preimage.as_slice(),
-    ]);
     let candidate_indices = (0..transactions.len())
         .map(|idx| u64::try_from(idx).expect("test transaction index fits u64"))
         .collect::<Vec<_>>();
@@ -16831,21 +16827,11 @@ pub(crate) mod valid {
                 crate::governance::manifest::LaneManifestRegistry::from_statuses(statuses),
             ));
         }
-        fn static_test_lane_incarnation(
-            network_id: &NetworkId,
-            catalog: &LaneCatalog,
-            lane_id: LaneId,
-        ) -> Hash {
-            const DOMAIN: &[u8] = b"iroha:nexus:lane-incarnation:static:v1\0";
-            let lane = catalog
-                .lanes()
-                .iter()
-                .find(|lane| lane.id == lane_id)
-                .expect("test lane exists in catalog");
-            let catalog_hash =
-                iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(catalog);
-            let preimage = (*network_id, catalog_hash, lane.id, lane.clone()).encode();
-            Hash::new_from_chunks(&[DOMAIN, preimage.as_slice()])
+        fn static_test_lane_incarnation(catalog: &LaneCatalog, lane_id: LaneId) -> Hash {
+            crate::state::derive_static_lane_incarnations(catalog)
+                .get(&lane_id)
+                .copied()
+                .expect("test lane exists in catalog")
         }
         fn insert_consensus_key(
             world: &mut World,
@@ -20750,11 +20736,7 @@ pub(crate) mod valid {
                 0,
                 paynet_lane,
                 paynet_dataspace,
-                static_test_lane_incarnation(
-                    state.network_id_ref(),
-                    &state.nexus_snapshot().lane_catalog,
-                    paynet_lane,
-                ),
+                static_test_lane_incarnation(&state.nexus_snapshot().lane_catalog, paynet_lane),
                 vec![0],
                 vec![Hash::from(tx.hash_as_entrypoint())],
                 topology.as_ref(),

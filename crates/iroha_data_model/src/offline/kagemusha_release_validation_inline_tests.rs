@@ -1,4 +1,107 @@
 #[test]
+fn compact_recursive_state_boundary_has_a_distinct_v5_protocol() {
+    assert_eq!(
+        (
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_DOMAIN_V5,
+        ),
+        (
+            5,
+            5,
+            138,
+            b"iroha:kagemusha:recursive-state-boundary:v5".as_slice()
+        )
+    );
+}
+
+#[test]
+fn v4_promotion_record_is_distinct_and_fail_closed() {
+    let record = promoted_release();
+    record.validate().expect("valid V4 promotion record");
+    macro_rules! rejects {
+        ($($mutation:expr),+ $(,)?) => {$({
+            let mut tampered = record.clone();
+            let mutation: fn(&mut KagemushaRecursiveSpendPromotedReleaseV4) = $mutation;
+            mutation(&mut tampered);
+            assert_eq!(
+                tampered.validate(),
+                Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+            );
+        })+};
+    }
+    rejects!(
+        |value: &mut KagemushaRecursiveSpendPromotedReleaseV4| value.schema =
+            "retired-promoted-release".to_owned(),
+        |value| value.version = KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+        |value| value.generation = "not portable/".to_owned(),
+        |value| value.authenticated_source_seal_projection_sha256 = [0; 32],
+        |value| value.reviewed_cargo_binary_sha256 = [0; 32],
+        |value| value.reviewed_rustc_binary_sha256 = [0; 32],
+        |value| value.manifest_sha256 = [0; 32],
+        |value| value.release_policy_sha256 = value.release_attestation_sha256,
+        |value| value.approved_signers.swap(0, 1),
+        |value| {
+            value.approved_signers.pop();
+        },
+        |value| {
+            let duplicate_signer = value.approved_signers[0].clone();
+            value.approved_signers.insert(1, duplicate_signer);
+        },
+        |value| value.artifact_inventory_verified = false,
+        |value| value.bridge_abi_version = KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4 - 1,
+        |value| value.artifact_roles.swap(0, 1),
+        |value| value.max_proof_bytes = 0,
+        |value| value.max_proof_bytes =
+            KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 + 1,
+    );
+}
+
+#[test]
+fn v4_release_record_binds_promotion_build_provenance_to_manifest() {
+    let mut record = release_activation_wire_fixture().release_record;
+    let benchmark = b"wire-bound benchmark evidence";
+    let reviewer = KeyPair::from_seed(vec![34; 32], Algorithm::Ed25519);
+    let candidate = unsigned_candidate(&record.manifest);
+    record.cryptographic_review_summary = signed_review_bytes(&candidate, &[&reviewer]);
+    record.manifest.benchmark_evidence_sha256 = digest(benchmark);
+    record.manifest.cryptographic_review_sha256 = digest(&record.cryptographic_review_summary);
+    record.release_attestation.subject = record
+        .manifest
+        .release_attestation_subject()
+        .expect("release-record fixture has a canonical attestation subject");
+    record.manifest.release_attestation_sha256 = digest(
+        &norito::encode_canonical(&record.release_attestation)
+            .expect("canonical release-record attestation"),
+    );
+    record.promotion_record.manifest_sha256 = record
+        .manifest
+        .canonical_sha256()
+        .expect("canonical release-record manifest");
+    record.promotion_record.release_attestation_sha256 =
+        record.manifest.release_attestation_sha256;
+    record
+        .validate_structure()
+        .expect("structurally valid release record before provenance mutation");
+    let mutations: [fn(&mut KagemushaRecursiveSpendPromotedReleaseV4); 3] = [
+        |value: &mut KagemushaRecursiveSpendPromotedReleaseV4| {
+            value.authenticated_source_seal_projection_sha256[0] ^= 1;
+        },
+        |value| value.reviewed_cargo_binary_sha256[0] ^= 1,
+        |value| value.reviewed_rustc_binary_sha256[0] ^= 1,
+    ];
+    for mutation in mutations {
+        let mut tampered = record.clone();
+        mutation(&mut tampered.promotion_record);
+        assert_eq!(
+            tampered.validate_structure(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+    }
+}
+
+#[test]
 fn v4_artifact_binding_requires_the_supplied_manifest_bytes() {
     let manifest = manifest();
     let canonical = norito::encode_canonical(&manifest).expect("canonical V4 manifest");

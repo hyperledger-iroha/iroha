@@ -264,6 +264,7 @@ OPERATION_FLAGS: dict[str, set[str]] = {
         "--dpn-validator-release-commit",
         "--cargo-lock-sha256", "--workspace-source-manifest-sha256",
         "--controller-manifest", "--controller-digest", "--output-bundle",
+        "--kagemusha-release-root", "--kagemusha-activation-authority",
     },
     "capture-four-peer": {
         "--reset-bundle", "--validator-binary", "--supervisor",
@@ -360,6 +361,7 @@ INPUT_PATH_FLAGS = {
     "--trusted-boi-qualification-public-key",
     "--release-manifest-verifier", "--authority-dir", "--source-bundle",
     "--privacy-release-dir", "--genesis-external-signer",
+    "--kagemusha-release-root",
     "--onboarding-token-hash-tool", "--reset-bundle", "--validator-binary",
     "--supervisor", "--linux-archive", "--linux-authority-dir",
     "--boi-artifact-handoff-dir", "--macos-receipt",
@@ -374,6 +376,9 @@ INPUT_PATH_FLAGS = {
     "--candidate-root",
     "--result", "--write-config",
 }
+KAGEMUSHA_PREPARE_RESET_FLAGS = frozenset(
+    {"--kagemusha-release-root", "--kagemusha-activation-authority"}
+)
 POSITIONAL_COMMANDS = {
     "assemble-candidate": {"assemble"},
     "admit": {"verify", "init-replay-ledger"},
@@ -382,7 +387,11 @@ REQUIRED_FLAGS: dict[tuple[str, str | None], set[str]] = {
     ("snapshot-public-privacy", None): OPERATION_FLAGS["snapshot-public-privacy"],
     ("finalize-linux", None): OPERATION_FLAGS["finalize-linux"],
     ("extract-privacy", None): OPERATION_FLAGS["extract-privacy"],
-    ("prepare-reset", None): OPERATION_FLAGS["prepare-reset"],
+    # Ordinary qualification resets remain supported.  A Kagemusha reset is
+    # selected only by supplying its complete release-root/authority pair.
+    ("prepare-reset", None): (
+        OPERATION_FLAGS["prepare-reset"] - KAGEMUSHA_PREPARE_RESET_FLAGS
+    ),
     ("capture-four-peer", None): OPERATION_FLAGS["capture-four-peer"],
     ("assemble-candidate", "assemble"): OPERATION_FLAGS["assemble-candidate"],
     ("assemble-boi", None): OPERATION_FLAGS["assemble-boi"],
@@ -1098,6 +1107,29 @@ def _validate_trusted_input_path(
             ):
                 _fail("trusted input ancestry is not root-owned and nonwritable")
     _revalidate_ancestry(rows)
+
+
+def _validate_root_owned_release_root(path: Path) -> Path:
+    """Authorize one canonical release root held outside runner identities."""
+
+    canonical = _require_canonical(path, "Kagemusha release root")
+    if canonical == Path("/"):
+        _fail("Kagemusha release root cannot be the filesystem root")
+    rows = _ancestry_snapshot(canonical)
+    for _component, expected in rows:
+        mode = expected[2]
+        if (
+            not stat.S_ISDIR(mode)
+            or stat.S_ISLNK(mode)
+            or expected[4] != 0
+            or expected[5] != 0
+            or mode & 0o022
+        ):
+            _fail(
+                "Kagemusha release root ancestry must be root-owned and nonwritable"
+            )
+    _revalidate_ancestry(rows)
+    return canonical
 
 
 def _validate_privacy_rollout_input(
@@ -2154,6 +2186,9 @@ def _validate_operation_args(
         canonical = path.resolve(strict=True)
         if canonical != path:
             _fail(f"controller input path is not canonical: {flag}")
+        if operation == "prepare-reset" and flag == "--kagemusha-release-root":
+            _validate_root_owned_release_root(canonical)
+            continue
         if flag in TRUSTED_EXECUTABLE_FLAGS:
             continue
         try:
@@ -2222,6 +2257,15 @@ def _validate_operation_args(
             attestation, operation, flag, canonical
         ):
             _fail(f"external controller input lacks an exact trust record: {flag}")
+    if operation == "prepare-reset":
+        kagemusha_flags_seen = seen & KAGEMUSHA_PREPARE_RESET_FLAGS
+        if (
+            kagemusha_flags_seen
+            and kagemusha_flags_seen != KAGEMUSHA_PREPARE_RESET_FLAGS
+        ):
+            _fail(
+                "Kagemusha release root and activation authority must be supplied together"
+            )
     required = REQUIRED_FLAGS[(operation, subcommand)]
     missing = sorted(required - seen)
     if missing:

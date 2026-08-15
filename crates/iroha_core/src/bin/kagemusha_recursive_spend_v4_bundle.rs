@@ -221,6 +221,10 @@ const BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX: Option<&str> =
     option_env!("KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX");
 const BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256: Option<&str> =
     option_env!("KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256");
+const BUILD_REVIEWED_CARGO_BINARY_SHA256: Option<&str> =
+    option_env!("KAGEMUSHA_BUILD_REVIEWED_CARGO_BINARY_SHA256");
+const BUILD_REVIEWED_RUSTC_BINARY_SHA256: Option<&str> =
+    option_env!("KAGEMUSHA_BUILD_REVIEWED_RUSTC_BINARY_SHA256");
 const AUTHORIZED_SOURCE_PARENT_COMMIT: &str = "5d41c784787ed496ccbd46379ee236cc992d9c65";
 const AUTHORIZED_SOURCE_PARENT_TREE: &str = "f20ab04ddd65c2b7da71250e77e2cc1006aa38f2";
 const AUTHORIZED_SOURCE_PARENT_EPOCH: u64 = 1_786_749_503;
@@ -484,6 +488,9 @@ struct BundleMetadata {
     source_tree_sha256: [u8; 32],
     reviewed_source_closure: KagemushaReviewedSourceClosureV1,
     reviewed_source_closure_descriptor_sha256: [u8; 32],
+    authenticated_source_seal_projection_sha256: [u8; 32],
+    reviewed_cargo_binary_sha256: [u8; 32],
+    reviewed_rustc_binary_sha256: [u8; 32],
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
     activation_height: u64,
@@ -628,6 +635,9 @@ struct CandidateValidationReportV2 {
     source_tree_sha256: String,
     source_repo_dirty: bool,
     reviewed_source_closure_descriptor_sha256: String,
+    authenticated_source_seal_projection_sha256: String,
+    reviewed_cargo_binary_sha256: String,
+    reviewed_rustc_binary_sha256: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
     generation: String,
@@ -647,8 +657,11 @@ struct FullSourceTreeIdentityV1 {
     source_tree_sha256: String,
     reviewed_source_closure: KagemushaReviewedSourceClosureV1,
     reviewed_source_closure_descriptor_sha256: String,
+    authenticated_source_seal_projection_sha256: String,
+    reviewed_cargo_binary_sha256: String,
+    reviewed_rustc_binary_sha256: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct SourceSealBuildScriptObservedV1 {
     debug_assertions: bool,
@@ -660,7 +673,7 @@ struct SourceSealBuildScriptObservedV1 {
     schema: String,
     target: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct SourceSealUnitGraphV1 {
     custom_build_packages: u64,
@@ -672,7 +685,7 @@ struct SourceSealUnitGraphV1 {
     size_bytes: u64,
     units: u64,
 }
-#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct SourceSealCargoPolicyV1 {
     binary: String,
@@ -683,14 +696,14 @@ struct SourceSealCargoPolicyV1 {
     target: String,
     unit_graph: SourceSealUnitGraphV1,
 }
-#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct SourceSealOuterPolicyV1 {
     cargo: SourceSealCargoPolicyV1,
     execution_policy_sha256: String,
     schema: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct SourceSealSshSignatureV1 {
     allowed_signers_sha256: String,
@@ -700,7 +713,7 @@ struct SourceSealSshSignatureV1 {
     revocation_sha256: String,
     signature_namespace: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct SourceSealAuthorityV1 {
     commit: String,
@@ -713,7 +726,7 @@ struct SourceSealAuthorityV1 {
     parent_tree: String,
     signature: SourceSealSshSignatureV1,
 }
-#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct AuthenticatedSourceSealProjectionV1 {
     build_script_observed: SourceSealBuildScriptObservedV1,
@@ -729,7 +742,6 @@ struct AuthenticatedSourceSealProjectionV1 {
 }
 #[derive(Debug, Clone)]
 struct EmbeddedSourceSealV1 {
-    projection: AuthenticatedSourceSealProjectionV1,
     identity: FullSourceTreeIdentityV1,
 }
 static EMBEDDED_SOURCE_SEAL: OnceLock<Result<EmbeddedSourceSealV1, String>> = OnceLock::new();
@@ -1150,6 +1162,21 @@ fn prepare_bundle_metadata(
         &source_identity.reviewed_source_closure_descriptor_sha256,
         &mut reviewed_source_closure_descriptor_sha256,
     )?;
+    let mut authenticated_source_seal_projection_sha256 = [0_u8; 32];
+    hex::decode_to_slice(
+        &source_identity.authenticated_source_seal_projection_sha256,
+        &mut authenticated_source_seal_projection_sha256,
+    )?;
+    let mut reviewed_cargo_binary_sha256 = [0_u8; 32];
+    hex::decode_to_slice(
+        &source_identity.reviewed_cargo_binary_sha256,
+        &mut reviewed_cargo_binary_sha256,
+    )?;
+    let mut reviewed_rustc_binary_sha256 = [0_u8; 32];
+    hex::decode_to_slice(
+        &source_identity.reviewed_rustc_binary_sha256,
+        &mut reviewed_rustc_binary_sha256,
+    )?;
     let activation_height = parse_u64(options, "activation-height")?;
     let withdrawal_height = parse_u64(options, "withdrawal-height")?;
     if activation_height == 0 || withdrawal_height <= activation_height {
@@ -1279,6 +1306,9 @@ fn prepare_bundle_metadata(
             source_tree_sha256: parse_digest(options, "source-tree-sha256")?,
             reviewed_source_closure: source_identity.reviewed_source_closure.clone(),
             reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256,
             generation_memory_limit_bytes,
             generation_memory_enforcement_profile,
             activation_height,
@@ -1555,39 +1585,6 @@ fn prepare_artifact(
         total_size,
     })
 }
-fn trusted_source_command(executable: &str) -> Command {
-    let mut command = Command::new(executable);
-    command.env_clear().env("PATH", TRUSTED_TOOL_PATH);
-    for variable in ["HOME", "GNUPGHOME"] {
-        if let Some(value) = env::var_os(variable) {
-            command.env(variable, value);
-        }
-    }
-    command
-}
-fn validate_base_source_head(source_commit: &str) -> Result<(), Box<dyn Error>> {
-    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let head = trusted_source_command(TRUSTED_GIT_EXECUTABLE)
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(&repository_root)
-        .args(["rev-parse", "--verify", "HEAD^{commit}"])
-        .output()
-        .map_err(|error| format!("failed to inspect candidate Git HEAD: {error}"))?;
-    if !head.status.success() {
-        return Err("candidate source is not a Git checkout with a commit HEAD".into());
-    }
-    let head = std::str::from_utf8(&head.stdout)
-        .map_err(|_| "candidate Git HEAD is not canonical UTF-8")?
-        .trim_end_matches(['\r', '\n']);
-    if head != source_commit {
-        return Err(format!(
-            "--source-commit must exactly equal the checked-out candidate HEAD ({head})"
-        )
-        .into());
-    }
-    Ok(())
-}
 fn is_lower_hex(value: &str, expected_len: usize) -> bool {
     value.len() == expected_len
         && value
@@ -1595,76 +1592,225 @@ fn is_lower_hex(value: &str, expected_len: usize) -> bool {
             .iter()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
 }
-fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error>> {
-    let (Some(reviewed_closure), Some(reviewed_closure_sha256)) = (
-        BUILD_REVIEWED_SOURCE_CLOSURE,
-        BUILD_REVIEWED_SOURCE_CLOSURE_SHA256,
-    ) else {
-        return Err("candidate generation requires an embedded reviewed source-closure pin".into());
-    };
-    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let seal_script = repository_root.join("scripts/kagemusha_source_tree_seal.py");
-    let output = trusted_source_command(TRUSTED_PYTHON_EXECUTABLE)
-        .arg("-I")
-        .arg(&seal_script)
-        .arg("identity")
-        .arg("--root")
-        .arg(&repository_root)
-        .arg("--reviewed-source-closure")
-        .arg(reviewed_closure)
-        .arg("--reviewed-source-closure-sha256")
-        .arg(reviewed_closure_sha256)
-        .output()
-        .map_err(|error| format!("failed to run the Kagemusha source-tree seal: {error}"))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Kagemusha source-tree seal rejected the checkout: {detail}").into());
-    }
-    let identity: FullSourceTreeIdentityV1 =
-        norito::json::from_slice(&output.stdout).map_err(|error| {
-            format!("Kagemusha source-tree identity is not canonical JSON: {error}")
+fn is_nonzero_lower_hex(value: &str, expected_len: usize) -> bool {
+    is_lower_hex(value, expected_len) && value.as_bytes().iter().any(|byte| *byte != b'0')
+}
+fn portable_source_identifier(value: &str, maximum_len: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum_len
+        && value.as_bytes().iter().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'@' | b'+' | b'-')
+        })
+}
+fn decode_embedded_source_seal(
+    projection_hex: Option<&str>,
+    projection_sha256: Option<&str>,
+    reviewed_cargo_binary_sha256: Option<&str>,
+    reviewed_rustc_binary_sha256: Option<&str>,
+    embedded_commit: Option<&str>,
+    embedded_tree_sha256: Option<&str>,
+    embedded_source_date_epoch: Option<&str>,
+) -> Result<EmbeddedSourceSealV1, String> {
+    let projection_hex = projection_hex
+        .filter(|value| {
+            is_lower_hex(value, value.len())
+                && value.len() >= 2
+                && value.len() <= 32_768
+                && value.len().is_multiple_of(2)
+        })
+        .ok_or_else(|| {
+            "embedded authenticated source-seal projection hex is malformed".to_owned()
         })?;
-    if identity.schema != "iroha.kagemusha.reviewed_source_tree_identity.v1"
-        || identity.source_repo_dirty
-        || !is_lower_hex(&identity.source_commit, 40)
-        || !is_lower_hex(&identity.source_tree_sha256, 64)
-        || !is_lower_hex(&identity.reviewed_source_closure_descriptor_sha256, 64)
-        || identity.reviewed_source_closure.validate().is_err()
-        || identity.reviewed_source_closure.source_commit != identity.source_commit
-        || hex::encode(identity.reviewed_source_closure.source_tree_sha256)
-            != identity.source_tree_sha256
-        || identity.reviewed_source_closure.source_repo_dirty
-        || identity
-            .reviewed_source_closure
+    let projection_sha256 = projection_sha256
+        .filter(|value| is_nonzero_lower_hex(value, 64))
+        .ok_or_else(|| {
+            "embedded authenticated source-seal projection SHA-256 is malformed".to_owned()
+        })?;
+    let reviewed_cargo_binary_sha256 = reviewed_cargo_binary_sha256
+        .filter(|value| is_nonzero_lower_hex(value, 64))
+        .ok_or_else(|| "embedded reviewed Cargo binary SHA-256 is malformed".to_owned())?;
+    let reviewed_rustc_binary_sha256 = reviewed_rustc_binary_sha256
+        .filter(|value| is_nonzero_lower_hex(value, 64))
+        .ok_or_else(|| "embedded reviewed rustc binary SHA-256 is malformed".to_owned())?;
+    let projection_bytes = hex::decode(projection_hex)
+        .map_err(|error| format!("embedded source-seal projection hex is invalid: {error}"))?;
+    if projection_bytes.len() > 16_384
+        || hex::encode(Sha256::digest(&projection_bytes)) != projection_sha256
+    {
+        return Err("embedded authenticated source-seal projection digest differs".to_owned());
+    }
+    let projection: AuthenticatedSourceSealProjectionV1 =
+        norito::json::from_slice(&projection_bytes).map_err(|error| {
+            format!("embedded source-seal projection is not strict JSON: {error}")
+        })?;
+    let mut canonical_projection = norito::json::to_json(&projection).map_err(|error| {
+        format!("could not canonicalize embedded source-seal projection: {error}")
+    })?;
+    canonical_projection.push('\n');
+    if canonical_projection.as_bytes() != projection_bytes {
+        return Err(
+            "embedded authenticated source-seal projection is not canonical JSON".to_owned(),
+        );
+    }
+
+    let commit = embedded_commit
+        .filter(|value| is_nonzero_lower_hex(value, 40))
+        .ok_or_else(|| "embedded source commit is malformed".to_owned())?;
+    let tree = embedded_tree_sha256
+        .filter(|value| is_nonzero_lower_hex(value, 64))
+        .ok_or_else(|| "embedded source-tree SHA-256 is malformed".to_owned())?;
+    let source_date_epoch = embedded_source_date_epoch
+        .ok_or_else(|| "embedded source epoch is missing".to_owned())?
+        .parse::<u64>()
+        .map_err(|_| "embedded source epoch is malformed".to_owned())?;
+    let observed = &projection.build_script_observed;
+    let cargo = &projection.outer_policy.cargo;
+    let unit_graph = &cargo.unit_graph;
+    let authority = &projection.source_authority;
+    let signature = &authority.signature;
+    if projection.schema != AUTHENTICATED_SOURCE_SEAL_PROJECTION_SCHEMA
+        || projection.source_repo_dirty
+        || projection.source_commit != commit
+        || projection.source_tree_sha256 != tree
+        || projection.source_date_epoch != source_date_epoch
+        || observed.schema != SOURCE_SEAL_BUILD_SCRIPT_OBSERVED_SCHEMA
+        || observed.debug_assertions
+        || !observed
+            .features
+            .iter()
+            .map(String::as_str)
+            .eq(SOURCE_SEAL_RESOLVED_FEATURES.iter().copied())
+        || observed.host != "aarch64-apple-darwin"
+        || observed.target != "aarch64-apple-darwin"
+        || observed.num_jobs != 1
+        || observed.opt_level != "3"
+        || observed.profile != "release"
+        || projection.outer_policy.schema != SOURCE_SEAL_OUTER_POLICY_SCHEMA
+        || !is_nonzero_lower_hex(&projection.outer_policy.execution_policy_sha256, 64)
+        || cargo.binary != "kagemusha_recursive_spend_v4_bundle"
+        || !cargo
+            .explicit_features
+            .iter()
+            .map(String::as_str)
+            .eq(SOURCE_SEAL_EXPLICIT_FEATURES.iter().copied())
+        || cargo.package != "iroha_core"
+        || cargo.profile != "release"
+        || !cargo
+            .semantic_argv
+            .iter()
+            .map(String::as_str)
+            .eq(SOURCE_SEAL_SEMANTIC_ARGV.iter().copied())
+        || cargo.target != "aarch64-apple-darwin"
+        || unit_graph.normalization != SOURCE_SEAL_UNIT_GRAPH_NORMALIZATION
+        || !is_nonzero_lower_hex(&unit_graph.sha256, 64)
+        || unit_graph.size_bytes == 0
+        || unit_graph.size_bytes > 16 * 1024 * 1024
+        || unit_graph.units == 0
+        || unit_graph.packages == 0
+        || unit_graph.iroha_core_units == 0
+        || unit_graph.iroha_core_units > unit_graph.units
+        || unit_graph.custom_build_units > unit_graph.units
+        || unit_graph.custom_build_packages > unit_graph.packages
+        || authority.commit != commit
+        || !is_nonzero_lower_hex(&authority.commit_object_sha256, 64)
+        || authority.commit_object_size == 0
+        || authority.commit_object_size > 4096
+        || authority.committer_epoch != source_date_epoch
+        || !is_nonzero_lower_hex(&authority.git_tree, 40)
+        || !authority
+            .ordered_parents
+            .iter()
+            .map(String::as_str)
+            .eq([AUTHORIZED_SOURCE_PARENT_COMMIT])
+        || authority.parent_commit != AUTHORIZED_SOURCE_PARENT_COMMIT
+        || authority.parent_tree != AUTHORIZED_SOURCE_PARENT_TREE
+        || source_date_epoch <= AUTHORIZED_SOURCE_PARENT_EPOCH
+        || signature.mechanism != "git-commit-ssh-signature-v1"
+        || signature.signature_namespace != "git"
+        || !portable_source_identifier(&signature.principal, 128)
+        || !is_nonzero_lower_hex(&signature.public_key_sha256, 64)
+        || !is_nonzero_lower_hex(&signature.allowed_signers_sha256, 64)
+        || !is_nonzero_lower_hex(&signature.revocation_sha256, 64)
+    {
+        return Err("embedded authenticated source-seal policy is not exact".to_owned());
+    }
+
+    let closure_hex = &projection.reviewed_source_closure_hex;
+    if !is_lower_hex(closure_hex, closure_hex.len())
+        || closure_hex.len() < 2
+        || closure_hex.len() > 8192
+        || !closure_hex.len().is_multiple_of(2)
+        || !is_nonzero_lower_hex(&projection.reviewed_source_closure_sha256, 64)
+    {
+        return Err("embedded reviewed source-closure bytes are malformed".to_owned());
+    }
+    let closure_bytes = hex::decode(closure_hex)
+        .map_err(|error| format!("embedded reviewed source-closure hex is invalid: {error}"))?;
+    if hex::encode(Sha256::digest(&closure_bytes)) != projection.reviewed_source_closure_sha256 {
+        return Err("embedded reviewed source-closure digest differs".to_owned());
+    }
+    let closure: KagemushaReviewedSourceClosureV1 = norito::json::from_slice(&closure_bytes)
+        .map_err(|error| format!("embedded reviewed source closure is not strict JSON: {error}"))?;
+    if closure.validate().is_err()
+        || closure.source_repo_dirty
+        || closure.source_commit != commit
+        || hex::encode(closure.source_tree_sha256) != tree
+        || closure
             .canonical_descriptor_sha256()
             .map(hex::encode)
             .ok()
             .as_deref()
-            != Some(identity.reviewed_source_closure_descriptor_sha256.as_str())
+            != Some(projection.reviewed_source_closure_sha256.as_str())
     {
-        return Err("Kagemusha reviewed source-closure identity is malformed".into());
+        return Err("embedded reviewed source-closure identity is malformed".to_owned());
     }
-    Ok(identity)
+    Ok(EmbeddedSourceSealV1 {
+        identity: FullSourceTreeIdentityV1 {
+            schema: "iroha.kagemusha.reviewed_source_tree_identity.v1".to_owned(),
+            source_commit: commit.to_owned(),
+            source_repo_dirty: false,
+            source_tree_sha256: tree.to_owned(),
+            reviewed_source_closure: closure,
+            reviewed_source_closure_descriptor_sha256: projection
+                .reviewed_source_closure_sha256
+                .clone(),
+            authenticated_source_seal_projection_sha256: projection_sha256.to_owned(),
+            reviewed_cargo_binary_sha256: reviewed_cargo_binary_sha256.to_owned(),
+            reviewed_rustc_binary_sha256: reviewed_rustc_binary_sha256.to_owned(),
+        },
+    })
+}
+fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error>> {
+    EMBEDDED_SOURCE_SEAL
+        .get_or_init(|| {
+            decode_embedded_source_seal(
+                BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX,
+                BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256,
+                BUILD_REVIEWED_CARGO_BINARY_SHA256,
+                BUILD_REVIEWED_RUSTC_BINARY_SHA256,
+                BUILD_SOURCE_COMMIT,
+                BUILD_SOURCE_TREE_SHA256,
+                BUILD_SOURCE_DATE_EPOCH,
+            )
+        })
+        .as_ref()
+        .map(|seal| seal.identity.clone())
+        .map_err(|error| error.clone().into())
 }
 fn validate_current_source(
     expected_commit: &str,
     expected_tree_sha256: [u8; 32],
 ) -> Result<FullSourceTreeIdentityV1, Box<dyn Error>> {
     let expected_tree_sha256 = hex::encode(expected_tree_sha256);
-    let first = read_source_tree_identity()?;
-    if first.source_commit != expected_commit || first.source_tree_sha256 != expected_tree_sha256 {
+    let identity = read_source_tree_identity()?;
+    if identity.source_commit != expected_commit
+        || identity.source_tree_sha256 != expected_tree_sha256
+    {
         return Err(
             "Kagemusha source commit/tree pair does not identify the exact reviewed closure".into(),
         );
     }
-    validate_base_source_head(expected_commit)?;
-    let second = read_source_tree_identity()?;
-    if second != first {
-        return Err(
-            "Kagemusha reviewed source closure changed during signature verification".into(),
-        );
-    }
-    Ok(first)
+    Ok(identity)
 }
 fn validate_current_manifest_source(
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -1674,6 +1820,12 @@ fn validate_current_manifest_source(
         || manifest.reviewed_source_closure != current.reviewed_source_closure
         || hex::encode(manifest.reviewed_source_closure_descriptor_sha256)
             != current.reviewed_source_closure_descriptor_sha256
+        || hex::encode(manifest.authenticated_source_seal_projection_sha256)
+            != current.authenticated_source_seal_projection_sha256
+        || hex::encode(manifest.reviewed_cargo_binary_sha256)
+            != current.reviewed_cargo_binary_sha256
+        || hex::encode(manifest.reviewed_rustc_binary_sha256)
+            != current.reviewed_rustc_binary_sha256
     {
         return Err(
             "candidate manifest does not bind the exact embedded reviewed source closure".into(),
@@ -2056,6 +2208,12 @@ fn verify_staged_candidate_for_publication(
         || manifest.reviewed_source_closure != current_source.reviewed_source_closure
         || hex::encode(manifest.reviewed_source_closure_descriptor_sha256)
             != current_source.reviewed_source_closure_descriptor_sha256
+        || hex::encode(manifest.authenticated_source_seal_projection_sha256)
+            != current_source.authenticated_source_seal_projection_sha256
+        || hex::encode(manifest.reviewed_cargo_binary_sha256)
+            != current_source.reviewed_cargo_binary_sha256
+        || hex::encode(manifest.reviewed_rustc_binary_sha256)
+            != current_source.reviewed_rustc_binary_sha256
     {
         return Err("staged V4 candidate source identity changed before publication".into());
     }
@@ -2567,6 +2725,11 @@ fn validate_candidate(
             reviewed_source_closure_descriptor_sha256: hex::encode(
                 manifest.reviewed_source_closure_descriptor_sha256,
             ),
+            authenticated_source_seal_projection_sha256: hex::encode(
+                manifest.authenticated_source_seal_projection_sha256,
+            ),
+            reviewed_cargo_binary_sha256: hex::encode(manifest.reviewed_cargo_binary_sha256),
+            reviewed_rustc_binary_sha256: hex::encode(manifest.reviewed_rustc_binary_sha256),
             generation_memory_limit_bytes: manifest.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: manifest
                 .generation_memory_enforcement_profile
@@ -3047,6 +3210,10 @@ fn finalize_release(
             schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: manifest.generation.clone(),
+            authenticated_source_seal_projection_sha256: manifest
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
             candidate_sha256: candidate_record
                 .sha256()
                 .map_err(|error| format!("failed to identify immutable V4 candidate: {error}"))?,
@@ -3238,6 +3405,10 @@ fn write_candidate(
         reviewed_source_closure: metadata.reviewed_source_closure,
         reviewed_source_closure_descriptor_sha256: metadata
             .reviewed_source_closure_descriptor_sha256,
+        authenticated_source_seal_projection_sha256: metadata
+            .authenticated_source_seal_projection_sha256,
+        reviewed_cargo_binary_sha256: metadata.reviewed_cargo_binary_sha256,
+        reviewed_rustc_binary_sha256: metadata.reviewed_rustc_binary_sha256,
         generation_memory_limit_bytes: metadata.generation_memory_limit_bytes,
         generation_memory_enforcement_profile: metadata.generation_memory_enforcement_profile,
         network_id: metadata.network_id,
@@ -3573,6 +3744,28 @@ struct PublicationDirectory {
     #[cfg(unix)]
     path_bound: bool,
 }
+
+const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 17;
+
+fn final_release_inventory_v4() -> BTreeSet<String> {
+    INPUTS
+        .iter()
+        .map(|spec| spec.file_name)
+        .chain([
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4,
+            MANIFEST_NORITO_FILE_NAME,
+            MANIFEST_NORITO_SHA256_FILE_NAME,
+            MANIFEST_JSON_FILE_NAME,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+            PROMOTION_RECORD_FILE_NAME_V4,
+        ])
+        .map(str::to_owned)
+        .collect()
+}
+
 impl PublicationDirectory {
     #[cfg(unix)]
     fn open_at(parent: &File, path: PathBuf, name: &std::ffi::OsStr) -> io::Result<Self> {
@@ -3971,22 +4164,12 @@ impl PublicationDirectory {
         self.verify_inventory(&expected)
     }
     fn verify_final_inventory(&self) -> io::Result<()> {
-        let expected = INPUTS
-            .iter()
-            .map(|spec| spec.file_name)
-            .chain([
-                KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4,
-                MANIFEST_NORITO_FILE_NAME,
-                MANIFEST_NORITO_SHA256_FILE_NAME,
-                MANIFEST_JSON_FILE_NAME,
-                KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
-                KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
-                KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
-                KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
-                PROMOTION_RECORD_FILE_NAME_V4,
-            ])
-            .map(str::to_owned)
-            .collect::<BTreeSet<_>>();
+        let expected = final_release_inventory_v4();
+        if expected.len() != FINAL_RELEASE_INVENTORY_COUNT_V4 {
+            return Err(io::Error::other(
+                "final V4 release inventory does not contain exactly 17 distinct files",
+            ));
+        }
         self.verify_inventory(&expected)
     }
     fn verify_inventory(&self, expected: &BTreeSet<String>) -> io::Result<()> {
@@ -4084,6 +4267,29 @@ mod tests {
         }
     }
     #[test]
+    fn final_release_inventory_is_exact_and_includes_recursive_qualification_receipt() {
+        let inventory = final_release_inventory_v4();
+        let expected = INPUTS
+            .iter()
+            .map(|spec| spec.file_name)
+            .chain([
+                KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4,
+                MANIFEST_NORITO_FILE_NAME,
+                MANIFEST_NORITO_SHA256_FILE_NAME,
+                MANIFEST_JSON_FILE_NAME,
+                KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+                PROMOTION_RECORD_FILE_NAME_V4,
+            ])
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(inventory.len(), FINAL_RELEASE_INVENTORY_COUNT_V4);
+        assert_eq!(FINAL_RELEASE_INVENTORY_COUNT_V4, 17);
+        assert_eq!(inventory, expected);
+    }
+    #[test]
     fn release_roster_requires_four_validators_in_every_window() {
         validate_release_roster_validator_floor([4, 7, 4])
             .expect("all release roster windows meet the public-validator floor");
@@ -4166,21 +4372,27 @@ mod tests {
         );
     }
     #[test]
-    fn source_validation_uses_fixed_tools_and_a_sanitized_path() {
+    fn source_validation_uses_only_the_embedded_authenticated_projection() {
         let source = include_str!("kagemusha_recursive_spend_v4_bundle.rs");
         let validation = source
-            .split_once("fn trusted_source_command(")
-            .expect("trusted source command helper exists")
+            .split_once("fn decode_embedded_source_seal(")
+            .expect("embedded projection decoder exists")
             .1
             .split_once("fn build_candidate(")
             .expect("source-validation boundary exists")
             .0;
-        assert!(validation.contains("command.env_clear()"));
-        assert!(validation.contains("TRUSTED_GIT_EXECUTABLE"));
-        assert!(validation.contains("TRUSTED_PYTHON_EXECUTABLE"));
-        assert!(!validation.contains("Command::new(\"git\")"));
-        assert!(!validation.contains("KAGEMUSHA_SOURCE_SEAL_PYTHON"));
+        assert!(validation.contains("BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_HEX"));
+        assert!(validation.contains("reviewed_source_closure_hex"));
+        for forbidden in [
+            "kagemusha_source_tree_seal.py",
+            "Command::new",
+            "TRUSTED_GIT_EXECUTABLE",
+            "TRUSTED_PYTHON_EXECUTABLE",
+        ] {
+            assert!(!validation.contains(forbidden), "{forbidden}");
+        }
     }
+    include!("kagemusha_recursive_spend_v4_bundle/authenticated_source_projection_test.rs");
     #[test]
     fn generated_candidate_metadata_revalidates_both_release_profiles() {
         let source = include_str!("kagemusha_recursive_spend_v4_bundle.rs");
@@ -4532,7 +4744,9 @@ mod tests {
     }
     #[test]
     fn candidate_source_must_match_the_signed_checkout_head() {
-        assert!(validate_base_source_head("0000000000000000000000000000000000000000").is_err());
+        assert!(
+            validate_current_source("0000000000000000000000000000000000000000", [0; 32]).is_err()
+        );
     }
     #[test]
     fn krv4_framing_is_canonical_and_payload_bound() {

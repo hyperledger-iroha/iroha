@@ -1254,14 +1254,14 @@ let discovery_was_outstanding = activated.with_runner_runtime(
             "adapter status publication latch closed surface",
             adapter_source,
             "status_publication_enabled",
-            6,
+            7,
         )
         require_token_count(
             adapter_path,
             "adapter status publication latch activation surface",
             adapter_source,
             "status_publication_enabled = true",
-            2,
+            3,
         )
         adapter_open = _require_qualified_rust_item(
             adapter_path,
@@ -1687,4 +1687,5 @@ Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
     errors.extend(
         _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(repo_root)
     )
+    errors.extend(_successor_recovery_source_fidelity_errors(repo_root))
     return errors

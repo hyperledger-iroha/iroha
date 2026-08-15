@@ -195,7 +195,7 @@ struct PrepareActivationV4Args {
     /// The policy and release are embedded in one composite consensus instruction.
     #[arg(long)]
     device_attestation_policy: PathBuf,
-    /// New private file receiving a JSON array accepted by `iroha multisig propose`.
+    /// New private file receiving a JSON array accepted by `iroha ledger multisig propose`.
     #[arg(long)]
     output: PathBuf,
 }
@@ -558,6 +558,18 @@ impl VerifiedReleaseV4 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: self.authenticated.manifest().generation.clone(),
+            authenticated_source_seal_projection_sha256: self
+                .authenticated
+                .manifest()
+                .authenticated_source_seal_projection_sha256,
+            reviewed_cargo_binary_sha256: self
+                .authenticated
+                .manifest()
+                .reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: self
+                .authenticated
+                .manifest()
+                .reviewed_rustc_binary_sha256,
             candidate_sha256: candidate
                 .sha256()
                 .map_err(|error| eyre!("failed to identify immutable V4 candidate: {error}"))?,
@@ -1970,6 +1982,9 @@ struct VerificationReport {
     qualification_receipt_sha256: String,
     qualified_candidate_sha256: String,
     release_policy_sha256: String,
+    authenticated_source_seal_projection_sha256: String,
+    reviewed_cargo_binary_sha256: String,
+    reviewed_rustc_binary_sha256: String,
     generation: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
@@ -2018,6 +2033,11 @@ impl VerificationReport {
             qualification_receipt_sha256: hex::encode(manifest.qualification_receipt_sha256),
             qualified_candidate_sha256: hex::encode(manifest.qualified_candidate_sha256),
             release_policy_sha256: hex::encode(release_policy_sha256),
+            authenticated_source_seal_projection_sha256: hex::encode(
+                manifest.authenticated_source_seal_projection_sha256,
+            ),
+            reviewed_cargo_binary_sha256: hex::encode(manifest.reviewed_cargo_binary_sha256),
+            reviewed_rustc_binary_sha256: hex::encode(manifest.reviewed_rustc_binary_sha256),
             generation: manifest.generation.clone(),
             generation_memory_limit_bytes: manifest.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: manifest
@@ -2042,6 +2062,9 @@ struct VerificationReportV4 {
     qualified_candidate_sha256: String,
     promotion_record_sha256: String,
     release_policy_sha256: String,
+    authenticated_source_seal_projection_sha256: String,
+    reviewed_cargo_binary_sha256: String,
+    reviewed_rustc_binary_sha256: String,
     generation: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
@@ -2067,6 +2090,11 @@ impl VerificationReportV4 {
             qualified_candidate_sha256: report.qualified_candidate_sha256.clone(),
             promotion_record_sha256: hex::encode(promotion_record_sha256),
             release_policy_sha256: report.release_policy_sha256.clone(),
+            authenticated_source_seal_projection_sha256: report
+                .authenticated_source_seal_projection_sha256
+                .clone(),
+            reviewed_cargo_binary_sha256: report.reviewed_cargo_binary_sha256.clone(),
+            reviewed_rustc_binary_sha256: report.reviewed_rustc_binary_sha256.clone(),
             generation: report.generation.clone(),
             generation_memory_limit_bytes: report.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: report

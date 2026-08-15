@@ -14,6 +14,7 @@ mod coordinator_support;
 #[cfg(test)]
 pub(crate) use coordinator_support::{
     reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
+    reviewed_v2_adapter_source_for_test, reviewed_v2_runtime_source_for_test,
 };
 /// Sealed coordinator cuts for adjacent direct body-pipeline transitions.
 #[path = "v2_lifecycle_body_pipeline_transition.rs"]

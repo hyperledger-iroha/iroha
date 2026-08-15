@@ -2,6 +2,8 @@
 //!
 //! These instructions move Soracloud service deployment state into the
 //! authoritative on-chain world model instead of Torii-local file persistence.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
@@ -35,10 +37,7 @@ fn decode_flags() -> u8 {
 }
 /// Admit a brand new Soracloud service deployment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DeploySoracloudService {
     /// Bundle being admitted.
     pub bundle: SoraDeploymentBundleV1,
@@ -59,10 +58,7 @@ impl PartialOrd for DeploySoracloudService {
 }
 /// Admit a new candidate revision for an existing Soracloud service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct UpgradeSoracloudService {
     /// Bundle being admitted as the candidate revision.
     pub bundle: SoraDeploymentBundleV1,
@@ -83,10 +79,7 @@ impl PartialOrd for UpgradeSoracloudService {
 }
 /// Admit a brand new Soracloud app-level infrastructure topology.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DeploySoracloudAppInfra {
     /// App topology manifest being admitted.
     pub manifest: SoraAppInfraManifestV1,
@@ -129,10 +122,7 @@ impl PartialOrd for DeploySoracloudAppInfra {
 }
 /// Admit an upgraded Soracloud app-level infrastructure topology.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct UpgradeSoracloudAppInfra {
     /// App topology manifest being admitted.
     pub manifest: SoraAppInfraManifestV1,
@@ -175,10 +165,7 @@ impl PartialOrd for UpgradeSoracloudAppInfra {
 }
 /// Roll a Soracloud service back to an already admitted revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RollbackSoracloudService {
     /// Service to roll back.
     pub service_name: Name,
@@ -196,10 +183,7 @@ impl PartialOrd for RollbackSoracloudService {
 }
 /// Record or replace an authoritative Soracloud service config entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SetSoracloudServiceConfig {
     /// Service whose config entry should be updated.
     pub service_name: Name,
@@ -218,10 +202,7 @@ impl PartialOrd for SetSoracloudServiceConfig {
 }
 /// Remove an authoritative Soracloud service config entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DeleteSoracloudServiceConfig {
     /// Service whose config entry should be removed.
     pub service_name: Name,
@@ -238,10 +219,7 @@ impl PartialOrd for DeleteSoracloudServiceConfig {
 }
 /// Record or replace an authoritative Soracloud service secret entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SetSoracloudServiceSecret {
     /// Service whose secret entry should be updated.
     pub service_name: Name,
@@ -260,10 +238,7 @@ impl PartialOrd for SetSoracloudServiceSecret {
 }
 /// Remove an authoritative Soracloud service secret entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DeleteSoracloudServiceSecret {
     /// Service whose secret entry should be removed.
     pub service_name: Name,
@@ -280,10 +255,7 @@ impl PartialOrd for DeleteSoracloudServiceSecret {
 }
 /// Record an ordered Soracloud state mutation against a declared binding.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MutateSoracloudState {
     /// Service whose state binding should be mutated.
     pub service_name: Name,
@@ -317,10 +289,7 @@ impl PartialOrd for MutateSoracloudState {
 }
 /// Register the first governance-authenticated FHE material version for a service policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RegisterSoracloudFhePolicy {
     /// Service that owns the policy.
     pub service_name: Name,
@@ -337,10 +306,7 @@ impl PartialOrd for RegisterSoracloudFhePolicy {
 }
 /// Rotate a service-scoped FHE policy to the next immutable material version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RotateSoracloudFhePolicy {
     /// Service that owns the policy.
     pub service_name: Name,
@@ -359,10 +325,7 @@ impl PartialOrd for RotateSoracloudFhePolicy {
 }
 /// Permanently revoke the exact active FHE policy version for a service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RevokeSoracloudFhePolicy {
     /// Service that owns the policy.
     pub service_name: Name,
@@ -379,10 +342,7 @@ impl PartialOrd for RevokeSoracloudFhePolicy {
 }
 /// Record an ordered Soracloud FHE execution result.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RunSoracloudFheJob {
     /// Service whose ciphertext state receives the job output.
     pub service_name: Name,
@@ -412,10 +372,7 @@ impl PartialOrd for RunSoracloudFheJob {
 }
 /// Record an ordered Soracloud decryption or health-access request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RecordSoracloudDecryptionRequest {
     /// Service whose ciphertext state is being requested.
     pub service_name: Name,
@@ -434,10 +391,7 @@ impl PartialOrd for RecordSoracloudDecryptionRequest {
 }
 /// Join or create a shared Hugging Face lease window on Soracloud.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct JoinSoracloudHfSharedLease {
     /// Hugging Face repository identifier.
     pub repo_id: String,
@@ -477,10 +431,7 @@ impl PartialOrd for JoinSoracloudHfSharedLease {
 }
 /// Leave the current shared Hugging Face lease window.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct LeaveSoracloudHfSharedLease {
     /// Hugging Face repository identifier.
     pub repo_id: String,
@@ -507,10 +458,7 @@ impl PartialOrd for LeaveSoracloudHfSharedLease {
 }
 /// Sponsor a fresh shared Hugging Face lease window after expiry or retirement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RenewSoracloudHfSharedLease {
     /// Hugging Face repository identifier.
     pub repo_id: String,
@@ -545,10 +493,7 @@ impl PartialOrd for RenewSoracloudHfSharedLease {
 }
 /// Advertise validator-host capabilities for authoritative HF placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AdvertiseSoracloudModelHost {
     /// Capability advert being published by the validator.
     pub capability: SoraModelHostCapabilityRecordV1,
@@ -563,10 +508,7 @@ impl PartialOrd for AdvertiseSoracloudModelHost {
 }
 /// Refresh the heartbeat TTL for an advertised validator host.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct HeartbeatSoracloudModelHost {
     /// Validator account that owns the host advert.
     pub validator_account_id: AccountId,
@@ -583,10 +525,7 @@ impl PartialOrd for HeartbeatSoracloudModelHost {
 }
 /// Withdraw an advertised validator host from authoritative HF placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct WithdrawSoracloudModelHost {
     /// Validator account that owns the host advert.
     pub validator_account_id: AccountId,
@@ -601,10 +540,7 @@ impl PartialOrd for WithdrawSoracloudModelHost {
 }
 /// Reconcile expired validator-host adverts against authoritative HF placements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReconcileSoracloudModelHosts;
 impl crate::seal::Instruction for ReconcileSoracloudModelHosts {}
 impl PartialOrd for ReconcileSoracloudModelHosts {
@@ -614,10 +550,7 @@ impl PartialOrd for ReconcileSoracloudModelHosts {
 }
 /// Advertise validator-host capabilities for authoritative Inrou placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AdvertiseSoracloudInrouHost {
     /// Capability advert being published by the validator.
     pub capability: SoraInrouHostCapabilityRecordV1,
@@ -632,10 +565,7 @@ impl PartialOrd for AdvertiseSoracloudInrouHost {
 }
 /// Withdraw an advertised validator host from authoritative Inrou placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct WithdrawSoracloudInrouHost {
     /// Validator account that owns the host advert.
     pub validator_account_id: AccountId,
@@ -650,10 +580,7 @@ impl PartialOrd for WithdrawSoracloudInrouHost {
 }
 /// Reconcile active hosted Inrou placements against current host adverts and service leases.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReconcileSoracloudInrouPlacements;
 impl crate::seal::Instruction for ReconcileSoracloudInrouPlacements {}
 impl PartialOrd for ReconcileSoracloudInrouPlacements {
@@ -663,10 +590,7 @@ impl PartialOrd for ReconcileSoracloudInrouPlacements {
 }
 /// Report authoritative evidence for a validator-host violation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReportSoracloudModelHostViolation {
     /// Validator responsible for the violation.
     pub validator_account_id: AccountId,
@@ -687,10 +611,7 @@ impl PartialOrd for ReportSoracloudModelHostViolation {
 }
 /// Deploy a Soracloud agent apartment into authoritative world state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DeploySoracloudAgentApartment {
     /// Apartment manifest being admitted.
     pub manifest: AgentApartmentManifestV1,
@@ -709,10 +630,7 @@ impl PartialOrd for DeploySoracloudAgentApartment {
 }
 /// Renew a Soracloud agent apartment lease.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RenewSoracloudAgentLease {
     /// Apartment to renew.
     pub apartment_name: Name,
@@ -729,10 +647,7 @@ impl PartialOrd for RenewSoracloudAgentLease {
 }
 /// Restart a Soracloud agent apartment process.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RestartSoracloudAgentApartment {
     /// Apartment to restart.
     pub apartment_name: Name,
@@ -749,10 +664,7 @@ impl PartialOrd for RestartSoracloudAgentApartment {
 }
 /// Revoke an active Soracloud agent apartment policy capability.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RevokeSoracloudAgentPolicy {
     /// Apartment whose policy should change.
     pub apartment_name: Name,
@@ -772,10 +684,7 @@ impl PartialOrd for RevokeSoracloudAgentPolicy {
 }
 /// Submit a policy-gated wallet spend request for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RequestSoracloudAgentWalletSpend {
     /// Apartment initiating the spend.
     pub apartment_name: Name,
@@ -794,10 +703,7 @@ impl PartialOrd for RequestSoracloudAgentWalletSpend {
 }
 /// Approve and apply a pending wallet spend request for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ApproveSoracloudAgentWalletSpend {
     /// Apartment owning the pending request.
     pub apartment_name: Name,
@@ -814,10 +720,7 @@ impl PartialOrd for ApproveSoracloudAgentWalletSpend {
 }
 /// Enqueue a deterministic mailbox message between agent apartments.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct EnqueueSoracloudAgentMessage {
     /// Sender apartment.
     pub from_apartment: Name,
@@ -838,10 +741,7 @@ impl PartialOrd for EnqueueSoracloudAgentMessage {
 }
 /// Acknowledge and consume a queued mailbox message for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AcknowledgeSoracloudAgentMessage {
     /// Apartment consuming the mailbox message.
     pub apartment_name: Name,
@@ -858,10 +758,7 @@ impl PartialOrd for AcknowledgeSoracloudAgentMessage {
 }
 /// Allowlist an autonomy artifact for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AllowSoracloudAgentAutonomyArtifact {
     /// Apartment receiving the allowlist rule.
     pub apartment_name: Name,
@@ -881,10 +778,7 @@ impl PartialOrd for AllowSoracloudAgentAutonomyArtifact {
 }
 /// Approve a deterministic autonomy run for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RunSoracloudAgentAutonomy {
     /// Apartment owning the run.
     pub apartment_name: Name,
@@ -911,10 +805,7 @@ impl PartialOrd for RunSoracloudAgentAutonomy {
 }
 /// Persist an authoritative apartment-level execution audit for a completed autonomy run.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RecordSoracloudAgentAutonomyExecution {
     /// Apartment that owns the executed run.
     pub apartment_name: Name,
@@ -956,10 +847,7 @@ impl PartialOrd for RecordSoracloudAgentAutonomyExecution {
 }
 /// Start a deterministic Soracloud training job.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct StartSoracloudTrainingJob {
     /// Service that owns the training job.
     pub service_name: Name,
@@ -992,10 +880,7 @@ impl PartialOrd for StartSoracloudTrainingJob {
 }
 /// Record a deterministic Soracloud training checkpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CheckpointSoracloudTrainingJob {
     /// Service that owns the training job.
     pub service_name: Name,
@@ -1018,10 +903,7 @@ impl PartialOrd for CheckpointSoracloudTrainingJob {
 }
 /// Move a deterministic Soracloud training job into retry-pending state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RetrySoracloudTrainingJob {
     /// Service that owns the training job.
     pub service_name: Name,
@@ -1040,10 +922,7 @@ impl PartialOrd for RetrySoracloudTrainingJob {
 }
 /// Register a deterministic Soracloud model artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RegisterSoracloudModelArtifact {
     /// Service that owns the artifact.
     pub service_name: Name,
@@ -1072,10 +951,7 @@ impl PartialOrd for RegisterSoracloudModelArtifact {
 }
 /// Register a deterministic Soracloud model-weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RegisterSoracloudModelWeight {
     /// Service that owns the model.
     pub service_name: Name,
@@ -1109,10 +985,7 @@ impl PartialOrd for RegisterSoracloudModelWeight {
 }
 /// Promote an admitted Soracloud model-weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PromoteSoracloudModelWeight {
     /// Service that owns the model.
     pub service_name: Name,
@@ -1135,10 +1008,7 @@ impl PartialOrd for PromoteSoracloudModelWeight {
 }
 /// Roll a Soracloud model registry back to a prior admitted weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RollbackSoracloudModelWeight {
     /// Service that owns the model.
     pub service_name: Name,
@@ -1159,10 +1029,7 @@ impl PartialOrd for RollbackSoracloudModelWeight {
 }
 /// Register an uploaded-model bundle root before encrypted chunks arrive.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RegisterSoracloudUploadedModelBundle {
     /// Deterministic uploaded-model bundle metadata.
     pub bundle: SoraUploadedModelBundleV1,
@@ -1177,10 +1044,7 @@ impl PartialOrd for RegisterSoracloudUploadedModelBundle {
 }
 /// Seal an uploaded-model bundle and publish its artifact metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct FinalizeSoracloudUploadedModelBundle {
     /// Service that owns the artifact.
     pub service_name: Name,
@@ -1215,10 +1079,7 @@ impl PartialOrd for FinalizeSoracloudUploadedModelBundle {
 }
 /// Advance or roll back an in-flight Soracloud rollout.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AdvanceSoracloudRollout {
     /// Service whose rollout should advance.
     pub service_name: Name,
@@ -1245,10 +1106,7 @@ impl PartialOrd for AdvanceSoracloudRollout {
 /// `CanManageSoracloud` holders may reconcile any service. Other callers must
 /// be active public-lane validators assigned to the exact service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SetSoracloudRuntimeState {
     /// Runtime state to persist.
     pub state: SoraServiceRuntimeStateV1,
@@ -1261,10 +1119,7 @@ impl PartialOrd for SetSoracloudRuntimeState {
 }
 /// Upsert authoritative runtime state for one placed Inrou replica.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SetSoracloudInrouReplicaRuntimeState {
     /// Runtime state to persist.
     pub state: SoraInrouReplicaRuntimeStateV1,
@@ -1277,10 +1132,7 @@ impl PartialOrd for SetSoracloudInrouReplicaRuntimeState {
 }
 /// Clear authoritative runtime state for one placed Inrou replica.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ClearSoracloudInrouReplicaRuntimeState {
     /// Service whose replica state should be removed.
     pub service_name: Name,
@@ -1300,10 +1152,7 @@ impl PartialOrd for ClearSoracloudInrouReplicaRuntimeState {
 /// `CanManageSoracloud` holders may reconcile any service. Other callers must
 /// be active public-lane validators assigned to the exact service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReportSoracloudServiceLeaseUsage {
     /// Service whose hosted-service lease should be updated.
     pub service_name: Name,
@@ -1324,10 +1173,7 @@ impl PartialOrd for ReportSoracloudServiceLeaseUsage {
 /// other callers must be active public-lane validators assigned to the source service's active
 /// revision. Recorded message identifiers are immutable and cannot be replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RecordSoracloudMailboxMessage {
     /// Mailbox message to persist.
     pub message: SoraServiceMailboxMessageV1,
@@ -1344,10 +1190,7 @@ impl PartialOrd for RecordSoracloudMailboxMessage {
 /// validators assigned to the exact service revision and must identify themselves as the selected
 /// validator in the receipt. Recorded receipt identifiers are immutable and cannot be replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RecordSoracloudRuntimeReceipt {
     /// Runtime receipt to persist.
     pub receipt: SoraRuntimeReceiptV1,
@@ -1363,10 +1206,7 @@ impl PartialOrd for RecordSoracloudRuntimeReceipt {
 /// This privileged ledger projection is restricted to `CanManageSoracloud` holders. Recorded
 /// receipt identifiers are immutable and cannot be replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct RecordSoracloudPrivateUploadedModelExecutionReceipt {
     /// Private uploaded-model execution receipt to persist.
     pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,

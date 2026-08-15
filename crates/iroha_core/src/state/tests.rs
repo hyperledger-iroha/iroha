@@ -3127,7 +3127,7 @@ fn install_existing_nexus_geometry_for_test(
         .kura
         .reconcile_lane_segments_for_testing(&diff.added, &diff.retired, &fixture_replacements)
         .expect("test Nexus lane storage must match the installed catalog");
-    let incarnations = derive_static_lane_incarnations(state.network_id_ref(), &nexus.lane_catalog);
+    let incarnations = derive_static_lane_incarnations(&nexus.lane_catalog);
     let_row! { activation_heights = nexus .lane_catalog .lanes() .iter() .map(|lane| (lane.id, 0)) .collect::<BTreeMap<_, _>>() };
     validate_lane_incarnation_map(&nexus.lane_catalog, &incarnations)
         .expect("test Nexus incarnation map is valid");
@@ -5023,8 +5023,8 @@ state_test! { sync autoscale_committee_pin_is_part_of_catalog_config_and_incarna
         merge_lane_catalog_hash(&catalog_b)
     );
     assert_ne!(
-        derive_static_lane_incarnations(&DEFAULT_TEST_NETWORK_ID, &catalog_a)[&LaneId::new(1)],
-        derive_static_lane_incarnations(&DEFAULT_TEST_NETWORK_ID, &catalog_b)[&LaneId::new(1)],
+        derive_static_lane_incarnations(&catalog_a)[&LaneId::new(1)],
+        derive_static_lane_incarnations(&catalog_b)[&LaneId::new(1)],
         "re-pinning authority is necessarily a new lane incarnation"
     );
 }
@@ -6828,7 +6828,7 @@ fn commit_state_block_with_empty_autoscale_queue(
 }
 fn manual_lane_lifecycle_payload() -> iroha_data_model::nexus::LaneLifecycleParameterV1 {
     let expected_catalog = LaneCatalog::default();
-    let incarnations = derive_static_lane_incarnations(&DEFAULT_TEST_NETWORK_ID, &expected_catalog);
+    let incarnations = derive_static_lane_incarnations(&expected_catalog);
     let_row! { incarnations = iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations( &expected_catalog, &incarnations, ) .expect("default lifecycle incarnation set is canonical") };
     iroha_data_model::nexus::LaneLifecycleParameterV1::new(
         &expected_catalog,
@@ -7034,7 +7034,7 @@ state_test! { sync signed_lane_lifecycle_rejects_stale_catalog_after_prior_commi
     }
     let before = state.nexus_snapshot().lane_catalog;
     assert!(before.lanes().iter().any(|lane| lane.id == LaneId::new(1)));
-    let_row! { stale_incarnations = derive_static_lane_incarnations(&DEFAULT_TEST_NETWORK_ID, &LaneCatalog::default()) };
+    let_row! { stale_incarnations = derive_static_lane_incarnations(&LaneCatalog::default()) };
     let_row! { stale_incarnations = iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations( &LaneCatalog::default(), &stale_incarnations, ) .expect("default lifecycle incarnation set is canonical") };
     let_row! { stale_payload = iroha_data_model::nexus::LaneLifecycleParameterV1::new( &LaneCatalog::default(), &stale_incarnations, iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![LaneConfig { id: LaneId::new(2), alias: "stale-second-lane".to_owned(), ..LaneConfig::default() }], retire: Vec::new(), }, ) .expect("stale lifecycle payload is structurally canonical") };
     let_row! { transaction = TransactionBuilder::new( *state.network_id_ref(), authority.clone(), iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), ) .with_instructions([iroha_data_model::isi::SetParameter::new(Parameter::Custom( stale_payload.into_custom_parameter(), ))]) .sign(signer.private_key()) };
@@ -14604,7 +14604,7 @@ state_test! { sync apply_lane_geometry_updates_relabels_kura_storage
     let_row! { updated_entry = updated_config .entry(LaneId::SINGLE) .expect("lane entry exists") };
     let old_dir = lane_entry.blocks_dir(&store_root);
     assert!(old_dir.exists(), "expected original directory to exist");
-    let incarnations = derive_static_lane_incarnations(&state.network_id, &initial_catalog);
+    let incarnations = derive_static_lane_incarnations(&initial_catalog);
     let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
     let lineage = state.lane_incarnation_lineage_snapshot();
     state
@@ -16565,7 +16565,7 @@ fn authenticated_startup_anchors_custom_primary_and_journals_secondaries_exactly
         );
         assert_eq!(
             state.lane_incarnations_snapshot(),
-            derive_static_lane_incarnations(&state.network_id, &anchored.lane_catalog)
+            derive_static_lane_incarnations(&anchored.lane_catalog)
         );
         assert_eq!(
             state.lane_incarnation_activation_heights_snapshot(),
@@ -16621,7 +16621,7 @@ state_test! { sync restored_primary_anchor_rejects_lane_zero_mismatch_before_kur
     let kura = authenticated_kura_for_testing(store_root.clone(), &configured);
     let mut state = blank_test_state_from_kura(&kura);
     let_row! { configured_primary_catalog = LaneCatalog::new( configured.lane_count(), vec![ configured .lanes() .iter() .find(|lane| lane.id == LaneId::SINGLE) .expect("configured primary lane") .clone(), ], ) .expect("configured primary-only catalog") };
-    let_row! { expected_primary_incarnation = derive_static_lane_incarnations(&state.network_id, &configured_primary_catalog) [&LaneId::SINGLE] };
+    let_row! { expected_primary_incarnation = derive_static_lane_incarnations(&configured_primary_catalog) [&LaneId::SINGLE] };
     let_row! { before_journal = kura .lane_geometry_journal_state_for_test() .expect("read journal before restored anchor rejection") };
     let configured_primary_exists_before = configured_primary_blocks.exists();
     let mut mismatched_lanes = configured.lanes().to_vec();

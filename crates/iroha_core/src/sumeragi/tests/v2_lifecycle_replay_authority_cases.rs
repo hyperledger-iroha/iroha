@@ -1280,7 +1280,7 @@ fn local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins() {
             "local replay authority exposed or reserved {forbidden}"
         );
     }
-    let runtime = include_str!("../v2_runtime.rs")
+    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test()
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("runtime has one production prefix");
@@ -1439,8 +1439,8 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
     for outside in [
         include_str!("../v2_lifecycle_coordinator.rs"),
         reviewed_lifecycle_ledger_source_for_test(),
-        include_str!("../v2.rs"),
-        include_str!("../v2_runtime.rs"),
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_runner.rs"),
     ] {
@@ -1538,7 +1538,7 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
         "the raw terminal reducer wrapper must remain a single test fixture"
     );
     for outside in [
-        include_str!("../v2.rs"),
+        crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test(),
         include_str!("../v2_lifecycle_coordinator.rs"),
         reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_lifecycle_open.rs"),
@@ -2158,7 +2158,7 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
             "remote Proposal replay wrapper exposed or reserved {forbidden}"
         );
     }
-    let runtime = include_str!("../v2_runtime.rs")
+    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test()
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("runtime has one production prefix");
@@ -2299,7 +2299,7 @@ fn invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only() {
             "invalid-body evidence exposed or reserved {forbidden}"
         );
     }
-    let adapter = include_str!("../v2.rs")
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test()
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("adapter production prefix is bounded");
@@ -2403,11 +2403,11 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
             "live WAL seal exposed or reserved forbidden surface {forbidden}"
         );
     }
-    let adapter = include_str!("../v2.rs")
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test()
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("adapter has one production prefix");
-    let runtime = include_str!("../v2_runtime.rs")
+    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test()
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("runtime has one production prefix");

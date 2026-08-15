@@ -70,6 +70,14 @@ pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str
     static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SOURCE
         .get_or_init(|| {
+            let recovered_wal =
+                include_str!("v2_lifecycle_work_registry_recovered_wal.rs").replacen(
+                    "include!(\"v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs\");\n",
+                    include_str!(
+                        "v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs"
+                    ),
+                    1,
+                );
             let recovery = include_str!("v2_lifecycle_work_registry_validate_recovery.rs")
                 .replacen(
                     "include!(\"v2_lifecycle_work_registry_validate_recovery_registry_impl.rs\");\n",
@@ -86,7 +94,7 @@ pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str
             include_str!("v2_lifecycle_work_registry.rs")
                 .replacen(
                     "include!(\"v2_lifecycle_work_registry_recovered_wal.rs\");\n",
-                    include_str!("v2_lifecycle_work_registry_recovered_wal.rs"),
+                    recovered_wal.as_str(),
                     1,
                 )
                 .replacen(
@@ -97,6 +105,42 @@ pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str
                 .replacen(
                     "include!(\"v2_lifecycle_work_registry_validate_execution.rs\");\n",
                     include_str!("v2_lifecycle_work_registry_validate_execution.rs"),
+                    1,
+                )
+        })
+        .as_str()
+}
+
+#[cfg(test)]
+/// Reconstruct the adapter source exactly as Rust expands its reviewed provider.
+pub(crate) fn reviewed_v2_adapter_source_for_test() -> &'static str {
+    static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SOURCE
+        .get_or_init(|| {
+            include_str!("v2.rs").replacen(
+                "include!(\"v2_authenticated_recovered_adapter_startup_impl.rs\");\n",
+                include_str!("v2_authenticated_recovered_adapter_startup_impl.rs"),
+                1,
+            )
+        })
+        .as_str()
+}
+
+#[cfg(test)]
+/// Reconstruct the runtime source exactly as Rust expands its reviewed providers.
+pub(crate) fn reviewed_v2_runtime_source_for_test() -> &'static str {
+    static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SOURCE
+        .get_or_init(|| {
+            include_str!("v2_runtime.rs")
+                .replacen(
+                    "include!(\"v2_runtime_effect_ownership_core_impl.rs\");\n",
+                    include_str!("v2_runtime_effect_ownership_core_impl.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_runtime_effect_ownership_rebind_impl.rs\");\n",
+                    include_str!("v2_runtime_effect_ownership_rebind_impl.rs"),
                     1,
                 )
         })

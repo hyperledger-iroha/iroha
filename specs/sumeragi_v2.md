@@ -52,7 +52,14 @@ caches, and telemetry are deliberately excluded. An unsigned
 deployment template whose final roster is not known carries the config-only projection. `kagami
 genesis sign` stages the complete genesis transaction, including validator activation, then
 replaces the projection and consensus fingerprint with the exact staged values before it emits a
-signed block. A template is therefore not a deployable commitment by itself.
+signed block. Generation-zero lane incarnations use the domain-separated `static:v2` projection of
+the canonical lane catalog and lane definition; they deliberately exclude `NetworkId`, because the
+exact `NetworkId` is the final signed-genesis header hash and including it here would require a
+cryptographic fixed point. Later configuration and lifecycle incarnations remain network-bound,
+and every live height context authenticates the exact `NetworkId` separately. After signing,
+Kagami re-stages the final signed body under that final `NetworkId` and refuses to publish it unless
+both context commitments reproduce exactly. A template is therefore not a deployable commitment
+by itself.
 
 Genesis also carries `sumeragi_v2.execution_policy_hash`. This is a separate, versioned identity
 for boot configuration which is read from `State` during transaction admission, transaction and

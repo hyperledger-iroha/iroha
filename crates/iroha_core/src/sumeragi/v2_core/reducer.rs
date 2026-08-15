@@ -699,10 +699,9 @@ impl Reducer {
         let mut body_work = BTreeMap::new();
         let mut pending_prepare = BTreeMap::new();
         if let Some(certificate) = retryable_prepare {
-            // Replay restores an undecided open-current-view high PrepareQC as the exact
-            // Missing-body authority without emitting constructor work. Retransmission derives
-            // FetchBody after ResumeAfterReplay; closed/old highs, locks, and Decisions retain
-            // their narrower recovery paths.
+            // Replay restores an undecided open-current-view high PrepareQC as exact Missing-body
+            // authority without constructor work. Retransmission derives FetchBody after replay;
+            // closed/old highs, locks, and Decisions retain narrower recovery paths.
             body_work.insert(
                 (certificate.round(), certificate.subject()),
                 BodyWork {
@@ -975,11 +974,9 @@ impl Reducer {
     /// Returns an error for malformed authenticated input, an invalid
     /// certificate, failed persistence, or an impossible durable-state change.
     pub fn step(&mut self, event: Event) -> Result<StepOutcome, ReducerError> {
-        // The candidate transition is always private until the executable
-        // refinement gate accepts its exact state/effect projection.  Even an
-        // error path passes through the same gate as an empty stutter before
-        // returning, so no `Reducer::step` exit bypasses the production kernel
-        // verified in `verus_proofs.rs`.
+        // The candidate transition stays private until the executable refinement gate accepts its
+        // exact state/effect projection. Even errors pass through it as empty stutters, so no
+        // `Reducer::step` exit bypasses the production kernel verified in `verus_proofs.rs`.
         let audit_event = event.clone();
         let mut next = self.clone();
         match next.step_in_place(event) {
@@ -1073,11 +1070,9 @@ impl Reducer {
                 && self.body_state(locked.round(), locked.subject()) == BodyState::Validated
                 && !progress_witness
             {
-                // A current-view validated lock must own its exact same-round
-                // Commit append. For a historical TC-promoted lock, the
-                // installed predecessor timeout is instead the typed witness
-                // which authorizes unchanged body re-proposal; it never
-                // authorizes a new Commit for the closed round.
+                // A current-view validated lock owns its exact same-round Commit append. For a
+                // historical TC-promoted lock, the installed predecessor timeout instead authorizes
+                // unchanged body re-proposal; it never authorizes a new Commit for the closed round.
                 return Some(ProgressWitnessViolation::LockedCommitOrphaned);
             }
         }
@@ -1090,9 +1085,8 @@ impl Reducer {
             if state == BodyState::Invalid {
                 return Some(ProgressWitnessViolation::DecidedBodyInvalid);
             }
-            // Every non-invalid body stage has a deterministic retransmission
-            // effect (fetch, store, validate, or apply), so retaining the exact
-            // stage is itself the reducer-owned reconstruction witness.
+            // Every non-invalid body stage has deterministic retransmission (fetch, store,
+            // validate, or apply), so the exact stage is the reducer-owned reconstruction witness.
             if !self
                 .body_work
                 .contains_key(&(body_round, decision.subject()))

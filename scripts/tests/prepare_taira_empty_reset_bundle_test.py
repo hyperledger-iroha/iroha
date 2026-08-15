@@ -19,6 +19,9 @@ from scripts import prepare_taira_empty_reset_bundle as reset_bundle
 
 SCRIPT = Path(reset_bundle.__file__).resolve()
 DPN_COMMIT = "12" * 20
+KAGEMUSHA_ACTIVATION_AUTHORITY = (
+    "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+)
 
 
 def test_isolated_cli_loads_only_its_trusted_sibling_modules(
@@ -39,6 +42,8 @@ def test_isolated_cli_loads_only_its_trusted_sibling_modules(
     assert "--kagami" not in result.stdout
     assert "--onboarding-token-hash-tool" in result.stdout
     assert "--source-bundle-sha256" in result.stdout
+    assert "--kagemusha-release-root" in result.stdout
+    assert "--kagemusha-activation-authority" in result.stdout
 
 
 class TairaResetFreeSpaceTests(unittest.TestCase):
@@ -103,6 +108,87 @@ class TairaResetIdentityTests(unittest.TestCase):
                 reset_bundle.require_source_commit(rejected)
 
 
+def test_kagemusha_activation_authority_requires_both_effective_genesis_grants() -> None:
+    def permission(operation: str, name: str) -> dict[str, object]:
+        return {
+            operation: {
+                "Permission": {
+                    "destination": KAGEMUSHA_ACTIVATION_AUTHORITY,
+                    "object": {"name": name},
+                }
+            }
+        }
+
+    required = sorted(reset_bundle.KAGEMUSHA_IMMUTABLE_ACTIVATION_PERMISSIONS)
+    accepted = reset_bundle.canonical_json_bytes(
+        {
+            "transactions": [
+                {
+                    "instructions": [
+                        permission("Grant", required[0]),
+                        permission("Grant", required[1]),
+                    ]
+                }
+            ]
+        }
+    )
+    assert (
+        reset_bundle._require_kagemusha_activation_authority_permissions(
+            accepted, KAGEMUSHA_ACTIVATION_AUTHORITY
+        )
+        == KAGEMUSHA_ACTIVATION_AUTHORITY
+    )
+
+    revoked = reset_bundle.canonical_json_bytes(
+        {
+            "transactions": [
+                {
+                    "instructions": [
+                        permission("Grant", required[0]),
+                        permission("Grant", required[1]),
+                        permission("Revoke", required[0]),
+                    ]
+                }
+            ]
+        }
+    )
+    with pytest.raises(RuntimeError, match=required[0]):
+        reset_bundle._require_kagemusha_activation_authority_permissions(
+            revoked, KAGEMUSHA_ACTIVATION_AUTHORITY
+        )
+
+    with pytest.raises(RuntimeError, match="activation-authority"):
+        reset_bundle._require_kagemusha_activation_authority_permissions(
+            accepted, None
+        )
+
+
+def test_kagemusha_genesis_staging_requires_policy_but_no_catalog_or_seal(
+    tmp_path: Path,
+) -> None:
+    release_root = tmp_path / "kagemusha-release"
+    _mkdir_private(release_root / "policy")
+    policy = (
+        release_root
+        / reset_bundle.renderer.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    )
+    _write_private(policy, b"reviewed release policy")
+    assert reset_bundle._kagemusha_release_policy_sha256(
+        release_root
+    ) == hashlib.sha256(b"reviewed release policy").hexdigest()
+
+    artifact_dir = release_root / reset_bundle.renderer.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+    _mkdir_private(artifact_dir)
+    with pytest.raises(RuntimeError, match="artifact directory must not exist"):
+        reset_bundle._kagemusha_release_policy_sha256(release_root)
+    artifact_dir.rmdir()
+
+    seal = release_root / reset_bundle.renderer.KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
+    _write_private(seal, b"stale seal")
+    with pytest.raises(RuntimeError, match="qualification seal must not exist"):
+        reset_bundle._kagemusha_release_policy_sha256(release_root)
+
+
 def _write_private(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_bytes(payload)
@@ -123,6 +209,34 @@ def _privacy_release(
     workspace_sha256: str,
 ) -> dict[str, bytes]:
     _mkdir_private(root)
+    genesis = {
+        "transactions": [
+            {
+                "instructions": [
+                    {
+                        "Grant": {
+                            "Permission": {
+                                "destination": KAGEMUSHA_ACTIVATION_AUTHORITY,
+                                "object": {
+                                    "name": "CanActivateKagemushaRecursiveReleaseV4"
+                                },
+                            }
+                        }
+                    },
+                    {
+                        "Grant": {
+                            "Permission": {
+                                "destination": KAGEMUSHA_ACTIVATION_AUTHORITY,
+                                "object": {
+                                    "name": "CanManageOfflineDeviceAttestationPolicy"
+                                },
+                            }
+                        }
+                    },
+                ]
+            }
+        ]
+    }
     payloads = {
         "privacy_bootstrap_plan.json": b'{"plan":true}\n',
         "config.toml": (
@@ -130,7 +244,7 @@ def _privacy_release(
             + b"AB" * 32
             + b'"\nexpected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"\n'
         ),
-        "genesis.json": b'{"transactions":[{"instructions":[]}]}\n',
+        "genesis.json": reset_bundle.canonical_json_bytes(genesis),
         "bootle_lantern_broker_public.json": b'{"broker":true}\n',
     }
     rows: dict[str, object] = {}
@@ -286,6 +400,8 @@ def _prepare_args(
         workspace_source_manifest_sha256="ef" * 32,
         controller_manifest=controller_manifest,
         controller_digest="12" * 32,
+        kagemusha_release_root=None,
+        kagemusha_activation_authority=None,
         minimum_free_bytes=0,
     )
 
@@ -641,7 +757,21 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     )
     _write_private(signer, b"fake external signer")
     signer.chmod(0o700)
-    monkeypatch.setattr(reset_bundle.renderer, "render_bundle", _fake_renderer)
+    render_release_roots: list[Path | None] = []
+    render_seal_modes: list[bool] = []
+    render_genesis_hashes: list[str | None] = []
+
+    def render_with_release_root(*render_args, **render_kwargs):
+        render_release_roots.append(render_kwargs.get("kagemusha_release_root"))
+        render_seal_modes.append(
+            render_kwargs.get("include_kagemusha_qualification_seal", True)
+        )
+        render_genesis_hashes.append(render_kwargs.get("genesis_expected_hash"))
+        return _fake_renderer(*render_args, **render_kwargs)
+
+    monkeypatch.setattr(
+        reset_bundle.renderer, "render_bundle", render_with_release_root
+    )
     monkeypatch.setattr(
         reset_bundle,
         "_validate_rendered_configs",
@@ -659,6 +789,14 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
         ),
     )
     args = _prepare_args(private, source, privacy, signer)
+    args.kagemusha_release_root = tmp_path / "kagemusha-release"
+    _mkdir_private(args.kagemusha_release_root / "policy")
+    _write_private(
+        args.kagemusha_release_root
+        / reset_bundle.renderer.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH,
+        b"authenticated release policy",
+    )
+    args.kagemusha_activation_authority = KAGEMUSHA_ACTIVATION_AUTHORITY
     _trust_test_controller(args, monkeypatch)
 
     result = reset_bundle.prepare(args)
@@ -666,11 +804,29 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     output = args.output_bundle
     manifest = json.loads((output / "reset-manifest.json").read_text(encoding="utf-8"))
     assert result["peer_count"] == 4
+    assert result["kagemusha_release_root"] == str(args.kagemusha_release_root)
+    assert render_release_roots == [
+        args.kagemusha_release_root,
+        args.kagemusha_release_root,
+    ]
+    assert render_seal_modes == [False, True]
+    assert render_genesis_hashes == [
+        reset_bundle.renderer.GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        "00" * 31 + "01",
+    ]
     assert (output / "base-config.toml").read_bytes() == payloads["config.toml"]
     assert (output / "genesis.signed.nrt").read_bytes() == b"new signed genesis"
     assert not (output / "validator-secrets.toml").exists()
     assert manifest["chain_id"] == reset_bundle.CHAIN_ID
     assert manifest["dpn_validator_release_commit"] == DPN_COMMIT
+    assert manifest["kagemusha_release_root"] == str(args.kagemusha_release_root)
+    assert (
+        manifest["kagemusha_activation_authority"]
+        == KAGEMUSHA_ACTIVATION_AUTHORITY
+    )
+    assert manifest["kagemusha_release_policy_sha256"] == hashlib.sha256(
+        b"authenticated release policy"
+    ).hexdigest()
     assert manifest["source_reset_bundle_sha256"] == args.source_bundle_sha256
     assert (
         manifest["signed_genesis_sha256"]

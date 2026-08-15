@@ -346,7 +346,9 @@ val candidateValidationFields = setOf(
     "schema", "candidate_record_sha256", "candidate_manifest_sha256",
     "qualification_receipt_file_name", "qualification_receipt_sha256",
     "qualified_candidate_sha256", "source_commit", "source_tree_sha256",
-    "source_repo_dirty", "generation", "generation_memory_limit_bytes",
+    "source_repo_dirty", "reviewed_source_closure_descriptor_sha256",
+    "authenticated_source_seal_projection_sha256", "reviewed_cargo_binary_sha256",
+    "reviewed_rustc_binary_sha256", "generation", "generation_memory_limit_bytes",
     "generation_memory_enforcement_profile", "bridge_abi_version", "artifact_count",
     "artifacts", "topup_finality_roster_file_name", "topup_finality_roster_size_bytes",
     "topup_finality_roster_sha256",
@@ -377,6 +379,17 @@ if (candidateValidationJson.keys != candidateValidationFields ||
     "topup-finality-roster-v4.norito"
 ) {
     throw GradleException("candidate validation report identity is not exact V2")
+}
+listOf(
+    "reviewed_source_closure_descriptor_sha256",
+    "authenticated_source_seal_projection_sha256",
+    "reviewed_cargo_binary_sha256",
+    "reviewed_rustc_binary_sha256",
+).forEach { key ->
+    val value = candidateValidationJson[key] as? String
+    if (value == null || !lowercaseSha256.matches(value) || value == "0".repeat(64)) {
+        throw GradleException("candidate validation report $key is invalid")
+    }
 }
 val artifactRoles = listOf(
     "step_eq_params_ipa", "step_eq_proving_key", "step_eq_verifying_key",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
@@ -30,12 +31,11 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         self.git("init", "-q")
         self.git("config", "user.name", "Kagemusha Test")
         self.git("config", "user.email", "kagemusha@example.invalid")
-        (self.root / ".gitignore").write_text("/Cargo.lock\n", encoding="utf-8")
         (self.root / "Cargo.lock").write_text(
             "# fixture lockfile consumed by --locked\n", encoding="utf-8"
         )
         self.signature_verifier = mock.patch.object(
-            seal, "_verify_signed_commit", return_value=None
+            seal, "_verify_signed_commit", side_effect=self.fake_verified_authority
         )
         self.signature_verifier.start()
 
@@ -44,7 +44,7 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         self.review_directory.cleanup()
         self.temporary.cleanup()
 
-    def git(self, *arguments: str) -> bytes:
+    def git(self, *arguments: str, input_bytes: bytes | None = None) -> bytes:
         environment = os.environ.copy()
         environment["GIT_CONFIG_GLOBAL"] = os.devnull
         environment["GIT_CONFIG_NOSYSTEM"] = "1"
@@ -56,6 +56,7 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         return subprocess.run(
             ["git", "-C", str(self.root), *arguments],
             check=True,
+            input=input_bytes,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=environment,
@@ -64,6 +65,37 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
     def commit(self) -> None:
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "fixture")
+
+    @staticmethod
+    def fixture_allowed_signers() -> bytes:
+        """Return one structurally valid canonical Ed25519 allowed-signers row."""
+
+        key_type = b"ssh-ed25519"
+        key_blob = (
+            len(key_type).to_bytes(4, "big")
+            + key_type
+            + (32).to_bytes(4, "big")
+            + b"K" * 32
+        )
+        return b"reviewer " + key_type + b" " + base64.b64encode(key_blob) + b"\n"
+
+    def fake_verified_authority(
+        self, root: Path, commit: bytes
+    ) -> object:
+        """Derive real commit facts while substituting only the SSH verification."""
+
+        raw_commit = seal._git(root, "cat-file", "commit", commit.decode("ascii"))
+        return seal._source_authority_from_verified_commit(
+            root,
+            commit.decode("ascii"),
+            raw_commit,
+            seal.VerifiedSshSignature(
+                principal="reviewer",
+                public_key_sha256="1" * 64,
+                allowed_signers_sha256="2" * 64,
+                revocation_sha256="3" * 64,
+            ),
+        )
 
     def reviewed_identity(self) -> tuple[object, dict[str, object], Path, str]:
         descriptor = seal.compute_observed_descriptor(self.root)
@@ -186,6 +218,34 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         )
         self.assertFalse(identity.source_repo_dirty)
 
+    def test_identity_derives_exact_raw_commit_authority(self) -> None:
+        (self.root / "tracked.txt").write_text("parent\n", encoding="utf-8")
+        self.commit()
+        parent = self.git("rev-parse", "HEAD").decode().strip()
+        parent_tree = self.git("rev-parse", "HEAD^{tree}").decode().strip()
+        (self.root / "tracked.txt").write_text("child\n", encoding="utf-8")
+        self.commit()
+
+        identity, _, _, _ = self.reviewed_identity()
+        authority = identity.source_authority
+        raw_commit = self.git("cat-file", "commit", authority.commit)
+        self.assertEqual(authority.commit, identity.source_commit)
+        self.assertEqual(
+            authority.commit_object_sha256, hashlib.sha256(raw_commit).hexdigest()
+        )
+        self.assertEqual(authority.commit_object_size, len(raw_commit))
+        self.assertEqual(
+            authority.git_tree,
+            self.git("rev-parse", "HEAD^{tree}").decode().strip(),
+        )
+        self.assertEqual(authority.ordered_parents, (parent,))
+        self.assertEqual(authority.ordered_parent_trees, (parent_tree,))
+        committer_epoch = int(
+            self.git("show", "-s", "--format=%ct", "HEAD").decode().strip()
+        )
+        self.assertEqual(authority.committer_epoch, committer_epoch)
+        self.assertEqual(authority.signature.principal, "reviewer")
+
     def test_descriptor_pin_and_canonical_bytes_are_mandatory(self) -> None:
         (self.root / "tracked.txt").write_text("base\n", encoding="utf-8")
         self.commit()
@@ -231,17 +291,24 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         with self.assertRaisesRegex(seal.SourceSealError, "file-count bound"):
             seal.compute_observed_descriptor(self.root)
 
-    def test_source_tree_and_descriptor_bind_ignored_root_cargo_lock(self) -> None:
+    def test_source_tree_and_descriptor_bind_tracked_root_cargo_lock(self) -> None:
         (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
         self.commit()
         identity, descriptor, path, pin = self.reviewed_identity()
+        initial_lock = (self.root / "Cargo.lock").read_bytes()
+        self.assertEqual(descriptor["ignored_cargo_lock_size_bytes"], len(initial_lock))
+        self.assertEqual(
+            descriptor["ignored_cargo_lock_sha256"],
+            hashlib.sha256(initial_lock).hexdigest(),
+        )
 
         (self.root / "Cargo.lock").write_text(
-            "# changed ignored lockfile consumed by --locked\n", encoding="utf-8"
+            "# changed tracked lockfile consumed by --locked\n", encoding="utf-8"
         )
-        self.assertEqual(seal.status(self.root), b"")
-        with self.assertRaisesRegex(seal.SourceSealError, "differs"):
+        self.assertNotEqual(seal.status(self.root), b"")
+        with self.assertRaisesRegex(seal.SourceSealError, "blob differs"):
             seal.compute_identity(self.root, str(path), pin)
+        self.commit()
         replacement = seal.compute_observed_descriptor(self.root)
         self.assertNotEqual(
             identity.source_tree_sha256,
@@ -252,27 +319,61 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
             replacement["ignored_cargo_lock_sha256"],
         )
 
-    def test_rejects_missing_or_symlinked_root_cargo_lock(self) -> None:
+    def test_requires_exactly_one_stage_zero_tracked_mode_100644_root_cargo_lock(
+        self,
+    ) -> None:
+        (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        self.commit()
+
+        self.git("rm", "-q", "Cargo.lock")
+        self.commit()
+        with self.assertRaisesRegex(seal.SourceSealError, "exactly one stage-0 tracked"):
+            seal.compute_observed_descriptor(self.root)
+
+        (self.root / "Cargo.lock").symlink_to("tracked.txt")
+        self.commit()
+        with self.assertRaisesRegex(seal.SourceSealError, "mode 100644"):
+            seal.compute_observed_descriptor(self.root)
+
+        (self.root / "Cargo.lock").unlink()
+        (self.root / "Cargo.lock").write_text("tracked executable lock\n", encoding="utf-8")
+        (self.root / "Cargo.lock").chmod(0o755)
+        self.commit()
+        with self.assertRaisesRegex(seal.SourceSealError, "mode 100644"):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_rejects_non_stage_zero_root_cargo_lock_index_entries(self) -> None:
+        (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        self.commit()
+        lock_blob = self.git("rev-parse", "HEAD:Cargo.lock").strip()
+        self.git("update-index", "--force-remove", "Cargo.lock")
+        self.git(
+            "update-index",
+            "--index-info",
+            input_bytes=(
+                b"100644 " + lock_blob + b" 1\tCargo.lock\n"
+                b"100644 " + lock_blob + b" 2\tCargo.lock\n"
+            ),
+        )
+        with self.assertRaisesRegex(seal.SourceSealError, "unresolved merge stage"):
+            seal._index_entries(self.root)
+
+    def test_rejects_symlinked_worktree_root_cargo_lock(self) -> None:
         (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
         self.commit()
         (self.root / "Cargo.lock").unlink()
-        with self.assertRaisesRegex(seal.SourceSealError, "ignored source set"):
-            seal.compute_observed_descriptor(self.root)
-
         os.symlink("tracked.txt", self.root / "Cargo.lock")
         with self.assertRaisesRegex(
-            seal.SourceSealError, "regular file|must not be executable"
+            seal.SourceSealError, "empty tracked diff|regular file|mode differs"
         ):
             seal.compute_observed_descriptor(self.root)
 
     def test_rejects_any_additional_ignored_source(self) -> None:
         (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
-        (self.root / ".gitignore").write_text(
-            "/Cargo.lock\n/hidden-input.bin\n", encoding="utf-8"
-        )
+        (self.root / ".gitignore").write_text("/hidden-input.bin\n", encoding="utf-8")
         self.commit()
         (self.root / "hidden-input.bin").write_bytes(b"unbound ignored input\n")
-        with self.assertRaisesRegex(seal.SourceSealError, "ignored source set"):
+        with self.assertRaisesRegex(seal.SourceSealError, "ignored source set must be empty"):
             seal.compute_observed_descriptor(self.root)
 
     def test_rejects_hardlinked_tracked_source(self) -> None:
@@ -389,6 +490,7 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
                 "_git",
                 return_value=(
                     b"tree " + b"b" * 40 + b"\n"
+                    b"committer Reviewer <reviewer@example.test> 1786749504 +0000\n"
                     b"gpgsig -----BEGIN SSH SIGNATURE-----\n"
                     b" payload\n"
                     b" -----END SSH SIGNATURE-----\n\nfixture\n"
@@ -397,7 +499,7 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
                 seal,
                 "_load_signature_policy",
                 return_value=seal.SignaturePolicy(
-                    allowed_signers=b"reviewer ssh-ed25519 AAAAfixture\n",
+                    allowed_signers=self.fixture_allowed_signers(),
                     revocation=b"",
                 ),
             ):
@@ -440,7 +542,9 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
             self.assertIs(runner.call_args_list[0].kwargs["stderr"], subprocess.PIPE)
         finally:
             self.signature_verifier = mock.patch.object(
-                seal, "_verify_signed_commit", return_value=None
+                seal,
+                "_verify_signed_commit",
+                side_effect=self.fake_verified_authority,
             )
             self.signature_verifier.start()
 
@@ -525,11 +629,38 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {"HOME": str(home)}):
                 descriptor = seal.compute_observed_descriptor(self.root)
+                payload = seal._canonical_json_bytes(descriptor)
+                reviewed = self.review_root / "signed-reviewed-source-closure.json"
+                reviewed.write_bytes(payload)
+                identity = seal.compute_identity(
+                    self.root,
+                    str(reviewed),
+                    hashlib.sha256(payload).hexdigest(),
+                )
             self.assertFalse(descriptor["source_repo_dirty"])
             self.assertEqual(descriptor["untracked_file_count"], 0)
+            raw_public_key = base64.b64decode(
+                key.with_suffix(".pub").read_text(encoding="ascii").split()[1],
+                validate=True,
+            )
+            signature = identity.source_authority.signature
+            self.assertEqual(signature.principal, "reviewer")
+            self.assertEqual(
+                signature.public_key_sha256,
+                hashlib.sha256(raw_public_key).hexdigest(),
+            )
+            self.assertEqual(
+                signature.allowed_signers_sha256,
+                hashlib.sha256(allowed.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                signature.revocation_sha256, hashlib.sha256(b"").hexdigest()
+            )
         finally:
             self.signature_verifier = mock.patch.object(
-                seal, "_verify_signed_commit", return_value=None
+                seal,
+                "_verify_signed_commit",
+                side_effect=self.fake_verified_authority,
             )
             self.signature_verifier.start()
 

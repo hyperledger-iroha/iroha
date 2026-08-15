@@ -7444,7 +7444,7 @@ function decodeVerifyingKeyIdValue(payload, context) {
   };
 }
 
-function encodeProofBoxValue(value, context) {
+function encodeBackendBytesBoxValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
@@ -7467,16 +7467,6 @@ function decodeProofBoxValue(payload, context) {
       ),
     ),
   };
-}
-
-function encodeVerifyingKeyBoxValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.backend, `${context}.backend`))],
-    [encodeByteVecValue(value.bytes, `${context}.bytes`)],
-  ]);
 }
 
 function decodeVerifyingKeyBoxValue(payload, context) {
@@ -7561,7 +7551,7 @@ function encodeVerifyingKeyRecordValue(value, context) {
     [encodeOptionValue(value.vk_bytes_cid, encodeNoritoStringValue, `${context}.vk_bytes_cid`)],
     [encodeOptionValue(value.activation_height, encodeU64NumberValue, `${context}.activation_height`)],
     [encodeOptionValue(value.withdraw_height, encodeU64NumberValue, `${context}.withdraw_height`)],
-    [encodeOptionValue(value.key, encodeVerifyingKeyBoxValue, `${context}.key`)],
+    [encodeOptionValue(value.key, encodeBackendBytesBoxValue, `${context}.key`)],
     [encodeConfidentialStatusValue(value.status, `${context}.status`)],
   ]);
 }
@@ -7703,7 +7693,7 @@ function encodeProofAttachmentValue(value, context) {
   const attachment = normalizeCanonicalProofAttachmentValue(value, context);
   const parts = [
     encodeNoritoField(encodeNoritoStringValue(attachment.backend)),
-    encodeNoritoField(encodeProofBoxValue(attachment.proof, `${context}.proof`)),
+    encodeNoritoField(encodeBackendBytesBoxValue(attachment.proof, `${context}.proof`)),
     encodeNoritoField(encodeVerifyingKeyIdValue(attachment.vk_ref, `${context}.vk_ref`)),
   ];
   const hasLanePrivacy = attachment.lane_privacy !== undefined && attachment.lane_privacy !== null;

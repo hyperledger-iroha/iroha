@@ -3405,8 +3405,8 @@ self.io.is_some()
                 "cold recovered phase owner handoff",
                 adapter_source,
                 (
-                    "install_recovered_sign(&body_store)",
                     "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
+                    "(*prepared).install_recovered_sign()",
                 ),
             )
             recovered_phase_broadcast_assembly = region(

@@ -1,26 +1,10 @@
 //! Fail-closed boundary for Kagemusha Pasta-cycle recursion.
-//!
-//! Retired generic cross-field `Halo2Loader` prototypes emulated transcript scalars and reached
-//! multi-gigabyte RSS; the earlier degree-20 processed key shape was likewise too large. Those
-//! measurements explain the original runaway-memory failure, but neither construction remains a
-//! production or generation fallback.
-//!
-//! The supported nested compact V5 profile keeps the public ABI at 21 and the release manifest at
-//! V4. It fixes both parities at degree 17, exposes one 66-element commitment column, keeps the
-//! exact 138-`u32` predecessor/result state boundary private, and caps each processed proving key
-//! at 5 GiB. Proving paths retain authenticated proving keys as file-backed spools and parse Eq and
-//! Ep one at a time, then materialize terminal verifier domains only after both proving keys and
-//! populated circuits have been released. Receipt-only verification instead authenticates and
-//! structurally scans each spool with fixed scratch because it never consumes a proving key.
-//!
-//! The production wire carries the current Eq/Fp and Ep/Fq proofs together. The fixed verifier
-//! derives every transcript challenge, residual coefficient, and IPA accumulator from proof bytes;
-//! none is caller-selected wire data. The production build retains the native terminal Eq/Vesta and
-//! Ep/Pallas decisions over authenticated, canonically derived transparent parameters and verifier
-//! keys. Tests retain the fixed-key Poseidon proof wires, canonical BGH19 IPA folding, and exact
-//! bounded proof bytes. Both recursive fixed-VK verifier halves constrain those same operations.
-//! Production availability remains false pending the authenticated complete archive, independent
-//! review, and physical-device gates.
+//! Retired cross-field loaders and degree-20 keys caused multi-gigabyte RSS;
+//! neither is a fallback.
+//! Compact V5 keeps ABI 21/manifest V4, k17 parities, one 66-cell column, a private 138-`u32` state,
+//! and 5-GiB processed-key caps. Proving spools authenticated keys serially; receipt verification
+//! uses fixed scratch, and all Eq/Fp and Ep/Fq challenges, coefficients, and accumulators derive
+//! from proof bytes. Production still requires the archive, independent review, and device gates.
 use super::kagemusha_accumulation::{
     KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4, KagemushaIpaAccumulationProofV4,
     KagemushaIpaAccumulatorWireV4, kagemusha_ipa_accumulation_proof_bytes_v4,
@@ -88,9 +72,8 @@ pub const KAGEMUSHA_PASTA_STEP_EQ_PROTOCOL_SHA256_OFFSET_V4: usize =
 /// First Ep compiled-protocol identity word.
 pub const KAGEMUSHA_PASTA_STEP_EP_PROTOCOL_SHA256_OFFSET_V4: usize =
     KAGEMUSHA_PASTA_STEP_EQ_PROTOCOL_SHA256_OFFSET_V4 + 8;
-// Compact V5 public-header offsets. The legacy-named constants above describe
-// the exact private semantic witness and intentionally remain separate: only
-// these compact cells enter recursive instance commitments.
+// Compact V5 offsets; legacy names are private witnesses,
+// while only these cells are committed.
 const KAGEMUSHA_COMPACT_PROFILE_OFFSET_V5: usize = 0;
 const KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5: usize = 1;
 const KAGEMUSHA_COMPACT_PROOF_STEP_COUNT_OFFSET_V5: usize = 2;
@@ -176,9 +159,7 @@ fn kagemusha_circuit_params_sha256_v4(
         format!("failed to identify authenticated Kagemusha V4 parameters: {error}")
     })
 }
-// The compact profile admits one reviewed k17 shape for artifact decoding and candidate generation.
-// Keeping the generation boundary explicit prevents a stale or column-heavy profile from reaching
-// `ParamsIPA::new` or Halo2 configure/keygen even if it was decoded from a historical carrier.
+// Only the reviewed k17 generation shape may reach `ParamsIPA::new` or Halo2 configure/keygen.
 const KAGEMUSHA_GENERATION_ADVICE_COLUMNS_V4: &[u32] =
     &iroha_data_model::offline::KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4;
 const KAGEMUSHA_GENERATION_LOOKUP_COLUMNS_V4: &[u32] =
@@ -194,9 +175,7 @@ const KAGEMUSHA_GENERATION_AFFINE_BYTES_V4: u64 = 64;
 const KAGEMUSHA_GENERATION_PARITIES_V4: u64 = 2;
 const KAGEMUSHA_GENERATION_LIVE_COLUMN_COPIES_V4: u64 = 4;
 const KAGEMUSHA_GENERATION_IPA_POINT_VECTORS_V4: u64 = 2;
-// These graph/map envelopes are calibrated against the populated k17 probe.
-// They deliberately use the authenticated release widths, rather than the
-// smaller observed minimum shape, and include container growth and indexing.
+// Populated-k17 graph/map envelopes use authenticated widths plus container/indexing growth.
 const KAGEMUSHA_GENERATION_VIRTUAL_ADVICE_SLOT_BYTES_V5: u64 = 1024;
 const KAGEMUSHA_GENERATION_VIRTUAL_LOOKUP_SLOT_BYTES_V5: u64 = 256;
 const KAGEMUSHA_GENERATION_ASSIGNED_MAP_SLOT_BYTES_V5: u64 = 128;
@@ -212,10 +191,8 @@ const KAGEMUSHA_GENERATION_MEMORY_POLL_INTERVAL_V4: std::time::Duration =
     std::time::Duration::from_millis(100);
 static KAGEMUSHA_GENERATION_MEMORY_GUARD_STARTED_V4: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-/// One-shot proof that the mandatory in-process memory monitor is active.
-///
-/// The effective limit is derived inside Core from physical RAM and the fixed
-/// 64-GiB ceiling. A caller may lower it, but cannot raise or disable it.
+/// Proof of the mandatory `min(physical RAM, 64 GiB)` monitor;
+/// callers may only lower its limit.
 #[derive(Clone, Copy, Debug)]
 pub struct KagemushaGenerationMemoryGuardV4 {
     effective_memory_limit_bytes: u64,
@@ -238,11 +215,8 @@ enum KagemushaQualificationMemoryContractModeV4<'guard> {
     Operator(&'guard KagemushaGenerationMemoryGuardV4),
     RuntimeCatalog { max_decoded_bytes: u64 },
 }
-/// Unforgeable memory-enforcement authority for qualification-role verification.
-///
-/// External operator paths can construct this contract only from an active
-/// [`KagemushaGenerationMemoryGuardV4`]. Core's runtime catalog uses its separately validated
-/// decoded-resident budget through a crate-private constructor.
+/// Unforgeable memory authority: operators need a guard;
+/// Core uses its validated decoded budget.
 #[derive(Debug)]
 pub struct KagemushaQualificationMemoryContractV4<'guard> {
     mode: KagemushaQualificationMemoryContractModeV4<'guard>,
@@ -339,17 +313,12 @@ fn estimate_kagemusha_generation_peak_bytes_v4(
     let ep_shape = configured_kagemusha_ep_vk_wire_shape_v4(step_ep_circuit_params)?;
     let eq_columns = columns(eq_shape, "Eq")?;
     let ep_columns = columns(ep_shape, "Ep")?;
-    // Every populated Eq circuit is consumed and dropped before an Ep circuit
-    // is built (and vice versa), so peak circuit storage is the larger parity,
-    // not their sum.
+    // Eq/Ep populated circuits are built and dropped serially, so peak storage is one parity.
     let staged_columns = eq_columns.max(ep_columns);
     let domain_rows = 1_u64
         .checked_shl(step_eq_circuit_params.k)
         .ok_or_else(|| "Kagemusha V4 generator domain-row estimate overflow".to_owned())?;
-    // The post-circuit polynomial suffix retains several coefficient,
-    // evaluation, and permutation forms of each configured column. This is no
-    // longer treated as the whole lifecycle: populated k17 circuit graphs are
-    // much larger than their eventual polynomial inventory.
+    // The polynomial suffix understates the larger populated-k17 graph/map lifecycle.
     let column_bytes = checked_kagemusha_generation_product_v4(
         &[
             domain_rows,
@@ -467,10 +436,7 @@ fn estimate_kagemusha_generation_peak_bytes_v4(
         let keygen_bytes = common_graph_bytes
             .checked_add(assembly_bytes)
             .ok_or_else(|| format!("Kagemusha V4 generator {parity} keygen estimate overflow"))?;
-        // The consuming prover still owns its populated circuit and complete
-        // processed key while V1 assigns every physical advice column. Account
-        // for that overlap explicitly; the circuit is dropped before the later
-        // polynomial/quotient suffix.
+        // Account for circuit/key overlap during V1 assignment; it drops before the suffix.
         let physical_advice_bytes = checked_kagemusha_generation_product_v4(
             &[
                 count(shape.advice_columns, "configured-advice")?,
@@ -600,10 +566,7 @@ fn preflight_kagemusha_generation_v4(
                 .to_owned(),
         );
     }
-    // Halo2's processed proving-key encoding contains every degree-n fixed and
-    // permutation polynomial. Compute that canonical size from the reviewed
-    // ConstraintSystem before `ParamsIPA::new` or key generation: checking the
-    // resulting Vec after `ProvingKey::to_bytes` is too late to contain an OOM.
+    // Preflight processed-key size before ParamsIPA/keygen; serialization is too late.
     validate_kagemusha_generation_encoding_sizes_v4::<halo2_proofs::halo2curves::pasta::EqAffine>(
         step_eq_circuit_params,
         "Eq",
@@ -972,9 +935,7 @@ fn parse_linux_cgroup_memory_limit_v4(
     if bytes == 0 {
         return Err("Linux cgroup memory limit must be nonzero".to_owned());
     }
-    // Cgroup v1 represents `unlimited` as a page-rounded value near signed
-    // LONG_MAX rather than a keyword. One exbibyte is above any supported host
-    // while remaining well below every kernel unlimited sentinel.
+    // Treat cgroup-v1 limits above 1 EiB as the kernel's page-rounded unlimited sentinel.
     if version == LinuxMemoryCgroupVersionV4::V1 && bytes >= (1_u64 << 60) {
         return Ok(None);
     }
@@ -1089,10 +1050,7 @@ const KAGEMUSHA_MACOS_RESOURCE_PROBE_MAX_OUTPUT_V4: usize = 4 * 1024;
 #[cfg(target_os = "macos")]
 const KAGEMUSHA_MACOS_RESOURCE_PROBE_TIMEOUT_V4: std::time::Duration =
     std::time::Duration::from_secs(2);
-// Core denies unsafe code, so macOS resource sampling delegates only to the
-// sealed operating-system probes by absolute path. Reauthenticate each tool,
-// clear the child environment, and bound both execution time and stdout before
-// trusting its strictly parsed numeric result.
+// Use reauthenticated absolute macOS probes with cleared env, bounded I/O/time, and strict parsing.
 #[cfg(target_os = "macos")]
 fn run_kagemusha_macos_resource_probe_v4(
     program: &str,
@@ -1230,11 +1188,8 @@ fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
 fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
     Err("Kagemusha V4 process-footprint introspection is unsupported on this platform".to_owned())
 }
-/// Query the exact first-release memory policy without starting the monitor.
-///
-/// The source-sealed bundle exposes this through its read-only
-/// `memory-capacity-v1` operation so external supervision applies the same
-/// container-aware capacity and fixed absolute ceiling as the in-process guard.
+/// Query the first-release policy without starting the monitor; sealed `memory-capacity-v1` gives
+/// supervisors the same container-aware capacity and absolute ceiling as the in-process guard.
 pub fn kagemusha_generation_memory_capacity_v1()
 -> Result<KagemushaGenerationMemoryCapacityV1, String> {
     let effective_physical_capacity_bytes = kagemusha_physical_memory_bytes_v4()?;
@@ -1290,11 +1245,8 @@ fn start_kagemusha_generation_memory_monitor_v4(
         .recv()
         .map_err(|_| "mandatory Kagemusha memory monitor exited during initialization".to_owned())?
 }
-/// Start the mandatory one-shot in-process physical-memory monitor.
-///
-/// The effective ceiling is `min(64 GiB, physical RAM / 2)`. A caller-provided
-/// value can only lower that ceiling. Neither an inherited descriptor nor an
-/// environment variable grants authority to disable or raise enforcement.
+/// Start the mandatory one-shot monitor at `min(64 GiB, physical RAM / 2)`; callers may only lower
+/// it, and neither inherited descriptors nor environment variables can alter enforcement.
 pub fn start_kagemusha_generation_memory_guard_v4(
     requested_memory_limit_bytes: Option<u64>,
 ) -> Result<KagemushaGenerationMemoryGuardV4, String> {
@@ -1341,12 +1293,8 @@ fn validate_kagemusha_generated_payload_size_v4(
     }
     Ok(())
 }
-/// A fail-closed writer used while streaming a processed proving key before
-/// the owned key enters the consuming proof path.
-///
-/// The proving-key serializer is intentionally given the caller's final
-/// staging sink instead of a `Vec<u8>`.  Counting here keeps the compact V5
-/// role cap authoritative even when the sink itself has no size limit.
+/// Fail-closed processed-key writer: direct staging avoids `Vec<u8>`, while counting preserves the
+/// compact V5 role cap even for an otherwise unbounded sink.
 struct KagemushaBoundedProvingKeyWriterV5<'a> {
     sink: &'a mut dyn std::io::Write,
     written: u64,
@@ -1389,9 +1337,7 @@ impl std::io::Write for KagemushaBoundedProvingKeyWriterV5<'_> {
         self.sink.flush()
     }
 }
-/// Convert an authenticated data-model V4 configuration to Halo2's runtime
-/// representation.  Callers must obtain `params` from a verified V4 profile;
-/// bridge/local configuration inputs are never accepted here.
+/// Convert a verified V4 profile to Halo2's runtime form; bridge/local inputs are never accepted.
 pub(crate) fn kagemusha_base_circuit_params_v4(
     params: &KagemushaStepCircuitParamsV4,
 ) -> Result<halo2_base::gates::circuit::BaseCircuitParams, String> {
@@ -1484,8 +1430,7 @@ fn kagemusha_break_point_max_rows_v5(
         .filter(|rows| *rows > 1)
         .ok_or_else(|| "Kagemusha V5 breakpoint domain has no usable rows".to_owned())
 }
-/// Convert Halo2's per-column row offsets into a canonical, strictly
-/// increasing cumulative wire representation.
+/// Convert Halo2 per-column row offsets into a canonical, strictly increasing cumulative wire.
 fn kagemusha_break_points_to_wire_v5(
     break_points: halo2_base::gates::flex_gate::MultiPhaseThreadBreakPoints,
     params: &KagemushaStepCircuitParamsV4,
@@ -1603,14 +1548,7 @@ fn kagemusha_break_points_from_wire_v5(
 }
 const KAGEMUSHA_RUNTIME_NORITO_MAX_NESTING_DEPTH_V4: usize = 32;
 fn kagemusha_runtime_norito_decode_limits_v4(encoded_len: usize) -> norito::core::DecodeLimits {
-    // Every variable-length member in the private bootstrap/proof-pair wire is
-    // represented inside this exact input. Binding each individual and
-    // cumulative budget to the bytes actually supplied prevents a malicious
-    // length prefix from reserving release-sized memory before truncation is
-    // discovered. Sixteen bytes of cumulative allocation per encoded byte
-    // covers both nested sequence storage and each sequence's decoded
-    // elements. At the absolute 384 KiB proof-pair ceiling this bounds
-    // cumulative decoded allocation to 6 MiB.
+    // Bind decode limits to supplied bytes; a capped 384 KiB pair permits at most 6 MiB cumulative.
     norito::core::DecodeLimits::new(
         encoded_len,
         encoded_len,
@@ -1622,22 +1560,16 @@ fn kagemusha_runtime_norito_decode_limits_v4(encoded_len: usize) -> norito::core
 /// One fully parseable parent slot in a canonical V4 bootstrap artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaStepBootstrapParentSlotV4 {
-    /// Exact one-column public instances, represented as unreduced `u32`
-    /// values before conversion into either Pasta scalar field.
+    /// Exact one-column public instances as unreduced `u32` values before Pasta-field conversion.
     pub instances: Vec<Vec<u32>>,
     /// Ordinary augmented Step proof transcript.
     pub ordinary_proof_bytes: Vec<u8>,
     /// Non-identity carried accumulator used by the always-executed fold.
     pub carried_lineage: KagemushaIpaAccumulatorWireV4,
-    /// Complete post-proof fold transcript, present even though the bootstrap
-    /// parent's public parent count is zero.
+    /// Complete post-proof fold transcript, present even for a zero-parent bootstrap.
     pub post_proof_fold: KagemushaIpaAccumulationProofV4,
 }
-/// Canonical, independently authenticated bootstrap artifact for one parity.
-///
-/// It contains both fixed parent slots and the all-bootstrap branch fold needed
-/// by genesis. Any synthesis with a real parent supplies a per-step mixed/real
-/// branch fold, which is parsed and verified by the recursive circuit.
+/// Authenticated parity bootstrap with fixed parent slots/genesis fold; real parents use a step fold.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaStepBootstrapV4 {
     /// Exact bootstrap payload version.
@@ -1650,12 +1582,9 @@ pub struct KagemushaStepBootstrapV4 {
     pub compiled_protocol_structure_sha256: [u8; 32],
     /// Identity of the independently reproducible bootstrap protocol values.
     pub bootstrap_compiled_protocol_sha256: [u8; 32],
-    /// Canonical cumulative Halo2 virtual-region breakpoints captured from the
-    /// exact keygen circuit. Runtime proof circuits decode these into the
-    /// witness-only builder and never reconstruct the constraint graph.
+    /// Keygen circuit's cumulative virtual-region breakpoints, decoded by witness-only builders.
     pub circuit_break_points: Vec<Vec<u32>>,
-    /// One manifest-independent all-zero public slot. Both disabled circuit
-    /// slots use this exact authenticated payload.
+    /// Manifest-independent all-zero public slot used by both disabled circuit slots.
     pub parent_slot: KagemushaStepBootstrapParentSlotV4,
     /// Complete fold transcript for the two canonical bootstrap lineages.
     pub branch_merge_fold: KagemushaIpaAccumulationProofV4,
@@ -1678,9 +1607,7 @@ impl KagemushaBootstrapParentValidationV4 {
     }
 }
 impl KagemushaStepBootstrapV4 {
-    /// Validate every host-checkable bootstrap invariant against authenticated
-    /// circuit parameters. Ordinary/fold equation validity is checked by the
-    /// recursive circuit; shape validation never creates substitute bytes.
+    /// Validate host-checkable invariants; the circuit checks equations and no substitute bytes exist.
     pub fn validate(
         &self,
         params: &KagemushaStepCircuitParamsV4,
@@ -1750,8 +1677,7 @@ impl KagemushaStepBootstrapV4 {
         }
         Ok(layout)
     }
-    /// Require this payload's bootstrap protocol identities to match a locally
-    /// reconstructed protocol under the authenticated V4 profile.
+    /// Match this payload's identities to a locally reconstructed protocol under the V4 profile.
     pub(crate) fn validate_bootstrap_protocol<C>(
         &self,
         params: &KagemushaStepCircuitParamsV4,
@@ -1799,18 +1725,14 @@ impl KagemushaStepBootstrapV4 {
         }
         Ok(layout)
     }
-    /// Decode one exact canonical bounded bootstrap payload before exposing any
-    /// of its recursion witnesses.
+    /// Decode one canonical bounded bootstrap payload before exposing any recursion witness.
     pub(crate) fn decode_authenticated(
         bytes: &[u8],
         params: &KagemushaStepCircuitParamsV4,
         expected_parity: KagemushaPastaCycleParityV1,
         expected_structure_sha256: [u8; 32],
     ) -> Result<Self, String> {
-        // A bootstrap contains one augmented proof plus bounded accumulator
-        // metadata. It cannot legitimately be larger than the complete Eq/Ep
-        // pair accepted by the same release. Do not inherit the much broader
-        // generic artifact-file ceiling for this typed payload.
+        // A bootstrap cannot exceed its release pair; do not inherit the generic artifact cap.
         let maximum = usize::try_from(
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
         )
@@ -1942,11 +1864,8 @@ impl KagemushaStepBootstrapV4 {
         })
     }
 }
-/// Validate one canonical V4 bootstrap payload for release tooling.
-///
-/// This public helper exposes no recursion witness. It returns only the exact
-/// authenticated ordinary-proof byte count so bundle generation can bind its
-/// measured profile without duplicating the private bootstrap wire schema.
+/// Validate a canonical V4 bootstrap without exposing witnesses, returning its authenticated
+/// ordinary-proof size so generation need not duplicate the private wire schema.
 pub fn validate_kagemusha_step_bootstrap_payload_v4(
     bytes: &[u8],
     params: &KagemushaStepCircuitParamsV4,
@@ -1971,8 +1890,7 @@ pub const fn kagemusha_pasta_parent_state_offset_v4(parent_slot: usize) -> usize
 pub const KAGEMUSHA_COMPILED_PROTOCOL_STRUCTURE_VERSION_V1: u32 = 1;
 /// Version of the compact Poseidon-then-SHA compiled-protocol identity.
 pub const KAGEMUSHA_COMPILED_PROTOCOL_IDENTITY_VERSION_V2: u32 = 2;
-/// Pinned `snark-verifier` revision whose `PlonkProtocol` layout and private
-/// enum encodings define the explicit V1 structural descriptor.
+/// Pinned `snark-verifier` revision defining the V1 descriptor's layout/private encodings.
 pub const KAGEMUSHA_SNARK_VERIFIER_PROTOCOL_REVISION_V1: &str =
     "bbfcc721d714bea0d44a27c8fc6c4736e73ca853";
 /// Domain separator for the fixed, value-free compiled-protocol descriptor.
@@ -2075,12 +1993,8 @@ fn append_compressed_point<C: CurveAffine>(output: &mut Vec<u8>, point: C) -> Re
     output.extend_from_slice(encoding.as_ref());
     Ok(())
 }
-/// Return the exact fixed descriptor of a compiled parent protocol.
-///
-/// The descriptor deliberately excludes only the self-referential verifier-key commitments and
-/// transcript initial state. It includes every verifier control-flow field, quotient expression,
-/// and instance-commitment key. Its digest can therefore be fixed before the final self key is
-/// known, while the excluded values are witness-loaded and constrained by the identity below.
+/// Return the compiled-parent descriptor minus self VK/transcript values; control flow, quotients,
+/// and instance keys fix its digest before the final key, while excluded values are witness-bound.
 pub fn kagemusha_compiled_protocol_structure_sha256<C>(
     protocol: &PlonkProtocol<C>,
     parity: KagemushaPastaCycleParityV1,
@@ -2104,8 +2018,7 @@ where
     append_scalar_repr(&mut bytes, protocol.domain.n_inv)?;
     append_scalar_repr(&mut bytes, protocol.domain.r#gen)?;
     append_scalar_repr(&mut bytes, protocol.domain.gen_inv)?;
-    // Only the count belongs to the fixed structure. The self-referential
-    // preprocessed values are authenticated separately by the identity below.
+    // Only presence is fixed structure; the self-referential value is authenticated below.
     append_len(
         &mut bytes,
         protocol.preprocessed.len(),
@@ -2136,10 +2049,7 @@ where
         protocol.quotient.chunk_degree,
         "quotient chunk degree",
     )?;
-    // `Expression::evaluate` is the pinned verifier's own exhaustive recursive
-    // visitor. It canonicalizes `DistributePowers` to the same sum/product
-    // operations used during verification, while retaining every scalar,
-    // polynomial, common-polynomial, challenge, unary, binary, and scale node.
+    // The pinned exhaustive visitor preserves every verifier expression node and operator.
     let numerator = protocol.quotient.numerator.evaluate(
         &|scalar| {
             let mut encoded = vec![0];
@@ -2303,11 +2213,8 @@ where
     elements.push(transcript_initial_state);
     Ok(elements)
 }
-/// Derive the release-authenticated identity of one exact compiled protocol.
-///
-/// Terminal verification computes this value from the authenticated Params/VK
-/// artifacts.  Recursive circuits independently hash the same preimage from
-/// witness-loaded preprocessed points and transcript state.
+/// Derive a compiled protocol identity; terminal verification uses authenticated Params/VK while
+/// recursive circuits independently hash the same witness-loaded points and transcript state.
 pub fn kagemusha_compiled_protocol_identity_sha256<C>(
     protocol: &PlonkProtocol<C>,
     parity: KagemushaPastaCycleParityV1,
@@ -2325,8 +2232,7 @@ where
         poseidon,
     )
 }
-/// Convert a standard SHA-256 digest to the eight public big-endian words used
-/// by the constrained SHA gadget.
+/// Convert SHA-256 to the eight public big-endian words used by the constrained SHA gadget.
 #[must_use]
 pub fn kagemusha_sha256_public_words(digest: [u8; 32]) -> [u32; 8] {
     std::array::from_fn(|index| {
@@ -2337,11 +2243,8 @@ pub fn kagemusha_sha256_public_words(digest: [u8; 32]) -> [u32; 8] {
         )
     })
 }
-/// Preserve one exact 32-byte wire value as eight little-endian `u32` limbs.
-///
-/// This is deliberately distinct from [`kagemusha_sha256_public_words`]: the constrained SHA gadget
-/// exposes big-endian digest words, while manifest and state-vector bindings carry their original
-/// bytes without reinterpreting the wire encoding.
+/// Preserve a 32-byte wire as eight little-endian `u32` limbs; unlike SHA digest words, manifest and
+/// state bindings retain their original bytes.
 #[must_use]
 fn kagemusha_exact_u32_public_limbs(bytes: [u8; 32]) -> [u32; 8] {
     std::array::from_fn(|index| {
@@ -2372,8 +2275,7 @@ fn kagemusha_bytes_to_u128_chunks_v5(bytes: [u8; 32]) -> [u128; 2] {
     })
 }
 fn kagemusha_pack_u32_limbs_for_poseidon_v5(limbs: &[u32]) -> Vec<Fp> {
-    // Seven limbs occupy 224 bits and therefore cannot wrap Pasta Fp. Packing
-    // before the sponge cuts the permutation count without dropping a bit.
+    // Seven limbs fit within 224 bits, so pre-sponge packing cannot wrap Pasta Fp.
     limbs
         .chunks(7)
         .map(|chunk| {
@@ -2395,23 +2297,15 @@ fn kagemusha_poseidon_commitment_chunks_v5(domain: u64, limbs: &[u32]) -> [u128;
     bytes.copy_from_slice(commitment.to_repr().as_ref());
     kagemusha_bytes_to_u128_chunks_v5(bytes)
 }
-/// Canonical V4 recursive-verifier compilation profile.
-///
-/// Querying the public instance polynomial through an IPA commitment expands every public limb into
-/// a fixed-base MSM inside the recursive verifier. The V4 public column contains thousands of
-/// limbs, so the split scalar/point audit would otherwise serialize thousands of fixed bases. The
-/// pinned verifier supports the equivalent direct Lagrange-evaluation path when queried instances
-/// are disabled.
+/// V4 verifier profile using direct public-instance Lagrange evaluation; disabling queried-instance
+/// IPA avoids fixed bases for thousands of public limbs.
 fn kagemusha_ipa_compile_config_v4(public_len: usize) -> snark_verifier::system::halo2::Config {
     snark_verifier::system::halo2::Config::ipa()
         .set_query_instance(false)
         .with_num_instance(vec![public_len])
 }
-/// IPA multi-open prover matching [`kagemusha_ipa_compile_config_v4`].
-///
-/// The pinned Halo2 `ProverIPA` implementation hard-codes queried instances. Delegating the opening
-/// proof while overriding this associated constant keeps Halo2's proof transcript aligned with
-/// snark-verifier's direct-instance protocol without forking the cryptographic implementation.
+/// IPA multi-open prover that delegates openings but disables Halo2's hard-coded queried instances,
+/// aligning [`kagemusha_ipa_compile_config_v4`] with snark-verifier without a crypto fork.
 #[derive(Debug)]
 struct KagemushaDirectInstanceProverIpa<'params, C: halo2_proofs::halo2curves::CurveAffine>(
     halo2_proofs::poly::ipa::multiopen::ProverIPA<'params, C>,
@@ -2507,11 +2401,7 @@ where
         >::verify_proof(&self.0, transcript, queries, msm)
     }
 }
-/// Single-proof strategy for the direct-instance IPA verifier.
-///
-/// snark-verifier's otherwise-equivalent strategy is implemented specifically
-/// for Halo2's queried-instance `VerifierIPA`, so the local verifier needs the
-/// same final MSM decision under its own type.
+/// Direct-instance single-proof strategy reproducing snark-verifier's final local MSM decision.
 #[derive(Debug)]
 struct KagemushaDirectInstanceSingleStrategy<'params, C: halo2_proofs::halo2curves::CurveAffine> {
     msm: halo2_proofs::poly::ipa::msm::MSMIPA<'params, C>,
@@ -2562,15 +2452,8 @@ where
         unreachable!("Kagemusha single-proof strategy decides in process")
     }
 }
-/// Deterministic universal target used to break the remaining self-protocol
-/// shape cycle during artifact generation.
-///
-/// The production bootstrap configures the same parity-specific Base, SHA-256, and dense-MSM graph
-/// as the final Step circuit. Virtual arithmetic performed during synthesis changes
-/// fixed/preprocessed *values* but not that PLONK query graph. Artifact generation therefore
-/// compiles the empty composite bootstrap first, preserves its protocol structure in
-/// `without_witnesses`, generates the real Step key, recompiles it, and requires the two structure
-/// digests to match exactly.
+/// Deterministic target breaking the self-protocol shape cycle: bootstrap/final Step share a query
+/// graph, so generation compiles it empty, preserves it, keys it, then checks the recompiled digest.
 #[derive(Clone, Debug)]
 pub struct KagemushaUniversalProtocolTargetV1 {
     /// Exact release `BaseConfig`, shared by bootstrap and final Step circuit.
@@ -2700,20 +2583,12 @@ where
     {
         return Err("Kagemusha bootstrap Params/circuit does not match BaseConfig".to_owned());
     }
-    // The bootstrap VK and PK describe the same empty, production-shaped
-    // circuit. Building them in one synthesis preserves the exact key bytes
-    // while avoiding a complete first keygen pass and its retained allocator
-    // pages immediately before the memory-critical bootstrap proof.
+    // Build the empty VK/PK together to preserve bytes without a second pre-bootstrap keygen.
     halo2_proofs::plonk::keygen_pk2(params, circuit, false)
         .map_err(|error| format!("failed to generate Kagemusha bootstrap PK: {error}"))
 }
-/// Compile the deterministic bootstrap protocol whose structure is retained
-/// by a self-recursive Step circuit during key generation.
-///
-/// The protocol values belong only to the canonical all-zero bootstrap proof; they are never
-/// substituted for the final Step protocol. After the final Step VK exists, callers compare
-/// structure hashes with [`kagemusha_require_protocol_structure_v1`] and authenticate both protocol
-/// identities independently.
+/// Compile the bootstrap structure retained by self keygen; its values are only for the zero proof,
+/// and final-VK callers compare shapes then authenticate both identities separately.
 #[cfg(test)]
 pub fn kagemusha_bootstrap_compiled_protocol_v1<C>(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
@@ -2730,8 +2605,8 @@ where
         kagemusha_ipa_compile_config_v4(target.instance_column_lengths[0]),
     ))
 }
-/// Require a final self protocol to converge to the deterministic bootstrap structure. A mismatch
-/// is an artifact-generation failure, never a reason to alter the target at runtime.
+/// Require final protocol convergence to the bootstrap structure;
+/// mismatch fails artifact generation.
 pub fn kagemusha_require_protocol_structure_v1<C>(
     bootstrap: &PlonkProtocol<C>,
     final_protocol: &PlonkProtocol<C>,
@@ -2878,11 +2753,8 @@ impl KagemushaSemanticBoundaryV4 {
         Ok(())
     }
 }
-/// Degree-parameterized V4 public inputs used by both concrete Step circuits.
-///
-/// The semantic prefix is fixed for ABI-21. Only the two IPA accumulator
-/// slices are dynamic, and their exact offsets are derived from the separately
-/// authenticated [`KagemushaStepCircuitParamsV4`].
+/// Degree-parameterized V4 Step inputs: ABI-21 fixes the prefix, while two IPA slices vary at offsets
+/// derived from authenticated [`KagemushaStepCircuitParamsV4`].
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaPastaCyclePublicInputsV4 {
     /// Canonical public-statement digest as eight unreduced limbs.
@@ -2909,8 +2781,7 @@ pub struct KagemushaPastaCyclePublicInputsV4 {
     pub parent_eq_deferred_sha256: [[u32; 8]; KAGEMUSHA_PASTA_PARENT_SLOTS_V1],
     /// Ep scalar/point audit joins for the two fixed parent slots.
     pub parent_ep_deferred_sha256: [[u32; 8]; KAGEMUSHA_PASTA_PARENT_SLOTS_V1],
-    /// Explicit circuit mode. Public proof pairs accept only `1` (live); the
-    /// adapter alone uses `0` for its authenticated all-zero bootstrap proof.
+    /// Circuit mode: public pairs accept only `1` (live); the adapter uses `0` only for bootstrap.
     pub live_selector: u32,
 }
 impl KagemushaPastaCyclePublicInputsV4 {
@@ -2945,9 +2816,7 @@ impl KagemushaPastaCyclePublicInputsV4 {
             parent_eq_deferred_sha256: self.parent_eq_deferred_sha256,
             parent_ep_deferred_sha256: self.parent_ep_deferred_sha256,
         }
-        // ABI-21 parent slots preserve split.inputs order, which is already
-        // canonical by bundle digest. State-vector lexicographic order is an
-        // unrelated historical V1 wire rule and cannot be imposed here.
+        // Preserve ABI-21 bundle-digest parent order; V1 state lexicographic order is unrelated.
         .validate_with_parent_state_order(
             proof_step_count,
             false,
@@ -3101,11 +2970,8 @@ impl KagemushaPastaCyclePublicInputsV4 {
             .collect()
     }
 }
-/// Compact public carrier embedded once in an Eq/Ep proof pair.
-///
-/// Exact operations and state openings remain prover-side witnesses. The wire retains only the
-/// common semantic header, the two parity-local accumulated lineages, and four reciprocal audit
-/// digests needed to reconstruct each 66-cell verifier instance.
+/// Compact Eq/Ep carrier retaining the header, parity lineages, and four reciprocal-audit digests
+/// needed per 66-cell instance; operations and state openings remain prover witnesses.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct KagemushaCompactPublicInputsV5 {
     common_header: Vec<u128>,
@@ -3242,11 +3108,8 @@ impl KagemushaCompactPublicInputsV5 {
         Ok(cells.into_iter().map(F::from_u128).collect())
     }
 }
-/// Backend-native V4 Eq/Ep pair encoded inside the public opaque proof box.
-///
-/// This is deliberately not a data-model envelope. ABI 21 carries the
-/// canonical Norito bytes of this value as an opaque proof payload, while the
-/// core alone constructs, decodes, and verifies its recursion-specific fields.
+/// Backend-native V4 Eq/Ep pair in canonical Norito ABI-21 bytes,
+/// handled only by Core.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct KagemushaPastaCycleProofPairV4 {
     /// Exact backend-native pair layout version.
@@ -3267,8 +3130,7 @@ pub(crate) struct KagemushaPastaCycleProofPairV4 {
 /// Exact backend-native layout version of [`KagemushaPastaCycleProofPairV4`].
 pub(crate) const KAGEMUSHA_PASTA_PROOF_PAIR_VERSION_V4: u16 = 5;
 impl KagemushaPastaCycleProofPairV4 {
-    /// Validate the complete pair against authenticated release parameters and
-    /// the release's measured opaque-proof payload cap.
+    /// Validate the pair against authenticated release parameters and its measured payload cap.
     pub(crate) fn validate(
         &self,
         step_eq_params: &KagemushaStepCircuitParamsV4,
@@ -3315,8 +3177,7 @@ impl KagemushaPastaCycleProofPairV4 {
         }
         Ok(eq_layout)
     }
-    /// Decode one opaque ABI-21 proof payload, reject non-canonical bytes, and
-    /// validate it against the pinned authenticated release profile.
+    /// Decode canonical opaque ABI-21 bytes and validate against the authenticated release profile.
     pub(crate) fn decode_authenticated(
         bytes: &[u8],
         step_eq_params: &KagemushaStepCircuitParamsV4,
@@ -3400,11 +3261,7 @@ fn kagemusha_max_recursive_pair_bytes_v5(
     u32::try_from(bytes.len())
         .map_err(|_| "Kagemusha V5 recursive pair length does not fit u32".to_owned())
 }
-/// Validate a canonical V4 proof-pair measurement without exposing its wire.
-///
-/// Artifact tooling uses this only after producing a real pair with the
-/// authenticated keys. Runtime verification additionally performs both
-/// terminal cryptographic decisions through the installed verifier.
+/// Validate a V4 pair measurement without exposing its wire; runtime also decides both terminals.
 pub fn validate_kagemusha_proof_pair_measurement_v4(
     bytes: &[u8],
     step_eq_params: &KagemushaStepCircuitParamsV4,
@@ -3685,8 +3542,7 @@ fn succinct_verify_step_ep_instances(
         return Ok(accumulator);
     }
 }
-/// Recompile the exact V4 self protocols from authenticated Params/VKs and
-/// require the pair's public identities to match both compiled protocols.
+/// Recompile V4 self protocols from authenticated Params/VKs and match both pair identities.
 fn terminal_validate_compiled_protocol_identities_v4(
     step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -3748,8 +3604,7 @@ fn terminal_validate_compiled_protocol_identities_v4(
     }
     Ok(())
 }
-/// Fully verify and terminally decide both halves of one backend-native V4
-/// pair under its authenticated release parameters.
+/// Verify and terminally decide both halves of a backend-native V4 pair under release parameters.
 pub(crate) fn terminal_verify_proof_pair_v4(
     step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -3780,8 +3635,7 @@ pub(crate) fn terminal_verify_proof_pair_v4(
     )?;
     Ok(())
 }
-/// Verify a V4 pair, terminally decide both folds, and return the complete
-/// lineages needed to construct an authenticated child operation.
+/// Verify a V4 pair, decide both folds, and return complete authenticated-child lineages.
 pub(crate) fn terminal_verify_proof_pair_lineage_v4(
     step_eq_params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -3870,10 +3724,7 @@ pub(crate) fn terminal_verify_proof_pair_lineage_v4(
         KagemushaIpaAccumulatorWireV4::from_ep(&ep_lineage, step_ep_circuit_params.k)?,
     ))
 }
-/// Parsed terminal-verifier material for one authenticated V4 release.
-///
-/// As with the prover, fields are private and are populated only by the V4
-/// framed-artifact loader after profile, digest, key, and bootstrap checks.
+/// Private terminal material populated by the V4 framed loader after profile/key/bootstrap checks.
 const KAGEMUSHA_HALO2_KEY_VERSION_V4: u8 = 0x02;
 const KAGEMUSHA_HALO2_UNCOMPRESSED_SELECTORS_V4: u8 = 0;
 const KAGEMUSHA_HALO2_VK_HEADER_BYTES_V4: u64 = 10;
@@ -4036,12 +3887,7 @@ where
 {
     validate_kagemusha_circuit_params_v4(circuit_params)?;
     let configured = C::configured_wire_shape_v4(circuit_params)?;
-    // `keygen_vk` disables selector compression. It appends one fixed
-    // polynomial per selector before serializing the fixed commitments, while
-    // the permutation vectors retain one polynomial per equality-enabled
-    // column. Derive both counts from the complete authenticated composite
-    // circuit (Base, all SHA lanes, and the dense reciprocal MSM) rather than
-    // the Base subcircuit alone or either serialized u32 count.
+    // With selector compression off, derive fixed/permutation counts from the full composite.
     let fixed_polynomials = configured
         .base_fixed_columns
         .checked_add(configured.selectors)
@@ -4545,17 +4391,13 @@ where
         .ok_or_else(|| "Kagemusha V5 proof-size preflight has invalid degree".to_owned())?;
     let permutation_columns = cs.permutation().get_columns().len();
     let permutation_chunks = permutation_columns.div_ceil(permutation_chunk_size);
-    // Key generation deliberately retains uncompressed selectors. Halo2
-    // converts each selector into one fixed column queried at the current row
-    // before transcript construction.
+    // Keygen retains selectors; Halo2 converts each to a current-row fixed-column query.
     let fixed_queries = cs
         .fixed_queries()
         .len()
         .checked_add(cs.num_selectors())
         .ok_or_else(|| "Kagemusha V5 fixed-query count overflow".to_owned())?;
-    // Mirror halo2-axiom's multi-opening point-set construction. The direct
-    // Kagemusha prover does not query public instance polynomials, so instance
-    // queries are intentionally absent even though one public column exists.
+    // Mirror halo2-axiom's point set, omitting unqueried instance polynomials despite one column.
     let mut column_queries =
         std::collections::BTreeMap::<Column<Any>, std::collections::BTreeSet<i32>>::new();
     for (column, rotation) in cs.advice_queries() {
@@ -5166,9 +5008,7 @@ where
         commitment::{Params as _, ParamsProver as _},
         ipa::commitment::ParamsIPA,
     };
-    // Both production entry points first require the exact first-release
-    // corridor. Keep an independent upper bound here so this allocation
-    // primitive also remains safe for small focused test fixtures.
+    // Production requires the release corridor; this independent cap also protects small fixtures.
     if expected_k > KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4 {
         return Err(format!(
             "Kagemusha V4 {role} parameter degree {expected_k} exceeds the fixed maximum {}",
@@ -5386,12 +5226,7 @@ where
         verifying_key,
         kagemusha_ipa_compile_config_v4(public_len),
     );
-    // The authenticated release binds the bootstrap payload, including its
-    // generation-time protocol identity. Re-generating the bootstrap VK here
-    // used a full keygen allocation on every runtime load without adding a new
-    // trust boundary: the final VK and bootstrap artifact are both already
-    // covered by the signed release. Validate the final protocol's exact
-    // structure and terminally verify the bootstrap equations below instead.
+    // The signed release already binds final VK/bootstrap identity; runtime keygen adds no trust.
     let actual_structure = kagemusha_compiled_protocol_structure_sha256(&final_protocol, parity)?;
     if expected_structure_sha256 == [0; 32] || actual_structure != expected_structure_sha256 {
         return Err("Kagemusha V4 compiled protocol structure mismatch".to_owned());
@@ -5405,12 +5240,8 @@ where
     let final_identity = kagemusha_compiled_protocol_identity_sha256(&final_protocol, parity)?;
     Ok((bootstrap, final_identity, final_protocol))
 }
-/// Terminally verify every Eq bootstrap equation before the payload can enter a recursive witness.
-/// The ordinary selector-zero proof is generated by the final Step proving key and is therefore
-/// verified by the final Step VK. The authenticated bootstrap payload records the generation-time
-/// protocol identity, while runtime validates the final protocol structure without regenerating any
-/// key. The all-zero parent has no carried public lineage, so the circuit selects `current`;
-/// nevertheless both fixed-shape fold stages execute and must be valid for `(current, current)`.
+/// Verify every Eq bootstrap equation before witnessing: the final VK checks its selector-zero proof,
+/// runtime checks shape without keygen, and both folds remain valid for the zero parent's lineage.
 fn terminal_validate_kagemusha_eq_bootstrap_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -5937,12 +5768,7 @@ impl KagemushaPastaCycleTerminalVerifierV4 {
             step_ep_verifying_key,
         })
     }
-    /// Decode and terminally decide one opaque ABI-21 pair only after its
-    /// complete public state is matched to the caller's canonical statement.
-    ///
-    /// This keeps fold transcripts and accumulator wires private to the
-    /// recursion adapter while giving the public facade a fail-closed binding
-    /// check over every value needed by the lifecycle.
+    /// Decide an ABI-21 pair after matching canonical public state, keeping folds private.
     pub(crate) fn verify_encoded_pair_binding(
         &self,
         bytes: &[u8],
@@ -5992,9 +5818,8 @@ impl KagemushaPastaCycleTerminalVerifierV4 {
         }
         self.verify_pair(&pair)
     }
-    /// Decode and terminally decide the generator's unbound live-pair
-    /// calibration vector. This is used only to qualify an authenticated
-    /// release; lifecycle acceptance must use `verify_encoded_pair_binding`.
+    /// Decide the generator's unbound live calibration only for release qualification; lifecycle
+    /// acceptance must use `verify_encoded_pair_binding`.
     pub(crate) fn verify_encoded_pair_qualification(&self, bytes: &[u8]) -> Result<(), String> {
         let pair = KagemushaPastaCycleProofPairV4::decode_authenticated(
             bytes,
@@ -6268,8 +6093,8 @@ fn kagemusha_ep_succinct_vk_v4(
         Some(hash_to_curve(&[1]).to_affine()),
     ))
 }
-/// Trust mode used while authenticating the bounded roles and the two pinned proving-key spools.
-/// Candidate evidence remains structurally distinct from a promoted release throughout loading.
+/// Trust mode for bounded roles/key spools,
+/// keeping candidate evidence distinct from a release.
 enum KagemushaArtifactSpoolBindingV5<'a> {
     AuthenticatedRelease(&'a KagemushaAuthenticatedReleaseV4),
     CandidateEvidenceLab {
@@ -6395,8 +6220,7 @@ impl<'a> KagemushaArtifactSpoolBindingV5<'a> {
         Ok(())
     }
 }
-/// Authenticated, reopenable framed proving-key payload backed by a pinned
-/// spool file. Only offsets and digests are retained in memory.
+/// Authenticated reopenable proving-key spool retaining only offsets/digests in memory.
 pub(crate) struct KagemushaProvingKeySpoolV5 {
     file: std::fs::File,
     framed_size: u64,
@@ -6772,8 +6596,7 @@ fn hash_kagemusha_pk_embedded_vk_prefix_v5(
     }
     Ok(hasher.finalize().into())
 }
-/// Authenticate one receipt-only proving-key role without materializing its
-/// multi-gigabyte polynomial vectors.
+/// Authenticate a receipt-only proving-key role without materializing its polynomial vectors.
 fn authenticate_kagemusha_receipt_pk_spool_v5(
     source: &KagemushaProvingKeySpoolV5,
     circuit_params: &KagemushaStepCircuitParamsV4,
@@ -6924,8 +6747,7 @@ impl std::ops::Deref for KagemushaPastaCycleProverV4 {
     }
 }
 impl KagemushaPastaCycleProverV4 {
-    /// The legacy all-eight in-memory carrier cannot satisfy the compact V5
-    /// active-memory contract. Callers must provide pinned proving-key spools.
+    /// The legacy all-eight carrier violates compact V5 memory; callers must use pinned key spools.
     pub(crate) fn from_authenticated_artifacts(
         _artifacts: &super::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4,
     ) -> Result<Self, String> {
@@ -6934,8 +6756,7 @@ impl KagemushaPastaCycleProverV4 {
                 .to_owned(),
         )
     }
-    /// Parse six bounded roles while retaining only authenticated, reopenable
-    /// file sources for the two release-sized proving keys.
+    /// Parse six bounded roles, retaining reopenable sources for the two release-sized keys.
     pub(crate) fn from_authenticated_artifact_spool_loader<F>(
         release: &KagemushaAuthenticatedReleaseV4,
         step_eq_proving_key_file: std::fs::File,
@@ -7768,19 +7589,14 @@ impl KagemushaPastaCycleProverV4 {
         Ok(pair)
     }
 }
-// Source-backed production operations serialize their complete heavy phase.
-// The pinned source already serializes individual file callbacks, but parsed
-// ParamsIPA/proving-key objects outlive those callbacks.  Keeping this permit
-// for the full operation prevents concurrent calls from recreating the same
-// two-parity memory peak that the source-backed path is designed to remove.
+// Serialize each source-backed heavy phase: parsed ParamsIPA/keys outlive individually serialized
+// file callbacks, so an operation-wide permit prevents a concurrent two-parity memory peak.
 static KAGEMUSHA_SOURCE_RUNTIME_HEAVY_PERMIT_V4: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn lock_kagemusha_source_runtime_heavy_v4() -> std::sync::MutexGuard<'static, ()> {
     match KAGEMUSHA_SOURCE_RUNTIME_HEAVY_PERMIT_V4.lock() {
         Ok(permit) => permit,
-        // The permit serializes memory-heavy work but protects no mutable
-        // protocol state. A bridge boundary deliberately catches worker
-        // panics, so retaining poison here would let one rejected operation
-        // permanently disable every later offline-cash operation.
+        // The permit guards memory, not protocol state; ignore poison so a caught worker panic cannot
+        // permanently disable later offline-cash operations.
         Err(poisoned) => {
             KAGEMUSHA_SOURCE_RUNTIME_HEAVY_PERMIT_V4.clear_poison();
             poisoned.into_inner()
@@ -9053,10 +8869,8 @@ mod scalar_lineage_v1 {
         #[cfg(test)]
         pub(super) identity_digest: [AssignedValue<C::ScalarExt>; 8],
     }
-    /// One parent-instance copy binding used by the fixed-shape V4 verifier.
-    ///
-    /// The binding itself carries no host presence flag. Its equality is gated exclusively by the
-    /// already-constrained current-Step slot bit passed to [`constrain_parent_scalar_lineage_v4`].
+    /// Parent-instance copy binding with equality gated only by the constrained current-Step slot bit
+    /// passed to [`constrain_parent_scalar_lineage_v4`], never by a host presence flag.
     pub(super) struct ParentInstanceCopyBindingV4<'a, F>
     where
         F: ff::Field,
@@ -9089,12 +8903,8 @@ mod scalar_lineage_v1 {
         /// Always-present degree-specific post-proof BGH19 transcript.
         pub(super) external_accumulation_proof: &'a KagemushaIpaAccumulationProofV4,
     }
-    /// Semantic reason an exact range of deferred curve equations is enabled.
-    ///
-    /// The enum, rather than a caller-provided Boolean vector, is retained in the fixed audit
-    /// shape. The scalar half derives its assigned selector from verified parent instances; the
-    /// reciprocal half derives the same selector from the cross-bound parent-count witnesses and
-    /// public slot bits.
+    /// Fixed-shape reason a deferred-equation range is enabled; scalar selectors derive from verified
+    /// parents, and reciprocal selectors derive from cross-bound parent counts and public slot bits.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(super) enum DeferredEquationGateV4 {
         /// Ordinary succinct verification for one parent slot.
@@ -9174,11 +8984,8 @@ mod scalar_lineage_v1 {
     {
         pub(super) stages: Vec<AssignedDeferredEquationStageV4<C::ScalarExt>>,
     }
-    /// Require the complete post-branch V4 stage order for the shared public deferred audit.
-    ///
-    /// Both V4 slots bind the same complete audit. Slot presence only controls public exposure of
-    /// that digest. This is required for a one-parent step: its enabled `BranchSelect` equation is
-    /// created after parent zero and therefore must be covered by slot zero's non-zero join.
+    /// Require full post-branch V4 stage order: both slots bind the same audit and presence gates only
+    /// exposure, ensuring a one-parent slot-zero join covers its later `BranchSelect` equation.
     pub(super) fn validate_stage_shapes_v4(
         stages: &[DeferredEquationStageShapeV4],
         equation_count: usize,
@@ -9285,13 +9092,9 @@ mod scalar_lineage_v1 {
     ) {
         output.extend(bytes.iter().copied().map(KagemushaSha256ByteV4::constant));
     }
-    /// Witness-load the only self-referential protocol values and bind their
-    /// exact canonical identity to the release-authenticated public words.
-    ///
-    /// `fixed_structure_sha256` is part of the outer circuit relation.  It is
-    /// checked against the native compiled protocol before assignment and then
-    /// loaded as constants.  The final VK may therefore be compiled only after
-    /// key generation without ever becoming a constant of its own circuit.
+    /// Witness-load self-referential protocol values and bind their identity to authenticated words.
+    /// The outer relation checks `fixed_structure_sha256` natively then loads it as constants, so the
+    /// final VK can be compiled after keygen without becoming its own circuit constant.
     pub(super) fn load_and_constrain_parent_protocol<'chip, C>(
         loader: &DeferredLoader<'chip, C>,
         sha_jobs: &mut KagemushaSha256JobsV4<C::ScalarExt>,
@@ -9966,13 +9769,9 @@ mod scalar_lineage_v1 {
         }
         Ok(ExposedParentLineageV4 { stages })
     }
-    /// Commit the complete selector-bound V6 audit once and expose it through
-    /// both independently presence-gated public join slots.
-    ///
-    /// Both public slots receive the same complete post-branch preimage.  For
-    /// a one-parent step slot zero is present and therefore binds every
-    /// enabled equation, including `BranchSelect`; slot one remains canonical
-    /// zero.  A two-parent step exposes the same complete digest in both slots.
+    /// Commit the full selector-bound V6 audit once for both presence-gated joins.
+    /// One-parent slot zero binds every enabled equation including `BranchSelect`, while slot one is
+    /// zero; two-parent steps expose the same post-branch digest in both slots.
     pub(super) fn constrain_scalar_audit_identity_v6<C>(
         loader: &DeferredLoader<'_, C>,
         sha_jobs: &mut KagemushaSha256JobsV4<C::ScalarExt>,
@@ -10088,11 +9887,8 @@ where
     stages: Vec<scalar_lineage_v1::DeferredEquationStageShapeV4>,
     inner_parent_counts: [u32; 2],
 }
-/// Commit one scalar-verifier audit exactly as both constrained halves do.
-///
-/// The complete injective audit encoding is absorbed by Poseidon, then its
-/// canonical field digest is wrapped by a single SHA-256 block. The resulting
-/// public words remain selector-gated exactly as in the V5 wire layout.
+/// Commit a scalar-verifier audit as both constrained halves do: Poseidon absorbs its injective
+/// encoding, one SHA-256 block wraps the field digest, and V5 selectors gate the public words.
 fn kagemusha_deferred_audit_public_words_v6<C>(
     witness: &super::kagemusha_cycle_loader::DeferredEquationWitness<C>,
     stages: &[scalar_lineage_v1::DeferredEquationStageShapeV4],
@@ -11469,14 +11265,9 @@ where
         ),
     })
 }
-/// Assign the exposed V4 column and gate its complete semantic interpretation
-/// behind the appended live selector.
-///
-/// Both modes assign and constrain the same two columns of advice values. In live mode every
-/// semantic limb is copy-equivalent to its exposed limb. In bootstrap mode every exposed limb
-/// (including the selector) is constrained to zero, while the same fixed-shape semantic relation is
-/// populated with the adapter's private calibration witness. Consequently a bootstrap proof has no
-/// public spend/state meaning and cannot be replayed as a live proof.
+/// Assign the V4 column and gate its semantics behind the live selector.
+/// Both modes constrain the same advice columns: live limbs copy to exposure, while bootstrap
+/// exposure is all zero over the fixed-shape private calibration relation and cannot be replayed live.
 fn assign_kagemusha_public_mode_v4<F>(
     builder: &mut halo2_base::gates::circuit::builder::BaseCircuitBuilder<F>,
     semantic_values: Vec<F>,
@@ -11556,19 +11347,175 @@ where
     let pinned = kagemusha_base_circuit_params_v4(circuit_params)?;
     let unusable_rows = usize::try_from(KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4)
         .map_err(|_| "Kagemusha V5 unusable-row count does not fit usize".to_owned())?;
+    #[cfg(feature = "kagemusha-generation-memory-lab")]
+    let shape_probe_role = if kagemusha_k17_shape_probe_is_active_v5() {
+        Some(match role {
+            "StepEqBootstrap" => "StepEqBootstrap",
+            "StepEqLive" => "StepEqLive",
+            "StepEpBootstrap" => "StepEpBootstrap",
+            "StepEpLive" => "StepEpLive",
+            _ => return Err("Kagemusha k17 shape probe saw an unknown circuit role".to_owned()),
+        })
+    } else {
+        None
+    };
+    #[cfg(feature = "kagemusha-generation-memory-lab")]
+    if let Some(role) = shape_probe_role {
+        let mut advice_cells = 0_usize;
+        let mut zero_mask_bytes = 0_usize;
+        let mut rational_advice_cells = 0_usize;
+        let mut rational_position_slots = 0_usize;
+        let mut denominator_slots = 0_usize;
+        let mut numerator_capacity = 0_usize;
+        let mut zero_mask_capacity_bytes = 0_usize;
+        let mut rational_position_capacity = 0_usize;
+        let mut denominator_capacity = 0_usize;
+        for phase in &builder.core().phase_manager {
+            for context in &phase.threads {
+                let add = |total: &mut usize, value: usize, label: &str| -> Result<(), String> {
+                    *total = total.checked_add(value).ok_or_else(|| {
+                        format!("Kagemusha k17 {label} telemetry total overflowed")
+                    })?;
+                    Ok(())
+                };
+                add(&mut advice_cells, context.advice_len(), "advice-cell")?;
+                add(
+                    &mut zero_mask_bytes,
+                    context.advice_zero_mask_bytes_len(),
+                    "zero-mask-byte",
+                )?;
+                add(
+                    &mut rational_advice_cells,
+                    context.rational_advice_len(),
+                    "rational-advice-cell",
+                )?;
+                add(
+                    &mut rational_position_slots,
+                    context.advice_rational_position_slots_len(),
+                    "rational-position-slot",
+                )?;
+                add(
+                    &mut denominator_slots,
+                    context.advice_denominator_slots_len(),
+                    "denominator-slot",
+                )?;
+                let [
+                    context_numerator_capacity,
+                    context_zero_mask_capacity_bytes,
+                    context_rational_position_capacity,
+                    context_denominator_capacity,
+                ] = context.advice_storage_capacities();
+                add(
+                    &mut numerator_capacity,
+                    context_numerator_capacity,
+                    "numerator-capacity",
+                )?;
+                add(
+                    &mut zero_mask_capacity_bytes,
+                    context_zero_mask_capacity_bytes,
+                    "zero-mask-capacity-byte",
+                )?;
+                add(
+                    &mut rational_position_capacity,
+                    context_rational_position_capacity,
+                    "rational-position-capacity",
+                )?;
+                add(
+                    &mut denominator_capacity,
+                    context_denominator_capacity,
+                    "denominator-capacity",
+                )?;
+            }
+        }
+        if rational_advice_cells != rational_position_slots
+            || rational_advice_cells != denominator_slots
+        {
+            return Err(
+                "Kagemusha k17 compact rational-position telemetry is inconsistent".to_owned(),
+            );
+        }
+        let (
+            advice_equalities,
+            constant_equalities,
+            distinct_constants,
+            constant_cell_slots,
+            constant_cell_capacity,
+            constant_cache_hits,
+            constant_index_lookups,
+        ) = {
+            let copy_manager = builder
+                .core()
+                .copy_manager
+                .lock()
+                .map_err(|_| "Kagemusha k17 copy manager lock is poisoned".to_owned())?;
+            let constant_cell_slots = copy_manager
+                .constant_equalities
+                .checked_cell_len()
+                .ok_or_else(|| "Kagemusha k17 constant-cell slot total overflowed".to_owned())?;
+            let constant_cell_capacity = copy_manager
+                .constant_equalities
+                .checked_cell_capacity()
+                .ok_or_else(|| {
+                "Kagemusha k17 constant-cell capacity total overflowed".to_owned()
+            })?;
+            if constant_cell_slots != copy_manager.constant_equalities.len() {
+                return Err(
+                    "Kagemusha k17 bucketed constant-equality count is inconsistent".to_owned(),
+                );
+            }
+            let constant_cache_hits = copy_manager.constant_equalities.last_cache_hits();
+            let constant_index_lookups = copy_manager.constant_equalities.index_lookups();
+            if constant_cache_hits
+                .checked_add(constant_index_lookups)
+                .ok_or_else(|| "Kagemusha k17 constant-cache accounting overflowed".to_owned())?
+                != copy_manager.constant_equalities.len()
+            {
+                return Err("Kagemusha k17 constant-cache accounting is inconsistent".to_owned());
+            }
+            (
+                copy_manager.advice_equalities.len(),
+                copy_manager.constant_equalities.len(),
+                copy_manager.constant_equalities.distinct_len(),
+                constant_cell_slots,
+                constant_cell_capacity,
+                constant_cache_hits,
+                constant_index_lookups,
+            )
+        };
+        let constant_cell_capacity_bytes = constant_cell_capacity
+            .checked_mul(std::mem::size_of::<halo2_base::ContextCell>())
+            .ok_or_else(|| {
+                "Kagemusha k17 constant-cell capacity byte total overflowed".to_owned()
+            })?;
+        let removed_flat_constant_value_bytes = constant_equalities
+            .checked_mul(std::mem::size_of::<F>())
+            .ok_or_else(|| {
+                "Kagemusha k17 removed flat constant-value estimate overflowed".to_owned()
+            })?;
+        let retired_reference_sort_input_bytes = constant_equalities
+            .checked_mul(std::mem::size_of::<&F>())
+            .ok_or_else(|| {
+                "Kagemusha k17 retired reference-sort scratch estimate overflowed".to_owned()
+            })?;
+        // Cache counters describe this parallel insertion schedule only. They
+        // are diagnostic performance telemetry, never reproducibility or
+        // promotion evidence; canonical counts and sorted output remain stable.
+        println!(
+            "k17_probe role={role} advice_cells={advice_cells} zero_mask_bytes={zero_mask_bytes} rational_advice_cells={rational_advice_cells} rational_position_slots={rational_position_slots} denominator_slots={denominator_slots} numerator_capacity={numerator_capacity} zero_mask_capacity_bytes={zero_mask_capacity_bytes} rational_position_capacity={rational_position_capacity} denominator_capacity={denominator_capacity} advice_equalities={advice_equalities} constant_equalities={constant_equalities} distinct_constants={distinct_constants} constant_cell_slots={constant_cell_slots} constant_cell_capacity={constant_cell_capacity} constant_cell_capacity_bytes={constant_cell_capacity_bytes} constant_cache_hits={constant_cache_hits} constant_index_lookups={constant_index_lookups} removed_flat_constant_value_bytes={removed_flat_constant_value_bytes} retired_reference_sort_input_bytes={retired_reference_sort_input_bytes}",
+        );
+        use std::io::Write as _;
+        std::io::stdout()
+            .flush()
+            .map_err(|error| format!("could not flush Kagemusha k17 shape telemetry: {error}"))?;
+    }
     let required = builder.calculate_params(Some(unusable_rows));
     // `calculate_params` installs its result. Restore the authenticated shape
     // before the circuit can escape this constructor.
     builder.set_params(pinned.clone());
     #[cfg(feature = "kagemusha-generation-memory-lab")]
     if kagemusha_k17_shape_probe_is_active_v5() {
-        let role = match role {
-            "StepEqBootstrap" => "StepEqBootstrap",
-            "StepEqLive" => "StepEqLive",
-            "StepEpBootstrap" => "StepEpBootstrap",
-            "StepEpLive" => "StepEpLive",
-            _ => return Err("Kagemusha k17 shape probe saw an unknown circuit role".to_owned()),
-        };
+        let role = shape_probe_role
+            .ok_or_else(|| "Kagemusha k17 shape probe lost its circuit role".to_owned())?;
         KAGEMUSHA_K17_SHAPE_PROBE_REQUIRED_V5.with(|captured| {
             captured.borrow_mut().push((role, required));
         });
@@ -11628,12 +11575,9 @@ where
     }
     Ok(())
 }
-/// Return whether the populated lookup-column counts fit the authenticated per-phase shape.
-///
-/// `BaseCircuitBuilder::calculate_params` reports every supported phase, so an unused suffix is
-/// represented as zero-width phases (for example `[1, 0, 0]`). Authenticated first-release
-/// parameters omit that suffix. Canonicalizing only the trailing zero-width phases preserves all
-/// real phase positions: an internal zero or a later non-zero phase can never be shifted.
+/// Check populated lookup counts against the authenticated phase shape.
+/// `calculate_params` reports unused zero-width suffixes; trimming only that suffix matches the
+/// first-release form without shifting an internal zero or later non-zero phase.
 fn kagemusha_lookup_phase_columns_fit_v5(needed: &[usize], available: &[usize]) -> bool {
     fn trim_trailing_zero_phases(phases: &[usize]) -> &[usize] {
         let canonical_len = phases
@@ -12411,6 +12355,8 @@ fn kagemusha_k17_shape_probe_iteration_v5(
         false,
     )?;
     KAGEMUSHA_K17_SHAPE_PROBE_REQUIRED_V5.with(|captured| captured.borrow_mut().clear());
+    // Purge setup allocator slack before the fixed 64-GiB circuit-build corridor.
+    halo2_proofs::release_allocator_slack();
     let step_eq = build_kagemusha_step_eq_circuit_v5(
         &witness,
         step_eq_circuit_params.clone(),
@@ -12497,16 +12443,11 @@ fn kagemusha_k17_shape_probe_iteration_v5(
     })
 }
 /// Run the non-shipping compact-k17 populated-shape convergence diagnostic.
-///
-/// This path generates only transparent IPA parameters and uncompressed verifier keys for empty
-/// selector-composite circuits. It deliberately uses parseable dummy parent transcripts and
-/// arbitrary accumulators only to populate the recursive constraint graph. It never constructs a
-/// proving key, creates a Step proof, or returns any probe witness or byte payload.
+/// It uses transparent IPA parameters, empty composite VKs, parseable dummy parents, and arbitrary
+/// accumulators only to populate the graph; it creates no PK/proof and returns no witness bytes.
 ///
 /// # Errors
-///
-/// Returns an error when the candidate exceeds a release resource corridor,
-/// the populated Eq/Ep graph cannot be derived, or closure is not reached.
+/// Returns an error if resource bounds, Eq/Ep graph derivation, or closure fails.
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 pub fn run_kagemusha_k17_shape_probe_v5(
     initial_advice_columns: u32,
@@ -12517,11 +12458,7 @@ pub fn run_kagemusha_k17_shape_probe_v5(
     if initial_advice_columns == 0 || initial_lookup_columns == 0 || maximum_iterations == 0 {
         return Err("Kagemusha k17 shape probe arguments must be non-zero".to_owned());
     }
-    // Populated recursive circuits reach Halo2's Rayon-backed fixed-base MSM.
-    // Match the production generator's disposable one-worker context so the
-    // diagnostic cannot multiply its large per-item construction scratch on
-    // the process-global pool. Enter the probe scope in the installed closure
-    // because its capture state is thread-local.
+    // Match production's one-worker pool to bound MSM scratch; capture state is thread-local.
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(KAGEMUSHA_GENERATION_RAYON_THREADS_V5)
         .thread_name(|_| "kagemusha-v5-shape-probe".to_owned())
@@ -12547,6 +12484,8 @@ fn run_kagemusha_k17_shape_probe_in_pool_v5(
     let mut candidate = (initial_advice_columns, initial_lookup_columns);
     for iteration in 1..=maximum_iterations {
         let required = kagemusha_k17_shape_probe_iteration_v5(iteration, candidate.0, candidate.1)?;
+        // Return dropped iteration graphs' allocator slack before closure confirmation.
+        halo2_proofs::release_allocator_slack();
         let next = (
             candidate.0.max(required.maximum_widths.0),
             candidate.1.max(required.maximum_widths.1),
@@ -12554,6 +12493,7 @@ fn run_kagemusha_k17_shape_probe_in_pool_v5(
         if next == candidate {
             let confirmed =
                 kagemusha_k17_shape_probe_iteration_v5(iteration + 1, candidate.0, candidate.1)?;
+            halo2_proofs::release_allocator_slack();
             if (
                 candidate.0.max(confirmed.maximum_widths.0),
                 candidate.1.max(confirmed.maximum_widths.1),
@@ -12761,13 +12701,9 @@ where
         |_| Ok(()),
     )
 }
-/// Generate and stream the complete artifact inventory while reporting
-/// resource-supervisor lifecycle boundaries.
-///
-/// Callback failures abort before the next heavyweight or publication phase.
-/// The compact V5 generator owns its detailed Eq/Ep scheduling internally, so
-/// the public progress surface reports the enclosing core and parity-emission
-/// boundaries without weakening the one-process supervisor permit.
+/// Stream the artifact inventory while reporting supervisor core/parity boundaries.
+/// Callback failure aborts before the next heavy or publication phase; detailed Eq/Ep scheduling
+/// stays internal and the one-process permit remains authoritative.
 pub fn generate_kagemusha_pasta_cycle_artifacts_streaming_with_progress_v4<F, P>(
     step_eq_circuit_params: KagemushaStepCircuitParamsV4,
     step_ep_circuit_params: KagemushaStepCircuitParamsV4,
@@ -12830,20 +12766,12 @@ where
         max_recursive_pair_bytes,
     })
 }
-/// Generate the complete Eq/Ep V4 artifact payload set from current source.
-///
-/// This is deliberately a two-stage fixed-point construction. A deterministic parity-specific
-/// composite proof supplies parseable disabled-parent transcripts while the final self-recursive
-/// PK/VK are generated. The final PK then creates a genuine selector-zero proof over the all-zero
-/// public column; its current accumulator and both independent folds become the authenticated
-/// bootstrap payload. Finally a selector-one initialization is proved and terminally decided to
-/// measure the public opaque pair. A checked resource preflight and the reviewed first-release
-/// profile gate run before either IPA parameter set is allocated. Populated keygen circuits are
-/// consumed and released immediately after synthesis and authenticated-breakpoint extraction,
-/// before fixed or permutation key polynomials are assembled. Each final processed proving key is
-/// streamed into its supplied staging sink, then moved with its witness-only circuit into the
-/// consuming proof API. The function never owns a proving-key byte vector and never keeps the Eq
-/// and Ep proving keys resident together.
+/// Generate the complete Eq/Ep V4 artifact set from current source.
+/// A deterministic composite supplies disabled parents for self keygen; the final PK produces the
+/// selector-zero bootstrap, then selector-one initialization measures the public pair. Resource and
+/// release-profile gates run before IPA allocation. Populated keygen circuits drop before polynomial
+/// assembly, and each processed PK streams to its sink then moves into proving without a key byte
+/// vector or simultaneous Eq/Ep key residency.
 pub fn generate_kagemusha_pasta_cycle_artifacts_v4(
     step_eq_circuit_params: KagemushaStepCircuitParamsV4,
     step_ep_circuit_params: KagemushaStepCircuitParamsV4,
@@ -12851,13 +12779,9 @@ pub fn generate_kagemusha_pasta_cycle_artifacts_v4(
     step_eq_proving_key_sink: &mut (dyn std::io::Write + Send),
     step_ep_proving_key_sink: &mut (dyn std::io::Write + Send),
 ) -> Result<KagemushaGeneratedPastaCycleArtifactsV4, String> {
-    // Halo2 uses Rayon inside FFTs, quotient evaluation, and IPA commitments.
-    // A one-process guard does not bound those per-worker scratch allocations.
-    // Keep the outer lifecycle in a disposable one-worker pool so FFT and
-    // quotient work remains bounded and its worker-local cache is released
-    // when the attempt returns. Large MSMs alone dispatch behind process-wide
-    // admission to Halo2's fixed two-worker window pool; its accumulator order
-    // remains canonical while bucket storage and allocator caches stay bounded.
+    // Run FFT/quotient Rayon work in a disposable single-worker pool so scratch/cache stays bounded.
+    // Large MSMs alone use Halo2's admitted fixed two-worker window, preserving accumulator order
+    // while bounding buckets and allocator caches.
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(KAGEMUSHA_GENERATION_RAYON_THREADS_V5)
         .thread_name(|_| "kagemusha-v5-generator".to_owned())
@@ -12901,18 +12825,12 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
     );
     let public_len = usize::try_from(preflight.layout.instance_column_limbs)
         .map_err(|_| "Kagemusha V4 generator public length does not fit usize".to_owned())?;
-    // `ParamsIPA::new` is a transparent, public-coin derivation: the vendored
-    // Halo2 implementation hashes the public domain `Halo2-Parameters` and
-    // indexed messages directly to curve points (with `[1]`/`[2]` for w/u).
-    // It accepts no RNG or secret seed, so reproducibility exposes no known
-    // discrete-log relation or toxic setup material.
+    // `ParamsIPA::new` hashes public `Halo2-Parameters` messages directly to curve points without an
+    // RNG or secret seed, so reproducibility exposes no known discrete-log relation or toxic setup.
     let step_eq_params = ParamsIPA::<EqAffine>::new(step_eq_circuit_params.k);
     let step_eq_seed = kagemusha_eq_bootstrap_seed_v4(&step_eq_params, &step_eq_circuit_params)?;
-    // The two universal parameter sets are not needed together while their
-    // parity-local bootstrap seeds are built.  Keeping both affine Eq vectors
-    // live beside bootstrap key assembly was the physical k17 peak.  Retain
-    // Eq temporarily in its canonical compressed representation, release the
-    // larger in-memory form, and reconstruct it only after the Ep seed exists.
+    // Bootstrap seeds do not need both parameter sets: compress Eq, release its affine vectors, and
+    // reconstruct it after the Ep seed to avoid the physical k17 peak.
     let step_eq_parameter_spool = kagemusha_eq_parameters_bytes_v4(&step_eq_params)?;
     validate_kagemusha_generated_payload_size_v4(
         step_eq_parameter_spool.len(),
@@ -13133,10 +13051,8 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
     )?;
     let step_eq_zero_instances = vec![vec![Fp::ZERO; public_len]];
     let step_ep_zero_instances = vec![vec![Fq::ZERO; public_len]];
-    // Build the Ep bootstrap first, then release its PK. Ep is rebuilt only
-    // after both authenticated bootstrap payloads exist, when its live proof
-    // and final serialized PK can be emitted. At no point does an Eq PK coexist
-    // with an Ep PK.
+    // Build and release the Ep bootstrap PK first; rebuild it after both bootstraps exist for the live
+    // proof and final stream, never alongside an Eq PK.
     let step_ep_bootstrap_keygen_circuit = build_kagemusha_step_ep_circuit_v5(
         &final_bootstrap_witness,
         &step_eq_circuit_params,
@@ -13415,9 +13331,7 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
         &step_eq_circuit_params,
     )?;
     drop(step_eq_live_verifying_key);
-    // Ep was used once above to authenticate its selector-zero bootstrap. It
-    // is rebuilt only after the Eq PK has been consumed so the live Ep proof
-    // and published bytes are produced without dual-PK residency.
+    // Rebuild Ep for live proof/publication only after consuming the Eq PK; never retain both.
     let step_ep_live_keygen_circuit = build_kagemusha_step_ep_circuit_v5(
         &live_witness,
         &step_eq_circuit_params,
@@ -13888,11 +13802,8 @@ where
     *ctx = loader.take_ctx();
     digest
 }
-/// Constrain one complete selector-bound V6 reciprocal audit once.
-///
-/// The complete post-branch stage plan is required for both public slots. As on the scalar side,
-/// each public exposure is multiplied by its slot-presence bit; every deferred MSM, selector
-/// schedule, serialization, and hash is evaluated only once.
+/// Constrain one full selector-bound V6 reciprocal audit for both public slots.
+/// Presence gates exposure; the deferred MSM, selector schedule, serialization, and hash run once.
 fn constrain_reciprocal_point_audit_identity_v6<'chip, C>(
     ctx: &mut halo2_base::gates::flex_gate::threads::SinglePhaseCoreManager<C::Base>,
     sha_jobs: &mut KagemushaSha256JobsV4<C::Base>,
@@ -14001,12 +13912,9 @@ where
     }
     Ok((digest, source_encodings))
 }
-/// Reconstruct the exact compiled-protocol identity in the reciprocal
-/// native-point circuit and bind it to the same public release words.
-///
-/// Protocol point chunks are selected by explicit source index from the V6 deferred-audit
-/// assignment. This avoids a second point assignment while the separate V2 Poseidon-then-SHA digest
-/// continues to anchor that namespace and transcript state to the authenticated release.
+/// Reconstruct the compiled-protocol identity in the reciprocal point circuit and bind release words.
+/// Explicit V6 source indices avoid a second point assignment; the V2 Poseidon/SHA digest still
+/// anchors the namespace and transcript state to the authenticated release.
 fn constrain_reciprocal_protocol_identity<'chip, C>(
     ctx: &mut halo2_base::gates::flex_gate::threads::SinglePhaseCoreManager<C::Base>,
     sha_jobs: &mut KagemushaSha256JobsV4<C::Base>,

@@ -928,7 +928,7 @@ function decodePunycodeLabel(input) {
   return String.fromCodePoint(...output);
 }
 
-export function canonicalizeDomainLabel(domain) {
+function requireExactDomainString(domain) {
   if (typeof domain !== JS_TYPE_STRING) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
@@ -948,6 +948,11 @@ export function canonicalizeDomainLabel(domain) {
       DOMAIN_NON_EMPTY_MESSAGE,
     );
   }
+  return trimmed;
+}
+
+export function canonicalizeDomainLabel(domain) {
+  const trimmed = requireExactDomainString(domain);
   if (/\s/.test(trimmed)) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
@@ -1073,25 +1078,7 @@ export function canonicalizeDomainLabel(domain) {
 }
 
 function canonicalizeDomainName(domain) {
-  if (typeof domain !== JS_TYPE_STRING) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      DOMAIN_STRING_MESSAGE,
-    );
-  }
-  const trimmed = domain.trim();
-  if (trimmed !== domain) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      DOMAIN_WHITESPACE_MESSAGE,
-    );
-  }
-  if (trimmed.length === 0) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      DOMAIN_NON_EMPTY_MESSAGE,
-    );
-  }
+  const trimmed = requireExactDomainString(domain);
   const labels = trimmed.split(".");
   if (labels.some((label) => label.length === 0)) {
     throw new AccountAddressError(

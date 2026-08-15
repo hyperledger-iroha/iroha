@@ -945,6 +945,11 @@ pub mod manifest {
     //! Manifest metadata for IVM smart contracts. It can be attached to a transaction's `metadata`
     //! under a well-known key for admission-time checks. When attached or registered, a V1 manifest
     //! must carry both consensus-binding hashes.
+    #[cfg(feature = "json")]
+    use crate::{
+        DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
+        DeriveJsonSerialize as DeriveJsonSer,
+    };
     use crate::{
         account::AccountId,
         events::EventFilterBox,
@@ -967,14 +972,7 @@ pub mod manifest {
     /// fields are optional metadata.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[norito(reuse_archived)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
@@ -1028,14 +1026,7 @@ pub mod manifest {
     }
     /// Bounded dynamic state access advertised by a compiler.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     pub struct DynamicAccessHint {
@@ -1164,14 +1155,7 @@ pub mod manifest {
     }
     /// Signature metadata binding a manifest to an approved signer.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
@@ -1190,14 +1174,7 @@ pub mod manifest {
     }
     /// Declarative metadata for a compiled entrypoint.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -1248,14 +1225,7 @@ pub mod manifest {
     }
     /// Declarative parameter metadata for a public or view entrypoint.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -1273,14 +1243,7 @@ pub mod manifest {
     }
     /// Declarative durable state schema advertised by a compiled contract.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -1298,14 +1261,7 @@ pub mod manifest {
     }
     /// Stable application error code exposed by a compiled contract.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -1325,14 +1281,7 @@ pub mod manifest {
     }
     /// Localized message text for a specific language tag.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -1350,14 +1299,7 @@ pub mod manifest {
     }
     /// Translation entry keyed by a stable message id.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -1375,14 +1317,7 @@ pub mod manifest {
     }
     /// Entrypoint callback target referenced by a trigger declaration.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -1401,14 +1336,7 @@ pub mod manifest {
     }
     /// Declarative trigger metadata attached to an entrypoint.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -1436,14 +1364,7 @@ pub mod manifest {
     }
     /// Entry point category advertised by Kotodama.
     #[derive(Debug, Clone, Copy, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[norito(tag = "kind", content = "value")]
     #[cfg_attr(
@@ -1466,14 +1387,7 @@ pub mod manifest {
     }
     /// Canonical payload signed to attest a manifest.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),

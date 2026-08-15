@@ -1026,7 +1026,7 @@ impl<F: ScalarField> GateInstructions<F> for GateChip<F> {
         let a = a.into_iter();
         let (len, hi) = a.size_hint();
         assert_eq!(Some(len), hi);
-        let row_offset = ctx.advice.len();
+        let row_offset = ctx.advice_len();
         let b_starts_with_one = self.inner_product_simple(ctx, a, b);
         let a_last = if b_starts_with_one {
             if len == 1 {
@@ -1062,7 +1062,7 @@ impl<F: ScalarField> GateInstructions<F> for GateChip<F> {
     {
         let a = a.into_iter().collect_vec();
         let len = a.len();
-        let row_offset = ctx.advice.len();
+        let row_offset = ctx.advice_len();
         let b_starts_with_one = self.inner_product_simple(ctx, a, b);
         let a_assigned = (0..len)
             .map(|i| {
@@ -1097,13 +1097,13 @@ impl<F: ScalarField> GateInstructions<F> for GateChip<F> {
     where
         QA: Into<QuantumCell<F>>,
     {
-        let row_offset = ctx.advice.len();
+        let row_offset = ctx.advice_len();
         let b_starts_with_one = self.inner_product_simple(ctx, a, b);
         if b_starts_with_one {
-            Box::new((row_offset..ctx.advice.len()).step_by(3).map(|i| ctx.get(i as isize)))
+            Box::new((row_offset..ctx.advice_len()).step_by(3).map(|i| ctx.get(i as isize)))
         } else {
             // in this case the first assignment is 0 so we skip it
-            Box::new((row_offset..ctx.advice.len()).step_by(3).skip(1).map(|i| ctx.get(i as isize)))
+            Box::new((row_offset..ctx.advice_len()).step_by(3).skip(1).map(|i| ctx.get(i as isize)))
         }
     }
 
@@ -1221,7 +1221,7 @@ impl<F: ScalarField> GateInstructions<F> for GateChip<F> {
         let bits = a.value().to_u64_limbs(range_bits, 1).into_iter().map(|x| Witness(F::from(x)));
 
         let mut bit_cells = Vec::with_capacity(range_bits);
-        let row_offset = ctx.advice.len();
+        let row_offset = ctx.advice_len();
         let acc = self.inner_product(
             ctx,
             bits,

@@ -79,11 +79,6 @@ import {
   SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
 } from "./sumeragiTypedLimits.js";
-import {
-  parseSumeragiDiagnosticsPayload,
-  parseSumeragiStatusPayload,
-} from "./sumeragiTyped.js";
-export { __sumeragiNativeAmxTestHelpers } from "./sumeragiTyped.js";
 import { buildCanonicalRequestHeaders } from "./canonicalRequest.js";
 import { requireCanonicalAuthAccount } from "./canonicalAccount.js";
 import { normalizeCanonicalWitnessHeader } from "./canonicalWitness.js";
@@ -7827,6 +7822,7 @@ export class ToriiClient {
       "Sumeragi typed status",
       { signal },
     );
+    const { parseSumeragiStatusPayload } = await import("./sumeragiTyped.js");
     return parseSumeragiStatusPayload(payload);
   }
 
@@ -7874,6 +7870,7 @@ export class ToriiClient {
       "Sumeragi typed diagnostics",
       { signal },
     );
+    const { parseSumeragiDiagnosticsPayload } = await import("./sumeragiTyped.js");
     return parseSumeragiDiagnosticsPayload(payload);
   }
 

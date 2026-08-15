@@ -4,9 +4,12 @@
 //! `Fresh` bytes never recreate the private permit required before H0 staging. The checksum detects
 //! noncanonical/corrupt bytes; it is not authentication, a proof receipt, or release authority.
 
-#![expect(
-    dead_code,
-    reason = "V2 creator corridor remains private and unconnected"
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "V2 creator corridor remains private and unconnected"
+    )
 )]
 
 use super::{
@@ -126,6 +129,16 @@ where
     S: ZkAmsMkheDirectRkgOneLifecycleStoreV2 + ?Sized,
 {
     let scope = direct_rkg_one_publication_scope_v1(roster, context, party_index)?;
+    reserve_scope_v2(scope, store)
+}
+
+fn reserve_scope_v2<S>(
+    scope: DirectRkgOnePublicationScopeV1,
+    store: &mut S,
+) -> Result<DirectRkgOneFreshReservationOutcomeV2, ZkAmsMkheErrorV1>
+where
+    S: ZkAmsMkheDirectRkgOneLifecycleStoreV2 + ?Sized,
+{
     let storage_key = record_v2::stable_storage_key_v2(scope)?;
     let mut observed = [0; RECORD_BYTES_V2];
     match load_v2(scope, storage_key, store, &mut observed)? {
@@ -162,6 +175,13 @@ where
 }
 
 /// Recover only an authority-neutral classification; no recovered state can resume creation.
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "the governed wrapper delegates to the fixed-scope state machine exercised by tests"
+    )
+)]
 pub(in super::super) fn recover_direct_rkg_one_lifecycle_v2<S>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     context: ZkAmsMkheDirectCeremonyContextV1,
@@ -172,6 +192,16 @@ where
     S: ZkAmsMkheDirectRkgOneLifecycleStoreV2 + ?Sized,
 {
     let scope = direct_rkg_one_publication_scope_v1(roster, context, party_index)?;
+    recover_scope_v2(scope, store)
+}
+
+fn recover_scope_v2<S>(
+    scope: DirectRkgOnePublicationScopeV1,
+    store: &mut S,
+) -> Result<Option<DirectRkgOneLifecycleObservationV2>, ZkAmsMkheErrorV1>
+where
+    S: ZkAmsMkheDirectRkgOneLifecycleStoreV2 + ?Sized,
+{
     let storage_key = record_v2::stable_storage_key_v2(scope)?;
     let mut record = [0; RECORD_BYTES_V2];
     match load_v2(scope, storage_key, store, &mut record)? {
@@ -207,34 +237,22 @@ where
     let axes = record_v2::published_axes_v2(publication)?;
     let mut desired = [0; RECORD_BYTES_V2];
     record_v2::encode_published_v2(permit.scope, permit.storage_key, axes, &mut desired)?;
-    let mutation = store.compare_exchange_exact_v2(&permit.storage_key, &permit.record, &desired);
-    let mut observed = [0; RECORD_BYTES_V2];
-    let reloaded = load_v2(permit.scope, permit.storage_key, store, &mut observed);
-    match mutation {
-        Ok(ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::ExchangedByThisCall) => match reloaded? {
-            LoadedV2::Lifecycle(DecodedStateV2::PublishedUnbound(found))
-                if observed == desired && found == axes =>
-            {
-                Ok(DirectRkgOnePublishedUnboundOwnerV2 {
-                    scope: permit.scope,
-                    storage_key: permit.storage_key,
-                    record: desired,
-                    axes,
-                })
-            }
-            _ => Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
-        },
-        Ok(
-            ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::ExactReplay
-            | ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::Conflict,
-        ) => {
-            let _ = reloaded?;
-            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+    match exchange_by_this_call_v2(
+        permit.scope,
+        &permit.storage_key,
+        &permit.record,
+        &desired,
+        store,
+    )? {
+        DecodedStateV2::PublishedUnbound(found) if found == axes => {
+            Ok(DirectRkgOnePublishedUnboundOwnerV2 {
+                scope: permit.scope,
+                storage_key: permit.storage_key,
+                record: desired,
+                axes,
+            })
         }
-        Err(error) => {
-            let _ = reloaded?;
-            Err(error)
-        }
+        _ => Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
     }
 }
 
@@ -260,23 +278,44 @@ where
         proof,
         &mut desired,
     )?;
-    let mutation =
-        store.compare_exchange_exact_v2(&published.storage_key, &published.record, &desired);
+    match exchange_by_this_call_v2(
+        published.scope,
+        &published.storage_key,
+        &published.record,
+        &desired,
+        store,
+    )? {
+        DecodedStateV2::ProofPublishedUnverified(found, proof_found)
+            if found == published.axes && proof_found == proof =>
+        {
+            Ok(DirectRkgOneProofPublishedUnverifiedOwnerV2 {
+                proof_owner,
+                publication_owner,
+                _scope: published.scope,
+                _storage_key: published.storage_key,
+                _record: desired,
+            })
+        }
+        _ => Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
+    }
+}
+
+fn exchange_by_this_call_v2<S>(
+    scope: DirectRkgOnePublicationScopeV1,
+    storage_key: &[u8; 32],
+    expected: &RecordV2,
+    desired: &RecordV2,
+    store: &mut S,
+) -> Result<DecodedStateV2, ZkAmsMkheErrorV1>
+where
+    S: ZkAmsMkheDirectRkgOneLifecycleStoreV2 + ?Sized,
+{
+    let mutation = store.compare_exchange_exact_v2(storage_key, expected, desired);
     let mut observed = [0; RECORD_BYTES_V2];
-    let reloaded = load_v2(published.scope, published.storage_key, store, &mut observed);
+    let reloaded = load_v2(scope, *storage_key, store, &mut observed);
     match mutation {
         Ok(ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::ExchangedByThisCall) => match reloaded? {
-            LoadedV2::Lifecycle(DecodedStateV2::ProofPublishedUnverified(found, proof_found))
-                if observed == desired && found == published.axes && proof_found == proof =>
-            {
-                Ok(DirectRkgOneProofPublishedUnverifiedOwnerV2 {
-                    proof_owner,
-                    publication_owner,
-                    _scope: published.scope,
-                    _storage_key: published.storage_key,
-                    _record: desired,
-                })
-            }
+            LoadedV2::Lifecycle(state) if observed == *desired => Ok(state),
             _ => Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
         },
         Ok(

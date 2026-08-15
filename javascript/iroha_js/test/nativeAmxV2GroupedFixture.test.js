@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 
+import { ToriiClient as SourceToriiClient } from "../src/toriiClient.js";
 import {
-  ToriiClient as SourceToriiClient,
   __sumeragiNativeAmxTestHelpers as sourceNativeAmxTestHelpers,
-} from "../src/toriiClient.js";
+} from "../src/sumeragiTyped.js";
 import {
   verifyBlockMerkleProof as sourceVerifyBlockMerkleProof,
 } from "../src/norito.js";
@@ -18,8 +18,10 @@ const distToriiClientUrl = distToriiClientPath
   : new URL("../dist/toriiClient.js", import.meta.url);
 const {
   ToriiClient: DistToriiClient,
-  __sumeragiNativeAmxTestHelpers: distNativeAmxTestHelpers,
 } = await import(distToriiClientUrl);
+const {
+  __sumeragiNativeAmxTestHelpers: distNativeAmxTestHelpers,
+} = await import(new URL("./sumeragiTyped.js", distToriiClientUrl));
 const {
   verifyBlockMerkleProof: distVerifyBlockMerkleProof,
 } = await import(new URL("./norito.js", distToriiClientUrl));

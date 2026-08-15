@@ -1,4 +1,6 @@
 //! Sora Name Service data structures for registrar APIs.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::{AccountAddress, AccountId},
     metadata::Metadata,
@@ -24,10 +26,7 @@ const fn default_ownership_generation_v1() -> u64 {
 }
 /// Canonical selector payload for SNS names.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NameSelectorV1 {
     /// Selector encoding version (currently `1`).
     pub version: u8,
@@ -88,10 +87,7 @@ pub enum NameSelectorError {
 }
 /// Record describing the canonical ownership state of a SNS name.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NameRecordV1 {
     /// Canonical selector for the registered label.
     pub selector: NameSelectorV1,
@@ -162,10 +158,7 @@ impl NameRecordV1 {
 }
 /// Lifecycle state of a SNS registration.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "status", content = "detail", no_fast_from_json)
@@ -184,10 +177,7 @@ pub enum NameStatus {
 }
 /// Details captured when a registration is frozen.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NameFrozenStateV1 {
     /// Reason recorded by governance/guardian.
     pub reason: String,
@@ -196,20 +186,14 @@ pub struct NameFrozenStateV1 {
 }
 /// Details captured when a registration is tombstoned.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NameTombstoneStateV1 {
     /// Reason recorded by governance/guardian.
     pub reason: String,
 }
 /// Canonical representation of token amounts used by SNS pricing.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct TokenValue {
     /// Settlement asset-holding identifier (`<asset-definition-id>#<account-id>`).
     pub asset_id: String,
@@ -228,10 +212,7 @@ impl TokenValue {
 }
 /// Auction metadata recorded for pending or running auctions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NameAuctionStateV1 {
     /// Auction flavour.
     pub kind: AuctionKind,
@@ -248,10 +229,7 @@ pub struct NameAuctionStateV1 {
 }
 /// Supported auction kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "detail", no_fast_from_json)
@@ -264,10 +242,7 @@ pub enum AuctionKind {
 }
 /// Controller descriptor referencing account addresses or resolver templates.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NameControllerV1 {
     /// Controller classification.
     pub controller_type: ControllerType,
@@ -291,10 +266,7 @@ impl NameControllerV1 {
 }
 /// Supported controller categories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "detail", no_fast_from_json)
@@ -311,10 +283,7 @@ pub enum ControllerType {
 }
 /// Steward-advertised pricing tier definition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PriceTierV1 {
     /// Tier identifier.
     pub tier_id: u8,
@@ -333,10 +302,7 @@ pub struct PriceTierV1 {
 }
 /// Reserved label assignment controlled by governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReservedNameV1 {
     /// Canonical lowercase label.
     pub normalized_label: String,
@@ -349,10 +315,7 @@ pub struct ReservedNameV1 {
 }
 /// Basis-point split describing how funds are routed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SuffixFeeSplitV1 {
     /// Treasury share (basis points).
     pub treasury_bps: u16,
@@ -365,10 +328,7 @@ pub struct SuffixFeeSplitV1 {
 }
 /// Policy lifecycle state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "status", content = "detail", no_fast_from_json)
@@ -383,10 +343,7 @@ pub enum SuffixStatus {
 }
 /// Minimal suffix policy definition consumed by the registrar.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SuffixPolicyV1 {
     /// Assigned identifier.
     pub suffix_id: SuffixId,

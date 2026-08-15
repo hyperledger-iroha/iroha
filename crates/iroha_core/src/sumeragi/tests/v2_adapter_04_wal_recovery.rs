@@ -2580,9 +2580,9 @@ fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
 }
 #[test]
 fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
-    let adapter = include_str!("../v2.rs");
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let body_store_source = include_str!("../v2_body_store.rs");
-    let runtime = include_str!("../v2_runtime.rs");
+    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let replay = concat!(
         include_str!("../v2_lifecycle_replay_authority.rs"),
         include_str!("../v2_lifecycle_replay_authority_certified_body.rs"),

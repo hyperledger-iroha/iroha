@@ -3,6 +3,8 @@
 //! Textual names in this module are catalog-free.  Resolution pins the canonical
 //! text to the numeric dataspace identifier that consensus must revalidate when
 //! executing an alias instruction.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     account::{
@@ -33,10 +35,7 @@ pub const ALIAS_LEASE_YEAR_MS: u64 = 31_536_000_000;
 /// `merchant@banka.paynet` has label `merchant`, domain `banka`, and
 /// dataspace `paynet`; `merchant@paynet` has no domain segment.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(decode_from_slice)]
 pub struct AccountAliasName {
     /// Canonical alias label.
@@ -182,10 +181,7 @@ fn canonical_alias_segment(raw: &str, segment: AliasSegment) -> Result<Name, Par
 }
 /// Canonical dataspace text paired with the numeric ID expected by the caller.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ResolvedDataSpaceV1 {
     /// Canonical textual dataspace name.
     pub canonical_name: Name,
@@ -234,10 +230,7 @@ impl fmt::Display for ResolvedDataSpaceV1 {
 }
 /// Canonical fully qualified domain paired with its expected numeric dataspace ID.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ResolvedDomainV1 {
     /// Canonical `domain.dataspace` text.
     pub canonical_name: DomainId,
@@ -291,10 +284,7 @@ impl fmt::Display for ResolvedDomainV1 {
 }
 /// Canonical account-alias text paired with its expected numeric dataspace ID.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ResolvedAccountAliasV1 {
     /// Canonical account alias text.
     pub canonical_name: AccountAliasName,
@@ -372,10 +362,7 @@ impl From<ResolvedAccountAliasV1> for AccountAlias {
 }
 /// Account provisioning behavior requested by an account-alias intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
@@ -391,10 +378,7 @@ pub enum AccountProvisionV1 {
 }
 /// Whether an account alias should be primary or additional.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
@@ -410,10 +394,7 @@ pub enum AccountAliasRoleV1 {
 }
 /// Desired state for one dataspace alias.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasDataSpaceIntentV1 {
     /// Resolved dataspace name.
     pub dataspace: ResolvedDataSpaceV1,
@@ -422,10 +403,7 @@ pub struct AliasDataSpaceIntentV1 {
 }
 /// Desired state for one domain.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasDomainIntentV1 {
     /// Resolved domain name, including its parent dataspace.
     pub domain: ResolvedDomainV1,
@@ -434,10 +412,7 @@ pub struct AliasDomainIntentV1 {
 }
 /// Desired state for one account alias.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasAccountIntentV1 {
     /// Resolved account alias.
     pub alias: ResolvedAccountAliasV1,
@@ -450,10 +425,7 @@ pub struct AliasAccountIntentV1 {
 }
 /// Declarative desired state for one alias/SNS resource.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "intent", rename_all = "snake_case")
@@ -482,10 +454,7 @@ impl AliasIntentV1 {
 }
 /// Lease terms used only when setup classifies a resource as absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasLeaseAcquisitionV1 {
     /// Requested lease term in whole years.
     pub term_years: u8,
@@ -505,10 +474,7 @@ impl AliasLeaseAcquisitionV1 {
 }
 /// Guard binding a lease operation to an exact policy and bounded quote.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasQuoteGuardV1 {
     /// Policy version that consensus must observe.
     pub expected_policy_version: u16,
@@ -525,10 +491,7 @@ pub struct AliasQuoteGuardV1 {
 /// instruction the client expects to submit. The planner reorders entries into dependency order,
 /// reclassifies them against live state, and returns the canonical framed instruction vector.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasSetupPlanRequestV1 {
     /// Request layout version. The only supported value is [`Self::VERSION`].
     pub schema_version: u8,
@@ -549,10 +512,7 @@ impl AliasSetupPlanRequestV1 {
 }
 /// Resolved resource supported by setup, renewal, and auto-renew operations.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "resource", rename_all = "snake_case")
@@ -590,10 +550,7 @@ impl fmt::Display for AliasTargetV1 {
 }
 /// Owner-configured deterministic auto-renew policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasAutoRenewConfigV1 {
     /// Renewal term in whole years.
     pub term_years: u8,
@@ -612,10 +569,7 @@ pub struct AliasAutoRenewConfigV1 {
 }
 /// Persisted compare-and-set state for native deterministic alias auto-renew.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasAutoRenewStateV1 {
     /// State layout version, currently `1`.
     pub version: u8,
@@ -662,10 +616,7 @@ impl AliasAutoRenewStateV1 {
 }
 /// Canonical signed request body for planning one lease renewal.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasLeaseRenewPlanRequestV1 {
     /// Request layout version. The only supported value is [`Self::VERSION`].
     pub schema_version: u8,
@@ -686,10 +637,7 @@ impl AliasLeaseRenewPlanRequestV1 {
 }
 /// Canonical signed request body for planning one auto-renew configuration CAS.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasAutoRenewPlanRequestV1 {
     /// Request layout version. The only supported value is [`Self::VERSION`].
     pub schema_version: u8,
@@ -710,10 +658,7 @@ impl AliasAutoRenewPlanRequestV1 {
 }
 /// Exact lifecycle operation committed by a lifecycle transaction plan.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "operation", rename_all = "snake_case")
@@ -738,10 +683,7 @@ impl AliasLifecycleOperationV1 {
 }
 /// Planner classification for one lifecycle operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
@@ -757,10 +699,7 @@ pub enum AliasLifecyclePlanDispositionV1 {
 }
 /// Planner classification for one resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "kind", content = "value", rename_all = "snake_case")
@@ -782,10 +721,7 @@ pub enum AliasPlanDispositionV1 {
 }
 /// Exact lease quote attached to a create or renewal plan resource.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasLeaseQuoteV1 {
     /// Resource to which the quote applies.
     pub target: AliasTargetV1,
@@ -804,10 +740,7 @@ pub struct AliasLeaseQuoteV1 {
 }
 /// Planner result for one ordered resource intent.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasPlanResourceV1 {
     /// Canonically resolved desired state.
     pub intent: AliasIntentV1,
@@ -822,10 +755,7 @@ pub struct AliasPlanResourceV1 {
 }
 /// Exact framed Norito instruction returned by the planner.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasFramedInstructionV1 {
     /// Stable instruction wire identifier.
     pub wire_id: String,
@@ -834,10 +764,7 @@ pub struct AliasFramedInstructionV1 {
 }
 /// Exact total charge for one payment asset.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasAssetTotalV1 {
     /// Payment asset.
     pub payment_asset: AssetDefinitionId,
@@ -846,10 +773,7 @@ pub struct AliasAssetTotalV1 {
 }
 /// Overall setup/readiness state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "status", content = "value", rename_all = "snake_case")
@@ -868,10 +792,7 @@ pub enum AliasSetupStatusV1 {
 }
 /// Phase that produced a setup diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "phase", content = "value", rename_all = "snake_case")
@@ -896,10 +817,7 @@ pub enum AliasSetupValidationPhaseV1 {
 }
 /// Severity of a setup diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     feature = "json",
     norito(tag = "severity", content = "value", rename_all = "snake_case")
@@ -918,10 +836,7 @@ pub enum AliasSetupSeverityV1 {
 }
 /// One stable, secret-free setup/readiness diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasSetupDiagnosticV1 {
     /// Validation phase.
     pub phase: AliasSetupValidationPhaseV1,
@@ -946,10 +861,7 @@ pub struct AliasSetupDiagnosticV1 {
 }
 /// Deterministically ordered setup/readiness diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasSetupReportV1 {
     /// Report layout version. The only supported value is [`Self::VERSION`].
     pub version: u8,
@@ -974,10 +886,7 @@ impl AliasSetupReportV1 {
 }
 /// World-state anchor used to classify an alias plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasPlanAnchorV1 {
     /// Height of the anchored block.
     pub block_height: u64,
@@ -986,10 +895,7 @@ pub struct AliasPlanAnchorV1 {
 }
 /// Canonical body committed by an alias transaction plan hash.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasTransactionPlanBodyV1 {
     /// Layout version. The only supported value is [`Self::VERSION`].
     pub version: u8,
@@ -1033,10 +939,7 @@ impl AliasTransactionPlanBodyV1 {
 }
 /// Alias transaction plan and its canonical body commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasTransactionPlanV1 {
     /// Canonical plan body.
     pub body: AliasTransactionPlanBodyV1,
@@ -1059,10 +962,7 @@ impl AliasTransactionPlanV1 {
 }
 /// Canonical body committed by an alias lifecycle transaction plan hash.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasLifecycleTransactionPlanBodyV1 {
     /// Layout version. The only supported value is [`Self::VERSION`].
     pub version: u8,
@@ -1112,10 +1012,7 @@ impl AliasLifecycleTransactionPlanBodyV1 {
 }
 /// Alias lifecycle transaction plan and its canonical body commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AliasLifecycleTransactionPlanV1 {
     /// Canonical lifecycle plan body.
     pub body: AliasLifecycleTransactionPlanBodyV1,

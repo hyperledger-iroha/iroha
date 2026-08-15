@@ -1522,7 +1522,7 @@ include!("v2_adapter_04b_lifecycle_startup.rs");
 include!("v2_adapter_05_direct_lifecycle.rs");
 #[test]
 fn recovered_wal_sign_status_publication_is_exact_last_and_unwired() {
-    let source = include_str!("../v2.rs");
+    let source = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let body_store_source = include_str!("../v2_body_store.rs");
     let (production, _) = source
         .split_once("\n#[cfg(test)]\nmod tests {")

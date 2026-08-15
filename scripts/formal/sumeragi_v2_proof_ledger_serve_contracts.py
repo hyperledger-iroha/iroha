@@ -1179,7 +1179,7 @@ _SERVE_INGRESS_GATE_WORKER_REGRESSION_TEST_SHA256 = {
         "18af9d5d33613df8489c684650e8fde266299eed705ed67818d7cdd5d99d9f1c"
     ),
     "fair_ingress_gate_overflow_closes_without_partial_admission": (
-        "5a36f512c8c77a9c370a1343f5fc5ad5a7ab669faa1f1e992e851c5ddcab7e5f"
+        "0262b1a40eca9b8916f51a1af1e05c443ed160398b4bf993fd99996bbdc6fe2b"
     ),
     "fair_ingress_rollover_retires_ticket_before_old_service_teardown": (
         "0c27de66d91cd2c0744cf962e673de7e54881838e12f4d920cbfeabeccbcf875"
@@ -1618,7 +1618,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "8b70e4c1d229b5d2fefd9eaa7f6a11a5ec6d07a0afff4dd275dc4cc7f4e972d1"
     ),
     "freeze_due_clock_owners": (
-        "d28538a60f9391277b1db6c60b71ed694c1d776de425305c52f8703450ebae85"
+        "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -1737,7 +1737,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256 = {
         "36092769fa443044ada01878360c825f359e5d0eae1626a785d15316d8fd97cd"
     ),
     "restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect": (
-        "4222e8a1cfb308f0fb76cec9ca1fc8e0f57c19c70cf425dad9648afa402e63d9"
+        "b13646ed6219f0c11276f6ab64fd2270353015c8183da26c61524570f1b279de"
     ),
     "live_producer_owner_cannot_replace_immutable_identity": (
         "fe58056b871ed225ceabf68f95ff99b6ea7882da5ba9e384c45d0864a74eb697"
@@ -1773,7 +1773,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256 = {
         "3c64469fa90eddc9df2a6fa0f63abc93e403761ae64797a7ef6d96cee4e4f122"
     ),
     "serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims": (
-        "43b35e99e1b618ded9f774fe0fb0bbf201ae269cf87152e1e2b760668a13a741"
+        "de3ee4ae3ebba0b2b55fc1183b95bb9fd268c827774b6967d94b27f456054460"
     ),
     "serviced_candidate_snapshot_is_bound_to_the_local_validator_owner": (
         "e2d69a7243f71d2818ffabcbdd78e9585c6245b447a882e8f6dc319067a956ee"
@@ -1819,7 +1819,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
 }
 _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {
     "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity": (
-        "d02a7f409972d645e46479269a11297493023132831fd299f487b0b202df6294"
+        "c1f6883beb0cebb4f2fded85abd8a8b88d1387a880c27b5cff9db93fcb123dda"
     ),
 }
 _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES = {

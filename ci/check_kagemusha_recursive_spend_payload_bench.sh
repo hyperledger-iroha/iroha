@@ -17,6 +17,8 @@ root = Path(sys.argv[1])
 model_path = root / "crates/iroha_data_model/src/offline/mod.rs"
 model_fragment_path = root / "crates/iroha_data_model/src/offline/kagemusha_model.rs"
 model_include = 'include!("kagemusha_model.rs");'
+verifier_path = root / "crates/iroha_data_model/src/offline/kagemusha_release_verifier.rs"
+verifier_module = "mod kagemusha_release_verifier;"
 model_parent = model_path.read_text(encoding="utf-8")
 if model_parent.count(model_include) != 1:
     raise SystemExit(
@@ -25,6 +27,22 @@ if model_parent.count(model_include) != 1:
 rust = model_parent.replace(
     model_include,
     model_fragment_path.read_text(encoding="utf-8"),
+    1,
+)
+if rust.count(verifier_module) != 1:
+    raise SystemExit(
+        f"{model_path}: expected exactly one reviewed {verifier_path.name} module"
+    )
+verifier = verifier_path.read_text(encoding="utf-8")
+for marker in (
+    "const VERIFIER_IDENTITY_SCHEMA_V4",
+    "pub fn kagemusha_recursive_spend_verifier_key_id_v4",
+):
+    if verifier.count(marker) != 1:
+        raise SystemExit(f"{verifier_path}: expected exactly one {marker!r}")
+rust = rust.replace(
+    verifier_module,
+    "mod kagemusha_release_verifier {\n" + verifier + "\n}",
     1,
 )
 swift = (root / "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift").read_text(encoding="utf-8")

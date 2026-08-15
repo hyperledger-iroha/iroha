@@ -78,7 +78,7 @@ _REPLY_WRITER_DEADLINE_NETWORK_TEST_SHA256 = {
         "48ed5103779d849e1313f465b6c7035f93e79b638249e2c3fabe23de4535355f"
     ),
     "reply_flush_ack_completes_only_after_peer_writer_flush": (
-        "3e9f44feed1f19b96c701d1619b3f47b76ce81c21dc925140c2c842f5faecfe5"
+        "a741724e907df8ae60e7027a8f7e55220f851e39f1575cd21f6c5e2805723559"
     ),
     "ready_exact_reply_flush_wins_route_retirement": (
         "6be7e1c0a3a76e1b2beeb053e221a3c4d39765b9921cbace30d28d9b10792bea"

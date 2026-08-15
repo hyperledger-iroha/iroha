@@ -118,7 +118,7 @@ fn direct_certified_body_preview_is_inert_and_commits_one_store_successor() {
 }
 #[test]
 fn recovered_broadcast_and_sign_projection_remains_affine_and_phase_body_bound() {
-    let adapter = include_str!("../v2.rs");
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let authority = adapter
         .split_once("struct RecoveredLifecycleSignBroadcastAndSignAuthorityV1")
         .expect("locate combined recovered successor authority")
@@ -1544,7 +1544,7 @@ fn direct_validation_rejects_foreign_receipts_and_commitments_without_mutation()
 }
 #[test]
 fn direct_validation_preview_surface_is_closed_move_only_and_unwired() {
-    let source = include_str!("../v2.rs");
+    let source = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let (production, _) = source
         .split_once("\n#[cfg(test)]\nmod tests {")
         .expect("locate unconditional production/test boundary");
@@ -2136,7 +2136,7 @@ fn direct_validation_failed_rejects_foreign_receipts_without_mutation() {
 }
 #[test]
 fn direct_validation_failed_surface_is_closed_move_only_and_unwired() {
-    let source = include_str!("../v2.rs");
+    let source = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let (production, _) = source
         .split_once("\n#[cfg(test)]\nmod tests {")
         .expect("locate unconditional production/test boundary");
@@ -2225,7 +2225,7 @@ fn direct_validation_failed_surface_is_closed_move_only_and_unwired() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
-    let source = include_str!("../v2.rs");
+    let source = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let (production, _) = source
         .split_once("\n#[cfg(test)]\nmod tests {")
         .expect("locate unconditional production/test boundary");

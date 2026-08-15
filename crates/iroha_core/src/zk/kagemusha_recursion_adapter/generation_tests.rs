@@ -1,10 +1,10 @@
-use std::{cell::Cell, mem, rc::Rc};
 use super::*;
 use halo2_proofs::arithmetic::Field;
 use iroha_data_model::offline::{
     KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
 };
 use snark_verifier::util::arithmetic::PrimeCurveAffine as _;
+use std::{cell::Cell, mem, rc::Rc};
 fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -579,6 +579,29 @@ fn v5_shape_probe_uses_one_disposable_rayon_worker() {
         .expect("next helper after populated-shape probe")
         .0;
     assert!(body.contains("KagemushaK17ShapeProbeScopeV5::enter()"));
+    assert!(
+        body.matches("halo2_proofs::release_allocator_slack();")
+            .count()
+            >= 2
+    );
+}
+#[test]
+fn v5_shape_probe_releases_setup_slack_before_the_first_populated_circuit() {
+    let source = include_str!("../kagemusha_recursion_adapter.rs");
+    let iteration = source
+        .split_once("fn kagemusha_k17_shape_probe_iteration_v5(")
+        .expect("populated-shape probe iteration")
+        .1
+        .split_once("pub fn run_kagemusha_k17_shape_probe_v5(")
+        .expect("public probe wrapper after iteration")
+        .0;
+    let release = iteration
+        .find("halo2_proofs::release_allocator_slack();")
+        .expect("setup allocator-pressure relief");
+    let first_build = iteration
+        .find("let step_eq = build_kagemusha_step_eq_circuit_v5(")
+        .expect("first populated StepEq circuit build");
+    assert!(release < first_build);
 }
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 #[test]
@@ -1386,16 +1409,16 @@ fn qualification_verifier_callers_have_a_static_memory_contract() {
 }
 #[test]
 fn v5_auxiliary_capacity_rejects_sha_and_dense_overflow_with_diagnostics() {
+    use crate::zk::{
+        kagemusha_cycle_loader::{LIMB_BITS, LIMBS},
+        kagemusha_dense_msm::KagemushaDenseMsmSourceV5,
+    };
     use halo2_base::{gates::circuit::builder::BaseCircuitBuilder, utils::CurveAffineExt as _};
     use halo2_ecc::{
         bigint::ProperCrtUint,
         fields::{FieldChip as _, fp::FpChip},
     };
     use halo2_proofs::halo2curves::pasta::EpAffine;
-    use crate::zk::{
-        kagemusha_cycle_loader::{LIMB_BITS, LIMBS},
-        kagemusha_dense_msm::KagemushaDenseMsmSourceV5,
-    };
     fn params_with_usable_rows(usable_rows: usize) -> KagemushaStepCircuitParamsV4 {
         let mut params = valid_step_circuit_params_v4();
         let domain_rows = 1_u32

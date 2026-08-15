@@ -1,5 +1,7 @@
 //! Portable, finality-bound active-receiver snapshot primitives.
 use super::KagemushaDevicePublicKeyV2;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, asset::AssetDefinitionId};
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
@@ -24,10 +26,7 @@ const RECEIVER_NODE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:active-receiver:node:v1
 /// the same account/device/asset tuple therefore creates an ambiguous entry
 /// instead of allowing the requester to select one of several keys.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaActiveReceiverKeyV1 {
     /// Recipient account.
@@ -39,10 +38,7 @@ pub struct KagemushaActiveReceiverKeyV1 {
 }
 /// Consensus-derived value for one unique active native registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaActiveReceiverValueV1 {
     /// Hash of the canonical public registration archive.
@@ -68,10 +64,7 @@ pub struct KagemushaActiveReceiverValueV1 {
 }
 /// One receiver tuple committed by the canonical balanced snapshot tree.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaActiveReceiverActiveEntryV1 {
     /// Tuple key.
@@ -81,10 +74,7 @@ pub struct KagemushaActiveReceiverActiveEntryV1 {
 }
 /// Ambiguity marker for a tuple with multiple current native registrations.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaActiveReceiverAmbiguousEntryV1 {
     /// Tuple key.
@@ -100,10 +90,7 @@ pub struct KagemushaActiveReceiverAmbiguousEntryV1 {
     reason = "the public snapshot entry keeps its canonical Norito variant payloads inline"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(
     tag = "kind",
     content = "value",
@@ -138,10 +125,7 @@ impl KagemushaActiveReceiverEntryV1 {
 }
 /// Availability state bound into every per-block receiver commitment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(
     tag = "status",
     content = "value",
@@ -158,10 +142,7 @@ pub enum KagemushaActiveReceiverSnapshotStatusV1 {
 }
 /// Exact value stored under the fixed synthetic execution-witness key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaActiveReceiverSnapshotCommitmentV1 {
     /// Snapshot format version.
@@ -179,10 +160,7 @@ pub struct KagemushaActiveReceiverSnapshotCommitmentV1 {
 }
 /// Balanced-tree membership proof for one exact receiver entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaActiveReceiverMembershipProofV1 {
     /// Zero-based index in canonical key order.
@@ -194,10 +172,7 @@ pub struct KagemushaActiveReceiverMembershipProofV1 {
 }
 /// Sparse-SMT proof that the fixed snapshot commitment is an ordinary write.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaActiveReceiverWitnessProofV1 {
     /// Fixed raw execution-witness key.

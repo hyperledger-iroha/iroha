@@ -126,3 +126,37 @@ fn autoscale_transition_runtime_elastic_range_corruption_matrix() {
         assert_autoscale_rejects_runtime_elastic_range_corruption(scale_in);
     }
 }
+
+state_test! { sync generation_zero_lane_incarnations_do_not_require_final_network_id
+    let network_a = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"genesis-network-a")),
+    );
+    let network_b = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"genesis-network-b")),
+    );
+    assert_ne!(network_a, network_b);
+    let chain = iroha_data_model::ChainId::from("generation-zero-incarnation-test");
+    let state_a = State::new_with_chain_and_network_id_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        chain.clone(),
+        network_a,
+    );
+    let state_b = State::new_with_chain_and_network_id_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        chain,
+        network_b,
+    );
+    assert_eq!(
+        state_a.lane_incarnations_snapshot(),
+        state_b.lane_incarnations_snapshot(),
+        "generation-zero lane identity must be signable before the final genesis hash exists"
+    );
+    assert_eq!(
+        state_a.lane_incarnation_activation_heights_snapshot(),
+        state_b.lane_incarnation_activation_heights_snapshot(),
+    );
+}

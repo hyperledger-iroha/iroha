@@ -895,6 +895,7 @@ def _production_liveness_release_inventory_errors(
                     successor_test,
                     """
                     let mut proposal_subject = subject(0x72);
+                    proposal_subject.parent_block_hash = Some(parent_subject.block_hash);
                     let proposal_body = b"parent-auth-body".to_vec();
                     proposal_subject.payload_hash = Hash::new(&proposal_body);
                     let manifest = encode_payload(
@@ -950,6 +951,22 @@ def _production_liveness_release_inventory_errors(
                     """,
                     "embedded-certificate conflict authentication must bind "
                     "the later-view canonical payload fixture",
+                    errors,
+                )
+                _require_rust_token_sequence(
+                    successor_adapter_path,
+                    successor_test,
+                    """
+                    let mut unbound_qc_b = wire::QuorumCertificate {
+                        round: timeout_round,
+                        proposal_round: timeout_round,
+                        execution_commitment: execution_commitment(0x86),
+                        ..unbound_qc_a.clone()
+                    };
+                    authenticate_qc(&mut unbound_qc_b, &keys);
+                    """,
+                    "timeout-group commitment conflicts must use a structurally "
+                    "valid timeout-round certificate",
                     errors,
                 )
             if successor_test is not None:
@@ -1285,13 +1302,13 @@ def _production_liveness_release_inventory_errors(
         )
     expected_irohad_list = (
         'production_irohad_unit_list="$(\n'
-        '  run_cargo test --locked --offline -p irohad --bin iroha3d '
+        '  run_cargo test --locked --offline -p irohad --lib '
         '--features test-network-message-control -- --list\n'
         ')"'
     )
     expected_irohad_ignored_list = (
         'production_irohad_ignored_unit_list="$(\n'
-        '  run_cargo test --locked --offline -p irohad --bin iroha3d '
+        '  run_cargo test --locked --offline -p irohad --lib '
         '--features test-network-message-control -- --list --ignored\n'
         ')"'
     )
@@ -1610,10 +1627,10 @@ def _production_liveness_release_inventory_errors(
                     "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "6ff2d5337414bbbf74a9530cc1b2bd59bc62141a82a1319fa2a270b84e64ce8c"
+                    "8eacf29414f086c4df8ba469a2dce3a71ad247d1d18f6295cefa277a342c6e07"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"
+                    "da76e1fadb876b9b1da0fa67a6ec33b93b10587a5a157a8c1ab6f42f53d86277"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
                     "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
@@ -1977,8 +1994,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
             "contain exactly "
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} unique required\n"
-            "tests: 319 core, 143 queue-journal, 13 configuration, eight data-model, "
-            "39\nTorii, one Torii-shared, and two integration.",
+            "tests: 321 core, 143 queue-journal, 13 configuration, eight data-model, five\n"
+            "iroha_zkp_halo2, 39 Torii, one Torii-shared, and two integration.",
             "both require that exact\n"
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row shape",
             "The G-UNIT static inventory checks establish exact "

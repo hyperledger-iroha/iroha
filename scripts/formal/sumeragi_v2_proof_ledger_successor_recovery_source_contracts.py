@@ -966,7 +966,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "let staged_predecessor = if fetch_is_present",
                         "predecessor.clone()",
                         ".stage_authenticated_wal_decision_fetch(projection.fetch())",
-                        "staged_predecessor .stage_recovered_decision_apply(&projection)",
+                        "staged_predecessor .stage_recovered_decision_apply(projection.as_ref())",
                         "LifecycleCoordinator::prepare_with_authenticated_successor_store_borrowed(",
                         "authority, ledger_store, predecessor, successor.clone()",
                     ),
@@ -1338,12 +1338,19 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "owner.live_fetch_count_for_test()",
                 ),
             )
-            lifecycle_launch = region(
+            lifecycle_launch_item = _require_qualified_rust_item(
                 launch_path,
                 launch_source,
+                "ProductionLifecycleOwnerV1",
+                "launch",
+                errors,
                 "Kura-bound production lifecycle launch",
-                "pub(in crate::sumeragi) fn launch(\n        mut self,",
-                "\n}\n#[cfg(test)]\nmod tests {",
+                expected_attributes=("#[allow(clippy::result_large_err)]",),
+            )
+            lifecycle_launch = (
+                lifecycle_launch_item.source
+                if lifecycle_launch_item is not None
+                else ""
             )
             require_order(
                 launch_path,
@@ -3587,8 +3594,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "cold recovered phase owner handoff",
                 adapter_source,
                 (
-                    "install_recovered_sign(&body_store)",
                     "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
+                    "(*prepared).install_recovered_sign()",
                 ),
             )
             recovered_phase_broadcast_assembly = region(

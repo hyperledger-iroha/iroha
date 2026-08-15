@@ -533,7 +533,7 @@ impl<F: ScalarField> RangeChip<F> {
             let limbs = decompose_fe_to_u64_limbs(a.value(), num_limbs, self.lookup_bits)
                 .into_iter()
                 .map(|x| Witness(F::from(x)));
-            let row_offset = ctx.advice.len() as isize;
+            let row_offset = ctx.advice_len() as isize;
             let acc = self.gate.inner_product(ctx, limbs, self.limb_bases[..num_limbs].to_vec());
             // the inner product above must equal `a`
             ctx.constrain_equal(&a, &acc);

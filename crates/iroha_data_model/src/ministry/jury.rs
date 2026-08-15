@@ -5,6 +5,8 @@
 //! sortition manifests plus sealed commit / reveal ballots so governance clients can prove juror
 //! selection and ballot integrity before admitting policy votes to the ledger.
 use crate::{Decode, Encode};
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use blake2::digest::Digest;
 use iroha_crypto::Blake2b256;
 use iroha_schema::IntoSchema;
@@ -44,10 +46,7 @@ impl PolicyJuryVoteChoice {
 }
 /// ZK proof references attached to a policy-jury ballot commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PolicyJuryZkEnvelope {
     /// URI referencing the proof bundle backing the reveal.
     pub proof_uri: String,
@@ -57,10 +56,7 @@ pub struct PolicyJuryZkEnvelope {
 }
 /// Ballot channel used for a juror's vote.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "mode", content = "value", rename_all = "kebab-case")]
 pub enum PolicyJuryBallotMode {
     /// Standard plaintext commit → reveal workflow.
@@ -70,10 +66,7 @@ pub enum PolicyJuryBallotMode {
 }
 /// Juror ballot commitment produced during the sealed phase.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PolicyJuryBallotCommitV1 {
     /// Schema version; must equal [`POLICY_JURY_BALLOT_COMMIT_VERSION_V1`].
     pub version: u16,
@@ -156,10 +149,7 @@ impl PolicyJuryBallotCommitV1 {
 }
 /// Public reveal payload proving the juror's choice and salt.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PolicyJuryBallotRevealV1 {
     /// Schema version; must equal [`POLICY_JURY_BALLOT_REVEAL_VERSION_V1`].
     pub version: u16,
@@ -286,10 +276,7 @@ pub enum PolicyJuryBallotError {
 }
 /// Deterministic sortition manifest for a policy jury round.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PolicyJurySortitionV1 {
     /// Schema version; must equal [`POLICY_JURY_SORTITION_VERSION_V1`].
     pub version: u16,
@@ -460,10 +447,7 @@ pub enum PolicyJurySortitionError {
 }
 /// Primary juror assignment emitted by the sortition workflow.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PolicyJuryAssignment {
     /// Slot number (`0..committee_size`).
     pub slot: u32,
@@ -479,10 +463,7 @@ pub struct PolicyJuryAssignment {
 }
 /// Automatic failover plan mapping a slot to the waitlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PolicyJuryFailoverPlan {
     /// Waitlist rank that should replace this slot if the juror no-shows.
     pub waitlist_rank: u32,
@@ -491,10 +472,7 @@ pub struct PolicyJuryFailoverPlan {
 }
 /// Waitlisted juror entry.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct PolicyJuryWaitlistEntry {
     /// Rank position (1-indexed, ascending).
     pub rank: u32,

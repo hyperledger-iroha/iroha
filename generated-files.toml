@@ -805,12 +805,12 @@ inputs = [
 ]
 check = "bash scripts/tests/consistency.sh docker-compose"
 
-# Kagami profile generation consumes the ignored/untracked root Cargo.lock at
-# runtime. The fail-closed wrapper authenticates its stable regular-file bytes
-# before and after every child: size=321032,
-# sha256=cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79.
-# Update both literal arguments only as a reviewed lock refresh; Cargo.lock must
-# not be listed below because generated-file inputs must be tracked.
+# Kagami profile generation consumes the tracked root Cargo.lock at runtime.
+# The fail-closed wrapper authenticates its stable regular-file bytes
+# before and after every child: size=315333,
+# sha256=0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222.
+# Update both literal arguments only as a reviewed lock refresh, and keep the
+# tracked Cargo.lock listed in each owner's input closure.
 [[generated]]
 name = "kagami-iroha3-dev-profile-bundle"
 kind = "file"
@@ -831,7 +831,7 @@ outputs = [
   "defaults/kagami/iroha3-dev/peer3.toml",
   "defaults/kagami/iroha3-dev/verify.txt",
 ]
-generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-dev --output-root \"${IROHA_KAGAMI_DEV_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-dev --output-root \"${IROHA_KAGAMI_DEV_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 315333 --cargo-lock-sha256 0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 generator_sources = [
   "scripts/kagami_profile_owner.py",
   "xtask/src/kagami_profiles.rs",
@@ -839,13 +839,14 @@ generator_sources = [
 ]
 inputs = [
   ".cargo/config.toml",
+  "Cargo.lock",
   "Cargo.toml",
   "crates/**",
   "rust-toolchain.toml",
   "vendor/**",
   "xtask/Cargo.toml",
 ]
-check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-dev --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_DEV_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_DEV_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-dev --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_DEV_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_DEV_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 315333 --cargo-lock-sha256 0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 
 # This output set is intentionally disjoint from the dev owner above. The
 # incomplete iroha3-nexus directory remains unregistered until all 15 outputs
@@ -877,7 +878,7 @@ outputs = [
   "defaults/kagami/iroha3-taira/sorafs_sites.json",
   "defaults/kagami/iroha3-taira/verify.txt",
 ]
-generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-taira --output-root \"${IROHA_KAGAMI_TAIRA_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_TAIRA_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-taira --output-root \"${IROHA_KAGAMI_TAIRA_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_TAIRA_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 315333 --cargo-lock-sha256 0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 generator_sources = [
   "scripts/kagami_profile_owner.py",
   "xtask/src/kagami_profiles.rs",
@@ -885,10 +886,11 @@ generator_sources = [
 ]
 inputs = [
   ".cargo/config.toml",
+  "Cargo.lock",
   "Cargo.toml",
   "crates/**",
   "rust-toolchain.toml",
   "vendor/**",
   "xtask/Cargo.toml",
 ]
-check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-taira --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_TAIRA_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_TAIRA_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_TAIRA_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 321032 --cargo-lock-sha256 cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-taira --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_TAIRA_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_TAIRA_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_TAIRA_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 315333 --cargo-lock-sha256 0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"

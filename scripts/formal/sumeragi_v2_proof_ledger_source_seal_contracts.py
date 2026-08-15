@@ -536,6 +536,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'status/test_guards.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2.rs': (
+        'v2_authenticated_recovered_adapter_startup_impl.rs',
         'tests/v2_adapter_main_00.rs',
         'tests/v2_adapter_main_01.rs',
         'tests/v2_adapter_main_02.rs',
@@ -586,7 +587,12 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lifecycle_work_registry_recovery_surface_cases.rs',
         'tests/v2_lifecycle_work_registry_replay_evidence_cases.rs',
     ),
+    'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs': (
+        'v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs',
+    ),
     'crates/iroha_core/src/sumeragi/v2_runtime.rs': (
+        'v2_runtime_effect_ownership_core_impl.rs',
+        'v2_runtime_effect_ownership_rebind_impl.rs',
         'tests/v2_runtime_pending_binding_cases.rs',
         'tests/v2_runtime_main_00.rs',
         'tests/v2_runtime_main_01.rs',
@@ -1174,7 +1180,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "45b2891248d62b2a998ebcaf2e29d35bfeb1687a8869a0b27776904ee6b3f778"
     ),
     "freeze_due_clock_owners": (
-        "d28538a60f9391277b1db6c60b71ed694c1d776de425305c52f8703450ebae85"
+        "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
     ),
     "validate_clock_owner_physical_cuts": (
         "0c32bff217ddf2b631eba89320a3b6fad6dda20830ed9e0ed7778ab47d2185d6"
@@ -2104,12 +2110,12 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 }
 
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 857
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 89
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
     "fc038b30180549cc6002db8ec5630ebf8ad5bb04a06be6dd19774d2b6ea5f433"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "70034e3368c9a9b369851e529e31f49c38899441bba723619e04e34f388ace77"
+    "f3acbcec8fc10c561db59029b21095370dd52e39a9403cec8fe847b383d4acb5"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2120,10 +2126,10 @@ _SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 525
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 526
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 532
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 533
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352"
+    "f1590363a43024969a7fceb947654e2afd1d7cad877dc8dcba5b863ba185d431"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -2157,6 +2163,11 @@ _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
         "iroha_data_model",
     ),
     (
+        "required_multilane_zkp_halo2_focus_tests",
+        "g-unit-iroha-zkp-halo2",
+        "iroha_zkp_halo2",
+    ),
+    (
         "required_multilane_torii_focus_tests",
         "g-unit-iroha-torii",
         "iroha_torii",
@@ -2183,14 +2194,14 @@ _SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
         "79c2caea8dfd6f17885ff3d72253a41cb34db7a99d7976b52d5fdab45c0e9a89"
     ),
     "successor_context_requires_the_durable_cryptographic_parent": (
-        "bd03567a99587337c72ed02902e1b60998459bdbcd6148b2f76f0cf948ea695a"
+        "52a642d0d8ca612e9cb96bbc2466940b9c35a7a303f4178bae7af73252965f69"
     ),
     "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter": (
-        "423991082e2c3a6151fdd80b69b643d56b56d2cb7963331024453b2fab7c037c"
+        "5ab55fdeb8281a185b76e14c57dce22af0ea00c05da8820169de1a08721c86e5"
     ),
 }
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
-    "b0457ed9453abd1999e7246c3cd2d96aa1dc6e4763466a5f7c76635699997344"
+    "bf99bfac45fd57a5f8b9e875f183164a3ea72600de485a58c79a0873aa5f7185"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-kura-progress-durability", "kura::tests", 17),

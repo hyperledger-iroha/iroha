@@ -35,6 +35,8 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_concrete_admission.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -59,13 +61,14 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_lifecycle_capacity_cases.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_recovered_lifecycle_output_cases.rs",
+    "crates/iroha_core/src/snapshot.rs",
     "crates/iroha_core/src/state.rs",
     "crates/iroha_core/src/kura.rs",
     "scripts/run_sumeragi_v2_release_gates.sh",
 )
 assert len(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES)
-) == 61
+) == 64
 
 
 def test_successor_run_inner_parser_rejects_neighbor_lookalike(
@@ -796,11 +799,25 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "cold recovered phase Broadcast-and-Sign ledger join omits production refinement tokens",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
-        "fn prepare_cold_adapter_startup(",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs",
+        "fn prepare_cold_signed_broadcast_and_next_vote_branch(",
         "authenticate_recovered_lifecycle_next_vote_body(&mut preview)",
         "authenticate_recovered_lifecycle_next_vote_body_unchecked(&mut preview)",
         "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+        "fn open_recovered_decision_apply_startup(",
+        ".stage_authenticated_wal_decision_fetch(projection.fetch())",
+        ".stage_recovered_decision_apply(projection.as_ref())",
+        "cold recovered Decision Apply startup lineage",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+        "fn open_recovered_decision_apply_startup(",
+        "ledger_store,\n            predecessor,\n            successor.clone(),",
+        "ledger_store,\n            staged_predecessor,\n            successor.clone(),",
+        "cold recovered Decision Apply startup lineage",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
@@ -901,7 +918,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "runner-sealed recovered lifecycle factory dependencies must use the opaque checked-transition gate",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
         "pub(in crate::sumeragi) fn bind_production_lifecycle_owner_factory_inputs_v1(",
         "let (local_signer, block_cadence) = permit.into_factory_dependencies();",
         "let (local_signer, block_cadence) = permit.into_factory_dependencies();\n        let _placeholder_cadence = state.sumeragi_block_cadence();",
@@ -1363,8 +1380,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "cold recovered signed-Broadcast storage census omits production refinement tokens",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2.rs",
-        "fn install_recovered_sign(",
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+        "fn prepare_recovered_phase_vote_cold_adapter_stage<'registry>(",
         "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
         "prepare_cold_adapter_startup_unchecked(&verified, adapter_startup, body_store)",
         "cold recovered phase owner handoff omits production refinement tokens",
@@ -1772,28 +1789,28 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "local launch identity preflight omits production refinement tokens",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
         "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
         "self.adapter.wal.matches_path(&storage.wal_path)",
         "true",
         "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
         "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
         "Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
         "true",
         "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
         "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
         "body_store: super::v2_body_store::QuarantinedV2BodyStore",
         "body_store: super::v2_body_store::V2BodyStore",
         "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
         "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
         ".into_revalidated_lifecycle_startup(",
         ".into_revalidated_startup(",
@@ -1828,7 +1845,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "fixed quarantined recovered marker replay must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
         "pub(in crate::sumeragi) fn bind_production_lifecycle_owner_factory_inputs_v1(",
         "state.matches_kura_instance(&kura)",
         "true",
@@ -2346,7 +2363,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 310
+) == 312
 
 
 @pytest.mark.parametrize(

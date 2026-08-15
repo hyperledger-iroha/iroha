@@ -3,6 +3,8 @@
 //! A content bundle is a hashed tar archive with a precomputed file index. The
 //! hash of the raw tar bytes serves as the bundle identifier and is used as the
 //! HTTP `ETag` when serving files through Torii.
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
     da::{
@@ -20,10 +22,7 @@ use std::collections::BTreeMap;
 pub type ContentBundleId = Hash;
 /// Entry in a content bundle file index.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ContentFileEntry {
     /// Normalised POSIX path inside the tar archive.
     pub path: String,
@@ -47,10 +46,7 @@ impl ContentFileEntry {
 /// Protected bundles always disable storage at the HTTP boundary so a shared
 /// cache cannot bypass current role or sponsor authorization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ContentCachePolicy {
     /// Maximum public-cache lifetime in seconds (used for `Cache-Control` max-age).
     pub max_age_seconds: u32,
@@ -68,10 +64,7 @@ impl ContentCachePolicy {
 }
 /// Authentication/authorisation guard for bundle reads.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "mode", content = "value")]
 pub enum ContentAuthMode {
     /// Bundle is publicly readable.
@@ -83,10 +76,7 @@ pub enum ContentAuthMode {
 }
 /// Bundle-level manifest describing cache/auth/placement metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ContentBundleManifest {
     /// Stable identifier of the tar archive (BLAKE2b-256).
     pub bundle_id: ContentBundleId,
@@ -129,10 +119,7 @@ impl ContentBundleManifest {
 }
 /// Metadata and chunk layout for a published content bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ContentBundleRecord {
     /// Stable identifier derived from the tar bytes.
     pub bundle_id: ContentBundleId,
@@ -173,10 +160,7 @@ pub struct ContentBundleRecord {
 }
 /// Chunk payload stored in the content lane store with a reference counter.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ContentChunk {
     /// Raw chunk bytes (at most `chunk_size` bytes).
     pub data: Vec<u8>,
@@ -205,10 +189,7 @@ impl ContentChunk {
 }
 /// Range of bytes served for a content file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ContentRange {
     /// Inclusive start offset (bytes) within the file.
     pub start: u64,
@@ -217,10 +198,7 @@ pub struct ContentRange {
 }
 /// Receipt attached to content responses carrying DA evidence and served range metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ContentDaReceipt {
     /// Identifier of the bundle that contained the served file.
     pub bundle_id: ContentBundleId,
