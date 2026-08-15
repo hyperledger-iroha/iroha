@@ -7,6 +7,11 @@
 //! persisted only after a canonical global block anchors the exact ownership;
 //! a losing global proposal can therefore never advance the durable lane tip.
 #[cfg(test)]
+use super::v2_apply::{
+    HistoricalAutonomousLaneRecoveryInstallOutcome, HistoricalAutonomousReservationInstallV1,
+    install_historical_autonomous_lane_recovery,
+};
+#[cfg(test)]
 use super::v2_worker::durable_exact_output_handoff_owner_pair;
 use super::{
     FairV2IngressOwnershipEvidence, InboundBlockMessage, LaneRelayMessage,
@@ -69,7 +74,7 @@ use crate::native_amx::{
     MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
 };
 #[cfg(test)]
-use crate::queue::{RouteLeg, RouteLegRole};
+use crate::queue::{LaneQueueReservationReconciliationGroupV1, RouteLeg, RouteLegRole};
 use crate::{
     block::BlockBuilder,
     kura::{
@@ -24279,6 +24284,29 @@ pub(super) mod tests {
             autonomous_lane_id,
             autonomous_dataspace_id,
         );
+        let autonomous_lane_entry = parent
+            .state
+            .nexus_snapshot()
+            .lane_config
+            .entry(autonomous_lane_id)
+            .expect("autonomous mixed-carrier lane storage entry")
+            .clone();
+        parent
+            .kura
+            .reconcile_lane_segments_for_testing(&[&autonomous_lane_entry], &[], &[])
+            .expect("provision autonomous mixed-carrier lane storage");
+        let autonomous_lane_incarnation = parent
+            .state
+            .lane_incarnation_at_height(autonomous_lane_id, parent.context.height)
+            .expect("autonomous mixed-carrier lane incarnation");
+        parent
+            .kura
+            .install_lane_incarnation_marker_for_test(
+                &autonomous_lane_entry,
+                autonomous_lane_incarnation,
+                0,
+            )
+            .expect("install autonomous mixed-carrier lane incarnation marker");
         let (parent_block, parent_proposal) = globally_anchored_lane_block_fixture(&parent, &keys);
         parent
             .kura
@@ -24390,14 +24418,6 @@ pub(super) mod tests {
             autonomous_producer_key.private_key(),
         )
         .expect("construct exact autonomous mixed-carrier payload");
-        successor
-            .kura
-            .persist_lane_executable_payload(
-                &autonomous_payload,
-                successor.native_network_id(),
-                successor.context.epoch,
-            )
-            .expect("persist autonomous mixed-carrier payload");
         assert_eq!(
             successor.accept_lane_message(
                 InboundBlockMessage::new(
@@ -24541,15 +24561,28 @@ pub(super) mod tests {
             "raw predecessor authentication must not authorize a local successor vote"
         );
         let _ = successor.drain_effects(usize::MAX);
+        let mut executed_successor_block = successor_block.clone();
+        executed_successor_block
+            .set_transaction_results(
+                Vec::new(),
+                &[entrypoint_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("attach canonical successor transaction result");
+        assert_eq!(
+            executed_successor_block.canonical_resultless_proposal(),
+            successor_block,
+            "execution results must preserve the exact locked successor proposal"
+        );
         successor
             .kura
-            .store_block(successor_block.clone())
+            .store_block(executed_successor_block.clone())
             .expect("persist exact raw successor carrier");
         let successor_finality =
-            verified_finality_artifact_for_block(&successor, &keys, &successor_block);
+            verified_finality_artifact_for_block(&successor, &keys, &executed_successor_block);
         let successor_receipt = KuraV2CommitReceipt::for_test(&successor_finality);
         let committed_successor =
-            ValidBlock::committed_from_replay_signed_block(successor_block.clone());
+            ValidBlock::committed_from_replay_signed_block(executed_successor_block.clone());
         commit_test_block_to_state(
             successor.state.as_ref(),
             &committed_successor,
@@ -29231,9 +29264,10 @@ pub(super) mod tests {
     }
     #[test]
     fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
-        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-        let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
-        let entrypoint = block
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        proposal.payload_block_hint = None;
+        let entrypoint = source_block
             .external_entrypoints_cloned()
             .next()
             .expect("planned autonomous entrypoint");
@@ -29335,6 +29369,48 @@ pub(super) mod tests {
             ),
             V2LaneIngressOutcome::Duplicate
         );
+        let envelope = autonomous_lane_payload_envelope(
+            &payload,
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("encode the exact autonomous carrier envelope");
+        let header = BlockHeader::new(
+            NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
+            adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            None,
+            None,
+            adapter.context.height,
+            0,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(Vec::new())
+                .with_autonomous_lane_payloads(vec![envelope]),
+        ));
+        let leader_index =
+            usize::try_from(adapter.context.leader(0)).expect("global leader index fits usize");
+        let block = builder
+            .build_with_signature(
+                u64::try_from(leader_index).expect("global leader index fits u64"),
+                keys[leader_index].private_key(),
+            )
+            .canonical_resultless_proposal();
+        let payload = payload
+            .attach_global_hint_exact(
+                LaneBlockProposalPayloadHintV1 {
+                    proposal_height: adapter.context.height,
+                    proposal_view: block.header().view_change_index(),
+                    proposal_block_hash: block.hash(),
+                },
+                adapter.native_network_id(),
+                adapter.context.epoch,
+            )
+            .expect("anchor the autonomous payload to its exact canonical carrier");
         let premature_body = crate::lane_consensus::LaneBlockNewViewBodyV1::for_transition(
             &payload.origin_proposal,
             &payload,
@@ -29580,10 +29656,17 @@ pub(super) mod tests {
                     .cloned()
             })
             .expect("durable view-one certificate");
+        let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
         adapter
             .kura
             .store_block(block.clone())
             .expect("persist canonical autonomous carrier before restart");
+        let finality_receipt = adapter
+            .kura
+            .store_v2_finality_artifact(&finality)
+            .expect("persist canonical autonomous carrier finality before restart");
+        assert_eq!(finality_receipt.height(), adapter.context.height);
+        assert_eq!(finality_receipt.block_hash(), block.hash());
         let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
         commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
         let historical_epoch = adapter.context.epoch;
@@ -29612,6 +29695,43 @@ pub(super) mod tests {
             );
             world.commit();
         }
+        let execution_commitment = finality.commit_qc.execution_commitment;
+        let mut historical_install = HistoricalAutonomousReservationInstallV1 {
+            version: HistoricalAutonomousReservationInstallV1::VERSION,
+            recovery_id: Hash::prehashed([0; Hash::LENGTH]),
+            canonical_body: CanonicalExecutedBlockNeedV1 {
+                height: historical_height,
+                block_hash: block.hash(),
+                finality_artifact_hash: HashOf::new(&finality),
+                execution_commitment,
+                executed_block_wire_len: execution_commitment.executed_block_wire_len,
+                executed_block_wire_hash: execution_commitment.executed_block_wire_hash,
+            },
+            historical_context: adapter.context.clone(),
+            historical_context_id: adapter.context.id(),
+            historical_context_hash: HashOf::new(&adapter.context),
+            carrier_view: block.header().view_change_index(),
+            payload: payload.clone(),
+            reservation_group: LaneQueueReservationReconciliationGroupV1 {
+                identity: LaneQueueReservationGroupIdentityV1::from_key(
+                    payload
+                        .reservation_keys
+                        .first()
+                        .expect("autonomous recovery reservation group is non-empty"),
+                ),
+                ordered_keys: payload.reservation_keys.clone(),
+            },
+        };
+        historical_install.recovery_id = historical_install.computed_recovery_id();
+        assert_eq!(
+            install_historical_autonomous_lane_recovery(
+                adapter.state.as_ref(),
+                adapter.kura.as_ref(),
+                &historical_install,
+            )
+            .expect("persist exact historical autonomous recovery record"),
+            HistoricalAutonomousLaneRecoveryInstallOutcome::Installed,
+        );
         let mut context = successor_context_for_parent(&adapter, &block);
         context.epoch = {
             let world = adapter.state.world_view();
@@ -29635,7 +29755,17 @@ pub(super) mod tests {
             .iter()
             .position(|entry| entry.validator == local_peer)
             .expect("fixture local validator belongs to the predecessor roster");
+        assert!(
+            context
+                .roster
+                .iter()
+                .all(|entry| entry.validator != replacement),
+            "successor-only validator must be distinct from the predecessor roster"
+        );
         context.roster[removed_index].validator = replacement;
+        context
+            .roster
+            .sort_by(|left, right| left.validator.cmp(&right.validator));
         context.quorum =
             wire::DualQuorum::from_roster(&context.roster).expect("successor equal-vote quorum");
         assert!(
@@ -29668,10 +29798,10 @@ pub(super) mod tests {
         .expect("reopen successor adapter after durable NewView publication");
         assert!(
             recovered
-                .autonomous_payloads
+                .historical_autonomous_recovery_records
                 .get(&payload_key)
-                .is_some_and(|candidate| candidate == &payload),
-            "successor startup must hydrate the exact historical Kura payload"
+                .is_some_and(|record| record.payload == payload),
+            "successor startup must hydrate the exact immutable historical recovery record"
         );
         assert!(
             recovered
@@ -29680,43 +29810,70 @@ pub(super) mod tests {
                 .contains(&payload.origin_proposal),
             "successor startup must rebuild the historical lane consensus session"
         );
+        let restored_prepare_vote = recovered
+            .lane_sessions
+            .local_vote_rebroadcast_artifacts_for(&local_peer)
+            .into_iter()
+            .find_map(|(proposal, vote)| {
+                (proposal == payload.origin_proposal && vote.body.phase == CertPhase::Prepare)
+                    .then_some(vote)
+            })
+            .expect(
+                "a configured validator removed from the successor global roster must keep signing its unfinished historical lane committee",
+            );
         assert!(
-            recovered
-                .lane_sessions
-                .local_vote_rebroadcast_artifacts_for(&local_peer)
-                .iter()
-                .any(|(proposal, vote)| {
-                    proposal == &payload.origin_proposal && vote.body.phase == CertPhase::Prepare
-                }),
-            "a configured validator removed from the successor global roster must keep signing its unfinished historical lane committee"
-        );
-        assert_eq!(
-            recovered.autonomous_payload_views.get(&payload_key),
-            Some(&1),
-            "successor hydration must restore Kura's cursor rather than regress to origin view"
+            recovered.autonomous_payloads.is_empty()
+                && recovered.autonomous_payload_views.is_empty(),
+            "historical recovery must not populate current-height autonomous payload or cursor maps"
         );
         assert!(
-            recovered
+            !recovered
                 .autonomous_new_view_certificates
-                .contains(&durable_certificate.certificate)
+                .contains(&durable_certificate.certificate),
+            "historical recovery must not hydrate a current-height NewView certificate cache"
         );
+        let recovered_durable_certificate = recovered
+            .kura
+            .read_autonomous_lane_block_artifact(
+                payload.origin_proposal.descriptor.lane_id,
+                payload.origin_proposal.descriptor.lane_block_height,
+                recovered.native_network_id(),
+                historical_epoch,
+            )
+            .and_then(|artifact| {
+                V2LaneWorkAdapter::latest_durable_autonomous_new_view_certificate(&artifact, 1)
+                    .cloned()
+            })
+            .expect("historical NewView certificate remains durable in Kura");
+        assert_eq!(recovered_durable_certificate, durable_certificate);
         let _ = recovered.drain_effects(usize::MAX);
         recovered
             .schedule_retransmission()
-            .expect("retransmit restored historical NewView certificate");
+            .expect("retransmit restored historical lane session");
+        let retransmissions = recovered.drain_effects(usize::MAX);
         assert!(
-            recovered
-                .drain_effects(usize::MAX)
-                .into_iter()
-                .any(|effect| {
-                    matches!(
-                        effect,
-                        V2LaneWorkEffect::PostLaneBlock {
-                            message: BlockMessage::LaneBlockNewViewCertificate(ref certificate),
-                            ..
-                        } if certificate == &durable_certificate.certificate
-                    )
-                })
+            retransmissions.iter().any(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostLaneBlock {
+                        message: BlockMessage::LaneBlockProposal(proposal),
+                        ..
+                    } if proposal == &payload.origin_proposal
+                )
+            }),
+            "historical retransmission must fan out the exact restored proposal"
+        );
+        assert!(
+            retransmissions.iter().any(|effect| {
+                matches!(
+                    effect,
+                    V2LaneWorkEffect::PostLaneBlock {
+                        message: BlockMessage::LaneBlockVote(vote),
+                        ..
+                    } if vote == &restored_prepare_vote
+                )
+            }),
+            "historical retransmission must fan out the exact restored Prepare vote"
         );
     }
     #[test]

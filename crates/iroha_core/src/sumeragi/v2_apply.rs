@@ -4678,3 +4678,5 @@ include!("v2_apply/error_recovery.rs");
 #[cfg(test)]
 #[path = "v2_apply_tests.rs"]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::install_historical_autonomous_lane_recovery;

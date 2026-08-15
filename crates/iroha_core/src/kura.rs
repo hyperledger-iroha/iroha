@@ -27288,21 +27288,8 @@ impl Kura {
             None,
         )?;
         let payload_record_matches = payload_record.as_ref().is_none_or(|record| {
-            let durable = &record.artifact.executable_payload;
-            durable == payload
-                || (record.retirement.is_none()
-                    && durable.origin_proposal.payload_block_hint.is_none()
-                    && payload.origin_proposal.payload_block_hint.is_some()
-                    && durable
-                        .attach_global_hint_exact(
-                            payload
-                                .origin_proposal
-                                .payload_block_hint
-                                .expect("checked present"),
-                            payload.network_id,
-                            payload.epoch,
-                        )
-                        .is_ok_and(|promoted| promoted == *payload))
+            record.artifact.executable_payload == *payload
+                || Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(record, payload)
         });
         if !payload_record_matches {
             return Err(Self::invalid_lane_artifact_error(
@@ -27354,6 +27341,25 @@ impl Kura {
                 "autonomous lifecycle bootstrap conflicts with the durable cursor head",
             )),
         }
+    }
+    fn autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+        record: &AutonomousLaneBlockDurableRecord,
+        payload: &LaneExecutablePayloadV1,
+    ) -> bool {
+        let durable = &record.artifact.executable_payload;
+        record.retirement.is_none()
+            && durable.origin_proposal.payload_block_hint.is_none()
+            && payload.origin_proposal.payload_block_hint.is_some()
+            && durable
+                .attach_global_hint_exact(
+                    payload
+                        .origin_proposal
+                        .payload_block_hint
+                        .expect("checked present"),
+                    payload.network_id,
+                    payload.epoch,
+                )
+                .is_ok_and(|promoted| promoted == *payload)
     }
     fn autonomous_lifecycle_bootstrap_authority_locked(
         &self,
@@ -27763,6 +27769,10 @@ impl Kura {
         bootstrap_signature: [u8; 96],
         authentication: AutonomousLifecycleBootstrapPersistenceAuthentication<'_>,
     ) -> Result<AutonomousLifecycleBootstrapRecoveryAuthority> {
+        let payload_custody = matches!(
+            &authentication,
+            AutonomousLifecycleBootstrapPersistenceAuthentication::PayloadCustody(_)
+        );
         let body = self.autonomous_lifecycle_bootstrap_body_with_authentication(
             process_generation,
             executable_payload,
@@ -27840,13 +27850,42 @@ impl Kura {
             descriptor.lane_block_height,
             descriptor.proposal_height,
         );
-        if self
+        let attempt_exists = self
             .regular_sidecar_metadata(&attempt_path, parent)?
-            .is_some()
-            || self
-                .regular_sidecar_metadata(&cursor_path, parent)?
-                .is_some()
-        {
+            .is_some();
+        let cursor_exists = self
+            .regular_sidecar_metadata(&cursor_path, parent)?
+            .is_some();
+        // A producer first persists hint-free Queue custody because the global
+        // carrier does not exist yet. Once that exact payload is protected by
+        // a live lock, a signed non-Queue bootstrap may promote only the
+        // advisory carrier hint while retaining the same current-generation
+        // Live cursor. Persisting the bootstrap makes this promotion
+        // restartable; every other replay around existing payload/cursor state
+        // remains forbidden.
+        let live_carrier_hint_promotion = if payload_custody && attempt_exists && cursor_exists {
+            let current = self.read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+                executable_payload.network_id,
+                executable_payload.epoch,
+                Some(pending_canonical_bytes),
+            )?;
+            let strict_hint_promotion = current.as_ref().is_some_and(|record| {
+                Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+                    record,
+                    executable_payload,
+                )
+            });
+            strict_hint_promotion
+                && self.classify_autonomous_lifecycle_bootstrap_locked(&entry, &bootstrap)?
+                    == AutonomousLifecycleBootstrapRecoveryStage::LiveDurable
+        } else {
+            false
+        };
+        if (attempt_exists || cursor_exists) && !live_carrier_hint_promotion {
             return Err(Self::invalid_lane_artifact_error(
                 path,
                 "autonomous lifecycle bootstrap cannot be replayed around existing payload or cursor state",
@@ -32571,6 +32610,17 @@ impl Kura {
                                 == bootstrap.body.executable_payload
                     })
                 });
+                let payload_promotable = bootstrap.body.custody.source
+                    != AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
+                    && attempts.get(&identity.0).is_some_and(|attempts_at_height| {
+                        attempts_at_height.iter().any(|(pointer, record)| {
+                            pointer.proposal_height == identity.1
+                                && Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+                                    record,
+                                    &bootstrap.body.executable_payload,
+                                )
+                        })
+                    });
                 let cursor = lifecycle_cursors.get(identity);
                 let stage_matches = match stage {
                     AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly => {
@@ -32584,7 +32634,8 @@ impl Kura {
                         payload_present && cursor == Some(&bootstrap.body.prepared_activate)
                     }
                     AutonomousLifecycleBootstrapRecoveryStage::LiveDurable => {
-                        payload_present && cursor == Some(&bootstrap.body.live_activate)
+                        (payload_present || payload_promotable)
+                            && cursor == Some(&bootstrap.body.live_activate)
                     }
                 };
                 if !stage_matches {
