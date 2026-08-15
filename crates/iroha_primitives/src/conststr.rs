@@ -103,9 +103,10 @@ impl ConstString {
         // branch is longer than the inline capacity. Null is rejected before
         // any write or ownership conversion.
         let allocation = unsafe { std::alloc::alloc(layout) };
-        let allocation = NonNull::new(allocation).ok_or(ncore::Error::AllocationFailed {
-            bytes: u64::try_from(len).unwrap_or(u64::MAX),
-        })?;
+        let allocation =
+            NonNull::new(allocation).ok_or_else(|| ncore::Error::AllocationFailed {
+                bytes: u64::try_from(len).unwrap_or(u64::MAX),
+            })?;
         // SAFETY: the allocation has exactly `len` writable bytes and the
         // source slice has the same length. All bytes are initialized before
         // converting the allocation into its unique boxed owner.

@@ -3195,7 +3195,7 @@ _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "dispatch_lane_work_effect": "4f26246db63b064c5b6f6389e9960f36968df9861ae9520d911eedbe4c5b317c",
 }
 
-_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "02b808aad6cce3c45d31cb15b837f8509c8ffba9f2a0876c51ad62e63a76d205", "pending_loop": "07ff38fadeea9d921ef343a6b0a318f5568ac924705df610d6fa0917494cb4f2", "ordinary_finalize": "6912b9343625468b23c8fab85f498aadf721dec6402573ee3136a6a1f6b379c7", "pending_active": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276"}
+_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "8a988b7b53dc952839db9407a32bfc675a54407606f57736db408cc694a8e92e", "pending_loop": "07ff38fadeea9d921ef343a6b0a318f5568ac924705df610d6fa0917494cb4f2", "ordinary_finalize": "6912b9343625468b23c8fab85f498aadf721dec6402573ee3136a6a1f6b379c7", "pending_active": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276"}
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "82bd8ab2d7e1c5a3f0517e28c0698c6db0e4fcb4d243c324b0d9d530225cd969"
 
 # `asyncNodeServiceDeadlines` is a proof-only projection of this one explicit
@@ -3788,28 +3788,10 @@ _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256 = {
     ),
 }
 
-# Exact joint ownership of the two per-height fair-ingress gates. Each seal was
-# bound after a focused mutation refreshed that exact item digest and the
-# semantic close/validate/atomic-unbind contract still rejected the change.
+# Exact production retirement of the two per-height fair-ingress gates. The
+# former runner binding wrappers are test-only compatibility scaffolding; the
+# production contract binds the canonical close and queue-owned unbind seams.
 _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
-    "runner::LeaderWireIngressBinding::bind": (
-        "4c9551aa9af0eea82b0bcf1f248c958d3e52c13f195bdde2f22f2a530d6b669e"
-    ),
-    "runner::LeaderWireIngressBinding::retire": (
-        "7e6730493a8b093e2ac6f125942073158fbc539660c52f97900e12c9ff5012f0"
-    ),
-    "runner::LeaderWireIngressBinding::drop": (
-        "88ddf5ff64ea693fbb027a716505a017236eb44e435eced813a6e4f6fc9bba61"
-    ),
-    "runner::HeightIngressBindings::new": (
-        "48c192241bdc3ea37cf5f12f3322d5d2b52c4a48a52a1cee0b85335da25493a3"
-    ),
-    "runner::HeightIngressBindings::retire": (
-        "50d7b09d0862c3e5bdaca6bdf829c9d851b766f492bf492fd947b9d534e9f94f"
-    ),
-    "runner::HeightIngressBindings::drop": (
-        "ba86ff1b630d46218acf45e32823871f81a47c82ac31bd71988c0d21e53d3cf6"
-    ),
     "runner::close_ingress_for_rollover": (
         "61ae9f7cd71bc2576f9330c5874d2018b873d6144514e9f733f5774343ddd1a5"
     ),
@@ -3824,25 +3806,8 @@ _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
     ),
 }
 _PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256 = {
-    "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut": (
-        "6f21dffceb9d005825946d6c39f5c02fc8c35c6ffc75fd379a825beb7d765208"
-    ),
-    "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership": (
-        "e4a8ab5a434808f3cc14752c4fbbfa4d6d9ce7e5fcf63d4da2dbeb2905ddc8d9"
-    ),
     "worker::closed_height_atomically_retires_serve_and_leader_ingress": (
         "be7493c6461cb56ae73d8355a7b1da9bf5b6eaa89a95c039107052ba7af82220"
-    ),
-}
-_PRODUCTION_CERTIFIED_SERVE_INGRESS_BINDING_ITEM_SHA256 = {
-    "CertifiedServeIngressBinding::bind": (
-        "4033d2192ddb54c72c444ba5a53f1d0bfd04de32dbbe78582f57a6abe4b8b013"
-    ),
-    "CertifiedServeIngressBinding::retire": (
-        "eb6d1d6a225610f182464077a030316af3cb66a95322f504b76c754134fa6bb0"
-    ),
-    "CertifiedServeIngressBinding::drop": (
-        "88ddf5ff64ea693fbb027a716505a017236eb44e435eced813a6e4f6fc9bba61"
     ),
 }
 

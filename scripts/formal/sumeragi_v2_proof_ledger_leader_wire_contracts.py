@@ -671,7 +671,9 @@ def _postmerge_exact_output_strengthening_errors(
             f"post-merge exact-output {name} provider")
 
     reviewed_attributes = {
-        "ProductionV2Services::start": ("#[allow(clippy::too_many_arguments)]",),
+        "ProductionV2Services::start": (
+            "#[allow(clippy::too_many_arguments, dead_code)]",
+        ),
         "ProductionV2Services::start_with_apply_service": ("#[allow(clippy::too_many_arguments)]",),
         "ProductionV2Services::start_inner": ("#[allow(clippy::too_many_arguments)]",),
         "ProductionV2Services::activate_effect_completion_observer": ("#[allow(dead_code)]",),

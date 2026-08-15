@@ -380,7 +380,7 @@ mod static_tests {
         let adapter_source = include_str!("v2.rs");
         let registry_source = reviewed_lifecycle_work_registry_source_for_test();
         let registry_recovery_source =
-            include_str!("v2_lifecycle_work_registry_validate_recovery.rs");
+            include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
         let reducer = source
             .split_once("fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(")
             .expect("locate combined Sign reducer")
@@ -535,7 +535,7 @@ mod static_tests {
             .expect("locate combined registry preparation")
             .1
             .split_once(
-                "impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor",
+                "impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter>",
             )
             .expect("locate end of combined registry preparation")
             .0;
@@ -567,11 +567,11 @@ mod static_tests {
         }
         let commit = registry_source
             .split_once(
-                "impl<'registry, 'adapter>\n    BoundRecoveredLifecycleSignBroadcastAndSignSuccessor",
+                "impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter>",
             )
             .expect("locate combined successor publication tail")
             .1
-            .split_once("include!(\"v2_lifecycle_work_registry_validate_recovery.rs\")")
+            .split_once("pub(crate) struct ReadyValidatedAdapterAuthority<'a> {")
             .expect("locate end of combined successor publication tail")
             .0;
         let remove_parent = commit

@@ -22455,6 +22455,25 @@ def test_exact_output_runner_inventory_is_exact_and_non_crashing(
     ), errors
 
 
+def test_test_only_height_ingress_wrappers_are_not_production_seals() -> None:
+    """Legacy runner bindings cannot re-enter the production seal inventory."""
+
+    module = load_checker()
+    assert set(module._PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256) == {
+        "runner::close_ingress_for_rollover",
+        "ingress::unbind_leader_wire_lifecycle_gate",
+        "ingress::unbind_height_ingress_gates",
+        "ingress::close",
+    }
+    assert set(module._PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256) == {
+        "worker::closed_height_atomically_retires_serve_and_leader_ingress",
+    }
+    assert not hasattr(
+        module,
+        "_PRODUCTION_CERTIFIED_SERVE_INGRESS_BINDING_ITEM_SHA256",
+    )
+
+
 @pytest.mark.parametrize(
     (
         "digest_key",
@@ -22466,76 +22485,6 @@ def test_exact_output_runner_inventory_is_exact_and_non_crashing(
         "expected_error",
     ),
     (
-        (
-            "runner::LeaderWireIngressBinding::bind",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "bind",
-            (("impl", "LeaderWireIngressBinding"),),
-            ".bind_leader_wire_lifecycle_gate(",
-            ".bind_leader_wire_lifecycle_gate_for_test(",
-            "leader-wire binding must publish the exact durable gate",
-        ),
-        (
-            "runner::LeaderWireIngressBinding::retire",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "retire",
-            (("impl", "LeaderWireIngressBinding"),),
-            ".unbind_leader_wire_lifecycle_gate(gate)",
-            ".unbind_leader_wire_lifecycle_gate_for_test(gate)",
-            "standalone leader-wire retirement must close admission",
-        ),
-        (
-            "runner::LeaderWireIngressBinding::retire",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "retire",
-            (("impl", "LeaderWireIngressBinding"),),
-            "close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);",
-            "let _ = (&self.ingress_ready, &self.block_ingress);",
-            "standalone leader-wire retirement must close admission",
-        ),
-        (
-            "runner::LeaderWireIngressBinding::drop",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "drop",
-            (("impl", "Drop", "for", "LeaderWireIngressBinding"),),
-            "if let Err(error) = self.retire() {",
-            "if let Err(error) = Ok::<(), V2RunnerError>(()) {",
-            "abnormal leader-wire binding drop must attempt",
-        ),
-        (
-            "runner::HeightIngressBindings::new",
-            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
-            "new",
-            (("impl", "HeightIngressBindings"),),
-            "Self {\n            certified_serve,\n            leader_wire,\n        }",
-            "Self {\n"
-            "            certified_serve,\n"
-            "            leader_wire: LeaderWireIngressBinding {\n"
-            "                ingress_ready: Arc::clone(&leader_wire.ingress_ready),\n"
-            "                block_ingress: Arc::clone(&leader_wire.block_ingress),\n"
-            "                gate: leader_wire.gate.clone(),\n"
-            "            },\n"
-            "        }",
-            "joint height-ingress construction must take move-only ownership",
-        ),
-        (
-            "runner::HeightIngressBindings::retire",
-            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
-            "retire",
-            (("impl", "HeightIngressBindings"),),
-            "self.certified_serve.gate = None;",
-            "let _ = &self.certified_serve.gate;",
-            "joint height-ingress retirement must validate paired ownership",
-        ),
-        (
-            "runner::HeightIngressBindings::drop",
-            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
-            "drop",
-            (("impl", "Drop", "for", "HeightIngressBindings"),),
-            "self.leader_wire.gate = None;",
-            "let _ = &self.leader_wire.gate;",
-            "failed joint drop must keep ingress closed",
-        ),
         (
             "runner::close_ingress_for_rollover",
             "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
@@ -22629,7 +22578,7 @@ def test_joint_height_ingress_semantics_survive_pending_digest_refresh(
     new: str,
     expected_error: str,
 ) -> None:
-    """Each joint owner is reviewed independently of its token digest."""
+    """Each production retirement seam survives a refreshed token digest."""
 
     module = load_checker()
     exact_output_production_fixture(tmp_path)
@@ -22667,23 +22616,6 @@ def test_joint_height_ingress_semantics_survive_pending_digest_refresh(
         "expected_error",
     ),
     (
-        (
-            "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut",
-            "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
-            "height_ingress_bindings_retire_both_gates_in_one_closed_cut",
-            ".expect(\"retire both per-height ingress gates atomically\");",
-            ".expect(\"retire both per-height ingress gates atomically\");\n"
-            "        ingress.open().expect(\"reopen retired ingress\");",
-            "joint binding regression must close and detach both gates",
-        ),
-        (
-            "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership",
-            "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
-            "height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership",
-            "bindings.leader_wire.ingress_ready = Arc::new(AtomicBool::new(true));",
-            "bindings.leader_wire.ingress_ready = Arc::clone(&ingress_ready);",
-            "mismatched joint ownership must reject before mutation",
-        ),
         (
             "worker::closed_height_atomically_retires_serve_and_leader_ingress",
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -22732,7 +22664,7 @@ def test_joint_height_ingress_regression_survives_pending_digest_refresh(
         (
             "_PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256",
             "remove",
-            "runner::HeightIngressBindings::retire",
+            "runner::close_ingress_for_rollover",
             "joint height-ingress token-seal inventory mismatch",
         ),
         (

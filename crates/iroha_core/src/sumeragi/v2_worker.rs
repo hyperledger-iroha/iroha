@@ -3,9 +3,8 @@
 //! The reducer itself remains serialized on the Sumeragi thread. Potentially
 //! blocking signing, body fsync/validation, state application, and certified
 //! body serving execute on one ordered I/O worker and return tagged
-//! completions. Control messages use the bounded committee topology: proposal
-//! manifests and phase votes reach the full committee, first-send body chunks
-//! reach Set A, and timeout/QC recovery remains committee-wide.
+//! completions. Control and recovery remain committee-wide, while first-send
+//! body chunks are limited to Set A.
 use super::v2_core::{
     CanonicalIdentityProjection, Committee, EventTag, IDENTITY_DOMAIN_PAYLOAD,
     IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_PROCESS_LOCAL, IDENTITY_KIND_MERGE_ENTRY,
@@ -17917,8 +17916,7 @@ impl ProductionV2Services {
         ))
     }
     /// Start the ordered I/O adapter for one immutable height context.
-    #[allow(dead_code)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn start(
         context: wire::HeightContext,
         initial_tag: EventTag,

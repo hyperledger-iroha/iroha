@@ -1398,7 +1398,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "initialize_recovered_local_proposal": "8295ba9249430d0f8f6c3ecc65b11b48873adc3b9f3408c313f1425f2a68ff01",
     "prepared_local_proposal_exactly_matches": "666d62c1d4104e6f0e07548434bd2d789514d23531e598032b743ed66e2afc5a",
     "activate_with_prepared_local_proposal": "dbfce16c82f866d3f833f0d04c490851d72ce48fad28e178e16ef059355ddadc",
-    "run_non_pending_lifecycle_loop": "02b808aad6cce3c45d31cb15b837f8509c8ffba9f2a0876c51ad62e63a76d205",
+    "run_non_pending_lifecycle_loop": "8a988b7b53dc952839db9407a32bfc675a54407606f57736db408cc694a8e92e",
     "run_lifecycle_active_height": "c61eee6e569f7b9537d1138a28d84fe2f59f4509c9492bfbd45fd7b6f5754f35",
     "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner": "ad38dabcaf0b4e2464c7aa4ed4d9867949588f617feb74cad713fb78b7cb9510",
     "prepared_local_proposal_state_is_affine_and_context_directive_bound": "e2e8af92151f3b187cdb8eca6f40bb67a5472060ed6fdc79b5fea0127d02c3b3",

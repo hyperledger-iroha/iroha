@@ -1153,7 +1153,7 @@ mod tests {
         NoritoDeserialize, NoritoSerialize,
         codec::{self, Decode, Encode},
     };
-    use std::{cell::Cell, io::Write};
+    use std::cell::Cell;
     #[repr(transparent)]
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct InexactBytes(Vec<u8>);

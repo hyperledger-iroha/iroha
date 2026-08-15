@@ -929,7 +929,8 @@ fn certified_fetch_dequeue_commit_requires_the_durable_token() {
 fn recovered_decision_apply_scheduler_attestation_stays_closed_and_io_bounded() {
     let registry = reviewed_lifecycle_work_registry_source_for_test();
     let adapter = include_str!("../v2.rs");
-    let recovery = include_str!("../v2_lifecycle_work_registry_validate_recovery.rs");
+    let recovery =
+        include_str!("../v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
     let boundary = include_str!("../v2_lifecycle_concrete_admission.rs");
     let scheduler = include_str!("../v2_lifecycle_scheduler_inputs.rs");
     let declaration = registry
@@ -1392,7 +1393,7 @@ fn recovered_next_wal_vote_completion_stays_closed_and_attests_its_ready_pair() 
         .split_once("fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor")
         .expect("combined successor preparation exists")
         .1
-        .split_once("impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor")
+        .split_once("impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter>")
         .expect("combined successor preparation stays bounded")
         .0;
     assert!(single.contains("DurableRecoveredLifecycleNextWalVoteSign(sign)"));
@@ -1400,7 +1401,8 @@ fn recovered_next_wal_vote_completion_stays_closed_and_attests_its_ready_pair() 
     assert!(combined.contains("DurableRecoveredLifecycleNextWalVoteSign(sign)"));
     assert!(combined.contains("project_recovered_next_wal_vote_signed_broadcast_and_sign("));
     assert!(registry.contains("DurableRecoveredLifecycleSignParentV1::NextWalVote(sign)"));
-    let recovery = include_str!("../v2_lifecycle_work_registry_validate_recovery.rs");
+    let recovery =
+        include_str!("../v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
     let pair = recovery
         .split_once("fn attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(")
         .expect("cold Ready pair attestation exists")

@@ -2237,6 +2237,69 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "build_historical_body_response must preserve exact production order",
     ),
     (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "pub(crate) struct SumeragiV2Adapter {",
+        "status_publication_enabled: bool,",
+        "status_publication_enabled_removed: bool,",
+        "SumeragiV2Adapter status publication latch omits production refinement tokens",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "fn open_with_aggregator_and_publication_with_capacity(",
+        "status_publication_enabled: publish_initial_status,",
+        "status_publication_enabled: true,",
+        "deferred status publication latch must initialize from publish_initial_status",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "fn install_registry_and_commit_adapter(",
+        "if self.adapter.status_publication_enabled {",
+        "if true {",
+        "Ready-Validate direct status publication must remain latch-dominated",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "fn publish_status(&mut self)",
+        "if self.status_publication_enabled {",
+        "if true {",
+        "adapter status publication must compute before its latch-dominated global setter",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "pub(crate) fn successor_activation_status(",
+        "let status = self.status()?;\n        self.status_publication_enabled = true;",
+        "self.status_publication_enabled = true;\n        let status = self.status()?;",
+        "successor activation may enable status publication only after a successful snapshot",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "pub(in crate::sumeragi) fn pending_kura_activation_status(",
+        "let status = self.status()?;\n        self.status_publication_enabled = true;",
+        "self.status_publication_enabled = true;\n        let status = self.status()?;",
+        "PendingKura activation may enable status publication only after a successful snapshot",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "pub(crate) fn pending_kura_activation_status_snapshot(",
+        "self.driver.pending_kura_activation_status()",
+        "self.driver.status()",
+        "pending_kura_activation_status_snapshot must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+        "pub(in crate::sumeragi) fn activate_no_clock(",
+        ".open_and_publish_recovered_height(",
+        ".open_recovered_height(",
+        "PendingKura activation status-before-ingress boundary must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn settle_recovered_decision_apply_completion_owner(",
+        "super::super::status::set_v2_status(status);",
+        "if false { super::super::status::set_v2_status(status); }",
+        "recovered Decision Apply settlement must preserve its intentional unguarded final publication",
+    ),
+    (
         "scripts/run_sumeragi_v2_release_gates.sh",
         "required_production_liveness_tests=(",
         "sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts",
@@ -2248,7 +2311,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 296
+) == 305
 
 
 @pytest.mark.parametrize(

@@ -802,47 +802,125 @@ pub(super) fn write_value_to<S: JsonWriteSink + ?Sized>(
     output: &mut S,
     depth: usize,
 ) -> Result<(), BoundedJsonError> {
-    if depth >= MAX_JSON_VALUE_NESTING_DEPTH {
-        return Err(BoundedJsonError::Unsupported);
+    enum Frame<'a> {
+        Value(&'a Value, usize),
+        Array {
+            values: core::slice::Iter<'a, Value>,
+            child_depth: usize,
+            wrote_value: bool,
+        },
+        Object {
+            values: std::collections::btree_map::Iter<'a, String, Value>,
+            child_depth: usize,
+            wrote_value: bool,
+        },
     }
-    match value {
-        Value::Null => output.push_str("null"),
-        Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
-        Value::Number(native::Number::I64(value)) => write_i64_to(*value, output),
-        Value::Number(native::Number::U64(value)) => write_u128_to(u128::from(*value), output),
-        Value::Number(native::Number::F64(value)) => write_f64_to(*value, output),
-        Value::String(value) => write_json_string_to(value, output),
-        Value::Array(values) => {
-            output.begin_container()?;
-            output.push('[')?;
-            let child_depth = depth.checked_add(1).ok_or(BoundedJsonError::Unsupported)?;
-            for (index, value) in values.iter().enumerate() {
-                if index != 0 {
-                    output.push(',')?;
+
+    // One frame is needed for each admitted container plus its current child.
+    // The extra slot lets an unchecked custom sink reach the first forbidden
+    // child and receive the same `Unsupported` error as the recursive walker.
+    const FRAME_CAPACITY: usize = MAX_JSON_VALUE_NESTING_DEPTH + 1;
+    let mut frames: [Option<Frame<'_>>; FRAME_CAPACITY] = [const { None }; FRAME_CAPACITY];
+    frames[0] = Some(Frame::Value(value, depth));
+    let mut frame_count = 1_usize;
+
+    while frame_count != 0 {
+        frame_count -= 1;
+        let frame = frames[frame_count]
+            .take()
+            .expect("JSON value writer frame must be initialized");
+        match frame {
+            Frame::Value(value, depth) => {
+                if depth >= MAX_JSON_VALUE_NESTING_DEPTH {
+                    return Err(BoundedJsonError::Unsupported);
                 }
-                write_value_to(value, output, child_depth)?;
-            }
-            output.push(']')?;
-            output.end_container();
-            Ok(())
-        }
-        Value::Object(values) => {
-            output.begin_container()?;
-            output.push('{')?;
-            let child_depth = depth.checked_add(1).ok_or(BoundedJsonError::Unsupported)?;
-            for (index, (key, value)) in values.iter().enumerate() {
-                if index != 0 {
-                    output.push(',')?;
+                match value {
+                    Value::Null => output.push_str("null")?,
+                    Value::Bool(value) => {
+                        output.push_str(if *value { "true" } else { "false" })?;
+                    }
+                    Value::Number(native::Number::I64(value)) => write_i64_to(*value, output)?,
+                    Value::Number(native::Number::U64(value)) => {
+                        write_u128_to(u128::from(*value), output)?;
+                    }
+                    Value::Number(native::Number::F64(value)) => write_f64_to(*value, output)?,
+                    Value::String(value) => write_json_string_to(value, output)?,
+                    Value::Array(values) => {
+                        output.begin_container()?;
+                        output.push('[')?;
+                        let child_depth =
+                            depth.checked_add(1).ok_or(BoundedJsonError::Unsupported)?;
+                        frames[frame_count] = Some(Frame::Array {
+                            values: values.iter(),
+                            child_depth,
+                            wrote_value: false,
+                        });
+                        frame_count += 1;
+                    }
+                    Value::Object(values) => {
+                        output.begin_container()?;
+                        output.push('{')?;
+                        let child_depth =
+                            depth.checked_add(1).ok_or(BoundedJsonError::Unsupported)?;
+                        frames[frame_count] = Some(Frame::Object {
+                            values: values.iter(),
+                            child_depth,
+                            wrote_value: false,
+                        });
+                        frame_count += 1;
+                    }
                 }
-                write_json_string_to(key, output)?;
-                output.push(':')?;
-                write_value_to(value, output, child_depth)?;
             }
-            output.push('}')?;
-            output.end_container();
-            Ok(())
+            Frame::Array {
+                mut values,
+                child_depth,
+                wrote_value,
+            } => {
+                if let Some(value) = values.next() {
+                    if wrote_value {
+                        output.push(',')?;
+                    }
+                    frames[frame_count] = Some(Frame::Array {
+                        values,
+                        child_depth,
+                        wrote_value: true,
+                    });
+                    frame_count += 1;
+                    frames[frame_count] = Some(Frame::Value(value, child_depth));
+                    frame_count += 1;
+                } else {
+                    output.push(']')?;
+                    output.end_container();
+                }
+            }
+            Frame::Object {
+                mut values,
+                child_depth,
+                wrote_value,
+            } => {
+                if let Some((key, value)) = values.next() {
+                    if wrote_value {
+                        output.push(',')?;
+                    }
+                    write_json_string_to(key, output)?;
+                    output.push(':')?;
+                    frames[frame_count] = Some(Frame::Object {
+                        values,
+                        child_depth,
+                        wrote_value: true,
+                    });
+                    frame_count += 1;
+                    frames[frame_count] = Some(Frame::Value(value, child_depth));
+                    frame_count += 1;
+                } else {
+                    output.push('}')?;
+                    output.end_container();
+                }
+            }
         }
     }
+
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -943,6 +1021,24 @@ mod tests {
             Value::Object(BTreeMap::from([("nested".to_owned(), value)]))
         })
     }
+    fn nested_alternating_value(containers: usize) -> Value {
+        (0..containers).fold(Value::Null, |value, index| {
+            if index % 2 == 0 {
+                Value::Array(vec![value])
+            } else {
+                Value::Object(BTreeMap::from([("nested".to_owned(), value)]))
+            }
+        })
+    }
+    fn nested_alternating_json(containers: usize) -> String {
+        (0..containers).fold("null".to_owned(), |value, index| {
+            if index % 2 == 0 {
+                format!("[{value}]")
+            } else {
+                format!("{{\"nested\":{value}}}")
+            }
+        })
+    }
     fn assert_programmatic_depth_boundary(builder: fn(usize) -> Value) {
         let accepted = builder(MAX_JSON_VALUE_NESTING_DEPTH - 1);
         let ordinary = super::super::to_json(&accepted).expect("ordinary depth-boundary JSON");
@@ -976,6 +1072,33 @@ mod tests {
     #[test]
     fn programmatic_object_depth_matches_the_parser_boundary() {
         assert_programmatic_depth_boundary(nested_object_value);
+    }
+    #[test]
+    fn programmatic_value_writer_fits_a_128k_stack() {
+        std::thread::Builder::new()
+            .name("bounded-json-value-writer".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let accepted_depth = MAX_JSON_VALUE_NESTING_DEPTH - 1;
+                let accepted = nested_alternating_value(accepted_depth);
+                let expected = nested_alternating_json(accepted_depth);
+                assert_eq!(
+                    to_json_bounded(&accepted, expected.len())
+                        .expect("serialize the exact depth boundary"),
+                    expected
+                );
+                super::super::drop_json_value_iteratively(accepted);
+
+                let rejected = nested_alternating_value(MAX_JSON_VALUE_NESTING_DEPTH);
+                assert_eq!(
+                    to_json_bounded(&rejected, usize::MAX),
+                    Err(BoundedJsonError::Unsupported)
+                );
+                super::super::drop_json_value_iteratively(rejected);
+            })
+            .expect("spawn constrained-stack JSON writer")
+            .join()
+            .expect("constrained-stack JSON writer");
     }
     #[test]
     fn unchecked_raw_value_fails_closed_before_destination_allocation() {

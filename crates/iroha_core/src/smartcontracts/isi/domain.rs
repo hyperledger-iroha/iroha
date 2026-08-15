@@ -40,7 +40,6 @@ pub mod isi {
         validation_fee::ValidationFeePlainElectorateRulesV1,
     };
     use iroha_logger::prelude::*;
-    use norito::codec::Decode as _;
     use std::{
         collections::{BTreeSet, btree_map::Entry},
         str::FromStr,

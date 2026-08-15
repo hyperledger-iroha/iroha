@@ -178,8 +178,8 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
     }
     /// Construct a duplicate-field error.
     #[inline]
-    pub fn duplicate_field(_field: &str) -> Error {
-        Error::Message("duplicate JSON object field".to_owned())
+    pub fn duplicate_field(field: &str) -> Error {
+        Error::duplicate_field(field)
     }
     /// Construct an unknown-field error.
     #[inline]

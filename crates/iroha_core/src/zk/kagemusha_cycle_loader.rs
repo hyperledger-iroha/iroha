@@ -2137,10 +2137,9 @@ mod tests {
     use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
     use halo2_ecc::fields::fp::FpChip;
     use halo2_proofs::{
-        arithmetic::Field as _,
         dev::MockProver,
         halo2curves::{
-            group::{Curve as _, Group as _, GroupEncoding as _},
+            group::GroupEncoding as _,
             pasta::{EpAffine, EqAffine, Fp, Fq},
         },
     };

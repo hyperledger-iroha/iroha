@@ -14,9 +14,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(test)]
-use std::collections::BTreeSet;
-
 use super::v2_core::{
     CanonicalIdentityProjection, EventTag, Generation, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
     IDENTITY_KIND_FINALITY_ARTIFACT, ProductionSuccessorPredecessorBindingProjection,
@@ -88,15 +85,14 @@ use super::{
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
     v2_transport::AuthenticatedCertifiedBodyRequest,
     v2_worker::{
-        CertifiedServeAdmission, CertifiedServeNegativeOutcome,
-        CertifiedServePrepareError, ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner,
-        ProductionV2Services, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
+        CertifiedServeAdmission, CertifiedServeNegativeOutcome, CertifiedServePrepareError,
+        ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner, ProductionV2Services,
+        V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
     },
 };
 #[cfg(test)]
 use super::{
-    serviced_candidate_store::LeaderWireLifecycleStoreGate,
-    v2_worker::CertifiedServeIngressGate,
+    serviced_candidate_store::LeaderWireLifecycleStoreGate, v2_worker::CertifiedServeIngressGate,
 };
 use crate::{
     kura::{AutonomousLifecycleProcessGenerationClaim, Kura, KuraV2CommitReceipt},

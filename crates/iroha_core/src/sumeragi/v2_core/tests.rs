@@ -7244,13 +7244,26 @@ fn delayed_lower_prepare_qc_cannot_downgrade_retransmitted_progress() {
             .expect("observe high PrepareQC"),
     );
     acknowledge(&mut reducer, &persist_high);
+    assert_eq!(
+        reducer.volatile_prepare_counts(),
+        (0, 1),
+        "an old-view durable high QC has no pending body-pipeline owner"
+    );
     let older = qc(&context, 0, Phase::Prepare, old_subject, &[1, 2, 3]);
-    reducer
+    let before_older = reducer.clone();
+    let ignored = reducer
         .step(Event::QuorumCertificateReceived {
             tag: reducer.current_tag(),
             certificate: older,
         })
         .expect("an old PrepareQC is valid but cannot regress progress");
+    assert_eq!(
+        ignored.disposition(),
+        StepDisposition::Ignored(IgnoreReason::IrrelevantView)
+    );
+    assert!(ignored.effects().is_empty());
+    assert_eq!(reducer, before_older);
+    assert_eq!(reducer.volatile_prepare_counts(), (0, 1));
     let retry = reducer
         .step(Event::RetransmitElapsed {
             tag: reducer.current_tag(),

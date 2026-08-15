@@ -2159,17 +2159,6 @@
             "a current-height exact request may cross ingress removal only with its already-prepared lifecycle admission",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn bind(\n"
-            "        ingress_ready: Arc<AtomicBool>,\n"
-            "        block_ingress: Arc<FairV2Ingress>,\n"
-            "        gate: CertifiedServeIngressGate,\n"
-            "    ) -> Result<Self, V2RunnerError> {",
-            ".bind_certified_serve_gate(gate.clone())",
-            ".bind_certified_serve_gate_for_test(gate.clone())",
-            "the per-height ingress owner must bind the exact Serve reservation gate before becoming live",
-        ),
-        (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn certified_serve_ingress_gate(&self) -> CertifiedServeIngressGate {",
             "queue: Arc::clone(&self.command_tx.queue),",
@@ -2182,21 +2171,6 @@
             ".map(V2IoHandle::certified_serve_ingress_gate)",
             ".map(|_| panic!(\"detached gate\"))",
             "production services must bind ingress to the live I/O handle's exact Serve queue",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn retire(&mut self) -> Result<(), V2RunnerError>",
-            "close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);",
-            "let _ = (&self.ingress_ready, &self.block_ingress);",
-            "ingress rollover must close selection before unbinding the exact Serve reservation gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "impl Drop for CertifiedServeIngressBinding {\n"
-            "    fn drop(&mut self) {",
-            "if let Err(error) = self.retire() {",
-            "if let Err(error) = Ok::<(), V2RunnerError>(()) {",
-            "every abnormal binding drop must attempt the same ordered ingress retirement",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",

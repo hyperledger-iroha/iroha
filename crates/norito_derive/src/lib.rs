@@ -2939,12 +2939,22 @@ fn derive_enum_serialize(
                 let mut exact_adds = Vec::new();
                 for (i, _b) in bindings.iter().enumerate() {
                     let b = &bindings[i];
-                    let ty = &fields.unnamed[i].ty;
+                    let field = &fields.unnamed[i];
+                    if FieldAttr::parse_validated(&field.attrs).skip {
+                        continue;
+                    }
+                    let ty = &field.ty;
                     let is_sd = is_self_delimiting(ty);
                     let is_fixed = is_fixed_size(ty).is_some();
+                    let is_u8_array = matches!(ty, syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8")));
+                    let exact_len = if is_u8_array {
+                        quote! { core::mem::size_of_val(#b) }
+                    } else {
+                        quote! { norito::core::NoritoSerialize::encoded_len_exact(#b)? }
+                    };
                     let add = if is_sd || is_fixed {
                         quote! {
-                            let __e = norito::core::NoritoSerialize::encoded_len_exact(#b)?;
+                            let __e = #exact_len;
                             if norito::core::use_packed_struct() {
                                 __sum = __sum.saturating_add(__e);
                             } else {
@@ -3039,12 +3049,22 @@ fn derive_enum_serialize(
                 // exact arm
                 let mut exact_adds = Vec::new();
                 for (i, name) in names.iter().enumerate() {
-                    let ty = &fields.named[i].ty;
+                    let field = &fields.named[i];
+                    if FieldAttr::parse_validated(&field.attrs).skip {
+                        continue;
+                    }
+                    let ty = &field.ty;
                     let is_sd = is_self_delimiting(ty);
                     let is_fixed = is_fixed_size(ty).is_some();
+                    let is_u8_array = matches!(ty, syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8")));
+                    let exact_len = if is_u8_array {
+                        quote! { core::mem::size_of_val(#name) }
+                    } else {
+                        quote! { norito::core::NoritoSerialize::encoded_len_exact(#name)? }
+                    };
                     let add = if is_sd || is_fixed {
                         quote! {
-                            let __e = norito::core::NoritoSerialize::encoded_len_exact(#name)?;
+                            let __e = #exact_len;
                             if norito::core::use_packed_struct() {
                                 __sum = __sum.saturating_add(__e);
                             } else {
@@ -5183,9 +5203,7 @@ fn derive_struct_json_deserialize(
             let unknown_field_arm = if container_attrs.deny_unknown_fields {
                 quote! {
                     _ => {
-                        return Err(norito::json::Error::Message(
-                            "unknown JSON field".into()
-                        ));
+                        return Err(norito::json::Error::unknown_field(key.as_str()));
                     }
                 }
             } else {
@@ -5539,9 +5557,7 @@ fn derive_enum_json_deserialize(
     let unknown_variant_field = if container_attrs.deny_unknown_fields {
         quote! {
             _ => {
-                return Err(norito::json::Error::Message(
-                    "unknown JSON variant field".into()
-                ));
+                return Err(norito::json::Error::unknown_field(key.as_str()));
             }
         }
     } else {
@@ -5767,9 +5783,7 @@ fn derive_enum_json_deserialize(
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
     let unknown_envelope_field = if container_attrs.deny_unknown_fields {
         quote! {
-            return Err(norito::json::Error::Message(
-                "unknown JSON enum envelope field".into()
-            ));
+            return Err(norito::json::Error::unknown_field(key.as_str()));
         }
     } else {
         quote! {

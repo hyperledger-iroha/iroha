@@ -5,7 +5,7 @@
 //! deterministic map so planning never makes the coordinator own physical
 //! bytes or service handles.
 #[cfg(test)]
-use super::{AdmissionRequest, CausalRoot, LeaseId, schema::DurableBodyFrameReference};
+use super::{AdmissionRequest, LeaseId};
 use super::{
     AuthenticatedLifecycleRecoveryCut, CandidateAdmission, CapacityClass, InitialLifecycleState,
     LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase,

@@ -1676,6 +1676,44 @@ fn only_enter_view_effect_restarts_both_clocks() {
     assert_eq!(runtime.driver.timeouts, vec![next]);
 }
 #[test]
+fn same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner() {
+    let start = Instant::now();
+    let initial = EventTag::new(7, 0, Generation::new(11));
+    let rebound = EventTag::new(7, 0, Generation::new(12));
+    let mut runtime = runtime(
+        FakeDriver::new(initial),
+        start,
+        RuntimeQueueConfig::new(8, 2, 2),
+    );
+    runtime
+        .step_and_take_scheduler_ownership_for_test(start + runtime.round_timeout())
+        .expect("the first generation emits its timeout");
+    assert_eq!(runtime.driver.timeouts, vec![initial]);
+
+    enqueue_fake(
+        &mut runtime,
+        initial,
+        CommandClass::Progress,
+        FakeCommand::enter_view(rebound),
+    )
+    .expect("admit the same-view generation upgrade");
+    let rebound_at = start + runtime.round_timeout();
+    assert!(matches!(
+        runtime.step_and_take_scheduler_ownership_for_test(rebound_at),
+        Ok(RuntimeStep::Advanced(_))
+    ));
+    assert_eq!(runtime.round_tag(), rebound);
+    runtime
+        .reconcile_active_view_producer(rebound, false)
+        .expect("the nonleader test peer retires the rebound producer");
+
+    runtime
+        .step_and_take_scheduler_ownership_for_test(rebound_at + runtime.round_timeout())
+        .expect("the rebound generation emits a fresh timeout");
+    assert_eq!(runtime.driver.timeouts, vec![initial, rebound]);
+    assert!(!runtime.fail_closed);
+}
+#[test]
 fn startup_enter_view_effect_restarts_clocks_and_is_returned_unchanged() {
     let start = Instant::now();
     let initial = tag(0);

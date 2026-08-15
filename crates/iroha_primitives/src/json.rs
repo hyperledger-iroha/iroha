@@ -595,7 +595,7 @@ mod tests {
         assert_eq!(
             norito::json::to_json_bounded(&value, expected.len())
                 .expect("serialize Json at exact bound"),
-            expected
+            expected.as_str()
         );
         assert_eq!(
             norito::json::to_json_bounded(&value, expected.len() - 1),

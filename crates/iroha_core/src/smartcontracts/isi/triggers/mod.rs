@@ -44,7 +44,6 @@ pub mod isi {
         events::EventFilter,
         isi::error::{InvalidParameterError, RepetitionError},
         name::Name,
-        trigger::prelude::*,
     };
     const RESERVED_TRIGGER_METADATA_KEYS: [&str; 2] =
         ["__registered_block_height", "__registered_at_ms"];

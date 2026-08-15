@@ -1236,6 +1236,139 @@ let discovery_was_outstanding = activated.with_runner_runtime(
             deferred_open,
             ("Self::open_with_aggregator_and_publication(", "false,"),
         )
+        adapter_struct = region(
+            adapter_path,
+            adapter_source,
+            "SumeragiV2Adapter status publication latch",
+            "pub(crate) struct SumeragiV2Adapter {",
+            "\nenum SafetyWalOpenTarget",
+        )
+        require_tokens(
+            adapter_path,
+            "SumeragiV2Adapter status publication latch",
+            adapter_struct,
+            ("status_publication_enabled: bool,",),
+        )
+        require_token_count(
+            adapter_path,
+            "adapter status publication latch closed surface",
+            adapter_source,
+            "status_publication_enabled",
+            6,
+        )
+        require_token_count(
+            adapter_path,
+            "adapter status publication latch activation surface",
+            adapter_source,
+            "status_publication_enabled = true",
+            2,
+        )
+        adapter_open = _require_qualified_rust_item(
+            adapter_path,
+            adapter_source,
+            "SumeragiV2Adapter",
+            "open_with_aggregator_and_publication_with_capacity",
+            errors,
+            "deferred status publication constructor",
+            expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            adapter_open,
+            """
+publish_initial_status: bool,
+capacity_geometry: ServicedCandidateCapacityGeometry,
+deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
+""",
+            "deferred status publication constructor must accept the exact latch initializer",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            adapter_open,
+            """
+replay_complete: false,
+status_publication_enabled: publish_initial_status,
+fail_closed: false,
+""",
+            "deferred status publication latch must initialize from publish_initial_status",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            adapter_open,
+            """
+adapter.replay_complete = true;
+adapter.advance_reducer_fence_generation()?;
+if publish_initial_status {
+    adapter.publish_status()?;
+}
+""",
+            "initial status publication must remain dominated by its constructor latch",
+            errors,
+        )
+        ready_validate_publication = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "install_registry_and_commit_adapter",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            ready_validate_publication,
+            (("impl", "PreparedReadyDurableValidatePersistedSign", "<", "'", "_", ">"),),
+            "Ready-Validate direct status publication",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            ready_validate_publication,
+            """
+self.armed = false;
+if self.adapter.status_publication_enabled {
+    super::status::set_v2_status(committed_status);
+}
+""",
+            "Ready-Validate direct status publication must remain latch-dominated",
+            errors,
+        )
+        if ready_validate_publication is not None:
+            require_token_count(
+                adapter_path,
+                "Ready-Validate direct status publication",
+                ready_validate_publication.source,
+                "super::status::set_v2_status(committed_status)",
+                1,
+            )
+        publish_status = _require_qualified_rust_item(
+            adapter_path,
+            adapter_source,
+            "SumeragiV2Adapter",
+            "publish_status",
+            errors,
+            "adapter status publication",
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            publish_status,
+            """
+let status = self.status()?;
+if self.status_publication_enabled {
+    super::status::set_v2_status(status);
+}
+Ok(())
+""",
+            "adapter status publication must compute before its latch-dominated global setter",
+            errors,
+        )
+        if publish_status is not None:
+            require_token_count(
+                adapter_path,
+                "adapter status publication",
+                publish_status.source,
+                "super::status::set_v2_status(status)",
+                1,
+            )
         marker = region(
             adapter_path,
             adapter_source,
@@ -1249,8 +1382,48 @@ let discovery_was_outstanding = activated.with_runner_runtime(
             marker,
             (
                 "SumeragiV2ProgressTransition::SuccessorHeightActivated",
-                "self.status()",
+                "let status = self.status()?",
+                "self.status_publication_enabled = true",
+                "Ok(status)",
             ),
+        )
+        successor_activation = _require_qualified_rust_item(
+            adapter_path,
+            adapter_source,
+            "SumeragiV2Adapter",
+            "successor_activation_status",
+            errors,
+            "successor activation status latch",
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            successor_activation,
+            """
+let status = self.status()?;
+self.status_publication_enabled = true;
+Ok(status)
+""",
+            "successor activation may enable status publication only after a successful snapshot",
+            errors,
+        )
+        pending_kura_activation = _require_qualified_rust_item(
+            adapter_path,
+            adapter_source,
+            "SumeragiV2Adapter",
+            "pending_kura_activation_status",
+            errors,
+            "PendingKura activation status latch",
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            pending_kura_activation,
+            """
+let status = self.status()?;
+self.status_publication_enabled = true;
+Ok(status)
+""",
+            "PendingKura activation may enable status publication only after a successful snapshot",
+            errors,
         )
     runtime_path, runtime_source = load(
         "crates/iroha_core/src/sumeragi/v2_runtime.rs"
@@ -1273,6 +1446,103 @@ let discovery_was_outstanding = activated.with_runner_runtime(
                 "self.driver.successor_activation_status()",
             ),
         )
+        pending_snapshot = region(
+            runtime_path,
+            runtime_source,
+            "pending_kura_activation_status_snapshot",
+            "pub(crate) fn pending_kura_activation_status_snapshot(",
+            "\n    fn body_pipeline_completion_is_owned(",
+        )
+        require_order(
+            runtime_path,
+            "pending_kura_activation_status_snapshot",
+            pending_snapshot,
+            (
+                "if self.clocks_armed",
+                "AdapterError::PendingKuraActivationNotReady",
+                "self.driver.pending_kura_activation_status()",
+            ),
+        )
+    pending_lifecycle_path, pending_lifecycle_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs"
+    )
+    if pending_lifecycle_source:
+        pending_activation = _require_qualified_rust_item(
+            pending_lifecycle_path,
+            pending_lifecycle_source,
+            "PreparedPendingKuraLaneRecoveryV1",
+            "activate_no_clock",
+            errors,
+            "PendingKura no-clock activation",
+            expected_attributes=("#[allow(dead_code, clippy::result_large_err)]",),
+        )
+        _require_rust_token_sequence(
+            pending_lifecycle_path,
+            pending_activation,
+            """
+let status = launched
+    .executor
+    .pending_kura_activation_status_snapshot()
+    .map_err(ProductionLifecycleActivationErrorV1::Status)?;
+""",
+            "PendingKura activation must snapshot and open its deferred adapter latch",
+            errors,
+        )
+        if pending_activation is not None:
+            require_order(
+                pending_lifecycle_path,
+                "PendingKura activation status-before-ingress boundary",
+                pending_activation.source,
+                (
+                    "pending_kura_activation_status_snapshot()",
+                    "activate_effect_completion_observer(observer)",
+                    "runner.open_and_publish_recovered_height(",
+                    "activation.complete()",
+                ),
+            )
+    lifecycle_launch_path, lifecycle_launch_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
+    )
+    if lifecycle_launch_source:
+        recovered_apply_settlement = _require_qualified_rust_item(
+            lifecycle_launch_path,
+            lifecycle_launch_source,
+            "LaunchedProductionLifecycleV1",
+            "settle_recovered_decision_apply_completion_owner",
+            errors,
+            "recovered Decision Apply settlement publication",
+        )
+        _require_rust_token_sequence(
+            lifecycle_launch_path,
+            recovered_apply_settlement,
+            """
+let status = executor.commit_recovered_decision_apply_finality(finality);
+let settled = completion.acknowledge_after_owner_settlement();
+assert!(
+    matches!(settled, RecoveredDecisionApplyWorkerResultV1::Applied(_)),
+    "borrowed recovered Apply result cannot change before acknowledgement"
+);
+super::super::status::set_v2_status(status);
+Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
+""",
+            "recovered Decision Apply settlement must preserve its intentional unguarded final publication",
+            errors,
+        )
+        if recovered_apply_settlement is not None:
+            require_token_count(
+                lifecycle_launch_path,
+                "recovered Decision Apply settlement publication",
+                recovered_apply_settlement.source,
+                "super::super::status::set_v2_status(status)",
+                1,
+            )
+            require_token_count(
+                lifecycle_launch_path,
+                "recovered Decision Apply settlement publication",
+                recovered_apply_settlement.source,
+                "status_publication_enabled",
+                0,
+            )
     block_sync_path, block_sync_source = load(
         "crates/iroha_core/src/sumeragi/v2_block_sync.rs"
     )

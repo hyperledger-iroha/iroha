@@ -115,6 +115,12 @@ fn aos_nested_named_variant_with_u8_array_roundtrips() {
         last: "after".to_owned(),
     };
     let bytes = to_bytes(&v).unwrap();
+    let payload = norito::core::from_bytes_view(&bytes).unwrap();
+    assert_eq!(
+        norito::core::NoritoSerialize::encoded_len_exact(&v),
+        Some(payload.as_bytes().len()),
+        "named enum byte arrays must report the raw-byte wire length"
+    );
     let back: NestedNamedArray = norito::decode_from_bytes(&bytes).unwrap();
     assert_eq!(v, back);
 }
