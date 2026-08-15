@@ -4564,12 +4564,20 @@ impl RuntimeEffectOwnership {
     }
     #[cfg(test)]
     pub(crate) fn fresh_for_test(tag: EventTag, lifecycle_ordinal: u128) -> Self {
+        Self::fresh_for_test_with_semantic_identity(tag, lifecycle_ordinal, b"test-runtime-effect")
+    }
+    #[cfg(test)]
+    pub(crate) fn fresh_for_test_with_semantic_identity(
+        tag: EventTag,
+        lifecycle_ordinal: u128,
+        semantic_identity: &[u8],
+    ) -> Self {
         let kind = RuntimeFreshRootKind::StartupRecovery;
         let origin = RuntimeCandidateCausalOrigin::mint_fresh_root(
             tag,
             CommandClass::Progress,
             kind,
-            b"test-runtime-effect",
+            semantic_identity,
         );
         Self::fresh(
             RuntimeLifecycleOwner::new(origin, lifecycle_ordinal)
@@ -13829,17 +13837,25 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 RuntimeFreshRootKind::Timeout,
                 b"begin-timeout",
             )?;
-            let pre_frozen_retransmit = match (
+            let (pre_frozen_retransmit, superseded_newer_retransmit) = match (
                 self.retransmit_owner.clone(),
                 self.retransmit_owner_physical_cut,
             ) {
                 (Some(retransmit), Some(cut))
                     if retransmit.lifecycle_ordinal() < owner.lifecycle_ordinal() =>
                 {
-                    Some((retransmit, cut))
+                    (Some((retransmit, cut)), None)
                 }
+                (Some(retransmit), Some(cut))
+                    if retransmit.lifecycle_ordinal() > owner.lifecycle_ordinal() =>
+                {
+                    (None, Some((retransmit, cut)))
+                }
+                // Actor-global lifecycle ordinals are unique. Distinct fresh
+                // timeout and retransmit roots at the same ordinal therefore
+                // prove corrupt ownership rather than a supersession order.
                 (Some(_), Some(_)) => return Err(EnqueueError::FailClosed),
-                (None, None) => None,
+                (None, None) => (None, None),
                 (Some(_), None) | (None, Some(_)) => return Err(EnqueueError::FailClosed),
             };
             let episode = RuntimeTimeoutRecoveryEpisode {
@@ -13852,6 +13868,32 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             };
             if !episode.validate_exact() {
                 return Err(EnqueueError::FailClosed);
+            }
+            let superseded_newer_retransmit_cache_key =
+                if let Some((retransmit, cut)) = superseded_newer_retransmit.as_ref() {
+                    let cache_key = (
+                        RuntimeFreshRootKind::Retransmit,
+                        retransmit.causal_origin().lifecycle_key,
+                    );
+                    if self.retransmit_owner.as_ref() != Some(retransmit)
+                        || self.retransmit_owner_physical_cut != Some(*cut)
+                        || self.dormant_fresh_lifecycle_owners.get(&cache_key) != Some(retransmit)
+                    {
+                        return Err(EnqueueError::FailClosed);
+                    }
+                    Some(cache_key)
+                } else {
+                    None
+                };
+            // A restart can restore the durable Timeout at its original
+            // ordinal after a live periodic tick has already minted a newer
+            // Retransmit. The absolute deadline supersedes only that exact
+            // undelivered occurrence. Every validation above precedes this
+            // mutation, and the remainder of the commit is infallible.
+            if let Some(cache_key) = superseded_newer_retransmit_cache_key {
+                self.dormant_fresh_lifecycle_owners.remove(&cache_key);
+                self.retransmit_owner = None;
+                self.retransmit_owner_physical_cut = None;
             }
             self.timeout_owner_physical_cut = Some(self.ingress_physical_cut);
             self.timeout_owner = Some(owner);

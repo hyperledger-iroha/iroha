@@ -1,16 +1,14 @@
-use super::super::tests::{Inject, Rng, begin, drops};
 use super::*;
 use crate::vega::zk_ams::mkhe::{
-    active::ZkAmsMkheGovernedActiveRosterV1,
-    active_exact_binding::{
-        DirectRelationPublicObjectsV1, SealedDirectRkgOneProofOwnerV1,
-        VerifiedPersistentWitnessBindingSetV1,
-    },
-    direct_collective_eval_ceremony::ZkAmsMkheDirectEvaluatedKeyTargetV1,
+    active_exact_binding::{DirectRelationPublicObjectsV1, PublishedDirectRkgOneProofOwnerV2},
+    direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1,
     direct_object_transport::ZkAmsMkheDirectObjectReadAtProviderV1,
-    direct_rkg_ephemeral_membership::tests::creator_state_fixture,
 };
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::{
+    cell::Cell,
+    panic::{AssertUnwindSafe, catch_unwind},
+    rc::Rc,
+};
 
 fn bounded_source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     assert_eq!(source.matches(start).count(), 1, "non-unique start anchor");
@@ -43,7 +41,7 @@ fn assert_ordered(section: &str, snippets: &[&str]) {
 
 #[expect(dead_code, reason = "compile-only precise-capture check")]
 fn semantic_owner_does_not_borrow_provider_or_objects<'a, P>(
-    owner: SealedDirectRkgOneProofOwnerV1<'a>,
+    owner: PublishedDirectRkgOneProofOwnerV2<'a>,
     context: ZkAmsMkheDirectCeremonyContextV1,
     objects: DirectRelationPublicObjectsV1,
     provider: &mut P,
@@ -57,94 +55,57 @@ where
     Ok(())
 }
 
-struct ReadyFixture {
-    roster: ZkAmsMkheGovernedActiveRosterV1,
-    bindings: VerifiedPersistentWitnessBindingSetV1,
-    state: super::super::super::ZkAmsMkheCollectivePartyStateV1,
-    wrapper: StateOwnedDirectRkgEphemeralMembershipPrecursorV1,
-    context: ZkAmsMkheDirectCeremonyContextV1,
+struct DropAuditedEphemeralOwner(Rc<Cell<usize>>);
+
+impl Drop for DropAuditedEphemeralOwner {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+    }
 }
 
-impl ReadyFixture {
-    fn new(label: &[u8]) -> Self {
-        let (roster, bindings, mut state) = creator_state_fixture(label);
-        begin(Inject::Good);
-        let wrapper = state
-            .prepare_state_owned_direct_rkg_ephemeral_membership_v1(
-                &roster,
-                &bindings,
-                0,
-                &mut Rng::new(0xaa),
-            )
-            .expect("accepted creator precursor");
-        let context = ZkAmsMkheDirectCeremonyContextV1::from_verified_binding_set(
-            &roster,
-            &bindings,
-            ZkAmsMkheDirectEvaluatedKeyTargetV1::Relinearization,
-            0,
-        )
-        .expect("accepted RKG1 context");
+struct LightweightPostTakeState {
+    ephemeral_owner: Option<DropAuditedEphemeralOwner>,
+    creation_mask: u64,
+}
+
+impl LightweightPostTakeState {
+    fn new(drop_count: &Rc<Cell<usize>>) -> Self {
         Self {
-            roster,
-            bindings,
-            state,
-            wrapper,
-            context,
+            ephemeral_owner: Some(DropAuditedEphemeralOwner(Rc::clone(drop_count))),
+            creation_mask: 1_u64 << 7,
         }
     }
 }
 
 #[test]
 fn post_take_error_burns_ephemeral_owner_and_keeps_creation_bit() {
-    let ReadyFixture {
-        roster,
-        bindings,
-        mut state,
-        wrapper,
-        context,
-    } = ReadyFixture::new(b"rkg1-post-take-error");
-    let creation_mask = state.party_local_rkg_ephemeral_creation_mask;
-    begin(Inject::None);
-    let result = take_ready_direct_rkg_one_prover_session_v1(
-        &mut state,
-        wrapper,
-        &roster,
-        &bindings,
-        context,
-        &mut Rng::fail(0xaa, 0),
-    );
+    let drop_count = Rc::new(Cell::new(0));
+    let mut state = LightweightPostTakeState::new(&drop_count);
+    let creation_mask = state.creation_mask;
+    let result: Result<(), ZkAmsMkheErrorV1> = (|| {
+        let _ephemeral_owner = take_ephemeral_owner_v1(&mut state.ephemeral_owner)?;
+        Err(ZkAmsMkheErrorV1::RandomUnavailable)
+    })();
     assert!(matches!(result, Err(ZkAmsMkheErrorV1::RandomUnavailable)));
-    assert!(state.party_local_rkg_ephemeral_opening.is_none());
-    assert_eq!(state.party_local_rkg_ephemeral_creation_mask, creation_mask);
-    assert_eq!(drops(), [1, 0, 1, 1]);
+    assert!(state.ephemeral_owner.is_none());
+    assert_eq!(state.creation_mask, creation_mask);
+    assert_eq!(drop_count.get(), 1);
 }
 
 #[test]
 fn post_take_unwind_burns_ephemeral_owner_and_keeps_creation_bit() {
-    let ReadyFixture {
-        roster,
-        bindings,
-        mut state,
-        wrapper,
-        context,
-    } = ReadyFixture::new(b"rkg1-post-take-unwind");
-    let creation_mask = state.party_local_rkg_ephemeral_creation_mask;
-    begin(Inject::None);
-    let mut random = Rng::panic(0xaa, 0);
+    let drop_count = Rc::new(Cell::new(0));
+    let mut state = LightweightPostTakeState::new(&drop_count);
+    let creation_mask = state.creation_mask;
     let unwind = catch_unwind(AssertUnwindSafe(|| {
-        let _ = take_ready_direct_rkg_one_prover_session_v1(
-            &mut state,
-            wrapper,
-            &roster,
-            &bindings,
-            context,
-            &mut random,
-        );
+        let _ephemeral_owner =
+            take_ephemeral_owner_v1(&mut state.ephemeral_owner).expect("prepared ephemeral owner");
+        panic!("injected post-take unwind");
     }));
     assert!(unwind.is_err());
-    assert!(state.party_local_rkg_ephemeral_opening.is_none());
-    assert_eq!(state.party_local_rkg_ephemeral_creation_mask, creation_mask);
-    assert_eq!(drops(), [1, 0, 1, 1]);
+    assert!(state.ephemeral_owner.is_none());
+    assert_eq!(state.creation_mask, creation_mask);
+    assert_eq!(drop_count.get(), 1);
 }
 
 #[test]
@@ -156,6 +117,7 @@ fn sealed_candidate_remains_opaque_and_unreachable() {
     let active = include_str!("../../active_exact_binding.rs");
     let adapter = include_str!("../../active_exact_binding/direct_rkg_one_creator_adapter_v1.rs");
     let publication = include_str!("../direct_rkg_one_publication_v1.rs");
+    let creator = include_str!("../direct_rkg_one_creator_v2.rs");
     let prover = include_str!(
         "../../active_exact_binding/direct_relation_wire_v1/rkg_one_creator_prover_v1.rs"
     );
@@ -167,17 +129,19 @@ fn sealed_candidate_remains_opaque_and_unreachable() {
     assert!(!prover.contains("fn proof_bytes"));
     assert!(!sealed.contains("into_bytes"));
     assert_eq!(
-        sealed
-            .matches("fn create_direct_rkg_one_sealed_candidate_v1")
+        creator
+            .matches("fn create_direct_rkg_one_sealed_candidate_v2")
             .count(),
         1
     );
     for source in [parent, collective, active] {
-        assert!(!source.contains("create_direct_rkg_one_sealed_candidate_v1"));
+        assert!(!source.contains("create_direct_rkg_one_sealed_candidate_v2"));
         assert!(!source.contains("verify_finalized_direct_rkg_one_semantic_candidate_v1"));
         assert!(!source.contains("fn verify_semantic_candidate_v1"));
     }
-    for source in [candidate, sealed, adapter, publication, prover] {
+    assert_eq!(sealed.matches("fn from_durable_parts_v2").count(), 1);
+    assert_eq!(creator.matches("from_durable_parts_v2(").count(), 1);
+    for source in [candidate, sealed, adapter, publication, prover, creator] {
         for forbidden in [
             "ReadyRkg2",
             "VerifiedPersistentWitnessBindingV1",
@@ -215,11 +179,8 @@ fn semantic_handoff_is_ordered_move_only_and_has_no_bypass() {
         "fn verify_semantic_candidate_v1",
         "fn seal_direct_rkg_one_proof_owner_v1",
     );
-    let sealed_handoff = bounded_source_section(
-        sealed,
-        "fn verify_semantic_candidate_v1",
-        "/// Private construction corridor",
-    );
+    let sealed_handoff =
+        bounded_source_section(sealed, "fn verify_semantic_candidate_v1", "\n    }\n}");
 
     assert_ordered(
         adapter_handoff,
@@ -234,7 +195,7 @@ fn semantic_handoff_is_ordered_move_only_and_has_no_bypass() {
     assert_ordered(
         prover_handoff,
         &[
-            "let Self {",
+            "let SealedDirectRkgOneProofOwnerV1 {",
             "let semantic_owner = verify_finalized_direct_rkg_one_semantic_candidate_v1(",
             "proof.as_bytes()",
             ")?;",
@@ -244,13 +205,12 @@ fn semantic_handoff_is_ordered_move_only_and_has_no_bypass() {
     assert_ordered(
         sealed_handoff,
         &[
-            "statement_objects_v1()? != objects",
+            "self.lifecycle_owner.statement_objects_v2()? != objects",
             "return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);",
-            "let proof_owner = self.proof_owner;",
-            "let publication_owner = self._publication_owner;",
-            "proof_owner.verify_semantic_candidate_v1(context, objects, provider)?",
+            "let lifecycle_owner = self",
+            ".verify_semantic_candidate_v2(context, objects, provider)?",
             "Ok(PostSemanticDirectRkgOneCandidateV1 {",
-            "_publication_owner: publication_owner,",
+            "_lifecycle_owner: lifecycle_owner,",
         ],
     );
     for handoff in [adapter_handoff, prover_handoff, sealed_handoff] {
@@ -290,21 +250,21 @@ fn semantic_handoff_is_ordered_move_only_and_has_no_bypass() {
         (
             adapter,
             "struct FinalizedDirectRkgOneCapabilityV1<'a> {",
-            ["_prover_session:", "capability:"],
+            &["_prover_session:", "capability:"][..],
         ),
         (
             prover,
             "struct PostSemanticDirectRkgOneProofOwnerV1<S> {",
-            ["_semantic_owner:", "_proof:"],
+            &["_semantic_owner:", "_proof:", "_publication:"][..],
         ),
         (
             sealed,
             "struct PostSemanticDirectRkgOneCandidateV1<S> {",
-            ["_proof_owner:", "_publication_owner:"],
+            &["_lifecycle_owner:"][..],
         ),
     ] {
         let owner = struct_body(source, marker);
-        assert_eq!(owner.matches(": ").count(), 2);
+        assert_eq!(owner.matches(": ").count(), fields.len());
         for field in fields {
             assert_eq!(owner.matches(field).count(), 1, "owner field: {field}");
         }
@@ -328,15 +288,23 @@ fn semantic_handoff_is_ordered_move_only_and_has_no_bypass() {
 #[test]
 fn semantic_error_or_unwind_cannot_restore_the_burn_or_open_a_gate() {
     let candidate = include_str!("../direct_rkg_one_candidate_v1.rs");
+    let take_helper = bounded_source_section(
+        candidate,
+        "fn take_ephemeral_owner_v1<T>(",
+        "pub(super) fn take_ready_direct_rkg_one_prover_session_v1",
+    );
+    assert_eq!(take_helper.matches(".take()").count(), 1);
+    assert!(take_helper.contains("ZkAmsMkheErrorV1::ReleaseUnavailable"));
     let take = candidate
         .split_once("fn take_ready_direct_rkg_one_prover_session_v1")
         .expect("prover-session take corridor")
         .1;
-    assert_eq!(take.matches(".take()").count(), 1);
+    assert_eq!(take.matches("take_ephemeral_owner_v1(").count(), 1);
+    assert!(!take.contains(".take()"));
     assert_ordered(
         take,
         &[
-            ".take()",
+            "take_ephemeral_owner_v1(",
             "let digit_bit = 1_u64",
             ".checked_shl(",
             "creation_mask & digit_bit == 0",
@@ -406,6 +374,20 @@ fn prover_session_derives_persistent_points_from_installed_owner() {
     assert!(take.contains("persistent_secret_binding_for("));
     assert!(take.contains("binding_identity != bindings.identity_digests()[party_index]"));
     assert!(take.contains("*persistent_guard.checked_commitments_v1()?"));
+    assert_eq!(
+        take.matches("ephemeral_owner_commitments_v1(&ephemeral_owner)?")
+            .count(),
+        1,
+        "the verified ephemeral commitment set must be reused"
+    );
+    assert_ordered(
+        take,
+        &[
+            "let ephemeral_commitments =",
+            "!= ephemeral_commitments",
+            "ephemeral_commitments,",
+        ],
+    );
     assert!(!take.contains("binding_commitments"));
 }
 

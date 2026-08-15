@@ -208,7 +208,8 @@ in each profile and digest-bound into every artifact header; it is not a
 separate streamed file. The content-addressed top-up-finality roster remains
 release metadata outside that eight-role cryptographic inventory. Every file
 has an exact framed and payload size and SHA-256. Installation streams to
-private files, verifies every binding plus the canonical candidate-bound
+private files, requires supplied manifest bytes to equal the canonical encoding
+of the validated manifest object, verifies every binding plus the candidate-bound
 `promotion-record-v4.norito`, and atomically activates the complete generation.
 Bootstrap payload version 5 authenticates the final key-generation circuit's
 canonical per-phase virtual-region breakpoints. Runtime rejects malformed or
@@ -463,7 +464,11 @@ readiness. `ActivateKagemushaRecursiveReleaseV4` authenticates
 the release-policy digest, signed release and evidence, exact-eight inventory,
 `NetworkId`/asset/scale and future issuance window, distinct inline Eq/Ep verifier
 records, matching local cached material, and the embedded production iOS and
-Android device-attestation policy. The instruction requires both release-
+Android device-attestation policy. Each verifier record must carry the exact
+release-derived owner identifier and public-input schema hash plus the
+domain-separated commitment of its inline key; merely non-empty or non-zero
+substitutes are invalid. Release-policy role thresholds must also fit together
+within the 64-approval attestation ceiling. The instruction requires both release-
 activation and device-policy governance permissions, then publishes the exact
 device policy, release, and Eq/Ep records in one consensus transaction overlay.
 There is no independently reorderable or standalone release-activation path. A

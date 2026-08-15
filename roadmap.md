@@ -439,8 +439,8 @@ to:
   disjoint-roster historical lane signing/recovery, exact-predecessor sidecar
   reservation under outsider pressure, DA resource-cap boundaries, volatile
   shard reacquisition followed by one durable canonical-body boundary, restart
-  hydration, fresh generated four-peer genesis startup, and nonblocking cleanup
-  saturation.
+  hydration, live/replay timeout-fenced PrepareQC-to-lock fallthrough, fresh
+  generated four-peer genesis startup, and nonblocking cleanup saturation.
 - Run unskipped chaos on representative networks of at least four validators,
   covering faulty/withholding leaders and proxy tails, Set A and Set B loss,
   asymmetric partitions, RS16 reconstruction, restart, and catch-up.

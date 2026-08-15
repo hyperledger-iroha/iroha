@@ -7,7 +7,7 @@ fn delayed_proposal_is_ignored_and_never_regresses_body_progress() {
     let observed = reducer
         .step(Event::QuorumCertificateReceived {
             tag: reducer.current_tag(),
-            certificate: prepare,
+            certificate: prepare.clone(),
         })
         .unwrap();
     let observe_entry = observed
@@ -19,6 +19,7 @@ fn delayed_proposal_is_ignored_and_never_regresses_body_progress() {
         })
         .expect("observing a highest PrepareQC is durable");
     acknowledge(&mut reducer, &observe_entry);
+    assert_certified_fallback(&mut reducer, &prepare);
     reducer
         .step(Event::BodyAvailable {
             tag: reducer.current_tag(),

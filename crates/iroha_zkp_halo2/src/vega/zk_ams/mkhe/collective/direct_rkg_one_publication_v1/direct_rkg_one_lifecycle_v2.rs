@@ -4,7 +4,10 @@
 //! `Fresh` bytes never recreate the private permit required before H0 staging. The checksum detects
 //! noncanonical/corrupt bytes; it is not authentication, a proof receipt, or release authority.
 
-#![expect(dead_code, reason = "V2 creator corridor remains private and unconnected")]
+#![expect(
+    dead_code,
+    reason = "V2 creator corridor remains private and unconnected"
+)]
 
 use super::{
     DirectRkgOnePublicationOwnerV1, DirectRkgOnePublicationScopeV1,
@@ -12,9 +15,10 @@ use super::{
 };
 use crate::vega::zk_ams::mkhe::{
     ZK_AMS_MKHE_DIRECT_RKG_ONE_LEGACY_RECORD_BYTES_V1,
-    ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2, ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2,
-    ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2, ZkAmsMkheDirectRkgOneLifecycleStoreV2,
-    ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2, ZkAmsMkheErrorV1,
+    ZK_AMS_MKHE_DIRECT_RKG_ONE_LIFECYCLE_RECORD_BYTES_V2,
+    ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2, ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2,
+    ZkAmsMkheDirectRkgOneLifecycleStoreV2, ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2,
+    ZkAmsMkheErrorV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
     active_exact_binding::{DirectRelationPublicObjectsV1, PublishedDirectRkgOneProofOwnerV2},
     direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1,
@@ -138,15 +142,13 @@ where
     let reloaded = load_v2(scope, storage_key, store, &mut observed);
     match mutation {
         Ok(ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2::InsertedByThisCall) => match reloaded? {
-            LoadedV2::Lifecycle(DecodedStateV2::Fresh) if observed == fresh => {
-                Ok(DirectRkgOneFreshReservationOutcomeV2::Reserved(
-                    DirectRkgOneFreshPublishPermitV2 {
-                        scope,
-                        storage_key,
-                        record: fresh,
-                    },
-                ))
-            }
+            LoadedV2::Lifecycle(DecodedStateV2::Fresh) if observed == fresh => Ok(
+                DirectRkgOneFreshReservationOutcomeV2::Reserved(DirectRkgOneFreshPublishPermitV2 {
+                    scope,
+                    storage_key,
+                    record: fresh,
+                }),
+            ),
             _ => Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
         },
         Ok(ZkAmsMkheDirectRkgOneLifecyclePutOutcomeV2::AlreadyPresent) => Ok(
@@ -205,11 +207,7 @@ where
     let axes = record_v2::published_axes_v2(publication)?;
     let mut desired = [0; RECORD_BYTES_V2];
     record_v2::encode_published_v2(permit.scope, permit.storage_key, axes, &mut desired)?;
-    let mutation = store.compare_exchange_exact_v2(
-        &permit.storage_key,
-        &permit.record,
-        &desired,
-    );
+    let mutation = store.compare_exchange_exact_v2(&permit.storage_key, &permit.record, &desired);
     let mut observed = [0; RECORD_BYTES_V2];
     let reloaded = load_v2(permit.scope, permit.storage_key, store, &mut observed);
     match mutation {
@@ -253,8 +251,7 @@ where
     if record_v2::published_axes_v2(&publication_owner)? != published.axes {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
-    let proof =
-        record_v2::proof_axes_v2(published.axes, proof_owner.publication_receipt_v2())?;
+    let proof = record_v2::proof_axes_v2(published.axes, proof_owner.publication_receipt_v2())?;
     let mut desired = [0; RECORD_BYTES_V2];
     record_v2::encode_proof_v2(
         published.scope,
@@ -263,18 +260,10 @@ where
         proof,
         &mut desired,
     )?;
-    let mutation = store.compare_exchange_exact_v2(
-        &published.storage_key,
-        &published.record,
-        &desired,
-    );
+    let mutation =
+        store.compare_exchange_exact_v2(&published.storage_key, &published.record, &desired);
     let mut observed = [0; RECORD_BYTES_V2];
-    let reloaded = load_v2(
-        published.scope,
-        published.storage_key,
-        store,
-        &mut observed,
-    );
+    let reloaded = load_v2(published.scope, published.storage_key, store, &mut observed);
     match mutation {
         Ok(ZkAmsMkheDirectRkgOneLifecycleCasOutcomeV2::ExchangedByThisCall) => match reloaded? {
             LoadedV2::Lifecycle(DecodedStateV2::ProofPublishedUnverified(found, proof_found))
@@ -321,13 +310,12 @@ where
 {
     record.fill(0xa5);
     match store.load_exact_v2(&storage_key, record)? {
-        ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Absent
-            if *record == [0; RECORD_BYTES_V2] =>
-        {
+        ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Absent if *record == [0; RECORD_BYTES_V2] => {
             Ok(LoadedV2::Absent)
         }
         ZkAmsMkheDirectRkgOneLifecycleStoredWidthV2::Legacy334
-            if record[LEGACY_RECORD_BYTES_V1..] == [0; RECORD_BYTES_V2 - LEGACY_RECORD_BYTES_V1] =>
+            if record[LEGACY_RECORD_BYTES_V1..]
+                == [0; RECORD_BYTES_V2 - LEGACY_RECORD_BYTES_V1] =>
         {
             Ok(LoadedV2::Legacy)
         }

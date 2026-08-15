@@ -220,26 +220,16 @@ fn fake_verify(
     Ok(hash.finalize())
 }
 
-pub(in crate::vega::zk_ams::mkhe) fn creator_evidence(
+pub(in crate::vega::zk_ams::mkhe) fn creator_evidence_from_commitments(
     context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
-    coefficients: &[i8],
-    blindings: &[Scalar; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
+    commitments: &[Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
     mismatch: bool,
 ) -> Result<
     ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1,
     ZkAmsMkheDirectRkgEphemeralMembershipErrorV1,
 > {
     let context_digest = context.to_exact()?.context_digest();
-    let mut commitments: [Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1] =
-        core::array::from_fn(|index| {
-            let start = index * ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1;
-            commit_zk_ams_t256_membership_chunk_v1(
-                ZkAmsT256MembershipBoundV1::One,
-                &coefficients[start..start + ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1],
-                &blindings[index],
-            )
-            .expect("opening commitment")
-        });
+    let mut commitments = *commitments;
     if mismatch {
         commitments[7] = -commitments[7];
     }

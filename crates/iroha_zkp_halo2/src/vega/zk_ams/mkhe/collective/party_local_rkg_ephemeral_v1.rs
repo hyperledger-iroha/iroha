@@ -246,9 +246,14 @@ impl ZkAmsMkheCollectivePartyStateV1 {
         let coefficients = ZeroizingRkgEphemeralCoefficientsV1::from_ternary_secret(&u.0)?;
         let commitments = commit_rkg_ephemeral_opening_v1(&coefficients.0, &blindings.0)?;
         let retained_commitment_wire = encode_rkg_ephemeral_commitments_v1(&commitments)?;
-        let membership =
-            prove_rkg_ephemeral_membership_v1(context, &coefficients.0, &blindings.0, random)
-                .map_err(map_membership_error_v1)?;
+        let membership = prove_rkg_ephemeral_membership_v1(
+            context,
+            &coefficients.0,
+            &blindings.0,
+            &commitments,
+            random,
+        )
+        .map_err(map_membership_error_v1)?;
         let evidence_commitment_wire =
             encode_rkg_ephemeral_commitments_v1(&membership.commitments())?;
         if membership.context() != context || evidence_commitment_wire != retained_commitment_wire {
@@ -285,14 +290,14 @@ fn prove_rkg_ephemeral_membership_v1<R: ProofRandomSource>(
     context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
     coefficients: &[i8],
     blindings: &[Scalar; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
+    _commitments: &[Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
     random: &mut R,
 ) -> Result<
     ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1,
     ZkAmsMkheDirectRkgEphemeralMembershipErrorV1,
 > {
     #[cfg(test)]
-    if let Some(injected) = tests::injected_membership_v1(context, coefficients, blindings, random)
-    {
+    if let Some(injected) = tests::injected_membership_v1(context, _commitments, random) {
         return injected;
     }
     ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1::prove(context, coefficients, blindings, random)

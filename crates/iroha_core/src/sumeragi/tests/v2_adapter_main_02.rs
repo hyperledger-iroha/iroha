@@ -1539,6 +1539,35 @@ fn serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims() {
         };
         let manifest = proposal.manifest;
         let (_, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic Decision signer")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let decision_preimage = wire::Vote {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: decided_subject,
+            execution_commitment: validated.execution_commitment(),
+            signer: 0,
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let decision_shares = keys[..3]
+            .iter()
+            .map(|key| {
+                Signature::new(key.private_key(), &decision_preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let decision_share_refs = decision_shares
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
         let decision = wire::QuorumCertificate {
             round: manifest.round,
             proposal_round: manifest.round,
@@ -1546,7 +1575,10 @@ fn serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims() {
             subject: decided_subject,
             execution_commitment: validated.execution_commitment(),
             signers: vec![0, 1, 2],
-            aggregate_signature: vec![0x43; 96],
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                &decision_share_refs,
+            )
+            .expect("aggregate durable Decision CommitQC"),
         };
         std::fs::remove_file(&snapshot_path).expect("remove the published snapshot");
         std::fs::create_dir(&snapshot_path).expect("replace the reclaim target with a directory");

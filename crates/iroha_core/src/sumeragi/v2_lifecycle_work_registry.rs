@@ -2861,9 +2861,9 @@ impl DurableRecoveredWalSignWork {
     }
 }
 /// Whether one concrete registry row is still an executable adapter effect or
-/// a closed durable carrier awaiting its future typed consumer. Keeping the
-/// move-only carriers inline avoids adding another heap-allocation fail-stop
-/// cut between physical evidence and exact-address ownership.
+/// a closed durable carrier awaiting its future typed consumer. Installed
+/// move-only carriers remain inline, so exact-address admission introduces no
+/// later heap-allocation fail-stop cut before the carrier's typed consumer.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Debug)]
 enum ConcreteLifecycleWorkKind {

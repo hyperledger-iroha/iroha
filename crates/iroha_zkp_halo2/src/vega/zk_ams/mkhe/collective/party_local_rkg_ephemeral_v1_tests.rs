@@ -7,7 +7,8 @@ use crate::{
             active::ZkAmsMkheGovernedActiveRosterV1,
             active_exact_binding::VerifiedPersistentWitnessBindingSetV1,
             direct_rkg_ephemeral_membership::tests::{
-                creator_evidence, creator_replacement_binding, creator_state_fixture,
+                creator_evidence_from_commitments, creator_replacement_binding,
+                creator_state_fixture,
             },
         },
     },
@@ -61,14 +62,21 @@ pub(super) fn begin(value: Inject) {
 
 pub(super) fn injected_membership_v1(
     context: Context,
-    coefficients: &[i8],
-    blindings: &[Scalar; 8],
+    commitments: &[Point; 8],
     random: &mut dyn ProofRandomSource,
 ) -> Option<Result<Evidence, DirectError>> {
     match INJECT.with(|cell| cell.replace(Inject::None)) {
         Inject::None => None,
-        Inject::Good => Some(creator_evidence(context, coefficients, blindings, false)),
-        Inject::BadWire => Some(creator_evidence(context, coefficients, blindings, true)),
+        Inject::Good => Some(creator_evidence_from_commitments(
+            context,
+            commitments,
+            false,
+        )),
+        Inject::BadWire => Some(creator_evidence_from_commitments(
+            context,
+            commitments,
+            true,
+        )),
         Inject::Error(error) => Some(Err(ExactEightChunkMembershipErrorV1::Membership(
             ZkAmsT256MembershipErrorV1::Backend(error),
         )

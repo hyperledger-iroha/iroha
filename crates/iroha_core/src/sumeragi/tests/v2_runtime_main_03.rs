@@ -1257,6 +1257,26 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     runtime
         .set_external_lifecycle_owners(Vec::new())
         .expect("retire the pending signer after completion enqueue");
+
+    let periodic_effects = match runtime.step(deadline) {
+        Ok(RuntimeStep::Advanced(effects)) => effects,
+        other => panic!("the frozen retransmit did not receive its bounded turn: {other:?}"),
+    };
+    assert!(
+        periodic_effects.is_empty(),
+        "the pre-carrier retransmit has no control evidence yet: {periodic_effects:?}"
+    );
+    assert_eq!(
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("the frozen retransmit retains exact scheduler ownership")
+            .selected,
+        RuntimeSelectedOwnerKind::PeriodicTimer
+    );
+    runtime
+        .take_effect_ownership(periodic_effects.len())
+        .expect("the executor consumes the frozen retransmit effect owner");
+
     assert!(matches!(
         runtime.step(deadline),
         Ok(RuntimeStep::Advanced(ref effects))

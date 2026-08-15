@@ -3955,6 +3955,7 @@ impl Reducer {
             return Ok(StepOutcome::applied(effects));
         }
         if current
+            && !view_closed
             && self.body_state(certificate.round(), certificate.subject()) == BodyState::Missing
             && self.local_certified_candidate_body_eligible()
         {
@@ -4042,14 +4043,19 @@ impl Reducer {
     }
     fn on_retransmit_elapsed(&mut self) -> Result<StepOutcome, ReducerError> {
         let current_view = self.durable.current_view();
-        if self
-            .candidate
-            .as_ref()
-            .is_some_and(|proposal| proposal.round().view() == current_view)
-            || self
-                .pending_prepare
-                .values()
-                .any(|certificate| certificate.round().view() == current_view)
+        let current_round = Round::new(self.context.height(), current_view);
+        let current_view_open = self.durable.timeout_intent(current_round).is_none();
+        // Closed-view PrepareQCs remain retransmittable control evidence, but
+        // must not reacquire body ownership ahead of the durable lock forever.
+        if current_view_open
+            && (self
+                .candidate
+                .as_ref()
+                .is_some_and(|proposal| proposal.round() == current_round)
+                || self
+                    .pending_prepare
+                    .values()
+                    .any(|certificate| certificate.round() == current_round))
         {
             self.fallback_active = true;
         }
@@ -4087,7 +4093,7 @@ impl Reducer {
         if let Some(certificate) = self
             .pending_prepare
             .values()
-            .find(|certificate| certificate.round().view() == self.durable.current_view())
+            .find(|certificate| current_view_open && certificate.round() == current_round)
             .cloned()
         {
             let round = certificate.round();
@@ -4134,7 +4140,7 @@ impl Reducer {
                 return Ok(StepOutcome::applied(effects));
             }
         }
-        if let Some(proposal) = self.candidate.clone() {
+        if current_view_open && let Some(proposal) = self.candidate.clone() {
             let round = proposal.round();
             let subject = proposal.manifest().subject();
             match self.body_state(round, subject) {

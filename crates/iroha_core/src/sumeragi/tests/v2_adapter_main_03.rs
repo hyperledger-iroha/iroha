@@ -733,8 +733,12 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         view: 0,
     };
     let local = context.leader(round.view);
-    let body_subject = subject(0xD6);
-    let outbound = encode_payload(&context, round, body_subject, b"recovered proposal FIFO")
+    let body = b"recovered proposal FIFO";
+    let body_subject = wire::BlockSubject {
+        payload_hash: Hash::new(body),
+        ..subject(0xD6)
+    };
+    let outbound = encode_payload(&context, round, body_subject, body)
         .expect("encode recovered proposal payload");
     let manifest = outbound.manifest().clone();
     let proposal = wire::Proposal {
@@ -1541,6 +1545,7 @@ fn recovered_wal_sign_status_publication_is_exact_last_and_unwired() {
         "RecoveredWalSignLifecycleOpenError<'registry>",
         "fn publish_open_result(",
         "let opened = match opened",
+        "adapter.status_publication_enabled = true",
         "if let Err(error) = adapter.publish_status()",
         "RecoveredWalLifecycleOpenPublicationFailure::Status",
         "fn open_coordinator_and_publish(",
@@ -1560,7 +1565,13 @@ fn recovered_wal_sign_status_publication_is_exact_last_and_unwired() {
     let status = publication
         .find("adapter.publish_status()")
         .expect("adapter status is published");
-    assert!(opened < status, "status must follow the exact open result");
+    let enabled = publication
+        .find("adapter.status_publication_enabled = true")
+        .expect("status publication is enabled after exact open");
+    assert!(
+        opened < enabled && enabled < status,
+        "status publication must be enabled only after the exact open result"
+    );
     let owner_factory = production
         .split_once("pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(")
         .expect("locate the sole production owner factory")

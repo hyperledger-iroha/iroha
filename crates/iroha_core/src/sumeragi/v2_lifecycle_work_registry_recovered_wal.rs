@@ -30,7 +30,7 @@ pub(crate) struct PersistedRecoveredWalValidateLedger<'registry> {
 }
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum PersistedRecoveredWalLifecycleAuthority<'registry> {
-    Sign(DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>),
+    Sign(Box<DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>>),
     SignedBroadcast(DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>),
     SignedBroadcastAndNextVote {
         repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
@@ -97,7 +97,7 @@ pub(crate) struct ExactStoreRecoveredWalPersistError<'registry> {
 }
 impl ExactStoreRecoveredWalPersistError<'_> {
     /// Return a stable diagnostic without exposing storage or repair authority.
-    pub(crate) const fn reason(&self) -> &'static str {
+    pub(crate) fn reason(&self) -> &'static str {
         self.error.reason()
     }
 }
@@ -110,7 +110,7 @@ pub(crate) struct ExactStoreRecoveredWalSignInstallError<'registry> {
 }
 impl ExactStoreRecoveredWalSignInstallError<'_> {
     /// Return a stable diagnostic without exposing storage or registry authority.
-    pub(crate) const fn reason(&self) -> &'static str {
+    pub(crate) fn reason(&self) -> &'static str {
         self.error.reason()
     }
 }
@@ -148,7 +148,7 @@ impl OpenedRecoveredWalValidateLedger {
             Ok((repaired, repair, _changed)) => Ok(PersistedRecoveredWalValidateLedger {
                 store,
                 repaired,
-                authority: PersistedRecoveredWalLifecycleAuthority::Sign(repair),
+                authority: PersistedRecoveredWalLifecycleAuthority::Sign(Box::new(repair)),
             }),
             Err(error) => Err(ExactStoreRecoveredWalPersistError {
                 _ledger: Self { store, opened },
@@ -165,6 +165,7 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
     /// rows do not change it. The body-store join and adapter replay happen
     /// before the authority variant changes, and the exact store is reloaded
     /// once more before this method releases the prepared startup.
+    #[inline(never)]
     pub(in crate::sumeragi) fn prepare_cold_adapter_startup(
         self,
         verified: &VerifiedHeightContext,
@@ -182,22 +183,58 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
             repaired,
             authority,
         } = self;
-        let repair = match authority {
+        match authority {
             PersistedRecoveredWalLifecycleAuthority::Sign(repair) => {
-                return Ok((
-                    startup,
-                    Self {
-                        store,
-                        repaired,
-                        authority: PersistedRecoveredWalLifecycleAuthority::Sign(repair),
-                    },
-                ));
+                Self::prepare_cold_sign_branch(store, repaired, repair, startup)
             }
-            PersistedRecoveredWalLifecycleAuthority::SignedBroadcast(repair) => repair,
+            PersistedRecoveredWalLifecycleAuthority::SignedBroadcast(repair) => {
+                Self::prepare_cold_signed_broadcast_branch(
+                    store, repaired, repair, verified, startup, body_store,
+                )
+            }
             PersistedRecoveredWalLifecycleAuthority::SignedBroadcastAndNextVote { .. } => {
-                return Err("recovered phase cold adapter pair was prepared twice");
+                Err("recovered phase cold adapter pair was prepared twice")
             }
-        };
+        }
+    }
+    #[inline(never)]
+    fn prepare_cold_sign_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: Box<DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>>,
+        startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+    ) -> Result<
+        (
+            crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+            Self,
+        ),
+        &'static str,
+    > {
+        Ok((
+            startup,
+            Self {
+                store,
+                repaired,
+                authority: PersistedRecoveredWalLifecycleAuthority::Sign(repair),
+            },
+        ))
+    }
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn prepare_cold_signed_broadcast_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
+        verified: &VerifiedHeightContext,
+        startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+        body_store: &V2BodyStore,
+    ) -> Result<
+        (
+            crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+            Self,
+        ),
+        &'static str,
+    > {
         let (observed_broadcast, validate_ordinal, sign_ordinal, broadcast_ordinal) = repaired
             .authenticate_recovered_phase_signed_broadcast(verified, &repair.repair)
             .map_err(|_| "recovered phase Broadcast changed before cold adapter preparation")?;
@@ -220,22 +257,62 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
         if matching.next().is_some() {
             return Err("recovered phase Broadcast matched multiple durable successor pairs");
         }
-        let Some(pair_hint) = pair_hint else {
-            let adapter_authority = repair
-                .repair
-                .project_cold_adapter_authority(verified, &repair.broadcast)
-                .ok_or("recovered phase Broadcast cannot replay the exact cold adapter")?;
-            let startup = startup
-                .advance_recovered_lifecycle_signed_broadcast(verified, adapter_authority)?;
-            return Ok((
-                startup,
-                Self {
-                    store,
-                    repaired,
-                    authority: PersistedRecoveredWalLifecycleAuthority::SignedBroadcast(repair),
-                },
-            ));
-        };
+        drop(matching);
+        match pair_hint {
+            Some(pair_hint) => Self::prepare_cold_signed_broadcast_and_next_vote_branch(
+                store, repaired, repair, pair_hint, verified, startup, body_store,
+            ),
+            None => Self::prepare_cold_single_signed_broadcast_branch(
+                store, repaired, repair, verified, startup,
+            ),
+        }
+    }
+    #[inline(never)]
+    fn prepare_cold_single_signed_broadcast_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
+        verified: &VerifiedHeightContext,
+        startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+    ) -> Result<
+        (
+            crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+            Self,
+        ),
+        &'static str,
+    > {
+        let adapter_authority = repair
+            .repair
+            .project_cold_adapter_authority(verified, &repair.broadcast)
+            .ok_or("recovered phase Broadcast cannot replay the exact cold adapter")?;
+        let startup =
+            startup.advance_recovered_lifecycle_signed_broadcast(verified, adapter_authority)?;
+        Ok((
+            startup,
+            Self {
+                store,
+                repaired,
+                authority: PersistedRecoveredWalLifecycleAuthority::SignedBroadcast(repair),
+            },
+        ))
+    }
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn prepare_cold_signed_broadcast_and_next_vote_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
+        pair_hint: super::ledger::RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
+        verified: &VerifiedHeightContext,
+        startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+        body_store: &V2BodyStore,
+    ) -> Result<
+        (
+            crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+            Self,
+        ),
+        &'static str,
+    > {
         let mut preview = repair.repair.prepare_cold_signed_broadcast_and_sign(
             verified,
             startup,
@@ -289,6 +366,7 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
     }
     /// Install the exact recovered Sign without reopening or substituting storage.
     #[allow(clippy::result_large_err)]
+    #[inline(never)]
     pub(crate) fn install_recovered_wal_sign(
         self,
     ) -> Result<
@@ -300,20 +378,81 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
             repaired,
             authority,
         } = self;
-        let installed = match authority {
+        match authority {
             PersistedRecoveredWalLifecycleAuthority::Sign(repair) => {
-                repair.install_recovered_sign(&store)
+                Self::install_recovered_sign_branch(store, repaired, repair)
             }
             PersistedRecoveredWalLifecycleAuthority::SignedBroadcast(repair) => {
-                repair.install_recovered_broadcast(&store)
+                Self::install_recovered_broadcast_branch(store, repaired, repair)
             }
             PersistedRecoveredWalLifecycleAuthority::SignedBroadcastAndNextVote {
                 repair,
                 combined,
                 pair,
-            } => repair.install_recovered_broadcast_and_next_vote(&store, combined, pair),
-        };
-        match installed {
+            } => Self::install_recovered_broadcast_and_next_vote_branch(
+                store, repaired, repair, combined, pair,
+            ),
+        }
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn install_recovered_sign_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: Box<DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>>,
+    ) -> Result<
+        InstalledRecoveredWalSignStorage<'registry>,
+        ExactStoreRecoveredWalSignInstallError<'registry>,
+    > {
+        match repair.install_recovered_sign(&store) {
+            Ok(installed) => Ok(InstalledRecoveredWalSignStorage {
+                store,
+                repaired,
+                installed,
+            }),
+            Err(error) => Err(ExactStoreRecoveredWalSignInstallError {
+                _store: store,
+                _repaired: repaired,
+                error,
+            }),
+        }
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn install_recovered_broadcast_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
+    ) -> Result<
+        InstalledRecoveredWalSignStorage<'registry>,
+        ExactStoreRecoveredWalSignInstallError<'registry>,
+    > {
+        match repair.install_recovered_broadcast(&store) {
+            Ok(installed) => Ok(InstalledRecoveredWalSignStorage {
+                store,
+                repaired,
+                installed,
+            }),
+            Err(error) => Err(ExactStoreRecoveredWalSignInstallError {
+                _store: store,
+                _repaired: repaired,
+                error,
+            }),
+        }
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn install_recovered_broadcast_and_next_vote_branch(
+        store: super::ledger::LifecycleLedgerStoreV1,
+        repaired: super::ledger::LifecycleLedgerV1,
+        repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
+        combined: RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+        pair: super::ledger::RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
+    ) -> Result<
+        InstalledRecoveredWalSignStorage<'registry>,
+        ExactStoreRecoveredWalSignInstallError<'registry>,
+    > {
+        match repair.install_recovered_broadcast_and_next_vote(&store, combined, pair) {
             Ok(installed) => Ok(InstalledRecoveredWalSignStorage {
                 store,
                 repaired,
@@ -441,7 +580,7 @@ impl<'registry> InstalledRecoveredWalSignStorage<'registry> {
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "failed recovered-parent reconstruction still owns startup authority"]
 pub(crate) struct RecoveredWalParentFactoryError<'body> {
-    failure: RecoveredWalParentFactoryFailure<'body>,
+    failure: Box<RecoveredWalParentFactoryFailure<'body>>,
 }
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalParentFactoryFailure<'body> {
@@ -478,8 +617,8 @@ enum RecoveredWalParentFactoryFailure<'body> {
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredWalParentFactoryError<'_> {
     /// Return a stable diagnostic without exposing any retained authority.
-    pub(crate) const fn reason(&self) -> &'static str {
-        match &self.failure {
+    pub(crate) fn reason(&self) -> &'static str {
+        match self.failure.as_ref() {
             RecoveredWalParentFactoryFailure::LedgerOpen { .. } => {
                 "recovered WAL lifecycle ledger could not be opened"
             }
@@ -635,6 +774,22 @@ fn detached_recovered_validation_is_exact(
 #[must_use = "a durable recovered WAL repair still reserves its concrete handoff"]
 pub(crate) struct DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
     repair: DurableAuthenticatedWalVoteLifecycleRepair,
+    validation: DetachedRecoveredValidateCompletion,
+    reservation: RecoveredWalValidateRegistryReservation<'registry>,
+}
+/// Fully preflighted recovered Validate-to-Sign ledger replacement.
+///
+/// The expected replacement frame, exact child coordinates, logical repair,
+/// validated-body completion, and exclusive registry reservation remain one
+/// opaque heap-owned seal. Its consuming persistence stage is separated from
+/// the large preflight frame so neither authority set shares a stack frame
+/// with the store fsync transaction.
+#[must_use = "a prepared recovered WAL ledger repair must be persisted or dropped"]
+struct PreparedRecoveredWalValidateLedgerPersist<'registry> {
+    expected: super::ledger::LifecycleLedgerV1,
+    child_ordinal: u128,
+    expected_changed: bool,
+    repair: Option<AuthenticatedWalVoteLifecycleRepair>,
     validation: DetachedRecoveredValidateCompletion,
     reservation: RecoveredWalValidateRegistryReservation<'registry>,
 }
@@ -829,44 +984,47 @@ impl RecoveredWalDecisionFetchLifecycleOpenError {
 #[must_use = "failed recovered Decision Apply installation requires restart"]
 pub(super) struct RecoveredDecisionApplyInstallError {
     reason: &'static str,
-    _authority: RecoveredDecisionApplyInstallAuthority,
+    _authority: Box<RecoveredDecisionApplyInstallAuthority>,
 }
 #[allow(variant_size_differences)]
 enum RecoveredDecisionApplyInstallAuthority {
     Projection {
-        _projection: RecoveredDecisionApplyStagedStorageV1,
+        _projection: Box<RecoveredDecisionApplyStagedStorageV1>,
         _effects: Vec<AdapterEffect>,
     },
     Carrier {
-        _adapter: ProductionLifecycleAdapterStartupV1,
-        _carrier: RecoveredDecisionApplyRegistryCarrierV1,
+        _authority: Box<(
+            ProductionLifecycleAdapterStartupV1,
+            RecoveredDecisionApplyRegistryCarrierV1,
+        )>,
     },
 }
 impl RecoveredDecisionApplyInstallError {
     fn projection(
         reason: &'static str,
-        projection: RecoveredDecisionApplyStagedStorageV1,
+        projection: Box<RecoveredDecisionApplyStagedStorageV1>,
         effects: Vec<AdapterEffect>,
     ) -> Self {
         Self {
             reason,
-            _authority: RecoveredDecisionApplyInstallAuthority::Projection {
+            _authority: Box::new(RecoveredDecisionApplyInstallAuthority::Projection {
                 _projection: projection,
                 _effects: effects,
-            },
+            }),
         }
     }
     fn carrier(
         reason: &'static str,
-        adapter: ProductionLifecycleAdapterStartupV1,
-        carrier: RecoveredDecisionApplyRegistryCarrierV1,
+        authority: Box<(
+            ProductionLifecycleAdapterStartupV1,
+            RecoveredDecisionApplyRegistryCarrierV1,
+        )>,
     ) -> Self {
         Self {
             reason,
-            _authority: RecoveredDecisionApplyInstallAuthority::Carrier {
-                _adapter: adapter,
-                _carrier: carrier,
-            },
+            _authority: Box::new(RecoveredDecisionApplyInstallAuthority::Carrier {
+                _authority: authority,
+            }),
         }
     }
     /// Return the stable non-authorizing failure classification.
@@ -896,17 +1054,17 @@ impl RecoveredDecisionApplyLifecycleOpenError {
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "failed recovered Sign installation still owns startup authority"]
 pub(crate) struct RecoveredWalSignInstallError<'registry> {
-    failure: RecoveredWalSignInstallFailure<'registry>,
+    failure: Box<RecoveredWalSignInstallFailure<'registry>>,
 }
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalSignInstallFailure<'registry> {
     InvalidPreflight {
-        _authority: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+        _authority: Box<DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>>,
     },
     #[cfg(test)]
     StoreOpen {
         _error: super::ledger::LifecycleLedgerError,
-        _authority: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+        _authority: Box<DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>>,
     },
     SignedBroadcast {
         _repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>,
@@ -918,8 +1076,8 @@ enum RecoveredWalSignInstallFailure<'registry> {
 }
 impl RecoveredWalSignInstallError<'_> {
     /// Return a stable diagnostic without releasing retained authority.
-    pub(crate) const fn reason(&self) -> &'static str {
-        match &self.failure {
+    pub(crate) fn reason(&self) -> &'static str {
+        match self.failure.as_ref() {
             RecoveredWalSignInstallFailure::InvalidPreflight { .. } => {
                 "fsynced recovered WAL Sign child failed exact registry preflight"
             }
@@ -945,7 +1103,7 @@ impl RecoveredWalSignInstallError<'_> {
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "failed recovered WAL persistence still owns its registry reservation"]
 pub(crate) struct RecoveredWalValidateLedgerPersistError<'registry> {
-    failure: RecoveredWalValidateLedgerPersistFailure<'registry>,
+    failure: Box<RecoveredWalValidateLedgerPersistFailure<'registry>>,
 }
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalValidateLedgerPersistFailure<'registry> {
@@ -975,8 +1133,8 @@ enum RecoveredWalValidateLedgerPersistFailure<'registry> {
 }
 impl RecoveredWalValidateLedgerPersistError<'_> {
     /// Return a stable diagnostic without releasing any retained authority.
-    pub(crate) const fn reason(&self) -> &'static str {
-        match &self.failure {
+    pub(crate) fn reason(&self) -> &'static str {
+        match self.failure.as_ref() {
             RecoveredWalValidateLedgerPersistFailure::InvalidAuthority { .. } => {
                 "recovered WAL validation authority is inconsistent"
             }
@@ -1124,9 +1282,9 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             || !self.ledger_parent_core_identity_is_exact(opened)
         {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::InvalidAuthority {
+                failure: Box::new(RecoveredWalValidateLedgerPersistFailure::InvalidAuthority {
                     _authority: self,
-                },
+                }),
             });
         }
         let (broadcast, parent_ordinal, sign_ordinal, broadcast_ordinal) = match opened
@@ -1135,10 +1293,10 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             Ok(projection) => projection,
             Err(error) => {
                 return Err(RecoveredWalValidateLedgerPersistError {
-                    failure: RecoveredWalValidateLedgerPersistFailure::Stage {
+                    failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Stage {
                         _error: error,
                         _authority: self,
-                    },
+                    }),
                 });
             }
         };
@@ -1147,20 +1305,20 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
                 Ok(geometry) => geometry,
                 Err(error) => {
                     return Err(RecoveredWalValidateLedgerPersistError {
-                        failure: RecoveredWalValidateLedgerPersistFailure::Stage {
+                        failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Stage {
                             _error: super::ledger::LifecycleLedgerError::InvalidLedger(format!(
                                 "recovered signed Broadcast Sign geometry is invalid: {error:?}"
                             )),
                             _authority: self,
-                        },
+                        }),
                     });
                 }
             };
         let Some((&sign_slot, &sign_digest)) = physical.first_key_value() else {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::InvalidAuthority {
+                failure: Box::new(RecoveredWalValidateLedgerPersistFailure::InvalidAuthority {
                     _authority: self,
-                },
+                }),
             });
         };
         let broadcast_slot = PhysicalSlotId::for_capacity(CapacityClass::Consensus, 0);
@@ -1173,9 +1331,9 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             ),
         ) else {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::InvalidAuthority {
+                failure: Box::new(RecoveredWalValidateLedgerPersistFailure::InvalidAuthority {
                     _authority: self,
-                },
+                }),
             });
         };
         if parent_ordinal != self.validation.address.ordinal
@@ -1193,9 +1351,9 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
                 .any(|address| address.owner == self.validation.address.owner)
         {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::InvalidAuthority {
+                failure: Box::new(RecoveredWalValidateLedgerPersistFailure::InvalidAuthority {
                     _authority: self,
-                },
+                }),
             });
         }
         let Self {
@@ -1207,14 +1365,14 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             Ok(repair) => repair,
             Err((error, repair)) => {
                 return Err(RecoveredWalValidateLedgerPersistError {
-                    failure: RecoveredWalValidateLedgerPersistFailure::Stage {
+                    failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Stage {
                         _error: error,
                         _authority: AuthenticatedRecoveredWalValidateLifecycleRepair {
                             repair,
                             validation,
                             reservation,
                         },
-                    },
+                    }),
                 });
             }
         };
@@ -1240,7 +1398,7 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
     /// reached disk before the failure was observed.
     #[allow(clippy::result_large_err)]
     pub(super) fn persist_in_opened_ledger(
-        mut self,
+        self,
         store: &super::ledger::LifecycleLedgerStoreV1,
         opened: &super::ledger::LifecycleLedgerV1,
     ) -> Result<
@@ -1251,18 +1409,32 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
         ),
         RecoveredWalValidateLedgerPersistError<'registry>,
     > {
+        let prepared = self.prepare_persist_in_opened_ledger(opened)?;
+        prepared.persist(store, opened)
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn prepare_persist_in_opened_ledger(
+        mut self,
+        opened: &super::ledger::LifecycleLedgerV1,
+    ) -> Result<
+        Box<PreparedRecoveredWalValidateLedgerPersist<'registry>>,
+        RecoveredWalValidateLedgerPersistError<'registry>,
+    > {
         if !self.concrete_pair_and_validation_are_exact() {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::InvalidAuthority {
+                failure: Box::new(RecoveredWalValidateLedgerPersistFailure::InvalidAuthority {
                     _authority: self,
-                },
+                }),
             });
         }
         if !self.ledger_parent_core_identity_is_exact(opened) {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::ParentLedgerMismatch {
-                    _authority: self,
-                },
+                failure: Box::new(
+                    RecoveredWalValidateLedgerPersistFailure::ParentLedgerMismatch {
+                        _authority: self,
+                    },
+                ),
             });
         }
         let (expected, child_ordinal, expected_changed) =
@@ -1270,19 +1442,21 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
                 Ok(staged) => staged,
                 Err(error) => {
                     return Err(RecoveredWalValidateLedgerPersistError {
-                        failure: RecoveredWalValidateLedgerPersistFailure::Stage {
+                        failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Stage {
                             _error: error,
                             _authority: self,
-                        },
+                        }),
                     });
                 }
             };
         let Some((child_address, child_digest)) = self.projected_child_address(child_ordinal)
         else {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::InvalidChildAddress {
-                    _authority: self,
-                },
+                failure: Box::new(
+                    RecoveredWalValidateLedgerPersistFailure::InvalidChildAddress {
+                        _authority: self,
+                    },
+                ),
             });
         };
         if !self
@@ -1290,9 +1464,11 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             .bind_child_if_vacant(child_address, child_digest)
         {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::OccupiedReservation {
-                    _authority: self,
-                },
+                failure: Box::new(
+                    RecoveredWalValidateLedgerPersistFailure::OccupiedReservation {
+                        _authority: self,
+                    },
+                ),
             });
         }
         let Self {
@@ -1300,22 +1476,70 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             validation,
             reservation,
         } = self;
-        let (persisted, repair, changed) =
-            match store.persist_authenticated_wal_vote_repair(opened, repair) {
-                Ok(persisted) => persisted,
-                Err((error, repair)) => {
-                    return Err(RecoveredWalValidateLedgerPersistError {
-                        failure: RecoveredWalValidateLedgerPersistFailure::Persist {
-                            _error: error,
-                            _authority: AuthenticatedRecoveredWalValidateLifecycleRepair {
-                                repair,
-                                validation,
-                                reservation,
-                            },
-                        },
-                    });
-                }
-            };
+        Ok(Box::new(PreparedRecoveredWalValidateLedgerPersist {
+            expected,
+            child_ordinal,
+            expected_changed,
+            repair: Some(repair),
+            validation,
+            reservation,
+        }))
+    }
+}
+impl<'registry> PreparedRecoveredWalValidateLedgerPersist<'registry> {
+    /// Fsync the preflighted frame and mint only its exact durable authority.
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn persist(
+        mut self: Box<Self>,
+        store: &super::ledger::LifecycleLedgerStoreV1,
+        opened: &super::ledger::LifecycleLedgerV1,
+    ) -> Result<
+        (
+            super::ledger::LifecycleLedgerV1,
+            DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+            bool,
+        ),
+        RecoveredWalValidateLedgerPersistError<'registry>,
+    > {
+        let repair = self
+            .repair
+            .take()
+            .expect("prepared recovered WAL persistence retains one logical repair");
+        match store.persist_authenticated_wal_vote_repair(opened, repair) {
+            Ok(persisted) => self.finish_persisted(store, persisted),
+            Err(failure) => Err(self.finish_persist_error(failure)),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn finish_persisted(
+        self: Box<Self>,
+        store: &super::ledger::LifecycleLedgerStoreV1,
+        persisted: Box<(
+            super::ledger::LifecycleLedgerV1,
+            DurableAuthenticatedWalVoteLifecycleRepair,
+            bool,
+        )>,
+    ) -> Result<
+        (
+            super::ledger::LifecycleLedgerV1,
+            DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+            bool,
+        ),
+        RecoveredWalValidateLedgerPersistError<'registry>,
+    > {
+        let (persisted, repair, changed) = *persisted;
+        let Self {
+            expected,
+            child_ordinal,
+            expected_changed,
+            repair: retained_repair,
+            validation,
+            reservation,
+        } = *self;
+        debug_assert!(retained_repair.is_none());
         let durable = DurableAuthenticatedRecoveredWalValidateLifecycleRepair {
             repair,
             validation,
@@ -1327,13 +1551,52 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             || !durable.post_fsync_authority_is_exact(store)
         {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::PostFsync {
+                failure: Box::new(RecoveredWalValidateLedgerPersistFailure::PostFsync {
                     _authority: durable,
-                },
+                }),
             });
         }
         Ok((persisted, durable, changed))
     }
+
+    #[inline(never)]
+    fn finish_persist_error(
+        self: Box<Self>,
+        failure: Box<(
+            super::ledger::LifecycleLedgerError,
+            AuthenticatedWalVoteLifecycleRepair,
+        )>,
+    ) -> RecoveredWalValidateLedgerPersistError<'registry> {
+        let (error, repair) = *failure;
+        let Self {
+            expected: _,
+            child_ordinal: _,
+            expected_changed: _,
+            repair: retained_repair,
+            validation,
+            reservation,
+        } = *self;
+        debug_assert!(retained_repair.is_none());
+        RecoveredWalValidateLedgerPersistError {
+            failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Persist {
+                _error: error,
+                _authority: AuthenticatedRecoveredWalValidateLifecycleRepair {
+                    repair,
+                    validation,
+                    reservation,
+                },
+            }),
+        }
+    }
+}
+#[cfg(test)]
+#[must_use = "a persisted recovered WAL Validate test repair still owns its durable authority"]
+struct PersistedRecoveredWalValidateTestRepair<'registry> {
+    root: std::path::PathBuf,
+    context: LifecycleContext,
+    repaired: super::ledger::LifecycleLedgerV1,
+    durable: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+    first_changed: bool,
 }
 #[cfg(test)]
 impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
@@ -1476,6 +1739,18 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
         ),
         RecoveredWalValidateLedgerPersistError<'registry>,
     > {
+        let persisted = self.persist_seed_for_test(root)?;
+        persisted.finish()
+    }
+    #[allow(clippy::result_large_err)]
+    #[inline(never)]
+    fn persist_seed_for_test(
+        self,
+        root: &std::path::Path,
+    ) -> Result<
+        Box<PersistedRecoveredWalValidateTestRepair<'registry>>,
+        RecoveredWalValidateLedgerPersistError<'registry>,
+    > {
         let context = LifecycleContext::new(
             self.repair.parent().key.context(),
             self.repair.parent().key.round().height(),
@@ -1487,10 +1762,10 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             Ok(seed) => seed,
             Err(error) => {
                 return Err(RecoveredWalValidateLedgerPersistError {
-                    failure: RecoveredWalValidateLedgerPersistFailure::Stage {
+                    failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Stage {
                         _error: error,
                         _authority: self,
-                    },
+                    }),
                 });
             }
         };
@@ -1498,105 +1773,38 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             Ok(opened) => opened,
             Err(error) => {
                 return Err(RecoveredWalValidateLedgerPersistError {
-                    failure: RecoveredWalValidateLedgerPersistFailure::Persist {
+                    failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Persist {
                         _error: error,
                         _authority: self,
-                    },
+                    }),
                 });
             }
         };
         if !opened.records().is_empty() || opened.high_water() != 0 {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::ParentLedgerMismatch {
-                    _authority: self,
-                },
+                failure: Box::new(
+                    RecoveredWalValidateLedgerPersistFailure::ParentLedgerMismatch {
+                        _authority: self,
+                    },
+                ),
             });
         }
         if let Err(error) = store.persist(&seed) {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::Persist {
+                failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Persist {
                     _error: error,
                     _authority: self,
-                },
+                }),
             });
         }
         let (repaired, durable, first_changed) = self.persist_in_opened_ledger(&store, &seed)?;
-        let (reopened_store, reopened) =
-            match super::ledger::LifecycleLedgerStoreV1::open(root, context) {
-                Ok(reopened) => reopened,
-                Err(_error) => {
-                    return Err(RecoveredWalValidateLedgerPersistError {
-                        failure: RecoveredWalValidateLedgerPersistFailure::PostFsync {
-                            _authority: durable,
-                        },
-                    });
-                }
-            };
-        let reopened_exact =
-            reopened == repaired && durable.post_fsync_authority_is_exact(&reopened_store);
-        let (repeated, child_ordinal, repeat_changed) =
-            match durable.stage_repeat_for_test(&reopened) {
-                Ok(repeated) => repeated,
-                Err(_error) => {
-                    return Err(RecoveredWalValidateLedgerPersistError {
-                        failure: RecoveredWalValidateLedgerPersistFailure::PostFsync {
-                            _authority: durable,
-                        },
-                    });
-                }
-            };
-        if repeated != repaired || child_ordinal != durable.repair.child_ordinal() {
-            return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::PostFsync {
-                    _authority: durable,
-                },
-            });
-        }
-        let parent_ordinal = durable.validation.address.ordinal;
-        let parent = repeated
-            .records()
-            .iter()
-            .find(|record| record.ordinal() == parent_ordinal);
-        let child = repeated
-            .records()
-            .iter()
-            .find(|record| record.ordinal() == child_ordinal);
-        let repair = durable.repair.repair();
-        let edge = repair.edge();
-        let parent_advanced = parent.is_some_and(|record| {
-            record.key() == Some(repair.parent().key)
-                && record.owner() == durable.validation.address.owner
-                && record.terminal() == Some(Some(super::TerminalOutcome::Advanced))
-                && record.continuation()
-                    == Some(super::schema::DurableContinuation::successor(
-                        edge,
-                        child_ordinal,
-                    ))
-        });
-        let child_live = child.is_some_and(|record| {
-            let candidate = repair.child();
-            candidate.initial_state == InitialLifecycleState::Ready
-                && record.key() == Some(candidate.key)
-                && record.owner() == durable.validation.address.owner
-                && record.work_class() == Some(candidate.work_class)
-                && record.stage() == Some(candidate.stage)
-                && record.reconstruction_source() == candidate.reconstruction_source
-                && record.durable_payload() == Some(candidate.payload)
-                && record.terminal() == Some(None)
-                && record.continuation() == Some(super::schema::DurableContinuation::None)
-        });
-        let summary = super::ledger::WalVoteLedgerRepairTestSummary::new(
-            child_ordinal,
-            edge,
+        Ok(Box::new(PersistedRecoveredWalValidateTestRepair {
+            root: root.to_path_buf(),
+            context,
+            repaired,
+            durable,
             first_changed,
-            repeat_changed,
-            parent_advanced,
-            child_live,
-            repeated.high_water(),
-            durable.repair.ledger_frame_hash() != LifecycleDigest::new([0_u8; 32]),
-            reopened_exact,
-        );
-        Ok((summary, durable))
+        }))
     }
     /// Exercise the outer stale-snapshot guard without releasing its sealed
     /// error authority. The exact parent snapshot is intentionally not written
@@ -1620,10 +1828,10 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             Ok(seed) => seed,
             Err(error) => {
                 return Err(RecoveredWalValidateLedgerPersistError {
-                    failure: RecoveredWalValidateLedgerPersistFailure::Stage {
+                    failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Stage {
                         _error: error,
                         _authority: self,
-                    },
+                    }),
                 });
             }
         };
@@ -1631,18 +1839,20 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             Ok(opened) => opened,
             Err(error) => {
                 return Err(RecoveredWalValidateLedgerPersistError {
-                    failure: RecoveredWalValidateLedgerPersistFailure::Persist {
+                    failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Persist {
                         _error: error,
                         _authority: self,
-                    },
+                    }),
                 });
             }
         };
         if !opened.records().is_empty() || opened.high_water() != 0 {
             return Err(RecoveredWalValidateLedgerPersistError {
-                failure: RecoveredWalValidateLedgerPersistFailure::ParentLedgerMismatch {
-                    _authority: self,
-                },
+                failure: Box::new(
+                    RecoveredWalValidateLedgerPersistFailure::ParentLedgerMismatch {
+                        _authority: self,
+                    },
+                ),
             });
         }
         self.persist_in_opened_ledger(&store, &seed)
@@ -1674,15 +1884,110 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             Ok(opened) => opened,
             Err(error) => {
                 return Err(RecoveredWalValidateLedgerPersistError {
-                    failure: RecoveredWalValidateLedgerPersistFailure::Persist {
+                    failure: Box::new(RecoveredWalValidateLedgerPersistFailure::Persist {
                         _error: error,
                         _authority: self,
-                    },
+                    }),
                 });
             }
         };
         self.persist_in_opened_ledger(&store, &opened)
             .map(|(_ledger, durable, changed)| (changed, durable))
+    }
+}
+#[cfg(test)]
+impl<'registry> PersistedRecoveredWalValidateTestRepair<'registry> {
+    #[allow(clippy::result_large_err, clippy::too_many_lines)]
+    #[inline(never)]
+    fn finish(
+        self: Box<Self>,
+    ) -> Result<
+        (
+            super::ledger::WalVoteLedgerRepairTestSummary,
+            DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+        ),
+        RecoveredWalValidateLedgerPersistError<'registry>,
+    > {
+        let (reopened_store, reopened) =
+            match super::ledger::LifecycleLedgerStoreV1::open(&self.root, self.context) {
+                Ok(reopened) => reopened,
+                Err(_error) => {
+                    let Self { durable, .. } = *self;
+                    return Err(RecoveredWalValidateLedgerPersistError {
+                        failure: Box::new(RecoveredWalValidateLedgerPersistFailure::PostFsync {
+                            _authority: durable,
+                        }),
+                    });
+                }
+            };
+        let reopened_exact = reopened == self.repaired
+            && self.durable.post_fsync_authority_is_exact(&reopened_store);
+        let (repeated, child_ordinal, repeat_changed) =
+            match self.durable.stage_repeat_for_test(&reopened) {
+                Ok(repeated) => repeated,
+                Err(_error) => {
+                    let Self { durable, .. } = *self;
+                    return Err(RecoveredWalValidateLedgerPersistError {
+                        failure: Box::new(RecoveredWalValidateLedgerPersistFailure::PostFsync {
+                            _authority: durable,
+                        }),
+                    });
+                }
+            };
+        if repeated != self.repaired || child_ordinal != self.durable.repair.child_ordinal() {
+            let Self { durable, .. } = *self;
+            return Err(RecoveredWalValidateLedgerPersistError {
+                failure: Box::new(RecoveredWalValidateLedgerPersistFailure::PostFsync {
+                    _authority: durable,
+                }),
+            });
+        }
+        let parent_ordinal = self.durable.validation.address.ordinal;
+        let parent = repeated
+            .records()
+            .iter()
+            .find(|record| record.ordinal() == parent_ordinal);
+        let child = repeated
+            .records()
+            .iter()
+            .find(|record| record.ordinal() == child_ordinal);
+        let repair = self.durable.repair.repair();
+        let edge = repair.edge();
+        let parent_advanced = parent.is_some_and(|record| {
+            record.key() == Some(repair.parent().key)
+                && record.owner() == self.durable.validation.address.owner
+                && record.terminal() == Some(Some(super::TerminalOutcome::Advanced))
+                && record.continuation()
+                    == Some(super::schema::DurableContinuation::successor(
+                        edge,
+                        child_ordinal,
+                    ))
+        });
+        let child_live = child.is_some_and(|record| {
+            let candidate = repair.child();
+            candidate.initial_state == InitialLifecycleState::Ready
+                && record.key() == Some(candidate.key)
+                && record.owner() == self.durable.validation.address.owner
+                && record.work_class() == Some(candidate.work_class)
+                && record.stage() == Some(candidate.stage)
+                && record.reconstruction_source() == candidate.reconstruction_source
+                && record.durable_payload() == Some(candidate.payload)
+                && record.terminal() == Some(None)
+                && record.continuation() == Some(super::schema::DurableContinuation::None)
+        });
+        let summary = super::ledger::WalVoteLedgerRepairTestSummary::new(
+            child_ordinal,
+            edge,
+            self.first_changed,
+            repeat_changed,
+            parent_advanced,
+            child_live,
+            repeated.high_water(),
+            self.durable.repair.ledger_frame_hash() != LifecycleDigest::new([0_u8; 32]),
+            reopened_exact,
+        );
+        let Self { durable, .. } = *self;
+        Ok((summary, durable))
     }
 }
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1729,7 +2034,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
     /// exclusively borrowed and revalidates the exact row without exposing it.
     #[allow(clippy::result_large_err)]
     pub(super) fn install_recovered_sign(
-        self,
+        self: Box<Self>,
         store: &super::ledger::LifecycleLedgerStoreV1,
     ) -> Result<
         InstalledRecoveredWalSignRegistryCut<'registry>,
@@ -1737,9 +2042,21 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
     > {
         if !self.post_fsync_authority_is_exact(store) {
             return Err(RecoveredWalSignInstallError {
-                failure: RecoveredWalSignInstallFailure::InvalidPreflight { _authority: self },
+                failure: Box::new(RecoveredWalSignInstallFailure::InvalidPreflight {
+                    _authority: self,
+                }),
             });
         }
+        self.finish_recovered_sign_install()
+    }
+
+    #[inline(never)]
+    fn finish_recovered_sign_install(
+        self: Box<Self>,
+    ) -> Result<
+        InstalledRecoveredWalSignRegistryCut<'registry>,
+        RecoveredWalSignInstallError<'registry>,
+    > {
         let (child_address, child_digest) = self
             .reservation
             .child
@@ -1748,7 +2065,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
             repair,
             validation,
             reservation,
-        } = self;
+        } = *self;
         let RecoveredWalValidateRegistryReservation {
             registry,
             parent_address,
@@ -1826,14 +2143,14 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
             Ok((store, _opened)) => store,
             Err(error) => {
                 return Err(RecoveredWalSignInstallError {
-                    failure: RecoveredWalSignInstallFailure::StoreOpen {
+                    failure: Box::new(RecoveredWalSignInstallFailure::StoreOpen {
                         _error: error,
-                        _authority: self,
-                    },
+                        _authority: Box::new(self),
+                    }),
                 });
             }
         };
-        self.install_recovered_sign(&store)
+        Box::new(self).install_recovered_sign(&store)
     }
 }
 impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry> {
@@ -1857,7 +2174,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
         } = self;
         let Ok(ledger) = store.load() else {
             return Err(RecoveredWalSignInstallError {
-                failure: RecoveredWalSignInstallFailure::SignedBroadcast {
+                failure: Box::new(RecoveredWalSignInstallFailure::SignedBroadcast {
                     _repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair {
                         repair,
                         validation,
@@ -1867,7 +2184,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
                         sign_address,
                         broadcast_address,
                     },
-                },
+                }),
             });
         };
         let exact = detached_recovered_validation_is_exact(repair.repair(), &validation)
@@ -1888,7 +2205,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
                 .all(|address| address.owner != broadcast_address.owner);
         if !exact {
             return Err(RecoveredWalSignInstallError {
-                failure: RecoveredWalSignInstallFailure::SignedBroadcast {
+                failure: Box::new(RecoveredWalSignInstallFailure::SignedBroadcast {
                     _repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair {
                         repair,
                         validation,
@@ -1898,7 +2215,7 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
                         sign_address,
                         broadcast_address,
                     },
-                },
+                }),
             });
         }
         let digest = broadcast.digest();
@@ -1954,10 +2271,10 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
         RecoveredWalSignInstallError<'registry>,
     > {
         let fail = |repair, combined| RecoveredWalSignInstallError {
-            failure: RecoveredWalSignInstallFailure::SignedBroadcastAndNextVote {
+            failure: Box::new(RecoveredWalSignInstallFailure::SignedBroadcastAndNextVote {
                 _repair: repair,
                 _combined: combined,
-            },
+            }),
         };
         let Ok(ledger) = store.load() else {
             return Err(fail(self, combined));
@@ -2204,7 +2521,7 @@ impl RecoveredWalSignInstallError<'_> {
     /// Prove that this opaque error still owns the complete exact authority and
     /// both registry vacancies when checked against the original store.
     pub(crate) fn retains_exact_vacancies_for_test(&self, root: &std::path::Path) -> bool {
-        let authority = match &self.failure {
+        let authority = match self.failure.as_ref() {
             RecoveredWalSignInstallFailure::InvalidPreflight {
                 _authority: authority,
             }
@@ -4069,7 +4386,7 @@ impl DetachedRecoveredValidateCompletion {
 /// and requires restart rather than falling back to ordinary execution.
 #[must_use = "failed recovered WAL validation still owns its sealed authority"]
 pub(crate) struct RecoveredWalValidateRegistryJoinError<'registry> {
-    failure: RecoveredWalValidateRegistryJoinFailure<'registry>,
+    failure: Box<RecoveredWalValidateRegistryJoinFailure<'registry>>,
 }
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalValidateRegistryJoinFailure<'registry> {
@@ -4089,8 +4406,8 @@ enum RecoveredWalValidateRegistryJoinFailure<'registry> {
 }
 impl RecoveredWalValidateRegistryJoinError<'_> {
     /// Return a stable diagnostic without exposing retained authority.
-    pub(crate) const fn reason(&self) -> &'static str {
-        match &self.failure {
+    pub(crate) fn reason(&self) -> &'static str {
+        match self.failure.as_ref() {
             RecoveredWalValidateRegistryJoinFailure::InvalidCarrier { .. } => {
                 "recovered Validate registry carrier is invalid"
             }

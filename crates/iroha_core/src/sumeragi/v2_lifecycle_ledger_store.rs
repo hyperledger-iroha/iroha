@@ -110,10 +110,13 @@ impl LifecycleLedgerStoreV1 {
         Ok((store, ledger))
     }
     pub(super) fn load(&self) -> Result<LifecycleLedgerV1, LifecycleLedgerError> {
+        self.load_with_frame_presence().map(|(ledger, _)| ledger)
+    }
+    fn load_with_frame_presence(&self) -> Result<(LifecycleLedgerV1, bool), LifecycleLedgerError> {
         let metadata = match fs::symlink_metadata(&self.path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => {
-                return Ok(LifecycleLedgerV1::empty(self.context));
+                return Ok((LifecycleLedgerV1::empty(self.context), false));
             }
             Err(error) => {
                 return Err(LifecycleLedgerError::Io(format!(
@@ -151,27 +154,29 @@ impl LifecycleLedgerStoreV1 {
             ));
         }
         ledger.validate(self.max_records)?;
-        Ok(ledger)
+        Ok((ledger, true))
     }
     /// Persist one exact staged successor only while the attached frame still
     /// equals the coordinator state from which it was derived.
     ///
     /// The equality read happens before any atomic replacement begins. An
-    /// exact stutter confirms the already-fsynced frame without rewriting it;
-    /// otherwise a successful return means `successor` is the exact fsynced V1
-    /// frame replacing `current`. Callers may perform only infallible in-memory
-    /// publication after this method returns.
+    /// exact stutter confirms an already-present fsynced frame without rewriting
+    /// it. When the logical empty frame has not yet been published, even an exact
+    /// stutter writes it durably. Otherwise a successful return means `successor`
+    /// is the exact fsynced V1 frame replacing `current`. Callers may perform only
+    /// infallible in-memory publication after this method returns.
     pub(super) fn persist_exact_successor(
         &self,
         current: &LifecycleLedgerV1,
         successor: &LifecycleLedgerV1,
     ) -> Result<(), LifecycleLedgerError> {
-        if self.load()? != *current {
+        let (loaded, frame_present) = self.load_with_frame_presence()?;
+        if loaded != *current {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "attached lifecycle ledger changed before successor publication".to_owned(),
             ));
         }
-        if current == successor {
+        if current == successor && frame_present {
             return Ok(());
         }
         self.persist(successor)
@@ -379,36 +384,36 @@ impl LifecycleLedgerStoreV1 {
         ledger: &LifecycleLedgerV1,
         repair: AuthenticatedWalVoteLifecycleRepair,
     ) -> Result<
-        (
+        Box<(
             LifecycleLedgerV1,
             DurableAuthenticatedWalVoteLifecycleRepair,
             bool,
-        ),
-        (LifecycleLedgerError, AuthenticatedWalVoteLifecycleRepair),
+        )>,
+        Box<(LifecycleLedgerError, AuthenticatedWalVoteLifecycleRepair)>,
     > {
         let loaded = match self.load() {
             Ok(loaded) => loaded,
-            Err(error) => return Err((error, repair)),
+            Err(error) => return Err(Box::new((error, repair))),
         };
         if &loaded != ledger {
-            return Err((
+            return Err(Box::new((
                 LifecycleLedgerError::InvalidLedger(
                     "WAL repair attempted to replace a stale ledger snapshot".to_owned(),
                 ),
                 repair,
-            ));
+            )));
         }
         let (staged, child_ordinal, changed) =
             match loaded.stage_authenticated_wal_vote_repair(&repair) {
                 Ok(staged) => staged,
-                Err(error) => return Err((error, repair)),
+                Err(error) => return Err(Box::new((error, repair))),
             };
         let frame = match encode_frame(&staged, self.max_frame_bytes) {
             Ok(frame) => frame,
-            Err(error) => return Err((error, repair)),
+            Err(error) => return Err(Box::new((error, repair))),
         };
         if let Err(error) = self.persist(&staged) {
-            return Err((error, repair));
+            return Err(Box::new((error, repair)));
         }
         let receipt = DurableWalVoteLedgerRepairReceipt {
             store_path: self.path.clone(),
@@ -423,15 +428,15 @@ impl LifecycleLedgerStoreV1 {
         let durable = match repair.bind_durable_ledger_receipt(receipt) {
             Ok(durable) => durable,
             Err((repair, _receipt)) => {
-                return Err((
+                return Err(Box::new((
                     LifecycleLedgerError::InvalidLedger(
                         "post-fsync WAL repair receipt did not bind its authority".to_owned(),
                     ),
                     repair,
-                ));
+                )));
             }
         };
-        Ok((staged, durable, changed))
+        Ok(Box::new((staged, durable, changed)))
     }
     /// Bind an already-persisted Validate→Sign repair beneath a live Broadcast.
     ///

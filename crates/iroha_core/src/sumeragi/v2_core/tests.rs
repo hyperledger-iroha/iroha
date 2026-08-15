@@ -694,17 +694,7 @@ fn proposal_then_prepare_qc_monotonically_upgrades_the_body_fetch() {
             certificate: prepare.clone(),
         })
         .expect("PrepareQC upgrades the in-flight acquisition");
-    assert!(upgraded.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::FetchBody {
-            manifest: Some(value),
-            certified_sources,
-            certificate: Some(value_certificate),
-            ..
-        } if *value == manifest
-            && certified_sources == &vec![id(1), id(2), id(3)]
-            && value_certificate == &prepare
-    )));
+    assert_certified_fetch(&reducer, &upgraded, &prepare, Some(manifest));
 }
 #[test]
 fn equal_prepare_qcs_with_different_quorum_subsets_reuse_first_fetch_authority() {
@@ -721,14 +711,7 @@ fn equal_prepare_qcs_with_different_quorum_subsets_reuse_first_fetch_authority()
             certificate: first.clone(),
         })
         .expect("first PrepareQC starts certified acquisition");
-    assert!(started.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::FetchBody {
-            certified_sources,
-            certificate: Some(value),
-            ..
-        } if certified_sources == &vec![id(1), id(2), id(3)] && value == &first
-    )));
+    assert_certified_fetch(&reducer, &started, &first, None);
     let persist = started
         .effects()
         .iter()
@@ -744,14 +727,8 @@ fn equal_prepare_qcs_with_different_quorum_subsets_reuse_first_fetch_authority()
             certificate: second,
         })
         .expect("same-subject PrepareQC with a different quorum is compatible");
-    assert!(matches!(
-        repeated.effects(),
-        [Effect::FetchBody {
-            certified_sources,
-            certificate: Some(value),
-            ..
-        }] if certified_sources == &vec![id(1), id(2), id(3)] && value == &first
-    ));
+    assert_eq!(repeated.effects().len(), 1);
+    assert_certified_fetch(&reducer, &repeated, &first, None);
 }
 #[test]
 fn prepare_qc_then_proposal_adds_the_manifest_without_dropping_certification() {
@@ -795,17 +772,8 @@ fn prepare_qc_then_proposal_adds_the_manifest_without_dropping_certification() {
             proposal,
         })
         .expect("proposal adds the canonical manifest");
-    assert!(matches!(
-        upgraded.effects(),
-        [Effect::FetchBody {
-            manifest: Some(value),
-            certified_sources,
-            certificate: Some(value_certificate),
-            ..
-        }] if *value == manifest
-            && certified_sources == &vec![id(1), id(2), id(3)]
-            && value_certificate == &prepare
-    ));
+    assert_eq!(upgraded.effects().len(), 1);
+    assert_certified_fetch(&reducer, &upgraded, &prepare, Some(manifest));
 }
 #[test]
 fn prepare_is_persisted_only_after_durable_body_validation() {
@@ -1250,17 +1218,7 @@ fn persisted_tc_starts_certified_fetch_for_a_missing_selected_lock() {
             .iter()
             .any(|effect| matches!(effect, Effect::EnterView { .. }))
     );
-    assert!(entered.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::FetchBody {
-            subject: fetched,
-            certified_sources,
-            certificate: Some(certificate),
-            ..
-        } if *fetched == subject
-            && certified_sources == &vec![id(1), id(2), id(3)]
-            && certificate == &high
-    )));
+    assert_certified_fetch(&reducer, &entered, &high, None);
     assert!(reducer.outbound_messages().any(|message| matches!(
         message,
         ConsensusMessageV2::QuorumCertificate(certificate)
@@ -4300,6 +4258,7 @@ fn current_view_commit_waits_for_the_exact_durable_lock() {
         })
         .expect("the current PrepareQC is persisted");
     acknowledge(&mut reducer, &observe_entry);
+    assert_certified_fallback(&mut reducer, &current_prepare);
     assert!(matches!(
         reducer
             .step(Event::BodyAvailable {
@@ -5649,21 +5608,8 @@ fn decision_replay_resume_emits_one_exact_certified_fetch() {
         Reducer::recover(context.clone(), Some(local), Generation::new(20), [entry]).unwrap();
     let resumed = resume_after_replay(&mut recovered);
     assert_eq!(resumed.disposition(), StepDisposition::Applied);
-    assert!(matches!(
-        resumed.effects(),
-        [Effect::FetchBody {
-            tag,
-            round,
-            subject: fetched_subject,
-            manifest: None,
-            certified_sources,
-            certificate: Some(certificate),
-        }] if *tag == recovered.current_tag()
-            && *round == decision.round()
-            && *fetched_subject == subject
-            && certified_sources == &vec![id(1), id(2), id(3)]
-            && certificate == &decision
-    ));
+    assert_eq!(resumed.effects().len(), 1);
+    assert_certified_fetch(&recovered, &resumed, &decision, None);
     assert_eq!(
         recovered.body_state(decision.round(), subject),
         BodyState::Missing
@@ -5703,29 +5649,7 @@ fn current_view_high_prepare_replay_rearms_exact_certified_missing_body() {
             tag: recovered.current_tag(),
         })
         .expect("the recovered certified acquisition is retryable");
-    assert_eq!(
-        retransmitted
-            .effects()
-            .iter()
-            .filter(|effect| matches!(effect, Effect::FetchBody { .. }))
-            .count(),
-        1
-    );
-    assert!(retransmitted.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::FetchBody {
-            tag,
-            round,
-            subject: fetched_subject,
-            manifest: None,
-            certified_sources,
-            certificate: Some(certificate),
-        } if *tag == recovered.current_tag()
-            && *round == prepare.round()
-            && *fetched_subject == subject
-            && certified_sources == &vec![id(1), id(2), id(4)]
-            && certificate == &prepare
-    )));
+    assert_certified_fetch(&recovered, &retransmitted, &prepare, None);
 }
 #[test]
 fn old_view_high_prepare_replay_does_not_reactivate_body_work() {
@@ -5837,6 +5761,100 @@ fn timed_out_current_view_high_prepare_replay_does_not_reactivate_body_work() {
     );
 }
 #[test]
+fn live_timeout_fence_retries_the_durable_lock_instead_of_a_closed_prepare() {
+    let context = context();
+    let locked_subject = Subject::repeat(0x7d);
+    let closed_subject = Subject::repeat(0x7e);
+    let locked_prepare = qc(&context, 0, Phase::Prepare, locked_subject, &[1, 2, 3]);
+    let locked_vote = Vote::new(
+        context.id(),
+        locked_prepare.round(),
+        Phase::Commit,
+        locked_subject,
+        id(4),
+    );
+    let installed_timeout = tc_with_high(&context, 0, locked_prepare.clone(), &[1, 2, 3]);
+    let closed_prepare = qc(&context, 1, Phase::Prepare, closed_subject, &[1, 2, 3]);
+    let entries = [
+        WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::LockAndCommit {
+                prepare: locked_prepare.clone(),
+                vote: locked_vote,
+            },
+        ),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::InstallTimeout(installed_timeout),
+        ),
+    ];
+    let mut reducer = Reducer::recover(context, Some(id(4)), Generation::new(26), entries).unwrap();
+    assert!(matches!(
+        resume_after_replay(&mut reducer).effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if vote == &locked_vote
+    ));
+    assert!(matches!(
+        complete_signature(&mut reducer, 0x7d).effects(),
+        [Effect::Broadcast(ConsensusMessageV2::Vote(vote))]
+            if vote.vote() == locked_vote
+    ));
+
+    let timeout = only_persist(
+        reducer
+            .step(Event::TimeoutElapsed {
+                tag: reducer.current_tag(),
+            })
+            .expect("the live current view starts its durable timeout"),
+    );
+    assert!(matches!(
+        acknowledge(&mut reducer, &timeout).effects(),
+        [Effect::Sign {
+            message: SignableMessage::TimeoutVote(_),
+            ..
+        }]
+    ));
+    assert!(matches!(
+        complete_signature(&mut reducer, 0x7e).effects(),
+        [Effect::Broadcast(ConsensusMessageV2::TimeoutVote(_))]
+    ));
+
+    let late_prepare = reducer
+        .step(Event::QuorumCertificateReceived {
+            tag: reducer.current_tag(),
+            certificate: closed_prepare.clone(),
+        })
+        .expect("the timeout-fenced PrepareQC remains valid control evidence");
+    assert!(
+        late_prepare
+            .effects()
+            .iter()
+            .all(|effect| !matches!(effect, Effect::FetchBody { .. })),
+        "late closed-view certification cannot recreate body acquisition"
+    );
+    let late_prepare = only_persist(late_prepare);
+    assert!(
+        acknowledge(&mut reducer, &late_prepare)
+            .effects()
+            .is_empty(),
+        "persisting late control evidence cannot create closed-view body work"
+    );
+
+    let retransmitted = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("the closed view keeps durable lock recovery live");
+    assert!(retransmitted.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::Broadcast(ConsensusMessageV2::QuorumCertificate(certificate))
+            if certificate == &closed_prepare
+    )));
+    assert_certified_fetch(&reducer, &retransmitted, &locked_prepare, None);
+}
+#[test]
 fn decision_replay_excludes_a_conflicting_current_prepare_body_owner() {
     let context = context();
     let prepare_subject = Subject::repeat(0x79);
@@ -5853,19 +5871,8 @@ fn decision_replay_excludes_a_conflicting_current_prepare_body_owner() {
     let mut recovered =
         Reducer::recover(context, Some(id(2)), Generation::new(23), entries).unwrap();
     let resumed = resume_after_replay(&mut recovered);
-    assert!(matches!(
-        resumed.effects(),
-        [Effect::FetchBody {
-            round,
-            subject,
-            certified_sources,
-            certificate: Some(certificate),
-            ..
-        }] if *round == decision.round()
-            && *subject == decision_subject
-            && certified_sources == &vec![id(1), id(3), id(4)]
-            && certificate == &decision
-    ));
+    assert_eq!(resumed.effects().len(), 1);
+    assert_certified_fetch(&recovered, &resumed, &decision, None);
     let before_prepare_completion = recovered.clone();
     let prepare_completion = recovered
         .step(Event::BodyAvailable {
@@ -5926,27 +5933,7 @@ fn durable_lock_replay_retains_one_exact_certified_body_owner() {
             tag: recovered.current_tag(),
         })
         .expect("the exact durable lock body remains retryable");
-    assert_eq!(
-        retransmitted
-            .effects()
-            .iter()
-            .filter(|effect| matches!(effect, Effect::FetchBody { .. }))
-            .count(),
-        1
-    );
-    assert!(retransmitted.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::FetchBody {
-            round,
-            subject: fetched_subject,
-            certified_sources,
-            certificate: Some(certificate),
-            ..
-        } if *round == prepare.round()
-            && *fetched_subject == subject
-            && certified_sources == &vec![id(1), id(2), id(3)]
-            && certificate == &prepare
-    )));
+    assert_certified_fetch(&recovered, &retransmitted, &prepare, None);
     let available = recovered
         .step(Event::BodyAvailable {
             tag: recovered.current_tag(),
@@ -6656,11 +6643,9 @@ fn tc_without_local_high_qc_retains_lock_and_rejects_another_subject() {
         equal_subject_reproposal.disposition(),
         StepDisposition::Applied
     );
-    assert!(matches!(
-        equal_subject_reproposal.effects(),
-        [Effect::FetchBody { round, subject, .. }]
-            if *round == Round::new(context.height(), 1) && *subject == subject_a
-    ));
+    assert!(equal_subject_reproposal.effects().is_empty());
+    let locked = reducer.durable_state().locked().unwrap().clone();
+    assert_certified_fallback(&mut reducer, &locked);
 }
 #[test]
 fn replay_accepts_strictly_higher_matching_prepare_qc_proposal() {
@@ -6757,7 +6742,7 @@ fn tc_max_preserves_potentially_committable_lock_and_forces_its_subject() {
             vote: commit_vote,
         },
     );
-    let timeout = tc_with_high(&context, 0, prepare_a, &[1, 2, 3]);
+    let timeout = tc_with_high(&context, 0, prepare_a.clone(), &[1, 2, 3]);
     let install = WalEntry::new(
         PersistenceId::new(2),
         WalRecord::InstallTimeout(timeout.clone()),
@@ -6820,11 +6805,8 @@ fn tc_max_preserves_potentially_committable_lock_and_forces_its_subject() {
         equal_subject_reproposal.disposition(),
         StepDisposition::Applied
     );
-    assert!(matches!(
-        equal_subject_reproposal.effects(),
-        [Effect::FetchBody { round, subject, .. }]
-            if *round == Round::new(context.height(), 1) && *subject == subject_a
-    ));
+    assert!(equal_subject_reproposal.effects().is_empty());
+    assert_certified_fallback(&mut reducer, &prepare_a);
 }
 #[test]
 fn grouped_timeout_certificate_uses_union_for_dual_quorum() {

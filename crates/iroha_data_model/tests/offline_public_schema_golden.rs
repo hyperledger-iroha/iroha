@@ -17,10 +17,10 @@ fn structural_schema_hash<T: IntoSchema>() -> String {
 fn public_offline_request_structural_schemas_are_frozen_for_abi21_v4() {
     assert_eq!(
         structural_schema_hash::<KagemushaRecursiveSpendTopUpRequestV4>(),
-        "cc4b252cf164cf026616483eda9e4085"
+        "7929db5019d35b407eddbccbd7b0529b"
     );
     assert_eq!(
         structural_schema_hash::<KagemushaRecursiveSpendRedeemRequestV4>(),
-        "f93f8c4af5ac999d49c04b6f1639e03a"
+        "1faf6a5464cf9fe068a27df61e15f563"
     );
 }

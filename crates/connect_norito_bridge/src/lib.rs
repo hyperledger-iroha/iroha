@@ -6750,78 +6750,12 @@ fn validate_kagemusha_recursive_spend_bundle_shape_v4(
     }
     Ok(())
 }
-fn validate_kagemusha_recursive_spend_topup_anchor_shape_v4(
-    anchor: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
-) -> BridgeResult<()> {
-    use iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2;
-    anchor
-        .amount
-        .validate()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    anchor
-        .current_note
-        .validate_public_binding()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    anchor
-        .artifact_binding
-        .validate()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    if anchor.version != KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4
-        || anchor.asset_scale != anchor.amount.scale
-        || anchor.current_note.amount != anchor.amount
-        || anchor.asset.account() != &anchor.payer
-        || anchor.current_note.network_id != anchor.network_id
-        || anchor.current_note.asset != *anchor.asset.definition()
-        || anchor.initial_root == [0; 32]
-        || anchor.finalized_root == [0; 32]
-        || anchor.initial_root == anchor.finalized_root
-        || anchor.shield_leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
-        || anchor.topup_operation_id == [0; 32]
-        || anchor.shield_verifier_id.backend.is_empty()
-        || anchor.shield_verifier_id.name.is_empty()
-        || anchor.shield_verifier_commitment == [0; 32]
-        || anchor.finalized_height == 0
-        || anchor.finalized_tx_hash == [0; 32]
-        || anchor.anchor_digest == [0; 32]
-    {
-        return Err(BridgeError::KagemushaProve);
-    }
-    Ok(())
-}
 fn validate_kagemusha_recursive_spend_init_request_shape_v4(
     request: &iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV4,
 ) -> BridgeResult<()> {
-    validate_kagemusha_recursive_spend_topup_anchor_shape_v4(&request.topup_anchor)?;
     request
-        .topup_finality_proof
-        .validate_structure()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    request
-        .topup_finality_roster_artifact
-        .validate_structure()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    request
-        .artifact_binding
-        .validate()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    let anchor = &request.topup_anchor;
-    if request.artifact_binding != anchor.artifact_binding
-        || request.topup_finality_proof.anchor.topup_operation_id != anchor.topup_operation_id
-        || request.topup_finality_proof.anchor.anchor_digest != anchor.anchor_digest
-        || request.topup_finality_proof.commit_qc.height_context.height != anchor.finalized_height
-        || request.topup_finality_roster_artifact.network_id != anchor.network_id
-        || request.topup_finality_roster_artifact.network_id
-            != request
-                .topup_finality_proof
-                .commit_qc
-                .height_context
-                .network_id
-        || request.topup_finality_roster_artifact.artifact_generation
-            != request.artifact_binding.generation
-    {
-        return Err(BridgeError::KagemushaProve);
-    }
-    Ok(())
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)
 }
 fn validate_kagemusha_recursive_spend_verify_request_shape_v4(
     request: &iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV4,
@@ -7079,7 +7013,7 @@ impl KagemushaRecursiveSpendRedeemLocalRequestV4 {
         }
         validate_kagemusha_recursive_spend_bundle_shape_v4(&self.bundle)?;
         self.topup_provenance
-            .validate_for_bundle(&self.bundle)
+            .validate_for_bundle_at(&self.bundle, self.block_height)
             .map_err(|_| BridgeError::KagemushaProve)?;
         self.input_opening.validate()?;
         self.input_membership_witness
@@ -18046,8 +17980,7 @@ mod kagemusha_bridge_tests {
         .finalize_digest()
         .expect("release-key regression top-up anchor");
         let (local_roster, local_signing_keys) = production_topup_finality_roster_v2(
-            production_topup_finality_network_id_v2(),
-            &fixture.manifest.network_id,
+            fixture.manifest.network_id,
             &fixture.manifest.generation,
         );
         let topup_finality_proof = production_topup_finality_proof_v2(
@@ -18615,6 +18548,33 @@ mod kagemusha_bridge_tests {
             opening: sender_opening.clone(),
             output_membership: topup_output_membership.clone(),
         };
+        init_local
+            .validate_shape()
+            .expect("production SBD init bridge shape");
+        let mut wrong_anchor_digest = init_local.clone();
+        wrong_anchor_digest.request.topup_anchor.anchor_digest[0] ^= 1;
+        wrong_anchor_digest
+            .request
+            .topup_finality_proof
+            .anchor
+            .anchor_digest = wrong_anchor_digest.request.topup_anchor.anchor_digest;
+        assert!(wrong_anchor_digest.validate_shape().is_err());
+        let mut insufficient_quorum = init_local.clone();
+        insufficient_quorum
+            .request
+            .topup_finality_proof
+            .commit_qc
+            .certificate
+            .signers
+            .pop();
+        assert!(insufficient_quorum.validate_shape().is_err());
+        let mut missing_roster_window = init_local.clone();
+        missing_roster_window
+            .request
+            .topup_finality_roster_artifact
+            .windows[0]
+            .withdraws_at_height = missing_roster_window.request.topup_anchor.finalized_height;
+        assert!(missing_roster_window.validate_shape().is_err());
         let init_archive =
             Zeroizing::new(norito::to_bytes(&init_local).expect("encode production SBD init"));
         let mut init_ptr = ptr::null_mut();
@@ -18771,6 +18731,33 @@ mod kagemusha_bridge_tests {
         );
         let peer_payment = KagemushaRecursiveSpendPeerPaymentV4::from_split_result(&split_result)
             .expect("project production SBD recipient payment");
+        let redeem_shape = KagemushaRecursiveSpendRedeemLocalRequestV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
+            bundle: peer_payment.recipient_bundle.clone(),
+            topup_provenance: peer_payment.topup_provenance.clone(),
+            input_opening: sender_opening.clone(),
+            input_membership_witness: peer_payment.recipient_membership_witness.clone(),
+            recipient: sample_account(0x97),
+            public_amount: peer_payment.recipient_bundle.statement.current_note.amount,
+            change_opening: None,
+            unshield_verifier_id: VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+            ),
+            unshield_verifier_commitment: [0x98; 32],
+            block_height: 43,
+            operation_id: [0x99; 32],
+            change_output_membership: None,
+        };
+        redeem_shape
+            .validate_shape()
+            .expect("production SBD redeem bridge shape");
+        let finalized_height = redeem_shape.topup_provenance.topup_finality_evidence[0]
+            .topup_anchor
+            .finalized_height;
+        let mut future_finality = redeem_shape;
+        future_finality.block_height = finalized_height - 1;
+        assert!(future_finality.validate_shape().is_err());
         let verify_local = KagemushaRecursiveSpendVerifyLocalRequestV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
             request: KagemushaRecursiveSpendVerifyRequestV4 {

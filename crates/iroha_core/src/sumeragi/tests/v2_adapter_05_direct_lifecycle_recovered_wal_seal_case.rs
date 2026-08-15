@@ -37,6 +37,7 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
         "struct StorageAuthenticatedRecoveredWalLifecycleStartup<'registry>",
         "ledger: OpenedRecoveredWalValidateLedger",
         "struct PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>",
+        "struct ColdPreparedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>",
         "struct InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>",
         "struct ProductionRecoveredLifecycleOwnerStartupV1",
         "ProductionRecoveredLifecycleOwnerAssemblyPermitV1",
@@ -88,6 +89,20 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
         1,
         "only the paired recovered startup may mint owner-assembly authority"
     );
+    let cold_prepare = token
+        .split_once("fn prepare_recovered_phase_vote_cold_adapter_stage")
+        .expect("locate recovered phase-vote cold preparation")
+        .1
+        .split_once("fn install_recovered_phase_vote_sign_stage")
+        .expect("locate the end of recovered phase-vote cold preparation")
+        .0;
+    assert!(cold_prepare.contains("context: adapter.wire_context.clone()"));
+    assert!(cold_prepare.contains("proofs_of_possession: adapter.proofs_of_possession.clone()"));
+    assert!(cold_prepare.contains("parent_verification: adapter.parent_verification.clone()"));
+    assert!(
+        cold_prepare
+            .contains(".prepare_cold_adapter_startup(&verified, adapter_startup, body_store)")
+    );
     let production_open = token
         .split_once("fn open_production_owner_seals(")
         .expect("locate paired production open")
@@ -100,7 +115,6 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
         .expect("paired production open signature ends")
         .0;
     assert!(!open_signature.contains("verified: VerifiedHeightContext"));
-    assert!(production_open.contains("context: adapter.wire_context.clone()"));
     assert!(production_open.contains("ProductionRecoveredLifecycleOwnerStartupV1"));
     assert!(!production_open.contains("Ok(("));
     for forbidden in [
@@ -114,7 +128,6 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
         "pub tag:",
         "pub vote:",
         "pub prepare_certificate:",
-        "fn new(",
         "impl Clone for RecoveredAdapterStartup",
         "FnOnce",
         "LifecycleCoordinator",
@@ -132,6 +145,17 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
             "recovery token exposes forbidden surface {forbidden}"
         );
     }
+    let recovered_vote_impl = token
+        .split_once("impl RecoveredWalVoteSign {")
+        .expect("locate the recovered WAL vote authority implementation")
+        .1
+        .split_once("\n}")
+        .expect("locate the end of the recovered WAL vote authority implementation")
+        .0;
+    assert!(
+        !recovered_vote_impl.contains("fn new("),
+        "the recovered WAL vote authority must have no caller-visible constructor"
+    );
     assert_eq!(
         production
             .matches("fn authenticate_recovered_wal_vote_sign(")
@@ -315,7 +339,10 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
         2,
         "recovered ordinary-Validate retag is called only by its sealed projection"
     );
-    let replay = include_str!("../v2_lifecycle_replay_authority.rs");
+    let replay = concat!(
+        include_str!("../v2_lifecycle_replay_authority.rs"),
+        include_str!("../v2_lifecycle_replay_authority_certified_body.rs")
+    );
     for required in [
         "pub(crate) struct RecoveredWalVoteReplayEvidenceV1",
         "locator: PersistedWalFrameLocatorV1",
@@ -379,7 +406,7 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
     for required in [
         "parent.exactly_matches_recovered_vote(&recovered)",
         "parent.runtime_causal_lifecycle_key()",
-        "parent.inherited_prepare_authority()",
+        ".inherited_prepare_authority()",
         "project_recovered_wal_vote_successor(&predecessor, recovered)",
     ] {
         assert!(
@@ -387,6 +414,13 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
             "storage-authenticated runtime reconstruction omitted {required}"
         );
     }
+    assert_eq!(
+        reconstructed
+            .matches(".inherited_prepare_authority()")
+            .count(),
+        2,
+        "storage-authenticated reconstruction must bind both inherited Prepare fields"
+    );
     for forbidden in [
         "RuntimeEffectOwnership",
         "RuntimeLifecycleOrdinalSource",
@@ -422,8 +456,6 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
         "envelope: StoredBodyEnvelope",
         "impl Drop for RecoveredDecisionApplyBodyCut<'_>",
         "a detached recovered Decision body cannot collide while restoring",
-        "wire::GlobalPhase::Prepare => recovered.tag().view() == vote.round.view",
-        "wire::GlobalPhase::Commit => recovered.tag().view() >= vote.round.view",
     ] {
         assert!(
             marker.contains(required),
@@ -441,6 +473,22 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
         assert!(
             !marker.contains(forbidden),
             "body marker cut exposes forbidden surface {forbidden}"
+        );
+    }
+    let recovered_parent_detach = body_store
+        .split_once("pub(super) fn detach_recovered_validated_parent(")
+        .expect("locate recovered validated-parent detach")
+        .1
+        .split_once("/// Execute one exact-body persistence task")
+        .expect("locate end of recovered validated-parent detach")
+        .0;
+    for required in [
+        "wire::GlobalPhase::Prepare => recovered.tag().view() == vote.round.view",
+        "wire::GlobalPhase::Commit => recovered.tag().view() >= vote.round.view",
+    ] {
+        assert!(
+            recovered_parent_detach.contains(required),
+            "recovered validated-parent detach omitted {required}"
         );
     }
     assert!(!body_store.contains("#[derive(Clone)]\npub(super) struct RecoveredValidatedBodyCut"));

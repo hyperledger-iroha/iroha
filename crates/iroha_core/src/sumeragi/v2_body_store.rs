@@ -269,7 +269,7 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterPreviewV1<'store> {
 /// before authenticating the complete startup census and publishing LedgerV1.
 #[must_use = "recovered Decision storage preview must enter exact publication"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyStoragePreviewV1<'store> {
-    staged: super::v2::RecoveredDecisionApplyStagedStorageV1,
+    staged: Box<super::v2::RecoveredDecisionApplyStagedStorageV1>,
     body: RecoveredDecisionApplyBodyCut<'store>,
 }
 /// Storage-ready state after the exact body has been restored to its owner.
@@ -278,7 +278,7 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStoragePreviewV1<'store> {
 /// all adapter and lifecycle authority here for restart-only handling.
 #[must_use = "restored Decision Apply state must enter the single-fsync transaction"]
 pub(in crate::sumeragi) struct RestoredRecoveredDecisionApplyStorageV1 {
-    staged: super::v2::RecoveredDecisionApplyStagedStorageV1,
+    staged: Box<super::v2::RecoveredDecisionApplyStagedStorageV1>,
 }
 /// Opaque failure while closing the adapter preview for storage publication.
 #[must_use = "failed recovered Decision storage projection requires restart"]
@@ -339,10 +339,8 @@ impl RecoveredDecisionApplyStoragePreviewV1<'_> {
         dead_code,
         reason = "reviewed inspection seam retained beside the consuming restore path"
     )]
-    pub(in crate::sumeragi) const fn staged(
-        &self,
-    ) -> &super::v2::RecoveredDecisionApplyStagedStorageV1 {
-        &self.staged
+    pub(in crate::sumeragi) fn staged(&self) -> &super::v2::RecoveredDecisionApplyStagedStorageV1 {
+        self.staged.as_ref()
     }
     /// Restore the exact body frame and marker, ending the store borrow before
     /// the external LedgerV1 publication can begin.
@@ -354,15 +352,13 @@ impl RecoveredDecisionApplyStoragePreviewV1<'_> {
 }
 impl RestoredRecoveredDecisionApplyStorageV1 {
     /// Borrow the exact staged lineage for the final pre-fsync recheck.
-    pub(in crate::sumeragi) const fn staged(
-        &self,
-    ) -> &super::v2::RecoveredDecisionApplyStagedStorageV1 {
-        &self.staged
+    pub(in crate::sumeragi) fn staged(&self) -> &super::v2::RecoveredDecisionApplyStagedStorageV1 {
+        self.staged.as_ref()
     }
     /// Consume the restored state only inside the lifecycle publication tail.
     pub(in crate::sumeragi) fn into_staged(
         self,
-    ) -> super::v2::RecoveredDecisionApplyStagedStorageV1 {
+    ) -> Box<super::v2::RecoveredDecisionApplyStagedStorageV1> {
         self.staged
     }
 }

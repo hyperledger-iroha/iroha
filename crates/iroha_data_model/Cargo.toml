@@ -163,7 +163,7 @@ required-features = ["dev-tools", "test-fixtures", "json"]
 [[bin]]
 name = "musubi_fixtures"
 path = "src/bin/musubi_fixtures.rs"
-required-features = ["dev-tools", "test-fixtures", "json"]
+required-features = ["dev-tools", "test-fixtures", "json", "transparent_api"]
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 

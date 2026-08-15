@@ -1366,11 +1366,11 @@ mod tests {
         );
         assert_eq!(
             hex::encode(tx_digest),
-            "f706a07a53999b6fe50baa1c970948d06cf558f9dfea83e90cf2f7fe6649b4d1"
+            "3bcb5f79e7b4d64e764ce8218ecf0619483ec8c9cc2d4fe77b93f6b70429dea1"
         );
         assert_eq!(
             hex::encode(replay_nullifier),
-            "4cab0d306af008a3069e2c3656c1b17f29c4da7b931c46b032f442ccfbb635e3"
+            "c34b477523c0a5ef9738211b85fc3d620ddfdcac41db7ad24fe7b6f0d6cbe5d6"
         );
     }
     #[cfg(feature = "json")]

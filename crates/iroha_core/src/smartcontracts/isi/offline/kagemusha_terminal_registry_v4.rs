@@ -20,7 +20,6 @@ use crate::zk::{
     },
     kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
 };
-use iroha_crypto::Hash;
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     offline::{
@@ -40,6 +39,8 @@ use iroha_data_model::{
         KagemushaRecursiveSpendCandidateV4, KagemushaRecursiveSpendQualificationReceiptV4,
         KagemushaRecursiveSpendReleaseActivationV4, KagemushaRecursiveSpendReleaseAttestationV4,
         KagemushaRecursiveSpendReleasePolicyV1, KagemushaStepCircuitParamsV4,
+        kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
+        kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4,
     },
     proof::{VerifyingKeyBox, VerifyingKeyRecord},
     state_path::StatePath,
@@ -73,8 +74,6 @@ use std::{
 };
 pub(crate) const TERMINAL_RELEASE_STATE_KEY_PREFIX_V4: &str = "kagemusha_terminal_release_v4_";
 const VERIFIER_OWNER_MANIFEST_PREFIX_V4: &str = "kagemusha-v4-";
-const VERIFIER_IDENTITY_SCHEMA_V4: &str = "kagemusha.offline.recursive_spend.verifier_identity.v4";
-const VERIFIER_IDENTITY_VERSION_V4: u16 = 4;
 const STEP_EQ_VERIFIER_CURVE_V4: &str = "vesta";
 const STEP_EP_VERIFIER_CURVE_V4: &str = "pallas";
 const MAX_POLICY_BYTES: usize = 64 * 1024;
@@ -145,18 +144,6 @@ const CATALOG_RELEASE_METADATA_TRANSIENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTES
 /// Extra allocator/metadata headroom applied to decoded catalog estimates.
 const DECODED_ESTIMATE_HEADROOM_NUMERATOR_V4: u64 = 5;
 const DECODED_ESTIMATE_HEADROOM_DENOMINATOR_V4: u64 = 4;
-/// Canonical identity committed by each V4 verifier registry record.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-struct KagemushaTerminalVerifierIdentityV4 {
-    schema: String,
-    version: u16,
-    manifest_sha256: [u8; 32],
-    parity: KagemushaPastaCycleParityV1,
-    circuit_id: String,
-    circuit_params_sha256: [u8; 32],
-    compiled_protocol_structure_sha256: [u8; 32],
-    public_input_limbs: u32,
-}
 /// Readiness-safe identity derived only from an authenticated V4 release.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KagemushaAuthenticatedArtifactSetV4 {
@@ -3464,9 +3451,8 @@ pub(crate) fn verifier_owner_manifest_id(
     binding
         .validate()
         .map_err(|error| format!("invalid Kagemusha V4 artifact binding: {error}"))?;
-    Ok(format!(
-        "{VERIFIER_OWNER_MANIFEST_PREFIX_V4}{}",
-        hex::encode(binding.manifest_sha256)
+    Ok(kagemusha_recursive_spend_verifier_owner_manifest_id_v4(
+        binding.manifest_sha256,
     ))
 }
 /// Derive the release- and layout-bound public-input identity stored in a V4
@@ -3475,25 +3461,8 @@ pub(crate) fn verifier_public_inputs_schema_hash(
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     parity: KagemushaPastaCycleParityV1,
 ) -> Result<[u8; 32], String> {
-    manifest.validate().map_err(|error| error.to_string())?;
-    let manifest_bytes = norito::to_bytes(manifest)
-        .map_err(|error| format!("failed to encode Kagemusha V4 manifest: {error}"))?;
-    let profile = profile(manifest, parity)?;
-    let identity = KagemushaTerminalVerifierIdentityV4 {
-        schema: VERIFIER_IDENTITY_SCHEMA_V4.to_owned(),
-        version: VERIFIER_IDENTITY_VERSION_V4,
-        manifest_sha256: Sha256::digest(manifest_bytes).into(),
-        parity,
-        circuit_id: profile.circuit_id.clone(),
-        circuit_params_sha256: profile
-            .circuit_params_sha256()
-            .map_err(|error| error.to_string())?,
-        compiled_protocol_structure_sha256: profile.compiled_protocol_structure_sha256,
-        public_input_limbs: profile.circuit_params.public_input_limbs,
-    };
-    let bytes = norito::to_bytes(&identity)
-        .map_err(|error| format!("failed to encode Kagemusha V4 verifier identity: {error}"))?;
-    Ok(Hash::new(bytes).into())
+    kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4(manifest, parity)
+        .map_err(|error| error.to_string())
 }
 fn decode_trusted_policy(bytes: &[u8]) -> Result<KagemushaRecursiveSpendReleasePolicyV1, String> {
     if bytes.is_empty() || bytes.len() > MAX_POLICY_BYTES || bytes.iter().all(|byte| *byte == 0) {

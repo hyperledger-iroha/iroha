@@ -108,13 +108,15 @@ mod model {
         /// Completed AXT envelopes recorded while executing the block.
         #[norito(default)]
         pub axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
-        /// Canonically ordered post-execution lane effects authenticated by the global CommitQC.
-        pub lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
         /// Trigger completion events recorded while executing the block.
         #[norito(default)]
         pub trigger_completions: Vec<TriggerCompletedEvent>,
         /// Canonical AXT policy snapshot used while executing the block.
         pub axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
+        /// Canonically ordered post-execution lane effects authenticated by the global CommitQC.
+        ///
+        /// This required V1 field stays last so its absence cannot alias a defaulted extension.
+        pub lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
     }
 }
 pub use self::model::{BlockPayload, BlockResult};

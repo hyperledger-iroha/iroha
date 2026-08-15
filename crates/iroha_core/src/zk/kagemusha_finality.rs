@@ -1418,7 +1418,7 @@ mod tests {
                     changed_power.manifest_digest,
                 )
                 .unwrap_err(),
-            KagemushaTopUpFinalityVerifyError::RosterContextMismatch
+            KagemushaTopUpFinalityVerifyError::InvalidStructure
         );
         assert_eq!(
             verifier.roster_crypto_verification_count(),
