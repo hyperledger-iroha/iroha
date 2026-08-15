@@ -138,6 +138,14 @@ max_tx_value = "1000000000"
 operation_registry_max_entries = 4096
 operation_registry_max_bytes = 524288
 
+# The base template deliberately has no active `[settlement.offline]` release
+# paths, so ordinary rendering has no dependency on unpublished artifacts.
+# Once an immutable Kagemusha V4 release is installed on every validator, pass
+# `--kagemusha-release-root /absolute/root-controlled/path` to
+# `render_taira_validator_bundle.py`; the renderer derives the policy, catalog,
+# qualification-seal, and decoded-budget settings outside the validator-owned
+# install root.
+
 [torii.account_onboarding]
 authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
 private_key_file = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"

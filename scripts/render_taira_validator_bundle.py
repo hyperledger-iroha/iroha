@@ -24,6 +24,17 @@ except ModuleNotFoundError as error:
 DEFAULT_NETWORK_ADDRESS = "0.0.0.0:1337"
 DEFAULT_TORII_ADDRESS = "0.0.0.0:18080"
 DEFAULT_INSTALL_ROOT = Path("/etc/iroha/taira-validator")
+KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH = Path("policy/release-policy-v1.norito")
+KAGEMUSHA_ARTIFACT_RELATIVE_PATH = Path("catalog")
+KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH = Path(
+    "seals/catalog-qualification-v1.norito"
+)
+KAGEMUSHA_MAX_DECODED_BYTES = 256 * 1024 * 1024
+KAGEMUSHA_MANAGED_CONFIG_KEYS = (
+    "kagemusha_release_policy_path",
+    "kagemusha_artifact_dir",
+    "kagemusha_catalog_qualification_seal_path",
+)
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
 MAX_VALIDATORS = 31
@@ -1665,6 +1676,9 @@ def render_validator_config(
     streaming_identity_private_key_file: Path | None = None,
     manifest_directory: Path = DEFAULT_INSTALL_ROOT / "manifests",
     sorafs_admission_directory: Path = DEFAULT_INSTALL_ROOT / "sorafs_admission",
+    kagemusha_release_policy_path: Path | None = None,
+    kagemusha_artifact_dir: Path | None = None,
+    kagemusha_catalog_qualification_seal_path: Path | None = None,
     sumeragi_body_bytes: int | None = None,
     genesis_expected_hash: str | None = None,
     genesis_file: Path | None = None,
@@ -1677,10 +1691,20 @@ def render_validator_config(
     body_bytes_rewritten = False
     genesis_expected_hash_rewritten = False
     genesis_file_rewritten = False
+    kagemusha_offline_section_seen = False
     rendered: list[str] = []
     trusted_peers_lines = _render_trusted_peers(validators)
     trusted_peers_pop_lines = _render_trusted_peers_pop(validators)
     shared = shared_secrets or SharedSecrets()
+    kagemusha_catalog_paths = (
+        kagemusha_release_policy_path,
+        kagemusha_artifact_dir,
+        kagemusha_catalog_qualification_seal_path,
+    )
+    if any(path is not None for path in kagemusha_catalog_paths) and not all(
+        path is not None for path in kagemusha_catalog_paths
+    ):
+        raise ValueError("Kagemusha release catalog paths must be supplied together")
 
     for raw_line in template_text.splitlines():
         stripped = raw_line.strip()
@@ -1693,6 +1717,22 @@ def render_validator_config(
         if stripped.startswith("[[") or stripped.startswith("["):
             current_section = stripped
             rendered.append(raw_line)
+            if current_section == "[settlement.offline]":
+                kagemusha_offline_section_seen = True
+                if kagemusha_release_policy_path is not None:
+                    rendered.extend(
+                        [
+                            "kagemusha_release_policy_path = "
+                            + _quote_toml(str(kagemusha_release_policy_path)),
+                            "kagemusha_artifact_dir = "
+                            + _quote_toml(str(kagemusha_artifact_dir)),
+                            "kagemusha_catalog_qualification_seal_path = "
+                            + _quote_toml(
+                                str(kagemusha_catalog_qualification_seal_path)
+                            ),
+                            f"kagemusha_max_decoded_bytes = {KAGEMUSHA_MAX_DECODED_BYTES}",
+                        ]
+                    )
             if current_section == "[genesis]" and genesis_file is not None:
                 rendered.append(f"file = {_quote_toml(str(genesis_file))}")
                 genesis_file_rewritten = True
@@ -1869,6 +1909,18 @@ def render_validator_config(
                 + _quote_toml(str(kagemusha_commands_private_key_file))
             )
             continue
+        if (
+            current_section == "[settlement.offline]"
+            and kagemusha_release_policy_path is not None
+            and stripped.partition("=")[0].strip()
+            in {
+                "kagemusha_release_policy_path",
+                "kagemusha_artifact_dir",
+                "kagemusha_catalog_qualification_seal_path",
+                "kagemusha_max_decoded_bytes",
+            }
+        ):
+            continue
         if current_section == "[soracloud_runtime.submission.signer]":
             signer_values = {
                 "handle": shared.soracloud_runtime_signer_handle,
@@ -1960,6 +2012,21 @@ def render_validator_config(
 
         rendered.append(raw_line)
 
+    if kagemusha_release_policy_path is not None and not kagemusha_offline_section_seen:
+        if rendered and rendered[-1]:
+            rendered.append("")
+        rendered.extend(
+            [
+                "[settlement.offline]",
+                "kagemusha_release_policy_path = "
+                + _quote_toml(str(kagemusha_release_policy_path)),
+                "kagemusha_artifact_dir = " + _quote_toml(str(kagemusha_artifact_dir)),
+                "kagemusha_catalog_qualification_seal_path = "
+                + _quote_toml(str(kagemusha_catalog_qualification_seal_path)),
+                f"kagemusha_max_decoded_bytes = {KAGEMUSHA_MAX_DECODED_BYTES}",
+            ]
+        )
+
     rendered_text = "\n".join(rendered)
     if not rendered_text.endswith("\n"):
         rendered_text += "\n"
@@ -1998,6 +2065,7 @@ def render_bundle(
     genesis_expected_hash: str | None = None,
     bundle_root: Path | None = None,
     onboarding_token_hash_tool: Path | None = None,
+    kagemusha_release_root: Path | None = None,
 ) -> list[Path]:
     """Render one config.toml per validator into output_dir."""
 
@@ -2026,6 +2094,19 @@ def render_bundle(
             onboarding_token_hash_tool,
         )
     template = _load_toml(base_config_path)
+    settlement = template.get("settlement", {})
+    offline = settlement.get("offline", {}) if isinstance(settlement, dict) else {}
+    managed_kagemusha_keys = (
+        set(KAGEMUSHA_MANAGED_CONFIG_KEYS).intersection(offline)
+        if isinstance(offline, dict)
+        else set()
+    )
+    if kagemusha_release_root is None and managed_kagemusha_keys:
+        listed = ", ".join(sorted(managed_kagemusha_keys))
+        raise ValueError(
+            "base config contains managed Kagemusha release paths without "
+            f"--kagemusha-release-root: {listed}"
+        )
     _validate_privacy_issuer_template(template, validators)
     sumeragi_body_bytes = _scaled_sumeragi_body_bytes(template, len(validators))
     template_text = base_config_path.read_text(encoding="utf-8")
@@ -2047,6 +2128,26 @@ def render_bundle(
             )
         if not bundle_root.exists() or bundle_root.resolve(strict=True) != bundle_root:
             raise ValueError("bundle_root must be an existing canonical directory")
+    if kagemusha_release_root is not None:
+        release_root_text = str(kagemusha_release_root)
+        if (
+            not kagemusha_release_root.is_absolute()
+            or kagemusha_release_root == Path("/")
+            or release_root_text.startswith("//")
+            or os.path.normpath(release_root_text) != release_root_text
+            or any(ord(character) < 0x20 for character in release_root_text)
+        ):
+            raise ValueError(
+                "kagemusha_release_root must be a canonical, non-root absolute path"
+            )
+        if (
+            kagemusha_release_root == path_root
+            or kagemusha_release_root.is_relative_to(path_root)
+            or path_root.is_relative_to(kagemusha_release_root)
+        ):
+            raise ValueError(
+                "kagemusha_release_root and the validator-writable install or bundle root must be disjoint"
+            )
     if not output_dir.is_absolute():
         raise ValueError("output_dir must be an absolute path")
     _ensure_private_directory(output_dir, "render output directory")
@@ -2156,6 +2257,21 @@ def render_bundle(
                 streaming_identity_private_key_file=streaming_identity_private_key_file,
                 manifest_directory=installed_manifest_dir,
                 sorafs_admission_directory=installed_sorafs_admission_dir,
+                kagemusha_release_policy_path=(
+                    kagemusha_release_root / KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+                    if kagemusha_release_root is not None
+                    else None
+                ),
+                kagemusha_artifact_dir=(
+                    kagemusha_release_root / KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+                    if kagemusha_release_root is not None
+                    else None
+                ),
+                kagemusha_catalog_qualification_seal_path=(
+                    kagemusha_release_root / KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
+                    if kagemusha_release_root is not None
+                    else None
+                ),
                 sumeragi_body_bytes=sumeragi_body_bytes,
                 genesis_expected_hash=genesis_expected_hash,
                 genesis_file=genesis_file,
@@ -2239,6 +2355,14 @@ def main(argv: list[str] | None = None) -> int:
             "token BLAKE3 digest from stdin"
         ),
     )
+    parser.add_argument(
+        "--kagemusha-release-root",
+        help=(
+            "opt in with an absolute root-controlled directory outside the "
+            "validator install/bundle root; settlement.offline policy, catalog, "
+            "and qualification-seal paths are derived beneath it"
+        ),
+    )
     args = parser.parse_args(argv)
 
     written = render_bundle(
@@ -2255,6 +2379,9 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.onboarding_token_hash_tool)
             if args.onboarding_token_hash_tool
             else None
+        ),
+        kagemusha_release_root=(
+            Path(args.kagemusha_release_root) if args.kagemusha_release_root else None
         ),
     )
     for path in written:

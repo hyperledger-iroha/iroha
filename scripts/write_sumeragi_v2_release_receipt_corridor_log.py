@@ -1242,7 +1242,7 @@ def _corridor_legs(
                 "command",
                 0,
                 f"{cargo_path} test -j1 --locked --offline -p irohad "
-                "--bin irohad --features test-network-message-control",
+                "--lib --features test-network-message-control",
             ),
             (
                 "source-sealed-workspace-clippy",

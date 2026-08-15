@@ -5,6 +5,8 @@
 mod receiver_snapshot;
 mod status;
 pub use self::model::*;
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     account::AccountId,
@@ -934,10 +936,7 @@ pub fn kagemusha_recursive_spend_verifier_key_id_v5(
 /// and evidence bytes are included so consensus has enough material to perform deterministic
 /// platform checks; the hashes provide stable replay keys and compact audit anchors.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OfflineDeviceAttestationRegistration {
     /// Registration format marker.
     pub version: u16,
@@ -1041,10 +1040,7 @@ pub struct OfflineAndroidKeyMintChallenge {
 /// Operators can rotate roots, publish deterministic revocations, and restrict accepted app
 /// identities without relying on external middleware state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OfflineDeviceAttestationPolicy {
     /// Policy format marker.
     pub version: u16,
@@ -1070,10 +1066,7 @@ pub struct OfflineDeviceAttestationPolicy {
 }
 /// Trusted platform root certificate for Offline device attestation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OfflineDeviceAttestationTrustedRoot {
     /// Platform class, for example `ios-appattest` or `android-keymint`.
     pub platform: String,
@@ -1086,10 +1079,7 @@ pub struct OfflineDeviceAttestationTrustedRoot {
 }
 /// Allowed iOS App Attest app identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OfflineIosAppAttestationPolicy {
     /// Apple App ID prefix (normally the Apple Developer Team ID).
     pub team_id: String,
@@ -1106,10 +1096,7 @@ pub struct OfflineIosAppAttestationPolicy {
 }
 /// Allowed Android `KeyMint` app identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct OfflineAndroidAppAttestationPolicy {
     /// Android package name.
     pub package_name: String,
@@ -8154,19 +8141,21 @@ mod kagemusha_v4_artifact_contract_tests {
             .expect("second V4 attestation subject");
         assert_eq!(first_subject, second_subject);
         let assert_subject_changes = |tampered: &mut _| {
-                let candidate = unsigned_candidate(tampered);
-                tampered.qualified_candidate_sha256 =
-                    kagemusha_recursive_spend_qualified_candidate_sha256_v4(
-                        candidate.sha256().expect("modified V4 candidate identity"),
-                        tampered.qualification_receipt_sha256,
-                    );
-                let subject = tampered
-                    .release_attestation_subject()
-                    .expect("valid modified V4 subject");
-                assert_ne!(second_subject, subject);
-            };
+            let candidate = unsigned_candidate(tampered);
+            tampered.qualified_candidate_sha256 =
+                kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                    candidate.sha256().expect("modified V4 candidate identity"),
+                    tampered.qualification_receipt_sha256,
+                );
+            let subject = tampered
+                .release_attestation_subject()
+                .expect("valid modified V4 subject");
+            assert_ne!(second_subject, subject);
+        };
         let mut params_tamper = manifest.clone();
-        params_tamper.profiles[0].circuit_params.minimum_unusable_rows += 1;
+        params_tamper.profiles[0]
+            .circuit_params
+            .minimum_unusable_rows += 1;
         assert_subject_changes(&mut params_tamper);
         let mut bootstrap_tamper = manifest.clone();
         bootstrap_tamper.profiles[0].artifacts[3].payload_sha256[0] ^= 1;

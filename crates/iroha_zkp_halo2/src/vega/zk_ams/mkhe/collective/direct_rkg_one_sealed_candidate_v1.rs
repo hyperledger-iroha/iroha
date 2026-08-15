@@ -4,8 +4,7 @@ use super::super::super::{
     direct_object_transport::ZkAmsMkheDirectObjectReadAtProviderV1,
 };
 use super::{
-    ZkAmsMkheErrorV1,
-    direct_rkg_one_publication_v1::DirectRkgOneProofPublishedUnverifiedOwnerV2,
+    ZkAmsMkheErrorV1, direct_rkg_one_publication_v1::DirectRkgOneProofPublishedUnverifiedOwnerV2,
 };
 
 /// Unverified authority-neutral candidate retaining the complete durable publication/proof owner.

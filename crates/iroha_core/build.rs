@@ -152,6 +152,7 @@ fn embed_exact_kagemusha_source_seal() {
             "\"commit_object_sha256\":\"{commit_object_sha256}\",",
             "\"commit_object_size\":{commit_object_size},",
             "\"committer_epoch\":{source_date_epoch},\"git_tree\":\"{source_git_tree}\",",
+            "\"ordered_parents\":[\"{parent_commit}\"],",
             "\"parent_commit\":\"{parent_commit}\",\"parent_tree\":\"{parent_tree}\",",
             "\"signature\":{{\"allowed_signers_sha256\":\"{ssh_allowed_signers_sha256}\",",
             "\"mechanism\":\"git-commit-ssh-signature-v1\",",

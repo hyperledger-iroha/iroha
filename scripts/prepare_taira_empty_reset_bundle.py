@@ -901,6 +901,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 base_genesis_path=genesis_template,
                 bundle_root=output,
                 onboarding_token_hash_tool=token_hash_tool_snapshot,
+                kagemusha_release_root=args.kagemusha_release_root,
             )
             if [path.parent.name for path in written] != list(SLUGS):
                 fail(
@@ -967,6 +968,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 genesis_expected_hash=expected_hash,
                 bundle_root=output,
                 onboarding_token_hash_tool=token_hash_tool_snapshot,
+                kagemusha_release_root=args.kagemusha_release_root,
             )
             if [path.parent.name for path in written] != list(SLUGS):
                 fail("post-signing renderer changed the exact four-validator roster")
@@ -1076,6 +1078,8 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 },
             }
         )
+        if args.kagemusha_release_root is not None:
+            manifest["kagemusha_release_root"] = str(args.kagemusha_release_root)
         atomic_write_json(output / "reset-manifest.json", manifest)
         _chmod_private_tree(output)
         _require_exact_names(output, OUTPUT_TOP_LEVEL_NAMES, "fresh signed reset")
@@ -1091,7 +1095,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
-        return {
+        result = {
             "bundle": str(output),
             "empty_storage_sha256": hashlib.sha256().hexdigest(),
             "free_bytes_before_copy": free_bytes_before_copy,
@@ -1101,6 +1105,9 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             "privacy_snapshot_manifest_sha256": authenticated_manifest_sha,
             "controller_digest": controller_digest,
         }
+        if args.kagemusha_release_root is not None:
+            result["kagemusha_release_root"] = str(args.kagemusha_release_root)
+        return result
     except BaseException:
         shutil.rmtree(output)
         raise
@@ -1116,6 +1123,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--genesis-external-signer", type=Path, required=True)
     parser.add_argument("--trusted-genesis-external-signer-sha256", required=True)
     parser.add_argument("--onboarding-token-hash-tool", type=Path, required=True)
+    parser.add_argument(
+        "--kagemusha-release-root",
+        type=Path,
+        help=(
+            "absolute root-controlled Kagemusha policy/catalog/seal root, disjoint "
+            "from the validator reset bundle"
+        ),
+    )
     parser.add_argument("--output-bundle", type=Path, required=True)
     parser.add_argument("--irohad-sha256", required=True)
     parser.add_argument("--source-commit", required=True)

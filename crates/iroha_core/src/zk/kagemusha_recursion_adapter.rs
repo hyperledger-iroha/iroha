@@ -12411,6 +12411,8 @@ fn kagemusha_k17_shape_probe_iteration_v5(
         false,
     )?;
     KAGEMUSHA_K17_SHAPE_PROBE_REQUIRED_V5.with(|captured| captured.borrow_mut().clear());
+    // Purge setup allocator slack before the fixed 64-GiB circuit-build corridor.
+    halo2_proofs::release_allocator_slack();
     let step_eq = build_kagemusha_step_eq_circuit_v5(
         &witness,
         step_eq_circuit_params.clone(),
@@ -12497,7 +12499,6 @@ fn kagemusha_k17_shape_probe_iteration_v5(
     })
 }
 /// Run the non-shipping compact-k17 populated-shape convergence diagnostic.
-///
 /// This path generates only transparent IPA parameters and uncompressed verifier keys for empty
 /// selector-composite circuits. It deliberately uses parseable dummy parent transcripts and
 /// arbitrary accumulators only to populate the recursive constraint graph. It never constructs a
@@ -12517,11 +12518,7 @@ pub fn run_kagemusha_k17_shape_probe_v5(
     if initial_advice_columns == 0 || initial_lookup_columns == 0 || maximum_iterations == 0 {
         return Err("Kagemusha k17 shape probe arguments must be non-zero".to_owned());
     }
-    // Populated recursive circuits reach Halo2's Rayon-backed fixed-base MSM.
-    // Match the production generator's disposable one-worker context so the
-    // diagnostic cannot multiply its large per-item construction scratch on
-    // the process-global pool. Enter the probe scope in the installed closure
-    // because its capture state is thread-local.
+    // Match production's one-worker pool to bound MSM scratch; capture state is thread-local.
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(KAGEMUSHA_GENERATION_RAYON_THREADS_V5)
         .thread_name(|_| "kagemusha-v5-shape-probe".to_owned())
@@ -12547,6 +12544,8 @@ fn run_kagemusha_k17_shape_probe_in_pool_v5(
     let mut candidate = (initial_advice_columns, initial_lookup_columns);
     for iteration in 1..=maximum_iterations {
         let required = kagemusha_k17_shape_probe_iteration_v5(iteration, candidate.0, candidate.1)?;
+        // Return dropped iteration graphs' allocator slack before closure confirmation.
+        halo2_proofs::release_allocator_slack();
         let next = (
             candidate.0.max(required.maximum_widths.0),
             candidate.1.max(required.maximum_widths.1),
@@ -12554,6 +12553,7 @@ fn run_kagemusha_k17_shape_probe_in_pool_v5(
         if next == candidate {
             let confirmed =
                 kagemusha_k17_shape_probe_iteration_v5(iteration + 1, candidate.0, candidate.1)?;
+            halo2_proofs::release_allocator_slack();
             if (
                 candidate.0.max(confirmed.maximum_widths.0),
                 candidate.1.max(confirmed.maximum_widths.1),

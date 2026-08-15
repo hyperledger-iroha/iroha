@@ -1602,7 +1602,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 525/525 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 532/532 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -2710,6 +2710,12 @@ production_data_model_unit_list="$(run_cargo test --locked --offline -p iroha_da
 production_data_model_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_data_model --lib -- --list --ignored
 )"
+production_zkp_halo2_unit_list="$(
+  run_cargo test --locked --offline -p iroha_zkp_halo2 --lib -- --list
+)"
+production_zkp_halo2_ignored_unit_list="$(
+  run_cargo test --locked --offline -p iroha_zkp_halo2 --lib -- --list --ignored
+)"
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
@@ -2719,10 +2725,10 @@ production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
 )"
 production_irohad_unit_list="$(
-  run_cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control -- --list
+  run_cargo test --locked --offline -p irohad --lib --features test-network-message-control -- --list
 )"
 production_irohad_ignored_unit_list="$(
-  run_cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control -- --list --ignored
+  run_cargo test --locked --offline -p irohad --lib --features test-network-message-control -- --list --ignored
 )"
 production_config_unit_list="$(run_cargo test --locked --offline -p iroha_config --lib -- --list)"
 production_config_ignored_unit_list="$(
@@ -2843,6 +2849,8 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_missing_extra_and_tampered_signer_pops
   sumeragi::v2_lane_work::tests::historical_recovery_request_survives_current_state_key_pruning
   sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_stale_incarnation_and_unanchored_view
+  sumeragi::v2_lane_work::tests::decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag
+  sumeragi::v2_lane_work::tests::unfinished_historical_lane_session_crosses_a_second_rollover_without_later_pops
   sumeragi::v2_core::refinement::tests::in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps
   sumeragi::v2_core::refinement::tests::in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_quorum
   queue::reservation_journal::tests::crash_at_every_operation_frame_write_boundary_is_prefix_atomic
@@ -3262,6 +3270,13 @@ required_multilane_data_model_focus_tests=(
   block::consensus::tests::autonomous_lane_execution_conflict_is_explicit_and_fail_closed
   block::consensus_v2::tests::execution_commitment_enforces_native_amx_manifest_shape_and_bound
 )
+required_multilane_zkp_halo2_focus_tests=(
+  vega::zk_ams::mkhe::collective::party_local_rkg_ephemeral_v1::direct_rkg_one_publication_v1::direct_rkg_one_lifecycle_v2::kats::stable_key_and_all_lifecycle_record_checksums_are_literal
+  vega::zk_ams::mkhe::collective::party_local_rkg_ephemeral_v1::direct_rkg_one_publication_v1::direct_rkg_one_lifecycle_v2::kats::stable_key_binds_context_party_slot_digit_and_party_identity
+  vega::zk_ams::mkhe::collective::party_local_rkg_ephemeral_v1::direct_rkg_one_publication_v1::direct_rkg_one_lifecycle_v2::tests::exact_cas_replay_conflict_mutation_error_and_false_winner_mint_nothing
+  vega::zk_ams::mkhe::collective::party_local_rkg_ephemeral_v1::direct_rkg_one_publication_v1::direct_rkg_one_lifecycle_v2::tests::exact_width_corruption_scope_and_reserved_state_are_fail_closed
+  vega::zk_ams::mkhe::collective::party_local_rkg_ephemeral_v1::direct_rkg_one_publication_v1::direct_rkg_one_lifecycle_v2::tests::reservation_mints_only_the_unique_insert_winner_and_recovery_is_observation_only
+)
 required_multilane_torii_focus_tests=(
   tests_runtime_handlers::torii_proxy_v5_roundtrip_and_forwarding_preserve_transaction_admission_binding
   tests_runtime_handlers::queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity
@@ -3329,13 +3344,14 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=525
+readonly expected_multilane_focus_test_count=532
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
     + ${#required_multilane_config_runtime_focus_tests[@]}
     + ${#required_multilane_config_fixtures_focus_tests[@]}
     + ${#required_multilane_data_model_focus_tests[@]}
+    + ${#required_multilane_zkp_halo2_focus_tests[@]}
     + ${#required_multilane_torii_focus_tests[@]}
     + ${#required_multilane_torii_shared_focus_tests[@]}
     + ${#required_multilane_integration_lib_focus_tests[@]}
@@ -3405,6 +3421,16 @@ for required_test in "${required_multilane_data_model_focus_tests[@]}"; do
     exit 1
   fi
 done
+for required_test in "${required_multilane_zkp_halo2_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$production_zkp_halo2_unit_list"; then
+    echo "missing required multilane iroha_zkp_halo2 focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$production_zkp_halo2_ignored_unit_list"; then
+    echo "required multilane iroha_zkp_halo2 focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
 multilane_torii_unit_list="$(
   run_cargo test --locked --offline -p iroha_torii --lib -- --list
 )"
@@ -3459,7 +3485,7 @@ done
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-  # unambiguous one-test Cargo transcript per entry. The canonical 525-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 532-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -3535,6 +3561,17 @@ if ((corridor_enabled)); then
   require_g_unit_log_results "${required_multilane_data_model_focus_tests[@]}"
 
   append_g_unit_inventory \
+    g-unit-iroha-zkp-halo2 iroha_zkp_halo2 \
+    "${required_multilane_zkp_halo2_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-zkp-halo2 cargo-focus \
+    "${#required_multilane_zkp_halo2_focus_tests[@]}" \
+    'for test in required_multilane_zkp_halo2_focus_tests; do cargo test --locked --offline -p iroha_zkp_halo2 --lib "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_crate_tests \
+      iroha_zkp_halo2 "${required_multilane_zkp_halo2_focus_tests[@]}"
+  require_g_unit_log_results "${required_multilane_zkp_halo2_focus_tests[@]}"
+
+  append_g_unit_inventory \
     g-unit-iroha-torii iroha_torii "${required_multilane_torii_focus_tests[@]}"
   run_corridor_leg \
     g-unit-iroha-torii cargo-focus "${#required_multilane_torii_focus_tests[@]}" \
@@ -3567,8 +3604,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 526 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 525 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 533 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 532 focused tests" >&2
     exit 1
   fi
 fi
@@ -3783,10 +3820,10 @@ for module_index in "${!production_liveness_modules[@]}"; do
   elif [[ "$module" == consensus_message_control::tests \
     || "$module" == network_relay_tests \
     || "$module" == tests::relay_fairness ]]; then
-    module_command="cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control ${module} -- --test-threads=1"
+    module_command="cargo test --locked --offline -p irohad --lib --features test-network-message-control ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      run_cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control \
+      run_cargo test --locked --offline -p irohad --lib --features test-network-message-control \
         "$module" -- --test-threads=1
   elif [[ "$module" == parameters::* ]]; then
     module_command="cargo test --locked --offline -p iroha_config --lib ${module} -- --test-threads=1"
@@ -3856,8 +3893,8 @@ run_final_workspace_verification() {
     run_cargo test --locked --offline --workspace
   run_corridor_leg \
     source-sealed-irohad-tests command 0 \
-    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --bin irohad --features test-network-message-control" \
-    run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control
+    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --lib --features test-network-message-control" \
+    run_cargo test --locked --offline -p irohad --lib --features test-network-message-control
   run_corridor_leg \
     source-sealed-workspace-clippy command 0 \
     "${IROHA_RELEASE_CARGO_BIN} clippy -j1 --locked --offline --workspace --all-targets -- -D warnings" \
@@ -4482,10 +4519,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 40 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
+  # 40 production-module + 10 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
-  # SDK + 6 diagnostics + 11 pytest legs = 88.
-  readonly expected_corridor_leg_count=88
+  # SDK + 6 diagnostics + 11 pytest legs = 89.
+  readonly expected_corridor_leg_count=89
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1

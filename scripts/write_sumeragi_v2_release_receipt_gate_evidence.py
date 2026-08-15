@@ -144,7 +144,7 @@ def _production_module_command(module: str) -> str:
         "tests::relay_fairness",
     }:
         return (
-            "cargo test --locked --offline -p irohad --bin iroha3d "
+            "cargo test --locked --offline -p irohad --lib "
             "--features test-network-message-control "
             f"{module} -- --test-threads=1"
         )

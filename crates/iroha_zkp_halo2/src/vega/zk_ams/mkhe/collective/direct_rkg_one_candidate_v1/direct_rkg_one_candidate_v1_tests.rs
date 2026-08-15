@@ -3,7 +3,7 @@ use super::*;
 use crate::vega::zk_ams::mkhe::{
     active::ZkAmsMkheGovernedActiveRosterV1,
     active_exact_binding::{
-        DirectRelationPublicObjectsV1, SealedDirectRkgOneProofOwnerV1,
+        DirectRelationPublicObjectsV1, PublishedDirectRkgOneProofOwnerV2,
         VerifiedPersistentWitnessBindingSetV1,
     },
     direct_collective_eval_ceremony::ZkAmsMkheDirectEvaluatedKeyTargetV1,
@@ -43,7 +43,7 @@ fn assert_ordered(section: &str, snippets: &[&str]) {
 
 #[expect(dead_code, reason = "compile-only precise-capture check")]
 fn semantic_owner_does_not_borrow_provider_or_objects<'a, P>(
-    owner: SealedDirectRkgOneProofOwnerV1<'a>,
+    owner: PublishedDirectRkgOneProofOwnerV2<'a>,
     context: ZkAmsMkheDirectCeremonyContextV1,
     objects: DirectRelationPublicObjectsV1,
     provider: &mut P,

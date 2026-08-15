@@ -1564,7 +1564,7 @@ canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
 yields the current 857-test, 40-module inventory. The complete source-sealed
 pre-network corridor
-contains 88 legs. Six source-
+contains 89 legs. Six source-
 sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
@@ -1635,9 +1635,10 @@ rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
 `fc038b30180549cc6002db8ec5630ebf8ad5bb04a06be6dd19774d2b6ea5f433`.
-The separate source-sealed G-UNIT inventory contains 525 focused tests,
-including 319 `iroha_core` tests. Its 526-line canonical TSV has SHA-256
-`dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`;
+The separate source-sealed G-UNIT inventory contains 532 focused tests,
+including 321 `iroha_core` and five `iroha_zkp_halo2` tests. Its 533-line
+canonical TSV has SHA-256
+`f1590363a43024969a7fceb947654e2afd1d7cad877dc8dcba5b863ba185d431`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
@@ -1675,7 +1676,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The five integration names share a module-filtered leg; the pre-network corridor
-now has 88 legs, including the governance-unlock audit module, the autonomous
+now has 89 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
@@ -1683,7 +1684,7 @@ geometry modules, and source-sealed command-success legs. Its finality, offline
 compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the forty-module, eighty-eight-leg corridor. It
+tests are not claimed by the forty-module, eighty-nine-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the

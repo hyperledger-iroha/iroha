@@ -195,7 +195,7 @@ struct PrepareActivationV4Args {
     /// The policy and release are embedded in one composite consensus instruction.
     #[arg(long)]
     device_attestation_policy: PathBuf,
-    /// New private file receiving a JSON array accepted by `iroha multisig propose`.
+    /// New private file receiving a JSON array accepted by `iroha ledger multisig propose`.
     #[arg(long)]
     output: PathBuf,
 }

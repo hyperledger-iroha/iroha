@@ -39,6 +39,7 @@ def test_isolated_cli_loads_only_its_trusted_sibling_modules(
     assert "--kagami" not in result.stdout
     assert "--onboarding-token-hash-tool" in result.stdout
     assert "--source-bundle-sha256" in result.stdout
+    assert "--kagemusha-release-root" in result.stdout
 
 
 class TairaResetFreeSpaceTests(unittest.TestCase):
@@ -286,6 +287,7 @@ def _prepare_args(
         workspace_source_manifest_sha256="ef" * 32,
         controller_manifest=controller_manifest,
         controller_digest="12" * 32,
+        kagemusha_release_root=None,
         minimum_free_bytes=0,
     )
 
@@ -641,7 +643,15 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     )
     _write_private(signer, b"fake external signer")
     signer.chmod(0o700)
-    monkeypatch.setattr(reset_bundle.renderer, "render_bundle", _fake_renderer)
+    render_release_roots: list[Path | None] = []
+
+    def render_with_release_root(*render_args, **render_kwargs):
+        render_release_roots.append(render_kwargs.get("kagemusha_release_root"))
+        return _fake_renderer(*render_args, **render_kwargs)
+
+    monkeypatch.setattr(
+        reset_bundle.renderer, "render_bundle", render_with_release_root
+    )
     monkeypatch.setattr(
         reset_bundle,
         "_validate_rendered_configs",
@@ -659,6 +669,7 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
         ),
     )
     args = _prepare_args(private, source, privacy, signer)
+    args.kagemusha_release_root = Path("/srv/iroha-kagemusha/taira-v4")
     _trust_test_controller(args, monkeypatch)
 
     result = reset_bundle.prepare(args)
@@ -666,11 +677,17 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     output = args.output_bundle
     manifest = json.loads((output / "reset-manifest.json").read_text(encoding="utf-8"))
     assert result["peer_count"] == 4
+    assert result["kagemusha_release_root"] == str(args.kagemusha_release_root)
+    assert render_release_roots == [
+        args.kagemusha_release_root,
+        args.kagemusha_release_root,
+    ]
     assert (output / "base-config.toml").read_bytes() == payloads["config.toml"]
     assert (output / "genesis.signed.nrt").read_bytes() == b"new signed genesis"
     assert not (output / "validator-secrets.toml").exists()
     assert manifest["chain_id"] == reset_bundle.CHAIN_ID
     assert manifest["dpn_validator_release_commit"] == DPN_COMMIT
+    assert manifest["kagemusha_release_root"] == str(args.kagemusha_release_root)
     assert manifest["source_reset_bundle_sha256"] == args.source_bundle_sha256
     assert (
         manifest["signed_genesis_sha256"]

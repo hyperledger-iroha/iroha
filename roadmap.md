@@ -1000,10 +1000,13 @@ Remaining work stays ordered and fail-closed:
   V6 audit equality, tamper rejection, and early capacity diagnostics. Then run
   the fresh guarded k17 shape probe and bind its exact result; this probe and
   authentic generation have not passed yet.
-- Seal the final reviewed source closure over signed `optimizations` anchor
-  `7d0d0d29544cbeaae114c1c098ee1e41187634e2`, requiring an empty tracked
-  diff, zero untracked files, present-empty gitlink directories, and the exact
-  separately bound root `Cargo.lock`. Build and hash the candidate
+- Seal the final reviewed source closure over the next trusted SSH-signed,
+  clean `optimizations` anchor. The current
+  `d81ab6c1bab217c84e6c38f078da7a909ec7b740` checkout is unsigned and has
+  tracked plus untracked changes, so it cannot be a production source seal.
+  Require an empty tracked diff, zero untracked files, present-empty gitlink
+  directories, and the exact separately bound root `Cargo.lock`. Build and
+  hash the candidate
   generator, runtime binaries, configuration, and reset tooling from that one
   provenance set; no earlier r5/r6 binary or artifact seal attests the k17
   layout.
@@ -1012,12 +1015,22 @@ Remaining work stays ordered and fail-closed:
   pair, complete the required independent review and physical-device evidence,
   finalize the immutable release, and qualify its validator catalog. Diagnostic
   probe output is not a candidate or promotion record.
-- Perform the authorized guarded reset across all four validators, deploy the
-  sealed binary/configuration/artifact set, and prove advancing consensus,
+- Install the finalized 17-file release and policy beneath a separate
+  root-controlled Kagemusha trust root on all four validators, qualify every
+  catalog with the admitted binary, and prove identical manifest digests and
+  whole-catalog byte accounting before startup. Because those settings change
+  `execution_policy_hash`, deploy them only through a fresh compatible reset
+  or an independently approved consensus-context migration. Recover advancing
+  Taira consensus and prove that the executing account already has both
+  genesis-only permissions, directly or through a role. The stock base-genesis
+  helper grants them to `genesis_authority`, not to an activation multisig, and
+  they cannot be repaired after genesis. Then prepare and approve the
+  one-instruction governed activation at a strictly future height; height 2
+  remains valid only for an explicitly authorized fresh guarded reset. Prove committed finality,
   query-visible `/status.blocks` equality, ordinary node readiness, universal
-  `cash_handoff_v1`/ABI-21 capability discovery without an asset catalog,
-  signed canary operation, a restart below 45 seconds, and continued
-  advancement after restart.
+  `cash_handoff_v1`/ABI-21 capability discovery without an asset enrollment
+  gate, a real top-up/redemption canary, a restart below 45 seconds, and
+  continued advancement after restart.
 
 ## ZK-ACE JavaScript signed-transaction parity
 

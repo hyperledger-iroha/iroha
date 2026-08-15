@@ -23,11 +23,11 @@ use super::super::super::{
     },
 };
 
+#[path = "direct_rkg_one_publication_v1/direct_rkg_one_lifecycle_v2.rs"]
+mod direct_rkg_one_lifecycle_v2;
 #[cfg(test)]
 #[path = "direct_rkg_one_publication_v1/direct_rkg_one_orphan_journal_v1.rs"]
 mod direct_rkg_one_orphan_journal_v1;
-#[path = "direct_rkg_one_publication_v1/direct_rkg_one_lifecycle_v2.rs"]
-mod direct_rkg_one_lifecycle_v2;
 pub(super) use direct_rkg_one_lifecycle_v2::{
     DirectRkgOneFreshReservationOutcomeV2, DirectRkgOneProofPublishedUnverifiedOwnerV2,
     persist_direct_rkg_one_proof_published_unverified_v2, reserve_direct_rkg_one_fresh_v2,
@@ -145,9 +145,7 @@ pub(super) fn publish_direct_rkg_one_h0_h1_v1<'a, P>(
     ZkAmsMkheErrorV1,
 >
 where
-    P: ZkAmsMkheDirectObjectCasPublicationV1
-        + ZkAmsMkheDirectRkgOneLifecycleStoreV2
-        + ?Sized,
+    P: ZkAmsMkheDirectObjectCasPublicationV1 + ZkAmsMkheDirectRkgOneLifecycleStoreV2 + ?Sized,
 {
     let (context, party_index) = h0_ready.stream_axes_v1();
     let scope = direct_rkg_one_publication_scope_v1(roster, context, party_index)?;
