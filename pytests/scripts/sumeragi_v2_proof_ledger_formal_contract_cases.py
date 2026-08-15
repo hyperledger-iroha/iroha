@@ -438,6 +438,12 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
 }
 
 REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
+    Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
+        Path(
+            "crates/iroha_core/src/sumeragi/tests/"
+            "v2_lane_work_lifecycle_and_recovery_cases.rs"
+        ),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"): (
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs"),
@@ -460,9 +466,9 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 48
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 4
-assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 4
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 49
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 5
+assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 5
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 44
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS

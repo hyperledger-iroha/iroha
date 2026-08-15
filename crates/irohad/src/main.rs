@@ -1,4 +1,4 @@
-//! Iroha node executable and feature-isolated real-network consensus fault-injection control.
+// Iroha node executable and feature-isolated real-network consensus fault-injection control.
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
@@ -9823,7 +9823,6 @@ impl Iroha {
             );
             #[cfg(not(feature = "embedded-soracloud-runtime"))]
             let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
-                Arc::new(config.common.chain.clone()),
                 Arc::clone(&queue),
                 Arc::clone(&state),
                 signer,

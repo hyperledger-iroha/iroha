@@ -77,7 +77,7 @@
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": 8761,
     "crates/iroha_core/src/sumeragi/v2_core/tests.rs": 7535,
     "crates/iroha_core/src/sumeragi/v2_effects.rs": 13651,
-    "crates/iroha_core/src/sumeragi/v2_lane_work.rs": 29840,
+    "crates/iroha_core/src/sumeragi/v2_lane_work.rs": 29350,
     "crates/iroha_core/src/sumeragi/v2_runtime.rs": 19586,
     "crates/iroha_core/src/sumeragi/v2_worker.rs": 22911,
     "crates/iroha_core/src/telemetry.rs": 14275,
