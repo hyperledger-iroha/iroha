@@ -853,15 +853,16 @@ fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
     let (context, keys) = authenticated_runtime_context();
     let commit = signed_runtime_quorum_certificate(&context, &keys, 0x77);
     let tag = EventTag::new(context.height, commit.round.view, Generation::new(5));
-    let bytes = vec![0x77; 4];
-    let manifest = wire::PayloadManifest::derive(
+    let bytes = vec![0x77, 6];
+    let manifest = encode_payload(
         &context,
         commit.proposal_round,
         commit.subject,
-        u64::try_from(bytes.len()).expect("small authority fixture"),
-        &[bytes],
+        &bytes,
     )
-    .expect("ordinary fetch manifest matches its physical lineage");
+    .expect("ordinary fetch payload has a canonical RS16 encoding")
+    .manifest()
+    .clone();
     let ordinary_fetch = AdapterEffect::FetchBody {
         tag,
         round: commit.proposal_round,

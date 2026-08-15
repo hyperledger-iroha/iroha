@@ -298,3 +298,70 @@ fn enter_view_projection_selects_and_fetches_the_exact_post_install_lock() {
     assert!(!refinement::accepts(substituted_control_projection));
     assert!(!before.transition_refines(&event, &substituted_control_state, outcome.effects()));
 }
+#[test]
+fn enter_view_without_a_lock_carries_and_fetches_nothing() {
+    let (before, event) = pending_timeout_install(None);
+    let mut after = before.clone();
+    let outcome = after
+        .step_in_place(event.clone())
+        .expect("materialize lock-free persisted-TC candidate");
+    assert!(matches!(
+        outcome.effects(),
+        [Effect::EnterView {
+            protected_lock: None,
+            ..
+        }]
+    ));
+    let projection = before.transition_projection(&event, &after, outcome.effects());
+    assert!(refinement::accepts(projection));
+    let mut nonzero_absent_context = projection;
+    nonzero_absent_context
+        .enter_view
+        .effect_protected_lock
+        .context_id
+        .word0 = 1;
+    assert!(!refinement::accepts(nonzero_absent_context));
+    let mut nonzero_absent_subject = projection;
+    nonzero_absent_subject
+        .enter_view
+        .effect_protected_lock
+        .subject
+        .word3 = 1;
+    assert!(!refinement::accepts(nonzero_absent_subject));
+    let mut invented = projection;
+    invented.enter_view.effect_protected_lock.present = true;
+    invented.enter_view.effect_protected_lock.context_id =
+        Reducer::context_identity_projection(before.context.id());
+    invented.enter_view.effect_protected_lock.height = before.context.height();
+    invented.enter_view.effect_protected_lock.phase = 1;
+    invented.enter_view.effect_protected_lock.subject =
+        Reducer::subject_identity_projection(Subject::repeat(0xb5));
+    assert!(!refinement::accepts(invented));
+    let mut invented_prepare_control_state = after;
+    invented_prepare_control_state.outbound_control.insert(
+        OutboundControlClass::PrepareQc,
+        ConsensusMessageV2::TimeoutCertificate(timeout_certificate(&before.context, 0, None)),
+    );
+    let invented_prepare_control_projection = before.transition_projection(
+        &event,
+        &invented_prepare_control_state,
+        outcome.effects(),
+    );
+    assert!(
+        invented_prepare_control_projection
+            .enter_view
+            .prepare_control_slot_present_after
+    );
+    assert!(
+        !invented_prepare_control_projection
+            .enter_view
+            .retained_prepare_qc_after
+            .present
+    );
+    assert!(!refinement::accepts(invented_prepare_control_projection));
+    assert!(!before.transition_refines(
+        &event,
+        &invented_prepare_control_state,
+        outcome.effects()
+    ));
+}

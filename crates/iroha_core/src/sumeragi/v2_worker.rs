@@ -80,10 +80,10 @@ use crate::{
     lane_consensus::LaneDrainVoteV1,
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
-        CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarClosedPrefix,
-        CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
-        CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarStreamEpochV1,
-        MergeSidecarError, reliable_flush_topic_tag,
+        CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarCloseAckV1,
+        CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarMessage,
+        CertifiedMergeSidecarRequestV1, CertifiedMergeSidecarSemanticSequenceV1,
+        CertifiedMergeSidecarStreamEpochV1, MergeSidecarError, reliable_flush_topic_tag,
     },
     native_amx::NativeAmxMessage,
 };
@@ -13145,23 +13145,12 @@ impl PendingExactOutput {
         }
         Ok(heights)
     }
-    fn close_certified_sidecar_prefix(
+    fn remove_fanouts_matching(
         &mut self,
-        prefix: &CertifiedMergeSidecarClosedPrefix,
+        covered: impl Fn(&PendingExactFanout) -> bool,
+        validate_removed: impl Fn(&PendingExactFanout) -> Result<(), String>,
+        operation: &'static str,
     ) -> Result<usize, String> {
-        let covered = |fanout: &PendingExactFanout| {
-            matches!(
-                &fanout.rollover_claim,
-                ExactOutputRolloverClaim::CertifiedSidecarChunk { transfer, .. }
-                    if certified_sidecar_prefix_covers_occurrence(
-                        prefix,
-                        &transfer.requester,
-                        transfer.service_generation,
-                        transfer.stream_epoch,
-                        transfer.semantic_sequence,
-                    )
-            )
-        };
         let mut current_sources = BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
         let mut current_reservations = BTreeMap::<ExactTargetReservation, usize>::new();
         let mut retained_sources =
@@ -13176,12 +13165,12 @@ impl PendingExactOutput {
                     .zip(&fanout.message_hashes)
                     .any(|(message, expected)| HashOf::new(message) != *expected)
             {
-                return Err(
-                    "Sumeragi v2 sidecar close found altered exact-output payload".to_owned(),
-                );
+                return Err(format!(
+                    "Sumeragi v2 {operation} found altered exact-output payload"
+                ));
             }
             let fifo_id = fanout.fifo_id.ok_or_else(|| {
-                "Sumeragi v2 sidecar close found an unowned exact-output fanout".to_owned()
+                format!("Sumeragi v2 {operation} found an unowned exact-output fanout")
             })?;
             let sources = fanout.outstanding_sources()?;
             let reservations = fanout.outstanding_reservation_counts()?;
@@ -13193,19 +13182,15 @@ impl PendingExactOutput {
             }
             for (reservation, count) in &reservations {
                 let aggregate = current_reservations.entry(reservation.clone()).or_default();
-                *aggregate = aggregate.checked_add(*count).ok_or_else(|| {
-                    "Sumeragi v2 sidecar close ownership count overflowed".to_owned()
-                })?;
+                *aggregate = aggregate
+                    .checked_add(*count)
+                    .ok_or_else(|| format!("Sumeragi v2 {operation} ownership count overflowed"))?;
             }
             if covered(fanout) {
-                if !fanout.is_certified_sidecar_chunk_fanout() {
-                    return Err(
-                        "Sumeragi v2 sidecar close claim covers a different output kind".to_owned(),
-                    );
-                }
+                validate_removed(fanout)?;
                 removed = removed
                     .checked_add(1)
-                    .ok_or_else(|| "Sumeragi v2 sidecar close count overflowed".to_owned())?;
+                    .ok_or_else(|| format!("Sumeragi v2 {operation} count overflowed"))?;
                 continue;
             }
             for source in sources {
@@ -13214,31 +13199,73 @@ impl PendingExactOutput {
             for (reservation, count) in reservations {
                 let aggregate = retained_reservations.entry(reservation).or_default();
                 *aggregate = aggregate.checked_add(count).ok_or_else(|| {
-                    "Sumeragi v2 retained sidecar ownership count overflowed".to_owned()
+                    format!("Sumeragi v2 retained {operation} ownership count overflowed")
                 })?;
             }
         }
         if current_sources != self.source_fifo_owners
             || current_reservations != self.reservation_owner_counts
         {
-            return Err(
-                "Sumeragi v2 sidecar close found inconsistent exact-output ownership".to_owned(),
-            );
+            return Err(format!(
+                "Sumeragi v2 {operation} found inconsistent exact-output ownership"
+            ));
         }
         let mut retained_units = 0usize;
         let mut retained_shared_units = 0usize;
         for (reservation, count) in &retained_reservations {
             retained_units = retained_units
                 .checked_add(*count)
-                .ok_or_else(|| "Sumeragi v2 retained sidecar units overflowed".to_owned())?;
+                .ok_or_else(|| format!("Sumeragi v2 retained {operation} units overflowed"))?;
             let frozen_credit = usize::from(self.reserved_target_classes.contains(reservation));
             retained_shared_units = retained_shared_units
                 .checked_add(count.checked_sub(frozen_credit).ok_or_else(|| {
-                    "Sumeragi v2 retained sidecar frozen credit exceeded ownership".to_owned()
+                    format!("Sumeragi v2 retained {operation} frozen credit exceeded ownership")
                 })?)
-                .ok_or_else(|| "Sumeragi v2 retained shared units overflowed".to_owned())?;
+                .ok_or_else(|| {
+                    format!("Sumeragi v2 retained {operation} shared units overflowed")
+                })?;
         }
         self.fanouts.retain(|fanout| !covered(fanout));
+        self.source_fifo_owners = retained_sources;
+        self.reservation_owner_counts = retained_reservations;
+        self.ownership_units = retained_units;
+        self.shared_ownership_units = retained_shared_units;
+        self.next_fanout_index = if self.fanouts.is_empty() {
+            0
+        } else {
+            self.next_fanout_index % self.fanouts.len()
+        };
+        Ok(removed)
+    }
+    fn close_certified_sidecar_prefix(
+        &mut self,
+        prefix: &CertifiedMergeSidecarClosedPrefix,
+    ) -> Result<usize, String> {
+        let covered = |fanout: &PendingExactFanout| {
+            matches!(
+                &fanout.rollover_claim,
+                ExactOutputRolloverClaim::CertifiedSidecarChunk { transfer, .. }
+                    if certified_sidecar_prefix_covers_occurrence(
+                        prefix,
+                        &transfer.requester,
+                        transfer.service_generation,
+                        transfer.stream_epoch,
+                        transfer.semantic_sequence,
+                )
+            )
+        };
+        let removed = self.remove_fanouts_matching(
+            covered,
+            |fanout| {
+                fanout
+                    .is_certified_sidecar_chunk_fanout()
+                    .then_some(())
+                    .ok_or_else(|| {
+                        "Sumeragi v2 sidecar close claim covers a different output kind".to_owned()
+                    })
+            },
+            "sidecar close",
+        )?;
         self.admitted_sidecar_chunks.retain(|admission| {
             let projection = admission.projection();
             !certified_sidecar_prefix_covers_occurrence(
@@ -13249,17 +13276,97 @@ impl PendingExactOutput {
                 projection.semantic_sequence,
             )
         });
-        self.source_fifo_owners = retained_sources;
-        self.reservation_owner_counts = retained_reservations;
-        self.ownership_units = retained_units;
-        self.shared_ownership_units = retained_shared_units;
-        self.next_fanout_index = if self.fanouts.is_empty() {
-            0
-        } else {
-            self.next_fanout_index % self.fanouts.len()
-        };
         debug_assert!(self.sidecar_control_units() <= self.sidecar_admission_capacity);
         Ok(removed)
+    }
+    fn cancel_historical_lane_recovery_requests(
+        &mut self,
+        request_hashes: &BTreeSet<HashOf<LaneHistoricalRecoveryRequestV1>>,
+    ) -> Result<usize, String> {
+        if request_hashes.is_empty() {
+            return Ok(0);
+        }
+        self.remove_fanouts_matching(
+            |fanout| {
+                matches!(
+                    &fanout.rollover_claim,
+                    ExactOutputRolloverClaim::HistoricalLaneRecoveryRequest {
+                        request_hash,
+                        ..
+                    } if request_hashes.contains(request_hash)
+                )
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "historical recovery cancellation",
+        )
+    }
+    fn cancel_certified_merge_sidecar_requests(
+        &mut self,
+        request_hashes: &BTreeSet<HashOf<CertifiedMergeSidecarRequestV1>>,
+    ) -> Result<usize, String> {
+        if request_hashes.is_empty() {
+            return Ok(0);
+        }
+        self.remove_fanouts_matching(
+            |fanout| {
+                matches!(
+                    &fanout.rollover_claim,
+                    ExactOutputRolloverClaim::CertifiedSidecarRequest {
+                        request_hash,
+                        ..
+                    } if request_hashes.contains(request_hash)
+                )
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "certified merge-sidecar request cancellation",
+        )
+    }
+    fn cancel_acknowledged_certified_merge_sidecar_closes(
+        &mut self,
+        acknowledgements: &[CertifiedMergeSidecarCloseAckV1],
+    ) -> Result<usize, String> {
+        if acknowledgements.is_empty() {
+            return Ok(0);
+        }
+        if acknowledgements.iter().any(|acknowledgement| {
+            acknowledgement.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                || acknowledgement.closed_through == 0
+                || acknowledgement.close_id != acknowledgement.canonical_close_id()
+        }) {
+            return Err(
+                "Sumeragi v2 requester Close cancellation has an invalid acknowledgement prefix"
+                    .to_owned(),
+            );
+        }
+        self.remove_fanouts_matching(
+            |fanout| {
+                matches!(
+                    fanout.messages.as_slice(),
+                    [NetworkMessage::CertifiedMergeSidecar(message)]
+                        if matches!(
+                            message.as_ref(),
+                            CertifiedMergeSidecarMessage::Close(close)
+                                if acknowledgements.iter().any(|acknowledgement| {
+                                    acknowledgement.covers_requester_close(close)
+                                })
+                        )
+                )
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "acknowledged certified merge-sidecar Close cancellation",
+        )
     }
     fn pending_sidecar_flushes(&self) -> usize {
         self.fanouts
@@ -21034,6 +21141,43 @@ impl ProductionV2Services {
             return Ok(0);
         }
         pending.close_certified_sidecar_prefix(prefix)
+    }
+    /// Cancel every exact-output occurrence whose historical request owner
+    /// completed through another authenticated source.
+    pub(crate) fn cancel_historical_lane_recovery_requests(
+        &self,
+        request_hashes: &BTreeSet<HashOf<LaneHistoricalRecoveryRequestV1>>,
+    ) -> Result<usize, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            debug_assert!(!pending.is_pending());
+            return Ok(0);
+        }
+        pending.cancel_historical_lane_recovery_requests(request_hashes)
+    }
+    /// Cancel requester-side sidecar output after its transport attempt retires.
+    pub(crate) fn cancel_certified_merge_sidecar_requests(
+        &self,
+        request_hashes: &BTreeSet<HashOf<CertifiedMergeSidecarRequestV1>>,
+    ) -> Result<usize, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            debug_assert!(!pending.is_pending());
+            return Ok(0);
+        }
+        pending.cancel_certified_merge_sidecar_requests(request_hashes)
+    }
+    /// Cancel requester-side Close retries covered by cumulative acknowledgements.
+    pub(crate) fn cancel_acknowledged_certified_merge_sidecar_closes(
+        &self,
+        acknowledgements: &[CertifiedMergeSidecarCloseAckV1],
+    ) -> Result<usize, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            debug_assert!(!pending.is_pending());
+            return Ok(0);
+        }
+        pending.cancel_acknowledged_certified_merge_sidecar_closes(acknowledgements)
     }
     fn exact_target_geometry(
         peer: &PeerId,

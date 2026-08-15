@@ -875,6 +875,159 @@ fn retain_exact_remote_finality_quorum(
         .expect("cryptographically valid non-local finality quorum");
 }
 #[test]
+fn canonical_executed_block_dispatch_drains_old_output_before_current_request() {
+    let (adapter, keys, canonical_block, finality) = canonical_executed_block_recovery_fixture();
+    let need = canonical_executed_block_need(&canonical_block, &finality);
+    let requester = finality
+        .commit_qc
+        .signers
+        .iter()
+        .filter_map(|index| {
+            usize::try_from(*index)
+                .ok()
+                .and_then(|index| finality.height_context.roster.get(index))
+                .map(|entry| entry.validator.clone())
+        })
+        .next()
+        .expect("fixture has a canonical recovery requester");
+    let request = canonical_executed_block_request(requester.clone(), need, 0);
+    evict_canonical_executed_block_fixture(&adapter, &keys, &canonical_block);
+    let context = adapter.context.clone();
+    let state = Arc::clone(&adapter.state);
+    let kura = Arc::clone(&adapter.kura);
+    let limits = adapter.limits;
+    drop(adapter);
+    let requester_index = context
+        .roster
+        .iter()
+        .position(|entry| entry.validator == requester)
+        .and_then(|index| wire::ValidatorIndex::try_from(index).ok())
+        .expect("requester belongs to the frozen context");
+    let mut services = service_for_history_context_with_local_validator(
+        Arc::clone(&kura),
+        context.clone(),
+        &keys,
+        requester_index,
+    );
+    services
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("install one shared exact-output slot");
+    let blocked = Arc::new(AtomicBool::new(true));
+    let blocked_for_hook = Arc::clone(&blocked);
+    let admitted = Arc::new(AtomicUsize::new(0));
+    let admitted_for_hook = Arc::clone(&admitted);
+    services.set_exact_output_admission_hook(move |post, ticket| {
+        if blocked_for_hook.load(Ordering::Acquire) {
+            return Err(
+                iroha_p2p::network::NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 1,
+                },
+            );
+        }
+        admitted_for_hook.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    });
+    let output_guard = services.lifecycle_output_guard();
+    let mut recovery = CanonicalExecutedBlockRecovery::new(
+        context,
+        requester,
+        state,
+        kura,
+        output_guard,
+        limits,
+        vec![need],
+    )
+    .expect("install exact-output retry fixture");
+    assert!(recovery.service_next().expect("queue responder A request"));
+    let first_peer = match recovery.effects.front() {
+        Some(V2LaneWorkEffect::PostLaneBlock { peer, .. }) => peer.clone(),
+        other => panic!("canonical recovery must queue a lane request: {other:?}"),
+    };
+    let (_, first_dispatched) =
+        dispatch_canonical_executed_block_recovery_effects_for_test(&mut recovery, &services, 1)
+            .expect("handoff responder A request into exact output");
+    assert!(first_dispatched);
+    assert_eq!(recovery.effect_count(), 0);
+    assert!(
+        services
+            .has_pending_exact_output()
+            .expect("inspect backpressured responder A request")
+    );
+    assert!(
+        recovery
+            .service_next()
+            .expect("queue exact responder A retry")
+    );
+    let (_, retry_dispatched) =
+        dispatch_canonical_executed_block_recovery_effects_for_test(&mut recovery, &services, 1)
+            .expect("coalesce responder A retry under exact ownership");
+    assert!(retry_dispatched);
+    assert!(recovery.service_next().expect("rotate to responder B"));
+    let second_peer = match recovery.effects.front() {
+        Some(V2LaneWorkEffect::PostLaneBlock { peer, .. }) => peer.clone(),
+        other => panic!("rotated recovery must queue a lane request: {other:?}"),
+    };
+    assert_ne!(second_peer, first_peer);
+    let mut filler_count = 0_usize;
+    for nonce in 0_u8..8 {
+        if !services
+            .can_retain_lane_work_effect(
+                recovery
+                    .effects
+                    .front()
+                    .expect("responder B request stays source-owned"),
+            )
+            .expect("inspect responder B reservation")
+        {
+            break;
+        }
+        let mut filler = request.clone();
+        filler.version = filler
+            .version
+            .saturating_add(u16::from(nonce).saturating_add(1));
+        services
+            .post_lane_block(
+                second_peer.clone(),
+                BlockMessage::LaneHistoricalRecoveryRequest(Box::new(filler)),
+            )
+            .expect("retain exact-output capacity filler");
+        filler_count = filler_count.saturating_add(1);
+    }
+    assert_ne!(
+        filler_count, 0,
+        "the fixture must consume responder B capacity"
+    );
+    assert!(
+        !services
+            .can_retain_lane_work_effect(
+                recovery
+                    .effects
+                    .front()
+                    .expect("responder B request stays source-owned"),
+            )
+            .expect("inspect saturated responder B reservation"),
+        "the current request must remain at source until old output drains"
+    );
+    blocked.store(false, Ordering::Release);
+    let (_, second_dispatched) =
+        dispatch_canonical_executed_block_recovery_effects_for_test(&mut recovery, &services, 1)
+            .expect("drain old output before reserving responder B");
+    assert!(second_dispatched);
+    assert_eq!(recovery.effect_count(), 0);
+    assert!(
+        !services
+            .has_pending_exact_output()
+            .expect("all canonical exact output reaches transport")
+    );
+    assert_eq!(
+        admitted.load(Ordering::Relaxed),
+        filler_count.saturating_add(3),
+        "both responder-A attempts, every filler, and responder B cross transport exactly once"
+    );
+}
+#[test]
 fn historical_missing_canonical_block_schedules_authenticated_retry_then_completes() {
     let mut unbound = quiet_historical_recovery_fixture();
     assert!(matches!(
@@ -1053,7 +1206,7 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
             .expect("free capacity permits the still-due bounded retry"),
         HistoricalRecoveryServiceOutcome::Waiting(_)
     ));
-    let second_requests = adapter.drain_effects(usize::MAX);
+    let second_requests = adapter.effects.iter().cloned().collect::<Vec<_>>();
     assert!(
         !second_requests.is_empty(),
         "a due retry must re-emit the authenticated request"
@@ -1063,11 +1216,12 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
         first_request_frames,
         "retry must preserve the exact peer order and request bytes"
     );
-    let second_cadence = adapter
+    let second_owner = adapter
         .historical_recovery_requests
         .get(&identity)
-        .expect("second request retains the exact owner")
-        .cadence;
+        .expect("second request retains the exact owner");
+    let second_cadence = second_owner.cadence;
+    let retired_request_hash = second_owner.request_hash.clone();
     assert_eq!(second_cadence.retained_attempts, 2);
     assert_eq!(
         second_cadence.next_retry_at,
@@ -1075,6 +1229,73 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
             .checked_add(adapter.limits.historical_recovery_retry_floor)
             .expect("bounded second retry deadline"),
         "the next deadline is anchored at the service turn, not the prior schedule"
+    );
+    let local_validator = adapter
+        .context
+        .roster
+        .iter()
+        .position(|entry| entry.validator == adapter.local_peer)
+        .and_then(|index| wire::ValidatorIndex::try_from(index).ok())
+        .expect("historical recovery requester belongs to the frozen roster");
+    let mut services = service_for_history_context_with_local_validator(
+        Arc::clone(&adapter.kura),
+        adapter.context.clone(),
+        &keys,
+        local_validator,
+    );
+    let block_actor = Arc::new(AtomicBool::new(true));
+    let block_actor_for_hook = Arc::clone(&block_actor);
+    let admitted = Arc::new(AtomicUsize::new(0));
+    let admitted_for_hook = Arc::clone(&admitted);
+    services.set_exact_output_admission_hook(move |post, ticket| {
+        if block_actor_for_hook.load(Ordering::Acquire) {
+            return Err(
+                iroha_p2p::network::NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 29,
+                },
+            );
+        }
+        admitted_for_hook.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    });
+    let transferred = adapter
+        .drain_effects(1)
+        .pop()
+        .expect("transfer one retry into exact-output ownership");
+    let V2LaneWorkEffect::PostLaneBlock { peer, message } = transferred else {
+        panic!("historical retry uses lane transport");
+    };
+    services
+        .post_lane_block(peer, message)
+        .expect("actor-backpressured retry remains service-owned");
+    assert!(
+        services
+            .has_pending_exact_output()
+            .expect("inspect service-owned historical retry")
+    );
+    let unrelated = second_requests
+        .iter()
+        .find_map(|effect| match effect {
+            V2LaneWorkEffect::PostLaneBlock {
+                peer,
+                message: BlockMessage::LaneHistoricalRecoveryRequest(request),
+            } => {
+                let mut request = request.as_ref().clone();
+                request.version = request.version.saturating_add(1);
+                Some(V2LaneWorkEffect::PostLaneBlock {
+                    peer: peer.clone(),
+                    message: BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request)),
+                })
+            }
+            _ => None,
+        })
+        .expect("the retry owns one request effect");
+    let unrelated_key = lane_work_effect_key(&unrelated);
+    assert!(
+        adapter.push_effect(unrelated),
+        "an unrelated queued request remains independently owned"
     );
     adapter
         .kura
@@ -1090,7 +1311,34 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
             .expect("local completion is never gated by the network deadline"),
         HistoricalRecoveryServiceOutcome::Complete(_)
     ));
-    assert!(adapter.drain_effects(usize::MAX).is_empty());
+    assert_eq!(
+        adapter.retired_historical_recovery_request_hashes,
+        BTreeSet::from([retired_request_hash]),
+        "completion publishes one exact cancellation identity"
+    );
+    assert_eq!(
+        apply_retired_historical_recovery_requests(&mut adapter, &services)
+            .expect("cancel service-owned retry before reopening actor admission"),
+        1
+    );
+    block_actor.store(false, Ordering::Release);
+    assert!(
+        !services
+            .retry_pending_exact_output()
+            .expect("a retired request leaves no retryable exact output")
+    );
+    assert_eq!(
+        admitted.load(Ordering::Relaxed),
+        0,
+        "a completed historical request must never reach transport"
+    );
+    let remaining = adapter.drain_effects(usize::MAX);
+    assert_eq!(
+        remaining.len(),
+        1,
+        "completion retires every exact fanout route but preserves unrelated work"
+    );
+    assert_eq!(lane_work_effect_key(&remaining[0]), unrelated_key);
     assert!(adapter.historical_recovery_waits_snapshot().is_empty());
     assert!(adapter.historical_recovery_requests.is_empty());
     assert!(adapter.historical_recovery_request_owners.is_empty());

@@ -3715,7 +3715,9 @@ impl VerifiedHeightContext {
             || context.mode != parent_artifact.height_context.mode
             || context.da_layout != parent_artifact.height_context.da_layout
             || context.execution_policy_hash != parent_artifact.height_context.execution_policy_hash
-            || parent_qc.subject != parent_artifact.subject
+            || !parent_qc
+                .as_ref()
+                .same_commit_decision(parent_artifact.commit_qc.as_ref())
             || parent_receipt.height() != parent_artifact.height
             || parent_receipt.context_id() != parent_artifact.context_id()
             || parent_receipt.block_hash() != parent_artifact.block_hash

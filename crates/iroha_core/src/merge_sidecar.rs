@@ -236,6 +236,10 @@ pub(crate) struct MergeSidecarLimits {
     server_request_gates_per_source: usize,
 }
 impl MergeSidecarLimits {
+    /// Maximum concurrent requester-side assemblies and live request attempts.
+    pub(crate) const fn inbound_session_capacity(&self) -> usize {
+        self.inbound_session_capacity
+    }
     /// Construct a geometry which retains disjoint decided and ordinary
     /// full-entry corridors and cannot weaken per-source ownership.
     #[allow(clippy::too_many_arguments)]
@@ -514,6 +518,16 @@ impl CertifiedMergeSidecarCloseAckV1 {
             responder: self.responder.clone(),
         }
         .canonical_close_id()
+    }
+    /// Return whether this cumulative acknowledgement retires an exact
+    /// requester-side Close occurrence.
+    pub(crate) fn covers_requester_close(&self, close: &CertifiedMergeSidecarCloseV1) -> bool {
+        self.version == close.version
+            && self.requester == close.requester
+            && self.responder == close.responder
+            && self.service_generation == close.service_generation
+            && self.stream_epoch == close.stream_epoch
+            && close.closed_through <= self.closed_through
     }
 }
 /// Authenticated responder fence returned for a stale service generation.
@@ -5696,6 +5710,19 @@ impl MergeSidecarTransport {
             reply_route: None,
             message: Arc::new(CertifiedMergeSidecarMessage::Request(request)),
         }))
+    }
+    /// Snapshot every requester-owned network occurrence still backed by a live attempt.
+    ///
+    /// The lane adapter compares this bounded set across one transport
+    /// mutation so output already transferred to the exact-output worker can
+    /// be cancelled when its semantic attempt times out, completes, or is
+    /// otherwise retired.
+    pub(crate) fn active_request_hashes(&self) -> BTreeSet<HashOf<CertifiedMergeSidecarRequestV1>> {
+        self.inbound
+            .values()
+            .filter_map(|assembly| assembly.current.as_ref())
+            .map(|attempt| HashOf::from_untyped_unchecked(attempt.message_hash.clone()))
+            .collect()
     }
     /// Return a request to the idle state when the caller's bounded outbound
     /// queue could not retain the post. No network attempt occurred, so a

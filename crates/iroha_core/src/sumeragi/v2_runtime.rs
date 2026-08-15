@@ -13379,8 +13379,28 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                         self.driver.deferred_admission_ordinal_source(),
                     )
             })
+            || self
+                .deferred_remote_proposal_replay
+                .iter()
+                .any(|(ordinal, origin)| {
+                    active.contains(ordinal)
+                        && (self.deferred_ingress_ownership.get(ordinal) != Some(&origin.ingress)
+                            || !origin
+                                .ingress
+                                .exactly_matches_authenticated(&origin.authenticated)
+                            || !retained.get(ordinal).is_some_and(|ingress| {
+                                ingress.exactly_matches_authenticated(&origin.authenticated)
+                            }))
+                })
         {
             return Err(RuntimeIngressMergeError::Conflict);
+        }
+        // The replay origin and runtime ingress map are one physical Proposal
+        // carrier, so commit their validated refinements together.
+        for (ordinal, origin) in &mut self.deferred_remote_proposal_replay {
+            if active.contains(ordinal) {
+                origin.ingress = retained[ordinal].clone();
+            }
         }
         self.deferred_ingress_ownership = retained;
         self.deferred_lifecycle_ownership = lifecycle_ownership;
