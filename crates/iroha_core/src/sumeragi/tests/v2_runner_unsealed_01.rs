@@ -325,8 +325,19 @@ fn runner_dispatch_prunes_retired_sidecar_source_without_losing_live_sibling() {
         super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
     assert!(lane_work.requeue_effect(effect));
     assert!(route_fixture.retire(&route_a));
+    let queue_plan_scans = services
+        .queue_plan_test_kura()
+        .pending_queue_plan_admission_inventory_scans
+        .load(Ordering::Relaxed);
     dispatch_lane_work_effects(&mut lane_work, &services, 1)
         .expect("a retired owned route cannot poison its live sibling");
+    assert_eq!(
+        services
+            .queue_plan_test_kura()
+            .pending_queue_plan_admission_inventory_scans
+            .load(Ordering::Relaxed),
+        queue_plan_scans
+    );
     assert_eq!(lane_work.effect_count(), 0);
     assert!(
         !services
@@ -338,6 +349,11 @@ fn runner_dispatch_prunes_retired_sidecar_source_without_losing_live_sibling() {
             .retains_reply_route_for_test(&route_b)
             .expect("inspect live sibling ownership")
     );
+}
+macro_rules! queue_plan_batch_case { ($($tokens:tt)*) => {{ $($tokens)* }}; }
+#[test]
+fn queue_plan_batch_scans_once_and_reuses_exact_sources() {
+    queue_plan_batch_case! { let (services, _) = super::super::v2_worker::tests::fixture(); let (mut lane_work, keys) = super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned); let view = 0; let (network_id, peer) = services.queue_plan_test_route(view); lane_work.set_queue_plan_test_network_id(network_id); super::super::v2_lane_work::tests::prepare_queue_plan_test(&mut lane_work, &keys); let mut effects = Vec::new(); for tag in [0x61, 0x62] { let (_, bytes) = super::super::v2_lane_work::tests::queue_plan_test_certificate(&lane_work, &keys, tag); services.queue_plan_test_kura().persist_pending_queue_plan_admission_certificate(&bytes).unwrap(); let effect = V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { peer: peer.clone(), view, certificate: Arc::new(bytes) }; assert!(lane_work.requeue_effect(effect.clone())); effects.push(effect); } let counters = || { let kura = services.queue_plan_test_kura(); (kura.pending_queue_plan_admission_inventory_scans.load(Ordering::Relaxed), kura.pending_queue_plan_admission_exact_reads.load(Ordering::Relaxed), kura.pending_queue_plan_admission_batch_validations.load(Ordering::Relaxed)) }; let before = counters(); dispatch_lane_work_effects_with_progress(&mut lane_work, &services, 2).unwrap(); assert_eq!(counters(), (before.0 + 1, before.1 + 2, before.2 + 2)); let mut missing_sources = services.queue_plan_admission_batch_sources().unwrap(); let missing = &effects[0]; let V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } = missing else { unreachable!() }; services.queue_plan_test_kura().remove_pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice())).unwrap(); assert!(services.can_retain_lane_work_effect_from_snapshot(missing, Some(&mut missing_sources)).is_err()); let mut tampered_sources = services.queue_plan_admission_batch_sources().unwrap(); let tampered = &effects[1]; let V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } = tampered else { unreachable!() }; tampered_sources.corrupt_for_test(Hash::new(certificate.as_slice())); assert!(services.can_retain_lane_work_effect_from_snapshot(tampered, Some(&mut tampered_sources)).is_err()); }
 }
 #[test]
 fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens() {

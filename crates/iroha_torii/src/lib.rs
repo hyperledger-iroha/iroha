@@ -25496,17 +25496,17 @@ fn validate_queue_plan_admission_publication(
     }
     match disposition {
         PendingQueuePlanAdmissionDisposition::Exact
-        | PendingQueuePlanAdmissionDisposition::EligibleAbsent
-        | PendingQueuePlanAdmissionDisposition::Future => {}
+        | PendingQueuePlanAdmissionDisposition::EligibleAbsent => {}
         PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
             return Err(
                 "canonical WSV already binds this entrypoint to another QueuePlan admission"
                     .to_owned(),
             );
         }
-        PendingQueuePlanAdmissionDisposition::Stale => {
+        PendingQueuePlanAdmissionDisposition::Stale
+        | PendingQueuePlanAdmissionDisposition::Future => {
             return Err(
-                "QueuePlan admission publication is stale against canonical history, lifecycle, or authority"
+                "QueuePlan admission publication is stale or ahead of canonical authority"
                     .to_owned(),
             );
         }

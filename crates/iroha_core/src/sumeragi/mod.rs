@@ -663,6 +663,13 @@ pub enum LaneRelayMessage {
     Envelope(LaneRelayEnvelope),
     /// Merge-committee signature share admitted from the authenticated relay.
     MergeSignature(MergeCommitteeSignature),
+    /// Exact QueuePlan admission certificate handed to the current global leader.
+    QueuePlanAdmissionCertificate {
+        /// Authenticated transport sender.
+        sender: PeerId,
+        /// Exact canonical quorum-certificate bytes.
+        certificate: Arc<Vec<u8>>,
+    },
     /// Certified merge-sidecar request or chunk with its transport sender.
     CertifiedMergeSidecar {
         /// Semantic protocol origin.
@@ -6922,6 +6929,7 @@ pub struct SumeragiHandle {
     lane_relay: mpsc::SyncSender<LaneRelayMessage>,
     wake: mpsc::SyncSender<()>,
     ingress_ready: Arc<AtomicBool>,
+    pending_queue_plan_admission_dirty: Arc<AtomicBool>,
     output_guard: Arc<ConsensusOutputGuard>,
 }
 impl SumeragiHandle {
@@ -6930,6 +6938,7 @@ impl SumeragiHandle {
         lane_relay: mpsc::SyncSender<LaneRelayMessage>,
         wake: mpsc::SyncSender<()>,
         ingress_ready: Arc<AtomicBool>,
+        pending_queue_plan_admission_dirty: Arc<AtomicBool>,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Self {
         Self {
@@ -6937,6 +6946,7 @@ impl SumeragiHandle {
             lane_relay,
             wake,
             ingress_ready,
+            pending_queue_plan_admission_dirty,
             output_guard,
         }
     }
@@ -6955,6 +6965,8 @@ impl SumeragiHandle {
         let Some(_permit) = self.output_guard.acquire() else {
             return false;
         };
+        self.pending_queue_plan_admission_dirty
+            .store(true, Ordering::Release);
         if !self.ingress_ready.load(Ordering::Acquire) {
             return false;
         }
@@ -7077,6 +7089,17 @@ impl SumeragiHandle {
         };
         if !self.ingress_ready.load(Ordering::Acquire) {
             return SumeragiIngressDisposition::Retry(message);
+        }
+        if let LaneRelayMessage::QueuePlanAdmissionCertificate { certificate, .. } = &message
+            && (certificate.is_empty()
+                || certificate.len()
+                    > iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES)
+        {
+            iroha_logger::debug!(
+                bytes = certificate.len(),
+                "rejecting malformed QueuePlan admission certificate before lane ingress"
+            );
+            return SumeragiIngressDisposition::Rejected(message);
         }
         if let LaneRelayMessage::CertifiedMergeSidecar {
             sender,
@@ -7257,43 +7280,12 @@ fn test_sumeragi_handle_with_source_geometry(
         lane_relay_tx,
         wake_tx,
         Arc::new(AtomicBool::new(true)),
+        Arc::new(AtomicBool::new(false)),
         ConsensusOutputGuard::isolated(),
     );
     (handle, block, lane_relay_rx)
 }
-/// Feature-gated real ingress owner used by dependent-crate liveness tests.
-///
-/// The harness exposes only ordinary public ingress attempts and one exact
-/// dequeue operation; production queue internals remain private.
-#[cfg(feature = "iroha-core-tests")]
-pub struct SumeragiIngressTestHarness {
-    handle: SumeragiHandle,
-    block: Arc<FairV2Ingress>,
-    _lane_relay: mpsc::Receiver<LaneRelayMessage>,
-}
-#[cfg(feature = "iroha-core-tests")]
-impl SumeragiIngressTestHarness {
-    /// Construct an open bounded ingress with an empty validator roster.
-    #[must_use]
-    pub fn new(block_capacity: usize) -> Self {
-        let (handle, block, lane_relay) = test_sumeragi_handle(block_capacity);
-        Self {
-            handle,
-            block,
-            _lane_relay: lane_relay,
-        }
-    }
-    /// Clone the genuine production ingress handle.
-    #[must_use]
-    pub fn handle(&self) -> SumeragiHandle {
-        self.handle.clone()
-    }
-    /// Remove one exact block occurrence and release its bounded inner owner.
-    #[must_use]
-    pub fn pop_block(&self) -> Option<InboundBlockMessage> {
-        self.block.try_recv_if(|_| true)
-    }
-}
+include!("tests/queue_plan_admission_handoff.rs");
 /// Spawn configuration for the authoritative serialized Sumeragi v2 worker.
 pub struct SumeragiStartArgs {
     /// Frozen-compatible v2 consensus configuration.
@@ -7480,11 +7472,13 @@ impl SumeragiStartArgs {
         let queue_wake = Arc::clone(&queue);
         let queue_wake_tx = wake_tx.clone();
         let ingress_ready = Arc::new(AtomicBool::new(false));
+        let pending_queue_plan_admission_dirty = Arc::new(AtomicBool::new(true));
         let handle = SumeragiHandle::new(
             Arc::clone(&block),
             lane_relay_tx,
             wake_tx,
             Arc::clone(&ingress_ready),
+            Arc::clone(&pending_queue_plan_admission_dirty),
             Arc::clone(&output_guard),
         );
         let worker = SumeragiWorker {
@@ -7502,6 +7496,7 @@ impl SumeragiStartArgs {
             genesis_network,
             lane_relay_rx,
             ingress_ready,
+            pending_queue_plan_admission_dirty,
             output_guard: Arc::clone(&output_guard),
             block_rx: block,
             wake_rx,
@@ -7719,6 +7714,7 @@ struct SumeragiWorker {
     genesis_network: GenesisWithPubKey,
     lane_relay_rx: mpsc::Receiver<LaneRelayMessage>,
     ingress_ready: Arc<AtomicBool>,
+    pending_queue_plan_admission_dirty: Arc<AtomicBool>,
     output_guard: Arc<ConsensusOutputGuard>,
     block_rx: Arc<FairV2Ingress>,
     wake_rx: mpsc::Receiver<()>,

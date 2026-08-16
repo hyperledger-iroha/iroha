@@ -812,6 +812,7 @@ fn run_lifecycle_active_height(
     events_sender: &crate::EventsSender,
     receiver: &Arc<FairV2Ingress>,
     lane_relay_rx: &std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
+    pending_queue_plan_admission_dirty: &Arc<AtomicBool>,
     wake_rx: &std::sync::mpsc::Receiver<()>,
     shutdown_signal: &iroha_futures::supervisor::ShutdownSignal,
     output_guard: &Arc<ConsensusOutputGuard>,
@@ -1248,6 +1249,20 @@ fn run_lifecycle_active_height(
             }));
         }
 
+        if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel) {
+            let active_view = activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, _services, _local_proposal| {
+                    executor
+                        .local_proposal_directive()
+                        .map(|directive| directive.tag().view())
+                },
+            )?;
+            if !lane_work.refresh_pending_queue_plan_admission_handoffs(active_view)? {
+                pending_queue_plan_admission_dirty.store(true, Ordering::Release);
+            }
+        }
+
         activated.with_runner_runtime(
             &mut active_runner,
             |_owner, executor, services, local_proposal| {
@@ -1301,6 +1316,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
     network: crate::IrohaNetwork,
     block_rx: Arc<FairV2Ingress>,
     lane_relay_rx: std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
+    pending_queue_plan_admission_dirty: Arc<AtomicBool>,
     wake_rx: std::sync::mpsc::Receiver<()>,
     shutdown_signal: iroha_futures::supervisor::ShutdownSignal,
     ingress_ready: Arc<AtomicBool>,
@@ -1790,6 +1806,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             &events_sender,
             &block_rx,
             &lane_relay_rx,
+            &pending_queue_plan_admission_dirty,
             &wake_rx,
             &shutdown_signal,
             &output_guard,

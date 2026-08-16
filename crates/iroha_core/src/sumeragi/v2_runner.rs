@@ -87,7 +87,7 @@ use super::{
     v2_worker::{
         CertifiedServeAdmission, CertifiedServeNegativeOutcome, CertifiedServePrepareError,
         ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner, ProductionV2Services,
-        V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
+        QueuePlanBatchSources, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
     },
 };
 #[cfg(test)]
@@ -853,6 +853,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         genesis_network,
         block_rx,
         lane_relay_rx,
+        pending_queue_plan_admission_dirty,
         wake_rx,
         shutdown_signal,
         ingress_ready,
@@ -986,6 +987,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             network,
             block_rx,
             lane_relay_rx,
+            Arc::clone(&pending_queue_plan_admission_dirty),
             wake_rx,
             shutdown_signal,
             ingress_ready,
@@ -1026,6 +1028,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             network,
             block_rx,
             lane_relay_rx,
+            pending_queue_plan_admission_dirty,
             wake_rx,
             shutdown_signal,
             ingress_ready,
@@ -2336,6 +2339,7 @@ fn dispatch_lane_work_effects_with_progress(
     let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
     apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
     apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
+    let mut queue_plan_sources = None;
     let scan_limit = lane_work.effect_count();
     let mut dispatched = 0usize;
     for _ in 0..scan_limit {
@@ -2349,8 +2353,20 @@ fn dispatch_lane_work_effects_with_progress(
             let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
             continue;
         }
+        if queue_plan_sources.is_none()
+            && matches!(
+                &next_effect,
+                V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+            )
+        {
+            queue_plan_sources = Some(
+                services
+                    .queue_plan_admission_batch_sources()
+                    .map_err(V2RunnerError::Service)?,
+            );
+        }
         if !services
-            .can_retain_lane_work_effect(&next_effect)
+            .can_retain_lane_work_effect_from_snapshot(&next_effect, queue_plan_sources.as_mut())
             .map_err(V2RunnerError::Service)?
         {
             let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
@@ -2364,7 +2380,11 @@ fn dispatch_lane_work_effects_with_progress(
         }
         let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
         drop(effect);
-        match dispatch_lane_work_effect(services, next_effect)? {
+        match dispatch_lane_work_effect_from_snapshot(
+            services,
+            next_effect,
+            queue_plan_sources.as_mut(),
+        )? {
             LaneWorkEffectDispatch::Complete => {
                 dispatched = dispatched.saturating_add(1);
             }
@@ -2390,6 +2410,25 @@ enum LaneWorkEffectDispatch {
 fn dispatch_lane_work_effect(
     services: &ProductionV2Services,
     effect: V2LaneWorkEffect,
+) -> Result<LaneWorkEffectDispatch, V2RunnerError> {
+    let mut sources = if matches!(
+        &effect,
+        V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+    ) {
+        Some(
+            services
+                .queue_plan_admission_batch_sources()
+                .map_err(V2RunnerError::Service)?,
+        )
+    } else {
+        None
+    };
+    dispatch_lane_work_effect_from_snapshot(services, effect, sources.as_mut())
+}
+fn dispatch_lane_work_effect_from_snapshot(
+    services: &ProductionV2Services,
+    effect: V2LaneWorkEffect,
+    queue_plan_sources: Option<&mut QueuePlanBatchSources>,
 ) -> Result<LaneWorkEffectDispatch, V2RunnerError> {
     match effect {
         V2LaneWorkEffect::PostLaneBlock { peer, message } => services
@@ -2441,6 +2480,23 @@ fn dispatch_lane_work_effect(
         }
         V2LaneWorkEffect::BroadcastMerge(signature) => {
             services.broadcast_merge_to_voters(signature);
+        }
+        V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+            peer,
+            view,
+            certificate,
+        } => {
+            let queue_plan_sources = queue_plan_sources.ok_or_else(|| {
+                V2RunnerError::Service(
+                    "QueuePlan admission dispatch lacks its Kura batch snapshot".to_owned(),
+                )
+            })?;
+            services.post_queue_plan_admission_certificate(
+                peer,
+                view,
+                certificate,
+                queue_plan_sources,
+            );
         }
         V2LaneWorkEffect::PostCertifiedMergeSidecar {
             peer,

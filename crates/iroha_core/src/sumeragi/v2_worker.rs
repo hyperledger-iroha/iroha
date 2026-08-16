@@ -97,6 +97,7 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
+    NetworkId,
     block::{
         BlockHeader, CertifiedMergeLedgerReference,
         consensus::{
@@ -128,7 +129,7 @@ use iroha_p2p::{
 };
 use norito::codec::{Decode, DecodeAll, Encode};
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fs::{self, File, OpenOptions},
     io::{ErrorKind, Read, Write},
     num::NonZeroUsize,
@@ -11375,6 +11376,8 @@ impl CertifiedSidecarTransferIdentity {
     }
 }
 include!("v2_worker/exact_output_rollover_claim.rs");
+include!("v2_worker/queue_plan_admission_handoff.rs");
+include!("v2_worker/exact_output_pending_state.rs");
 #[derive(Debug)]
 struct PendingExactFanout {
     messages: Vec<NetworkMessage>,
@@ -16117,6 +16120,17 @@ fn applied_height_reconstruction_covers(
             })?,
             local_peer,
             *proposal_height,
+        );
+    }
+    if matches!(
+        rollover_claim,
+        ExactOutputRolloverClaim::QueuePlanAdmission { .. }
+    ) {
+        return queue_plan_admission_reconstruction_covers(
+            messages,
+            rollover_claim,
+            artifact,
+            durable_history,
         );
     }
     if matches!(
@@ -21098,21 +21112,6 @@ impl ProductionV2Services {
         }
         Ok(())
     }
-    /// Return whether the bounded corridor has dispatchable fanout work, a
-    /// pending writer-flush witness, or an admitted sidecar receipt awaiting
-    /// delivery to the lane. Parked retained payload is intentionally
-    /// non-spinning and becomes dispatchable only after reconnect atomically
-    /// reuses its retained FIFO and reservation ownership.
-    pub(crate) fn has_pending_exact_output(&self) -> Result<bool, String> {
-        self.lock_pending_exact_output().map(|pending| {
-            if self.exact_output_handoff_owner.is_sealed() {
-                debug_assert!(!pending.is_pending());
-                false
-            } else {
-                pending.is_pending()
-            }
-        })
-    }
     /// Drain process-local sidecar receipts after the exact peer writer flushes
     /// their response chunks.
     pub(crate) fn drain_certified_merge_sidecar_chunk_admissions(
@@ -21179,38 +21178,11 @@ impl ProductionV2Services {
         }
         pending.cancel_acknowledged_certified_merge_sidecar_closes(acknowledgements)
     }
-    fn exact_target_geometry(
-        peer: &PeerId,
-        reply_routes: Option<&NetworkReplyRoutes>,
-    ) -> Result<
-        (
-            Vec<PeerId>,
-            Vec<ExactTargetRoute>,
-            Option<NetworkReplyRoutes>,
-        ),
-        String,
-    > {
-        let Some(reply_routes) = reply_routes else {
-            return Ok((vec![peer.clone()], vec![ExactTargetRoute::Topology], None));
-        };
-        if reply_routes.semantic_target() != peer || reply_routes.is_empty() {
-            return Err("Sumeragi v2 effect has invalid reply-route ownership".to_owned());
-        }
-        let routes = reply_routes
-            .iter()
-            .cloned()
-            .map(ExactTargetRoute::Reply)
-            .collect::<Vec<_>>();
-        Ok((
-            vec![peer.clone(); routes.len()],
-            routes,
-            Some(reply_routes.clone()),
-        ))
-    }
     /// Check the exact target/class/kind reservation for the next lane-work effect.
-    pub(crate) fn can_retain_lane_work_effect(
+    pub(crate) fn can_retain_lane_work_effect_from_snapshot(
         &self,
         effect: &V2LaneWorkEffect,
+        queue_plan_sources: Option<&mut QueuePlanBatchSources>,
     ) -> Result<bool, String> {
         let (messages, peers, routes, reply_route_history, ingress_ownership, rollover_claim) =
             match effect {
@@ -21357,6 +21329,18 @@ impl ProductionV2Services {
                         },
                     )
                 }
+                V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                    peer,
+                    view,
+                    certificate,
+                } => self.queue_plan_effect_parts(
+                    peer,
+                    *view,
+                    certificate,
+                    queue_plan_sources.ok_or_else(|| {
+                        "QueuePlan admission handoff lacks its Kura batch snapshot".to_owned()
+                    })?,
+                )?,
                 V2LaneWorkEffect::PostCertifiedMergeSidecar {
                     peer,
                     reply_routes,
@@ -21490,14 +21474,6 @@ impl ProductionV2Services {
         } else {
             pending.can_enqueue(&fanout)
         }
-    }
-    fn remote_voters(&self) -> Vec<PeerId> {
-        self.context
-            .roster
-            .iter()
-            .filter(|entry| entry.validator != self.local_peer)
-            .map(|entry| entry.validator.clone())
-            .collect()
     }
     /// Publish one exact signed body-keeper advert from durable Kura state.
     ///
@@ -22307,6 +22283,7 @@ pub(super) mod tests {
     include!("tests/v2_worker_lifecycle_capacity_cases.rs");
     include!("tests/v2_worker_equivocation_and_selected_serve_fixture.rs");
     include!("v2_worker/applied_height_handoff_tests.rs");
+    include!("v2_worker/queue_plan_admission_handoff_tests.rs");
     include!("v2_worker/upstream_reply_route_test.rs");
     include!("tests/v2_worker_main_02.rs");
     include!("tests/v2_worker_main_03.rs");
