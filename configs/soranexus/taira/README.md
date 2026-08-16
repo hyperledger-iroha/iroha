@@ -873,21 +873,176 @@ PY
 
 First seal the rendered public validator keys and PoPs into the release-bound
 top-up roster. The input config may contain runtime secrets, but the command
-reads only `trusted_peers_pop` and emits only the public canonical roster:
+reads only `trusted_peers_pop` and emits only the public canonical roster.
+Use one independently reviewed Kagami executable for this command, circuit
+parameter construction, activation preparation, and the production readiness
+gate. The path and SHA-256 below are public release inputs, not secrets. Keep
+them in the same operator shell for the complete workflow; do not rebuild or
+replace Kagami between steps.
+
+Before and after every invocation, the helper below requires a canonical
+absolute non-symlink path, a root-owned and non-group/world-writable directory
+chain, and a root-owned, single-link, executable regular file whose bytes match
+the independently reviewed SHA-256. The descriptor and pathname metadata must
+also remain identical across each check:
 
 ```bash
-cargo run -p iroha_kagami --bin kagami -- \
+KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami
+KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>'
+export KAGEMUSHA_V4_KAGAMI_BIN KAGEMUSHA_V4_KAGAMI_SHA256
+readonly KAGEMUSHA_V4_KAGAMI_BIN KAGEMUSHA_V4_KAGAMI_SHA256
+
+assert_kagemusha_v4_kagami_custody() {
+  /usr/bin/python3 -I -S - \
+    "${KAGEMUSHA_V4_KAGAMI_BIN}" \
+    "${KAGEMUSHA_V4_KAGAMI_SHA256}" <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+raw_path, expected_sha256 = sys.argv[1:]
+if (
+    re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+    or expected_sha256 == "0" * 64
+):
+    raise SystemExit("Kagami SHA-256 pin is not canonical")
+
+path = Path(raw_path)
+try:
+    resolved = path.resolve(strict=True)
+except OSError as error:
+    raise SystemExit(f"Kagami path cannot be resolved: {error}")
+if not path.is_absolute() or resolved != path:
+    raise SystemExit("Kagami path must be canonical, absolute, and symlink-free")
+
+current = Path(path.anchor)
+directories = [current]
+for component in path.parts[1:-1]:
+    current /= component
+    directories.append(current)
+for directory in directories:
+    metadata = directory.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise SystemExit(f"Kagami path component is not a real directory: {directory}")
+    if metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise SystemExit(f"Kagami path component lacks production custody: {directory}")
+
+before = path.lstat()
+if (
+    stat.S_ISLNK(before.st_mode)
+    or not stat.S_ISREG(before.st_mode)
+    or before.st_uid != 0
+    or stat.S_IMODE(before.st_mode) & 0o022
+    or not stat.S_IMODE(before.st_mode) & 0o111
+    or before.st_nlink != 1
+    or before.st_size <= 0
+    or before.st_size > 512 * 1024 * 1024
+):
+    raise SystemExit("Kagami executable lacks production custody")
+
+fingerprint = (
+    before.st_dev,
+    before.st_ino,
+    before.st_nlink,
+    before.st_mode,
+    before.st_size,
+    before.st_mtime_ns,
+    before.st_ctime_ns,
+    before.st_uid,
+    before.st_gid,
+)
+flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(path, flags)
+try:
+    opened = os.fstat(descriptor)
+    opened_fingerprint = (
+        opened.st_dev,
+        opened.st_ino,
+        opened.st_nlink,
+        opened.st_mode,
+        opened.st_size,
+        opened.st_mtime_ns,
+        opened.st_ctime_ns,
+        opened.st_uid,
+        opened.st_gid,
+    )
+    if not os.path.samestat(before, opened) or opened_fingerprint != fingerprint:
+        raise SystemExit("Kagami executable changed while it was opened")
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < opened.st_size:
+        chunk = os.pread(descriptor, min(1024 * 1024, opened.st_size - offset), offset)
+        if not chunk:
+            raise SystemExit("Kagami executable became truncated while it was hashed")
+        digest.update(chunk)
+        offset += len(chunk)
+    after_descriptor = os.fstat(descriptor)
+    after_path = path.lstat()
+    after_descriptor_fingerprint = (
+        after_descriptor.st_dev,
+        after_descriptor.st_ino,
+        after_descriptor.st_nlink,
+        after_descriptor.st_mode,
+        after_descriptor.st_size,
+        after_descriptor.st_mtime_ns,
+        after_descriptor.st_ctime_ns,
+        after_descriptor.st_uid,
+        after_descriptor.st_gid,
+    )
+    after_path_fingerprint = (
+        after_path.st_dev,
+        after_path.st_ino,
+        after_path.st_nlink,
+        after_path.st_mode,
+        after_path.st_size,
+        after_path.st_mtime_ns,
+        after_path.st_ctime_ns,
+        after_path.st_uid,
+        after_path.st_gid,
+    )
+    if (
+        after_descriptor_fingerprint != fingerprint
+        or after_path_fingerprint != fingerprint
+        or digest.hexdigest() != expected_sha256
+    ):
+        raise SystemExit("Kagami executable changed or differs from its reviewed SHA-256")
+finally:
+    os.close(descriptor)
+PY
+}
+
+assert_kagemusha_v4_kagami_custody || exit 1
+if /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin \
+  "${KAGEMUSHA_V4_KAGAMI_BIN}" \
   kagemusha prepare-taira-release-roster-v4 \
   --validator-config /absolute/path/to/rendered-validator/config.toml \
   --network-id "${GENESIS_EXPECTED_HASH}" \
   --withdrawal-height "${WITHDRAWAL_HEIGHT}" \
   --output /absolute/private/path/taira-release-roster.norito
+then
+  KAGEMUSHA_COMMAND_STATUS=0
+else
+  KAGEMUSHA_COMMAND_STATUS=$?
+fi
+assert_kagemusha_v4_kagami_custody || exit 1
+test "${KAGEMUSHA_COMMAND_STATUS}" -eq 0 || exit "${KAGEMUSHA_COMMAND_STATUS}"
 
 mkdir -m 700 /absolute/private/path/kagemusha-release-inputs
-cargo run --locked --target-dir /absolute/private/path/kagami-target \
-  -p iroha_kagami --bin kagami -- \
+assert_kagemusha_v4_kagami_custody || exit 1
+if /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin \
+  "${KAGEMUSHA_V4_KAGAMI_BIN}" \
   kagemusha prepare-release-circuit-params-v4 \
   --output-dir /absolute/private/path/kagemusha-release-inputs/circuit-params-v4
+then
+  KAGEMUSHA_COMMAND_STATUS=0
+else
+  KAGEMUSHA_COMMAND_STATUS=$?
+fi
+assert_kagemusha_v4_kagami_custody || exit 1
+test "${KAGEMUSHA_COMMAND_STATUS}" -eq 0 || exit "${KAGEMUSHA_COMMAND_STATUS}"
 ```
 
 The circuit-parameter command is the official constructor for both reviewed
@@ -974,14 +1129,15 @@ execution. Pre-create `/var/lib/iroha/kagemusha-readiness-v1` as root mode
 revocation files below are the exact policies bound by the authenticated
 source-seal projection. Both are mandatory and digest pinned; use an explicitly
 pinned empty revocation file when the reviewed policy has no revoked keys.
-Promotion does not consult the invoking account's Git configuration:
+Promotion does not consult the invoking account's Git configuration. The gate
+inherits the exported read-only `KAGEMUSHA_V4_KAGAMI_BIN` and
+`KAGEMUSHA_V4_KAGAMI_SHA256` verified above, so it authenticates the same
+executable used to construct the roster, circuit parameters, and activation:
 
 ```bash
 KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256='<reviewed-gate-64-lowercase-hex>' \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
-KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami \
-KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
@@ -1189,13 +1345,24 @@ account.
 Build the exact composite activation instruction into new owner-private files.
 Kagami prints a durable-publication result followed by the prepared report; the
 last line contains the instruction hash, while `--output` names the separate
-instruction-array file:
+instruction-array file. Continue in the same operator shell so this invocation
+uses the same read-only `KAGEMUSHA_V4_KAGAMI_BIN`,
+`KAGEMUSHA_V4_KAGAMI_SHA256`, and
+`assert_kagemusha_v4_kagami_custody` established above. Set
+`REVIEWED_DEVICE_ATTESTATION_POLICY_STATE_SHA256` from the independent review
+of the canonical governed policy state; never copy it from Kagami's report.
+Validate all release-binding report fields against those reviewed inputs before
+extracting `instructions_hash`:
 
 ```bash
 ACTIVATION_JSON=/absolute/private/path/kagemusha-activation-v4.json
 PREPARE_REPORT=/absolute/private/path/kagemusha-activation-v4.prepare.jsonl
+REVIEWED_DEVICE_ATTESTATION_POLICY_STATE_SHA256='<reviewed-device-policy-state-64-lowercase-hex>'
+set -o pipefail
 
-cargo run --locked -p iroha_kagami --bin kagami -- \
+assert_kagemusha_v4_kagami_custody || exit 1
+if /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin \
+  "${KAGEMUSHA_V4_KAGAMI_BIN}" \
   kagemusha prepare-activation-v4 \
   --artifact-root /srv/iroha-kagemusha/taira-v4-r1/catalog \
   --release-policy /srv/iroha-kagemusha/taira-v4-r1/policy/release-policy-v1.norito \
@@ -1203,10 +1370,42 @@ cargo run --locked -p iroha_kagami --bin kagami -- \
   --verifier-version "${NEXT_VERIFIER_VERSION}" \
   --device-attestation-policy /absolute/private/path/device-attestation-policy.json \
   --output "${ACTIVATION_JSON}" \
-  | tee "${PREPARE_REPORT}"
+  | /usr/bin/tee "${PREPARE_REPORT}"
+then
+  KAGEMUSHA_COMMAND_STATUS=0
+else
+  KAGEMUSHA_COMMAND_STATUS=$?
+fi
+assert_kagemusha_v4_kagami_custody || exit 1
+test "${KAGEMUSHA_COMMAND_STATUS}" -eq 0 || exit "${KAGEMUSHA_COMMAND_STATUS}"
 
-INSTRUCTIONS_HASH="$(tail -n 1 "${PREPARE_REPORT}" | jq -er \
-  'select(.status == "prepared") | .instructions_hash')"
+PREPARED_REPORT_LINE="$(/usr/bin/tail -n 1 "${PREPARE_REPORT}")"
+if ! /usr/bin/jq -e \
+  --arg manifest_sha256 "${MANIFEST_SHA256}" \
+  --argjson verifier_version "${NEXT_VERIFIER_VERSION}" \
+  --arg device_policy_state_sha256 \
+    "${REVIEWED_DEVICE_ATTESTATION_POLICY_STATE_SHA256}" \
+  '
+    ($manifest_sha256 | test("^[0-9a-f]{64}$") and (test("^0{64}$") | not)) and
+    ($device_policy_state_sha256 | test("^[0-9a-f]{64}$") and (test("^0{64}$") | not)) and
+    ($verifier_version | type == "number" and . == floor and . >= 0 and . <= 4294967295) and
+    type == "object" and
+    .status == "prepared" and
+    .manifest_sha256 == $manifest_sha256 and
+    .verifier_version == $verifier_version and
+    .instruction_count == 1 and
+    .device_attestation_policy_state_sha256 == $device_policy_state_sha256 and
+    (.instructions_hash |
+      type == "string" and
+      test("^[0-9a-f]{64}$") and
+      (test("^0{64}$") | not))
+  ' <<<"${PREPARED_REPORT_LINE}" >/dev/null
+then
+  echo "Kagami activation report does not match reviewed release inputs" >&2
+  exit 1
+fi
+
+INSTRUCTIONS_HASH="$(/usr/bin/jq -er '.instructions_hash' <<<"${PREPARED_REPORT_LINE}")"
 test -n "${INSTRUCTIONS_HASH}"
 ```
 

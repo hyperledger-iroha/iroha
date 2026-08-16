@@ -1,7 +1,7 @@
 use std::{cmp::max, iter::zip};
 
 use crate::{
-    gates::{flex_gate::threads::SinglePhaseCoreManager, GateChip},
+    gates::{GateChip, flex_gate::threads::SinglePhaseCoreManager},
     halo2_proofs::halo2curves::bn256::Fr,
     poseidon::hasher::PoseidonSponge,
     utils::ScalarField,

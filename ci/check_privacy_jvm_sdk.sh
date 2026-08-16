@@ -7,17 +7,14 @@ PYTHON_BIN="${PRIVACY_JVM_SDK_PYTHON_BIN:-python3}"
 CARGO_BIN="${PRIVACY_JVM_SDK_CARGO_BIN:-cargo}"
 RUSTC_BIN="${PRIVACY_JVM_SDK_RUSTC_BIN:-rustc}"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+TRACKED_ROOT_CARGO_LOCK_SHA256="0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
 JAVA_OUT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-java-sdk-test.XXXXXX")"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-jvm-native.XXXXXX")"
-CREATED_WORKSPACE_LOCK=0
 
 cleanup() {
   local status=$?
   trap - EXIT HUP INT TERM
-  if [[ "${CREATED_WORKSPACE_LOCK}" == "1" ]]; then
-    rm -f -- "${ROOT_DIR}/Cargo.lock"
-  fi
   rm -rf -- "${JAVA_OUT}" "${NATIVE_BUILD_ROOT}"
   exit "${status}"
 }
@@ -45,11 +42,17 @@ print(digest.hexdigest())
 PY
 }
 
-SELECTED_CARGO_LOCK="${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH:-${ROOT_DIR}/Cargo.lock}"
+SELECTED_CARGO_LOCK="${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH:-}"
 [[ -f "${SELECTED_CARGO_LOCK}" && ! -L "${SELECTED_CARGO_LOCK}" ]] \
   || fail "the authenticated privacy Cargo.lock is unavailable"
+[[ "${SELECTED_CARGO_LOCK}" != "${ROOT_DIR}/Cargo.lock" ]] \
+  || fail "the privacy release Cargo.lock must remain distinct from the tracked root lock"
 [[ "$(sha256_file "${SELECTED_CARGO_LOCK}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
   || fail "the authenticated privacy Cargo.lock does not match the frozen release digest"
+[[ -f "${ROOT_DIR}/Cargo.lock" && ! -L "${ROOT_DIR}/Cargo.lock" ]] \
+  || fail "the tracked root Cargo.lock is unavailable"
+[[ "$(sha256_file "${ROOT_DIR}/Cargo.lock")" == "${TRACKED_ROOT_CARGO_LOCK_SHA256}" ]] \
+  || fail "the tracked root Cargo.lock does not match its release authority"
 
 RUSTC_VERSION="$("${RUSTC_BIN}" --version)"
 [[ "${RUSTC_VERSION}" == rustc\ 1.93.1\ * ]] \
@@ -83,18 +86,9 @@ NATIVE_LIBRARY_DIR="$(cd "$(dirname "${NATIVE_LIBRARY}")" && pwd -P)"
 NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi22.json"
 CSHARP_NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi22-csharp.json"
 
-# The canonical source manifest always binds the workspace Cargo.lock even
-# though repository policy keeps it ignored. CI selects the same bytes through
-# an external authenticated lock; materialize those bytes only after the
-# wrapped Cargo invocation and remove them before the CI lock-state recheck.
-if [[ ! -e "${ROOT_DIR}/Cargo.lock" && ! -L "${ROOT_DIR}/Cargo.lock" ]]; then
-  install -m 600 "${SELECTED_CARGO_LOCK}" "${ROOT_DIR}/Cargo.lock"
-  CREATED_WORKSPACE_LOCK=1
-fi
-[[ -f "${ROOT_DIR}/Cargo.lock" && ! -L "${ROOT_DIR}/Cargo.lock" ]] \
-  || fail "workspace Cargo.lock must be a regular file"
-[[ "$(sha256_file "${ROOT_DIR}/Cargo.lock")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
-  || fail "workspace Cargo.lock does not match the frozen release digest"
+# Native evidence binds the clean source tree, including the tracked root lock.
+# The distinct frozen privacy-release lock remains selected externally for all
+# wrapped Cargo invocations and is authenticated independently above.
 
 "${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" record \
   --artifact "${NATIVE_LIBRARY}" \
@@ -229,8 +223,8 @@ java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" -cp "${JAVA_OUT}:${PRIVACY_
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${CSHARP_NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}"
-[[ "$(sha256_file "${ROOT_DIR}/Cargo.lock")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
-  || fail "workspace Cargo.lock changed during privacy JVM native execution"
+[[ "$(sha256_file "${ROOT_DIR}/Cargo.lock")" == "${TRACKED_ROOT_CARGO_LOCK_SHA256}" ]] \
+  || fail "tracked root Cargo.lock changed during privacy JVM native execution"
 
 if [[ -n "${PRIVACY_JVM_NATIVE_EXPORT_DIR:-}" ]]; then
   [[ "${PRIVACY_JVM_NATIVE_EXPORT_DIR}" == /* ]] \
@@ -245,7 +239,7 @@ if [[ -n "${PRIVACY_JVM_NATIVE_EXPORT_DIR:-}" ]]; then
     "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi22-c-jni.json"
   install -m 400 "${CSHARP_NATIVE_MANIFEST}" \
     "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/native-sdk-abi22-csharp.json"
-  install -m 400 "${ROOT_DIR}/Cargo.lock" \
+  install -m 400 "${SELECTED_CARGO_LOCK}" \
     "${PRIVACY_JVM_NATIVE_EXPORT_DIR}/Cargo.lock"
   "${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
     --artifact "${EXPORTED_LIBRARY}" \

@@ -1286,11 +1286,31 @@ The TLAPM installer likewise addresses the exact GitHub release-asset object
 IDs recorded by the upstream
 [build run](https://github.com/tlaplus/tlapm/actions/runs/29682668751), then
 checks the platform archive SHA-256 and the embedded commit identity. TLAPM's
-rolling-release workflow deletes each superseded object, so an unavailable
-pinned object is an explicit availability failure; the installer never falls
-through to the newer same-name asset. Operators retaining the exact original
-archive may pass its path with `TLAPM_ARCHIVE_PATH`; the same digest and tool
-identity checks remain mandatory.
+rolling-release workflow deletes each superseded object. Operators retaining
+the exact original archive may pass its path with `TLAPM_ARCHIVE_PATH`; the
+same digest and tool identity checks remain mandatory. A caller-archive or
+downloaded-object checksum mismatch is terminal and never selects another
+input. Only when no caller archive was supplied and the exact object is
+unavailable does the installer use the checked-in immutable source-build lock.
+That lock fixes the TLAPM commit and tree, an exact opam-repository commit and
+tree, opam 2.5.2 binary hashes, OCaml 5.1.0 and the exact 131-package macOS or
+133-package Linux installed closure, plus immutable CommunityModules, LS4,
+Z3, and Isabelle inputs for each supported host. A frozen, exact-argument
+`wget` resolver makes those verified bytes visible inside Dune sandboxes and
+records one consumption receipt per input; unknown URLs, arguments, working
+directories, duplicate fetches, and unconsumed inputs fail closed. The macOS
+Z3 pin is the upstream x86_64 binary and therefore requires Rosetta on arm64.
+The builder rechecks both Git trees, the package set, backend derivations, and
+the frozen lock/helper/resolver/builder corridor before publication, and
+`make release` runs upstream's `fast/basic` test. It starts opam and the build
+under private configuration roots, mandatory checksums, and a scrubbed
+environment. Installs and source-build output bundles publish atomically with
+no replacement, and cached installs are accepted only when their origin,
+complete distribution closure, corridor hashes, and source attestation (when
+applicable) match. A source-built install retains the lock and its verified
+attestation. The attestation deliberately makes no
+byte-reproducibility claim: the host OS and build tools remain outside this
+input lock and therefore remain admitted prerequisites.
 The TLC and replay entry points also verify the exact SHA-256 digests of the
 `Functions.tla` and `Folds.tla` files from that pinned TLAPM commit before
 adding them to `TLA-Library`; an inherited alternate standard library cannot

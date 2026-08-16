@@ -3,9 +3,8 @@
 
 The manifest covers tracked and untracked, non-ignored paths reported by Git,
 including deletions, symlink targets, and executable bits. Build artifacts and
-other ignored files are deliberately excluded, except for the workspace
-``Cargo.lock``: Cargo consumes that file even when repository policy keeps it
-untracked, so a release manifest must bind its exact bytes. Unresolved index
+other ignored files are deliberately excluded. The tracked workspace
+``Cargo.lock`` remains an explicit mandatory build input. Unresolved index
 entries are rejected because they do not identify one reproducible source
 tree. For every enumerated file or symlink entry, the checkout manifest records
 all permission bits, not only Git's executable bit. The separate source-seal
@@ -223,9 +222,8 @@ def _git_source_paths(root: Path) -> list[str]:
         for raw in result.stdout.split(b"\0")
         if raw
     }
-    # This workspace intentionally keeps Cargo.lock untracked. Cargo still
-    # consumes it, and `--locked` validates it, so excluding it would allow a
-    # build input to drift without invalidating release evidence.
+    # Cargo.lock is tracked, but keep its mandatory build-input inclusion
+    # explicit so future ignore-policy drift cannot remove it from evidence.
     paths.add(_WORKSPACE_LOCKFILE)
     return sorted(paths, key=os.fsencode)
 
@@ -1777,7 +1775,7 @@ def _manifest_for_paths(root: Path, paths: Iterable[str]) -> str:
 
 
 def _release_workspace_snapshot(root: Path) -> tuple[str, str]:
-    """Bind the checkout manifest and ignored Cargo.lock from the same stream."""
+    """Bind the checkout manifest and tracked Cargo.lock from the same stream."""
 
     manifest, lock_sha256 = _manifest_snapshot_for_paths(
         root,

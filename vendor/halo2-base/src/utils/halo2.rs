@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry;
 
+use crate::AssignedValue;
 use crate::ff::Field;
 use crate::halo2_proofs::{
     circuit::{AssignedCell, Cell, Region, Value},
@@ -8,7 +9,6 @@ use crate::halo2_proofs::{
     poly::kzg::commitment::ParamsKZG,
 };
 use crate::virtual_region::copy_constraints::{CopyConstraintManager, EXTERNAL_CELL_TYPE_ID};
-use crate::AssignedValue;
 
 pub use keygen::ProvingKeyGenerator;
 

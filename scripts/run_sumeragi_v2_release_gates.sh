@@ -11,6 +11,7 @@ if [[ $# -gt 1 ]] || [[ "$profile" != "--pr" && "$profile" != "--release" ]]; th
 fi
 
 readonly repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
+readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 # A production release is launched only by the externally authenticated
 # bootstrap.  Validate that capability before changing the bootstrap's closed
 # environment or executing any other candidate helper.  The sealed child is

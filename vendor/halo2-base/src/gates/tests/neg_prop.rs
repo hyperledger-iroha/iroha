@@ -1,13 +1,13 @@
 use crate::{
+    QuantumCell::Witness,
     ff::Field,
     gates::{
+        GateInstructions,
         range::RangeInstructions,
         tests::{pos_prop::rand_fr, utils},
-        GateInstructions,
     },
     halo2_proofs::halo2curves::bn256::Fr,
-    utils::{biguint_to_fe, bit_length, fe_to_biguint, testing::base_test, ScalarField},
-    QuantumCell::Witness,
+    utils::{ScalarField, biguint_to_fe, bit_length, fe_to_biguint, testing::base_test},
 };
 
 use num_bigint::BigUint;
@@ -131,54 +131,69 @@ fn check_select(a: Fr, b: Fr, sel: bool, rand_output: Fr) -> bool {
 fn neg_test_idx_to_indicator(k: usize, len: usize, idx: usize, ind_witnesses: &[Fr]) {
     // Check soundness of witness values
     let is_valid_witness = check_idx_to_indicator(Fr::from(idx as u64), len, ind_witnesses);
-    base_test().k(k as u32).expect_satisfied(is_valid_witness).run_gate(|ctx, gate| {
-        // assign value to advice column before by assigning `idx` via ctx.load() -> use same method as ind_offsets to get offset
-        let dummy_idx = Witness(Fr::from(idx as u64));
-        let mut indicator = gate.idx_to_indicator(ctx, dummy_idx, len);
-        for (advice, prank_val) in indicator.iter_mut().zip(ind_witnesses) {
-            advice.debug_prank(ctx, *prank_val);
-        }
-    });
+    base_test()
+        .k(k as u32)
+        .expect_satisfied(is_valid_witness)
+        .run_gate(|ctx, gate| {
+            // assign value to advice column before by assigning `idx` via ctx.load() -> use same method as ind_offsets to get offset
+            let dummy_idx = Witness(Fr::from(idx as u64));
+            let mut indicator = gate.idx_to_indicator(ctx, dummy_idx, len);
+            for (advice, prank_val) in indicator.iter_mut().zip(ind_witnesses) {
+                advice.debug_prank(ctx, *prank_val);
+            }
+        });
 }
 
 fn neg_test_select(k: usize, a: Fr, b: Fr, sel: bool, prank_output: Fr) {
     // Check soundness of output
     let is_valid_instance = check_select(a, b, sel, prank_output);
-    base_test().k(k as u32).expect_satisfied(is_valid_instance).run_gate(|ctx, gate| {
-        let [a, b, sel] = [a, b, Fr::from(sel)].map(|x| ctx.load_witness(x));
-        let select = gate.select(ctx, a, b, sel);
-        select.debug_prank(ctx, prank_output);
-    })
+    base_test()
+        .k(k as u32)
+        .expect_satisfied(is_valid_instance)
+        .run_gate(|ctx, gate| {
+            let [a, b, sel] = [a, b, Fr::from(sel)].map(|x| ctx.load_witness(x));
+            let select = gate.select(ctx, a, b, sel);
+            select.debug_prank(ctx, prank_output);
+        })
 }
 
 fn neg_test_select_by_indicator(k: usize, a: Vec<Fr>, idx: usize, prank_output: Fr) {
     // retrieve the value of a[idx] and check that it is equal to rand_output
     let is_valid_witness = prank_output == a[idx];
-    base_test().k(k as u32).expect_satisfied(is_valid_witness).run_gate(|ctx, gate| {
-        let indicator = gate.idx_to_indicator(ctx, Witness(Fr::from(idx as u64)), a.len());
-        let a = ctx.assign_witnesses(a);
-        let a_idx = gate.select_by_indicator(ctx, a, indicator);
-        a_idx.debug_prank(ctx, prank_output);
-    });
+    base_test()
+        .k(k as u32)
+        .expect_satisfied(is_valid_witness)
+        .run_gate(|ctx, gate| {
+            let indicator = gate.idx_to_indicator(ctx, Witness(Fr::from(idx as u64)), a.len());
+            let a = ctx.assign_witnesses(a);
+            let a_idx = gate.select_by_indicator(ctx, a, indicator);
+            a_idx.debug_prank(ctx, prank_output);
+        });
 }
 
 fn neg_test_select_from_idx(k: usize, cells: Vec<Fr>, idx: usize, prank_output: Fr) {
     // Check soundness of witness values
     let is_valid_witness = prank_output == cells[idx];
-    base_test().k(k as u32).expect_satisfied(is_valid_witness).run_gate(|ctx, gate| {
-        let cells = ctx.assign_witnesses(cells);
-        let idx_val = gate.select_from_idx(ctx, cells, Witness(Fr::from(idx as u64)));
-        idx_val.debug_prank(ctx, prank_output);
-    });
+    base_test()
+        .k(k as u32)
+        .expect_satisfied(is_valid_witness)
+        .run_gate(|ctx, gate| {
+            let cells = ctx.assign_witnesses(cells);
+            let idx_val = gate.select_from_idx(ctx, cells, Witness(Fr::from(idx as u64)));
+            idx_val.debug_prank(ctx, prank_output);
+        });
 }
 
 fn neg_test_inner_product(k: usize, a: Vec<Fr>, b: Vec<Fr>, prank_output: Fr) {
     let is_valid_witness = prank_output == utils::inner_product_ground_truth(&a, &b);
-    base_test().k(k as u32).expect_satisfied(is_valid_witness).run_gate(|ctx, gate| {
-        let a = ctx.assign_witnesses(a);
-        let inner_product = gate.inner_product(ctx, a, b.into_iter().map(Witness));
-        inner_product.debug_prank(ctx, prank_output);
-    });
+    base_test()
+        .k(k as u32)
+        .expect_satisfied(is_valid_witness)
+        .run_gate(|ctx, gate| {
+            let a = ctx.assign_witnesses(a);
+            let inner_product = gate.inner_product(ctx, a, b.into_iter().map(Witness));
+            inner_product.debug_prank(ctx, prank_output);
+        });
 }
 
 fn neg_test_inner_product_left_last(
@@ -189,23 +204,30 @@ fn neg_test_inner_product_left_last(
 ) {
     let is_valid_witness = prank_output == utils::inner_product_ground_truth(&a, &b)
         && prank_a_last == *a.last().unwrap();
-    base_test().k(k as u32).expect_satisfied(is_valid_witness).run_gate(|ctx, gate| {
-        let a = ctx.assign_witnesses(a);
-        let (inner_product, a_last) =
-            gate.inner_product_left_last(ctx, a, b.into_iter().map(Witness));
-        inner_product.debug_prank(ctx, prank_output);
-        a_last.debug_prank(ctx, prank_a_last);
-    });
+    base_test()
+        .k(k as u32)
+        .expect_satisfied(is_valid_witness)
+        .run_gate(|ctx, gate| {
+            let a = ctx.assign_witnesses(a);
+            let (inner_product, a_last) =
+                gate.inner_product_left_last(ctx, a, b.into_iter().map(Witness));
+            inner_product.debug_prank(ctx, prank_output);
+            a_last.debug_prank(ctx, prank_a_last);
+        });
 }
 
 // Range Check
 
 fn neg_test_range_check(k: usize, range_bits: usize, lookup_bits: usize, rand_a: Fr) {
     let correct = fe_to_biguint(&rand_a).bits() <= range_bits as u64;
-    base_test().k(k as u32).lookup_bits(lookup_bits).expect_satisfied(correct).run(|ctx, range| {
-        let a_witness = ctx.load_witness(rand_a);
-        range.range_check(ctx, a_witness, range_bits);
-    })
+    base_test()
+        .k(k as u32)
+        .lookup_bits(lookup_bits)
+        .expect_satisfied(correct)
+        .run(|ctx, range| {
+            let a_witness = ctx.load_witness(rand_a);
+            range.range_check(ctx, a_witness, range_bits);
+        })
 }
 
 // TODO: expand to prank output of is_less_than_safe()
@@ -215,11 +237,15 @@ fn neg_test_is_less_than_safe(k: usize, b: u64, lookup_bits: usize, rand_a: Fr, 
     let correct = (is_lt == prank_out)
         && (a_big.bits() as usize <= bit_length(b).div_ceil(lookup_bits) * lookup_bits); // circuit should always fail if `a` doesn't pass range check
 
-    base_test().k(k as u32).lookup_bits(lookup_bits).expect_satisfied(correct).run(|ctx, range| {
-        let a_witness = ctx.load_witness(rand_a);
-        let out = range.is_less_than_safe(ctx, a_witness, b);
-        out.debug_prank(ctx, Fr::from(prank_out));
-    });
+    base_test()
+        .k(k as u32)
+        .lookup_bits(lookup_bits)
+        .expect_satisfied(correct)
+        .run(|ctx, range| {
+            let a_witness = ctx.load_witness(rand_a);
+            let out = range.is_less_than_safe(ctx, a_witness, b);
+            out.debug_prank(ctx, Fr::from(prank_out));
+        });
 }
 
 proptest! {

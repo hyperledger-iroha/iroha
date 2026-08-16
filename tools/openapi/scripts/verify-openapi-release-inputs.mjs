@@ -29,6 +29,7 @@ import {readOpenApiStableFile} from './lib/openapi-safe-file.mjs';
 import {
   OPENAPI_CARGO_LOCK_PIN_MAX_BYTES,
   OPENAPI_CARGO_LOCK_PIN_PATH,
+  isolateGitRepositoryEnvironment,
   parseOpenApiCargoLockPin,
   validateOpenApiCargoLockBytes,
 } from './provision-openapi-cargo-lock.mjs';
@@ -40,15 +41,15 @@ const __dirname = dirname(__filename);
 export const OPENAPI_GENERATOR_INPUT_INVENTORY_HEADER =
   'iroha.openapi.generator-inputs.v1';
 export const OPENAPI_GENERATOR_INPUT_TREE_DOMAIN =
-  'iroha-openapi-generator-input-tree-v2';
-export const OPENAPI_IGNORED_GENERATOR_INPUT_PATH = 'Cargo.lock';
-export const OPENAPI_IGNORED_GENERATOR_INPUT_MODE = '100644';
-export const OPENAPI_IGNORED_GENERATOR_INPUT_MAX_BYTES =
+  'iroha-openapi-generator-input-tree-v3';
+export const OPENAPI_TRACKED_GENERATOR_INPUT_PATH = 'Cargo.lock';
+export const OPENAPI_TRACKED_GENERATOR_INPUT_MODE = '100644';
+export const OPENAPI_TRACKED_GENERATOR_INPUT_MAX_BYTES =
   16 * 1024 * 1024;
 export const OPENAPI_GENERATOR_INPUT_PATHS = Object.freeze([
   '.cargo/config.toml',
   '.github/workflows/openapi.yml',
-  OPENAPI_IGNORED_GENERATOR_INPUT_PATH,
+  OPENAPI_TRACKED_GENERATOR_INPUT_PATH,
   'Cargo.toml',
   'IrohaSwift',
   'Makefile',
@@ -85,9 +86,7 @@ export const OPENAPI_GENERATOR_INPUT_PATHS = Object.freeze([
   'xtask',
 ]);
 export const OPENAPI_TRACKED_GENERATOR_INPUT_PATHS = Object.freeze(
-  OPENAPI_GENERATOR_INPUT_PATHS.filter(
-    (path) => path !== OPENAPI_IGNORED_GENERATOR_INPUT_PATH,
-  ),
+  [...OPENAPI_GENERATOR_INPUT_PATHS],
 );
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -165,22 +164,21 @@ export function parseOpenApiGeneratorInputInventory(bytes) {
 export function computeOpenApiGeneratorInputTreeSha256({
   inventoryBytes,
   treeBytes,
-  ignoredInputBytes,
+  trackedInputBytes,
   inventoryPaths = parseOpenApiGeneratorInputInventory(inventoryBytes),
 }) {
   const tree = Buffer.from(treeBytes);
-  const trackedInventoryPaths =
-    trackedOpenApiGeneratorInputPaths(inventoryPaths);
-  validateGitTreeBytes(tree, trackedInventoryPaths);
+  validateTrackedOpenApiGeneratorInputPaths(inventoryPaths);
+  validateGitTreeBytes(tree, inventoryPaths);
   return computeOpenApiGeneratorInputTreeSha256Components({
     inventoryBytes,
     treeBytes: tree,
-    ignoredInputBytes,
+    trackedInputBytes,
   });
 }
 
 /**
- * Hash the exact V2 cross-language component contract.
+ * Hash the exact V3 cross-language component contract.
  *
  * Tree validation belongs to computeOpenApiGeneratorInputTreeSha256 so this
  * helper can also carry a compact fixed cross-language digest vector.
@@ -188,11 +186,11 @@ export function computeOpenApiGeneratorInputTreeSha256({
 export function computeOpenApiGeneratorInputTreeSha256Components({
   inventoryBytes,
   treeBytes,
-  ignoredInputBytes,
+  trackedInputBytes,
 }) {
   const inventory = toDigestBytes(inventoryBytes, 'inventoryBytes');
   const tree = toDigestBytes(treeBytes, 'treeBytes');
-  const ignoredInput = validateIgnoredInputBytes(ignoredInputBytes);
+  const trackedInput = validateTrackedInputBytes(trackedInputBytes);
   const hasher = createHash('sha256');
   updateSha256Component(
     hasher,
@@ -203,76 +201,76 @@ export function computeOpenApiGeneratorInputTreeSha256Components({
   updateSha256Component(hasher, 'tree', tree);
   updateSha256Component(
     hasher,
-    'ignored-input-path',
-    OPENAPI_IGNORED_GENERATOR_INPUT_PATH,
+    'tracked-input-path',
+    OPENAPI_TRACKED_GENERATOR_INPUT_PATH,
   );
   updateSha256Component(
     hasher,
-    'ignored-input-mode',
-    OPENAPI_IGNORED_GENERATOR_INPUT_MODE,
+    'tracked-input-mode',
+    OPENAPI_TRACKED_GENERATOR_INPUT_MODE,
   );
   updateSha256Component(
     hasher,
-    'ignored-input-bytes',
-    ignoredInput,
+    'tracked-input-bytes',
+    trackedInput,
   );
   return hasher.digest('hex');
 }
 
 /**
- * Read the separately provisioned ignored Cargo.lock without following links.
+ * Read the tracked root Cargo.lock without following links.
  */
-export async function readOpenApiIgnoredCargoLock(
+export async function readOpenApiTrackedCargoLock(
   filePath,
   {stableFileReader = readOpenApiStableFile} = {},
 ) {
-  const snapshot = await captureOpenApiIgnoredCargoLock(filePath, {
+  const snapshot = await captureOpenApiTrackedCargoLock(filePath, {
     stableFileReader,
   });
   return snapshot.bytes;
 }
 
 /**
- * Validate the Git evidence that Cargo.lock is ignored and never tree-backed.
+ * Validate that Cargo.lock is one identical stage-zero 100644 blob in the
+ * index, generator tree, and HEAD tree.
  */
-export function validateOpenApiIgnoredCargoLockGitEvidence({
-  ignoredPathBytes,
+export function validateOpenApiTrackedCargoLockGitEvidence({
   indexEntryBytes,
   pinnedTreeEntryBytes,
   headTreeEntryBytes,
 }) {
-  const expectedIgnoredPath = Buffer.from(
-    `${OPENAPI_IGNORED_GENERATOR_INPUT_PATH}\n`,
-    'utf8',
+  const indexBlobOid = parseOpenApiCargoLockIndexEntry(
+    indexEntryBytes,
+    'Git index',
   );
-  if (
-    !Buffer.isBuffer(ignoredPathBytes) ||
-    !ignoredPathBytes.equals(expectedIgnoredPath)
-  ) {
+  const pinnedBlobOid = parseOpenApiCargoLockTreeEntry(
+    pinnedTreeEntryBytes,
+    'generator Git tree',
+  );
+  const headBlobOid = parseOpenApiCargoLockTreeEntry(
+    headTreeEntryBytes,
+    'HEAD Git tree',
+  );
+  if (indexBlobOid !== pinnedBlobOid || pinnedBlobOid !== headBlobOid) {
     throw new Error(
-      'OpenAPI generator input Cargo.lock must be the exact ignored root path',
+      'OpenAPI generator input Cargo.lock must reference the same blob in the index, generator Git tree, and HEAD Git tree',
     );
   }
-  for (const [label, bytes] of [
-    ['Git index', indexEntryBytes],
-    ['pinned Git tree', pinnedTreeEntryBytes],
-    ['HEAD Git tree', headTreeEntryBytes],
-  ]) {
-    if (!Buffer.isBuffer(bytes) || bytes.length !== 0) {
-      throw new Error(
-        `OpenAPI generator input Cargo.lock must be untracked in the ${label}`,
-      );
-    }
-  }
+  return headBlobOid;
 }
 
 /**
  * Require one identical, non-executable pin blob in the pinned and HEAD trees.
  */
 export function validateOpenApiCargoLockPinGitEvidence({
+  indexEntryBytes,
   pinnedTreeEntryBytes,
   headTreeEntryBytes,
 }) {
+  const indexBlobOid = parseOpenApiCargoLockPinIndexEntry(
+    indexEntryBytes,
+    'Git index',
+  );
   const pinnedBlobOid = parseOpenApiCargoLockPinTreeEntry(
     pinnedTreeEntryBytes,
     'pinned Git tree',
@@ -281,19 +279,19 @@ export function validateOpenApiCargoLockPinGitEvidence({
     headTreeEntryBytes,
     'HEAD Git tree',
   );
-  if (pinnedBlobOid !== headBlobOid) {
+  if (indexBlobOid !== pinnedBlobOid || pinnedBlobOid !== headBlobOid) {
     throw new Error(
-      'OpenAPI Cargo.lock pin must reference the same blob in the pinned and HEAD Git trees',
+      'OpenAPI Cargo.lock pin must reference the same blob in the index, pinned Git tree, and HEAD Git tree',
     );
   }
   return pinnedBlobOid;
 }
 
 /**
- * Parse source-bound pin bytes and validate the exact ignored root lock.
+ * Parse source-bound pin bytes and validate the exact tracked root lock.
  */
-export function validateOpenApiIgnoredCargoLockAgainstPin({
-  ignoredInputBytes,
+export function validateOpenApiTrackedCargoLockAgainstPin({
+  trackedInputBytes,
   pinBytes,
 }) {
   const sourceBoundPinBytes = toDigestBytes(pinBytes, 'pinBytes');
@@ -303,7 +301,7 @@ export function validateOpenApiIgnoredCargoLockAgainstPin({
     );
   }
   const pin = parseOpenApiCargoLockPin(sourceBoundPinBytes);
-  validateOpenApiCargoLockBytes(ignoredInputBytes, pin);
+  validateOpenApiCargoLockBytes(trackedInputBytes, pin);
   return pin;
 }
 
@@ -405,7 +403,14 @@ export function validatePinnedOpenApiProvenance({
 export async function verifyOpenApiReleaseInputs({
   repoRoot = defaultRepoRoot,
   requireCleanWorkingTree = true,
+  beforeFinalStateCheck,
 } = {}) {
+  if (
+    beforeFinalStateCheck !== undefined &&
+    typeof beforeFinalStateCheck !== 'function'
+  ) {
+    throw new TypeError('beforeFinalStateCheck must be a function');
+  }
   const root = resolve(repoRoot);
   const openapiDir = join(root, 'artifacts', 'openapi');
   const inventoryPath = join(
@@ -425,12 +430,13 @@ export async function verifyOpenApiReleaseInputs({
     ),
     versions: join(openapiDir, 'versions.json'),
     releaseVersionMap: join(root, 'release', 'version-map.toml'),
-    ignoredCargoLock: join(
+    trackedCargoLock: join(
       root,
-      OPENAPI_IGNORED_GENERATOR_INPUT_PATH,
+      OPENAPI_TRACKED_GENERATOR_INPUT_PATH,
     ),
   };
 
+  const headCommit = await readGitCommitOid(root, 'HEAD', 'HEAD');
   if (requireCleanWorkingTree) {
     const status = await gitBytes(root, [
       'status',
@@ -485,8 +491,7 @@ export async function verifyOpenApiReleaseInputs({
   ]);
 
   const inventoryPaths = parseOpenApiGeneratorInputInventory(inventoryBytes);
-  const trackedInventoryPaths =
-    trackedOpenApiGeneratorInputPaths(inventoryPaths);
+  validateTrackedOpenApiGeneratorInputPaths(inventoryPaths);
   if (!rootSpecBytes.equals(currentSpecBytes)) {
     throw new Error(
       'root and current Torii OpenAPI specifications must be byte-identical',
@@ -544,7 +549,7 @@ export async function verifyOpenApiReleaseInputs({
   const generatorCommitIsAncestor = await gitIsAncestor(
     root,
     generatorCommit,
-    'HEAD',
+    headCommit,
   );
   if (!generatorCommitIsAncestor) {
     validatePinnedOpenApiProvenance({
@@ -562,40 +567,51 @@ export async function verifyOpenApiReleaseInputs({
   const [
     pinnedTreeBytes,
     headTreeBytes,
+    headTreeOid,
     expectedGeneratedUnixMs,
-    ignoredCargoLockGitState,
+    trackedCargoLockGitState,
   ] = await Promise.all([
-    readGeneratorInputTree(
+    readGeneratorInputTree(root, generatorCommit, inventoryPaths),
+    readGeneratorInputTree(root, headCommit, inventoryPaths),
+    readGitTreeOid(root, headCommit),
+    readGitCommitTimestampMs(root, generatorCommit),
+    validateOpenApiTrackedCargoLockGitState(
       root,
       generatorCommit,
-      trackedInventoryPaths,
+      headCommit,
     ),
-    readGeneratorInputTree(root, 'HEAD', trackedInventoryPaths),
-    readGitCommitTimestampMs(root, generatorCommit),
-    validateOpenApiIgnoredCargoLockGitState(root, generatorCommit),
   ]);
   const pinBytes = await readOpenApiCargoLockPinBlob(
     root,
-    ignoredCargoLockGitState.pinBlobOid,
+    trackedCargoLockGitState.pinBlobOid,
   );
-  const ignoredCargoLockSnapshot =
-    await captureOpenApiIgnoredCargoLock(paths.ignoredCargoLock);
-  validateOpenApiIgnoredCargoLockAgainstPin({
-    ignoredInputBytes: ignoredCargoLockSnapshot.bytes,
+  const committedCargoLockBytes = await readOpenApiCargoLockBlob(
+    root,
+    trackedCargoLockGitState.cargoLockBlobOid,
+  );
+  const trackedCargoLockSnapshot =
+    await captureOpenApiTrackedCargoLock(paths.trackedCargoLock);
+  if (!trackedCargoLockSnapshot.bytes.equals(committedCargoLockBytes)) {
+    throw new Error(
+      'tracked OpenAPI generator input Cargo.lock working bytes must equal the authenticated Git blob',
+    );
+  }
+  validateOpenApiTrackedCargoLockAgainstPin({
+    trackedInputBytes: committedCargoLockBytes,
     pinBytes,
   });
   const pinnedSourceSha256Hex =
     computeOpenApiGeneratorInputTreeSha256({
       inventoryBytes,
       treeBytes: pinnedTreeBytes,
-      ignoredInputBytes: ignoredCargoLockSnapshot.bytes,
+      trackedInputBytes: committedCargoLockBytes,
       inventoryPaths,
     });
   const headSourceSha256Hex =
     computeOpenApiGeneratorInputTreeSha256({
       inventoryBytes,
       treeBytes: headTreeBytes,
-      ignoredInputBytes: ignoredCargoLockSnapshot.bytes,
+      trackedInputBytes: committedCargoLockBytes,
       inventoryPaths,
     });
   const provenance = validatePinnedOpenApiProvenance({
@@ -620,10 +636,27 @@ export async function verifyOpenApiReleaseInputs({
     label: 'root Torii OpenAPI manifest',
     expectedArtifactPath: 'torii.json',
   });
-  await assertOpenApiIgnoredCargoLockUnchanged(
-    paths.ignoredCargoLock,
-    ignoredCargoLockSnapshot,
+  if (beforeFinalStateCheck) {
+    await beforeFinalStateCheck({root, generatorCommit, headCommit});
+  }
+  await assertOpenApiTrackedCargoLockUnchanged(
+    paths.trackedCargoLock,
+    trackedCargoLockSnapshot,
   );
+  await assertOpenApiFinalGitState({
+    root,
+    generatorCommit,
+    headCommit,
+    headTreeOid,
+    inventoryBytes,
+    inventoryPaths,
+    headTreeBytes,
+    headSourceSha256Hex,
+    trackedCargoLockGitState,
+    committedCargoLockBytes,
+    pinBytes,
+    requireCleanWorkingTree,
+  });
   return {
     schema: 'iroha.openapi.release_inputs.v1',
     generator_commit: provenance.generatorCommit,
@@ -652,29 +685,14 @@ async function readGeneratorInputTree(repoRoot, commit, inventoryPaths) {
   ]);
 }
 
-async function validateOpenApiIgnoredCargoLockGitState(
+async function validateOpenApiTrackedCargoLockGitState(
   repoRoot,
   generatorCommit,
+  headCommit,
 ) {
-  let ignoredPathBytes;
-  try {
-    ignoredPathBytes = await gitBytes(repoRoot, [
-      'check-ignore',
-      '--no-index',
-      '--',
-      OPENAPI_IGNORED_GENERATOR_INPUT_PATH,
-    ]);
-  } catch (error) {
-    if (error?.gitExitCode === 1) {
-      throw new Error(
-        'OpenAPI generator input Cargo.lock must be ignored by repository policy',
-        {cause: error},
-      );
-    }
-    throw error;
-  }
   const [
     indexEntryBytes,
+    pinIndexEntryBytes,
     pinnedTreeEntryBytes,
     headTreeEntryBytes,
     pinnedPinTreeEntryBytes,
@@ -685,7 +703,14 @@ async function validateOpenApiIgnoredCargoLockGitState(
       '--stage',
       '-z',
       '--',
-      OPENAPI_IGNORED_GENERATOR_INPUT_PATH,
+      OPENAPI_TRACKED_GENERATOR_INPUT_PATH,
+    ]),
+    gitBytes(repoRoot, [
+      'ls-files',
+      '--stage',
+      '-z',
+      '--',
+      OPENAPI_CARGO_LOCK_PIN_PATH,
     ]),
     gitBytes(repoRoot, [
       'ls-tree',
@@ -693,15 +718,15 @@ async function validateOpenApiIgnoredCargoLockGitState(
       '--full-tree',
       generatorCommit,
       '--',
-      OPENAPI_IGNORED_GENERATOR_INPUT_PATH,
+      OPENAPI_TRACKED_GENERATOR_INPUT_PATH,
     ]),
     gitBytes(repoRoot, [
       'ls-tree',
       '-z',
       '--full-tree',
-      'HEAD',
+      headCommit,
       '--',
-      OPENAPI_IGNORED_GENERATOR_INPUT_PATH,
+      OPENAPI_TRACKED_GENERATOR_INPUT_PATH,
     ]),
     gitBytes(repoRoot, [
       'ls-tree',
@@ -715,19 +740,20 @@ async function validateOpenApiIgnoredCargoLockGitState(
       'ls-tree',
       '-z',
       '--full-tree',
-      'HEAD',
+      headCommit,
       '--',
       OPENAPI_CARGO_LOCK_PIN_PATH,
     ]),
   ]);
-  validateOpenApiIgnoredCargoLockGitEvidence({
-    ignoredPathBytes,
+  const cargoLockBlobOid = validateOpenApiTrackedCargoLockGitEvidence({
     indexEntryBytes,
     pinnedTreeEntryBytes,
     headTreeEntryBytes,
   });
   return {
+    cargoLockBlobOid,
     pinBlobOid: validateOpenApiCargoLockPinGitEvidence({
+      indexEntryBytes: pinIndexEntryBytes,
       pinnedTreeEntryBytes: pinnedPinTreeEntryBytes,
       headTreeEntryBytes: headPinTreeEntryBytes,
     }),
@@ -746,6 +772,115 @@ async function readOpenApiCargoLockPinBlob(repoRoot, blobOid) {
     );
   }
   return bytes;
+}
+
+async function readOpenApiCargoLockBlob(repoRoot, blobOid) {
+  const bytes = await gitBytes(repoRoot, ['cat-file', 'blob', blobOid]);
+  return validateTrackedInputBytes(bytes);
+}
+
+async function assertOpenApiFinalGitState({
+  root,
+  generatorCommit,
+  headCommit,
+  headTreeOid,
+  inventoryBytes,
+  inventoryPaths,
+  headTreeBytes,
+  headSourceSha256Hex,
+  trackedCargoLockGitState,
+  committedCargoLockBytes,
+  pinBytes,
+  requireCleanWorkingTree,
+}) {
+  if (await readGitCommitOid(root, 'HEAD', 'HEAD') !== headCommit) {
+    throw new Error('OpenAPI release-input HEAD changed during verification');
+  }
+  const [finalTreeOid, finalTreeBytes, finalGitState, finalLock, finalPin] =
+    await Promise.all([
+      readGitTreeOid(root, headCommit),
+      readGeneratorInputTree(root, headCommit, inventoryPaths),
+      validateOpenApiTrackedCargoLockGitState(
+        root,
+        generatorCommit,
+        headCommit,
+      ),
+      readOpenApiCargoLockBlob(
+        root,
+        trackedCargoLockGitState.cargoLockBlobOid,
+      ),
+      readOpenApiCargoLockPinBlob(
+        root,
+        trackedCargoLockGitState.pinBlobOid,
+      ),
+    ]);
+  if (finalTreeOid !== headTreeOid || !finalTreeBytes.equals(headTreeBytes)) {
+    throw new Error(
+      'OpenAPI release-input HEAD tree changed during verification',
+    );
+  }
+  if (
+    finalGitState.cargoLockBlobOid !==
+      trackedCargoLockGitState.cargoLockBlobOid ||
+    finalGitState.pinBlobOid !== trackedCargoLockGitState.pinBlobOid
+  ) {
+    throw new Error(
+      'OpenAPI Cargo.lock or pin index/tree evidence changed during verification',
+    );
+  }
+  if (!finalLock.equals(committedCargoLockBytes) || !finalPin.equals(pinBytes)) {
+    throw new Error(
+      'OpenAPI Cargo.lock or pin Git blob changed during verification',
+    );
+  }
+  const finalSourceSha256Hex = computeOpenApiGeneratorInputTreeSha256({
+    inventoryBytes,
+    treeBytes: finalTreeBytes,
+    trackedInputBytes: finalLock,
+    inventoryPaths,
+  });
+  if (finalSourceSha256Hex !== headSourceSha256Hex) {
+    throw new Error(
+      'OpenAPI release-input HEAD digest changed during verification',
+    );
+  }
+  if (requireCleanWorkingTree) {
+    const status = await gitBytes(root, [
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+    ]);
+    if (status.length !== 0) {
+      throw new Error(
+        'OpenAPI release-input checkout changed during verification',
+      );
+    }
+  }
+  if (await readGitCommitOid(root, 'HEAD', 'HEAD') !== headCommit) {
+    throw new Error('OpenAPI release-input HEAD changed during verification');
+  }
+}
+
+async function readGitCommitOid(repoRoot, revision, label) {
+  return readGitOid(repoRoot, `${revision}^{commit}`, `${label} commit`);
+}
+
+async function readGitTreeOid(repoRoot, revision) {
+  return readGitOid(repoRoot, `${revision}^{tree}`, 'HEAD tree');
+}
+
+async function readGitOid(repoRoot, revision, label) {
+  const bytes = await gitBytes(repoRoot, [
+    'rev-parse',
+    '--verify',
+    revision,
+  ]);
+  const text = bytes.toString('ascii');
+  if (!/^[0-9a-f]{40}\n$/.test(text) || /^0{40}\n$/.test(text)) {
+    throw new Error(`${label} must resolve to one full nonzero Git object`);
+  }
+  return text.slice(0, -1);
 }
 
 async function resolveGitCommit(repoRoot, commit) {
@@ -811,6 +946,7 @@ function gitBytes(repoRoot, args) {
       ['-C', repoRoot, ...args],
       {
         encoding: 'buffer',
+        env: isolateGitRepositoryEnvironment(),
         maxBuffer: GIT_MAX_BUFFER_BYTES,
         windowsHide: true,
       },
@@ -868,14 +1004,6 @@ function validateGitTreeBytes(tree, inventoryPaths) {
     if (seen.has(path)) {
       throw new Error(`git ls-tree duplicated OpenAPI generator input ${path}`);
     }
-    if (
-      path === OPENAPI_IGNORED_GENERATOR_INPUT_PATH ||
-      path.startsWith(`${OPENAPI_IGNORED_GENERATOR_INPUT_PATH}/`)
-    ) {
-      throw new Error(
-        'ignored OpenAPI generator input Cargo.lock must not resolve from a Git tree',
-      );
-    }
     seen.add(path);
     resolvedPaths.push(path);
   }
@@ -892,30 +1020,15 @@ function validateGitTreeBytes(tree, inventoryPaths) {
   }
 }
 
-function trackedOpenApiGeneratorInputPaths(inventoryPaths) {
+function validateTrackedOpenApiGeneratorInputPaths(inventoryPaths) {
   if (!Array.isArray(inventoryPaths)) {
     throw new TypeError(
       'OpenAPI generator input inventory paths must be an array',
     );
   }
-  const ignoredPaths = inventoryPaths.filter(
-    (path) => path === OPENAPI_IGNORED_GENERATOR_INPUT_PATH,
-  );
   if (
-    ignoredPaths.length !== 1 ||
-    inventoryPaths.length !==
-      OPENAPI_TRACKED_GENERATOR_INPUT_PATHS.length + 1
-  ) {
-    throw new Error(
-      'Cargo.lock must be the sole separately bound ignored OpenAPI generator input',
-    );
-  }
-  const trackedPaths = inventoryPaths.filter(
-    (path) => path !== OPENAPI_IGNORED_GENERATOR_INPUT_PATH,
-  );
-  if (
-    trackedPaths.length !== OPENAPI_TRACKED_GENERATOR_INPUT_PATHS.length ||
-    trackedPaths.some(
+    inventoryPaths.length !== OPENAPI_TRACKED_GENERATOR_INPUT_PATHS.length ||
+    inventoryPaths.some(
       (path, index) =>
         path !== OPENAPI_TRACKED_GENERATOR_INPUT_PATHS[index],
     )
@@ -924,16 +1037,66 @@ function trackedOpenApiGeneratorInputPaths(inventoryPaths) {
       'OpenAPI tracked generator inputs do not match the exact release-input contract',
     );
   }
-  return trackedPaths;
+}
+
+function parseOpenApiCargoLockIndexEntry(bytes, label) {
+  return parseOpenApiIndexEntry(
+    bytes,
+    OPENAPI_TRACKED_GENERATOR_INPUT_PATH,
+    `OpenAPI Cargo.lock ${label}`,
+  );
+}
+
+function parseOpenApiCargoLockPinIndexEntry(bytes, label) {
+  return parseOpenApiIndexEntry(
+    bytes,
+    OPENAPI_CARGO_LOCK_PIN_PATH,
+    `OpenAPI Cargo.lock pin ${label}`,
+  );
+}
+
+function parseOpenApiIndexEntry(bytes, expectedPath, label) {
+  if (!Buffer.isBuffer(bytes)) {
+    throw new TypeError(`${label} evidence must be bytes`);
+  }
+  const escapedPath = expectedPath.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    '\\$&',
+  );
+  const match = new RegExp(
+    `^100644 ([0-9a-f]{40}) 0\\t${escapedPath}\\0$`,
+  ).exec(bytes.toString('utf8'));
+  if (!match || /^0{40}$/.test(match[1])) {
+    throw new Error(
+      `${label} must be one stage-zero 100644 blob`,
+    );
+  }
+  return match[1];
+}
+
+function parseOpenApiCargoLockTreeEntry(bytes, label) {
+  return parseOpenApiTreeEntry(
+    bytes,
+    OPENAPI_TRACKED_GENERATOR_INPUT_PATH,
+    `OpenAPI Cargo.lock ${label}`,
+  );
 }
 
 function parseOpenApiCargoLockPinTreeEntry(bytes, label) {
+  return parseOpenApiTreeEntry(
+    bytes,
+    OPENAPI_CARGO_LOCK_PIN_PATH,
+    `OpenAPI Cargo.lock pin ${label}`,
+  );
+}
+
+function parseOpenApiTreeEntry(bytes, expectedPath, label) {
   if (!Buffer.isBuffer(bytes)) {
     throw new TypeError(
-      `OpenAPI Cargo.lock pin ${label} evidence must be bytes`,
+      `${label} evidence must be bytes`,
     );
   }
-  const escapedPath = OPENAPI_CARGO_LOCK_PIN_PATH.replace(
+  const escapedPath = expectedPath.replace(
     /[.*+?^${}()|[\]\\]/g,
     '\\$&',
   );
@@ -942,13 +1105,13 @@ function parseOpenApiCargoLockPinTreeEntry(bytes, label) {
   ).exec(bytes.toString('utf8'));
   if (!match || /^0{40}$/.test(match[1])) {
     throw new Error(
-      `OpenAPI Cargo.lock pin must be one canonical 100644 blob in the ${label}`,
+      `${label} must be one canonical 100644 blob`,
     );
   }
   return match[1];
 }
 
-async function captureOpenApiIgnoredCargoLock(
+async function captureOpenApiTrackedCargoLock(
   filePath,
   {stableFileReader = readOpenApiStableFile} = {},
 ) {
@@ -956,41 +1119,41 @@ async function captureOpenApiIgnoredCargoLock(
     throw new TypeError('stableFileReader must be a function');
   }
   const resolved = resolve(filePath);
-  const before = await inspectOpenApiIgnoredCargoLock(resolved);
+  const before = await inspectOpenApiTrackedCargoLock(resolved);
   const readBytes = await stableFileReader(resolved, {
-    label: 'ignored OpenAPI generator input Cargo.lock',
-    maxBytes: OPENAPI_IGNORED_GENERATOR_INPUT_MAX_BYTES,
+    label: 'tracked OpenAPI generator input Cargo.lock',
+    maxBytes: OPENAPI_TRACKED_GENERATOR_INPUT_MAX_BYTES,
   });
-  const bytes = validateIgnoredInputBytes(readBytes);
-  const after = await inspectOpenApiIgnoredCargoLock(resolved);
+  const bytes = validateTrackedInputBytes(readBytes);
+  const after = await inspectOpenApiTrackedCargoLock(resolved);
   if (
-    !sameOpenApiIgnoredCargoLockState(before, after) ||
+    !sameOpenApiTrackedCargoLockState(before, after) ||
     after.size !== BigInt(bytes.length)
   ) {
     throw new Error(
-      `ignored OpenAPI generator input Cargo.lock ${resolved} changed while it was read`,
+      `tracked OpenAPI generator input Cargo.lock ${resolved} changed while it was read`,
     );
   }
   return {bytes, state: after};
 }
 
-async function assertOpenApiIgnoredCargoLockUnchanged(filePath, snapshot) {
+async function assertOpenApiTrackedCargoLockUnchanged(filePath, snapshot) {
   const resolved = resolve(filePath);
-  const current = await inspectOpenApiIgnoredCargoLock(resolved);
-  if (!sameOpenApiIgnoredCargoLockState(snapshot.state, current)) {
+  const current = await inspectOpenApiTrackedCargoLock(resolved);
+  if (!sameOpenApiTrackedCargoLockState(snapshot.state, current)) {
     throw new Error(
-      `ignored OpenAPI generator input Cargo.lock ${resolved} changed during release-input verification`,
+      `tracked OpenAPI generator input Cargo.lock ${resolved} changed during release-input verification`,
     );
   }
 }
 
-async function inspectOpenApiIgnoredCargoLock(resolved) {
+async function inspectOpenApiTrackedCargoLock(resolved) {
   let metadata;
   try {
     metadata = await lstat(resolved, {bigint: true});
   } catch (error) {
     const wrapped = new Error(
-      `failed to inspect ignored OpenAPI generator input Cargo.lock ${resolved}: ${error?.message ?? error}`,
+      `failed to inspect tracked OpenAPI generator input Cargo.lock ${resolved}: ${error?.message ?? error}`,
       {cause: error},
     );
     wrapped.code = error?.code;
@@ -998,17 +1161,17 @@ async function inspectOpenApiIgnoredCargoLock(resolved) {
   }
   if (metadata.isSymbolicLink()) {
     throw new Error(
-      `ignored OpenAPI generator input Cargo.lock ${resolved} must not be a symlink`,
+      `tracked OpenAPI generator input Cargo.lock ${resolved} must not be a symlink`,
     );
   }
   if (!metadata.isFile()) {
     throw new Error(
-      `ignored OpenAPI generator input Cargo.lock ${resolved} must be a regular file`,
+      `tracked OpenAPI generator input Cargo.lock ${resolved} must be a regular file`,
     );
   }
   if (metadata.nlink !== 1n) {
     throw new Error(
-      `ignored OpenAPI generator input Cargo.lock ${resolved} must have exactly one hard link`,
+      `tracked OpenAPI generator input Cargo.lock ${resolved} must have exactly one hard link`,
     );
   }
   if (
@@ -1016,26 +1179,26 @@ async function inspectOpenApiIgnoredCargoLock(resolved) {
     (metadata.mode & 0o111n) !== 0n
   ) {
     throw new Error(
-      `ignored OpenAPI generator input Cargo.lock ${resolved} must not be executable`,
+      `tracked OpenAPI generator input Cargo.lock ${resolved} must not be executable`,
     );
   }
   if (metadata.size === 0n) {
     throw new Error(
-      `ignored OpenAPI generator input Cargo.lock ${resolved} must not be empty`,
+      `tracked OpenAPI generator input Cargo.lock ${resolved} must not be empty`,
     );
   }
   if (
     metadata.size >
-    BigInt(OPENAPI_IGNORED_GENERATOR_INPUT_MAX_BYTES)
+    BigInt(OPENAPI_TRACKED_GENERATOR_INPUT_MAX_BYTES)
   ) {
     throw new Error(
-      `ignored OpenAPI generator input Cargo.lock ${resolved} exceeds the ${OPENAPI_IGNORED_GENERATOR_INPUT_MAX_BYTES}-byte limit`,
+      `tracked OpenAPI generator input Cargo.lock ${resolved} exceeds the ${OPENAPI_TRACKED_GENERATOR_INPUT_MAX_BYTES}-byte limit`,
     );
   }
   return metadata;
 }
 
-function sameOpenApiIgnoredCargoLockState(left, right) {
+function sameOpenApiTrackedCargoLockState(left, right) {
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&
@@ -1071,16 +1234,16 @@ function toDigestBytes(value, label) {
   return Buffer.from(value);
 }
 
-function validateIgnoredInputBytes(value) {
-  const bytes = toDigestBytes(value, 'ignoredInputBytes');
+function validateTrackedInputBytes(value) {
+  const bytes = toDigestBytes(value, 'trackedInputBytes');
   if (bytes.length === 0) {
     throw new Error(
-      'ignored OpenAPI generator input Cargo.lock must not be empty',
+      'tracked OpenAPI generator input Cargo.lock must not be empty',
     );
   }
-  if (bytes.length > OPENAPI_IGNORED_GENERATOR_INPUT_MAX_BYTES) {
+  if (bytes.length > OPENAPI_TRACKED_GENERATOR_INPUT_MAX_BYTES) {
     throw new Error(
-      `ignored OpenAPI generator input Cargo.lock exceeds the ${OPENAPI_IGNORED_GENERATOR_INPUT_MAX_BYTES}-byte limit`,
+      `tracked OpenAPI generator input Cargo.lock exceeds the ${OPENAPI_TRACKED_GENERATOR_INPUT_MAX_BYTES}-byte limit`,
     );
   }
   return bytes;

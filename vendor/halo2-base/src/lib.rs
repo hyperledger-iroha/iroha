@@ -157,8 +157,8 @@ impl ContextCell {
             context_id <= Self::CONTEXT_MASK as usize,
             "ContextCell context_id exceeds the compact 29-bit range"
         );
-        let offset = u32::try_from(offset)
-            .expect("ContextCell offset exceeds the compact u32 range") as u64;
+        let offset =
+            u32::try_from(offset).expect("ContextCell offset exceeds the compact u32 range") as u64;
         let packed = (type_code << Self::TYPE_SHIFT)
             | ((context_id as u64) << Self::CONTEXT_SHIFT)
             | (offset << Self::OFFSET_SHIFT)
@@ -285,11 +285,7 @@ mod context_cell_tests {
     fn context_cell_accepts_compact_maximum_and_returns_usize() {
         let maximum_context = (1_usize << 29) - 1;
         let maximum_offset = usize::try_from(u32::MAX).expect("u32 fits supported usize targets");
-        let cell = ContextCell::new(
-            THIRD_PHASE_CELL_TYPE_ID,
-            maximum_context,
-            maximum_offset,
-        );
+        let cell = ContextCell::new(THIRD_PHASE_CELL_TYPE_ID, maximum_context, maximum_offset);
         assert_eq!(cell.type_id(), THIRD_PHASE_CELL_TYPE_ID);
         assert_eq!(cell.context_id(), maximum_context);
         assert_eq!(cell.offset(), maximum_offset);
@@ -352,38 +348,496 @@ impl<F: ScalarField> AsRef<AssignedValue<F>> for AssignedValue<F> {
     }
 }
 
-const COMPACT_ADVICE_ZERO_BITS_PER_BYTE: usize = u8::BITS as usize;
+const PACKED_BITS_PER_BYTE: usize = u8::BITS as usize;
+const PACKED_BITS_SEGMENT_BYTES: usize = 1 << 16;
+const PACKED_BITS_SEGMENT_LEN: usize = PACKED_BITS_SEGMENT_BYTES * PACKED_BITS_PER_BYTE;
+const COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN: usize = 1 << 16;
+const LARGE_VEC_REALLOCATION_RELIEF_BYTES: usize = 64 * 1024 * 1024;
+
+static PACKED_BITS_FALSE: bool = false;
+static PACKED_BITS_TRUE: bool = true;
+
+/// Return allocator-retained pages after a large `Vec` growth releases its old buffer.
+///
+/// Growing a multi-gigabyte recursive-circuit inventory can leave the previous
+/// capacity charged to Darwin's physical footprint until the next phase
+/// boundary. Relieving only reallocations whose old buffer was at least 64 MiB
+/// keeps ordinary circuit construction free of allocator syscalls while
+/// preventing those logarithmic growth buffers from accumulating.
+pub(crate) fn release_large_vec_reallocation_slack<T>(old_capacity: usize, new_capacity: usize) {
+    if new_capacity > old_capacity
+        && old_capacity
+            .checked_mul(std::mem::size_of::<T>())
+            .unwrap_or(usize::MAX)
+            >= LARGE_VEC_REALLOCATION_RELIEF_BYTES
+    {
+        #[cfg(all(feature = "halo2-axiom", not(feature = "cuda")))]
+        halo2_proofs::release_allocator_slack();
+    }
+}
 
 fn compact_advice_position(index: usize) -> u32 {
     u32::try_from(index).expect("CompactAdvice position exceeds the compact u32 range")
 }
 
-fn compact_advice_zero_mask_len(advice_len: usize) -> usize {
-    advice_len
-        .checked_add(COMPACT_ADVICE_ZERO_BITS_PER_BYTE - 1)
-        .expect("CompactAdvice zero-mask length overflow")
-        / COMPACT_ADVICE_ZERO_BITS_PER_BYTE
+fn packed_bits_byte_len(bit_len: usize) -> usize {
+    bit_len
+        .checked_add(PACKED_BITS_PER_BYTE - 1)
+        .expect("SegmentedBits byte length overflow")
+        / PACKED_BITS_PER_BYTE
 }
 
-fn compact_advice_zero_mask_location(index: usize) -> (usize, u8) {
-    let byte = index / COMPACT_ADVICE_ZERO_BITS_PER_BYTE;
-    let bit = 1_u8 << (index % COMPACT_ADVICE_ZERO_BITS_PER_BYTE);
-    (byte, bit)
+#[cfg(test)]
+fn compact_advice_zero_mask_len(advice_len: usize) -> usize {
+    packed_bits_byte_len(advice_len)
+}
+
+/// A fixed-segment packed Boolean sequence.
+///
+/// Each inner segment has capacity for 65,536 bytes (524,288 bits), so growing
+/// the sequence never relocates previously written bits. Logical ordering and
+/// the `len`, `get`, `set`, `resize`, indexing, and iteration behavior used by
+/// halo2-base selectors match a `Vec<bool>`.
+#[derive(Eq, PartialEq)]
+pub struct SegmentedBits {
+    segments: Vec<Vec<u8>>,
+    len: usize,
+}
+
+impl Default for SegmentedBits {
+    fn default() -> Self {
+        Self {
+            segments: Vec::new(),
+            len: 0,
+        }
+    }
+}
+
+impl Clone for SegmentedBits {
+    fn clone(&self) -> Self {
+        let mut segments = Vec::with_capacity(self.segments.capacity());
+        for source in &self.segments {
+            let mut segment = Vec::with_capacity(PACKED_BITS_SEGMENT_BYTES);
+            segment.extend_from_slice(source);
+            segments.push(segment);
+        }
+        Self {
+            segments,
+            len: self.len,
+        }
+    }
+}
+
+impl fmt::Debug for SegmentedBits {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl SegmentedBits {
+    fn location(index: usize) -> (usize, usize, u8) {
+        let global_byte = index / PACKED_BITS_PER_BYTE;
+        let segment = global_byte / PACKED_BITS_SEGMENT_BYTES;
+        let byte = global_byte % PACKED_BITS_SEGMENT_BYTES;
+        let bit = 1_u8 << (index % PACKED_BITS_PER_BYTE);
+        (segment, byte, bit)
+    }
+
+    fn required_segment_count(len: usize) -> usize {
+        let bytes = packed_bits_byte_len(len);
+        bytes
+            .checked_add(PACKED_BITS_SEGMENT_BYTES - 1)
+            .expect("SegmentedBits segment count overflow")
+            / PACKED_BITS_SEGMENT_BYTES
+    }
+
+    fn prepare_push(&mut self) -> Option<Vec<u8>> {
+        let _ = self
+            .len
+            .checked_add(1)
+            .expect("SegmentedBits length overflow");
+        if self.len % PACKED_BITS_SEGMENT_LEN != 0 {
+            return None;
+        }
+        self.segments.reserve(1);
+        Some(Vec::with_capacity(PACKED_BITS_SEGMENT_BYTES))
+    }
+
+    fn push_prepared(&mut self, value: bool, prepared: Option<Vec<u8>>) {
+        let new_len = self
+            .len
+            .checked_add(1)
+            .expect("SegmentedBits length overflow");
+        let (segment_index, byte_index, bit) = Self::location(self.len);
+        if let Some(mut segment) = prepared {
+            debug_assert_eq!(self.len % PACKED_BITS_SEGMENT_LEN, 0);
+            debug_assert_eq!(segment_index, self.segments.len());
+            debug_assert_eq!(byte_index, 0);
+            debug_assert!(segment.capacity() >= PACKED_BITS_SEGMENT_BYTES);
+            segment.push(0);
+            self.segments.push(segment);
+        } else {
+            debug_assert_ne!(self.len % PACKED_BITS_SEGMENT_LEN, 0);
+            let segment = self
+                .segments
+                .get_mut(segment_index)
+                .expect("SegmentedBits lost its live tail segment");
+            debug_assert!(segment.capacity() >= PACKED_BITS_SEGMENT_BYTES);
+            if byte_index == segment.len() {
+                debug_assert!(segment.len() < PACKED_BITS_SEGMENT_BYTES);
+                segment.push(0);
+            }
+        }
+        if value {
+            *self
+                .segments
+                .get_mut(segment_index)
+                .and_then(|segment| segment.get_mut(byte_index))
+                .expect("SegmentedBits prepared bit is unavailable") |= bit;
+        }
+        self.len = new_len;
+    }
+
+    /// Returns the number of logical bits.
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(
+            self.segments.iter().map(Vec::len).sum::<usize>(),
+            packed_bits_byte_len(self.len)
+        );
+        self.len
+    }
+
+    /// Returns `true` when the sequence contains no logical bits.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn value(&self, index: usize) -> Option<bool> {
+        if index >= self.len {
+            return None;
+        }
+        let (segment, byte, bit) = Self::location(index);
+        let stored = *self
+            .segments
+            .get(segment)
+            .and_then(|segment| segment.get(byte))
+            .expect("SegmentedBits storage does not cover its logical length");
+        Some(stored & bit != 0)
+    }
+
+    /// Returns a reference to the bit at `index`, or `None` when out of bounds.
+    pub fn get(&self, index: usize) -> Option<&bool> {
+        self.value(index).map(|value| {
+            if value {
+                &PACKED_BITS_TRUE
+            } else {
+                &PACKED_BITS_FALSE
+            }
+        })
+    }
+
+    /// Replaces the bit at `index`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `index` is out of bounds.
+    pub fn set(&mut self, index: usize, value: bool) {
+        assert!(index < self.len, "SegmentedBits index is out of bounds");
+        let (segment, byte, bit) = Self::location(index);
+        let stored = self
+            .segments
+            .get_mut(segment)
+            .and_then(|segment| segment.get_mut(byte))
+            .expect("SegmentedBits storage does not cover its logical length");
+        if value {
+            *stored |= bit;
+        } else {
+            *stored &= !bit;
+        }
+    }
+
+    /// Resizes the logical sequence, filling new bits with `value`.
+    pub fn resize(&mut self, new_len: usize, value: bool) {
+        if new_len == self.len {
+            return;
+        }
+        if new_len < self.len {
+            let required_bytes = packed_bits_byte_len(new_len);
+            let required_segments = Self::required_segment_count(new_len);
+            if required_segments == 0 {
+                self.segments.clear();
+            } else {
+                self.segments.truncate(required_segments);
+                let tail_bytes = required_bytes
+                    .checked_sub((required_segments - 1) * PACKED_BITS_SEGMENT_BYTES)
+                    .expect("SegmentedBits tail length underflow");
+                self.segments
+                    .last_mut()
+                    .expect("SegmentedBits lost its retained tail segment")
+                    .truncate(tail_bytes);
+                if new_len % PACKED_BITS_PER_BYTE != 0 {
+                    let retained_bits = new_len % PACKED_BITS_PER_BYTE;
+                    let mask = (1_u8 << retained_bits) - 1;
+                    let tail = self
+                        .segments
+                        .last_mut()
+                        .and_then(|segment| segment.last_mut())
+                        .expect("SegmentedBits lost its retained tail byte");
+                    *tail &= mask;
+                }
+            }
+            self.len = new_len;
+            return;
+        }
+
+        let old_len = self.len;
+        let old_required_bytes = packed_bits_byte_len(old_len);
+        let required_bytes = packed_bits_byte_len(new_len);
+        let required_segments = Self::required_segment_count(new_len);
+        let missing_segments = required_segments.saturating_sub(self.segments.len());
+        let mut prepared_segments = Vec::with_capacity(missing_segments);
+        for index in self.segments.len()..required_segments {
+            let preceding = index
+                .checked_mul(PACKED_BITS_SEGMENT_BYTES)
+                .expect("SegmentedBits byte offset overflow");
+            let segment_len = required_bytes
+                .saturating_sub(preceding)
+                .min(PACKED_BITS_SEGMENT_BYTES);
+            let mut segment = Vec::with_capacity(PACKED_BITS_SEGMENT_BYTES);
+            segment.resize(segment_len, 0);
+            prepared_segments.push(segment);
+        }
+        self.segments.reserve(missing_segments);
+        if old_required_bytes % PACKED_BITS_SEGMENT_BYTES != 0 {
+            let index = old_required_bytes / PACKED_BITS_SEGMENT_BYTES;
+            let preceding = index * PACKED_BITS_SEGMENT_BYTES;
+            let segment_len = required_bytes
+                .saturating_sub(preceding)
+                .min(PACKED_BITS_SEGMENT_BYTES);
+            let segment = self
+                .segments
+                .get_mut(index)
+                .expect("SegmentedBits lost its live growth segment");
+            segment.resize(segment_len, 0);
+        }
+        self.segments.extend(prepared_segments);
+        self.len = new_len;
+        if value {
+            for index in old_len..new_len {
+                self.set(index, true);
+            }
+        }
+    }
+
+    /// Iterates over logical bits in insertion order.
+    pub fn iter(&self) -> SegmentedBitsIter<'_> {
+        SegmentedBitsIter {
+            bits: self,
+            position: 0,
+        }
+    }
+
+    /// Returns the number of initialized backing bytes.
+    pub fn used_bytes_len(&self) -> usize {
+        packed_bits_byte_len(self.len)
+    }
+
+    /// Returns the checked sum of inner byte payload and outer segment-header
+    /// capacities.
+    pub fn checked_capacity_bytes(&self) -> Option<usize> {
+        let payload = self.segments.iter().try_fold(0_usize, |total, segment| {
+            total.checked_add(segment.capacity())
+        })?;
+        let headers = self
+            .segments
+            .capacity()
+            .checked_mul(std::mem::size_of::<Vec<u8>>())?;
+        payload.checked_add(headers)
+    }
+
+    /// Returns the number of fixed-capacity backing segments.
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    fn fill(&mut self, value: bool) {
+        for segment in &mut self.segments {
+            segment.fill(if value { u8::MAX } else { 0 });
+        }
+        if value && self.len % PACKED_BITS_PER_BYTE != 0 {
+            let retained_bits = self.len % PACKED_BITS_PER_BYTE;
+            let mask = (1_u8 << retained_bits) - 1;
+            let tail = self
+                .segments
+                .last_mut()
+                .and_then(|segment| segment.last_mut())
+                .expect("SegmentedBits lost its live tail byte");
+            *tail &= mask;
+        }
+    }
+}
+
+impl std::ops::Index<usize> for SegmentedBits {
+    type Output = bool;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index)
+            .expect("SegmentedBits index is out of bounds")
+    }
+}
+
+/// Ordered iterator over a [`SegmentedBits`] sequence.
+#[derive(Clone, Copy, Debug)]
+pub struct SegmentedBitsIter<'a> {
+    bits: &'a SegmentedBits,
+    position: usize,
+}
+
+impl<'a> Iterator for SegmentedBitsIter<'a> {
+    type Item = &'a bool;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let value = self.bits.get(self.position)?;
+        self.position += 1;
+        Some(value)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.bits.len() - self.position;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for SegmentedBitsIter<'_> {}
+impl std::iter::FusedIterator for SegmentedBitsIter<'_> {}
+
+/// Fixed-capacity numerator segments that never relocate earlier field values.
+///
+/// A single exponentially growing `Vec<F>` must relocate its entire initialized
+/// prefix when its capacity doubles. Keeping every segment at 65,536 entries
+/// bounds each allocation to 2 MiB for the reviewed 32-byte Pasta fields while
+/// retaining checked constant-time indexing and exact insertion order.
+struct SegmentedNumerators<F: ScalarField> {
+    segments: Vec<Vec<F>>,
+    len: usize,
+}
+
+impl<F: ScalarField> Default for SegmentedNumerators<F> {
+    fn default() -> Self {
+        Self {
+            segments: Vec::new(),
+            len: 0,
+        }
+    }
+}
+
+impl<F: ScalarField> Clone for SegmentedNumerators<F> {
+    fn clone(&self) -> Self {
+        let mut segments = Vec::with_capacity(self.segments.len());
+        for source in &self.segments {
+            let mut segment = Vec::with_capacity(COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN);
+            segment.extend_from_slice(source);
+            segments.push(segment);
+        }
+        Self {
+            segments,
+            len: self.len,
+        }
+    }
+}
+
+impl<F: ScalarField> SegmentedNumerators<F> {
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn location(index: usize) -> (usize, usize) {
+        (
+            index / COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN,
+            index % COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN,
+        )
+    }
+
+    /// Allocates the next fixed segment, when needed, without changing the
+    /// logical sequence. The caller can therefore finish every other reserve
+    /// before committing a multi-vector advice push.
+    fn prepare_push(&mut self) -> Option<Vec<F>> {
+        if self.len % COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN != 0 {
+            return None;
+        }
+        self.segments.reserve(1);
+        Some(Vec::with_capacity(COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN))
+    }
+
+    fn push_prepared(&mut self, value: F, prepared: Option<Vec<F>>) {
+        let new_len = self
+            .len
+            .checked_add(1)
+            .expect("SegmentedNumerators length overflow");
+        if let Some(mut segment) = prepared {
+            debug_assert_eq!(self.len % COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN, 0);
+            debug_assert_eq!(segment.len(), 0);
+            debug_assert!(segment.capacity() >= COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN);
+            segment.push(value);
+            self.segments.push(segment);
+        } else {
+            debug_assert_ne!(self.len % COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN, 0);
+            let segment = self
+                .segments
+                .last_mut()
+                .expect("SegmentedNumerators lost its live tail segment");
+            debug_assert!(segment.len() < COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN);
+            segment.push(value);
+        }
+        self.len = new_len;
+    }
+
+    fn get(&self, index: usize) -> Option<&F> {
+        if index >= self.len {
+            return None;
+        }
+        let (segment, offset) = Self::location(index);
+        self.segments.get(segment)?.get(offset)
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut F> {
+        if index >= self.len {
+            return None;
+        }
+        let (segment, offset) = Self::location(index);
+        self.segments.get_mut(segment)?.get_mut(offset)
+    }
+
+    fn checked_capacity(&self) -> Option<usize> {
+        self.segments.iter().try_fold(0_usize, |total, segment| {
+            total.checked_add(segment.capacity())
+        })
+    }
+
+    fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    fn wipe(&mut self) {
+        for segment in &mut self.segments {
+            segment.fill(F::ZERO);
+        }
+    }
 }
 
 /// Memory-dense storage for the exact [`Assigned`] values in a [`Context`].
 ///
-/// Numerators and trivial values share the dense field vector. `Zero` variants
-/// are marked in a packed bit mask, while sorted sparse positions pair exactly
-/// with rational denominators; an unmarked position is `Trivial`. Random
-/// reconstruction is O(log R), where R is the number of rational values, and
-/// sequential assignment uses a merge iterator. Rational values stay rational
-/// until physical assignment so Halo2 retains its batch-inversion behavior
-/// (including the specified `x / 0 -> 0` semantics).
+/// Numerators and trivial values share fixed-capacity field segments. `Zero`
+/// variants are marked in a packed bit mask, while sorted sparse positions pair
+/// exactly with rational denominators; an unmarked position is `Trivial`.
+/// Random reconstruction is O(log R), where R is the number of rational values,
+/// and sequential assignment uses a merge iterator. Rational values stay
+/// rational until physical assignment so Halo2 retains its batch-inversion
+/// behavior (including the specified `x / 0 -> 0` semantics).
 #[derive(Clone)]
 struct CompactAdvice<F: ScalarField> {
-    numerators: Vec<F>,
-    zero_mask: Vec<u8>,
+    numerators: SegmentedNumerators<F>,
+    zero_mask: SegmentedBits,
     rational_positions: Vec<u32>,
     denominators: Vec<F>,
 }
@@ -391,8 +845,8 @@ struct CompactAdvice<F: ScalarField> {
 impl<F: ScalarField> Default for CompactAdvice<F> {
     fn default() -> Self {
         Self {
-            numerators: Vec::new(),
-            zero_mask: Vec::new(),
+            numerators: SegmentedNumerators::default(),
+            zero_mask: SegmentedBits::default(),
             rational_positions: Vec::new(),
             denominators: Vec::new(),
         }
@@ -407,10 +861,7 @@ impl<F: ScalarField> fmt::Debug for CompactAdvice<F> {
 
 impl<F: ScalarField> CompactAdvice<F> {
     fn len(&self) -> usize {
-        debug_assert_eq!(
-            self.zero_mask.len(),
-            compact_advice_zero_mask_len(self.numerators.len())
-        );
+        debug_assert_eq!(self.zero_mask.len(), self.numerators.len());
         debug_assert_eq!(self.rational_positions.len(), self.denominators.len());
         self.numerators.len()
     }
@@ -421,32 +872,35 @@ impl<F: ScalarField> CompactAdvice<F> {
         let new_len = index
             .checked_add(1)
             .expect("CompactAdvice advice length overflow");
-        let required_mask_len = compact_advice_zero_mask_len(new_len);
+        debug_assert_eq!(new_len, self.zero_mask.len() + 1);
         let (numerator, is_zero, denominator) = match value {
             Assigned::Zero => (F::ZERO, true, None),
             Assigned::Trivial(value) => (value, false, None),
-            Assigned::Rational(numerator, denominator) => {
-                (numerator, false, Some(denominator))
-            }
+            Assigned::Rational(numerator, denominator) => (numerator, false, Some(denominator)),
         };
 
         // Complete every fallible allocation before changing logical lengths.
-        self.numerators.reserve(1);
-        if required_mask_len > self.zero_mask.len() {
-            self.zero_mask.reserve(1);
-        }
+        let prepared_numerator_segment = self.numerators.prepare_push();
+        let prepared_zero_mask_segment = self.zero_mask.prepare_push();
         if denominator.is_some() {
+            let old_position_capacity = self.rational_positions.capacity();
             self.rational_positions.reserve(1);
+            release_large_vec_reallocation_slack::<u32>(
+                old_position_capacity,
+                self.rational_positions.capacity(),
+            );
+            let old_denominator_capacity = self.denominators.capacity();
             self.denominators.reserve(1);
+            release_large_vec_reallocation_slack::<F>(
+                old_denominator_capacity,
+                self.denominators.capacity(),
+            );
         }
 
-        self.numerators.push(numerator);
-        if required_mask_len > self.zero_mask.len() {
-            self.zero_mask.push(0);
-        }
-        if is_zero {
-            self.set_zero(index, true);
-        }
+        self.numerators
+            .push_prepared(numerator, prepared_numerator_segment);
+        self.zero_mask
+            .push_prepared(is_zero, prepared_zero_mask_segment);
         if let Some(denominator) = denominator {
             debug_assert!(
                 self.rational_positions
@@ -460,25 +914,14 @@ impl<F: ScalarField> CompactAdvice<F> {
     }
 
     fn is_zero(&self, index: usize) -> bool {
-        let (byte, bit) = compact_advice_zero_mask_location(index);
-        let mask = *self
+        *self
             .zero_mask
-            .get(byte)
-            .expect("CompactAdvice zero mask does not cover its advice position");
-        mask & bit != 0
+            .get(index)
+            .expect("CompactAdvice zero mask does not cover its advice position")
     }
 
     fn set_zero(&mut self, index: usize, is_zero: bool) {
-        let (byte, bit) = compact_advice_zero_mask_location(index);
-        let mask = self
-            .zero_mask
-            .get_mut(byte)
-            .expect("CompactAdvice zero mask does not cover its advice position");
-        if is_zero {
-            *mask |= bit;
-        } else {
-            *mask &= !bit;
-        }
+        self.zero_mask.set(index, is_zero);
     }
 
     fn get(&self, index: usize) -> Option<Assigned<F>> {
@@ -497,9 +940,7 @@ impl<F: ScalarField> CompactAdvice<F> {
             Some(last_position) if position > last_position => {
                 return Some(Assigned::Trivial(numerator));
             }
-            Some(last_position) if position == last_position => {
-                self.rational_positions.len() - 1
-            }
+            Some(last_position) if position == last_position => self.rational_positions.len() - 1,
             Some(_) => match self.rational_positions.binary_search(&position) {
                 Ok(index) => index,
                 Err(_) => return Some(Assigned::Trivial(numerator)),
@@ -536,7 +977,7 @@ impl<F: ScalarField> CompactAdvice<F> {
     }
 
     fn zero_mask_bytes_len(&self) -> usize {
-        self.zero_mask.len()
+        self.zero_mask.used_bytes_len()
     }
 
     fn rational_position_slots_len(&self) -> usize {
@@ -545,11 +986,23 @@ impl<F: ScalarField> CompactAdvice<F> {
 
     fn capacities(&self) -> [usize; 4] {
         [
-            self.numerators.capacity(),
-            self.zero_mask.capacity(),
+            self.numerators
+                .checked_capacity()
+                .expect("CompactAdvice numerator capacity overflow"),
+            self.zero_mask
+                .checked_capacity_bytes()
+                .expect("CompactAdvice zero-mask capacity overflow"),
             self.rational_positions.capacity(),
             self.denominators.capacity(),
         ]
+    }
+
+    fn numerator_segment_count(&self) -> usize {
+        self.numerators.segment_count()
+    }
+
+    fn zero_mask_segment_count(&self) -> usize {
+        self.zero_mask.segment_count()
     }
 
     fn replace_with_trivial(&mut self, index: usize, value: F) {
@@ -567,13 +1020,16 @@ impl<F: ScalarField> CompactAdvice<F> {
             let _ = self.denominators.pop();
             self.rational_positions.remove(rational_index);
         }
-        self.numerators[index] = value;
+        *self
+            .numerators
+            .get_mut(index)
+            .expect("validated advice replacement offset must exist") = value;
         self.set_zero(index, false);
     }
 
     fn wipe(&mut self) {
-        self.numerators.fill(F::ZERO);
-        self.zero_mask.fill(0);
+        self.numerators.wipe();
+        self.zero_mask.fill(false);
         self.rational_positions.fill(0);
         self.denominators.fill(F::ZERO);
         self.rational_positions.clear();
@@ -646,8 +1102,9 @@ impl<F: ScalarField> std::iter::FusedIterator for CompactAdviceIter<'_, F> {}
 #[cfg(test)]
 mod compact_advice_tests {
     use super::{
-        compact_advice_position, compact_advice_zero_mask_len, AssignedValue, CompactAdvice,
-        Context, FIRST_PHASE_CELL_TYPE_ID,
+        AssignedValue, COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN, CompactAdvice, Context,
+        FIRST_PHASE_CELL_TYPE_ID, PACKED_BITS_SEGMENT_LEN, SegmentedBits, compact_advice_position,
+        compact_advice_zero_mask_len,
     };
     use crate::ff::Field as _;
     use crate::gates::flex_gate::threads::SinglePhaseCoreManager;
@@ -748,7 +1205,8 @@ mod compact_advice_tests {
         }
 
         assert_sequence(&advice, &expected);
-        assert_eq!(advice.zero_mask, [0x81, 0x81, 0x81, 0x01]);
+        assert_eq!(advice.zero_mask.segments.len(), 1);
+        assert_eq!(advice.zero_mask.segments[0], [0x81, 0x81, 0x81, 0x01]);
         assert_eq!(
             advice.zero_mask_bytes_len(),
             compact_advice_zero_mask_len(expected.len())
@@ -756,6 +1214,145 @@ mod compact_advice_tests {
         assert_eq!(advice.rational_positions, [6, 9, 17]);
         assert_exact(
             advice.last().expect("boundary fixture has a last value"),
+            Assigned::Zero,
+        );
+    }
+
+    #[test]
+    fn compact_advice_segmented_numerators_preserve_boundaries_and_random_access() {
+        let len = COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN + 3;
+        let mut advice = CompactAdvice::default();
+        let mut expected = Vec::with_capacity(len);
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        for index in 0..len {
+            state ^= state << 7;
+            state ^= state >> 9;
+            state ^= state << 8;
+            let value = match index {
+                index if index + 1 == COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN => {
+                    Assigned::Rational(Fr::from(101), Fr::from(103))
+                }
+                COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN => Assigned::Zero,
+                index if index == COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN + 1 => {
+                    Assigned::Rational(Fr::from(107), Fr::ZERO)
+                }
+                _ if state % 257 == 0 => Assigned::Zero,
+                _ if state % 127 == 0 => {
+                    Assigned::Rational(Fr::from(state), Fr::from(state.rotate_left(17)))
+                }
+                _ => Assigned::Trivial(Fr::from(state)),
+            };
+            advice.push(value);
+            expected.push(value);
+        }
+
+        assert_eq!(advice.numerator_segment_count(), 2);
+        assert_eq!(
+            advice.capacities()[0],
+            2 * COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN
+        );
+        assert_sequence(&advice, &expected);
+
+        let mut probe = 0xd1b5_4a32_d192_ed03_u64;
+        let len_u64 = u64::try_from(len).expect("segmented fixture length fits u64");
+        for _ in 0..4096 {
+            probe ^= probe << 13;
+            probe ^= probe >> 7;
+            probe ^= probe << 17;
+            let index = usize::try_from(probe % len_u64).expect("probe index fits usize");
+            assert_exact(
+                advice.get(index).expect("random advice probe exists"),
+                expected[index],
+            );
+        }
+
+        let mut decoded = advice.iter();
+        assert_eq!(decoded.size_hint(), (len, Some(len)));
+        for (index, expected) in expected.iter().copied().enumerate() {
+            assert_exact(
+                decoded.next().expect("segmented iterator value exists"),
+                expected,
+            );
+            assert_eq!(decoded.len(), len - index - 1);
+        }
+        assert!(decoded.next().is_none());
+        assert!(decoded.next().is_none());
+
+        let original_capacities = advice.capacities();
+        let mut clone = advice.clone();
+        assert_eq!(clone.capacities()[0], original_capacities[0]);
+        assert_eq!(
+            clone.numerator_segment_count(),
+            advice.numerator_segment_count()
+        );
+        clone.replace_with_trivial(COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN - 1, Fr::from(109));
+        clone.replace_with_trivial(COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN, Fr::from(113));
+        clone.push(Assigned::Rational(Fr::from(127), Fr::from(131)));
+        assert_exact(
+            advice
+                .get(COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN - 1)
+                .expect("original boundary value exists"),
+            expected[COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN - 1],
+        );
+        assert_exact(
+            clone
+                .get(COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN - 1)
+                .expect("replaced boundary value exists"),
+            Assigned::Trivial(Fr::from(109)),
+        );
+        assert_exact(
+            clone
+                .get(COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN)
+                .expect("replaced first value in second segment exists"),
+            Assigned::Trivial(Fr::from(113)),
+        );
+        assert_exact(
+            clone.last().expect("clone append exists"),
+            Assigned::Rational(Fr::from(127), Fr::from(131)),
+        );
+
+        let clone_len = clone.len();
+        let clone_capacities = clone.capacities();
+        let clone_segments = clone.numerator_segment_count();
+        clone.wipe();
+        assert_eq!(clone.len(), clone_len);
+        assert_eq!(clone.capacities(), clone_capacities);
+        assert_eq!(clone.numerator_segment_count(), clone_segments);
+        for value in clone.iter() {
+            assert_exact(value, Assigned::Trivial(Fr::ZERO));
+        }
+    }
+
+    #[test]
+    fn compact_advice_crosses_combined_numerator_and_bit_segment_boundary() {
+        let mut advice = CompactAdvice::default();
+        for _ in 0..PACKED_BITS_SEGMENT_LEN {
+            advice.push(Assigned::Trivial(Fr::ZERO));
+        }
+        assert_eq!(advice.len(), PACKED_BITS_SEGMENT_LEN);
+        assert_eq!(
+            advice.numerator_segment_count(),
+            PACKED_BITS_SEGMENT_LEN / COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN
+        );
+        assert_eq!(advice.zero_mask_segment_count(), 1);
+
+        advice.push(Assigned::Zero);
+        assert_eq!(advice.len(), PACKED_BITS_SEGMENT_LEN + 1);
+        assert_eq!(
+            advice.numerator_segment_count(),
+            PACKED_BITS_SEGMENT_LEN / COMPACT_ADVICE_NUMERATOR_SEGMENT_LEN + 1
+        );
+        assert_eq!(advice.zero_mask_segment_count(), 2);
+        assert_exact(
+            advice
+                .get(PACKED_BITS_SEGMENT_LEN - 1)
+                .expect("last value before combined boundary exists"),
+            Assigned::Trivial(Fr::ZERO),
+        );
+        assert_exact(
+            advice
+                .get(PACKED_BITS_SEGMENT_LEN)
+                .expect("first value after combined boundary exists"),
             Assigned::Zero,
         );
     }
@@ -796,7 +1393,7 @@ mod compact_advice_tests {
         assert!(clone.denominators.is_empty());
         assert_eq!(clone.rational_len(), 0);
         assert_eq!(clone.denominator_slots_len(), 0);
-        assert!(clone.zero_mask.iter().all(|byte| *byte == 0));
+        assert!(clone.zero_mask.iter().all(|selected| !*selected));
         assert_eq!(clone.len(), expected.len());
         for value in clone.iter() {
             assert_exact(value, Assigned::Trivial(Fr::ZERO));
@@ -842,10 +1439,7 @@ mod compact_advice_tests {
         );
 
         assigned.debug_prank(&mut context, Fr::from(23));
-        assert_exact(
-            context.get(0).value,
-            Assigned::Trivial(Fr::from(23)),
-        );
+        assert_exact(context.get(0).value, Assigned::Trivial(Fr::from(23)));
         context.wipe_advice();
         assert_eq!(context.advice_len(), 1);
         assert_exact(context.get(0).value, Assigned::Trivial(Fr::ZERO));
@@ -878,11 +1472,241 @@ mod compact_advice_tests {
         assert_eq!(compact_advice_position(u32::MAX as usize), u32::MAX);
     }
 
+    #[test]
+    fn segmented_bits_preserve_boundaries_resize_clone_wipe_and_iteration() {
+        let len = PACKED_BITS_SEGMENT_LEN + 9;
+        let selected = [
+            0,
+            7,
+            8,
+            15,
+            PACKED_BITS_SEGMENT_LEN - 1,
+            PACKED_BITS_SEGMENT_LEN,
+            len - 1,
+        ];
+        let mut bits = SegmentedBits::default();
+        assert!(bits.is_empty());
+        bits.resize(len, false);
+        for index in selected {
+            bits.set(index, true);
+        }
+
+        assert_eq!(bits.len(), len);
+        assert_eq!(bits.segment_count(), 2);
+        assert_eq!(bits.used_bytes_len(), compact_advice_zero_mask_len(len));
+        let capacity = bits
+            .checked_capacity_bytes()
+            .expect("packed-bit capacity fits usize");
+        let segments = bits.segment_count();
+        assert!(
+            capacity >= bits.used_bytes_len(),
+            "packed storage capacity must cover every used byte"
+        );
+        assert!(bits.get(len).is_none());
+        for index in [
+            0,
+            6,
+            7,
+            8,
+            9,
+            PACKED_BITS_SEGMENT_LEN - 1,
+            PACKED_BITS_SEGMENT_LEN,
+            len - 1,
+        ] {
+            assert_eq!(bits[index], selected.contains(&index));
+        }
+        assert_eq!(bits.segment_count(), segments);
+        assert_eq!(
+            bits.checked_capacity_bytes()
+                .expect("packed-bit capacity fits usize"),
+            capacity,
+            "setting existing bits must not allocate"
+        );
+
+        let mut iter = bits.iter();
+        assert_eq!(iter.size_hint(), (len, Some(len)));
+        for index in 0..len {
+            assert_eq!(
+                *iter.next().expect("packed bit exists"),
+                selected.contains(&index)
+            );
+            assert_eq!(iter.len(), len - index - 1);
+        }
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
+
+        let mut clone = bits.clone();
+        clone.set(0, false);
+        assert!(bits[0]);
+        assert!(!clone[0]);
+        clone.resize(PACKED_BITS_SEGMENT_LEN - 3, false);
+        clone.resize(len, false);
+        for index in PACKED_BITS_SEGMENT_LEN - 3..len {
+            assert!(!clone[index], "shrunk selector bit resurrected at {index}");
+        }
+        clone.fill(true);
+        assert!(clone.iter().all(|selected| *selected));
+        clone.fill(false);
+        assert!(clone.iter().all(|selected| !*selected));
+        assert_eq!(clone.len(), len);
+    }
+
+    #[test]
+    fn segmented_bits_repeated_small_growth_and_logical_debug_match_vec() {
+        let mut bits = SegmentedBits::default();
+        bits.resize(PACKED_BITS_SEGMENT_LEN - 17, false);
+        let selected = [
+            PACKED_BITS_SEGMENT_LEN - 17,
+            PACKED_BITS_SEGMENT_LEN - 1,
+            PACKED_BITS_SEGMENT_LEN,
+            PACKED_BITS_SEGMENT_LEN + 19,
+        ];
+        for index in PACKED_BITS_SEGMENT_LEN - 17..=PACKED_BITS_SEGMENT_LEN + 19 {
+            bits.resize(index + 1, false);
+            if selected.contains(&index) {
+                bits.set(index, true);
+            }
+        }
+        assert_eq!(bits.segment_count(), 2);
+        for index in PACKED_BITS_SEGMENT_LEN - 18..bits.len() {
+            assert_eq!(bits[index], selected.contains(&index));
+        }
+
+        let mut debug_fixture = SegmentedBits::default();
+        debug_fixture.resize(5, true);
+        debug_fixture.set(1, false);
+        debug_fixture.set(3, false);
+        let expected = vec![true, false, true, false, true];
+        assert_eq!(debug_fixture.iter().copied().collect::<Vec<_>>(), expected);
+        assert_eq!(format!("{debug_fixture:?}"), format!("{expected:?}"));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn segmented_bits_large_capacity_arithmetic_needs_no_large_allocation() {
+        let len = (1_usize << 31) + 1;
+        assert_eq!(super::packed_bits_byte_len(len), 268_435_457);
+        assert_eq!(SegmentedBits::required_segment_count(len), 4_097);
+    }
+
+    #[test]
+    fn segmented_bits_prepare_push_does_not_commit_logical_length() {
+        let mut bits = SegmentedBits::default();
+        let prepared = bits.prepare_push();
+        assert_eq!(bits.len(), 0);
+        assert!(bits.segments.is_empty());
+        assert!(
+            prepared
+                .as_ref()
+                .is_some_and(|segment| segment.capacity() >= super::PACKED_BITS_SEGMENT_BYTES)
+        );
+        bits.push_prepared(true, prepared);
+        assert_eq!(bits.len(), 1);
+        assert!(bits[0]);
+
+        bits.resize(PACKED_BITS_SEGMENT_LEN, false);
+        let prepared = bits.prepare_push();
+        assert_eq!(bits.len(), PACKED_BITS_SEGMENT_LEN);
+        assert_eq!(bits.segment_count(), 1);
+        bits.push_prepared(false, prepared);
+        assert_eq!(bits.segment_count(), 2);
+        assert!(!bits[PACKED_BITS_SEGMENT_LEN]);
+    }
+
+    #[test]
+    fn context_selector_inventory_stays_aligned_and_ordered() {
+        let copy_manager = SharedCopyConstraintManager::<Fr>::default();
+        let mut context = Context::new(false, 0, FIRST_PHASE_CELL_TYPE_ID, 0, copy_manager);
+        let _ = context.load_witness(Fr::from(2));
+        context.assign_region(
+            [
+                crate::QuantumCell::Witness(Fr::from(3)),
+                crate::QuantumCell::Witness(Fr::from(5)),
+            ],
+            [-1_isize, 0, 0, 1],
+        );
+        let _ = context.load_constant(Fr::from(11));
+
+        assert_eq!(context.advice_len(), 4);
+        assert_eq!(context.selector.len(), context.advice_len());
+        assert_eq!(
+            context.selector.iter().copied().collect::<Vec<_>>(),
+            [true, true, true, false]
+        );
+        assert_eq!(context.selector_storage_bytes_len(), 1);
+        assert_eq!(context.selector_segment_count(), 1);
+        assert!(
+            context
+                .selector_checked_capacity_bytes()
+                .expect("selector capacity fits usize")
+                >= context.selector_storage_bytes_len()
+        );
+    }
+
+    #[test]
+    fn witness_only_context_does_not_allocate_selector_storage() {
+        let copy_manager = SharedCopyConstraintManager::<Fr>::default();
+        let mut context = Context::new(true, 0, FIRST_PHASE_CELL_TYPE_ID, 0, copy_manager);
+        context.assign_region(
+            [
+                crate::QuantumCell::Witness(Fr::from(3)),
+                crate::QuantumCell::Witness(Fr::from(5)),
+            ],
+            [0_isize],
+        );
+
+        assert_eq!(context.advice_len(), 2);
+        assert!(context.selector.is_empty());
+        assert_eq!(context.selector_storage_bytes_len(), 0);
+        assert_eq!(context.selector_segment_count(), 0);
+        assert_eq!(context.selector_checked_capacity_bytes(), Some(0));
+    }
+
     #[cfg(target_pointer_width = "64")]
     #[test]
     #[should_panic(expected = "CompactAdvice position exceeds the compact u32 range")]
     fn compact_advice_rejects_position_overflow() {
         compact_advice_position(u32::MAX as usize + 1);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn compact_advice_rejects_position_overflow_before_mutation() {
+        let mut advice = CompactAdvice::<Fr>::default();
+        advice.numerators.len = u32::MAX as usize + 1;
+        let numerator_segment_capacity = advice.numerators.segments.capacity();
+        let zero_mask_capacity = advice
+            .zero_mask
+            .checked_capacity_bytes()
+            .expect("zero-mask capacity fits usize");
+        let rational_position_capacity = advice.rational_positions.capacity();
+        let denominator_capacity = advice.denominators.capacity();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            advice.push(Assigned::Trivial(Fr::ONE));
+        }));
+        assert!(result.is_err());
+        assert_eq!(advice.numerators.len, u32::MAX as usize + 1);
+        assert!(advice.numerators.segments.is_empty());
+        assert_eq!(
+            advice.numerators.segments.capacity(),
+            numerator_segment_capacity
+        );
+        assert!(advice.zero_mask.is_empty());
+        assert_eq!(
+            advice
+                .zero_mask
+                .checked_capacity_bytes()
+                .expect("zero-mask capacity fits usize"),
+            zero_mask_capacity
+        );
+        assert!(advice.rational_positions.is_empty());
+        assert_eq!(
+            advice.rational_positions.capacity(),
+            rational_position_capacity
+        );
+        assert!(advice.denominators.is_empty());
+        assert_eq!(advice.denominators.capacity(), denominator_capacity);
     }
 
     #[test]
@@ -921,9 +1745,9 @@ pub struct Context<F: ScalarField> {
     // ========================================
     // General principle: we don't need to optimize anything specific to `witness_gen_only == false` because it is only done during keygen
     // If `witness_gen_only == false`:
-    /// [Vec] representing the selector column of this [Context] accompanying each `advice` column
+    /// Packed Boolean selector column accompanying each `advice` cell.
     /// * Assumed to have the same length as `advice`
-    pub selector: Vec<bool>,
+    pub selector: SegmentedBits,
 
     /// Global shared thread-safe manager for all copy (equality) constraints between virtual advice, constants, and raw external Halo2 cells.
     pub copy_manager: SharedCopyConstraintManager<F>,
@@ -951,7 +1775,7 @@ impl<F: ScalarField> Context<F> {
             type_id,
             context_id,
             advice: CompactAdvice::default(),
-            selector: Vec::new(),
+            selector: SegmentedBits::default(),
             zero_cell: None,
             copy_manager,
         }
@@ -998,6 +1822,31 @@ impl<F: ScalarField> Context<F> {
         self.advice.capacities()
     }
 
+    /// Returns the number of fixed-capacity numerator segments.
+    pub fn advice_numerator_segment_count(&self) -> usize {
+        self.advice.numerator_segment_count()
+    }
+
+    /// Returns the number of fixed-capacity packed `Zero`-mask segments.
+    pub fn advice_zero_mask_segment_count(&self) -> usize {
+        self.advice.zero_mask_segment_count()
+    }
+
+    /// Returns the number of bytes used by the packed selector bits.
+    pub fn selector_storage_bytes_len(&self) -> usize {
+        self.selector.used_bytes_len()
+    }
+
+    /// Returns the checked packed selector capacity in bytes.
+    pub fn selector_checked_capacity_bytes(&self) -> Option<usize> {
+        self.selector.checked_capacity_bytes()
+    }
+
+    /// Returns the number of fixed-capacity packed selector segments.
+    pub fn selector_segment_count(&self) -> usize {
+        self.selector.segment_count()
+    }
+
     /// Iterates the exact [`Assigned`] values without exposing their compact backing storage.
     pub(crate) fn advice_values(&self) -> impl ExactSizeIterator<Item = Assigned<F>> + '_ {
         self.advice.iter()
@@ -1033,8 +1882,7 @@ impl<F: ScalarField> Context<F> {
                     self.copy_manager
                         .lock()
                         .unwrap()
-                        .advice_equalities
-                        .push((new_cell, acell.cell.unwrap()));
+                        .push_advice_equality((new_cell, acell.cell.unwrap()));
                 }
             }
             QuantumCell::Witness(val) => {
@@ -1048,7 +1896,11 @@ impl<F: ScalarField> Context<F> {
                 // If witness generation is not performed, enforce equality constraints between the existing cell and the new cell
                 if !self.witness_gen_only {
                     let new_cell = self.latest_cell();
-                    self.copy_manager.lock().unwrap().constant_equalities.push((c, new_cell));
+                    self.copy_manager
+                        .lock()
+                        .unwrap()
+                        .constant_equalities
+                        .push((c, new_cell));
                 }
             }
         }
@@ -1063,7 +1915,10 @@ impl<F: ScalarField> Context<F> {
             // have been materialized. Constraint collection remains guarded
             // by `witness_gen_only`; retaining the pointer does not add any
             // virtual equality work.
-            AssignedValue { value: v, cell: Some(self.latest_cell()) }
+            AssignedValue {
+                value: v,
+                cell: Some(self.latest_cell()),
+            }
         })
     }
 
@@ -1098,8 +1953,7 @@ impl<F: ScalarField> Context<F> {
             self.copy_manager
                 .lock()
                 .unwrap()
-                .advice_equalities
-                .push((a.cell.unwrap(), b.cell.unwrap()));
+                .push_advice_equality((a.cell.unwrap(), b.cell.unwrap()));
         }
     }
 
@@ -1127,10 +1981,14 @@ impl<F: ScalarField> Context<F> {
             }
             self.selector.resize(self.advice.len(), false);
             for offset in gate_offsets {
-                *self
-                    .selector
-                    .get_mut(row_offset.checked_add_signed(offset).expect("Invalid gate offset"))
-                    .expect("Invalid selector offset") = true;
+                let selector_offset = row_offset
+                    .checked_add_signed(offset)
+                    .expect("Invalid gate offset");
+                assert!(
+                    selector_offset < self.selector.len(),
+                    "Invalid selector offset"
+                );
+                self.selector.set(selector_offset, true);
             }
         }
     }
@@ -1179,7 +2037,7 @@ impl<F: ScalarField> Context<F> {
         if !self.witness_gen_only {
             // Add equality constraints between cells in the advice column.
             for (offset1, offset2) in equality_offsets {
-                self.copy_manager.lock().unwrap().advice_equalities.push((
+                self.copy_manager.lock().unwrap().push_advice_equality((
                     ContextCell::new(
                         self.type_id,
                         self.context_id,
@@ -1194,7 +2052,7 @@ impl<F: ScalarField> Context<F> {
             }
             // Add equality constraints between cells in the advice column and external cells (Fixed column).
             for (cell, offset) in external_equality {
-                self.copy_manager.lock().unwrap().advice_equalities.push((
+                self.copy_manager.lock().unwrap().push_advice_equality((
                     cell.unwrap(),
                     ContextCell::new(
                         self.type_id,

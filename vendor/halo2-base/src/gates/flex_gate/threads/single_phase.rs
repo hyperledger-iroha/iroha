@@ -7,15 +7,15 @@ use crate::halo2_proofs::circuit::Cell;
 #[cfg(not(feature = "halo2-axiom"))]
 use crate::utils::halo2::raw_assign_advice;
 use crate::{
+    Context, ContextCell, FIRST_PHASE_CELL_TYPE_ID, SECOND_PHASE_CELL_TYPE_ID,
+    THIRD_PHASE_CELL_TYPE_ID,
     gates::{
         circuit::CircuitBuilderStage,
         flex_gate::{BasicGateConfig, ThreadBreakPoints},
     },
-    utils::halo2::{raw_assign_advice_discarding_value, raw_constrain_equal},
     utils::ScalarField,
+    utils::halo2::{raw_assign_advice_discarding_value, raw_constrain_equal},
     virtual_region::copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
-    Context, ContextCell, FIRST_PHASE_CELL_TYPE_ID, SECOND_PHASE_CELL_TYPE_ID,
-    THIRD_PHASE_CELL_TYPE_ID,
 };
 use crate::{
     halo2_proofs::circuit::{Region, Value},
@@ -149,10 +149,7 @@ impl<F: ScalarField> SinglePhaseCoreManager<F> {
 
     /// Returns total advice cells
     pub fn total_advice(&self) -> usize {
-        self.threads
-            .iter()
-            .map(Context::advice_len)
-            .sum::<usize>()
+        self.threads.iter().map(Context::advice_len).sum::<usize>()
     }
 }
 
@@ -381,9 +378,9 @@ mod physical_mapping_tests {
 
     use super::*;
     use crate::{
-        gates::circuit::{builder::BaseCircuitBuilder, BaseCircuitParams},
-        halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr, plonk::Assigned},
         QuantumCell,
+        gates::circuit::{BaseCircuitParams, builder::BaseCircuitBuilder},
+        halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr, plonk::Assigned},
     };
 
     const K: u32 = 6;
@@ -452,9 +449,7 @@ mod physical_mapping_tests {
         );
     }
 
-    fn compact_advice_assignment_circuit(
-        include_zero_denominator: bool,
-    ) -> BaseCircuitBuilder<Fr> {
+    fn compact_advice_assignment_circuit(include_zero_denominator: bool) -> BaseCircuitBuilder<Fr> {
         let mut assignment_params = params();
         assignment_params.num_fixed = 1;
         let mut circuit = BaseCircuitBuilder::<Fr>::new(false).use_params(assignment_params);
@@ -492,11 +487,7 @@ mod physical_mapping_tests {
         circuit: &BaseCircuitBuilder<Fr>,
         expected_equalities: usize,
     ) {
-        let manager = circuit
-            .core()
-            .copy_manager
-            .lock()
-            .expect("copy manager");
+        let manager = circuit.core().copy_manager.lock().expect("copy manager");
         assert_eq!(manager.constant_equalities.len(), expected_equalities);
         assert_eq!(manager.constant_equalities.distinct_len(), 6);
         assert!(
@@ -544,9 +535,7 @@ mod physical_mapping_tests {
         assignment_params.num_fixed = 1;
         let mut circuit = BaseCircuitBuilder::<Fr>::new(false).use_params(assignment_params);
         let values = [3_u64, 7, 3, 11, 7, 3];
-        let cells = circuit
-            .main(0)
-            .assign_witnesses(values.map(Fr::from));
+        let cells = circuit.main(0).assign_witnesses(values.map(Fr::from));
         let mut equalities = values
             .into_iter()
             .zip(cells)
@@ -555,11 +544,7 @@ mod physical_mapping_tests {
         if reverse {
             equalities.reverse();
         }
-        let mut copy_manager = circuit
-            .core()
-            .copy_manager
-            .lock()
-            .expect("copy manager");
+        let mut copy_manager = circuit.core().copy_manager.lock().expect("copy manager");
         for equality in equalities {
             copy_manager.constant_equalities.push(equality);
         }

@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -19,6 +20,162 @@ use super::manager::VirtualRegionManager;
 /// Thread-safe shared global manager for all copy constraints.
 pub type SharedCopyConstraintManager<F> = Arc<Mutex<CopyConstraintManager<F>>>;
 
+const CONSTANT_CELL_SEGMENT_LEN: usize = 1 << 16;
+
+/// Append-only constant-cell storage partitioned into bounded segments.
+///
+/// The first segment grows from one cell so singleton constants remain cheap;
+/// later segments reserve their complete fixed-size payload up front.
+/// Canonicalization sorts each segment. A bounded merge frontier
+/// then exposes the same globally sorted sequence as one flat unstable sort;
+/// equal cells are indistinguishable, so the segment tie-breakers cannot alter
+/// the observable `(constant, ContextCell)` sequence.
+#[derive(Clone, Debug, Default)]
+struct SegmentedContextCells {
+    segments: Vec<Vec<ContextCell>>,
+    len: usize,
+    canonicalized: bool,
+}
+
+impl SegmentedContextCells {
+    fn push(&mut self, cell: ContextCell) {
+        let next_len = self
+            .len
+            .checked_add(1)
+            .expect("constant-cell bucket length overflowed");
+        if self.len % CONSTANT_CELL_SEGMENT_LEN == 0 {
+            self.segments.reserve(1);
+            let capacity = if self.segments.is_empty() {
+                1
+            } else {
+                CONSTANT_CELL_SEGMENT_LEN
+            };
+            let mut segment = Vec::with_capacity(capacity);
+            segment.push(cell);
+            self.segments.push(segment);
+        } else {
+            let segment = self
+                .segments
+                .last_mut()
+                .expect("constant-cell bucket lost its live tail segment");
+            debug_assert!(segment.len() < CONSTANT_CELL_SEGMENT_LEN);
+            segment.push(cell);
+        }
+        self.len = next_len;
+        self.canonicalized = false;
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn checked_capacity(&self) -> Option<usize> {
+        self.segments.iter().try_fold(0_usize, |total, segment| {
+            total.checked_add(segment.capacity())
+        })
+    }
+
+    fn canonicalize(&mut self) {
+        if self.canonicalized {
+            return;
+        }
+        for segment in &mut self.segments {
+            segment.par_sort_unstable();
+        }
+        self.canonicalized = true;
+    }
+
+    fn iter(&self) -> ConstantCellIter<'_> {
+        if self.canonicalized {
+            ConstantCellIter::canonical(self)
+        } else {
+            ConstantCellIter::Insertion {
+                bucket: self,
+                segment: 0,
+                offset: 0,
+                remaining: self.len,
+            }
+        }
+    }
+}
+
+enum ConstantCellIter<'a> {
+    Insertion {
+        bucket: &'a SegmentedContextCells,
+        segment: usize,
+        offset: usize,
+        remaining: usize,
+    },
+    Canonical {
+        bucket: &'a SegmentedContextCells,
+        frontier: BinaryHeap<Reverse<(ContextCell, usize, usize)>>,
+        remaining: usize,
+    },
+}
+
+impl<'a> ConstantCellIter<'a> {
+    fn canonical(bucket: &'a SegmentedContextCells) -> Self {
+        let mut frontier = BinaryHeap::with_capacity(bucket.segments.len());
+        for (segment, cells) in bucket.segments.iter().enumerate() {
+            if let Some(cell) = cells.first() {
+                frontier.push(Reverse((*cell, segment, 0)));
+            }
+        }
+        Self::Canonical {
+            bucket,
+            frontier,
+            remaining: bucket.len,
+        }
+    }
+}
+
+impl<'a> Iterator for ConstantCellIter<'a> {
+    type Item = &'a ContextCell;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Insertion {
+                bucket,
+                segment,
+                offset,
+                remaining,
+            } => loop {
+                let cells = bucket.segments.get(*segment)?;
+                if let Some(cell) = cells.get(*offset) {
+                    *offset += 1;
+                    *remaining -= 1;
+                    return Some(cell);
+                }
+                *segment += 1;
+                *offset = 0;
+            },
+            Self::Canonical {
+                bucket,
+                frontier,
+                remaining,
+            } => {
+                let Reverse((_, segment, offset)) = frontier.pop()?;
+                let next_offset = offset + 1;
+                if let Some(next) = bucket.segments[segment].get(next_offset) {
+                    frontier.push(Reverse((*next, segment, next_offset)));
+                }
+                *remaining -= 1;
+                Some(&bucket.segments[segment][offset])
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = match self {
+            Self::Insertion { remaining, .. } | Self::Canonical { remaining, .. } => *remaining,
+        };
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for ConstantCellIter<'_> {}
+impl std::iter::FusedIterator for ConstantCellIter<'_> {}
+
 /// Constant-copy constraints grouped by their exact fixed value.
 ///
 /// The former flat `(F, ContextCell)` inventory repeated a full field element
@@ -30,7 +187,7 @@ pub type SharedCopyConstraintManager<F> = Arc<Mutex<CopyConstraintManager<F>>>;
 #[derive(Clone, Default, Debug)]
 pub struct ConstantEqualities<F: Field + Ord> {
     bucket_by_constant: BTreeMap<F, usize>,
-    cell_buckets: Vec<Vec<ContextCell>>,
+    cell_buckets: Vec<SegmentedContextCells>,
     len: usize,
     last_constant: Option<(F, usize)>,
     last_cache_hits: usize,
@@ -63,7 +220,7 @@ impl<F: Field + Ord> ConstantEqualities<F> {
                 std::collections::btree_map::Entry::Occupied(entry) => *entry.get(),
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     let bucket = self.cell_buckets.len();
-                    self.cell_buckets.push(Vec::new());
+                    self.cell_buckets.push(SegmentedContextCells::default());
                     entry.insert(bucket);
                     bucket
                 }
@@ -98,9 +255,9 @@ impl<F: Field + Ord> ConstantEqualities<F> {
 
     /// Returns the checked sum of all retained cell-bucket capacities.
     pub fn checked_cell_capacity(&self) -> Option<usize> {
-        self.cell_buckets
-            .iter()
-            .try_fold(0_usize, |total, bucket| total.checked_add(bucket.capacity()))
+        self.cell_buckets.iter().try_fold(0_usize, |total, bucket| {
+            total.checked_add(bucket.checked_capacity()?)
+        })
     }
 
     /// Returns the number of pushes served by the last-constant cache.
@@ -116,18 +273,21 @@ impl<F: Field + Ord> ConstantEqualities<F> {
     /// Sorts every cell bucket into the legacy canonical order.
     fn canonicalize_cells(&mut self) {
         for bucket in &mut self.cell_buckets {
-            bucket.par_sort_unstable();
+            bucket.canonicalize();
         }
     }
 
+    /// Iterates exact distinct constants in field order without constructing a
+    /// cell-merge frontier.
+    fn constants(&self) -> impl Iterator<Item = &F> {
+        self.bucket_by_constant.keys()
+    }
+
     /// Iterates constants in field order and their complete cell buckets.
-    fn buckets(&self) -> impl Iterator<Item = (&F, &[ContextCell])> {
-        self.bucket_by_constant.iter().map(|(constant, bucket)| {
-            (
-                constant,
-                self.cell_buckets[*bucket].as_slice(),
-            )
-        })
+    fn buckets(&self) -> impl Iterator<Item = (&F, ConstantCellIter<'_>)> {
+        self.bucket_by_constant
+            .iter()
+            .map(|(constant, bucket)| (constant, self.cell_buckets[*bucket].iter()))
     }
 
     /// Iterates constants in field order and cells in their current bucket order.
@@ -136,9 +296,8 @@ impl<F: Field + Ord> ConstantEqualities<F> {
     /// the legacy lexicographic `(constant, cell)` order. Before then, cell
     /// order reflects constraint insertion within each constant bucket.
     pub fn iter(&self) -> impl Iterator<Item = (&F, &ContextCell)> {
-        self.buckets().flat_map(|(constant, bucket)| {
-            bucket.iter().map(move |cell| (constant, cell))
-        })
+        self.buckets()
+            .flat_map(|(constant, bucket)| bucket.map(move |cell| (constant, cell)))
     }
 
     /// Clears all equality, index, and cache state.
@@ -180,6 +339,16 @@ pub struct CopyConstraintManager<F: Field + Ord> {
 }
 
 impl<F: Field + Ord> CopyConstraintManager<F> {
+    /// Adds one virtual advice equality and relieves any released large growth buffer.
+    pub(crate) fn push_advice_equality(&mut self, equality: (ContextCell, ContextCell)) {
+        let old_capacity = self.advice_equalities.capacity();
+        self.advice_equalities.push(equality);
+        crate::release_large_vec_reallocation_slack::<(ContextCell, ContextCell)>(
+            old_capacity,
+            self.advice_equalities.capacity(),
+        );
+    }
+
     /// Returns the number of distinct constants used.
     pub fn num_distinct_constants(&self) -> usize {
         self.constant_equalities.distinct_len()
@@ -217,7 +386,10 @@ impl<F: Field + Ord> CopyConstraintManager<F> {
                 value = *v;
             }
         });
-        AssignedValue { value, cell: Some(context_cell) }
+        AssignedValue {
+            value,
+            cell: Some(context_cell),
+        }
     }
 
     /// Adds external raw Halo2 cell to `self.assigned_advices` and returns a new virtual cell that can be
@@ -230,7 +402,10 @@ impl<F: Field + Ord> CopyConstraintManager<F> {
     /// Mock to load an external cell for base circuit simulation. If any mock external cell is loaded, calling `assign_raw` will panic.
     pub fn mock_external_assigned(&mut self, v: F) -> AssignedValue<F> {
         let context_cell = self.load_external_cell_impl(None);
-        AssignedValue { value: Assigned::Trivial(v), cell: Some(context_cell) }
+        AssignedValue {
+            value: Assigned::Trivial(v),
+            cell: Some(context_cell),
+        }
     }
 
     fn load_external_cell_impl(&mut self, cell: Option<Cell>) -> ContextCell {
@@ -288,7 +463,7 @@ impl<F: Field + Ord> VirtualRegionManager<F> for SharedCopyConstraintManager<F> 
         // Assign fixed cells, we go left to right, then top to bottom, to avoid needing to know number of rows here
         let mut fixed_col = 0;
         let mut fixed_offset = 0;
-        for (constant, _) in manager.constant_equalities.buckets() {
+        for constant in manager.constant_equalities.constants() {
             // this will panic if you run out of rows
             let cell = raw_assign_fixed(region, config[fixed_col], fixed_offset, *constant);
             manager.assigned_constants.insert(*constant, cell);
@@ -304,8 +479,14 @@ impl<F: Field + Ord> VirtualRegionManager<F> for SharedCopyConstraintManager<F> 
         // Impose equality constraints between assigned advice cells
         // At this point we assume all cells have been assigned by other VirtualRegionManagers
         for (left, right) in &manager.advice_equalities {
-            let left = manager.assigned_advices.get(left).expect("virtual cell not assigned");
-            let right = manager.assigned_advices.get(right).expect("virtual cell not assigned");
+            let left = manager
+                .assigned_advices
+                .get(left)
+                .expect("virtual cell not assigned");
+            let right = manager
+                .assigned_advices
+                .get(right)
+                .expect("virtual cell not assigned");
             raw_constrain_equal(region, *left, *right);
         }
         for (constant, cells) in manager.constant_equalities.buckets() {
@@ -394,9 +575,7 @@ mod tests {
         );
 
         let mut legacy = fixture.clone();
-        legacy.par_sort_unstable_by(|(c1, cell1), (c2, cell2)| {
-            c1.cmp(c2).then(cell1.cmp(cell2))
-        });
+        legacy.par_sort_unstable_by(|(c1, cell1), (c2, cell2)| c1.cmp(c2).then(cell1.cmp(cell2)));
         manager.constant_equalities.canonicalize_cells();
         let canonical = manager
             .constant_equalities
@@ -432,9 +611,7 @@ mod tests {
         let appended = equality(3, 3, 0);
         manager.constant_equalities.push(appended);
         legacy.push(appended);
-        legacy.par_sort_unstable_by(|(c1, cell1), (c2, cell2)| {
-            c1.cmp(c2).then(cell1.cmp(cell2))
-        });
+        legacy.par_sort_unstable_by(|(c1, cell1), (c2, cell2)| c1.cmp(c2).then(cell1.cmp(cell2)));
         manager.constant_equalities.canonicalize_cells();
         assert_eq!(
             manager
@@ -461,6 +638,134 @@ mod tests {
 
         reversed.clear();
         manager.clear();
+    }
+
+    #[test]
+    fn segmented_constant_bucket_grows_head_then_fixes_later_segments() {
+        let cell = ContextCell::new(FIRST_PHASE_CELL_TYPE_ID, 0, 0);
+        let mut bucket = SegmentedContextCells::default();
+
+        bucket.push(cell);
+        assert_eq!(bucket.segments.len(), 1);
+        assert_eq!(bucket.segments[0].capacity(), 1);
+        assert_eq!(bucket.checked_capacity(), Some(1));
+        assert_eq!(
+            bucket.segments[0].capacity() * std::mem::size_of::<ContextCell>(),
+            std::mem::size_of::<ContextCell>(),
+            "a singleton bucket must not reserve a complete 512 KiB segment"
+        );
+
+        bucket.push(cell);
+        assert!(bucket.segments[0].capacity() > 1);
+        assert!(bucket.segments[0].capacity() < CONSTANT_CELL_SEGMENT_LEN);
+        while bucket.len() < CONSTANT_CELL_SEGMENT_LEN {
+            bucket.push(cell);
+        }
+        assert_eq!(bucket.segments.len(), 1);
+        assert_eq!(bucket.segments[0].len(), CONSTANT_CELL_SEGMENT_LEN);
+        assert_eq!(bucket.segments[0].capacity(), CONSTANT_CELL_SEGMENT_LEN);
+        assert_eq!(bucket.checked_capacity(), Some(CONSTANT_CELL_SEGMENT_LEN));
+
+        bucket.push(cell);
+        assert_eq!(bucket.segments.len(), 2);
+        assert_eq!(bucket.segments[1].len(), 1);
+        assert_eq!(bucket.segments[1].capacity(), CONSTANT_CELL_SEGMENT_LEN);
+        assert_eq!(
+            bucket.checked_capacity(),
+            Some(CONSTANT_CELL_SEGMENT_LEN * 2)
+        );
+    }
+
+    #[test]
+    fn segmented_constant_bucket_preserves_boundary_duplicates_and_canonical_order() {
+        let cell_count = CONSTANT_CELL_SEGMENT_LEN + 3;
+        let inserted = (0..cell_count)
+            .map(|index| {
+                ContextCell::new(
+                    FIRST_PHASE_CELL_TYPE_ID,
+                    index % 3,
+                    (index.wrapping_mul(37) + 11) % 1_009,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut bucket = SegmentedContextCells::default();
+        for cell in inserted.iter().copied() {
+            bucket.push(cell);
+        }
+
+        assert_eq!(bucket.len(), cell_count);
+        assert_eq!(bucket.segments.len(), 2);
+        assert_eq!(bucket.segments[0].capacity(), CONSTANT_CELL_SEGMENT_LEN);
+        assert_eq!(bucket.segments[1].capacity(), CONSTANT_CELL_SEGMENT_LEN);
+        assert_eq!(
+            bucket.checked_capacity(),
+            Some(CONSTANT_CELL_SEGMENT_LEN * 2)
+        );
+        assert_eq!(
+            bucket.iter().copied().collect::<Vec<_>>(),
+            inserted,
+            "crossing a segment boundary must preserve every insertion and duplicate"
+        );
+
+        let mut expected = inserted;
+        expected.par_sort_unstable();
+        bucket.canonicalize();
+        match bucket.iter() {
+            ConstantCellIter::Canonical { frontier, .. } => {
+                assert_eq!(frontier.len(), bucket.segments.len());
+            }
+            ConstantCellIter::Insertion { .. } => panic!("canonical merge iterator required"),
+        }
+        assert_eq!(
+            bucket.iter().copied().collect::<Vec<_>>(),
+            expected,
+            "segment-local sorts and bounded merge must equal one flat unstable sort"
+        );
+
+        let appended = ContextCell::new(FIRST_PHASE_CELL_TYPE_ID, 2, 7);
+        bucket.push(appended);
+        expected.push(appended);
+        expected.par_sort_unstable();
+        bucket.canonicalize();
+        assert_eq!(
+            bucket.iter().copied().collect::<Vec<_>>(),
+            expected,
+            "append-after-canonicalize must be included by the next canonicalization"
+        );
+    }
+
+    #[test]
+    fn segmented_constant_bucket_iterators_are_exact_and_fused() {
+        fn assert_exact_and_fused(mut iter: ConstantCellIter<'_>, expected: &[ContextCell]) {
+            assert_eq!(iter.size_hint(), (expected.len(), Some(expected.len())));
+            assert_eq!(iter.len(), expected.len());
+            for (index, expected_cell) in expected.iter().enumerate() {
+                assert_eq!(iter.next(), Some(expected_cell));
+                let remaining = expected.len() - index - 1;
+                assert_eq!(iter.size_hint(), (remaining, Some(remaining)));
+                assert_eq!(iter.len(), remaining);
+            }
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.next(), None, "an exhausted iterator must remain fused");
+            assert_eq!(iter.size_hint(), (0, Some(0)));
+            assert_eq!(iter.len(), 0);
+        }
+
+        let inserted = [
+            ContextCell::new(FIRST_PHASE_CELL_TYPE_ID, 2, 3),
+            ContextCell::new(FIRST_PHASE_CELL_TYPE_ID, 0, 1),
+            ContextCell::new(FIRST_PHASE_CELL_TYPE_ID, 0, 1),
+        ];
+        let mut bucket = SegmentedContextCells::default();
+        for cell in inserted {
+            bucket.push(cell);
+        }
+        assert_exact_and_fused(bucket.iter(), &inserted);
+
+        bucket.canonicalize();
+        let mut canonical = inserted;
+        canonical.sort_unstable();
+        assert_exact_and_fused(bucket.iter(), &canonical);
     }
 
     #[cfg(target_pointer_width = "64")]

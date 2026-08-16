@@ -63,9 +63,9 @@ Completed history lives in [`status.md`](./status.md).
 
 - Preserve the immutable 5,067,263-line first-party Rust baseline, the
   5,014,603-line active ratchet, and the 4,560,536-line ten-percent objective.
-  The reconciled mutable-worktree audit counts 5,013,943 Rust lines, which is
-  660 lines below the active ratchet and 453,407 lines above the objective.
-  This restores the required 550 lines of ratchet headroom with 110 lines of
+  The reconciled mutable-worktree audit counts 5,013,832 Rust lines, which is
+  771 lines below the active ratchet and 453,296 lines above the objective.
+  This restores the required 550 lines of ratchet headroom with 221 lines of
   reserve, but is not an immutable-candidate receipt;
   do not redefine the baseline, count moved test code as a physical reduction,
   or weaken required runtime, security, consensus, SDK, or release-evidence
@@ -80,11 +80,14 @@ Completed history lives in [`status.md`](./status.md).
   full locked workspace build and tests, strict all-target/all-feature
   Clippy, ABI and canonical wire goldens, focused Sumeragi/Kura recovery suites,
   and representative four-validator deterministic consensus tests.
-- Bring the static JavaScript bundles below their unchanged release ceilings
-  without hiding deferred code: Torii is currently 1,070,886/1,006,592 bytes,
-  transaction codec 304,228/304,128 bytes, and the public browser aggregate
-  563,467/480,256 bytes. Nexus, canonical request, IVM artifact, and Kotodama
-  browser targets already pass.
+- Preserve the green split-aware JavaScript bundle gate without hiding deferred
+  code. The exact pinned-esbuild result is Torii eager 998,331/1,006,592 bytes,
+  Sumeragi lazy 71,905/72,704 bytes, and combined 1,070,236/1,079,296 bytes;
+  public-browser eager 480,214/480,256 bytes, Sumeragi lazy 72,243/72,704 bytes,
+  deployment lazy 9,177/9,216 bytes, and combined 561,634/562,176 bytes. The
+  transaction codec is 300,611/304,128 bytes, and Nexus, canonical request, IVM
+  artifact, and Kotodama browser targets also pass. Keep the exact dynamic-edge
+  inventory and eager/lazy closure accounting intact.
 - Capture comparable `valid: true` cold/warm and compiler-work reports for the
   baseline and candidate with identical source, lock, toolchain, arguments,
   environment, and host. Expand compile-unit coverage beyond the current
@@ -599,7 +602,7 @@ Remaining release gates, in order, are:
   focused alias and streaming XCTest cases pass under the full Xcode toolchain.
   Regenerate the checked
   exact 31-route OpenAPI surface only from a clean dependency graph whose
-  ignored `Cargo.lock` matches the committed exact pin; do not bless the
+  tracked root `Cargo.lock` matches its source-bound exact pin; do not bless the
   present unrelated uncommitted dependency work by changing that pin in
   isolation.
 - Qualify the remaining phase-three deployment and long-detach boundaries.
@@ -975,48 +978,49 @@ from cascading every focused command into a full core relink. The two final
 regression fixtures also mirror production semantics for durable post-decision
 CommitQC rebroadcast and startup auxiliary-lane binding. Source-bound focused
 revalidation, compact-commitment validation, source sealing, release
-generation, and live rollout remain open, and public Taira remains on the old
-deployment. Offline application protocols are a universal Iroha capability;
+generation, and live rollout remain open. At the latest public sample, Taira
+remains on the old deployment at committed height 11, view 230, phase
+`awaiting_proposal`, blocker `missing_proposal`, and approximately 64.3 hours
+without block progress. Offline application protocols are a universal Iroha
+capability;
 they require no validator mode, dataspace or asset opt-in, escrow catalog, or
 backend readiness gate. Taira promotion therefore evaluates ordinary node and
 consensus health only. App/device offline user-interface state must never make
 `/health` or `/readyz` fail. The guarded reset must still pass the signed public
 canary and prove a healthy, advancing validator cohort.
 
-The earlier populated-profile probe is superseded for promotion. Authentic
-final-VK generation exposed a 20,154-byte raw compiled-protocol identity: its
-316 SHA-256 blocks required 147,520 rows across five Table16 lanes, exceeding
-the 131,063 usable k17 rows and failing only after roughly 29 minutes. The
-compact source keeps the value-free structure hash at V1, while protocol
-identity V2 and deferred audit V6 absorb every canonical 32-byte compressed
-point into Poseidon as two injective little-endian `u128` field elements and
-feed only a short one-block domain/version/digest wrapper to SHA-256. Exact
-SHA-job and dense-MSM capacity checks now reject an impossible auxiliary layout
-before key generation. The authentic StepEq reciprocal audit contains 1,867
-dense sources, which exceeded k17 as one 313,659-row trace. It is now split in
-stable source order across three disjoint accumulator lanes with terminal-to-
-start equality links and a final ring closure; the longest lane is 104,667
-rows and the ring preserves exactly the original identity relation. The
-`[220]` advice / `[25, 0, 0]` lookup-advice k17 profile remains the candidate.
-The packed-cell/word-encoding run reached the internal monitor at
-68,730,140,736 bytes, still 10,664,000 bytes above the unchanged 64 GiB limit;
-the lower outer 250 ms sample is not qualification evidence. Replacing the
-per-advice word with a one-bit zero mask and sparse rational positions preserves
-exact variants, but its exact detached run still reached 69,079,106,448
-internal bytes, 359,629,712 bytes over, during later StepEq reciprocal-Poseidon
-range construction. Constant-equality interning is the next deterministic
-source-reviewed reduction. The `[176]` / `[20, 0, 0]` diagnostic is not a
-promotable profile. Do not qualify generation or bind release hashes until an
-exact detached run completes below the unchanged limit.
+Promotion is blocked by circuit capacity, not another host-memory
+representation optimization. Authenticated raw `StepEqBootstrap` telemetry
+reports `advice_cells=2,596,502,505`; with 131,063 usable k17 rows, the graph
+requires at least 19,812 advice columns. The required `[220]` advice /
+`[25, 0, 0]` lookup-advice runs aborted under the mandatory host guard before
+`calculate_params`, so they established no usable shape, parameters, keys,
+proof bounds, or production qualification. Packed-cell, sparse-rational, and
+other memory-only reductions cannot make this graph fit and are not release
+evidence.
+
+Every currently reviewed cross-field bridge variant—raw or compressed SHA,
+narrow-field Poseidon, dense vector/Pedersen, and direct verification—is a hard
+`NO` under the combined k17, 5 GiB processed-key, 384 KiB proof-pair, and
+128 MiB device ceilings. Exact public transport remains an unreviewed schema
+redesign whose fit depends on the guarded inventory; it is not production-ready.
+Any replacement binding requires independent cryptographic review. The guarded
+pre-graph `S/E/T/P` inventory completed at a 1,636,745,216-byte evidence peak
+with zero populated Step circuits. Both parities have 2,025 sources, eight
+equations, 2,680 terms, 636 protocol points, and 5,364 non-native Poseidon
+permutations; raw/compressed combined bindings require 69/51 k17 lanes, so
+neither fits the reviewed five-lane bridge. Do not run a populated graph, bind
+release hashes, or describe `[220]` / `[25, 0, 0]` as a candidate until a
+reviewed replacement satisfies every cap.
 
 Remaining work stays ordered and fail-closed:
 
-- Complete focused compile and unit validation for the native,
-  scalar-circuit, and reciprocal-circuit compact commitments, including
-  compressed-point parity, identity rejection, exact V1 structure/V2 identity,
-  V6 audit equality, tamper rejection, and early capacity diagnostics. Then run
-  the fresh guarded k17 shape probe and bind its exact result; this probe and
-  authentic generation have not passed yet.
+- Run the bounded pre-graph inventory under the host guard and archive exact
+  `S/E/T/P`, V6/V2 element and permutation counts, and legacy SHA lower bounds.
+  Use those measurements to select and independently review a replacement
+  cross-field binding before implementation. Do not rerun populated `[220]` /
+  `[25, 0, 0]` generation while the authenticated capacity lower bound remains
+  unsatisfied.
 - Keep the focused-tested V4 provenance structural-schema hashes frozen and
   complete the remaining promotion-evidence corridor. Require the
   authenticated source projection plus actual reviewed Cargo/rustc digests to
@@ -1024,35 +1028,37 @@ Remaining work stays ordered and fail-closed:
   qualification, review, attestation, and promotion records; no source-only
   fixture or placeholder hash is release evidence.
 - Seal the final reviewed source closure over the next clean `optimizations`
-  anchor carrying the release-authorized SSH signature. Current `HEAD`
-  `5fcbfe2d1e403e4e52b9384a4d056b61c151cd39` has a valid PGP signature, but
-  not the required release-authorized SSH signature; its parent
-  `d81ab6c1bab217c84e6c38f078da7a909ec7b740` is not the authorized release
-  parent, and the index/worktree contain tracked and untracked changes. It
-  therefore cannot be a production source seal.
+  anchor carrying the release-authorized SSH signature. The current dirty
+  worktree is not a production source seal.
   Require an empty tracked diff, zero untracked files, present-empty gitlink
   directories, and the exact separately bound root `Cargo.lock`. Build and
   hash the candidate
   generator, runtime binaries, configuration, and reset tooling from that one
   provenance set; no earlier r5/r6 binary or artifact seal attests the k17
   layout.
-- Run guarded production generation for the exact eight-artifact Eq/Ep bundle,
-  confirm and bind the expected 93,120-byte proofs and 191,862-byte maximum
-  pair, complete the required independent review and physical-device evidence,
-  finalize the immutable release, and qualify its validator catalog. Diagnostic
-  probe output is not a candidate or promotion record.
+- After a reviewed replacement binding passes the bounded shape and key gates,
+  run guarded production generation for the exact eight-artifact Eq/Ep bundle,
+  derive and bind its actual proof and pair sizes, complete the required
+  independent review and physical-device evidence, finalize the immutable
+  release, and qualify its validator catalog. The old 93,120-byte proof and
+  191,862-byte pair values are unvalidated projections, not release constants.
+  Diagnostic probe output is not a candidate or promotion record.
 - Install the finalized 17-file release and policy beneath a separate
   root-controlled Kagemusha trust root on all four validators, qualify every
   catalog with the admitted binary, and prove identical manifest digests and
   whole-catalog byte accounting before startup. Because those settings change
   `execution_policy_hash`, deploy them only through a fresh compatible reset
   or an independently approved consensus-context migration. Recover advancing
-  Taira consensus and prove that the executing account already has both
-  genesis-only permissions, directly or through a role. The stock base-genesis
-  helper grants them to `genesis_authority`, not to an activation multisig, and
-  they cannot be repaired after genesis. Then prepare and approve the
-  one-instruction governed activation at a strictly future height; height 2
-  remains valid only for an explicitly authorized fresh guarded reset. Prove committed finality,
+  Taira consensus; the latest public sample remains stalled at height 11, view
+  230, `missing_proposal`, after approximately 64.3 hours. No reviewed
+  activation authority or canonical activation transaction has been supplied.
+  The checked-in genesis does not establish such an authority with direct
+  `CanActivateKagemushaRecursiveReleaseV4` and
+  `CanManageOfflineDeviceAttestationPolicy` grants and contains no canonical
+  `MultisigRegister`; those genesis-only grants cannot be repaired in place.
+  Only after resolving that authority boundary should operators prepare and
+  approve the one-instruction governed activation at a strictly future height.
+  Prove committed finality,
   query-visible `/status.blocks` equality, ordinary node readiness, universal
   `cash_handoff_v1`/ABI-21 capability discovery without an asset enrollment
   gate, a real top-up/redemption canary, a restart below 45 seconds, and
@@ -1187,14 +1193,14 @@ mandatory.
 
 The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
-`48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
-its staged grouped and diagnostics suite-source manifests each contain 1,397
+`65187ba2cb0ce05d13fa59bd83062e9b2c1d026d7bcbf986de9464cfd6cc1bb3`;
+its staged grouped and diagnostics suite-source manifests each contain 1,398
 records and hash respectively to
-`a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
+`46a4ba9c0add14d71d2f69ae25c4677451fd9298da89ea38a5898cde21b41506`
 and
-`1bec39d7d0b9a08bf151c90e52a1d7d46d30bce2857a7726d939bf9ed1daf6ee`;
+`b559dbdbe37a428113769d3412928eb5dc85bcec44c2b63eccba2d004230e575`;
 the synchronized 48-line wire TSV hashes to
-`aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
+`79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
 `60`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
 OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
@@ -1284,15 +1290,15 @@ The remaining work is evidence-driven and must stay in order:
   source/distribution, Swift, Kotlin, and Java for
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 55 negative controls,
   fixture SHA-256
-  `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
-  staged grouped/diagnostics suite-source manifests at exactly 1,397 records
+  `65187ba2cb0ce05d13fa59bd83062e9b2c1d026d7bcbf986de9464cfd6cc1bb3`,
+  staged grouped/diagnostics suite-source manifests at exactly 1,398 records
   each with SHA-256 values
-  `a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
+  `46a4ba9c0add14d71d2f69ae25c4677451fd9298da89ea38a5898cde21b41506`
   and
-  `1bec39d7d0b9a08bf151c90e52a1d7d46d30bce2857a7726d939bf9ed1daf6ee`,
+  `b559dbdbe37a428113769d3412928eb5dc85bcec44c2b63eccba2d004230e575`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
-  `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
+  `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
   The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,
   Swift `4`, Kotlin `6`, and Java `5` tests. Earlier direct subset results are
   not an archived all-surface replay and do not attest this
@@ -1651,11 +1657,11 @@ cutover work.
   proving-key serialization, scoped max(RSS, physical-footprint) polling plus
   the final kernel peak-RSS gate, and the 56 GiB reviewed exact-profile
   preflight around the checked 53,108,563,136-byte phase-aware admission
-  estimate. The populated k17
-  `[220]` advice / `[25, 0, 0]` lookup-advice shape has exact per-parity
-  ParamsIPA/VK/PK lengths of
-  8,388,676 / 20,362 / 5,347,763,078 bytes and remains inside the fixed 5 GiB
-  per-artifact corridor. A
+  estimate. The `[220]` advice / `[25, 0, 0]` lookup-advice profile and its
+  8,388,676 / 20,362 / 5,347,763,078-byte ParamsIPA/VK/PK values were
+  pre-generation projections. The authenticated graph never reached
+  `calculate_params`, so those values are not a populated shape or release
+  evidence. A
   non-shipping memory-benchmark report is diagnostic calibration, not candidate
   or release evidence. Do not restore high-degree generation or a release-sized
   proving-key `Vec`.
@@ -1813,13 +1819,14 @@ stays false.
 The historical ABI-19/V3 path had a 1,600-byte per-step limit. Its degree-18 prototype produced 7,296-byte ordinary and
 7,328-byte augmented proofs even before full confidential/output-membership
 composition; it is not the current artifact/readiness contract. V4's
-authenticated profiles pin exact per-parity proof bounds and its manifest
-pins the pair bound. The reviewed `[220]` advice / `[25, 0, 0]` lookup profile retains
-defensive ceilings of 192 KiB per step and 384 KiB per canonical pair. The
-populated graph computes a 93,120-byte transcript per role, a 186,852-byte
-initialization pair, and a 191,862-byte maximum recursive pair. Authentic
-generation must confirm those exact values, and the manifest must authenticate
-the recursive maximum rather than the smaller initialization pair.
+authenticated profiles retain defensive ceilings of 192 KiB per step and
+384 KiB per canonical pair. The `[220]` advice / `[25, 0, 0]` profile and its
+93,120-byte per-role, 186,852-byte initialization-pair, and 191,862-byte
+recursive-pair figures were reviewed projections, but the authenticated graph
+never reached `calculate_params`. A replacement binding must first produce a
+usable shape; authentic generation must then derive the actual values, and the
+manifest must authenticate the measured recursive maximum rather than a stale
+projection.
 Those ceilings are not availability signals; promotion must pin the
 candidate's exact values and pass independent review and device evidence.
 
@@ -27202,8 +27209,8 @@ available as a signed clean commit.
 
 Production release execution is now structurally isolated from mutable source
 and authenticated before candidate code runs. Active Git operations are
-rejected, the candidate must be one clean committed HEAD/index/worktree plus a
-regular ignored `Cargo.lock`, and an operator-authenticated out-of-tree
+rejected, the candidate must be one clean committed HEAD/index/worktree,
+including one regular tracked `Cargo.lock`, and an operator-authenticated out-of-tree
 bootstrap must run under a protected `python3 -I -S`. The bootstrap digest-binds
 and archives its protected Python, Git, OpenSSH `ssh-keygen`, Bash, manifest and
 identity helpers, one-entry unbounded SSH allowed-signers policy, and revocation

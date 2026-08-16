@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Git provenance must not inherit caller-selected routing or configuration.
+while IFS= read -r openapi_git_variable; do
+  [[ "${openapi_git_variable}" == GIT_* ]] && unset "${openapi_git_variable}"
+done < <(compgen -e)
+export GIT_OPTIONAL_LOCKS=0 GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=2
+export GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+export GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROCESS_POLICY="${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
@@ -450,8 +459,6 @@ const provisionModule = pathToFileURL(
   ),
 ).href;
 const {
-  OPENAPI_CARGO_LOCK_EXPECTED_BYTES,
-  OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
   OPENAPI_CARGO_LOCK_PROVISION_SCHEMA,
   provisionOpenApiCargoLock,
 } = await import(provisionModule);
@@ -461,13 +468,11 @@ const summary = await provisionOpenApiCargoLock({
 });
 if (
   summary.schema !== OPENAPI_CARGO_LOCK_PROVISION_SCHEMA ||
-  summary.status !== 'installed' ||
-  summary.source !== 'operator' ||
-  summary.path !== 'Cargo.lock' ||
-  summary.bytes !== OPENAPI_CARGO_LOCK_EXPECTED_BYTES ||
-  summary.sha256_hex !== OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX
+  summary.status !== 'verified' ||
+  summary.source !== 'tracked' ||
+  summary.path !== 'Cargo.lock'
 ) {
-  throw new Error('isolated OpenAPI replay Cargo.lock provisioning was not exact');
+  throw new Error('isolated OpenAPI replay Cargo.lock verification was not exact');
 }
 NODE
   if ! cmp -s "${REPO_ROOT}/Cargo.lock" "${source_root}/Cargo.lock"; then

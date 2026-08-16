@@ -1,10 +1,10 @@
 use getset::CopyGetters;
 
 use crate::{
+    Context,
     gates::{circuit::CircuitBuilderStage, flex_gate::FlexGateConfigParams},
     utils::ScalarField,
     virtual_region::copy_constraints::SharedCopyConstraintManager,
-    Context,
 };
 
 use super::SinglePhaseCoreManager;
@@ -33,9 +33,16 @@ impl<F: ScalarField> MultiPhaseCoreManager<F> {
     ///         * These values are fixed for the circuit at key generation time, and they do not need to be re-computed by the prover in the actual proving phase.
     pub fn new(witness_gen_only: bool) -> Self {
         let copy_manager = SharedCopyConstraintManager::default();
-        let phase_manager =
-            vec![SinglePhaseCoreManager::new(witness_gen_only, copy_manager.clone())];
-        Self { phase_manager, witness_gen_only, use_unknown: false, copy_manager }
+        let phase_manager = vec![SinglePhaseCoreManager::new(
+            witness_gen_only,
+            copy_manager.clone(),
+        )];
+        Self {
+            phase_manager,
+            witness_gen_only,
+            use_unknown: false,
+            copy_manager,
+        }
     }
 
     /// Creates a new [MultiPhaseCoreManager] depending on the stage of circuit building. If the stage is [CircuitBuilderStage::Prover], the [MultiPhaseCoreManager] is used for witness generation only.
@@ -106,12 +113,18 @@ impl<F: ScalarField> MultiPhaseCoreManager<F> {
 
     /// Returns some statistics about the virtual region.
     pub fn statistics(&self) -> GateStatistics {
-        let total_advice_per_phase =
-            self.phase_manager.iter().map(|pm| pm.total_advice()).collect::<Vec<_>>();
+        let total_advice_per_phase = self
+            .phase_manager
+            .iter()
+            .map(|pm| pm.total_advice())
+            .collect::<Vec<_>>();
 
         let total_fixed = self.copy_manager.lock().unwrap().num_distinct_constants();
 
-        GateStatistics { total_advice_per_phase, total_fixed }
+        GateStatistics {
+            total_advice_per_phase,
+            total_fixed,
+        }
     }
 
     /// Auto-calculates configuration parameters for the circuit
@@ -130,7 +143,11 @@ impl<F: ScalarField> MultiPhaseCoreManager<F> {
             .collect::<Vec<_>>();
         let num_fixed = (stats.total_fixed + (1 << k) - 1) >> k;
 
-        let params = FlexGateConfigParams { num_advice_per_phase, num_fixed, k };
+        let params = FlexGateConfigParams {
+            num_advice_per_phase,
+            num_fixed,
+            k,
+        };
         #[cfg(feature = "display")]
         {
             for (phase, num_advice) in stats.total_advice_per_phase.iter().enumerate() {

@@ -1,0 +1,697 @@
+{
+  "schema_version": 1,
+  "source": {
+    "commit": "3ab43c7ff31db4ced850619d4746fa4c841a7681",
+    "repository": "https://github.com/tlaplus/tlapm.git",
+    "source_date_epoch": 1784455405,
+    "tree": "bf173dd38408314652d436f990b2b9edadaaabe9",
+    "version": "1.6.0-pre"
+  },
+  "opam": {
+    "repository": {
+      "commit": "ba7c59c5aafbef7f549ce2ca2e2b864cbfa0a5f7",
+      "repository": "https://github.com/ocaml/opam-repository.git",
+      "tree": "afd25878962ffa2ab4788fe71a0d9c726bb02342"
+    },
+    "version": "2.5.2"
+  },
+  "compiler_packages": [
+    {
+      "name": "base-bigarray",
+      "version": "base"
+    },
+    {
+      "name": "base-domains",
+      "version": "base"
+    },
+    {
+      "name": "base-nnp",
+      "version": "base"
+    },
+    {
+      "name": "base-threads",
+      "version": "base"
+    },
+    {
+      "name": "base-unix",
+      "version": "base"
+    },
+    {
+      "name": "ocaml",
+      "version": "5.1.0"
+    },
+    {
+      "name": "ocaml-base-compiler",
+      "version": "5.1.0"
+    },
+    {
+      "name": "ocaml-config",
+      "version": "3"
+    },
+    {
+      "name": "ocaml-options-vanilla",
+      "version": "1"
+    }
+  ],
+  "build_packages": [
+    {
+      "name": "alcotest",
+      "version": "1.9.1"
+    },
+    {
+      "name": "astring",
+      "version": "0.8.5"
+    },
+    {
+      "name": "base",
+      "version": "v0.17.3"
+    },
+    {
+      "name": "base_bigstring",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "base_quickcheck",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "bigstringaf",
+      "version": "0.10.0"
+    },
+    {
+      "name": "bin_prot",
+      "version": "v0.17.0-1"
+    },
+    {
+      "name": "camlzip",
+      "version": "1.14"
+    },
+    {
+      "name": "capitalization",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "cmdliner",
+      "version": "2.1.1"
+    },
+    {
+      "name": "conf-g++",
+      "version": "1.0"
+    },
+    {
+      "name": "conf-pkg-config",
+      "version": "5"
+    },
+    {
+      "name": "conf-zlib",
+      "version": "1"
+    },
+    {
+      "name": "core",
+      "version": "v0.17.2"
+    },
+    {
+      "name": "core_kernel",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "core_unix",
+      "version": "v0.17.1"
+    },
+    {
+      "name": "cppo",
+      "version": "1.8.0"
+    },
+    {
+      "name": "csexp",
+      "version": "1.5.2"
+    },
+    {
+      "name": "cstruct",
+      "version": "6.2.0"
+    },
+    {
+      "name": "domain-local-await",
+      "version": "1.0.1"
+    },
+    {
+      "name": "dune",
+      "version": "3.24.0"
+    },
+    {
+      "name": "dune-build-info",
+      "version": "3.24.0"
+    },
+    {
+      "name": "dune-configurator",
+      "version": "3.24.0"
+    },
+    {
+      "name": "dune-private-libs",
+      "version": "3.24.0"
+    },
+    {
+      "name": "dune-site",
+      "version": "3.24.0"
+    },
+    {
+      "name": "dyn",
+      "version": "3.24.0"
+    },
+    {
+      "name": "eio",
+      "version": "1.2"
+    },
+    {
+      "name": "eio_main",
+      "version": "1.2"
+    },
+    {
+      "name": "eio_posix",
+      "version": "1.2"
+    },
+    {
+      "name": "expect_test_helpers_core",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "fieldslib",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "fmt",
+      "version": "0.11.0"
+    },
+    {
+      "name": "fs-io",
+      "version": "3.24.0"
+    },
+    {
+      "name": "gel",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "hmap",
+      "version": "0.8.1"
+    },
+    {
+      "name": "int_repr",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "iomux",
+      "version": "0.4"
+    },
+    {
+      "name": "jane-street-headers",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "jane_rope",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "jsonrpc",
+      "version": "1.27.0"
+    },
+    {
+      "name": "jst-config",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "lsp",
+      "version": "1.27.0"
+    },
+    {
+      "name": "lwt-dllist",
+      "version": "1.1.0"
+    },
+    {
+      "name": "mtime",
+      "version": "2.1.0"
+    },
+    {
+      "name": "num",
+      "version": "1.6"
+    },
+    {
+      "name": "ocaml-compiler-libs",
+      "version": "v0.12.4"
+    },
+    {
+      "name": "ocaml-syntax-shims",
+      "version": "1.0.0"
+    },
+    {
+      "name": "ocaml_intrinsics_kernel",
+      "version": "v0.17.2"
+    },
+    {
+      "name": "ocamlbuild",
+      "version": "0.16.1"
+    },
+    {
+      "name": "ocamlfind",
+      "version": "1.9.8"
+    },
+    {
+      "name": "ocolor",
+      "version": "1.3.1"
+    },
+    {
+      "name": "optint",
+      "version": "0.3.0"
+    },
+    {
+      "name": "ordering",
+      "version": "3.24.0"
+    },
+    {
+      "name": "ounit2",
+      "version": "2.2.7"
+    },
+    {
+      "name": "parsexp",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "patdiff",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "patience_diff",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "pp",
+      "version": "2.0.0"
+    },
+    {
+      "name": "ppx_assert",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_base",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_bench",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_bin_prot",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_cold",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_compare",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_custom_printf",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_derivers",
+      "version": "1.2.1"
+    },
+    {
+      "name": "ppx_deriving",
+      "version": "6.0.3"
+    },
+    {
+      "name": "ppx_diff",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_disable_unused_warnings",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_enumerate",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_expect",
+      "version": "v0.17.2"
+    },
+    {
+      "name": "ppx_fields_conv",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_fixed_literal",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_globalize",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_hash",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_here",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_ignore_instrumentation",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_inline_test",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_jane",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_let",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_log",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_module_timer",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_optcomp",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_optional",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_pipebang",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_sexp_conv",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_sexp_message",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_sexp_value",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_stable",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_stable_witness",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_string",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_string_conv",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_tydi",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_typerep_conv",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_variants_conv",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppx_yojson_conv_lib",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "ppxlib",
+      "version": "0.35.0"
+    },
+    {
+      "name": "ppxlib_jane",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "psq",
+      "version": "0.2.1"
+    },
+    {
+      "name": "re",
+      "version": "1.14.0"
+    },
+    {
+      "name": "re2",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "regex_parser_intf",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "seq",
+      "version": "base"
+    },
+    {
+      "name": "sexp_diff",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "sexp_pretty",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "sexplib",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "sexplib0",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "spawn",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "splittable_random",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "stdio",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "stdlib-shims",
+      "version": "0.3.0"
+    },
+    {
+      "name": "stdune",
+      "version": "3.24.0"
+    },
+    {
+      "name": "thread-table",
+      "version": "1.0.0"
+    },
+    {
+      "name": "time_now",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "timezone",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "top-closure",
+      "version": "3.24.0"
+    },
+    {
+      "name": "topkg",
+      "version": "1.1.1"
+    },
+    {
+      "name": "typerep",
+      "version": "v0.17.1"
+    },
+    {
+      "name": "uopt",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "uutf",
+      "version": "1.0.4"
+    },
+    {
+      "name": "variantslib",
+      "version": "v0.17.0"
+    },
+    {
+      "name": "yojson",
+      "version": "3.0.0"
+    }
+  ],
+  "platforms": {
+    "arm64-darwin": {
+      "additional_packages": [],
+      "backend_downloads": [
+        {
+          "build_path": "_build/default/library/CommunityModules.jar",
+          "derivation_kind": "file",
+          "directory_prefix": null,
+          "destination": "community-modules/CommunityModules.jar",
+          "download_url": "https://github.com/tlaplus/CommunityModules/releases/download/202607181436/CommunityModules.jar",
+          "locked_output_architecture": "portable",
+          "locked_output_sha256": "c90a5e35c8fbfb656788332c3c532a13d7cef3b71ad9e699afaeb8873bd1ecf6",
+          "name": "community-modules",
+          "package_path": "lib/tlapm/stdlib/CommunityModules.jar",
+          "progress_dot_giga": false,
+          "requested_url": "https://github.com/tlaplus/CommunityModules/releases/latest/download/CommunityModules.jar",
+          "sha256": "c90a5e35c8fbfb656788332c3c532a13d7cef3b71ad9e699afaeb8873bd1ecf6",
+          "working_suffix": "default/library"
+        },
+        {
+          "build_path": "_build/default/deps/isabelle/Isabelle",
+          "derivation_kind": "tree",
+          "directory_prefix": "_build_cache",
+          "destination": "isabelle/Isabelle2025_macos.tar.gz",
+          "download_url": "https://isabelle.in.tum.de/website-Isabelle2025/dist/Isabelle2025_macos.tar.gz",
+          "locked_output_architecture": "arm64-darwin",
+          "locked_output_sha256": null,
+          "name": "isabelle",
+          "package_path": "lib/tlapm/backends/Isabelle",
+          "progress_dot_giga": true,
+          "requested_url": "https://isabelle.in.tum.de/website-Isabelle2025/dist/Isabelle2025_macos.tar.gz",
+          "sha256": "ea5754c228857f5d9d3ae254ec9814797f2453ea290df20b2f6dcb2ef0e2e7f8",
+          "working_suffix": "default/deps/isabelle"
+        },
+        {
+          "build_path": "_build/default/deps/ls4/ls4",
+          "derivation_kind": "file",
+          "directory_prefix": null,
+          "destination": "ls4/v1.0.zip",
+          "download_url": "https://github.com/quickbeam123/ls4/archive/v1.0.zip",
+          "locked_output_architecture": "arm64-darwin",
+          "locked_output_sha256": null,
+          "name": "ls4",
+          "package_path": "lib/tlapm/backends/bin/ls4",
+          "progress_dot_giga": true,
+          "requested_url": "https://github.com/quickbeam123/ls4/archive/v1.0.zip",
+          "sha256": "2d3fff1637497971cf00287df1a6cbb572769a61d10a86e0d11d34d39a017b1d",
+          "working_suffix": "default/deps/ls4"
+        },
+        {
+          "build_path": "_build/default/deps/z3/z3",
+          "derivation_kind": "file",
+          "directory_prefix": null,
+          "destination": "z3/z3-4.8.9-x64-osx-10.14.6.zip",
+          "download_url": "https://github.com/Z3Prover/z3/releases/download/z3-4.8.9/z3-4.8.9-x64-osx-10.14.6.zip",
+          "locked_output_architecture": "x86_64",
+          "locked_output_sha256": "0207d927019e8d90c28acd18c4596796baef36a87583e6e853c81487a9cd0c27",
+          "name": "z3",
+          "package_path": "lib/tlapm/backends/bin/z3",
+          "progress_dot_giga": true,
+          "requested_url": "https://github.com/Z3Prover/z3/releases/download/z3-4.8.9/z3-4.8.9-x64-osx-10.14.6.zip",
+          "sha256": "5fdbec33ca4a2ef8169553b6a4f41d9c05d5e9d5ef56c400c28dafb007f0e768",
+          "working_suffix": "default/deps/z3"
+        }
+      ],
+      "opam_binary": {
+        "sha256": "407e53416cfb49b41ce80e6d3c67a3df08df7f5028f407311f457f4e2a19004b",
+        "url": "https://github.com/ocaml/opam/releases/download/2.5.2/opam-2.5.2-arm64-macos"
+      },
+      "package_set_sha256": "2f61af5fd7ef689457f622dfb1b31d9169fcbeacb6d5aed0859b8ca73240f34c"
+    },
+    "x86_64-linux-gnu": {
+      "additional_packages": [
+        {
+          "name": "eio_linux",
+          "version": "1.2"
+        },
+        {
+          "name": "uring",
+          "version": "2.7.0"
+        }
+      ],
+      "backend_downloads": [
+        {
+          "build_path": "_build/default/library/CommunityModules.jar",
+          "derivation_kind": "file",
+          "directory_prefix": null,
+          "destination": "community-modules/CommunityModules.jar",
+          "download_url": "https://github.com/tlaplus/CommunityModules/releases/download/202607181436/CommunityModules.jar",
+          "locked_output_architecture": "portable",
+          "locked_output_sha256": "c90a5e35c8fbfb656788332c3c532a13d7cef3b71ad9e699afaeb8873bd1ecf6",
+          "name": "community-modules",
+          "package_path": "lib/tlapm/stdlib/CommunityModules.jar",
+          "progress_dot_giga": false,
+          "requested_url": "https://github.com/tlaplus/CommunityModules/releases/latest/download/CommunityModules.jar",
+          "sha256": "c90a5e35c8fbfb656788332c3c532a13d7cef3b71ad9e699afaeb8873bd1ecf6",
+          "working_suffix": "default/library"
+        },
+        {
+          "build_path": "_build/default/deps/isabelle/Isabelle",
+          "derivation_kind": "tree",
+          "directory_prefix": "_build_cache",
+          "destination": "isabelle/Isabelle2025_linux.tar.gz",
+          "download_url": "https://isabelle.in.tum.de/website-Isabelle2025/dist/Isabelle2025_linux.tar.gz",
+          "locked_output_architecture": "x86_64-linux-gnu",
+          "locked_output_sha256": null,
+          "name": "isabelle",
+          "package_path": "lib/tlapm/backends/Isabelle",
+          "progress_dot_giga": true,
+          "requested_url": "https://isabelle.in.tum.de/website-Isabelle2025/dist/Isabelle2025_linux.tar.gz",
+          "sha256": "3d1d66de371823fe31aa8ae66638f73575bac244f00b31aee1dcb62f38147c56",
+          "working_suffix": "default/deps/isabelle"
+        },
+        {
+          "build_path": "_build/default/deps/ls4/ls4",
+          "derivation_kind": "file",
+          "directory_prefix": null,
+          "destination": "ls4/v1.0.zip",
+          "download_url": "https://github.com/quickbeam123/ls4/archive/v1.0.zip",
+          "locked_output_architecture": "x86_64-linux-gnu",
+          "locked_output_sha256": null,
+          "name": "ls4",
+          "package_path": "lib/tlapm/backends/bin/ls4",
+          "progress_dot_giga": true,
+          "requested_url": "https://github.com/quickbeam123/ls4/archive/v1.0.zip",
+          "sha256": "2d3fff1637497971cf00287df1a6cbb572769a61d10a86e0d11d34d39a017b1d",
+          "working_suffix": "default/deps/ls4"
+        },
+        {
+          "build_path": "_build/default/deps/z3/z3",
+          "derivation_kind": "file",
+          "directory_prefix": null,
+          "destination": "z3/z3-4.8.9-x64-ubuntu-16.04.zip",
+          "download_url": "https://github.com/Z3Prover/z3/releases/download/z3-4.8.9/z3-4.8.9-x64-ubuntu-16.04.zip",
+          "locked_output_architecture": "x86_64",
+          "locked_output_sha256": "4321b0c0db1574a1e90881d9e097f12b8753d0c3e78b21a0155c77005a631436",
+          "name": "z3",
+          "package_path": "lib/tlapm/backends/bin/z3",
+          "progress_dot_giga": true,
+          "requested_url": "https://github.com/Z3Prover/z3/releases/download/z3-4.8.9/z3-4.8.9-x64-ubuntu-16.04.zip",
+          "sha256": "42f1644d79596718bf56944365900df8ef261c3150dddbb7687b5d3797d55c2d",
+          "working_suffix": "default/deps/z3"
+        }
+      ],
+      "opam_binary": {
+        "sha256": "edfca2630c373b44b7ee1c2f81cd8dcf67468d0db57d6c02158de553ac63dbd4",
+        "url": "https://github.com/ocaml/opam/releases/download/2.5.2/opam-2.5.2-x86_64-linux"
+      },
+      "package_set_sha256": "9e706a61b06be508588ac8be7530ee3b2aea94a5c1ee22204bada0e887e51a95"
+    }
+  }
+}

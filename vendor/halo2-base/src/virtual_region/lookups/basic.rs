@@ -1,6 +1,7 @@
 use std::iter::zip;
 
 use crate::{
+    AssignedValue,
     halo2_proofs::{
         circuit::{Layouter, Region, Value},
         halo2curves::ff::Field,
@@ -8,11 +9,10 @@ use crate::{
         poly::Rotation,
     },
     utils::{
-        halo2::{constrain_virtual_equals_external, raw_assign_advice, raw_assign_fixed},
         ScalarField,
+        halo2::{constrain_virtual_equals_external, raw_assign_advice, raw_assign_fixed},
     },
     virtual_region::copy_constraints::SharedCopyConstraintManager,
-    AssignedValue,
 };
 
 /// A simple dynamic lookup table for when you want to verify some length `KEY_COL` key
@@ -73,11 +73,17 @@ impl<const KEY_COL: usize> BasicDynLookupConfig<KEY_COL> {
                 let table_is_enabled = meta.query_fixed(table_is_enabled, Rotation::cur());
                 let key = key.map(|c| meta.query_advice(c, Rotation::cur()));
                 let key_is_enabled = meta.query_fixed(*key_is_enabled, Rotation::cur());
-                zip(key, table).chain([(key_is_enabled, table_is_enabled)]).collect()
+                zip(key, table)
+                    .chain([(key_is_enabled, table_is_enabled)])
+                    .collect()
             });
         }
 
-        Self { table_is_enabled, table, to_lookup }
+        Self {
+            table_is_enabled,
+            table,
+            to_lookup,
+        }
     }
 
     /// Assign managed lookups. The `keys` must have already been raw assigned beforehand.

@@ -833,6 +833,18 @@ mod tests {
         let rest = &FIXTURE[start..];
         rest[..rest.find('"').expect("fixture string terminator")].to_owned()
     }
+    fn fixture_network_id() -> NetworkId {
+        let literal = fixture_string("network_id");
+        let encoded = norito::json::to_json(&literal).expect("encode fixture NetworkId literal");
+        let network_id = norito::json::from_str::<NetworkId>(&encoded)
+            .expect("decode canonical fixture NetworkId literal");
+        assert_eq!(
+            norito::json::to_json(&network_id).expect("re-encode fixture NetworkId"),
+            encoded,
+            "fixture NetworkId must use the canonical checksummed JSON spelling"
+        );
+        network_id
+    }
     fn fixture_u64(key: &str) -> u64 {
         let needle = format!("\"{key}\": ");
         let start = FIXTURE.find(&needle).expect("fixture numeric key") + needle.len();
@@ -977,9 +989,7 @@ mod tests {
                 fixture_string("chain_id")
                     .parse()
                     .expect("fixture chain id"),
-                fixture_string("network_id")
-                    .parse()
-                    .expect("fixture network id"),
+                fixture_network_id(),
             )
         };
         let client = NexusAppClient::new(
@@ -1012,9 +1022,7 @@ mod tests {
                 fixture_string("chain_id")
                     .parse()
                     .expect("fixture chain id"),
-                fixture_string("network_id")
-                    .parse()
-                    .expect("fixture network id"),
+                fixture_network_id(),
             )
         };
         let submitter = FakeSubmitter::default();

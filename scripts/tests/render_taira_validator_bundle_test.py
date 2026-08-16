@@ -137,11 +137,89 @@ def test_taira_templates_require_no_backend_offline_enrollment() -> None:
 def test_taira_kagemusha_release_docs_preserve_both_production_boundaries() -> None:
     readme = TAIRA_README_PATH.read_text(encoding="utf-8")
 
+    assert "cargo run" not in readme
     assert "--kagemusha-release-catalog" not in readme
     assert "--kagemusha-release-root /srv/iroha-kagemusha/taira-v4-r1" in readme
     assert "/srv/iroha-kagemusha/taira-v4-r1/seals/" in readme
     assert "/etc/iroha/taira-validator/kagemusha-qualified" not in readme
+    assert (
+        "KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami" in readme
+    )
+    assert (
+        "KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>'"
+        in readme
+    )
+    assert (
+        "export KAGEMUSHA_V4_KAGAMI_BIN KAGEMUSHA_V4_KAGAMI_SHA256"
+        in readme
+    )
+    assert (
+        "readonly KAGEMUSHA_V4_KAGAMI_BIN KAGEMUSHA_V4_KAGAMI_SHA256"
+        in readme
+    )
+    pinned_invocation_prefix = (
+        "assert_kagemusha_v4_kagami_custody || exit 1\n"
+        "if /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin \\\n"
+        '  "${KAGEMUSHA_V4_KAGAMI_BIN}" \\\n'
+        "  kagemusha "
+    )
+    for subcommand in (
+        "prepare-taira-release-roster-v4",
+        "prepare-release-circuit-params-v4",
+        "prepare-activation-v4",
+    ):
+        assert pinned_invocation_prefix + subcommand in readme
+    assert readme.count(pinned_invocation_prefix) == 3
+    assert readme.count("assert_kagemusha_v4_kagami_custody || exit 1") == 6
+    pinned_invocation_postcheck = (
+        "then\n"
+        "  KAGEMUSHA_COMMAND_STATUS=0\n"
+        "else\n"
+        "  KAGEMUSHA_COMMAND_STATUS=$?\n"
+        "fi\n"
+        "assert_kagemusha_v4_kagami_custody || exit 1\n"
+        'test "${KAGEMUSHA_COMMAND_STATUS}" -eq 0 || '
+        'exit "${KAGEMUSHA_COMMAND_STATUS}"'
+    )
+    assert readme.count(pinned_invocation_postcheck) == 3
+    for pinned_invocation_suffix in (
+        "--output /absolute/private/path/taira-release-roster.norito\n"
+        + pinned_invocation_postcheck,
+        "--output-dir /absolute/private/path/kagemusha-release-inputs/"
+        "circuit-params-v4\n"
+        + pinned_invocation_postcheck,
+        '| /usr/bin/tee "${PREPARE_REPORT}"\n' + pinned_invocation_postcheck,
+    ):
+        assert pinned_invocation_suffix in readme
+    assert 'path.resolve(strict=True)' in readme
+    assert "metadata.st_uid != 0" in readme
+    assert "stat.S_IMODE(metadata.st_mode) & 0o022" in readme
+    assert "before.st_nlink != 1" in readme
+    assert "digest.hexdigest() != expected_sha256" in readme
+    assert "inherits the exported read-only `KAGEMUSHA_V4_KAGAMI_BIN`" in readme
     assert "kagemusha prepare-activation-v4" in readme
+    report_validation = readme.index("if ! /usr/bin/jq -e")
+    report_extraction = readme.index(
+        'INSTRUCTIONS_HASH="$(/usr/bin/jq -er \'.instructions_hash\''
+    )
+    assert report_validation < report_extraction
+    report_contract = readme[report_validation:report_extraction]
+    assert '.status == "prepared"' in report_contract
+    assert '.manifest_sha256 == $manifest_sha256' in report_contract
+    assert '.verifier_version == $verifier_version' in report_contract
+    assert ".instruction_count == 1" in report_contract
+    assert (
+        ".device_attestation_policy_state_sha256 == $device_policy_state_sha256"
+        in report_contract
+    )
+    assert "REVIEWED_DEVICE_ATTESTATION_POLICY_STATE_SHA256" in report_contract
+    assert "PREPARED_REPORT_LINE" in report_contract
+    assert 'test("^[0-9a-f]{64}$")' in report_contract
+    instructions_hash_contract = report_contract[
+        report_contract.index("(.instructions_hash |") :
+    ]
+    assert 'test("^[0-9a-f]{64}$")' in instructions_hash_contract
+    assert '(test("^0{64}$") | not)' in instructions_hash_contract
     assert "execution_policy_hash" in readme
     assert "/usr/local/libexec/iroha-taira-release-controller-v1" in readme
     assert 'prepare-reset -- \\\n' in readme

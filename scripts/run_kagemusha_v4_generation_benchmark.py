@@ -24,8 +24,13 @@ resource_guard = candidate_guard.resource_guard
 BENCHMARK_EXECUTABLE = "kagemusha_recursive_spend_v4_memory_benchmark"
 BENCHMARK_SUBCOMMAND = "measure-compact-k17"
 K17_SHAPE_PROBE_SUBCOMMAND = "probe-compact-k17-shape"
+K17_AUDIT_INVENTORY_SUBCOMMAND = "probe-compact-k17-audit-inventory"
 BENCHMARK_SUBCOMMANDS = frozenset(
-    {BENCHMARK_SUBCOMMAND, K17_SHAPE_PROBE_SUBCOMMAND}
+    {
+        BENCHMARK_SUBCOMMAND,
+        K17_SHAPE_PROBE_SUBCOMMAND,
+        K17_AUDIT_INVENTORY_SUBCOMMAND,
+    }
 )
 SCRATCH_PREFIX = ".kagemusha-v4-benchmark-scratch-"
 MINIMUM_SCRATCH_FREE_BYTES = candidate_guard.MINIMUM_OUTPUT_FREE_BYTES
@@ -319,7 +324,7 @@ def _cleanup_scratch_directory(scratch: ScratchDirectory) -> int:
 
 
 def _validate_benchmark_command(command: Sequence[str]) -> None:
-    """Admit only the prebuilt benchmark's two exact non-shipping operations."""
+    """Admit only the prebuilt benchmark's exact non-shipping operations."""
 
     executable = Path(command[0]).name
     if executable.endswith(".exe"):

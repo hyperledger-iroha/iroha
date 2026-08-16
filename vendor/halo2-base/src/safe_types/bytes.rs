@@ -1,9 +1,9 @@
 #![allow(clippy::len_without_is_empty)]
 use crate::{
-    gates::GateInstructions,
-    utils::bit_length,
     AssignedValue, Context,
     QuantumCell::{Constant, Existing},
+    gates::GateInstructions,
+    utils::bit_length,
 };
 
 use super::{SafeByte, ScalarField};
@@ -57,7 +57,12 @@ impl<F: ScalarField, const MAX_LEN: usize> VarLenBytes<F, MAX_LEN> {
     ) -> FixLenBytes<F, MAX_LEN> {
         let padded = left_pad_var_array_to_fixed(ctx, gate, &self.bytes, self.len, MAX_LEN);
         FixLenBytes::new(
-            padded.into_iter().map(|b| SafeByte(b)).collect::<Vec<_>>().try_into().unwrap(),
+            padded
+                .into_iter()
+                .map(|b| SafeByte(b))
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap(),
         )
     }
 
@@ -107,7 +112,10 @@ impl<F: ScalarField> VarLenBytesVec<F> {
         gate: &impl GateInstructions<F>,
     ) -> FixLenBytesVec<F> {
         let padded = left_pad_var_array_to_fixed(ctx, gate, &self.bytes, self.len, self.max_len());
-        FixLenBytesVec::new(padded.into_iter().map(|b| SafeByte(b)).collect_vec(), self.max_len())
+        FixLenBytesVec::new(
+            padded.into_iter().map(|b| SafeByte(b)).collect_vec(),
+            self.max_len(),
+        )
     }
 
     /// Return a copy of the byte array with 0 padding ensured.
@@ -194,7 +202,13 @@ pub fn left_pad_var_array_to_fixed<F: ScalarField>(
     let shift_bits = gate.num_to_bits(ctx, shift, bit_length(out_len as u64));
     for (i, shift_bit) in shift_bits.into_iter().enumerate() {
         let shifted = (0..out_len)
-            .map(|j| if j >= (1 << i) { Existing(padded[j - (1 << i)]) } else { Constant(F::ZERO) })
+            .map(|j| {
+                if j >= (1 << i) {
+                    Existing(padded[j - (1 << i)])
+                } else {
+                    Constant(F::ZERO)
+                }
+            })
             .collect_vec();
         padded = padded
             .into_iter()
@@ -216,7 +230,9 @@ fn ensure_0_padding<F: ScalarField>(
     let idx = gate.dec(ctx, len);
     let len_indicator = gate.idx_to_indicator(ctx, idx, max_len);
     // inputs_mask[i] = sum(len_indicator[i..])
-    let mut mask = gate.partial_sums(ctx, len_indicator.clone().into_iter().rev()).collect_vec();
+    let mut mask = gate
+        .partial_sums(ctx, len_indicator.clone().into_iter().rev())
+        .collect_vec();
     mask.reverse();
 
     bytes

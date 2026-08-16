@@ -183,6 +183,101 @@ fn v5_k17_shape_probe_profile_tracks_production_constants() {
     assert_eq!(layout.live_selector_offset, 65);
     assert_eq!(layout.instance_column_limbs, 66);
 }
+#[test]
+fn v6_k17_audit_inventory_formulas_match_an_independent_fixture() {
+    let counts = KagemushaK17AuditCountsV6 {
+        sources: 2,
+        equations: 2,
+        terms: 3,
+        stages: 2,
+        stage_equations: 2,
+        max_terms_per_equation: 2,
+        invalid_equation_source_indices: 0,
+        protocol_points: 2,
+        protocol_source_indices: 2,
+        invalid_protocol_source_indices: 0,
+    };
+    let inventory =
+        KagemushaK17AuditInventoryV6::from_counts(counts, 131_063).expect("small exact inventory");
+    inventory.validate("fixture").expect("consistent fixture");
+    assert_eq!(inventory.audit_poseidon_elements, 23);
+    assert_eq!(inventory.audit_poseidon_permutations, 12);
+    assert_eq!(inventory.protocol_poseidon_elements, 17);
+    assert_eq!(inventory.protocol_poseidon_permutations, 9);
+    assert_eq!(inventory.total_non_native_poseidon_permutations, 21);
+    assert_eq!(inventory.legacy_v5_raw_audit_bytes, 300);
+    assert_eq!(inventory.legacy_v5_raw_audit_sha256_blocks, 5);
+    assert_eq!(inventory.legacy_v5_raw_audit_rows_five_lanes, 65_527);
+    assert_eq!(inventory.legacy_v5_raw_audit_required_k17_lanes, 1);
+    assert_eq!(inventory.compressed_source_audit_bytes, 236);
+    assert_eq!(inventory.compressed_source_audit_sha256_blocks, 4);
+    assert_eq!(inventory.compressed_source_audit_rows_five_lanes, 65_527);
+    assert_eq!(inventory.compressed_source_audit_required_k17_lanes, 1);
+    assert_eq!(inventory.legacy_v1_protocol_bytes, 186);
+    assert_eq!(inventory.legacy_v1_protocol_sha256_blocks, 4);
+    assert_eq!(inventory.legacy_v5_raw_combined_sha256_blocks, 9);
+    assert_eq!(inventory.legacy_v5_raw_combined_rows_five_lanes, 65_527);
+    assert_eq!(inventory.legacy_v5_raw_combined_required_k17_lanes, 1);
+    assert_eq!(inventory.compressed_source_combined_sha256_blocks, 8);
+    assert_eq!(inventory.compressed_source_combined_rows_five_lanes, 65_527);
+    assert_eq!(inventory.compressed_source_combined_required_k17_lanes, 1);
+}
+#[test]
+fn v6_k17_audit_inventory_exposes_the_authenticated_source_lower_bound() {
+    let counts = KagemushaK17AuditCountsV6 {
+        sources: 1_867,
+        equations: 1,
+        terms: 1_867,
+        stages: 1,
+        stage_equations: 1,
+        max_terms_per_equation: 1_867,
+        invalid_equation_source_indices: 0,
+        protocol_points: 626,
+        protocol_source_indices: 626,
+        invalid_protocol_source_indices: 0,
+    };
+    let inventory = KagemushaK17AuditInventoryV6::from_counts(counts, 131_063)
+        .expect("authenticated lower-bound inventory");
+    assert_eq!(inventory.audit_poseidon_permutations, 3_740);
+    assert_eq!(inventory.protocol_poseidon_permutations, 633);
+    assert_eq!(inventory.legacy_v5_raw_audit_bytes, 186_755);
+    assert_eq!(inventory.legacy_v5_raw_audit_sha256_blocks, 2_919);
+    assert_eq!(inventory.legacy_v5_raw_audit_required_k17_lanes, 53);
+    assert_eq!(inventory.compressed_source_audit_bytes, 127_011);
+    assert_eq!(inventory.compressed_source_audit_sha256_blocks, 1_985);
+    assert_eq!(inventory.compressed_source_audit_required_k17_lanes, 36);
+    assert_eq!(inventory.legacy_v1_protocol_bytes, 20_154);
+    assert_eq!(inventory.legacy_v1_protocol_sha256_blocks, 316);
+    assert_eq!(inventory.legacy_v5_raw_combined_sha256_blocks, 3_235);
+    assert_eq!(inventory.legacy_v5_raw_combined_required_k17_lanes, 58);
+    assert_eq!(inventory.compressed_source_combined_sha256_blocks, 2_301);
+    assert_eq!(inventory.compressed_source_combined_required_k17_lanes, 42);
+}
+#[test]
+fn v6_k17_audit_inventory_rejects_inconsistent_or_overflowing_counts() {
+    let inconsistent = KagemushaK17AuditCountsV6 {
+        sources: 1,
+        equations: 2,
+        terms: 1,
+        stages: 1,
+        stage_equations: 1,
+        max_terms_per_equation: 1,
+        invalid_equation_source_indices: 1,
+        protocol_points: 1,
+        protocol_source_indices: 0,
+        invalid_protocol_source_indices: 1,
+    };
+    let inventory = KagemushaK17AuditInventoryV6::from_counts(inconsistent, 131_063)
+        .expect("inconsistent counts still have measurable geometry");
+    assert!(inventory.validate("fixture").is_err());
+
+    let overflow = KagemushaK17AuditCountsV6 {
+        sources: u64::MAX,
+        ..inconsistent
+    };
+    assert!(KagemushaK17AuditInventoryV6::from_counts(overflow, 131_063).is_err());
+    assert!(KagemushaK17AuditInventoryV6::from_counts(inconsistent, 63).is_err());
+}
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 #[test]
 fn v5_k17_shape_capture_requires_the_production_degree() {
@@ -561,7 +656,7 @@ fn v5_generator_uses_one_disposable_rayon_worker() {
 #[test]
 fn v5_shape_probe_uses_one_disposable_rayon_worker() {
     assert_eq!(KAGEMUSHA_GENERATION_RAYON_THREADS_V5, 1);
-    let source = include_str!("../kagemusha_recursion_adapter.rs");
+    let source = include_str!("k17_probe.rs");
     let wrapper = source
         .split_once("pub fn run_kagemusha_k17_shape_probe_v5(")
         .expect("public populated-shape probe")
@@ -574,10 +669,7 @@ fn v5_shape_probe_uses_one_disposable_rayon_worker() {
     let body = source
         .split_once("fn run_kagemusha_k17_shape_probe_in_pool_v5(")
         .expect("bounded populated-shape probe body")
-        .1
-        .split_once("fn kagemusha_eq_recursion_from_bootstrap_v4(")
-        .expect("next helper after populated-shape probe")
-        .0;
+        .1;
     assert!(body.contains("KagemushaK17ShapeProbeScopeV5::enter()"));
     assert!(
         body.matches("halo2_proofs::release_allocator_slack();")
@@ -587,7 +679,7 @@ fn v5_shape_probe_uses_one_disposable_rayon_worker() {
 }
 #[test]
 fn v5_shape_probe_releases_setup_slack_before_the_first_populated_circuit() {
-    let source = include_str!("../kagemusha_recursion_adapter.rs");
+    let source = include_str!("k17_probe.rs");
     let iteration = source
         .split_once("fn kagemusha_k17_shape_probe_iteration_v5(")
         .expect("populated-shape probe iteration")
@@ -602,6 +694,35 @@ fn v5_shape_probe_releases_setup_slack_before_the_first_populated_circuit() {
         .find("let step_eq = build_kagemusha_step_eq_circuit_v5(")
         .expect("first populated StepEq circuit build");
     assert!(release < first_build);
+}
+#[test]
+fn v6_audit_inventory_probe_exits_before_the_first_populated_circuit() {
+    let source = include_str!("k17_probe.rs");
+    let iteration = source
+        .split_once("fn kagemusha_k17_shape_probe_iteration_v5(")
+        .expect("shared k17 diagnostic iteration")
+        .1
+        .split_once("pub fn run_kagemusha_k17_audit_inventory_probe_v6(")
+        .expect("audit-inventory wrapper after iteration")
+        .0;
+    let inventory_return = iteration
+        .find("KagemushaK17ProbeIterationOutcomeV5::AuditInventory")
+        .expect("audit-inventory early return");
+    let first_build = iteration
+        .find("let step_eq = build_kagemusha_step_eq_circuit_v5(")
+        .expect("first populated StepEq circuit build");
+    assert!(inventory_return < first_build);
+
+    let wrapper = source
+        .split_once("pub fn run_kagemusha_k17_audit_inventory_probe_v6(")
+        .expect("audit-inventory wrapper")
+        .1
+        .split_once("pub fn run_kagemusha_k17_shape_probe_v5(")
+        .expect("populated-shape wrapper after inventory wrapper")
+        .0;
+    assert!(wrapper.contains(".num_threads(KAGEMUSHA_GENERATION_RAYON_THREADS_V5)"));
+    assert!(wrapper.contains("KagemushaK17ShapeProbeScopeV5::enter()"));
+    assert!(wrapper.contains("populated_step_circuits=0"));
 }
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 #[test]

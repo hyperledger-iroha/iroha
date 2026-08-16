@@ -86,6 +86,7 @@ def test_runner_rejects_every_command_except_the_exact_benchmark(
         [str(fake_benchmark), "wrong-operation"],
         [str(fake_benchmark), MODULE.BENCHMARK_SUBCOMMAND, "extra"],
         [str(fake_benchmark), MODULE.K17_SHAPE_PROBE_SUBCOMMAND, "extra"],
+        [str(fake_benchmark), MODULE.K17_AUDIT_INVENTORY_SUBCOMMAND, "extra"],
     ]
 
     for command in rejected_commands:
@@ -105,13 +106,21 @@ def test_runner_rejects_every_command_except_the_exact_benchmark(
         assert not report.exists()
 
 
-def test_runner_admits_both_exact_benchmark_operations(tmp_path: Path) -> None:
+def test_runner_admits_all_exact_benchmark_operations(tmp_path: Path) -> None:
     fake_benchmark = _fake_benchmark(tmp_path)
 
     assert MODULE.BENCHMARK_SUBCOMMAND == "measure-compact-k17"
     assert MODULE.K17_SHAPE_PROBE_SUBCOMMAND == "probe-compact-k17-shape"
+    assert (
+        MODULE.K17_AUDIT_INVENTORY_SUBCOMMAND
+        == "probe-compact-k17-audit-inventory"
+    )
     assert MODULE.BENCHMARK_SUBCOMMANDS == frozenset(
-        {MODULE.BENCHMARK_SUBCOMMAND, MODULE.K17_SHAPE_PROBE_SUBCOMMAND}
+        {
+            MODULE.BENCHMARK_SUBCOMMAND,
+            MODULE.K17_SHAPE_PROBE_SUBCOMMAND,
+            MODULE.K17_AUDIT_INVENTORY_SUBCOMMAND,
+        }
     )
     for subcommand in MODULE.BENCHMARK_SUBCOMMANDS:
         MODULE._validate_benchmark_command([str(fake_benchmark), subcommand])

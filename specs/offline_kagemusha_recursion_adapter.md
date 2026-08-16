@@ -525,12 +525,18 @@ python3 scripts/run_kagemusha_v4_generation_benchmark.py \
 ```
 
 Use `probe-compact-k17-shape` in place of `measure-compact-k17` to rerun the
-populated four-role closure diagnostic. The guard admits only those two exact
-operations and rejects extra arguments. On Darwin, both diagnostic operations
-use the production runner's 250 ms process-group sampling and enforce the
-greater of aggregate RSS or physical footprint. Other hosts retain the
-process-group RSS policy because they do not expose the Darwin footprint
-counter.
+populated four-role closure diagnostic. Use
+`probe-compact-k17-audit-inventory` to run only the two witness-only scalar
+prepasses, print exact source/equation/term and compiled-protocol point counts,
+and derive checked V6 Poseidon, historical raw V5 SHA, and counterfactual
+compressed-source SHA geometry.
+The inventory command exits before either populated reciprocal Step circuit is
+built; its V5 figures are diagnostic alternatives, not production fallbacks.
+The guard admits only those three exact operations and rejects extra arguments.
+On Darwin, all diagnostic operations use the production runner's 250 ms
+process-group sampling and enforce the greater of aggregate RSS or physical
+footprint. Other hosts retain the process-group RSS policy because they do not
+expose the Darwin footprint counter.
 
 Use the optimized binary for calibration. An `opt-level=0` debug build derives
 the same deterministic public parameters and byte geometry, but its sequential
@@ -568,20 +574,27 @@ preserve the former string/context/row equality, ordering, debug, and legacy
 `usize` hash semantics. Both `ContextCell` and `Option<ContextCell>` are eight
 bytes on 64-bit targets.
 Context advice retains exact `Assigned::{Zero, Trivial, Rational}` semantics in
-a dense numerator/value vector, a packed `Zero` bit mask, and sorted checked-u32
-rational positions paired with a sparse denominator vector. Random access uses
-binary search over rational positions, while assignment, iteration, and debug
-formatting merge the sparse inventory sequentially. Rational witnesses,
-including a zero denominator, are reconstructed without evaluation before
-Halo2 assignment, so backend batch-inversion timing and circuit synthesis order
-are unchanged. For `N` advice values and `R` rationals, the written backing
-storage is `32N + ceil(N / 8) + 36R` bytes instead of 72 bytes per value. The
-220-column profile contains at least 28,702,798 virtual advice values, and the
-reviewed rational-producing primitives contribute at most one denominator per
-eight values. Written storage therefore falls by at least 1,015,361,506 bytes
-before the additional packed-cell equality and lookup savings. The guarded
-probe reports mask bytes, active rational positions, denominators, every advice
-backing-vector capacity, constant bucket count and cell capacity, and
+fixed 65,536-entry numerator/value segments, a packed `Zero` bit mask, and
+sorted checked-u32 rational positions paired with a sparse denominator vector.
+The zero mask and the parallel virtual-gate selector use the same fixed
+65,536-byte (524,288-bit) segmented Boolean storage. No packed-bit segment ever
+relocates an earlier segment, each store has less than one segment of tail
+slack per context, and selector iteration and indexing retain exact logical
+order. The zero-mask segment is allocated before a new advice value changes any
+logical length. Random advice access uses binary search over rational positions,
+while assignment, iteration, and debug formatting merge the sparse inventory
+sequentially. Rational witnesses, including a zero denominator, are reconstructed
+without evaluation before Halo2 assignment, so backend batch-inversion timing
+and circuit synthesis order are unchanged. For `N` advice values and `R`
+rationals, advice backing storage is `32N + ceil(N / 8) + 36R` bytes instead of
+72 bytes per value; its selector adds `ceil(N / 8)` written bytes instead of
+`N`. The 220-column profile contains at least 28,702,798 virtual advice values,
+and the reviewed rational-producing primitives contribute at most one
+denominator per eight values. Written storage therefore falls by at least
+1,015,361,506 bytes before the additional selector, packed-cell equality, and
+lookup savings. The guarded probe reports mask and selector used bytes and
+segment counts, active rational positions, denominators, every advice and
+selector backing capacity, constant bucket count and cell capacity, and
 last-constant cache hits versus ordered-index lookups to detect allocation or
 construction-time cliffs. The two cache counters are schedule-local diagnostic
 performance data, not reproducibility evidence or promotion predicates. These

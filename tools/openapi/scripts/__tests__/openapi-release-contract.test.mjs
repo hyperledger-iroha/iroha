@@ -129,6 +129,10 @@ test('OpenAPI Cargo paths use the shared no-interference policy', async () => {
     join(repoRoot, 'ci', 'run_openapi_generator.sh'),
     'utf8',
   );
+  const android = await readFile(
+    join(repoRoot, 'ci', 'check_android_codegen.sh'),
+    'utf8',
+  );
   const policy = await readFile(
     join(repoRoot, 'scripts', 'sumeragi_v2_release_process_policy.sh'),
     'utf8',
@@ -140,6 +144,25 @@ test('OpenAPI Cargo paths use the shared no-interference policy', async () => {
     assert.doesNotMatch(source, /\bcargo(?:\s|\+)/);
     assert.doesNotMatch(source, /(?:^|\s)--jobs(?:=|\s)|(?:^|\s)-j\d*/m);
     assert.doesNotMatch(source, /(?:^|\s)--sign(?:\s|\\|$)/m);
+  }
+  for (const source of [gate, generator, android]) {
+    assert.match(source, /compgen -e/);
+    assert.match(source, /unset "\$\{openapi_git_variable\}"/);
+    assert.match(source, /export GIT_OPTIONAL_LOCKS=0/);
+    for (const setting of [
+      'GIT_NO_LAZY_FETCH=1',
+      'GIT_NO_REPLACE_OBJECTS=1',
+      'GIT_CONFIG_NOSYSTEM=1',
+      'GIT_CONFIG_GLOBAL=/dev/null',
+      'GIT_CONFIG_COUNT=2',
+      'GIT_CONFIG_KEY_0=core.hooksPath',
+      'GIT_CONFIG_VALUE_0=/dev/null',
+      'GIT_CONFIG_KEY_1=core.fsmonitor',
+      'GIT_CONFIG_VALUE_1=false',
+    ]) {
+      assert.ok(source.includes(setting), setting);
+    }
+    assert.ok(source.indexOf('compgen -e') < source.indexOf('git -C'));
   }
   for (const relativePath of [
     join('ci', 'check_openapi_spec.sh'),
@@ -307,8 +330,8 @@ test('OpenAPI CI replays complete bundles from independent clean sources', async
   assert.ok(!gate.includes("    'docs',\n    'portal',"));
   assert.match(gate, /const summary = await provisionOpenApiCargoLock\(\{/);
   assert.match(gate, /repoRoot: replaySourceRoot,/);
-  assert.match(gate, /summary\.status !== 'installed'/);
-  assert.match(gate, /summary\.source !== 'operator'/);
+  assert.match(gate, /summary\.status !== 'verified'/);
+  assert.match(gate, /summary\.source !== 'tracked'/);
   assert.match(gate, /summary\.path !== 'Cargo\.lock'/);
   assert.match(gate, /"\$\{REPO_ROOT\}\/Cargo\.lock"/);
   assert.doesNotMatch(gate, /cp "\$\{REPO_ROOT\}\/Cargo\.lock"/);

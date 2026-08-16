@@ -1986,7 +1986,7 @@ classifications. They validate the release machinery; they are not substitutes
 for the 24-hour validator soak.
 
 Both profiles require one clean committed source identity before their first
-Cargo command, bind the ignored workspace `Cargo.lock` as an explicit build
+Cargo command, bind the tracked workspace `Cargo.lock` as an explicit build
 input, and reject unresolved index entries and every active merge,
 cherry-pick, revert, mailbox-apply, rebase, sequencer, or bisect operation.
 Administrative paths are resolved through `git rev-parse --git-path`, so an
@@ -2004,7 +2004,7 @@ corridor.
 
 Before any network attempt, the gate requires the complete source-manifest and
 seal contract suite to pass. It covers content and ordering, deletions,
-symlinks, executable modes, ignored `Cargo.lock` drift, unresolved entries,
+symlinks, executable modes, tracked `Cargo.lock` drift, unresolved entries,
 every active Git operation, linked-worktree locality, clean HEAD/index/worktree
 identity, missing or symlinked lockfiles, detached-source reproduction, and a
 cooperative ordinary-write attempt against a read-only source tree. Source
@@ -2045,7 +2045,7 @@ its tree must resolve, the index tree must equal HEAD, tracked files must be
 unchanged, and no non-ignored untracked path may exist. It recreates that exact
 commit in an independent local clone made with no local object sharing, no
 hardlinks, and no alternates; verifies that the mirror shares no Git-object
-inode with the candidate; copies and re-hashes the ignored `Cargo.lock`; and
+inode with the candidate; re-hashes the tracked `Cargo.lock` in both; and
 requires the pre-seal mirror identity to equal the original candidate identity.
 It rechecks the original identity after mirror creation, redirects `target`,
 temporary files, caches, evidence, and retained localnets outside the source,

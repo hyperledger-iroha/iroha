@@ -1,5 +1,5 @@
 use crate::{
-    gates::circuit::{builder::RangeCircuitBuilder, CircuitBuilderStage},
+    gates::circuit::{CircuitBuilderStage, builder::RangeCircuitBuilder},
     halo2_proofs::plonk::{keygen_pk, keygen_vk},
     halo2_proofs::{halo2curves::bn256::Fr, poly::kzg::commitment::ParamsKZG},
     safe_types::*,
@@ -41,8 +41,11 @@ fn test_raw_bytes_to_gen<const BYTES_PER_ELE: usize, const TOTAL_BITS: usize>(
     let safe_value =
         safe_type_chip.raw_bytes_to::<BYTES_PER_ELE, TOTAL_BITS>(builder.main(0), dummy_raw_bytes);
     // get the offsets of the safe value cells for later 'pranking'
-    let safe_value_offsets =
-        safe_value.value().iter().map(|v| v.cell.unwrap().offset()).collect::<Vec<_>>();
+    let safe_value_offsets = safe_value
+        .value()
+        .iter()
+        .map(|v| v.cell.unwrap().offset())
+        .collect::<Vec<_>>();
 
     let config_params = builder.calculate_params(Some(9));
     let params = ParamsKZG::setup(k, OsRng);
@@ -106,7 +109,11 @@ fn test_raw_bytes_to_uint256() {
     // [0x1, 0x2] + [0x0; 30] -> [0x201, 0x0]
     test_raw_bytes_to_gen::<BYTES_PER_ELE, TOTAL_BITS>(
         k,
-        &[[Fr::from(1), Fr::from(2)].as_slice(), [Fr::from(0); 30].as_slice()].concat(),
+        &[
+            [Fr::from(1), Fr::from(2)].as_slice(),
+            [Fr::from(0); 30].as_slice(),
+        ]
+        .concat(),
         &[Fr::from(0x201), Fr::from(0)],
         true,
     );
@@ -184,7 +191,11 @@ fn test_raw_bytes_to_uint64() {
     // [0x1, 0x2] + [0x0; 6] -> [0x201]
     test_raw_bytes_to_gen::<BYTES_PER_ELE, TOTAL_BITS>(
         k,
-        &[[Fr::from(1), Fr::from(2)].as_slice(), [Fr::from(0); 6].as_slice()].concat(),
+        &[
+            [Fr::from(1), Fr::from(2)].as_slice(),
+            [Fr::from(0); 6].as_slice(),
+        ]
+        .concat(),
         &[Fr::from(0x201)],
         true,
     );
@@ -240,8 +251,16 @@ fn test_raw_bytes_to_bytes32() {
     // [0x1, 0x2] + [0x0; 30] -> [0x201, 0x0]
     test_raw_bytes_to_gen::<BYTES_PER_ELE, TOTAL_BITS>(
         k,
-        &[[Fr::from(1), Fr::from(2)].as_slice(), [Fr::from(0); 30].as_slice()].concat(),
-        &[[Fr::from(1), Fr::from(2)].as_slice(), [Fr::from(0); 30].as_slice()].concat(),
+        &[
+            [Fr::from(1), Fr::from(2)].as_slice(),
+            [Fr::from(0); 30].as_slice(),
+        ]
+        .concat(),
+        &[
+            [Fr::from(1), Fr::from(2)].as_slice(),
+            [Fr::from(0); 30].as_slice(),
+        ]
+        .concat(),
         true,
     );
     // [[0xff; 32] -> [2^248 - 1, 0xff]

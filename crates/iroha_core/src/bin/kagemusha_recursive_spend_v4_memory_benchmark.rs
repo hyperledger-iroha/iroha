@@ -1,13 +1,14 @@
 //! Measure the non-shipping compact Kagemusha generator under its external guard.
 //!
-//! This diagnostic executes either the complete generate, bootstrap, live-prove, and
-//! terminal-verification lifecycle or a populated k17 circuit-shape probe. Proving keys are
-//! streamed into anonymous files, and the process emits only validated byte counts and shape
-//! summaries; it cannot frame or publish candidate or release artifacts.
+//! This diagnostic executes the complete generate/bootstrap/live/verify lifecycle, a populated
+//! k17 circuit-shape probe, or a witness-only audit inventory. Proving keys are streamed into
+//! anonymous files, and the process emits only validated byte counts and diagnostic summaries; it
+//! cannot frame or publish candidate or release artifacts.
 use iroha_core::zk::kagemusha_v2::{
     KagemushaGeneratedParityArtifactsV4, generate_kagemusha_pasta_cycle_artifacts_v4,
-    run_kagemusha_k17_shape_probe_v5, start_kagemusha_generation_memory_guard_v4,
-    validate_kagemusha_proof_pair_measurement_v4, validate_kagemusha_step_bootstrap_payload_v4,
+    run_kagemusha_k17_audit_inventory_probe_v6, run_kagemusha_k17_shape_probe_v5,
+    start_kagemusha_generation_memory_guard_v4, validate_kagemusha_proof_pair_measurement_v4,
+    validate_kagemusha_step_bootstrap_payload_v4,
 };
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
@@ -27,6 +28,7 @@ use std::{
 };
 const SUBCOMMAND: &str = "measure-compact-k17";
 const K17_SHAPE_PROBE_SUBCOMMAND: &str = "probe-compact-k17-shape";
+const K17_AUDIT_INVENTORY_SUBCOMMAND: &str = "probe-compact-k17-audit-inventory";
 const EXPECTED_PARAMETERS_BYTES: usize = 8_388_676;
 const EXPECTED_VERIFYING_KEY_BYTES: usize = 20_362;
 const EXPECTED_PROVING_KEY_BYTES: u64 = 5_347_763_078;
@@ -215,10 +217,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .map_err(benchmark_error)
                 .map_err(Into::into)
         }
+        (Some(subcommand), None) if subcommand == OsStr::new(K17_AUDIT_INVENTORY_SUBCOMMAND) => {
+            let memory_guard = start_kagemusha_generation_memory_guard_v4(None)
+                .map_err(|error| benchmark_error(format!("memory monitor is unavailable: {error}")))?;
+            println!("benchmark=NON_SHIPPING_K17_AUDIT_INVENTORY");
+            run_kagemusha_k17_audit_inventory_probe_v6(
+                KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4[0],
+                KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4[0],
+                &memory_guard,
+            )
+            .map_err(benchmark_error)
+            .map_err(Into::into)
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "usage: kagemusha_recursive_spend_v4_memory_benchmark <{SUBCOMMAND}|{K17_SHAPE_PROBE_SUBCOMMAND}>"
+                "usage: kagemusha_recursive_spend_v4_memory_benchmark <{SUBCOMMAND}|{K17_SHAPE_PROBE_SUBCOMMAND}|{K17_AUDIT_INVENTORY_SUBCOMMAND}>"
             ),
         )
         .into()),

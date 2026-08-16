@@ -1,4 +1,6 @@
 use crate::{
+    AssignedValue, Context,
+    QuantumCell::{self, Constant, Existing, Witness, WitnessFraction},
     halo2_proofs::{
         plonk::{
             Advice, Assigned, Column, ConstraintSystem, FirstPhase, Fixed, SecondPhase, Selector,
@@ -7,8 +9,6 @@ use crate::{
         poly::Rotation,
     },
     utils::ScalarField,
-    AssignedValue, Context,
-    QuantumCell::{self, Constant, Existing, Witness, WitnessFraction},
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,11 @@ pub struct BasicGateConfig<F: ScalarField> {
 impl<F: ScalarField> BasicGateConfig<F> {
     /// Constructor
     pub fn new(q_enable: Selector, value: Column<Advice>) -> Self {
-        Self { q_enable, value, _marker: PhantomData }
+        Self {
+            q_enable,
+            value,
+            _marker: PhantomData,
+        }
     }
 
     /// Instantiates a new [BasicGateConfig].
@@ -70,7 +74,11 @@ impl<F: ScalarField> BasicGateConfig<F> {
 
         let q_enable = meta.selector();
 
-        let config = Self { q_enable, value, _marker: PhantomData };
+        let config = Self {
+            q_enable,
+            value,
+            _marker: PhantomData,
+        };
         config.create_gate(meta);
         config
     }
@@ -130,11 +138,15 @@ impl<F: ScalarField> FlexGateConfig<F> {
 
         let mut basic_gates = vec![];
         for (phase, &num_columns) in params.num_advice_per_phase.iter().enumerate() {
-            let config =
-                (0..num_columns).map(|_| BasicGateConfig::configure(meta, phase as u8)).collect();
+            let config = (0..num_columns)
+                .map(|_| BasicGateConfig::configure(meta, phase as u8))
+                .collect();
             basic_gates.push(config);
         }
-        log::debug!("Poisoned rows after FlexGateConfig::configure {}", meta.minimum_rows());
+        log::debug!(
+            "Poisoned rows after FlexGateConfig::configure {}",
+            meta.minimum_rows()
+        );
         Self {
             basic_gates,
             constants,
@@ -233,7 +245,10 @@ pub trait GateInstructions<F: ScalarField> {
     fn neg(&self, ctx: &mut Context<F>, a: impl Into<QuantumCell<F>>) -> AssignedValue<F> {
         let a = a.into();
         let out_val = -*a.value();
-        ctx.assign_region([a, Witness(out_val), Constant(F::ONE), Constant(F::ZERO)], [0]);
+        ctx.assign_region(
+            [a, Witness(out_val), Constant(F::ONE), Constant(F::ZERO)],
+            [0],
+        );
         ctx.get(-3)
     }
 
@@ -301,7 +316,10 @@ pub trait GateInstructions<F: ScalarField> {
     /// * `ctx`: [Context] to add the constraints to
     /// * `x`: [QuantumCell] value to constrain
     fn assert_bit(&self, ctx: &mut Context<F>, x: AssignedValue<F>) {
-        ctx.assign_region([Constant(F::ZERO), Existing(x), Existing(x), Existing(x)], [0]);
+        ctx.assign_region(
+            [Constant(F::ZERO), Existing(x), Existing(x), Existing(x)],
+            [0],
+        );
     }
 
     /// Constrains and returns a / b = out.
@@ -333,7 +351,11 @@ pub trait GateInstructions<F: ScalarField> {
     /// * `constant`: constant value to constrain `a` to be equal to
     fn assert_is_const(&self, ctx: &mut Context<F>, a: &AssignedValue<F>, constant: &F) {
         if !ctx.witness_gen_only {
-            ctx.copy_manager.lock().unwrap().constant_equalities.push((*constant, a.cell.unwrap()));
+            ctx.copy_manager
+                .lock()
+                .unwrap()
+                .constant_equalities
+                .push((*constant, a.cell.unwrap()));
         }
     }
 
@@ -496,7 +518,9 @@ pub trait GateInstructions<F: ScalarField> {
         if let Some(b_first) = b_first {
             let b_first = ctx.assign_region_last([b_first], []);
             std::iter::successors(Some(b_first), |x| {
-                a.next().zip(b.next()).map(|(a, b)| self.mul_add(ctx, Existing(*x), a, b))
+                a.next()
+                    .zip(b.next())
+                    .map(|(a, b)| self.mul_add(ctx, Existing(*x), a, b))
             })
             .collect()
         } else {
@@ -723,7 +747,11 @@ pub trait GateInstructions<F: ScalarField> {
         let cells =
             std::iter::once(Constant(F::ZERO)).chain(a.zip(indicator).flat_map(|(a, ind)| {
                 let a = a.into();
-                sum = if ind.value().is_zero_vartime() { sum } else { *a.value() };
+                sum = if ind.value().is_zero_vartime() {
+                    sum
+                } else {
+                    *a.value()
+                };
                 [a, Existing(ind), Witness(sum)]
             }));
         ctx.assign_region_last(cells, (0..len).map(|i| 3 * i as isize))
@@ -925,7 +953,10 @@ impl<F: ScalarField> GateChip<F> {
         }
         let field_element_cache = (0..1024).map(|i| F::from(i)).collect();
 
-        Self { pow_of_two, field_element_cache }
+        Self {
+            pow_of_two,
+            field_element_cache,
+        }
     }
 
     /// Calculates and constrains the inner product of `<a, b>`.
@@ -1100,10 +1131,19 @@ impl<F: ScalarField> GateInstructions<F> for GateChip<F> {
         let row_offset = ctx.advice_len();
         let b_starts_with_one = self.inner_product_simple(ctx, a, b);
         if b_starts_with_one {
-            Box::new((row_offset..ctx.advice_len()).step_by(3).map(|i| ctx.get(i as isize)))
+            Box::new(
+                (row_offset..ctx.advice_len())
+                    .step_by(3)
+                    .map(|i| ctx.get(i as isize)),
+            )
         } else {
             // in this case the first assignment is 0 so we skip it
-            Box::new((row_offset..ctx.advice_len()).step_by(3).skip(1).map(|i| ctx.get(i as isize)))
+            Box::new(
+                (row_offset..ctx.advice_len())
+                    .step_by(3)
+                    .skip(1)
+                    .map(|i| ctx.get(i as isize)),
+            )
         }
     }
 
@@ -1218,7 +1258,11 @@ impl<F: ScalarField> GateInstructions<F> for GateChip<F> {
         a: AssignedValue<F>,
         range_bits: usize,
     ) -> Vec<AssignedValue<F>> {
-        let bits = a.value().to_u64_limbs(range_bits, 1).into_iter().map(|x| Witness(F::from(x)));
+        let bits = a
+            .value()
+            .to_u64_limbs(range_bits, 1)
+            .into_iter()
+            .map(|x| Witness(F::from(x)));
 
         let mut bit_cells = Vec::with_capacity(range_bits);
         let row_offset = ctx.advice_len();

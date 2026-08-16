@@ -163,8 +163,12 @@ impl<F: PrimeField, const T: usize, const RATE: usize> MDSMatrix<F, T, RATE> {
         let m_prime = prime(m_hat);
         let m_prime_prime = prime_prime(w_hat);
         // row = first row of m_prime_prime.transpose() = first column of m_prime_prime
-        let row: [F; T] =
-            m_prime_prime.iter().map(|row| row[0]).collect::<Vec<_>>().try_into().unwrap();
+        let row: [F; T] = m_prime_prime
+            .iter()
+            .map(|row| row[0])
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
         // col_hat = first column of m_prime_prime.transpose() without first element = first row of m_prime_prime without first element
         let col_hat: [F; RATE] = m_prime_prime[0][1..].try_into().unwrap();
         (m_prime, SparseMDSMatrix { row, col_hat })

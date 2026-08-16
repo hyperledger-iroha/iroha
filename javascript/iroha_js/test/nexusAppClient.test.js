@@ -517,7 +517,6 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
   const requested = [];
 
   const client = new NexusAppClient({
-    chainId: "test-chain",
     networkId: fixtureNetworkId,
     signingPublicKey: fixturePublicKey,
     connectTransport: {

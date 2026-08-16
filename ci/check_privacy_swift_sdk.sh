@@ -5,6 +5,7 @@ ROOT_DIR="${PRIVACY_SWIFT_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && 
 SWIFTC_BIN="${PRIVACY_SWIFT_SDK_SWIFTC_BIN:-swiftc}"
 SWIFT_BIN="${PRIVACY_SWIFT_SDK_SWIFT_BIN:-swift}"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+TRACKED_ROOT_CARGO_LOCK_SHA256="0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 PYTHON_BIN="${MOBILE_SDK_PYTHON_BINARY:-${PRIVACY_SWIFT_SDK_PYTHON_BIN:-}}"
 APPLE_ARTIFACT_CHECKER="${ROOT_DIR}/scripts/check_mobile_sdk_artifacts.sh"
 
@@ -54,14 +55,29 @@ esac
   exit 1
 }
 [[ -f "${ROOT_DIR}/Cargo.lock" && ! -L "${ROOT_DIR}/Cargo.lock" ]] || {
-  echo "error: privacy Swift gate requires the frozen workspace Cargo.lock" >&2
+  echo "error: privacy Swift gate requires the tracked root Cargo.lock" >&2
   exit 1
 }
 [[ "$("${PYTHON_BIN}" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${ROOT_DIR}/Cargo.lock")" == \
-  "${FROZEN_CARGO_LOCK_SHA256}" ]] || {
-  echo "error: privacy Swift Cargo.lock is not the frozen release lock" >&2
+  "${TRACKED_ROOT_CARGO_LOCK_SHA256}" ]] || {
+  echo "error: privacy Swift tracked root Cargo.lock authority changed" >&2
   exit 1
 }
+PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
+[[ -f "${PRIVACY_RELEASE_CARGO_LOCK}" && ! -L "${PRIVACY_RELEASE_CARGO_LOCK}" && \
+  "${PRIVACY_RELEASE_CARGO_LOCK}" != "${ROOT_DIR}/Cargo.lock" ]] || {
+  echo "error: privacy Swift gate requires a distinct external privacy release Cargo.lock" >&2
+  exit 1
+}
+[[ "$("${PYTHON_BIN}" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${PRIVACY_RELEASE_CARGO_LOCK}")" == \
+  "${FROZEN_CARGO_LOCK_SHA256}" ]] || {
+  echo "error: privacy Swift external Cargo.lock is not the frozen release lock" >&2
+  exit 1
+}
+echo \
+  "error: privacy Swift native tooling requires external-lock requalification before it can consume cd9e without replacing the tracked 0ddb root authority" \
+  >&2
+exit 1
 
 DEVELOPER_DIR="$(xcode-select -p)"
 [[ "${DEVELOPER_DIR}" == */Xcode*.app/Contents/Developer ]] || {

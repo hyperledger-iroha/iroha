@@ -50,6 +50,12 @@ statements in this document describe the mutable development checkout. They are
 inventories and source-consistency observations, not immutable-candidate
 execution or release receipts.
 
+As of 2026-08-16, the current mutable-tree source-budget checker inspects 8,061
+paths with 195 exceptions and counts 5,013,832 Rust lines with zero findings.
+That leaves 771 lines of ratchet headroom, 453,296 lines to the objective, and
+221 lines of reserve beyond the required 550; it is not an immutable-candidate
+receipt.
+
 ## 2026-08-15 historical merge-audit snapshot
 
 - This dated snapshot is retained as historical evidence; it is not the current
@@ -60,7 +66,7 @@ execution or release receipts.
   candidate. Historical snapshots below are not current receipts.
 - The immutable source-budget baseline, active ratchet, and objective remain
   5,067,263, 5,014,603, and 4,560,536 Rust lines, with at least 550 lines of
-  required headroom. The official exact current check inspected 8,031 paths
+  required headroom. That historical snapshot's exact check inspected 8,031 paths
   with 197 exceptions and counted 5,014,041 Rust lines with zero findings,
   leaving 562 lines of headroom and 453,505 lines to the objective. The log is
   `/private/tmp/iroha-source-budget-final-after-fmt.log`, SHA-256
@@ -105,7 +111,7 @@ execution or release receipts.
   distribution source and Kotlin/Java Native model dependencies, are present in
   the development tree. The SoraFS orderbook JavaScript declaration,
   implementation, and standalone Python module are tracked. The recursive
-  resolver currently enumerates exactly 1,397 grouped and 1,397 diagnostics
+  resolver currently enumerates exactly 1,398 grouped and 1,398 diagnostics
   records. The canonical suite-source hashes are recorded with the owning
   corpus row (`ML-API-04`) and release gate (`G-SDK`) below.
   Diagnostics suite counts are Rust 14, Python 121, JavaScript 88, Swift 33,
@@ -1650,7 +1656,7 @@ status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
 and Kotlin/Java Native model dependencies. The staged inventory is exactly
-1,397 grouped and 1,397 diagnostics records. Their canonical hashes are
+1,398 grouped and 1,398 diagnostics records. Their canonical hashes are
 recorded once in the owning corpus row and once in the release gate. The
 release receipt must reproduce those values from its immutable candidate;
 the staged values alone are not evidence. The two specialized static Python modules are canonically
@@ -1740,11 +1746,11 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The staged recursive closure contains exactly
-1,397 grouped and 1,397 diagnostics records. Its grouped and diagnostics
+1,398 grouped and 1,398 diagnostics records. Its grouped and diagnostics
 suite-source SHA-256 values are
-`3328f7d22e18ebe586f2d4f356a1dd1766d342f88bea91e5b136b42ecd155899`
+`46a4ba9c0add14d71d2f69ae25c4677451fd9298da89ea38a5898cde21b41506`
 and
-`7c7e37624cb716684f20e4b185b686a7cf8e2870ea5c050229aa1e5cbe6d5a27`.
+`b559dbdbe37a428113769d3412928eb5dc85bcec44c2b63eccba2d004230e575`.
 The checked-in grouped fixture has SHA-256
 `65187ba2cb0ce05d13fa59bd83062e9b2c1d026d7bcbf986de9464cfd6cc1bb3`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -2037,11 +2043,11 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The staged
-closure contains exactly 1,397 records for each suite, with grouped and
+closure contains exactly 1,398 records for each suite, with grouped and
 diagnostics suite-source SHA-256 values
-`3328f7d22e18ebe586f2d4f356a1dd1766d342f88bea91e5b136b42ecd155899`
+`46a4ba9c0add14d71d2f69ae25c4677451fd9298da89ea38a5898cde21b41506`
 and
-`7c7e37624cb716684f20e4b185b686a7cf8e2870ea5c050229aa1e5cbe6d5a27`.
+`b559dbdbe37a428113769d3412928eb5dc85bcec44c2b63eccba2d004230e575`.
 The current grouped JSON and wire TSV SHA-256 values are
 `65187ba2cb0ce05d13fa59bd83062e9b2c1d026d7bcbf986de9464cfd6cc1bb3`
 and

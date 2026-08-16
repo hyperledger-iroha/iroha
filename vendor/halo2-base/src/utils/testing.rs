@@ -1,15 +1,16 @@
 //! Utilities for testing
 use crate::{
+    Context,
     gates::{
-        circuit::{builder::RangeCircuitBuilder, BaseCircuitParams, CircuitBuilderStage},
-        flex_gate::threads::SinglePhaseCoreManager,
         GateChip, RangeChip,
+        circuit::{BaseCircuitParams, CircuitBuilderStage, builder::RangeCircuitBuilder},
+        flex_gate::threads::SinglePhaseCoreManager,
     },
     halo2_proofs::{
         dev::MockProver,
         halo2curves::bn256::{Bn256, Fr, G1Affine},
         plonk::{
-            create_proof, keygen_pk, keygen_vk, verify_proof, Circuit, ProvingKey, VerifyingKey,
+            Circuit, ProvingKey, VerifyingKey, create_proof, keygen_pk, keygen_vk, verify_proof,
         },
         poly::commitment::ParamsProver,
         poly::kzg::{
@@ -20,10 +21,9 @@ use crate::{
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     },
-    Context,
 };
 use ark_std::{end_timer, perf_trace::TimerInfo, start_timer};
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 
 use super::fs::gen_srs;
 
@@ -111,7 +111,12 @@ pub struct BaseTester {
 
 impl Default for BaseTester {
     fn default() -> Self {
-        Self { k: 10, lookup_bits: Some(9), expect_satisfied: true, unusable_rows: 9 }
+        Self {
+            k: 10,
+            lookup_bits: Some(9),
+            expect_satisfied: true,
+            unusable_rows: 9,
+        }
     }
 }
 
@@ -131,7 +136,10 @@ impl BaseTester {
 
     /// Sets the size of the lookup table used for range checks to [0, 2<sup>lookup_bits</sup>)
     pub fn lookup_bits(mut self, lookup_bits: usize) -> Self {
-        assert!(lookup_bits < self.k as usize, "lookup_bits must be less than k");
+        assert!(
+            lookup_bits < self.k as usize,
+            "lookup_bits must be less than k"
+        );
         self.lookup_bits = Some(lookup_bits);
         self
     }
@@ -169,22 +177,39 @@ impl BaseTester {
         if let Some(lb) = self.lookup_bits {
             builder.set_lookup_bits(lb)
         }
-        let range = RangeChip::new(self.lookup_bits.unwrap_or(0), builder.lookup_manager().clone());
+        let range = RangeChip::new(
+            self.lookup_bits.unwrap_or(0),
+            builder.lookup_manager().clone(),
+        );
         // run the function, mutating `builder`
         let res = f(builder.pool(0), &range);
 
         // helper check: if your function didn't use lookups, turn lookup table "off"
-        let t_cells_lookup =
-            builder.lookup_manager().iter().map(|lm| lm.total_rows()).sum::<usize>();
-        let lookup_bits = if t_cells_lookup == 0 { None } else { self.lookup_bits };
+        let t_cells_lookup = builder
+            .lookup_manager()
+            .iter()
+            .map(|lm| lm.total_rows())
+            .sum::<usize>();
+        let lookup_bits = if t_cells_lookup == 0 {
+            None
+        } else {
+            self.lookup_bits
+        };
         builder.config_params.lookup_bits = lookup_bits;
 
         // configure the circuit shape, 9 blinding rows seems enough
         builder.calculate_params(Some(self.unusable_rows));
         if self.expect_satisfied {
-            MockProver::run(self.k, &builder, vec![]).unwrap().assert_satisfied();
+            MockProver::run(self.k, &builder, vec![])
+                .unwrap()
+                .assert_satisfied();
         } else {
-            assert!(MockProver::run(self.k, &builder, vec![]).unwrap().verify().is_err());
+            assert!(
+                MockProver::run(self.k, &builder, vec![])
+                    .unwrap()
+                    .verify()
+                    .is_err()
+            );
         }
         res
     }
@@ -206,14 +231,24 @@ impl BaseTester {
         if let Some(lb) = self.lookup_bits {
             builder.set_lookup_bits(lb)
         }
-        let range = RangeChip::new(self.lookup_bits.unwrap_or(0), builder.lookup_manager().clone());
+        let range = RangeChip::new(
+            self.lookup_bits.unwrap_or(0),
+            builder.lookup_manager().clone(),
+        );
         // run the function, mutating `builder`
         f(builder.pool(0), &range, init_input);
 
         // helper check: if your function didn't use lookups, turn lookup table "off"
-        let t_cells_lookup =
-            builder.lookup_manager().iter().map(|lm| lm.total_rows()).sum::<usize>();
-        let lookup_bits = if t_cells_lookup == 0 { None } else { self.lookup_bits };
+        let t_cells_lookup = builder
+            .lookup_manager()
+            .iter()
+            .map(|lm| lm.total_rows())
+            .sum::<usize>();
+        let lookup_bits = if t_cells_lookup == 0 {
+            None
+        } else {
+            self.lookup_bits
+        };
         builder.config_params.lookup_bits = lookup_bits;
 
         // configure the circuit shape, 9 blinding rows seems enough
@@ -232,7 +267,10 @@ impl BaseTester {
         // create real proof
         let proof_time = start_timer!(|| "Proving time");
         let mut builder = RangeCircuitBuilder::prover(config_params.clone(), break_points);
-        let range = RangeChip::new(self.lookup_bits.unwrap_or(0), builder.lookup_manager().clone());
+        let range = RangeChip::new(
+            self.lookup_bits.unwrap_or(0),
+            builder.lookup_manager().clone(),
+        );
         f(builder.pool(0), &range, logic_input);
         let proof = gen_proof(&params, &pk, builder);
         end_timer!(proof_time);
@@ -243,7 +281,14 @@ impl BaseTester {
         check_proof(&params, pk.get_vk(), &proof, self.expect_satisfied);
         end_timer!(verify_time);
 
-        BenchStats { config_params, vk_time, pk_time, proof_time, proof_size, verify_time }
+        BenchStats {
+            config_params,
+            vk_time,
+            pk_time,
+            proof_time,
+            proof_size,
+            verify_time,
+        }
     }
 }
 

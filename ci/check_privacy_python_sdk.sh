@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIREMENTS_LOCKFILE="${ROOT_DIR}/python/iroha_python/requirements-ci.lock"
 CHECKOUT_NATIVE_DIR="${ROOT_DIR}/python/iroha_python/src"
 FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+TRACKED_ROOT_CARGO_LOCK_SHA256="0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
 WHEEL_PATH=""
 WHEEL_SEAL=""
@@ -787,6 +788,13 @@ WORKSPACE_CARGO_LOCK_STATE="$(
     "workspace Cargo.lock" \
     "${PYTHON_BIN}"
 )"
+case "${WORKSPACE_CARGO_LOCK_STATE}" in
+  "present:${TRACKED_ROOT_CARGO_LOCK_SHA256}:"*) ;;
+  *)
+    echo "error: privacy Python SDK requires the exact tracked root Cargo.lock authority" >&2
+    exit 1
+    ;;
+esac
 SELECTED_CARGO_LOCK_SEAL="$(
   privacy_sdk_file_seal "${SELECTED_CARGO_LOCKFILE}" "${PYTHON_BIN}"
 )"
@@ -944,18 +952,6 @@ assert_privacy_sdk_inputs_unchanged() {
 cleanup_privacy_sdk_cargo_wrapper() {
   local status=$?
   trap - EXIT HUP INT TERM
-  if [[ "${TEMPORARY_WORKSPACE_LOCK:-0}" == "1" ]]; then
-    if [[ -f "${WORKSPACE_CARGO_LOCKFILE:-}" && \
-      ! -L "${WORKSPACE_CARGO_LOCKFILE:-}" && \
-      "$(privacy_sdk_file_seal "${WORKSPACE_CARGO_LOCKFILE}" "${PYTHON_BIN}")" == \
-        "${FROZEN_CARGO_LOCK_SHA256}:"* ]]; then
-      rm -f -- "${WORKSPACE_CARGO_LOCKFILE}"
-      TEMPORARY_WORKSPACE_LOCK=0
-    else
-      echo "error: refusing to remove a changed temporary workspace Cargo.lock" >&2
-      status=1
-    fi
-  fi
   if ! assert_privacy_sdk_inputs_unchanged; then
     status=1
   fi
@@ -1115,33 +1111,6 @@ esac
 assert_privacy_sdk_inputs_unchanged
 
 NATIVE_ABI22_MANIFEST="${PRIVATE_CARGO_WRAPPER_DIR}/python-native-abi22.json"
-materialize_workspace_lock_for_native_evidence() {
-  [[ "${WORKSPACE_CARGO_LOCK_STATE}" == "absent" ]] || {
-    echo "error: privacy Python native evidence requires an initially absent workspace Cargo.lock" >&2
-    return 1
-  }
-  [[ ! -e "${WORKSPACE_CARGO_LOCKFILE}" && ! -L "${WORKSPACE_CARGO_LOCKFILE}" ]] || {
-    echo "error: workspace Cargo.lock appeared before native evidence collection" >&2
-    return 1
-  }
-  install -m 600 "${SELECTED_CARGO_LOCKFILE}" "${WORKSPACE_CARGO_LOCKFILE}"
-  TEMPORARY_WORKSPACE_LOCK=1
-}
-remove_workspace_lock_after_native_evidence() {
-  [[ -f "${WORKSPACE_CARGO_LOCKFILE}" && ! -L "${WORKSPACE_CARGO_LOCKFILE}" ]] || {
-    echo "error: temporary workspace Cargo.lock changed identity" >&2
-    return 1
-  }
-  [[ "$(privacy_sdk_file_seal "${WORKSPACE_CARGO_LOCKFILE}" "${PYTHON_BIN}")" == \
-    "${FROZEN_CARGO_LOCK_SHA256}:"* ]] || {
-    echo "error: temporary workspace Cargo.lock differs from the authenticated lock" >&2
-    return 1
-  }
-  rm -f -- "${WORKSPACE_CARGO_LOCKFILE}"
-  TEMPORARY_WORKSPACE_LOCK=0
-}
-
-materialize_workspace_lock_for_native_evidence
 "${VENV_DIR}/bin/python" -I -S "${ABI22_CHECKER}" record \
   --artifact "${INSTALLED_NATIVE_PATH}" \
   --manifest "${NATIVE_ABI22_MANIFEST}" \
@@ -1154,7 +1123,6 @@ materialize_workspace_lock_for_native_evidence
   --manifest "${NATIVE_ABI22_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python"
-remove_workspace_lock_after_native_evidence
 assert_privacy_sdk_inputs_unchanged
 
 export IROHA_PYTHON_TEST_INSTALLED_PACKAGE=1
@@ -1173,11 +1141,9 @@ export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
   "${ROOT_DIR}/scripts/tests/check_privacy_python_witness_boundary_test.py"
 assert_privacy_sdk_inputs_unchanged
 
-materialize_workspace_lock_for_native_evidence
 "${VENV_DIR}/bin/python" -I -S "${ABI22_CHECKER}" verify \
   --artifact "${INSTALLED_NATIVE_PATH}" \
   --manifest "${NATIVE_ABI22_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python"
-remove_workspace_lock_after_native_evidence
 assert_privacy_sdk_inputs_unchanged

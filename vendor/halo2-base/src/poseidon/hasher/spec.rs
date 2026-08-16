@@ -21,13 +21,13 @@ pub(crate) struct Poseidon128Pow5Gen<
 }
 
 impl<
-        F: PrimeField,
-        const T: usize,
-        const RATE: usize,
-        const R_F: usize,
-        const R_P: usize,
-        const SECURE_MDS: usize,
-    > PoseidonSpec<F, T, RATE> for Poseidon128Pow5Gen<F, T, RATE, R_F, R_P, SECURE_MDS>
+    F: PrimeField,
+    const T: usize,
+    const RATE: usize,
+    const R_F: usize,
+    const R_P: usize,
+    const SECURE_MDS: usize,
+> PoseidonSpec<F, T, RATE> for Poseidon128Pow5Gen<F, T, RATE, R_F, R_P, SECURE_MDS>
 {
     fn full_rounds() -> usize {
         R_F
@@ -101,7 +101,11 @@ impl<F: PrimeField, const T: usize, const RATE: usize> OptimizedPoseidonSpec<F, 
         Self {
             r_f: R_F,
             constants,
-            mds_matrices: MDSMatrices { mds, sparse_matrices, pre_sparse_mds },
+            mds_matrices: MDSMatrices {
+                mds,
+                sparse_matrices,
+                pre_sparse_mds,
+            },
         }
     }
 
@@ -117,8 +121,10 @@ impl<F: PrimeField, const T: usize, const RATE: usize> OptimizedPoseidonSpec<F, 
         // Calculate optimized constants for first half of the full rounds
         let mut constants_start: Vec<[F; T]> = vec![[F::ZERO; T]; r_f_half];
         constants_start[0] = constants[0];
-        for (optimized, constants) in
-            constants_start.iter_mut().skip(1).zip(constants.iter().skip(1))
+        for (optimized, constants) in constants_start
+            .iter_mut()
+            .skip(1)
+            .zip(constants.iter().skip(1))
         {
             *optimized = inverse_mds.mul_vector(constants);
         }
@@ -143,8 +149,9 @@ impl<F: PrimeField, const T: usize, const RATE: usize> OptimizedPoseidonSpec<F, 
 
         // Calculate optimized constants for ending half of the full rounds
         let mut constants_end: Vec<[F; T]> = vec![[F::ZERO; T]; r_f_half - 1];
-        for (optimized, constants) in
-            constants_end.iter_mut().zip(constants.iter().skip(r_f_half + r_p + 1))
+        for (optimized, constants) in constants_end
+            .iter_mut()
+            .zip(constants.iter().skip(r_f_half + r_p + 1))
         {
             *optimized = inverse_mds.mul_vector(constants);
         }

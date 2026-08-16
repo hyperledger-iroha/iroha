@@ -6,8 +6,6 @@
 //! identical keys, layouts, and proof-size limits.
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 pub use super::kagemusha_recursion_adapter::generate_candidate_recursive_step_two_receipt_v4;
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-pub use super::kagemusha_recursion_adapter::run_kagemusha_k17_shape_probe_v5;
 pub use super::kagemusha_recursion_adapter::{
     KAGEMUSHA_GENERATION_MEMORY_CAPACITY_POLICY_V1, KAGEMUSHA_GENERATION_MEMORY_CAPACITY_SCHEMA_V1,
     KagemushaCandidateRecursiveStepTwoEvidenceV4, KagemushaGeneratedArtifactSpoolV4,
@@ -19,6 +17,10 @@ pub use super::kagemusha_recursion_adapter::{
     generate_kagemusha_pasta_cycle_artifacts_v4, kagemusha_generation_memory_capacity_v1,
     start_kagemusha_generation_memory_guard_v4, validate_kagemusha_proof_pair_measurement_v4,
     validate_kagemusha_step_bootstrap_payload_v4, verify_candidate_recursive_step_two_receipt_v4,
+};
+#[cfg(feature = "kagemusha-generation-memory-lab")]
+pub use super::kagemusha_recursion_adapter::{
+    run_kagemusha_k17_audit_inventory_probe_v6, run_kagemusha_k17_shape_probe_v5,
 };
 pub use super::kagemusha_step_transition::{
     KagemushaStepOperationVectorV4, KagemushaStepTransferPublicV4,
