@@ -1239,7 +1239,7 @@ mod codec_tests {
             CompoundPredicateWire::Json("{".into()),
         )
         .expect_err("invalid raw predicate JSON must be rejected");
-        assert!(error.to_string().contains("unexpected end of input"));
+        assert!(error.to_string().contains("invalid JSON string"));
     }
     #[test]
     fn compound_predicate_noncanonical_raw_json_rejects() {
@@ -1546,7 +1546,7 @@ mod codec_tests {
             CompoundPredicateWire::Json("{".into()),
         )
         .expect_err("invalid raw predicate JSON must be rejected");
-        assert!(error.to_string().contains("unexpected end of input"));
+        assert!(error.to_string().contains("invalid JSON string"));
     }
     #[test]
     fn committed_tx_typed_wire_rejects_non_transaction_type_confusion() {

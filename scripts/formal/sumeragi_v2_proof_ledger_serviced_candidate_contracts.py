@@ -352,6 +352,7 @@ def _serviced_candidate_production_source_fidelity_errors(
         "complete_leader_wire_runtime_owner": (
             "complete_leader_wire_runtime_owner"
         ),
+        "observe_effects": "observe_effects",
         "step": "step",
         "finish_dispatched_step": "finish_dispatched_step",
         "try_step_pacemaker_escape": "try_step_pacemaker_escape",
@@ -1817,6 +1818,27 @@ self.pending_producer_handoffs.clear();
     require_item_sequence(
         "runtime",
         runtime_items,
+        "observe_effects",
+        """
+self.round_tag = tag;
+self.round_started_at = now;
+self.retransmit_started_at = now;
+self.timeout_emitted = false;
+self.timeout_owner = None;
+self.timeout_owner_physical_cut = None;
+self.timeout_recovery_episode = None;
+self.retransmit_owner = None;
+self.retransmit_owner_physical_cut = None;
+self.dormant_fresh_lifecycle_owners
+    .retain(|_, owner| owner.causal_origin().root_tag == tag);
+self.active_view_producer = Some(ActiveViewProducerReservation { tag, ownership });
+self.schedule = ScheduleState::default();
+""",
+        "EnterView must retire every stale full round-tag clock owner before installing the successor producer and schedule",
+    )
+    require_item_sequence(
+        "runtime",
+        runtime_items,
         "install_dormant_local_fifo_reservations",
         """
 if !self.commands.is_empty()
@@ -2133,9 +2155,55 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         "authenticated record sequence",
         errors,
     )
-    seal_regressions(
+    runtime_regressions = seal_regressions(
         "runtime",
         _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256,
+    )
+    _require_rust_token_sequence(
+        paths["runtime"],
+        runtime_regressions.get(
+            "same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner"
+        ),
+        """
+let initial = EventTag::new(7, 0, Generation::new(11));
+let rebound = EventTag::new(7, 0, Generation::new(12));
+""",
+        "the same-view generation regression must exercise distinct exact round tags",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["runtime"],
+        runtime_regressions.get(
+            "same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner"
+        ),
+        """
+assert_eq!(runtime.driver.timeouts, vec![initial, rebound]);
+assert!(!runtime.fail_closed);
+""",
+        "the same-view generation regression must prove a fresh successor timeout without fail-close",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["runtime"],
+        runtime_regressions.get(
+            "dormant_fresh_owner_cache_is_derived_bounded_and_purged_by_round_tag"
+        ),
+        """
+let next_tag = EventTag::new(
+    owner_tag.height(),
+    owner_tag.view(),
+    Generation::new(owner_tag.generation().get() + 1),
+);
+runtime
+    .observe_effects_with_test_ownership(start, &[FakeEffect::enter_view(next_tag)])
+    .expect("test EnterView retains positional producer ownership");
+assert!(
+    runtime.dormant_fresh_lifecycle_owners.is_empty(),
+    "a same-view generation upgrade must purge stale clock owners"
+);
+""",
+        "the dormant-owner regression must purge an exact same-view predecessor generation",
+        errors,
     )
     seal_regressions(
         "worker",

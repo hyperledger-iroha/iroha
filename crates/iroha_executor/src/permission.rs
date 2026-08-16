@@ -330,9 +330,8 @@ pub trait ExecutorPermission: Permission + PartialEq {
     }
 }
 impl<T: Permission + PartialEq> ExecutorPermission for T {}
-/// Trait that should be implemented for all permission tokens.
-/// Provides a function to check validity of [`Grant`] and [`Revoke`]
-/// instructions containing implementing permission.
+/// Trait that should be implemented for all permission tokens. Provides a function to check
+/// validity of [`Grant`] and [`Revoke`] instructions containing implementing permission.
 pub(super) trait ValidateGrantRevoke {
     fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result;
     fn validate_revoke(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result;

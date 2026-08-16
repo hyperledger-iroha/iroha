@@ -517,6 +517,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RevokeTwitterBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{
+        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+    };
     use crate::{
         nexus::UniversalAccountId,
         oracle::{
@@ -525,9 +528,7 @@ mod tests {
         },
     };
     use iroha_primitives::numeric::Numeric;
-    use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
-    };
+    use norito::core::DecodeFromSlice;
     #[derive(norito::codec::Encode)]
     struct ForgedOpenOracleDispute {
         feed_id: FeedId,

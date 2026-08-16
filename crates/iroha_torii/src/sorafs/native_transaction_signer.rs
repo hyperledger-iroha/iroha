@@ -1,11 +1,10 @@
 //! Production qualification boundary for native SoraFS transaction signers.
 //!
-//! Runtime credentials and private keys remain outside configuration and Torii.
-//! This module binds each injected signer to one immutable non-secret expected
-//! identity, probes that identity twice before accepting the provider, and
-//! revalidates it immediately before and after every signing operation. The
-//! facade also rejects an input owned by another authority and verifies that
-//! the provider returned the exact payload, authority, and a valid signature.
+//! Runtime credentials and private keys remain outside configuration and Torii. This module binds
+//! each injected signer to one immutable non-secret expected identity, probes that identity twice
+//! before accepting the provider, and revalidates it immediately before and after every signing
+//! operation. The facade also rejects an input owned by another authority and verifies that the
+//! provider returned the exact payload, authority, and a valid signature.
 use iroha_config::parameters::validate_production_runtime_handle;
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
@@ -47,10 +46,9 @@ pub struct SorafsNativeTransactionSignerQualificationV1 {
 impl SorafsNativeTransactionSignerQualificationV1 {
     /// Construct a qualification value.
     ///
-    /// Call [`Self::validate`] before trusting values returned by an external
-    /// provider. Keeping construction infallible lets Torii reject malformed
-    /// provider probes explicitly rather than making them unrepresentable in
-    /// adversarial tests.
+    /// Call [`Self::validate`] before trusting values returned by an external provider. Keeping
+    /// construction infallible lets Torii reject malformed provider probes explicitly rather than
+    /// making them unrepresentable in adversarial tests.
     #[must_use]
     pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
         Self {
@@ -181,9 +179,8 @@ pub enum SorafsNativeTransactionSignerProbeErrorV1 {
 }
 /// Shared identity contract implemented by every native transaction signer.
 ///
-/// Implementations must return public identity only. Credentials, private keys,
-/// tokens, vendor diagnostics, and payload material are never valid probe
-/// outputs.
+/// Implementations must return public identity only. Credentials, private keys, tokens, vendor
+/// diagnostics, and payload material are never valid probe outputs.
 ///
 /// A bare local [`iroha_crypto::KeyPair`] intentionally does not implement this
 /// contract or any role-specific signer trait:
@@ -211,13 +208,12 @@ pub trait SorafsNativeTransactionSignerProviderV1: Send + Sync {
 }
 /// Runtime-only signer used by the durable SoraFS proof-outcome forwarder.
 ///
-/// Implementations may delegate to PKCS#11/HSM infrastructure. The signer is
-/// intentionally given only a fully constructed payload and no transaction
-/// queue capability, which makes an interrupted signing claim safe to replay.
-/// Before claiming an outbox entry, the worker checks finalized state for the
-/// exact provider-scoped `CanRecordSorafsProofOutcome` permission on
-/// [`SorafsNativeTransactionSignerProviderV1::authority`], including
-/// permissions inherited through roles.
+/// Implementations may delegate to PKCS#11/HSM infrastructure. The signer is intentionally given
+/// only a fully constructed payload and no transaction queue capability, which makes an interrupted
+/// signing claim safe to replay. Before claiming an outbox entry, the worker checks finalized state
+/// for the exact provider-scoped `CanRecordSorafsProofOutcome` permission on
+/// [`SorafsNativeTransactionSignerProviderV1::authority`], including permissions inherited through
+/// roles.
 pub trait SoraFsProofOutcomeTransactionSigner:
     SorafsNativeTransactionSignerProviderV1 + Send + Sync
 {
@@ -243,10 +239,9 @@ pub enum SoraFsProofOutcomeSigningError {
 }
 /// Runtime-only signer used by the durable native SoraFS repair forwarder.
 ///
-/// Implementations receive only a fully constructed fee-quoted payload and
-/// cannot submit it. Before a signing claim is consumed, the worker reconciles
-/// finalized repair state and checks the exact provider permission or
-/// provider-owner binding required by the native instruction.
+/// Implementations receive only a fully constructed fee-quoted payload and cannot submit it. Before
+/// a signing claim is consumed, the worker reconciles finalized repair state and checks the exact
+/// provider permission or provider-owner binding required by the native instruction.
 pub trait SoraFsRepairTransactionSigner:
     SorafsNativeTransactionSignerProviderV1 + Send + Sync
 {
@@ -555,10 +550,9 @@ macro_rules! define_qualified_signer {
         }
         #[doc = $constructor_doc]
         ///
-        /// The provider is probed twice before this function returns. The
-        /// returned trait object revalidates the same binding before every
-        /// fallible public-identity probe and immediately before and after
-        /// every signing request.
+        /// The provider is probed twice before this function returns. The returned trait object
+        /// revalidates the same binding before every fallible public-identity probe and immediately
+        /// before and after every signing request.
         ///
         /// # Errors
         ///

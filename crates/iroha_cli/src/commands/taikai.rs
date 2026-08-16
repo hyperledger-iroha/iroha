@@ -1,8 +1,7 @@
 //! Taikai publisher tooling.
 //!
-//! Provides helpers for bundling broadcast segments into deterministic CAR
-//! archives and Norito envelopes so downstream services can index and publish
-//! them without re-deriving ingest metadata.
+//! Provides helpers for bundling broadcast segments into deterministic CAR archives and Norito
+//! envelopes so downstream services can index and publish them without re-deriving ingest metadata.
 use super::da_common::{
     DaPublisher, metadata_map_to_extra, parse_blob_class, parse_fec_scheme, parse_storage_class,
 };

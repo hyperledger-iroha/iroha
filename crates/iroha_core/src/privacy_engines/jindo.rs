@@ -4,10 +4,9 @@
 //! revised Jindo lattice PCS.  It deliberately does not expose the paper's
 //! slot-encoding or general multilinear parameter surfaces.
 //!
-//! The implementation completes the public algorithms in Figures 2--7 of the
-//! current ePrint 2026/044 revision as one exact, versioned, native-Rust experimental testnet
-//! profile: fixed ring parameters, proof wire, prover, verifier, integer-only
-//! sampling, and adversarial vectors.
+//! The implementation completes the public algorithms in Figures 2--7 of the current ePrint
+//! 2026/044 revision as one exact, versioned, native-Rust experimental testnet profile: fixed ring
+//! parameters, proof wire, prover, verifier, integer-only sampling, and adversarial vectors.
 //!
 //! The executable profile remains experimental: its complete `S_35`
 //! challenge distribution does not yet carry the distribution-wide theorem
@@ -163,11 +162,10 @@ pub struct JindoPrivacyActionWitnessV1 {
 impl JindoPrivacyActionWitnessV1 {
     /// Validate and take ownership of one canonical Jindo witness.
     ///
-    /// A polynomial has exactly one accepted representation: it is non-empty,
-    /// contains only canonical field encodings, and has no trailing zero
-    /// coefficient unless it is the single-coefficient zero polynomial.
-    /// Duplicate polynomials are rejected so one batch cannot express the same
-    /// private relation through multiple encodings.
+    /// A polynomial has exactly one accepted representation: it is non-empty, contains only
+    /// canonical field encodings, and has no trailing zero coefficient unless it is the
+    /// single-coefficient zero polynomial. Duplicate polynomials are rejected so one batch cannot
+    /// express the same private relation through multiple encodings.
     ///
     /// # Errors
     ///
@@ -650,11 +648,10 @@ fn transaction_payload_v1(
 }
 /// Derive the canonical proof-independent transaction intent for the first pass.
 ///
-/// The data-model projection canonically removes proof bytes and zeroes the
-/// self-referential intent and statement digests. This helper materializes
-/// exactly that normalized preimage, derives its digest immediately, and
-/// returns only the digest. Its proof-empty intermediate therefore cannot be
-/// returned, signed, or submitted through the public prepared-action API.
+/// The data-model projection canonically removes proof bytes and zeroes the self-referential intent
+/// and statement digests. This helper materializes exactly that normalized preimage, derives its
+/// digest immediately, and returns only the digest. Its proof-empty intermediate therefore cannot
+/// be returned, signed, or submitted through the public prepared-action API.
 fn derive_canonical_transaction_intent_digest_v1(
     context: &JindoPrivacyActionTransactionContextV1,
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
@@ -682,11 +679,10 @@ fn derive_canonical_transaction_intent_digest_v1(
 /// Prepare and prove one canonical direct Jindo action using caller-provided
 /// cryptographically secure randomness.
 ///
-/// This is the pure proving half of the API: it does not receive or clone a
-/// transaction signing key. It performs the required two-pass construction,
-/// first deriving the intent from a proof-independent projection and then proving
-/// the final intent-bound statement. The final payload is revalidated before
-/// it is returned.
+/// This is the pure proving half of the API: it does not receive or clone a transaction signing
+/// key. It performs the required two-pass construction, first deriving the intent from a
+/// proof-independent projection and then proving the final intent-bound statement. The final
+/// payload is revalidated before it is returned.
 ///
 /// # Errors
 ///
@@ -835,8 +831,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns the same closed failures as
-/// [`prepare_jindo_privacy_action_with_rng_v1`].
+/// Returns the same closed failures as [`prepare_jindo_privacy_action_with_rng_v1`].
 pub fn prepare_jindo_privacy_action_v1(
     context: JindoPrivacyActionTransactionContextV1,
     witness: JindoPrivacyActionWitnessV1,
@@ -904,9 +899,8 @@ pub fn sign_prepared_jindo_privacy_action_v1(
 /// Build, prove, bind, and sign one canonical direct Jindo privacy action with
 /// caller-provided cryptographically secure randomness.
 ///
-/// This entrypoint validates the signing authority before it requests any
-/// randomness or performs proof work, then composes the pure prover and the
-/// prepared-action signer.
+/// This entrypoint validates the signing authority before it requests any randomness or performs
+/// proof work, then composes the pure prover and the prepared-action signer.
 ///
 /// # Errors
 ///
@@ -933,8 +927,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns the same closed failures as
-/// [`build_signed_privacy_action_with_rng_v1`].
+/// Returns the same closed failures as [`build_signed_privacy_action_with_rng_v1`].
 pub fn build_signed_privacy_action_v1(
     context: JindoPrivacyActionTransactionContextV1,
     witness: JindoPrivacyActionWitnessV1,

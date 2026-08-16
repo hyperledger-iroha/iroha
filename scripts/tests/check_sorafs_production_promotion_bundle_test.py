@@ -29,6 +29,10 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+import check_sorafs_production_readiness as aggregate_checker  # noqa: E402
+import sorafs_l1_lane_evidence_inventory as lane_inventory  # noqa: E402
+import sorafs_l1_lane_inventory_integration as inventory_integration  # noqa: E402
+import sorafs_topology_qualification as topology_qualification  # noqa: E402
 from sorafs_resilience_test_support import (  # noqa: E402
     public_key_from_seed,
     sign,
@@ -87,10 +91,222 @@ def promotion_payload() -> dict[str, Any]:
     }
 
 
-def write_positive_replay(root: Path) -> tuple[dict[str, Path], dict[str, Any]]:
+def schema_valid_synthetic_promotion_payload() -> dict[str, Any]:
+    """Return a synthetic payload accepted by the authoritative aggregate validator.
+
+    This is test structure only: its deterministic digests and signer identities are
+    neither captured deployment evidence nor eligible production provenance.
+    """
+
+    deployment_id = "sorafs-mainnet-2026-08"
+    environment = "production"
+    generated_at_unix = NOW_UNIX - 120
+    base_topology = {
+        "qualification_summary_sha256": digest("topology-summary"),
+        "manifest_sha256": digest("topology-manifest"),
+        "canonical_manifest_sha256": digest("topology-manifest-canonical"),
+        "deployment_id": deployment_id,
+        "environment": environment,
+        "network": "taira",
+        "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
+        "chain_discriminant": 369,
+        "validator_ids_sha256": (
+            topology_qualification.CANONICAL_TAIRA_VALIDATOR_IDS_SHA256
+        ),
+    }
+    authenticated_topology = {
+        **base_topology,
+        "signer_authentication_kind": "external-ed25519",
+        "signer_backend": "software",
+        "signer_service_id": "sorafs-topology-signer-a",
+        "signer_administrator_id": "sorafs-topology-admin-b",
+        "signer_key_revision": 3,
+        "signer_policy_revision": 5,
+        "signer_policy_digest_sha256": digest("topology-policy"),
+        "signer_public_key_fingerprint_sha256": digest("topology-key"),
+    }
+    resilience_binding = {
+        "schema": aggregate_checker.RESILIENCE_QUALIFICATION_BINDING_SCHEMA,
+        "summary_sha256": digest("resilience-summary"),
+        "receipt_sha256": digest("resilience-receipt"),
+        "canonical_receipt_sha256": digest("resilience-canonical-receipt"),
+        "receipt_generated_at_unix": generated_at_unix,
+        "signer_backend": "software",
+        "signer_service_id": "sorafs-resilience-signer-a",
+        "signer_administrator_id": "sorafs-resilience-admin-b",
+        "signer_key_revision": 5,
+        "signer_policy_revision": 8,
+        "signer_policy_digest_sha256": digest("resilience-policy"),
+        "signer_public_key_fingerprint_sha256": digest("resilience-key"),
+    }
+    inventory_sha256 = digest("lane-inventory")
+    inventory_binding = {
+        "schema": lane_inventory.VERIFICATION_SCHEMA,
+        "status": "ready",
+        "signer_qualification": "software-key-qualified",
+        "inventory_sha256": inventory_sha256,
+        "summary_file_count": 17,
+        "recognized_summary_count": 17,
+        "deployment": {
+            "deployment_id": deployment_id,
+            "environment": environment,
+            "network": "taira",
+            "chain_id": base_topology["chain_id"],
+            "chain_discriminant": base_topology["chain_discriminant"],
+        },
+        "anchors": {
+            "topology_qualification_summary_sha256": base_topology[
+                "qualification_summary_sha256"
+            ],
+            "topology_manifest_sha256": base_topology["manifest_sha256"],
+            "topology_canonical_manifest_sha256": base_topology[
+                "canonical_manifest_sha256"
+            ],
+            "validator_ids_sha256": base_topology["validator_ids_sha256"],
+            "oldest_evidence_generated_at_unix": generated_at_unix,
+            "newest_evidence_generated_at_unix": generated_at_unix,
+        },
+        "signer": {
+            "role": lane_inventory.SIGNER_ROLE,
+            "service_kind": lane_inventory.SIGNER_KIND,
+            "algorithm": "ed25519",
+            "backend": "software",
+            "service_id": "sorafs-inventory-signer-a",
+            "administrator_id": "sorafs-inventory-admin-b",
+            "key_revision": 13,
+            "policy_revision": 17,
+            "policy_digest_sha256": digest("inventory-policy"),
+            "public_key_fingerprint_sha256": digest("inventory-key"),
+        },
+    }
+    lane_sha256 = {
+        gate: digest(f"lane:{gate}")
+        for gate in MODULE.promotion_runner.DEFAULT_REQUIRED_GATES
+    }
+    required = {}
+    for gate_name in MODULE.promotion_runner.DEFAULT_REQUIRED_GATES:
+        gate = MODULE.promotion_runner.GATE_BY_NAME[gate_name]
+        artifact_count = len(gate.required_kinds)
+        required[gate_name] = {
+            "schema": gate.schema,
+            "present": True,
+            "valid": True,
+            "required_kind_count": artifact_count,
+            "expected_required_kind_count": artifact_count,
+            "evidence_file_count": artifact_count,
+            "recognized_artifact_count": artifact_count,
+            "artifact_count": artifact_count,
+            "thresholds": {"synthetic_threshold": 1},
+            "oldest_generated_at_unix": generated_at_unix,
+            "newest_generated_at_unix": generated_at_unix,
+            "deployment_id": deployment_id,
+            "environment": environment,
+            "expected_required_kinds": list(gate.required_kinds),
+            "topology_qualification": base_topology,
+            "errors": [],
+            "path": f"{gate_name}.json",
+            "sha256": lane_sha256[gate_name],
+        }
+    foundational = {
+        "schema": MODULE.promotion_runner.FOUNDATIONAL_PREREQUISITE_SCHEMA,
+        "present": True,
+        "valid": True,
+        "required_ids": list(
+            MODULE.promotion_runner.FOUNDATIONAL_PREREQUISITE_IDS
+        ),
+        "prerequisite_count": len(
+            MODULE.promotion_runner.FOUNDATIONAL_PREREQUISITE_IDS
+        ),
+        "generated_at_unix": generated_at_unix,
+        "oldest_evidence_generated_at_unix": generated_at_unix - 1,
+        "newest_evidence_generated_at_unix": generated_at_unix - 1,
+        "deployment_id": deployment_id,
+        "environment": environment,
+        "release_sequence": 7,
+        "previous_envelope_sha256": digest("previous-foundation"),
+        "signer_backend": "software",
+        "signer_service_id": "sorafs-foundation-signer-a",
+        "signer_administrator_id": "sorafs-foundation-admin-b",
+        "signer_key_revision": 7,
+        "signer_policy_revision": 11,
+        "signer_policy_digest_sha256": digest("foundation-policy"),
+        "signer_public_key_fingerprint_sha256": digest("foundation-key"),
+        "evidence_anchor_sha256": [
+            digest(f"anchor:{prerequisite_id}")
+            for prerequisite_id in (
+                MODULE.promotion_runner.FOUNDATIONAL_PREREQUISITE_IDS
+            )
+        ],
+        "prerequisite_readiness_summary_sha256": [
+            {
+                "id": prerequisite_id,
+                "readiness_summary_sha256": [
+                    {"gate": gate, "sha256": lane_sha256[gate]}
+                    for gate in aggregate_checker.FOUNDATIONAL_PREREQUISITE_LANES[
+                        prerequisite_id
+                    ]
+                ],
+            }
+            for prerequisite_id in (
+                MODULE.promotion_runner.FOUNDATIONAL_PREREQUISITE_IDS
+            )
+        ],
+        "lane_summary_sha256": [
+            {"gate": gate, "sha256": lane_sha256[gate]}
+            for gate in MODULE.promotion_runner.DEFAULT_REQUIRED_GATES
+        ],
+        "l1_lane_evidence_inventory_sha256": inventory_sha256,
+        "topology_qualification": authenticated_topology,
+        "resilience_qualification": resilience_binding,
+        "path": "foundational-prerequisites.json",
+        "sha256": digest("foundation-envelope"),
+        "errors": [],
+    }
+    return {
+        "schema": MODULE.promotion_runner.SUMMARY_SCHEMA,
+        "status": "ready",
+        "signer_qualification": "software-key-qualified",
+        "required_gates": list(MODULE.promotion_runner.DEFAULT_REQUIRED_GATES),
+        "thresholds": {"max_summary_artifact_age_secs": 1_209_600},
+        "summary_file_count": 17,
+        "recognized_summary_count": 17,
+        "deployment": {
+            "deployment_id": deployment_id,
+            "environment": environment,
+        },
+        "topology_qualification": authenticated_topology,
+        "resilience_qualification": {
+            "schema": (
+                aggregate_checker.AGGREGATE_RESILIENCE_QUALIFICATION_SCHEMA
+            ),
+            "present": True,
+            "valid": True,
+            "binding": resilience_binding,
+            "errors": [],
+        },
+        "l1_lane_evidence_inventory": {
+            "schema": (
+                inventory_integration.AGGREGATE_L1_LANE_EVIDENCE_INVENTORY_SCHEMA
+            ),
+            "present": True,
+            "valid": True,
+            "binding": inventory_binding,
+            "errors": [],
+        },
+        "foundational_prerequisites": foundational,
+        "required": required,
+        "errors": [],
+    }
+
+
+def write_positive_replay(
+    root: Path,
+    *,
+    aggregate_payload: dict[str, Any] | None = None,
+) -> tuple[dict[str, Path], dict[str, Any]]:
     """Write one byte-identical two-run/22-input synthetic replay."""
 
-    payload = promotion_payload()
+    payload = promotion_payload() if aggregate_payload is None else aggregate_payload
     aggregate_raw = MODULE.render_checker_summary(payload).encode("utf-8")
     first = root / "aggregate-first.json"
     second = root / "aggregate-second.json"
@@ -299,8 +515,9 @@ def write_provenance(
 
 def build_bundle(
     root: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch | None,
     *,
+    aggregate_payload: dict[str, Any] | None = None,
     archive_input_set_sha256: str | None = None,
     provenance_mutator: Callable[[dict[str, Any]], None] | None = None,
     valid_signature: bool = True,
@@ -308,12 +525,16 @@ def build_bundle(
     """Build one completely synthetic but internally valid promotion bundle."""
 
     root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        MODULE.promotion_runner,
-        "validate_aggregate_summary_output",
-        lambda payload, required_gates, errors: None,
+    if monkeypatch is not None:
+        monkeypatch.setattr(
+            MODULE.promotion_runner,
+            "validate_aggregate_summary_output",
+            lambda payload, required_gates, errors: None,
+        )
+    positive_paths, positive = write_positive_replay(
+        root,
+        aggregate_payload=aggregate_payload,
     )
-    positive_paths, positive = write_positive_replay(root)
     archive, negative_manifest, negative_manifest_raw = write_negative_archive(
         root,
         positive,
@@ -431,6 +652,72 @@ def test_complete_authenticated_bundle_is_the_only_ready_result(
     assert [row["mutation_id"] for row in summary["negative_receipts"]] == [
         case.mutation_id for case in MODULE.negative_runner.MUTATION_CASES
     ]
+
+
+def test_complete_authenticated_bundle_runs_authoritative_aggregate_validator(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    aggregate_payload = schema_valid_synthetic_promotion_payload()
+    assert (
+        MODULE.promotion_runner.validate_aggregate_summary_output
+        is aggregate_checker.validate_aggregate_summary_output
+    )
+    aggregate_errors: list[str] = []
+    MODULE.promotion_runner.validate_aggregate_summary_output(
+        aggregate_payload,
+        MODULE.promotion_runner.DEFAULT_REQUIRED_GATES,
+        aggregate_errors,
+    )
+    assert aggregate_errors == []
+
+    args, paths = build_bundle(
+        tmp_path,
+        None,
+        aggregate_payload=aggregate_payload,
+    )
+    exit_code, summary, stderr = run_and_decode(args, capsys)
+
+    assert exit_code == 0
+    assert stderr == ""
+    assert summary["status"] == "ready"
+    assert summary["externally_authenticated"] is True
+    assert summary["promotion_eligible"] is True
+    assert summary["baseline_input_count"] == 22
+    assert paths["first"].read_bytes() == paths["second"].read_bytes()
+
+    replay_manifest = json.loads(paths["manifest"].read_bytes())
+    assert replay_manifest["status"] == "verified"
+    assert replay_manifest["execution_count"] == 2
+    assert replay_manifest["input_count"] == 22
+    assert replay_manifest["first_aggregate_sha256"] == replay_manifest[
+        "second_aggregate_sha256"
+    ]
+
+    negative_manifest = json.loads(
+        (
+            paths["archive"]
+            / MODULE.negative_runner.ARCHIVE_MANIFEST_FILENAME
+        ).read_bytes()
+    )
+    assert negative_manifest["mutation_count"] == 6
+    assert negative_manifest["mutation_ids"] == [
+        case.mutation_id for case in MODULE.negative_runner.MUTATION_CASES
+    ]
+    assert len(negative_manifest["receipts"]) == 6
+
+    provenance = json.loads(paths["provenance"].read_bytes())
+    assert provenance["signing_provider"] == MODULE.REQUIRED_SIGNING_PROVIDER
+    assert provenance["signing_backend"] == "software"
+    assert provenance["signer_qualification"] == "software-key-qualified"
+    assert provenance["oidc_identity_status"] == "verified"
+    assert provenance["cosign_provenance_status"] == "verified"
+    assert provenance["authentication"]["kind"] == "external-ed25519"
+    assert provenance["authentication"]["algorithm"] == "ed25519"
+    assert provenance["authentication"]["backend"] == "software"
+    assert summary["cosign_bundle_sha256"] == hashlib.sha256(
+        paths["cosign"].read_bytes()
+    ).hexdigest()
 
 
 @pytest.mark.parametrize(

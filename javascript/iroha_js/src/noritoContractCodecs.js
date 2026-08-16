@@ -1,4 +1,9 @@
 import { Buffer } from "buffer";
+import {
+  BASE64_ENCODING,
+  HEX_ENCODING,
+  JS_TYPE_STRING,
+} from "./commonLiterals.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 
 /**
@@ -92,7 +97,7 @@ export function createNoritoProofValueCodecs(
       version,
       ephemeral_pubkey,
       nonce,
-      ciphertext: Buffer.from(ciphertext).toString("base64"),
+      ciphertext: Buffer.from(ciphertext).toString(BASE64_ENCODING),
     };
   }
 
@@ -574,7 +579,7 @@ export function createNoritoContractCodecs(
   }
 
   function encodeEntryPointKindValue(value, context) {
-    const kind = typeof value === "string" ? value : value?.kind;
+    const kind = typeof value === JS_TYPE_STRING ? value : value?.kind;
     const normalized = assertNonEmptyString(kind, context).toLowerCase();
     switch (normalized) {
       case "kotoage":
@@ -1019,7 +1024,7 @@ export function createNoritoContractCodecs(
     ) {
       throw new Error(`${context}.signature must be an even-length hexadecimal string`);
     }
-    const signature = Buffer.from(signatureLiteral, "hex");
+    const signature = Buffer.from(signatureLiteral, HEX_ENCODING);
     validateManifestSignatureBytes(signature, `${context}.signature`);
     return encodeStructValue([
       [encodePublicKeyValue(signer, `${context}.signer`)],
@@ -1038,7 +1043,7 @@ export function createNoritoContractCodecs(
         signer.publicKey,
         `${context}.signer`,
       ),
-      signature: signature.toString("hex").toUpperCase(),
+      signature: signature.toString(HEX_ENCODING).toUpperCase(),
     };
   }
 
@@ -1187,5 +1192,7 @@ export function createNoritoContractCodecs(
     encodeContractManifestSignaturePayloadValue,
     encodeContractManifestValue,
     decodeContractManifestValue,
+    encodeManifestProvenanceValue,
+    decodeManifestProvenanceValue,
   ];
 }

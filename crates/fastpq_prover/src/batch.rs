@@ -5,9 +5,8 @@ use norito::{NoritoDeserialize, NoritoSerialize};
 use std::collections::BTreeMap;
 /// Stable nominal Norito schema identity for [`TransitionBatch`].
 ///
-/// This intentionally preserves the type-name hash carried by the existing
-/// canonical FASTPQ fixtures while making it independent of Cargo features and
-/// Rust module refactors.
+/// This intentionally preserves the type-name hash carried by the existing canonical FASTPQ
+/// fixtures while making it independent of Cargo features and Rust module refactors.
 pub const TRANSITION_BATCH_SCHEMA_NAME: &str = "fastpq_prover::batch::TransitionBatch";
 /// Public inputs supplied by the host for a FASTPQ batch.
 #[derive(

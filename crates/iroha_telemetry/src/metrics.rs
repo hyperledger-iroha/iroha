@@ -5228,8 +5228,7 @@ pub struct Status {
     pub stack: StackStatus,
     /// Universal offline-wallet protocol capability advertised by this build.
     ///
-    /// This is never a node-health, startup, asset-enrollment, or dataspace
-    /// readiness gate.
+    /// This is never a node-health, startup, asset-enrollment, or dataspace readiness gate.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub offline: Option<OfflineStatus>,
@@ -15276,9 +15275,8 @@ impl Metrics {
     }
     /// Record one authenticated SoraFS gateway-compliance control response.
     ///
-    /// Caller-provided values are collapsed into fixed vocabularies before
-    /// reaching Prometheus, so paths, feed identities, and payload data can
-    /// never create label cardinality.
+    /// Caller-provided values are collapsed into fixed vocabularies before reaching Prometheus, so
+    /// paths, feed identities, and payload data can never create label cardinality.
     pub fn record_sorafs_gateway_compliance_request(&self, operation: &str, outcome: &str) {
         let operation = match operation {
             "feed" => "feed",

@@ -1,0 +1,17 @@
+
+seiyaku NativeJsonRuntimeAcceptance {
+  view fn run() -> Json {
+    let List<string, 4> labels = ["primary", "secondary"];
+    var List<bytes, 2> blobs = [];
+    blobs.try_push(b"\xaa");
+    blobs.try_push(b"\xbb");
+    let Option<quantity> maybe = Option::some(1.25);
+    json {
+      z_bytes: b"\xab\x01",
+      maybe: maybe,
+      labels: labels,
+      blobs: blobs,
+      amount: 1.25,
+    }
+  }
+}

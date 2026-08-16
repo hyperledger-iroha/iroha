@@ -985,7 +985,7 @@ mod tests {
             .filter(|route| {
                 route.method() == HttpMethod::Post && route.admission() == AdmissionPolicy::Public
             })
-            .map(RouteDescriptor::stable_route_id)
+            .map(|route| route.stable_route_id())
             .collect::<Vec<_>>();
         assert_eq!(
             public_posts,

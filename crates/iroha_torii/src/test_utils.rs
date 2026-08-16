@@ -373,10 +373,9 @@ pub fn grant_contract_operator_permissions(state: &Arc<State>, authority: &Accou
 }
 /// Build and enqueue a locally signed atomic contract deployment transaction.
 ///
-/// This deliberately exercises the native deployment instructions instead of
-/// recreating the retired server-side signing endpoint in test routers. The
-/// authenticated chain identity is read from the same [`State`] snapshot used
-/// to derive the contract address and enqueue the transaction.
+/// This deliberately exercises the native deployment instructions instead of recreating the retired
+/// server-side signing endpoint in test routers. The authenticated chain identity is read from the
+/// same [`State`] snapshot used to derive the contract address and enqueue the transaction.
 pub fn enqueue_locally_signed_contract_deployment(
     state: &Arc<State>,
     queue: &Arc<Queue>,

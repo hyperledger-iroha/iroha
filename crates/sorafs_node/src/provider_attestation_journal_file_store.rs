@@ -1,27 +1,23 @@
 //! Root-fenced local persistence for the Musubi provider-attestation journal.
 //!
-//! The adapter stores exact private journal checkpoint bytes in the existing
-//! descriptor-relative two-slot CAS primitive. Linux and macOS are the only
-//! qualified V1 targets. Windows remains fail-closed until the two-slot files
-//! and initialization lock pin their exact owner SID and DACL.
+//! The adapter stores exact private journal checkpoint bytes in the existing descriptor-relative
+//! two-slot CAS primitive. Linux and macOS are the only qualified V1 targets. Windows remains
+//! fail-closed until the two-slot files and initialization lock pin their exact owner SID and DACL.
 //!
-//! This local seal detects link/path substitution, torn writes, and invalid
-//! two-slot lineage. A private wrapper treats the authenticated external
-//! checkpoint head/blob as authority, so a privileged offline rollback of the
-//! complete local filesystem cannot become current. Store initialization uses
-//! a fixed, bounded cross-process lock wait. Normal loads and mutations use
+//! This local seal detects link/path substitution, torn writes, and invalid two-slot lineage. A
+//! private wrapper treats the authenticated external checkpoint head/blob as authority, so a
+//! privileged offline rollback of the complete local filesystem cannot become current. Store
+//! initialization uses a fixed, bounded cross-process lock wait. Normal loads and mutations use
 //! typed nonblocking locks and return `Unavailable` on contention.
 //!
-//! Generic abstract journal store/runtime injection is a trusted internal
-//! boundary. File-backed integrations must consume this adapter through the
-//! explicit asynchronous initialize/open paths, which bind the local store to
-//! the exact network/provider/policy checkpoint scope.
+//! Generic abstract journal store/runtime injection is a trusted internal boundary. File-backed
+//! integrations must consume this adapter through the explicit asynchronous initialize/open paths,
+//! which bind the local store to the exact network/provider/policy checkpoint scope.
 //!
-//! Daemon activation requires construction below the supervised provider-ingest
-//! child, accepted crash/corruption evidence, and a singleton rooted runtime
-//! session or provider-side cross-machine fencing for each external scope.
-//! Windows remains unsupported until exact SID/DACL pinning is qualified; the
-//! local OS lease fences only processes sharing this state root.
+//! Daemon activation requires construction below the supervised provider-ingest child, accepted
+//! crash/corruption evidence, and a singleton rooted runtime session or provider-side cross-machine
+//! fencing for each external scope. Windows remains unsupported until exact SID/DACL pinning is
+//! qualified; the local OS lease fences only processes sharing this state root.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::governance_rooted_fs::{TwoSlotInitializationWaitV1, TwoSlotStoreConfigV1};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -72,9 +68,8 @@ const JOURNAL_INITIALIZATION_TIMEOUT_V1: Duration = Duration::from_secs(5);
 const JOURNAL_INITIALIZATION_RETRY_INTERVAL_V1: Duration = Duration::from_millis(10);
 /// Exact deployment identity bound into one journal file-store layout.
 ///
-/// The stable two-slot nonce is derived internally from these public values;
-/// callers cannot select a path-independent nonce or silently reuse another
-/// chain/provider journal.
+/// The stable two-slot nonce is derived internally from these public values; callers cannot select
+/// a path-independent nonce or silently reuse another chain/provider journal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusubiProviderAttestationJournalFileBindingV1 {
     network_id: NetworkId,
@@ -127,11 +122,10 @@ impl MusubiProviderAttestationJournalFileBindingV1 {
 }
 /// Local root-fenced two-slot persistence adapter for the attestation journal.
 ///
-/// `Debug` deliberately omits the configured state-root path and underlying
-/// file handles. Clone instances share a nonblocking process-local single-
-/// flight gate; separately opened adapters additionally contend through the
-/// generic store's nonblocking operating-system lock. Raw checkpoint bytes and
-/// CAS operations stay crate-private; external callers can only inspect the
+/// `Debug` deliberately omits the configured state-root path and underlying file handles. Clone
+/// instances share a nonblocking process-local single- flight gate; separately opened adapters
+/// additionally contend through the generic store's nonblocking operating-system lock. Raw
+/// checkpoint bytes and CAS operations stay crate-private; external callers can only inspect the
 /// public binding/policy or consume the adapter into the scope-bound runtime.
 ///
 /// ```compile_fail
@@ -164,11 +158,10 @@ impl fmt::Debug for MusubiProviderAttestationJournalFileStoreV1 {
 impl MusubiProviderAttestationJournalFileStoreV1 {
     /// Open or initialize the fixed journal namespace below an existing root.
     ///
-    /// The caller supplies a pre-existing state root. The adapter captures and
-    /// continually revalidates its owner, ACL, ancestor, and physical identity;
-    /// it creates only fixed direct child names through retained handles.
-    /// Initialization waits at most five seconds on the generic two-slot
-    /// cross-process init lock. Normal trait operations are nonblocking with
+    /// The caller supplies a pre-existing state root. The adapter captures and continually
+    /// revalidates its owner, ACL, ancestor, and physical identity; it creates only fixed direct
+    /// child names through retained handles. Initialization waits at most five seconds on the
+    /// generic two-slot cross-process init lock. Normal trait operations are nonblocking with
     /// respect to both local and cross-process store locks.
     ///
     /// # Errors
@@ -241,25 +234,22 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
     }
     /// Return the checkpoint policy used for byte/schema validation.
     ///
-    /// A journal coordinator using this adapter must use this exact policy as
-    /// well; otherwise its logical capacity rules and the store's decode rules
-    /// would diverge.
+    /// A journal coordinator using this adapter must use this exact policy as well; otherwise its
+    /// logical capacity rules and the store's decode rules would diverge.
     #[must_use]
     pub const fn policy(&self) -> MusubiProviderAttestationJournalPolicyV1 {
         self.policy
     }
     /// Explicitly provision empty external H0 and construct a sealed runtime.
     ///
-    /// Initialization first proves the local two-slot store is the unique safe
-    /// empty snapshot. It never promotes local checkpoint bytes. An identical
-    /// already-provisioned empty H0 is accepted as an idempotent retry; any
-    /// nonempty local or external head is rejected.
+    /// Initialization first proves the local two-slot store is the unique safe empty snapshot. It
+    /// never promotes local checkpoint bytes. An identical already-provisioned empty H0 is accepted
+    /// as an idempotent retry; any nonempty local or external head is rejected.
     ///
     /// # Errors
     ///
-    /// Returns a stable journal store error for an unsafe root, nonempty local
-    /// state, foreign clock scope, policy mismatch, unavailable seal, or
-    /// nonempty/substituted external head.
+    /// Returns a stable journal store error for an unsafe root, nonempty local state, foreign clock
+    /// scope, policy mismatch, unavailable seal, or nonempty/substituted external head.
     pub async fn initialize_journal_runtime(
         self,
         clock: Arc<MusubiProviderAttestationSealedUnixClockV1>,
@@ -314,16 +304,14 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
     }
     /// Open an existing externally sealed journal runtime.
     ///
-    /// Ordinary open rejects an absent external H0 and never initializes from
-    /// local bytes. The external head/blob is authoritative. A safe local exact
-    /// direct predecessor may be repaired forward; all deeper rollback,
-    /// ahead/fork, missing-blob, and substituted state is rejected.
+    /// Ordinary open rejects an absent external H0 and never initializes from local bytes. The
+    /// external head/blob is authoritative. A safe local exact direct predecessor may be repaired
+    /// forward; all deeper rollback, ahead/fork, missing-blob, and substituted state is rejected.
     ///
     /// # Errors
     ///
-    /// Returns a stable journal store error for unsafe local state, absent or
-    /// invalid external authority, scope/policy mismatch, or failed bounded
-    /// direct-predecessor repair.
+    /// Returns a stable journal store error for unsafe local state, absent or invalid external
+    /// authority, scope/policy mismatch, or failed bounded direct-predecessor repair.
     pub async fn open_journal_runtime(
         self,
         clock: Arc<MusubiProviderAttestationSealedUnixClockV1>,
@@ -633,11 +621,10 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
 }
 /// Root-fenced cross-process lease spanning external and local journal state.
 ///
-/// The per-call two-slot lock is intentionally insufficient here: the
-/// external blob/head mutation and the following local CAS form one composite
-/// operation. Holding the nonblocking init-lock identity already committed in
-/// the two-slot headers prevents another process from advancing the external
-/// head through the bounded one-step repair window.
+/// The per-call two-slot lock is intentionally insufficient here: the external blob/head mutation
+/// and the following local CAS form one composite operation. Holding the nonblocking init-lock
+/// identity already committed in the two-slot headers prevents another process from advancing the
+/// external head through the bounded one-step repair window.
 struct MusubiProviderAttestationJournalCompositeOperationLeaseV1 {
     root_guard: GovernanceFilesystemRootGuard,
     bound_lease: Option<TwoSlotBoundOperationLeaseV1>,

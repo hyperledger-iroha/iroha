@@ -1,11 +1,10 @@
 //! Isolated logical-heap regression for the Musubi production CAR stream bridge.
 //!
-//! The child measurement covers the exact bounded worker/channel implementation,
-//! canonical CAR layout/writer, the caller-retained plan, its worker clone, and
-//! one maximum provider chunk. It deliberately excludes HTTP/TLS client state,
-//! response JSON DOM construction, and cache filesystem ingestion; those require
-//! a deployment-equivalent process-RSS or cgroup gate before the complete 64 MiB
-//! fetch requirement can be claimed.
+//! The child measurement covers the exact bounded worker/channel implementation, canonical CAR
+//! layout/writer, the caller-retained plan, its worker clone, and one maximum provider chunk. It
+//! deliberately excludes HTTP/TLS client state, response JSON DOM construction, and cache
+//! filesystem ingestion; those require a deployment-equivalent process-RSS or cgroup gate before
+//! the complete 64 MiB fetch requirement can be claimed.
 // This integration test is the narrow exception that needs `GlobalAlloc` in order to
 // measure the production stream bridge in an isolated child process.
 #![allow(unsafe_code)]

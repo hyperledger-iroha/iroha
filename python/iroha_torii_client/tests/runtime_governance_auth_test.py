@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
+import requests
 from iroha_torii_client.client import ToriiCanonicalRequestAuth, ToriiClient
 
 ACCOUNT = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
@@ -52,14 +52,28 @@ class _Response:
         return self._payload
 
 
-class _Session:
+class _Session(requests.Session):
     def __init__(self, response: _Response) -> None:
+        super().__init__()
         self.response = response
         self.calls: list[dict[str, Any]] = []
+
+    @staticmethod
+    def get_adapter(_url: str) -> requests.adapters.HTTPAdapter:
+        return requests.adapters.HTTPAdapter(max_retries=0)
 
     def request(self, method: str, url: str, **kwargs: Any) -> _Response:
         self.calls.append({"method": method, "url": url, **kwargs})
         return self.response
+
+    def send(self, request: requests.PreparedRequest, **kwargs: Any) -> _Response:
+        return self.request(
+            request.method or "",
+            request.url or "",
+            headers=dict(request.headers),
+            data=request.body,
+            **kwargs,
+        )
 
 
 def test_protected_surface_has_no_networkless_unsigned_overload() -> None:

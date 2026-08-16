@@ -86,12 +86,32 @@ python3 -m pytest -q \
   scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/build_sorafs_reference_sdk_release_canary_test.py \
   scripts/tests/build_sorafs_foundational_prerequisite_test.py \
+  scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_gateway_load_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_hedging_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_l1_deployment_qualification_test.py \
+  scripts/tests/check_sorafs_l1_resilience_qualification_test.py \
+  scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_pdp_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_por_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_potr_rollout_evidence_test.py \
   scripts/tests/check_sorafs_production_readiness_test.py \
   scripts/tests/run_sorafs_production_readiness_test.py \
   scripts/tests/run_sorafs_production_readiness_negative_archive_test.py \
   scripts/tests/check_sorafs_production_promotion_bundle_test.py \
+  scripts/tests/check_sorafs_repair_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_reputation_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py \
+  scripts/tests/check_sorafs_transparency_rollout_evidence_test.py \
+  scripts/tests/sorafs_archive_path_components_test.py \
   scripts/tests/sorafs_evidence_json_test.py \
   scripts/tests/sorafs_l1_lane_evidence_inventory_test.py \
+  scripts/tests/sorafs_required_kinds_test.py \
   scripts/tests/sorafs_response_args_test.py \
   scripts/tests/sorafs_topology_qualification_test.py \
   scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py \

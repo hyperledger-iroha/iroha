@@ -1,7 +1,6 @@
-//! SNNet-15M2 beta bundle generator for the SoraGlobal Gateway CDN.
-//! Extends the M1 alpha pack with DoQ/ODoH preview configs, trustless CAR
-//! verifier wiring, PQ readiness evidence, GAR compliance rollup, and
-//! hardening baselines ahead of GA.
+//! SNNet-15M2 beta bundle generator for the SoraGlobal Gateway CDN. Extends the M1 alpha pack with
+//! DoQ/ODoH preview configs, trustless CAR verifier wiring, PQ readiness evidence, GAR compliance
+//! rollup, and hardening baselines ahead of GA.
 use crate::{
     gar, soranet_gateway, soranet_gateway_billing, soranet_gateway_hardening, soranet_gateway_ops,
     soranet_gateway_pq, soranet_pop,

@@ -3,10 +3,9 @@ use super::ByteSink;
 use std::io::{self, Write};
 /// Non-generic destination used by [`super::NoritoSerialize`] implementations.
 ///
-/// Erasing the concrete [`Write`] type at the outer serialization boundary
-/// prevents every model type from being monomorphized once per destination.
-/// A dedicated buffer path keeps the common temporary-field and bare-payload
-/// encoders allocation-free beyond the buffer they already own.
+/// Erasing the concrete [`Write`] type at the outer serialization boundary prevents every model
+/// type from being monomorphized once per destination. A dedicated buffer path keeps the common
+/// temporary-field and bare-payload encoders allocation-free beyond the buffer they already own.
 pub struct Encoder<'a> {
     sink: EncoderSink<'a>,
 }

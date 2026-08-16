@@ -1,9 +1,8 @@
 //! Exact-lock Microsoft Vega-MC boundary for the released Figure 9 relation.
 //!
-//! The public facade, envelope, governed profile identity, and canonical wire
-//! remain fixed while the upstream implementation is internalized. The
-//! production Figure 9 path is deliberately fail-closed until its exact
-//! verifier key, setup, and prover are all first-party code.
+//! The public facade, envelope, governed profile identity, and canonical wire remain fixed while
+//! the upstream implementation is internalized. The production Figure 9 path is deliberately
+//! fail-closed until its exact verifier key, setup, and prover are all first-party code.
 use super::{
     MAX_VEGA_PROOF_BYTES_V1, VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaT256ScalarV1 as Scalar,
     engine::{

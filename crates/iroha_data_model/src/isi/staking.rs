@@ -434,11 +434,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelConsensusEvidencePenalty {
 mod slice_tests {
     use super::*;
     use crate::block::consensus::{EvidenceKind, EvidencePayload};
+    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::Decode;
-    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
-    use norito::core::{DecodeFlagsGuard, header_flags, read_len_dyn_slice};
+    use norito::core::{DecodeFlagsGuard, DecodeFromSlice, header_flags, read_len_dyn_slice};
     #[derive(norito::codec::Encode)]
     struct ForgedRegisterPublicLaneValidator {
         lane_id: LaneId,

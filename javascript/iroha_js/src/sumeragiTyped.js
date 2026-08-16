@@ -3,35 +3,23 @@ import { sha256 } from "@noble/hashes/sha2";
 
 import { assertCanonicalBls12381G1Compressed } from "./bls12381G1.js";
 import { blake2b256 } from "./blake2b.js";
+import { crc64Xz } from "./crc64Xz.js";
+import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import { NumericV1, NumericV1Error } from "./numericV1.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   createValidationError,
   ValidationErrorCode,
 } from "./validationError.js";
+import {
+  SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
+  SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+} from "./sumeragiTypedLimits.js";
 
-export const SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES = 1024 * 1024;
-export const SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES = 16 * 1024 * 1024;
-
-const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
-
-const CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
-
-const CRC64_TABLE = (() => {
-  const table = new Array(256);
-  for (let index = 0; index < 256; index += 1) {
-    let crc = BigInt(index);
-    for (let bit = 0; bit < 8; bit += 1) {
-      if ((crc & 1n) !== 0n) {
-        crc = (crc >> 1n) ^ CRC64_REFLECTED_POLY;
-      } else {
-        crc >>= 1n;
-      }
-    }
-    table[index] = crc;
-  }
-  return table;
-})();
+export {
+  SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
+  SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+};
 
 function parseSumeragiNexusFeeSchedule(value, context) {
   const record = assertExactSumeragiRecord(
@@ -3852,28 +3840,6 @@ function formatHashLiteral(bodyHex) {
   return `hash:${upper}#${checksum}`;
 }
 
-function computeHashLiteralCrc(tag, body) {
-  let crc = 0xffff;
-  const processByte = (byte) => {
-    crc ^= (byte & 0xff) << 8;
-    for (let i = 0; i < 8; i += 1) {
-      if ((crc & 0x8000) !== 0) {
-        crc = ((crc << 1) ^ 0x1021) & 0xffff;
-      } else {
-        crc = (crc << 1) & 0xffff;
-      }
-    }
-  };
-  for (const byte of Buffer.from(tag, "utf8")) {
-    processByte(byte);
-  }
-  processByte(":".charCodeAt(0));
-  for (const byte of Buffer.from(body, "utf8")) {
-    processByte(byte);
-  }
-  return (crc & 0xffff).toString(16).toUpperCase().padStart(4, "0");
-}
-
 function u64ToLittleEndianBuffer(value) {
   const normalized = BigInt.asUintN(64, BigInt(value));
   const buffer = Buffer.alloc(8);
@@ -3885,15 +3851,6 @@ function irohaHashBytes(parts) {
   const digest = Buffer.from(blake2b256(Buffer.concat(parts.map((part) => Buffer.from(part)))));
   digest[digest.length - 1] |= 1;
   return digest;
-}
-
-function crc64Ecma(payload) {
-  let crc = UINT64_MASK;
-  for (const byte of payload) {
-    const index = Number((crc ^ BigInt(byte)) & 0xffn);
-    crc = CRC64_TABLE[index] ^ (crc >> 8n);
-  }
-  return BigInt.asUintN(64, crc ^ UINT64_MASK);
 }
 
 function noritoSchemaHash(typeName) {
@@ -3911,7 +3868,7 @@ function frameNoritoPayload(typeName, payload, flags = 0) {
     noritoSchemaHash(typeName),
     Buffer.from([0]),
     u64ToLittleEndianBuffer(payload.length),
-    u64ToLittleEndianBuffer(crc64Ecma(payload)),
+    u64ToLittleEndianBuffer(crc64Xz(payload)),
     Buffer.from([flags & 0xff]),
   ]);
   return Buffer.concat([header, payload]);

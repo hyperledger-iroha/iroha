@@ -1,10 +1,9 @@
 //! Native first-release PQ-MASP engine.
 //!
-//! The engine is deliberately split into a checked note relation, the fixed
-//! ML-DSA/ML-KEM/XChaCha wire, and a transparent Goldilocks STARK. The verifier
-//! and deterministic compiled profile are wired into typed runtime dispatch.
-//! Compilation does not create or activate a lifecycle record; governed
-//! deployment remains gated on the explicit release checks.
+//! The engine is deliberately split into a checked note relation, the fixed ML-DSA/ML-KEM/XChaCha
+//! wire, and a transparent Goldilocks STARK. The verifier and deterministic compiled profile are
+//! wired into typed runtime dispatch. Compilation does not create or activate a lifecycle record;
+//! governed deployment remains gated on the explicit release checks.
 pub(crate) mod air;
 mod facade;
 #[cfg(any(test, feature = "privacy-release-evidence"))]

@@ -16,6 +16,7 @@ import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
 import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
 import org.hyperledger.iroha.sdk.client.JsonParser
@@ -36,8 +37,11 @@ class MusubiSdkV1FixtureTest {
         "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
     )
     private val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-    private val accountId = "ed0120" + keyPair.public.encoded.takeLast(32).joinToString("") {
-        "%02X".format(it.toInt() and 0xFF)
+    private val accountId = keyPair.public.encoded.let { encoded ->
+        AccountAddress.fromAccount(
+            encoded.copyOfRange(encoded.size - 32, encoded.size),
+            "ed25519",
+        ).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
     }
 
     @Test
@@ -1245,7 +1249,10 @@ class MusubiSdkV1FixtureTest {
         ?.firstOrNull()
 
     private fun assertCanonicalSignature(request: TransportRequest) {
-        assertEquals(accountId, firstHeader(request, CanonicalRequestSigner.HEADER_ACCOUNT))
+        assertEquals(
+            AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).address.canonicalHex(),
+            firstHeader(request, CanonicalRequestSigner.HEADER_ACCOUNT),
+        )
         val timestampMs = assertNotNull(
             firstHeader(request, CanonicalRequestSigner.HEADER_TIMESTAMP_MS),
         ).toLong()

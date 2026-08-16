@@ -4,8 +4,8 @@ import { blake2b256 } from "./blake2b.js";
 import {
   NumericV1,
   NumericV1Error,
-  parseStrictLosslessIntegerJson,
 } from "./numericV1.js";
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   noritoDecodeBlockProofs,
   noritoEncodeMultisigContractCallApproveRequest,
@@ -34,6 +34,8 @@ import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
 import {
   SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+} from "./sumeragiTypedLimits.js";
+import {
   parseSumeragiDiagnosticsJson,
   parseSumeragiStatusJson,
 } from "./sumeragiTyped.js";
@@ -1396,6 +1398,7 @@ function streamGapFromEvent(event) {
   });
 }
 
+
 export class ToriiBrowserClient {
   constructor(baseUrl, options = {}) {
     const normalizedOptions = requireObject(options, "ToriiBrowserClient options");
@@ -2644,23 +2647,23 @@ export class ToriiBrowserClient {
   getSumeragiStatusTyped(options = {}) {
     const opts = signalOnlyOptions(options, "getSumeragiStatusTyped options");
     return this._json("GET", "/v1/sumeragi/status", {
-      headers: { Accept: "application/json" },
-      signal: signalFrom(opts),
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "getSumeragiStatusTyped",
-      ),
-      maximumBodyBytes: SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
-      responseObserver: (response) => {
-        requireExactJsonContentType(
-          response.headers.get("content-type"),
-          "Sumeragi typed status response",
-        );
-      },
-      jsonParser: (text) => parseSumeragiStatusJson(
-        text,
-        "Sumeragi typed status",
-      ),
+        headers: { Accept: "application/json" },
+        signal: signalFrom(opts),
+        operatorSigningContext: requireOperatorSigningContext(
+          this._operatorSigningContext,
+          "getSumeragiStatusTyped",
+        ),
+        maximumBodyBytes: SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+        responseObserver: (response) => {
+          requireExactJsonContentType(
+            response.headers.get("content-type"),
+            "Sumeragi typed status response",
+          );
+        },
+        jsonParser: (text) => parseSumeragiStatusJson(
+          text,
+          "Sumeragi typed status",
+        ),
     });
   }
 
@@ -2678,23 +2681,23 @@ export class ToriiBrowserClient {
   getSumeragiDiagnosticsTyped(options = {}) {
     const opts = signalOnlyOptions(options, "getSumeragiDiagnosticsTyped options");
     return this._json("GET", "/v1/sumeragi/diagnostics", {
-      headers: { Accept: "application/json" },
-      signal: signalFrom(opts),
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "getSumeragiDiagnosticsTyped",
-      ),
-      maximumBodyBytes: SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
-      responseObserver: (response) => {
-        requireExactJsonContentType(
-          response.headers.get("content-type"),
-          "Sumeragi typed diagnostics response",
-        );
-      },
-      jsonParser: (text) => parseSumeragiDiagnosticsJson(
-        text,
-        "Sumeragi typed diagnostics",
-      ),
+        headers: { Accept: "application/json" },
+        signal: signalFrom(opts),
+        operatorSigningContext: requireOperatorSigningContext(
+          this._operatorSigningContext,
+          "getSumeragiDiagnosticsTyped",
+        ),
+        maximumBodyBytes: SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
+        responseObserver: (response) => {
+          requireExactJsonContentType(
+            response.headers.get("content-type"),
+            "Sumeragi typed diagnostics response",
+          );
+        },
+        jsonParser: (text) => parseSumeragiDiagnosticsJson(
+          text,
+          "Sumeragi typed diagnostics",
+        ),
     });
   }
 

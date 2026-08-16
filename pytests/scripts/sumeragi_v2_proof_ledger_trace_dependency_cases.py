@@ -114,7 +114,7 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
         "cross_tool_proved before prerequisite progress-witness-preservation "
         "is proved"
     ) in errors
-    by_id["progress-witness-production-refinement"]["status"] = "specified_unproved"
+    by_id["progress-witness-production-refinement"]["status"] = "cross_tool_proved"
     by_id["progress-witness-preservation"]["status"] = original_progress_status
 
     original_rank_status = by_id["protected-service-rank"]["status"]
@@ -126,24 +126,29 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
         "before prerequisite protected-service-rank is tlaps_proved"
     ) in errors
 
-    by_id["post-gst-starvation-freedom"]["status"] = "specified_unproved"
+    by_id["post-gst-starvation-freedom"]["status"] = "tlaps_proved"
     by_id["protected-service-rank"]["status"] = original_rank_status
+    handoff_prerequisite_ids = (
+        "rotating-leader-liveness",
+        "application-liveness",
+        "successor-activation-starvation-freedom",
+    )
+    for prerequisite_id in handoff_prerequisite_ids:
+        by_id[prerequisite_id]["status"] = "specified_unproved"
     for dependent_id in (
         "genesis-height-successor-handoff",
         "height-liveness",
     ):
         by_id[dependent_id]["status"] = "tlaps_proved"
         errors = module._proof_status_dependency_errors(obligations)
-        for prerequisite_id in (
-            "rotating-leader-liveness",
-            "application-liveness",
-            "successor-activation-starvation-freedom",
-        ):
+        for prerequisite_id in handoff_prerequisite_ids:
             assert (
                 f"proof obligation {dependent_id} cannot be tlaps_proved before "
                 f"prerequisite {prerequisite_id} is tlaps_proved"
             ) in errors
-        by_id[dependent_id]["status"] = "specified_unproved"
+        by_id[dependent_id]["status"] = "tlaps_proved"
+    for prerequisite_id in handoff_prerequisite_ids:
+        by_id[prerequisite_id]["status"] = "tlaps_proved"
 
     rank_index = next(
         index

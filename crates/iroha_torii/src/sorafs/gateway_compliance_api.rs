@@ -1,11 +1,10 @@
 //! Authenticated V1 control surface for the durable gateway-compliance controller.
 //!
-//! The HTTP boundary owns no feed, ACME, or signing credentials. Every request
-//! is bound to the exact method, URI, and canonical JSON bytes through Torii's
-//! canonical account-signature authentication, and the caller must hold the
-//! governed `sorafs_gateway_compliance_operator` role. Catalog, gateway
-//! acknowledgement, and rollback signatures are verified again by the
-//! controller before any durable transition commits.
+//! The HTTP boundary owns no feed, ACME, or signing credentials. Every request is bound to the
+//! exact method, URI, and canonical JSON bytes through Torii's canonical account-signature
+//! authentication, and the caller must hold the governed `sorafs_gateway_compliance_operator` role.
+//! Catalog, gateway acknowledgement, and rollback signatures are verified again by the controller
+//! before any durable transition commits.
 
 #![cfg(feature = "app_api")]
 use super::gateway::{
@@ -148,9 +147,8 @@ async fn handle_get_sorafs_gateway_compliance_feed_inner(
         Err(error) => gateway_compliance_error_response(error),
     }
 }
-/// Return a bounded, payload-free projection of the durable controller
-/// checkpoint. Catalog rules, signatures, signer identities, feed paths, and
-/// acknowledgement bodies never cross this boundary.
+/// Return a bounded, payload-free projection of the durable controller checkpoint. Catalog rules,
+/// signatures, signer identities, feed paths, and acknowledgement bodies never cross this boundary.
 pub(crate) async fn handle_get_sorafs_gateway_compliance_status(
     State(state): State<SharedAppState>,
     headers: HeaderMap,

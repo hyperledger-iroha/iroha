@@ -1,13 +1,11 @@
 //! Privacy-preserving telemetry aggregation for the `SoraNet` anonymity layer.
 //!
-//! The SNNet-8 roadmap item introduces a secure aggregation pipeline that
-//! collects relay handshake telemetry while preserving end-user anonymity.
-//! Runtime components feed circuit successes/failures, throttling decisions,
-//! RTT samples, verified byte counters, and GAR abuse reports into this
-//! aggregator. Statistics are only emitted when enough contributors populate a
-//! bucket; otherwise the bucket is surfaced as suppressed so downstream
-//! dashboards can reason about withheld windows without leaking per-relay
-//! details.
+//! The SNNet-8 roadmap item introduces a secure aggregation pipeline that collects relay handshake
+//! telemetry while preserving end-user anonymity. Runtime components feed circuit
+//! successes/failures, throttling decisions, RTT samples, verified byte counters, and GAR abuse
+//! reports into this aggregator. Statistics are only emitted when enough contributors populate a
+//! bucket; otherwise the bucket is surfaced as suppressed so downstream dashboards can reason about
+//! withheld windows without leaking per-relay details.
 use blake3::Hasher as Blake3Hasher;
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetGarAbuseCountV1, SoranetGarAbuseShareV1, SoranetLatencyPercentileV1,
@@ -694,10 +692,9 @@ impl SoranetSecureAggregator {
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyShareError`] when share metadata is inconsistent with the
-    /// current configuration (e.g., bucket width mismatch) or when combining shares
-    /// yields invalid aggregates (negative totals or values exceeding supported
-    /// ranges).
+    /// Returns [`PrivacyShareError`] when share metadata is inconsistent with the current
+    /// configuration (e.g., bucket width mismatch) or when combining shares yields invalid
+    /// aggregates (negative totals or values exceeding supported ranges).
     pub fn ingest_prio_share(
         &self,
         share: SoranetPrivacyPrioShareV1,

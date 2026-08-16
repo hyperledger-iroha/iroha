@@ -165,11 +165,10 @@ enum FinalizedCursorRelationV1 {
 }
 /// Compare one retained reserve operation with an exact finalized projection.
 ///
-/// Unique registration, movement, appeal, and decision identities can be
-/// completed semantically after a cross-peer duplicate submission. Rent,
-/// lifecycle, draw, and repayment operations intentionally require exact
-/// transaction reconciliation because their revision identity alone cannot
-/// prove which payload changed the provider account.
+/// Unique registration, movement, appeal, and decision identities can be completed semantically
+/// after a cross-peer duplicate submission. Rent, lifecycle, draw, and repayment operations
+/// intentionally require exact transaction reconciliation because their revision identity alone
+/// cannot prove which payload changed the provider account.
 pub(crate) fn reconcile_reserve_semantics(
     expected_chain_id: &ChainId,
     delivery: &ReserveTransactionPendingV1,
@@ -224,9 +223,8 @@ pub(crate) fn reconcile_reserve_semantics(
 }
 /// Select one safe durable transition for a pending delivery.
 ///
-/// Exact committed-envelope results take precedence over semantic projection
-/// changes. This is what allows restart reconciliation after Torii's transient
-/// pipeline cache has expired.
+/// Exact committed-envelope results take precedence over semantic projection changes. This is what
+/// allows restart reconciliation after Torii's transient pipeline cache has expired.
 pub(crate) fn plan_reserve_worker_action(
     expected_chain_id: &ChainId,
     configured_signer_authority: Option<&AccountId>,

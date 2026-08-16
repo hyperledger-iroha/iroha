@@ -38,9 +38,8 @@ pub(super) struct NovaNifsProverInput<'a> {
 impl NovaNifs {
     /// Fold one satisfying relaxed pair with one satisfying regular pair.
     ///
-    /// Randomness is supplied explicitly. This keeps the proof primitive
-    /// deterministic and makes the caller responsible for sourcing fresh,
-    /// cryptographically secure blindings.
+    /// Randomness is supplied explicitly. This keeps the proof primitive deterministic and makes
+    /// the caller responsible for sourcing fresh, cryptographically secure blindings.
     pub(super) fn prove(
         input: NovaNifsProverInput<'_>,
         transcript: &mut VegaTranscriptV1,
@@ -138,9 +137,8 @@ impl NovaNifs {
     /// Replay one exact public fold and return both the resulting accumulator
     /// and the canonical Fiat--Shamir challenge used by encrypted producers.
     ///
-    /// Exposing the already-validated challenge here prevents Phase-II/III
-    /// implementations from inventing a parallel transcript that a Nova
-    /// settlement verifier cannot reproduce.
+    /// Exposing the already-validated challenge here prevents Phase-II/III implementations from
+    /// inventing a parallel transcript that a Nova settlement verifier cannot reproduce.
     pub(super) fn verify_with_challenge(
         &self,
         key: &CommitmentKey,

@@ -1,9 +1,8 @@
 #![cfg(feature = "privacy-release-evidence")]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Enforced four-peer DA/RBC, activation, adversarial-proof, state-replay,
-//! exact-finality, and restart gate for the six retained exact-12 native
-//! engines: ZK-ACE, Anonymous PGC, VeRange, Bootle/Lantern, FCMP++, and the
-//! private-IVM note protocol.
+//! Enforced four-peer DA/RBC, activation, adversarial-proof, state-replay, exact-finality, and
+//! restart gate for the six retained exact-12 native engines: ZK-ACE, Anonymous PGC, VeRange,
+//! Bootle/Lantern, FCMP++, and the private-IVM note protocol.
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{

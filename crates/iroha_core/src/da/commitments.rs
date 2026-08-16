@@ -1,8 +1,7 @@
 //! DA commitment spool helpers.
 //!
-//! This module reads Torii-emitted `da-commitment-*.norito` files from the
-//! configured spool directory and assembles a deterministic bundle ready to
-//! embed into a block payload.
+//! This module reads Torii-emitted `da-commitment-*.norito` files from the configured spool
+//! directory and assembles a deterministic bundle ready to embed into a block payload.
 use crate::da::{ReplayFingerprint, commitment_store::DaCommitmentStore};
 use iroha_data_model::{
     da::{
@@ -123,9 +122,8 @@ pub enum DaSpoolError {
 ///
 /// # Errors
 ///
-/// Returns a [`DaSpoolError`] if the spool directory or any matching commitment
-/// file cannot be read, decoded, or matched against its advertised filename
-/// tuple.
+/// Returns a [`DaSpoolError`] if the spool directory or any matching commitment file cannot be
+/// read, decoded, or matched against its advertised filename tuple.
 pub fn load_commitment_bundle(
     spool_dir: &Path,
 ) -> Result<Option<DaCommitmentBundle>, DaSpoolError> {

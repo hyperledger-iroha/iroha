@@ -328,9 +328,8 @@ pub enum StatusStreamEvent {
         sumeragi: Option<Arc<SumeragiV2Status>>,
         /// Optional non-authoritative Sumeragi diagnostics payload.
         sumeragi_diagnostics: Option<Arc<SumeragiDiagnosticsStatus>>,
-        /// Optional metrics payload parsed from `/metrics`. When metrics polling is throttled,
-        /// this value reuses the last successfully fetched snapshot until the refresh interval
-        /// elapses.
+        /// Optional metrics payload parsed from `/metrics`. When metrics polling is throttled, this
+        /// value reuses the last successfully fetched snapshot until the refresh interval elapses.
         metrics: Option<Arc<ToriiMetricsSnapshot>>,
         /// Error information describing why metrics could not be fetched.
         metrics_error: Option<ToriiErrorInfo>,
@@ -382,9 +381,8 @@ pub struct ManagedStatusStream {
 impl ManagedStatusStream {
     /// Spawn a polling loop that fetches `/status` on the requested interval.
     ///
-    /// `poll_interval` controls the delay between successful samples. Failures
-    /// automatically retry using the standard exponential backoff window shared
-    /// with the streamed endpoints.
+    /// `poll_interval` controls the delay between successful samples. Failures automatically retry
+    /// using the standard exponential backoff window shared with the streamed endpoints.
     pub fn spawn(
         handle: &Handle,
         alias: impl Into<String>,

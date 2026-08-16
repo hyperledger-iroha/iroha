@@ -77,7 +77,7 @@ _PRODUCTION_LIVENESS_HELPER_SEALS = (
 
 _PRODUCTION_LIVENESS_HELPER_FIXTURE_SOURCES = {
     "crates/iroha_core/src/kura.rs": (
-        "crates/iroha_core/src/kura/autonomous_release_authority.rs"
+        "crates/iroha_core/src/kura/autonomous_retired_attempt.rs"
     ),
     "crates/iroha_core/src/sumeragi/v2_lane_work.rs": (
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
@@ -1782,7 +1782,7 @@ def _production_liveness_release_inventory_errors(
                     "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "9d2e5b25788fb98c43a8f2f409229181bf58a80b36a15415dc9847a6fe8b8a87"
+                    "d57f1fac4c07849e8a377a0d0ce4fdba09aa20d1de35cf0cc8d7f0c191ebc786"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
                     "dd67a4f7b7c321238bd08789cb54fb7704c3e309c9f1764baea275ff64a5e5ae"

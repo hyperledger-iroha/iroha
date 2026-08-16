@@ -1,0 +1,18 @@
+
+            seiyaku Escrow {
+                fn open(
+                    Name escrow,
+                    AccountId account,
+                    AssetDefinitionId asset,
+                    quantity amount
+                ) {
+                    ledger::escrow::open_offer(
+                        offer: escrow,
+                        asset_definition: account,
+                        amount: account,
+                        evidence: asset,
+                        unexpected: amount,
+                    );
+                }
+            }
+            

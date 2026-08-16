@@ -1,8 +1,7 @@
 // Detached executor note: Keep this handler minimal and side‑effect free; only record
 // deltas. Prefer performing complex checks during merge in `StateBlock::merge_into`.
 // Extend cautiously when adding new ISIs (Peer, Parameters, ExecuteTrigger, etc.).
-//! Structures and impls related to processing Iroha Virtual Machine (IVM)
-//! runtime executors.
+//! Structures and impls related to processing Iroha Virtual Machine (IVM) runtime executors.
 #[cfg(feature = "zk-preverify")]
 use crate::zk::PreverifyResult;
 use crate::{
@@ -192,10 +191,9 @@ const EXECUTOR_LENGTH_PREFIX_BYTES: usize = 8;
 const EXECUTOR_LENGTH_PREFIX_BYTES_U64: u64 = 8;
 /// Maximum accepted size of one framed executor result, including its prefix.
 ///
-/// Executor results conventionally share the VM's one-MiB heap window with
-/// their input. Keeping the host-side limit at that deterministic region size
-/// prevents a guest-controlled length prefix from requesting an unbounded host
-/// allocation, while retaining the entire addressable result envelope.
+/// Executor results conventionally share the VM's one-MiB heap window with their input. Keeping the
+/// host-side limit at that deterministic region size prevents a guest-controlled length prefix from
+/// requesting an unbounded host allocation, while retaining the entire addressable result envelope.
 const MAX_EXECUTOR_OUTPUT_BYTES: u64 = Memory::HEAP_MAX_SIZE;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NativeQueryAccess {
@@ -966,10 +964,9 @@ const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
 const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
 /// Execute a single instruction in a detached overlay, recording only the state deltas.
 ///
-/// This helper is used by the parallel validator to pre-apply side-effect-free
-/// instructions without borrowing a live `StateBlock`. Unsupported instructions
-/// return `ValidationFail::InternalError` so the caller can conservatively fall back
-/// to sequential execution.
+/// This helper is used by the parallel validator to pre-apply side-effect-free instructions without
+/// borrowing a live `StateBlock`. Unsupported instructions return `ValidationFail::InternalError`
+/// so the caller can conservatively fall back to sequential execution.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn execute_instruction_detached(
     authority: &AccountId,
@@ -1998,9 +1995,8 @@ pub struct FeeAdmissionQuote {
     pub program_revision: Option<u64>,
     /// Canonically selected proof-bound spend lease for each sponsored fee asset.
     ///
-    /// This map is populated only for receipt-lane settlement. All charge
-    /// components using the same asset share one selection and consume its
-    /// aggregate maximum.
+    /// This map is populated only for receipt-lane settlement. All charge components using the same
+    /// asset share one selection and consume its aggregate maximum.
     pub relay_leases: BTreeMap<AssetDefinitionId, FeeSponsorRelayLeaseCapacity>,
     /// Per-asset sponsor capacity snapshot, empty for authority payment.
     pub capacities: BTreeMap<AssetDefinitionId, FeeSponsorCapacity>,
@@ -3287,8 +3283,7 @@ pub(crate) fn requested_contract_entrypoint(
     }
     Ok(entrypoint)
 }
-/// Require a by-reference invocation to match the exact live code binding
-/// authorized by its signer.
+/// Require a by-reference invocation to match the exact live code binding authorized by its signer.
 pub(crate) fn ensure_contract_invocation_code_hash(
     invocation: &ContractInvocation,
     actual_code_hash: iroha_crypto::Hash,
@@ -3452,11 +3447,10 @@ enum ContractArgumentSource<'a> {
 /// Resolve a self-describing IVM trigger callback and bind the current event
 /// arguments to its compiler-emitted schema.
 ///
-/// Trigger actions select the callback with `contract_entrypoint` metadata, but
-/// their payload is supplied by the event that fired the trigger. The payload
-/// is converted here, once, into the same schema-bound canonical Norito record
-/// used by ordinary contract calls. A fixed `contract_payload` in trigger
-/// metadata is rejected so it cannot shadow the signed event arguments.
+/// Trigger actions select the callback with `contract_entrypoint` metadata, but their payload is
+/// supplied by the event that fired the trigger. The payload is converted here, once, into the same
+/// schema-bound canonical Norito record used by ordinary contract calls. A fixed `contract_payload`
+/// in trigger metadata is rejected so it cannot shadow the signed event arguments.
 pub(crate) fn parse_prepared_trigger_call_execution_context(
     metadata: &Metadata,
     contract: &ivm::PreparedContract,
@@ -3619,9 +3613,8 @@ pub(crate) fn parse_prepared_contract_invocation_execution_context(
 }
 /// Resolve a prepared ordinary nested call using the nested entrypoint policy.
 ///
-/// Unlike top-level transaction dispatch, nested calls may enter read-only
-/// views. Lifecycle entrypoints remain reserved for their dedicated state
-/// transition machinery.
+/// Unlike top-level transaction dispatch, nested calls may enter read-only views. Lifecycle
+/// entrypoints remain reserved for their dedicated state transition machinery.
 pub(crate) fn parse_prepared_nested_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     contract: &ivm::PreparedContract,
@@ -4084,11 +4077,10 @@ fn evaluate_nexus_fee_admission_payload(
 }
 /// Quote and validate the exact fee funding source for a canonical unsigned draft.
 ///
-/// The fee byte component is measured over the canonical [`TransactionPayload`]
-/// encoding, so this result remains identical after the payload is signed. The
-/// supplied intent must already contain adequate signature-bound charge limits.
-/// Protocol and successful-claim exemptions return an accepted zero-component
-/// quote because execution skips the same exact signed payloads.
+/// The fee byte component is measured over the canonical [`TransactionPayload`] encoding, so this
+/// result remains identical after the payload is signed. The supplied intent must already contain
+/// adequate signature-bound charge limits. Protocol and successful-claim exemptions return an
+/// accepted zero-component quote because execution skips the same exact signed payloads.
 pub fn quote_nexus_fee_admission_payload(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -4160,11 +4152,10 @@ fn fee_exempt_admission_quote(payload: &TransactionPayload) -> FeeAdmissionQuote
 }
 /// Discover the exact charge limits for an unsigned transaction draft.
 ///
-/// Callers may supply empty or stale limits. Core deterministically reaches a
-/// fixed point because the limits themselves contribute to the canonical byte
-/// fee, then returns the exact [`FeePaymentIntent`] to place in the payload
-/// before signing. Exempt payloads canonicalize directly to empty charge limits.
-/// Queue admission intentionally uses the strict quote API.
+/// Callers may supply empty or stale limits. Core deterministically reaches a fixed point because
+/// the limits themselves contribute to the canonical byte fee, then returns the exact
+/// [`FeePaymentIntent`] to place in the payload before signing. Exempt payloads canonicalize
+/// directly to empty charge limits. Queue admission intentionally uses the strict quote API.
 pub fn quote_nexus_fee_admission_draft(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -4273,10 +4264,9 @@ pub(crate) fn quote_external_nexus_fee_admission(
 }
 /// Revalidate the exact signed fee intent against the state used for block execution.
 ///
-/// Queue reservations are an availability optimization, not consensus
-/// authority. Except for the authentic initial genesis bootstrap, every
-/// execution path, including overlay application, must run this check before
-/// applying business effects so a block producer cannot bypass signed maxima,
+/// Queue reservations are an availability optimization, not consensus authority. Except for the
+/// authentic initial genesis bootstrap, every execution path, including overlay application, must
+/// run this check before applying business effects so a block producer cannot bypass signed maxima,
 /// sponsor rules, budgets, or payer balance checks.
 pub(crate) fn validate_transaction_fee_admission(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -10021,9 +10011,8 @@ pub(crate) fn authorize_prepared_raw_contract_selector(
 }
 /// Enforce the compiler-verified permission attached to a named public entrypoint.
 ///
-/// Overlay preparation, live overlay application, direct execution, triggers,
-/// and nested calls all use this helper so none of those paths can drift into a
-/// weaker authorization policy.
+/// Overlay preparation, live overlay application, direct execution, triggers, and nested calls all
+/// use this helper so none of those paths can drift into a weaker authorization policy.
 pub(crate) fn enforce_named_contract_entrypoint_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10843,9 +10832,8 @@ impl LoadedExecutor {
 }
 /// Norito encode/decode helpers for the runtime `Executor`.
 ///
-/// These helpers serialize the core `Executor` enum into a compact Norito
-/// payload using a local DTO and provide a materialization path that loads a
-/// `LoadedExecutor` when required.
+/// These helpers serialize the core `Executor` enum into a compact Norito payload using a local DTO
+/// and provide a materialization path that loads a `LoadedExecutor` when required.
 pub mod executor_norito {
     use super::*;
     use std::panic::{AssertUnwindSafe, catch_unwind};

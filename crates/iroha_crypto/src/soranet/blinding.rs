@@ -1,10 +1,9 @@
 //! CID blinding helpers used by the `SoraNet` anonymity overlay.
 //!
-//! The primitives in this module derive a per-circuit blinding key from the
-//! daily salt and the handshake transcript secret. Requests can then be bound
-//! to an additional nonce so that popular content remains unlinkable across
-//! distinct circuits, while the exit gateway retains a deterministic cache key
-//! derived from the published salt.
+//! The primitives in this module derive a per-circuit blinding key from the daily salt and the
+//! handshake transcript secret. Requests can then be bound to an additional nonce so that popular
+//! content remains unlinkable across distinct circuits, while the exit gateway retains a
+//! deterministic cache key derived from the published salt.
 use crate::secrecy::{ExposeSecret, Secret};
 use blake3::Hasher;
 use rand_core::TryCryptoRng;
@@ -48,16 +47,14 @@ pub struct CircuitBlindingKey(Secret<Zeroizing<[u8; BLINDING_KEY_LEN]>>);
 impl CircuitBlindingKey {
     /// Derive a new blinding key from the published salt and circuit secret.
     ///
-    /// The circuit secret should be produced by the `SoraNet` hybrid Noise
-    /// handshake and is assumed to be unique per circuit. Mixing it with the
-    /// public salt ensures requests issued over different circuits (or
-    /// different days) become unlinkable even for popular content.
+    /// The circuit secret should be produced by the `SoraNet` hybrid Noise handshake and is assumed
+    /// to be unique per circuit. Mixing it with the public salt ensures requests issued over
+    /// different circuits (or different days) become unlinkable even for popular content.
     ///
     /// # Errors
     ///
-    /// Returns [`BlindingError::Hkdf`] when HKDF cannot expand into a 32-byte
-    /// key. Returns [`BlindingError::WeakInput`] when either entropy-bearing
-    /// input is all zero.
+    /// Returns [`BlindingError::Hkdf`] when HKDF cannot expand into a 32-byte key. Returns
+    /// [`BlindingError::WeakInput`] when either entropy-bearing input is all zero.
     pub fn derive(epoch_salt: &[u8; 32], circuit_secret: &[u8; 32]) -> Result<Self, BlindingError> {
         if epoch_salt.iter().all(|byte| *byte == 0) {
             return Err(BlindingError::WeakInput("epoch_salt"));
@@ -94,9 +91,8 @@ impl CircuitBlindingKey {
         hasher.update(cid);
         BlindedCid::from_hash(hasher.finalize())
     }
-    /// Produce a request-scoped blinded CID by incorporating an explicit
-    /// per-request nonce. Distinct nonces yield unlinkable digests, limiting
-    /// passive correlation of popular content.
+    /// Produce a request-scoped blinded CID by incorporating an explicit per-request nonce.
+    /// Distinct nonces yield unlinkable digests, limiting passive correlation of popular content.
     #[must_use]
     pub fn request_scoped_blinded(&self, cid: &[u8], nonce: &RequestNonce) -> BlindedCid {
         let mut hasher = Hasher::new_keyed(self.key_bytes());
@@ -106,9 +102,8 @@ impl CircuitBlindingKey {
         BlindedCid::from_hash(hasher.finalize())
     }
 }
-/// Canonical cache key derived solely from the public salt. Gateways persist
-/// data against this digest to ensure deterministic storage layouts that remain
-/// verifiable during audits.
+/// Canonical cache key derived solely from the public salt. Gateways persist data against this
+/// digest to ensure deterministic storage layouts that remain verifiable during audits.
 #[must_use]
 pub fn canonical_cache_key(epoch_salt: &[u8; 32], cid: &[u8]) -> BlindedCid {
     let mut hasher = Hasher::new();
@@ -139,9 +134,8 @@ impl RequestNonce {
     /// Populate the nonce with random bytes using the provided RNG.
     ///
     /// # Errors
-    /// Returns [`BlindingError::RandomBytes`] if the RNG cannot provide request
-    /// nonce material, or [`BlindingError::WeakInput`] if the RNG returns
-    /// all-zero nonce material.
+    /// Returns [`BlindingError::RandomBytes`] if the RNG cannot provide request nonce material, or
+    /// [`BlindingError::WeakInput`] if the RNG returns all-zero nonce material.
     #[cfg(feature = "rand")]
     pub fn random<R>(rng: &mut R) -> Result<Self, BlindingError>
     where

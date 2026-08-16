@@ -1,10 +1,9 @@
 //! Byte packing helpers for the FASTPQ trace builder.
 //!
-//! The FASTPQ AIR packs variable-length keys and values into Goldilocks field
-//! elements using 7-byte limbs (little-endian). This module provides helper
-//! functions for packing/unpacking the representation so higher-level builders
-//! can operate on typed structures instead of manual loops. The helpers are
-//! intentionally simple and deterministic so the eventual trace builder can be
+//! The FASTPQ AIR packs variable-length keys and values into Goldilocks field elements using 7-byte
+//! limbs (little-endian). This module provides helper functions for packing/unpacking the
+//! representation so higher-level builders can operate on typed structures instead of manual loops.
+//! The helpers are intentionally simple and deterministic so the eventual trace builder can be
 //! audited easily.
 use core::cmp::min;
 /// Goldilocks modulus (2^64 - 2^32 + 1) used by the FASTPQ AIR.

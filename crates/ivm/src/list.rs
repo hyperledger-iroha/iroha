@@ -1,9 +1,8 @@
 //! Runtime support for compiler-owned bounded Kotodama lists.
 //!
-//! A list is not a pointer-ABI envelope. Its handle is the base address of one
-//! owned heap allocation whose exact element shape and capacity come from the
-//! compiler-emitted schema. Hosts must therefore validate the complete range
-//! against that schema before reading it.
+//! A list is not a pointer-ABI envelope. Its handle is the base address of one owned heap
+//! allocation whose exact element shape and capacity come from the compiler-emitted schema. Hosts
+//! must therefore validate the complete range against that schema before reading it.
 use crate::{IVM, VMError};
 #[cfg(test)]
 use ivm_abi::list::LIST_HEADER_WORDS_V1;

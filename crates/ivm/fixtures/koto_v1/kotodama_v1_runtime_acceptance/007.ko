@@ -1,0 +1,11 @@
+
+seiyaku ResultPropagationLayoutAcceptance {
+  fn source() -> Result<int, bool> {
+    Result::err(true)
+  }
+
+  view fn run() -> Result<(int, int), bool> {
+    let value = source()?;
+    Result::ok((value, value))
+  }
+}

@@ -1,18 +1,15 @@
 //! Fixed-topology four-bit selector for complete P-256 scalar multiplication.
 //!
-//! Every lookup scans all sixteen candidate points.  Candidate and selected
-//! output coordinates are exposed in value-id-contiguous order: the sixteen
-//! little-endian limbs of x, then y, then z.  Three consecutive limbs are
-//! packed into each physical row, so one candidate consumes sixteen rows and
-//! one selected output consumes another sixteen rows.
+//! Every lookup scans all sixteen candidate points. Candidate and selected output coordinates are
+//! exposed in value-id-contiguous order: the sixteen little-endian limbs of x, then y, then z.
+//! Three consecutive limbs are packed into each physical row, so one candidate consumes sixteen
+//! rows and one selected output consumes another sixteen rows.
 //!
-//! The selector is reconstructed from four Boolean scalar bits on every
-//! candidate row.  Forty-eight running accumulators select all three
-//! coordinates without a host-language branch.  The surrounding P-256 value
-//! bus must bind every external limb to its arithmetic SSA value, and the
-//! scalar-bit copy bus must bind the four repeated bits to the scalar
-//! arithmetic trace. The aggregate adapter supplies both bindings; this AIR
-//! has no standalone activation path.
+//! The selector is reconstructed from four Boolean scalar bits on every candidate row. Forty-eight
+//! running accumulators select all three coordinates without a host-language branch. The
+//! surrounding P-256 value bus must bind every external limb to its arithmetic SSA value, and the
+//! scalar-bit copy bus must bind the four repeated bits to the scalar arithmetic trace. The
+//! aggregate adapter supplies both bindings; this AIR has no standalone activation path.
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 use thiserror::Error;
 /// Stable aggregate layout for all selectors in one ECDSA equation.
@@ -578,8 +575,7 @@ fn p256_window_stark_fixed_local_row_v1(
     fixed[STARK_ACTIVE_CONTINUE] = F(u64::from(local + 1 < P256_WINDOW_ROWS_V1));
     Ok(fixed)
 }
-/// Constant-memory verifier preprocessing for the vertically packed window
-/// adapter.
+/// Constant-memory verifier preprocessing for the vertically packed window adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256WindowBatchStarkFixedProviderV1 {
     trace_size: usize,
@@ -592,8 +588,7 @@ impl P256WindowBatchStarkFixedProviderV1 {
         }
         Ok(Self { trace_size })
     }
-    /// Regenerate one exact numeric row without retaining 128 fixed blocks or
-    /// their suffix.
+    /// Regenerate one exact numeric row without retaining 128 fixed blocks or their suffix.
     pub(crate) fn row_v1(
         self,
         index: usize,
@@ -676,12 +671,10 @@ fn stark_window_matching_bit_v1(bit: F, expected: F) -> F {
         .mul(bit)
         .add(F::ONE.sub(expected).mul(F::ONE.sub(bit)))
 }
-/// Evaluate one window row as a fixed-width extension-domain polynomial
-/// vector.
+/// Evaluate one window row as a fixed-width extension-domain polynomial vector.
 ///
-/// All row roles, candidate bits, chunk positions, and boundaries are numeric
-/// verifier preprocessing. The evaluator never decodes a proof-controlled
-/// enum or index.
+/// All row roles, candidate bits, chunk positions, and boundaries are numeric verifier
+/// preprocessing. The evaluator never decodes a proof-controlled enum or index.
 pub(crate) fn evaluate_p256_window_stark_residues_v1(
     current: &[F; P256_WINDOW_BASE_WIDTH_V1],
     next: &[F; P256_WINDOW_BASE_WIDTH_V1],

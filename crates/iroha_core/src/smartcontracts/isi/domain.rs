@@ -147,9 +147,8 @@ pub mod isi {
     }
     /// Restore only the missing binding/index state of an exact account-alias setup intent.
     ///
-    /// The declarative classifier must run immediately before this helper. The
-    /// checks here are repeated defensively so repair can never overwrite a
-    /// different binding or primary alias.
+    /// The declarative classifier must run immediately before this helper. The checks here are
+    /// repeated defensively so repair can never overwrite a different binding or primary alias.
     pub(crate) fn repair_account_alias_setup_state(
         state_transaction: &mut StateTransaction<'_, '_>,
         intent: &AliasAccountIntentV1,

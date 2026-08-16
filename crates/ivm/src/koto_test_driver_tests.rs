@@ -126,30 +126,7 @@ fn helper_preserves_u64_max_json_int_through_option_match() {
     let temp = TestTempDir::new();
     let target = temp.write(
         "u64_max_option_match.ko",
-        r#"
-            seiyaku U64MaxOptionMatch {
-                error enum RegressionError {
-                    Invalid = 1,
-                }
-
-                fn validate(Json signed_json) {
-                    let key = Name::parse("source_change_sequence");
-                    let sequence = match signed_json.get_int(key) {
-                        Option::some(value) => value,
-                        Option::none => {
-                            require(false, RegressionError::Invalid);
-                            0
-                        },
-                    };
-                    require(sequence >= 0, RegressionError::Invalid);
-                }
-
-                #[test]
-                fn maximum_survives_helper_match() {
-                    validate(Json::parse("{\"source_change_sequence\":18446744073709551615}"));
-                }
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/001.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     let suite = discover_suite(&target).expect("discover u64 max regression suite");
     let compiled = compile_suite(&suite, false).expect("compile u64 max regression suite");
@@ -459,15 +436,7 @@ fn structured_runner_returns_ordered_logical_outcomes_without_timing() {
     let temp = TestTempDir::new();
     let target = temp.write(
         "structured.ko",
-        r#"
-            seiyaku Structured {
-                #[test]
-                fn z_passes() { test::assert(true); }
-
-                #[test]
-                fn a_fails() { test::assert(false); }
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/002.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     let mut request = KotoTestRunRequestV1::new(&target, 753);
     request.jobs = 2;
@@ -497,26 +466,11 @@ fn structured_module_graph_executes_exact_dependency_and_ignores_ambient_tests()
     let temp = TestTempDir::new();
     let target = temp.write(
         "tests/unit.ko",
-        r#"
-            seiyaku ExactGraph {
-                view fn current() -> int { return calc::value(); }
-
-                #[test]
-                fn dependency_is_exact() {
-                    test::assert(calc::value() == 7);
-                }
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/003.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     temp.write(
         "tests/ambient.test.ko",
-        r#"
-            module Ambient {
-                koto_test { target: "unit.ko" }
-                #[test]
-                fn must_not_run() { test::assert(false); }
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/004.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     let dependency = "std/math@1.0.0".to_owned();
     let modules = KotoTestModuleGraphV1 {
@@ -610,41 +564,16 @@ fn discover_suite_links_inline_and_matching_standalone_tests() {
     let temp = TestTempDir::new();
     let target = temp.write(
         "contracts/demo.ko",
-        r#"
-            seiyaku Demo {
-              fn increment(int x) -> int { return x + 1; }
-
-              #[test]
-              fn inline() {
-                test::assert_eq(actual: increment(1), expected: 2);
-              }
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/005.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     temp.write(
         "contracts/demo.test.ko",
-        r#"
-            module DemoTests {
-              koto_test { target: "demo.ko" }
-
-              #[test]
-              fn standalone() {
-                test::assert_eq(actual: increment(2), expected: 3);
-              }
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/006.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     temp.write("contracts/other.ko", "seiyaku Other { fn other() {} }");
     temp.write(
         "contracts/tests/ignored.test.ko",
-        r#"
-            module IgnoredTests {
-              koto_test { target: "../other.ko" }
-
-              #[test]
-              fn ignored() {}
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/007.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     let suite = discover_suite(&target).expect("discover suite");
     let mut names = suite
@@ -663,24 +592,11 @@ fn discover_suite_from_standalone_input_uses_target_program() {
     let temp = TestTempDir::new();
     temp.write(
         "contracts/demo.ko",
-        r#"
-            seiyaku Demo {
-              fn increment(int x) -> int { return x + 1; }
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/008.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     let standalone = temp.write(
         "contracts/demo.test.ko",
-        r#"
-            module DemoTests {
-              koto_test { target: "demo.ko" }
-
-              #[test]
-              fn smoke() {
-                test::assert_eq(actual: increment(2), expected: 3);
-              }
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/009.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     let suite = discover_suite(&standalone).expect("discover suite from standalone input");
     assert_eq!(
@@ -705,38 +621,7 @@ fn execute_suite_supports_native_contract_flow_helpers() {
         .expect("canonical actor account");
     temp.write(
         "contracts/contract_flow_demo.ko",
-        r#"
-            seiyaku Demo {
-                error enum DemoError {
-                    Rejected = 1,
-                }
-
-                state int counter;
-                state AccountId last_actor;
-
-                hajimari() {
-                    counter = 1;
-                    last_actor = context::authority();
-                }
-
-                kotoage fn increment() authorize("Test") {
-                    counter = counter + 4;
-                }
-
-                kotoage fn remember_caller() authorize("Test") {
-                    last_actor = context::authority();
-                }
-
-                view fn pair() -> (int, int) {
-                    return (2, 3);
-                }
-
-                kotoage fn reject_me() authorize("Test") {
-                    require(false, DemoError::Rejected);
-                }
-
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/010.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     let test_path = temp.write(
             "contracts/contract_flow_demo.test.ko",
@@ -906,41 +791,7 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
         .expect("canonical actor account");
     temp.write(
         "contracts/contract_flow_demo.ko",
-        r#"
-            seiyaku Demo {
-                error enum DemoError {
-                    Rejected = 1,
-                }
-
-                state int counter;
-                state AccountId last_actor;
-
-                hajimari() {
-                    counter = 1;
-                    last_actor = context::authority();
-                }
-
-                kotoage fn increment() authorize("Test") {
-                    counter = counter + 4;
-                }
-
-                kotoage fn remember_caller() authorize("Test") {
-                    last_actor = context::authority();
-                }
-
-                view fn pair() -> (int, int) {
-                    return (2, 3);
-                }
-
-                kotoage fn reject_me() authorize("Test") {
-                    require(false, DemoError::Rejected);
-                }
-
-                kotoage fn set_counter(int value) authorize("Test") {
-                    counter = value;
-                }
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/011.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     let test_path = temp.write(
             "contracts/contract_flow_demo.test.ko",
@@ -1077,13 +928,7 @@ fn standalone_test_source_parser_rejects_public_functions() {
     temp.write("demo.ko", "seiyaku Demo { fn helper() {} }");
     let test_file = temp.write(
         "demo.test.ko",
-        r#"
-            module BadTests {
-              koto_test { target: "demo.ko" }
-
-              kotoage fn not_local() authorize("Test") {}
-            }
-            "#,
+        include_str!("../fixtures/koto_v1/koto_test_driver_tests/012.ko").strip_suffix('\n').expect("fixture sentinel newline"),
     );
     let error = parse_program_file(&test_file)
         .expect_err("a module cannot contain a public seiyaku function");
@@ -1122,20 +967,7 @@ fn finalize_suite_rejects_program_without_tests() {
 }
 #[test]
 fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
-    let source = r#"
-            seiyaku Demo {
-                view fn run(int count) -> int { return count + 1; }
-
-                #[test]
-                fn smoke() {
-                    let next = test::invoke_kotoage(
-                        kotoage: "run",
-                        arguments: Json::parse("{\"count\":\"7\"}")
-                    );
-                    test::assert_eq(actual: next, expected: 8);
-                }
-            }
-            "#;
+    let source = include_str!("../fixtures/koto_v1/koto_test_driver_tests/013.ko").strip_suffix('\n').expect("fixture sentinel newline");
     let program = parser::parse(source).expect("parse program");
     let suite = DiscoveredSuite {
         target_path: PathBuf::from("/tmp/demo.ko"),

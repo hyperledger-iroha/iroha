@@ -41,9 +41,8 @@ pub struct IrohaZkX509StarkP256StatementV1 {
     pub crl_record_epoch: u64,
     /// Governance-scoped digest of the leaf certificate subject public key.
     ///
-    /// Parent-chain keys and the private chain depth are deliberately excluded:
-    /// the proof binds those through path validation, signatures, and the
-    /// governed trust anchor.
+    /// Parent-chain keys and the private chain depth are deliberately excluded: the proof binds
+    /// those through path validation, signatures, and the governed trust anchor.
     pub subject_public_key_digest: PrivacyCertificateKeyDigestV1,
     /// CA trust-store membership root authenticating the terminal certificate.
     pub ca_membership_root: PrivacyRootV1,
@@ -99,9 +98,8 @@ impl PrivacyJindoFieldElementV1 {
 }
 /// Canonical public outer commitment in the fixed Jindo lattice profile.
 ///
-/// The byte string contains 3 × 1024 signed little-endian `i32`
-/// coefficients. Native verification additionally enforces the compiled
-/// rounded-coefficient bound.
+/// The byte string contains 3 × 1024 signed little-endian `i32` coefficients. Native verification
+/// additionally enforces the compiled rounded-coefficient bound.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -193,15 +191,13 @@ pub struct BootleLanternIssuerPublicMatrixV1 {
 /// Minimum number of non-zero coefficients in the canonical degree-512
 /// issuer public key `h` reconstructed from the eight first-column blocks.
 ///
-/// Genuine Falcon/NTRU public keys are dense. This conservative floor rejects
-/// zero, monomial, identity, and deliberately sparse matrices at the
-/// authoritative policy boundary without attempting to prove possession of
-/// the issuer secret key.
+/// Genuine Falcon/NTRU public keys are dense. This conservative floor rejects zero, monomial,
+/// identity, and deliberately sparse matrices at the authoritative policy boundary without
+/// attempting to prove possession of the issuer secret key.
 pub const BOOTLE_LANTERN_ISSUER_PUBLIC_KEY_MIN_NONZERO_COEFFICIENTS_V1: usize = 256;
 impl BootleLanternIssuerPublicMatrixV1 {
-    /// Expand the eight canonical first-column blocks of one degree-512
-    /// Falcon/NTRU public key into its exact 8-by-8 multiplication matrix over
-    /// `Z_12289[Y]/(Y^64 + 1)`.
+    /// Expand the eight canonical first-column blocks of one degree-512 Falcon/NTRU public key into
+    /// its exact 8-by-8 multiplication matrix over `Z_12289[Y]/(Y^64 + 1)`.
     ///
     /// For `h` in `Z_12289[X]/(X^512 + 1)`, the interleaved coefficient
     /// isomorphism is exactly `H_i[j] = h[8*j+i]` for `0 <= i < 8` and
@@ -473,8 +469,7 @@ impl BootleLanternIssuerPolicyV1 {
     ///
     /// # Errors
     ///
-    /// Returns a Norito error if canonical encoding of the matrix
-    /// unexpectedly fails.
+    /// Returns a Norito error if canonical encoding of the matrix unexpectedly fails.
     pub fn computed_issuer_parameter_digest(
         &self,
     ) -> Result<PrivacyParameterDigestV1, norito::Error> {
@@ -494,8 +489,7 @@ impl BootleLanternIssuerPolicyV1 {
     ///
     /// # Errors
     ///
-    /// Returns a Norito error if canonical encoding of the normalized record
-    /// unexpectedly fails.
+    /// Returns a Norito error if canonical encoding of the normalized record unexpectedly fails.
     pub fn computed_record_digest(
         &self,
     ) -> Result<PrivacyBootleLanternIssuerPolicyDigestV1, norito::Error> {
@@ -516,9 +510,8 @@ impl BootleLanternIssuerPolicyV1 {
     }
     /// Validate canonical issuer key, disclosure rules, and self-authenticating digest.
     ///
-    /// This intrinsic check does not make the record trusted. Core must resolve
-    /// it from committed state and separately match its issuer parameter
-    /// artifact before native verification.
+    /// This intrinsic check does not make the record trusted. Core must resolve it from committed
+    /// state and separately match its issuer parameter artifact before native verification.
     ///
     /// # Errors
     ///
@@ -621,8 +614,7 @@ impl BootleLanternIssuerPolicyV1 {
     ///
     /// # Errors
     ///
-    /// Returns an intrinsic record failure or rejects any initial epoch other
-    /// than one.
+    /// Returns an intrinsic record failure or rejects any initial epoch other than one.
     pub fn validate_initial(&self) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
         self.validate()?;
         if self.epoch != 1 {
@@ -1091,9 +1083,8 @@ pub struct MoneroFcmpPlusPlusStatementV1 {
     pub inputs: Vec<PrivacyFcmpInputPublicV1>,
     /// Complete new output tuples in canonical append order.
     ///
-    /// Validators derive the successor typed root and epoch from these tuples
-    /// and the authoritative mixed-radix frontier. A caller-selected successor
-    /// is intentionally unrepresentable.
+    /// Validators derive the successor typed root and epoch from these tuples and the authoritative
+    /// mixed-radix frontier. A caller-selected successor is intentionally unrepresentable.
     pub outputs: Vec<PrivacyFcmpOutputTupleV1>,
     /// Encrypted new outputs, aligned one-to-one with `outputs`.
     pub encrypted_outputs: Vec<PrivacyFcmpEncryptedOutputV1>,
@@ -1138,13 +1129,11 @@ pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     pub execution_epoch: u64,
 }
 impl IrohaIvmPrivateNoteStarkStatementV1 {
-    /// Compute the action digest with its self-authenticating field normalized
-    /// to zero.
+    /// Compute the action digest with its self-authenticating field normalized to zero.
     ///
     /// # Errors
     ///
-    /// Returns a Norito error if canonical statement encoding unexpectedly
-    /// fails.
+    /// Returns a Norito error if canonical statement encoding unexpectedly fails.
     pub fn computed_action_digest(&self) -> Result<PrivacyActionDigestV1, norito::Error> {
         let mut normalized = self.clone();
         normalized.action_digest = PrivacyActionDigestV1::new([0; 32]);

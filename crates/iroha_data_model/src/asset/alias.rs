@@ -229,8 +229,7 @@ impl ResolvedAssetDefinitionAliasV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`ParseError`] when a domain-qualified alias does not form a canonical
-    /// [`DomainId`].
+    /// Returns [`ParseError`] when a domain-qualified alias does not form a canonical [`DomainId`].
     pub fn parent_domain(&self) -> Result<Option<DomainId>, ParseError> {
         self.canonical_name
             .domain_segment()

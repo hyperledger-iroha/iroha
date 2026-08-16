@@ -417,7 +417,7 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
         Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"),
         Path("javascript/iroha_js/test/toriiClient.test.js"),
-        Path("crates/iroha_core/src/kura/autonomous_release_authority.rs"),
+        Path("crates/iroha_core/src/kura/autonomous_retired_attempt.rs"),
         Path(
             "crates/iroha_core/src/sumeragi/v2_worker/"
             "autonomous_lane_output_reconstruction.rs"

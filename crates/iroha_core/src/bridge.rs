@@ -91,9 +91,8 @@ impl VerifiedV2FinalityArtifact {
 pub trait BridgeStateReadOnly {
     /// Exact genesis-derived network identity bound to the state snapshot.
     fn bridge_network_id(&self) -> &NetworkId;
-    /// Load an exact durable Sumeragi-v2 finality artifact whose structure,
-    /// roster PoPs, and CommitQC cryptography have already been verified by the
-    /// storage boundary.
+    /// Load an exact durable Sumeragi-v2 finality artifact whose structure, roster PoPs, and
+    /// CommitQC cryptography have already been verified by the storage boundary.
     fn bridge_verified_v2_finality_artifact(
         &self,
         height: u64,
@@ -1261,9 +1260,8 @@ pub enum BridgeFinalityError {
 ///
 /// # Errors
 ///
-/// Returns [`BridgeFinalityError`] when the height is zero, the durable retained-header artifact
-/// is missing/malformed, or the exact v2 artifact fails
-/// cryptographic verification.
+/// Returns [`BridgeFinalityError`] when the height is zero, the durable retained-header artifact is
+/// missing/malformed, or the exact v2 artifact fails cryptographic verification.
 pub fn build_finality_proof(
     state: &impl BridgeStateReadOnly,
     height: u64,
@@ -1749,9 +1747,8 @@ pub fn verify_sccp_finality_proof_against_local_state(
 /// block and durable v2 artifact state without repeating proof-controlled parsing.
 ///
 /// # Errors
-/// Returns a human-readable rejection reason when the context's finality
-/// artifact differs from authoritative local state or the proof-typed storage
-/// lookup rejects that local artifact.
+/// Returns a human-readable rejection reason when the context's finality artifact differs from
+/// authoritative local state or the proof-typed storage lookup rejects that local artifact.
 pub fn verify_sccp_destination_context_against_local_state(
     state: &impl BridgeStateReadOnly,
     context: &iroha_sccp::SccpVerifiedDestinationContextV1,

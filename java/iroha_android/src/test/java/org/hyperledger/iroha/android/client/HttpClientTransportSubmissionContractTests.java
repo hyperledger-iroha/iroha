@@ -72,7 +72,7 @@ public final class HttpClientTransportSubmissionContractTests {
   private static void canonicalAuthRedirectStatusAndNetworkFailuresAreOneShot() {
     final ToriiCanonicalRequestAuth auth =
         new ToriiCanonicalRequestAuth(
-            "alice", message -> Arrays.copyOf(message, 64), 1_717_171_717_000L,
+            "alice@universal", message -> Arrays.copyOf(message, 64), 1_717_171_717_000L,
             "canonical-one-shot-nonce");
     for (final int status : new int[] {307, 308, 503}) {
       assertCanonicalAliasFailsOnce(auth, OutcomeExecutor.forStatus(status));

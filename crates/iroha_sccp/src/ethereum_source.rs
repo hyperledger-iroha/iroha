@@ -1,11 +1,10 @@
 //! Native Ethereum light-client, state, storage, and receipt verification for SCCP.
 //!
-//! The verifier starts at one immutable governed beacon light-client bootstrap,
-//! applies a bounded sequence of protocol `LightClientUpdate` objects, and then
-//! opens three canonical Ethereum Merkle-Patricia tries under the finalized
-//! execution payload: the immutable transfer-route contract account and the
-//! successful transaction receipt. No RPC assertion, owner-authorized generic
-//! emitter, proxy convention, or domain-only fallback is admitted.
+//! The verifier starts at one immutable governed beacon light-client bootstrap, applies a bounded
+//! sequence of protocol `LightClientUpdate` objects, and then opens three canonical Ethereum
+//! Merkle-Patricia tries under the finalized execution payload: the immutable transfer-route
+//! contract account and the successful transaction receipt. No RPC assertion, owner-authorized
+//! generic emitter, proxy convention, or domain-only fallback is admitted.
 use super::{
     H256, SccpPayloadV1, canonical_sccp_payload_bytes, decode_canonical_sccp_payload_bytes,
     prefixed_blake2b, sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,

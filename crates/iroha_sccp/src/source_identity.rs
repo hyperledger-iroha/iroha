@@ -71,9 +71,8 @@ pub fn canonical_sccp_lane_source_event_bytes_v1(
 ///
 /// The contract-computable preimage is exactly
 /// `"sccp:source:event:v1" || 0x01 || lane_hash || message_id || payload_hash`.
-/// All three hash roles must be nonzero and pairwise distinct. Keccak-256 is
-/// used here because EVM and TVM route contracts must recompute the value
-/// without accepting a caller-supplied digest.
+/// All three hash roles must be nonzero and pairwise distinct. Keccak-256 is used here because EVM
+/// and TVM route contracts must recompute the value without accepting a caller-supplied digest.
 pub fn sccp_lane_source_event_digest_v1(
     lane: SccpLaneIdV1,
     message_id: H256,

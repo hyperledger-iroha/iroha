@@ -1,10 +1,9 @@
 //! Global account admission policy.
 //!
-//! Iroha accounts are explicit on-chain entities identified by canonical I105 account IDs.
-//! This module defines a chain-level policy that controls *implicit account creation on receipt*
-//! for Ethereum/Bitcoin-like UX: sending/minting assets (or transferring NFTs) to a
-//! never-before-seen `AccountId` can auto-create the corresponding account object when the
-//! global policy allows it.
+//! Iroha accounts are explicit on-chain entities identified by canonical I105 account IDs. This
+//! module defines a chain-level policy that controls *implicit account creation on receipt* for
+//! Ethereum/Bitcoin-like UX: sending/minting assets (or transferring NFTs) to a never-before-seen
+//! `AccountId` can auto-create the corresponding account object when the global policy allows it.
 use crate::{
     parameter::{CustomParameter, CustomParameterId},
     prelude::{AccountId, AssetDefinitionId, RoleId},

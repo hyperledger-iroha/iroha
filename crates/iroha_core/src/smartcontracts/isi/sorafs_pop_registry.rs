@@ -534,10 +534,9 @@ pub(super) struct ActivePopPublicationsV1 {
 }
 /// Fully validated historical publications fixed by an admitted moderation appeal.
 ///
-/// Registry advancement must not rewrite the eligibility snapshot of an
-/// already-admitted appeal. The audit link and publication records remain
-/// consensus-owned, so consumers can validate the exact historical root/list
-/// pair without requiring it to remain the active pair.
+/// Registry advancement must not rewrite the eligibility snapshot of an already-admitted appeal.
+/// The audit link and publication records remain consensus-owned, so consumers can validate the
+/// exact historical root/list pair without requiring it to remain the active pair.
 pub(super) struct PinnedPopPublicationsV1 {
     pub(super) root: PopCommitmentRootV1,
     pub(super) revocations: PopRevocationListV1,

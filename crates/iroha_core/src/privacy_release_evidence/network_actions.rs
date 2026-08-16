@@ -1,10 +1,9 @@
 //! Non-shipping canonical action builders for four-peer release gates.
 //!
-//! The parent module is compiled only with `privacy-release-evidence`. These
-//! helpers retain PQ witness material inside `iroha_core` and return ordinary
-//! production `SignedTransaction` and bootstrap data-model values. Network
-//! execution therefore traverses the same Torii, DA/RBC, verifier, and ledger
-//! paths as any externally constructed action.
+//! The parent module is compiled only with `privacy-release-evidence`. These helpers retain PQ
+//! witness material inside `iroha_core` and return ordinary production `SignedTransaction` and
+//! bootstrap data-model values. Network execution therefore traverses the same Torii, DA/RBC,
+//! verifier, and ledger paths as any externally constructed action.
 use iroha_crypto::PrivateKey;
 use iroha_data_model::{
     metadata::Metadata,
@@ -51,8 +50,7 @@ pub use retained::{
     build_privacy_release_verange_network_action_v1,
     build_privacy_release_zk_ace_network_action_v1,
 };
-/// Exact transaction and consensus context used by one non-shipping network
-/// action builder.
+/// Exact transaction and consensus context used by one non-shipping network action builder.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseTransactionContextV1 {
     /// Exact genesis-header-derived transaction security domain.
@@ -98,12 +96,11 @@ pub struct PrivacyReleaseVegaNetworkActionV1 {
 }
 /// Four independently proved PQ-MASP actions consuming the same genesis note.
 ///
-/// Each transaction has a distinct canonical intent and proof. The first is a
-/// valid pre-activation probe; the second is expected to apply after
-/// activation; the remaining two carry the same stable nullifier as protocol
-/// replay probes rather than duplicate transaction-hash probes. Keeping the
-/// fourth transaction fresh lets a restart gate prove that both the successor
-/// frontier and consumed-nullifier set were recovered by the restarted peer.
+/// Each transaction has a distinct canonical intent and proof. The first is a valid pre-activation
+/// probe; the second is expected to apply after activation; the remaining two carry the same stable
+/// nullifier as protocol replay probes rather than duplicate transaction-hash probes. Keeping the
+/// fourth transaction fresh lets a restart gate prove that both the successor frontier and
+/// consumed-nullifier set were recovered by the restarted peer.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleasePqMaspNetworkActionsV1 {
     /// Valid ordinary production transaction submitted before activation.
@@ -285,10 +282,9 @@ fn vega_utc_date_from_timestamp_ms_v1(
 }
 /// Build one canonical network-bound revised-Jindo action.
 ///
-/// The polynomial coefficients, evaluation point, proof randomness, and
-/// transaction signing key remain native Rust values for their complete
-/// lifetime. This builder makes no claim about the deliberately exposed
-/// distribution-wide knowledge-soundness limitation.
+/// The polynomial coefficients, evaluation point, proof randomness, and transaction signing key
+/// remain native Rust values for their complete lifetime. This builder makes no claim about the
+/// deliberately exposed distribution-wide knowledge-soundness limitation.
 pub fn build_privacy_release_jindo_network_action_v1(
     transaction_context: PrivacyReleaseTransactionContextV1,
     fixture_seed: [u8; 32],

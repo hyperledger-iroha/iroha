@@ -75,8 +75,7 @@ PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_causal_fifo_cases.py",
     "sumeragi_v2_proof_ledger_post_component_cases.py",
 )
-assert len(PROOF_LEDGER_TEST_COMPONENT_FILES) == 22
-assert len(set(PROOF_LEDGER_TEST_COMPONENT_FILES)) == 22
+assert len(PROOF_LEDGER_TEST_COMPONENT_FILES) == len(set(PROOF_LEDGER_TEST_COMPONENT_FILES)) == 22
 
 def _execute_test_component(filename: str) -> None:
     """Execute one reviewed case component in this canonical test namespace."""
@@ -858,7 +857,7 @@ def test_tla_comment_stripping_reuses_bounded_content_cache() -> None:
     assert (third.hits, third.misses, third.maxsize) == (1, 2, 64)
 
 
-def test_repository_ledger_has_only_explicit_unproved_debt() -> None:
+def test_repository_ledger_has_proved_height_liveness_and_completion() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     result = module.validate_ledger(ledger)
@@ -877,9 +876,9 @@ def test_repository_ledger_has_only_explicit_unproved_debt() -> None:
         "requirement": None,
         "module": "SumeragiV2ChainLivenessProofs",
         "symbol": "HeightLivenessObligation",
-        "status": "specified_unproved",
+        "status": "tlaps_proved",
     }
-    assert result.machine_checked_completion is ledger["machine_checked_completion"]
+    assert result.machine_checked_completion is True
 
 
 def test_reviewed_obligation_inventory_rejects_deleted_obligation() -> None:
@@ -1229,7 +1228,7 @@ def test_typed_rollover_liveness_remains_source_bound_support() -> None:
     ]
     consumer_id = module.SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
     assert support_id not in by_id
-    assert by_id[consumer_id]["status"] == "specified_unproved"
+    assert by_id[consumer_id]["status"] == "cross_tool_proved"
     assert support_module in module.RELEASE_PROOF_MODULES
     source = (
         module.FORMAL_DIR / f"{support_module}.tla"
@@ -1402,6 +1401,11 @@ def test_completion_claim_rejects_unproved_debt_without_release_mode() -> None:
     module = load_checker()
     ledger = copy.deepcopy(module.load_ledger())
     ledger["machine_checked_completion"] = True
+    next(
+        obligation
+        for obligation in ledger["obligations"]
+        if obligation["id"] == "height-liveness"
+    )["status"] = "specified_unproved"
 
     errors = module.validate_ledger(ledger).errors
 
@@ -1412,8 +1416,6 @@ def test_completion_claim_rejects_unproved_debt_without_release_mode() -> None:
         )
         for error in errors
     )
-
-
 
 
 def test_release_gate_requires_every_deductive_module_and_positive_counts(
@@ -1584,8 +1586,6 @@ def test_promotion_target_contract_rejects_mapping_and_order_mutations(
     monkeypatch.setattr(module, "PROMOTION_PROOF_TARGET_CONTRACTS", original)
 
 
-
-
 def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
     module = load_checker()
     ledger = module.load_ledger()
@@ -1659,11 +1659,17 @@ def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
     module.CROSS_TOOL_REFINEMENT_CONTRACTS = canonical_contracts
     by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
     assert all(
-        by_id[obligation_id]["status"] == "specified_unproved"
+        by_id[obligation_id]["status"] == "cross_tool_proved"
         for obligation_id in module.CROSS_TOOL_REFINEMENT_BY_ID
     )
+    unpromoted = copy.deepcopy(ledger)
+    unpromoted_by_id = {
+        obligation["id"]: obligation for obligation in unpromoted["obligations"]
+    }
+    for obligation_id in module.CROSS_TOOL_REFINEMENT_BY_ID:
+        unpromoted_by_id[obligation_id]["status"] = "specified_unproved"
     assert module._cross_tool_evidence_errors(
-        ledger,
+        unpromoted,
         {},
         tlaps_evidence=None,
         verus_evidence=None,
@@ -1672,7 +1678,7 @@ def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
     ]
     with pytest.raises(ValueError, match="no cross_tool_proved obligations"):
         module.build_cross_tool_evidence(
-            ledger,
+            unpromoted,
             tlaps_evidence={},
             verus_evidence={},
         )
@@ -3300,13 +3306,21 @@ def test_cross_tool_contract_rejects_call_source_missing_from_verus_inventory() 
     )
 
 
-def test_cross_tool_obligation_query_is_dormant_canonical_and_fail_closed(
+def test_cross_tool_obligation_query_is_canonical_and_fail_closed(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
     ledger_path = tmp_path / "proof_coverage.json"
+    complete = complete_cross_tool_ledger(module)
+    dormant_ledger = copy.deepcopy(complete)
+    dormant_by_id = {
+        obligation["id"]: obligation
+        for obligation in dormant_ledger["obligations"]
+    }
+    for obligation_id in module.CROSS_TOOL_REFINEMENT_BY_ID:
+        dormant_by_id[obligation_id]["status"] = "specified_unproved"
     ledger_path.write_text(
-        json.dumps(module.load_ledger()),
+        json.dumps(dormant_ledger),
         encoding="utf-8",
     )
     dormant = subprocess.run(
@@ -3325,7 +3339,6 @@ def test_cross_tool_obligation_query_is_dormant_canonical_and_fail_closed(
     assert dormant.returncode == 0, dormant.stderr
     assert dormant.stdout.strip() == ""
 
-    complete = complete_cross_tool_ledger(module)
     ledger_path.write_text(json.dumps(complete), encoding="utf-8")
     required = subprocess.run(
         [
@@ -7186,7 +7199,7 @@ def test_async_production_model_and_proofs_are_ci_gated() -> None:
         assert historical_module in module.RELEASE_PROOF_MODULES
 
 
-def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
+def test_first_release_type_and_height_completion_targets_are_pinned() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
@@ -7196,22 +7209,22 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
         "same-round-lock-and-commit-authorization": "tlaps_proved",
         "effective-lock-body-acquisition-model": "tlaps_proved",
         "effective-lock-body-acquisition-production-refinement": (
-            "specified_unproved"
+            "cross_tool_proved"
         ),
         "post-decision-timeout-exclusion": "tlaps_proved",
         "decision-recovery-across-restart": "tlaps_proved",
-        "progress-witness-production-refinement": "specified_unproved",
+        "progress-witness-production-refinement": "cross_tool_proved",
         "async-type-invariant": "tlaps_proved",
         "async-progress-ownership-invariant": "tlaps_proved",
         "protected-service-rank-stage4-ready-causal": "tlaps_proved",
         "protected-service-rank-serve-fifo": "tlaps_proved",
         "protected-service-rank-stage5-consensus-fifo": "tlaps_proved",
-        "successor-activation-starvation-freedom": "specified_unproved",
+        "successor-activation-starvation-freedom": "tlaps_proved",
         "successor-activation-exact-recovery-production-refinement": (
-            "specified_unproved"
+            "cross_tool_proved"
         ),
-        "genesis-height-successor-handoff": "specified_unproved",
-        "height-liveness": "specified_unproved",
+        "genesis-height-successor-handoff": "tlaps_proved",
+        "height-liveness": "tlaps_proved",
     }
     for obligation_id, target in module.FIXED_PROOF_OBLIGATION_TARGETS.items():
         target_module, symbol = target
@@ -7231,7 +7244,7 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
     )
 
 
-def test_effective_lock_body_model_is_proved_and_production_refinement_remains_debt() -> None:
+def test_effective_lock_body_model_is_tlaps_and_production_refinement_is_cross_tool_proved() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
@@ -7263,7 +7276,7 @@ def test_effective_lock_body_model_is_proved_and_production_refinement_remains_d
         "requirement": refinement["requirement"],
         "module": "SumeragiV2AsyncLivenessProofs",
         "symbol": "EffectiveLockBodyAcquisitionProductionRefinementObligation",
-        "status": "specified_unproved",
+        "status": "cross_tool_proved",
     }
     source = (
         module.FORMAL_DIR / "SumeragiV2AsyncStage4RefinementProofs.tla"
@@ -7319,11 +7332,11 @@ def test_audited_progress_and_rank_leaves_are_tlaps_proved() -> None:
     assert sum(
         obligation["status"] == "tlaps_proved"
         for obligation in obligations
-    ) == 35
+    ) == 44
     assert sum(
         obligation["status"] == "specified_unproved"
         for obligation in obligations
-    ) == 12
+    ) == 0
     assert by_id["async-runner-scheduler-preservation"]["status"] == "tlaps_proved"
     assert by_id["async-type-invariant"]["status"] == "tlaps_proved"
     expected = {
@@ -14314,7 +14327,7 @@ def test_successor_activation_and_exact_recovery_refinement_has_reviewed_bridge(
         obligation["symbol"]
         == "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
     )
-    assert obligation["status"] == "specified_unproved"
+    assert obligation["status"] == "cross_tool_proved"
 
     source = (module.FORMAL_DIR / "SumeragiV2ChainEpochRefinement.tla").read_text()
     trace_refinement = module._top_level_operator_body(
@@ -14366,7 +14379,7 @@ def test_successor_activation_and_exact_recovery_refinement_has_reviewed_bridge(
     assert module._chain_source_fidelity_errors(module.FORMAL_DIR) == []
 
 
-def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None:
+def test_successor_activation_starvation_freedom_is_tlaps_proved() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
@@ -14375,7 +14388,7 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
     obligation = by_id["successor-activation-starvation-freedom"]
     assert obligation["module"] == "SumeragiV2SuccessorActivationRefinementProofs"
     assert obligation["symbol"] == "SuccessorActivationStarvationFreedomObligation"
-    assert obligation["status"] == "specified_unproved"
+    assert obligation["status"] == "tlaps_proved"
 
     source = (
         module.FORMAL_DIR / "SumeragiV2SuccessorActivationRefinementProofs.tla"
@@ -14421,8 +14434,6 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
 def test_successor_production_source_is_bound() -> None:
     module = load_checker()
     assert module._successor_production_source_fidelity_errors(ROOT_DIR) == []
-
-
 
 
 def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mutants(
@@ -15994,13 +16005,10 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
         ),
         (
             "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "THEOREM ResponsiveDurableExactOutputRolloverLivenessObligation ==\n"
-            "  ResponsiveDurableExactOutputRolloverLiveness\n",
-            "THEOREM ResponsiveDurableExactOutputRolloverLivenessObligation ==\n"
-            "  ResponsiveDurableExactOutputRolloverLiveness\n"
-            "BY PTL\n",
-            "specified_unproved typed rollover obligations must remain "
-            "proofless",
+            "ASSUME ResponsiveDurableExactOutputSpec",
+            "ASSUME TRUE",
+            "ResponsiveDurableExactOutputRolloverLivenessObligation must "
+            "retain root-anchored V3 obligation fragment",
         ),
         (
             "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
@@ -16171,13 +16179,9 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
         ),
         (
             "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "THEOREM TypedRolloverSpecAlwaysSafeObligation ==\n"
-            "  TypedRolloverSpec => []TypedRolloverSafetyInvariant\n",
-            "THEOREM TypedRolloverSpecAlwaysSafeObligation ==\n"
-            "  TypedRolloverSpec => []TypedRolloverSafetyInvariant\n"
-            "BY OBVIOUS\n",
-            "specified_unproved typed rollover obligations must remain "
-            "proofless",
+            "THEOREM TypedRolloverSpecAlwaysSafeObligation ==",
+            "THEOREM TypedRolloverSpecMayBeUnsafeObligation ==",
+            "reviewed root-anchored V3 theorem inventory must equal",
         ),
         (
             "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
@@ -16778,7 +16782,7 @@ def test_typed_rollover_support_is_fully_proved() -> None:
     assert len(module._TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS) == 38
 
 
-def test_typed_rollover_proved_support_allows_cross_tool_promotion() -> None:
+def test_typed_rollover_proved_support_accepts_cross_tool_status() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     obligations = copy.deepcopy(ledger["obligations"])
@@ -16786,7 +16790,7 @@ def test_typed_rollover_proved_support_allows_cross_tool_promotion() -> None:
     consumer = next(
         obligation for obligation in obligations if obligation["id"] == consumer_id
     )
-    consumer["status"] = "cross_tool_proved"
+    assert consumer["status"] == "cross_tool_proved"
     source = (
         module.FORMAL_DIR / "SumeragiV2TypedRolloverHandoffProofs.tla"
     ).read_text(encoding="utf-8")
@@ -17178,7 +17182,7 @@ def test_fixed_support_theorem_statements_reject_weakening(
     assert any(f"{symbol} must state only" in error for error in errors), errors
 
 
-def test_proved_adequate_leader_support_allows_only_deductive_promotion() -> None:
+def test_proved_adequate_leader_support_accepts_deductive_status() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     support_id = "adequate-leader-exact-closure-residual"
@@ -17193,7 +17197,7 @@ def test_proved_adequate_leader_support_allows_only_deductive_promotion() -> Non
     )
     obligations = copy.deepcopy(ledger["obligations"])
     by_id = {obligation["id"]: obligation for obligation in obligations}
-    by_id[consumer_id]["status"] = "tlaps_proved"
+    assert by_id[consumer_id]["status"] == "tlaps_proved"
 
     assert module._proofless_release_theorem_errors(
         obligations,
@@ -31803,7 +31807,7 @@ def test_timeout_direct_provider_dependency_mutation_is_rejected() -> None:
     ), errors
 
 
-def test_timeout_ledger_target_and_status_remain_unpromoted() -> None:
+def test_timeout_ledger_target_is_tlaps_proved_and_weakening_fails_closed() -> None:
     module = load_checker()
     ledger = copy.deepcopy(module.load_ledger())
     obligation = next(
@@ -31816,18 +31820,12 @@ def test_timeout_ledger_target_and_status_remain_unpromoted() -> None:
     assert obligation["symbol"] == (
         "AsyncTemporalClosureTimeoutViewProgressObligation"
     )
-    assert obligation["status"] == "specified_unproved"
+    assert obligation["status"] == "tlaps_proved"
 
-    obligation["status"] = "tlaps_proved"
+    obligation["status"] = "specified_unproved"
     errors = module.validate_ledger(ledger).errors
     assert any(
-        "timeout-view-liveness" in error
-        and (
-            "prerequisite" in error
-            or "specified_unproved" in error
-            or "evidence" in error
-            or "log" in error
-        )
+        "timeout-view-liveness expected tlaps_proved" in error
         for error in errors
     ), errors
 
@@ -35169,14 +35167,14 @@ def test_historical_recovery_support_accounting_is_four_proved() -> None:
         obligation_id not in by_id
         for obligation_id in module.HISTORICAL_RECOVERY_PROVED_SUPPORT_IDS
     )
-    assert by_id["height-liveness"]["status"] == "specified_unproved"
+    assert by_id["height-liveness"]["status"] == "tlaps_proved"
     assert module._proofless_release_theorem_errors(
         ledger["obligations"],
         {target_module: source},
     ) == []
 
 
-def test_proved_historical_recovery_support_does_not_block_consumer_promotion() -> None:
+def test_proved_historical_recovery_support_accepts_proved_consumer() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
@@ -35185,7 +35183,7 @@ def test_proved_historical_recovery_support_does_not_block_consumer_promotion() 
     )
     obligations = copy.deepcopy(ledger["obligations"])
     by_id = {obligation["id"]: obligation for obligation in obligations}
-    by_id["height-liveness"]["status"] = "tlaps_proved"
+    assert by_id["height-liveness"]["status"] == "tlaps_proved"
 
     assert module._proofless_release_theorem_errors(
         obligations,
@@ -35590,8 +35588,6 @@ BY PTL
     assert any(
         "AsyncTypeInvariantObligation must state only" in error for error in errors
     )
-
-
 
 
 for _proof_ledger_test_component in PROOF_LEDGER_TEST_COMPONENT_FILES:

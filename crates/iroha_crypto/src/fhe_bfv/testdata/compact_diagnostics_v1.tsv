@@ -558,8 +558,8 @@ iroha-bfv-diagnostics-v1
 556	S	placeholder text	S	evaluator artifact-set digesting must reject binary-decorated placeholder artifact envelope bytes before Norito decoding
 557	S	placeholder text	S	evaluator artifact-set digesting must reject binary-split placeholder artifact envelope bytes before Norito decoding
 558	S	Norito-encoded	S	evaluator artifact-set digesting must reject malformed artifact envelopes
-559	S	canonical v1 envelope bytes	S	artifact bundles must reject noncanonical compressed artifact envelope framing
-560	S	canonical v1 envelope bytes	S	evaluator artifact-set digesting must reject noncanonical compressed artifact envelope framing
+559	S	canonical v1 bytes containing a Norito-encoded BFV full-bootstrap artifact payload	S	artifact bundles must reject noncanonical compressed artifact envelope framing
+560	S	canonical v1 bytes containing a Norito-encoded BFV full-bootstrap artifact payload	S	evaluator artifact-set digesting must reject noncanonical compressed artifact envelope framing
 561	S	linear transform	S	evaluator artifact-set digesting must reject opaque typed artifact payloads
 562	S	placeholder text	S	evaluator artifact-set digesting must reject placeholder artifact circuit ids before governed mismatch
 563	S	canonical	S	evaluator artifact-set digesting must reject wrong-circuit artifact envelopes before governed mismatch
@@ -674,7 +674,7 @@ iroha-bfv-diagnostics-v1
 672	S	canonical	S	artifact bundles must reject proof-key material retargeted to a noncanonical native circuit
 673	S	canonical v1 bytes	S	artifact-derived proof-key commitments must reject noncanonical compressed Norito payload framing
 674	S	canonical v1 bytes	S	decoded artifact-derived proof-key commitments must reject noncanonical compressed Norito payload framing
-675	S	canonical v1 envelope bytes	S	artifact-derived proof-key commitments must reject noncanonical compressed envelope framing
+675	S	canonical v1 bytes containing a Norito-encoded BFV full-bootstrap artifact payload	S	artifact-derived proof-key commitments must reject noncanonical compressed envelope framing
 676	S	placeholder text	S	artifact-derived proof-key commitments must reject binary-split placeholder payloads before typed decoding
 677	S	placeholder text	S	artifact-derived proof-key commitments must reject placeholder artifact circuit ids before canonical mismatch
 678	S	canonical	S	artifact-derived proof-key commitments must reject wrong-circuit artifact envelopes before profile matching

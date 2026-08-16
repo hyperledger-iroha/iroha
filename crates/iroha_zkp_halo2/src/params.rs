@@ -5,7 +5,8 @@
 //! - `h` vector for binding the public vector in the IPA proof (length `n`)
 //! - a single `u` element to bind the inner product term
 //!
-//! All generators are derived using SHA3-256 under a fixed DST.
+//! Production generators are mapped independently with the backend's hash-to-curve suite under a
+//! fixed, framed domain. This keeps their discrete-log relationships unknown.
 use crate::{
     backend::{IpaBackend, traits::IpaGroup},
     errors::Error,

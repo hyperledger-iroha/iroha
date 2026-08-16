@@ -1,10 +1,9 @@
 //! Source-backed authenticated Kagemusha artifact access.
 //!
-//! Production runtimes retain pinned artifact handles instead of materializing
-//! the complete Eq/Ep inventory.  A source can only lend a seekable framed
-//! reader: descriptor selection, release binding, complete-frame digest
-//! authentication, exact parser-pass consumption, and trailing-byte rejection
-//! remain owned by core.
+//! Production runtimes retain pinned artifact handles instead of materializing the complete Eq/Ep
+//! inventory. A source can only lend a seekable framed reader: descriptor selection, release
+//! binding, complete-frame digest authentication, exact parser-pass consumption, and trailing-byte
+//! rejection remain owned by core.
 use super::kagemusha_artifact_v4::{
     KagemushaAuthenticatedArtifactInspectionV4, KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
     kagemusha_artifact_descriptor_v4,
@@ -22,10 +21,9 @@ use std::{
 };
 /// Object-safe seekable reader lent by an authenticated artifact source.
 ///
-/// The source must keep the underlying handle pinned for the complete callback.
-/// Core either authenticates it before and during the callback or consumes a
-/// pinned source's retained complete-frame inspection and reauthenticates the
-/// exact bytes seen by the callback.
+/// The source must keep the underlying handle pinned for the complete callback. Core either
+/// authenticates it before and during the callback or consumes a pinned source's retained
+/// complete-frame inspection and reauthenticates the exact bytes seen by the callback.
 pub trait KagemushaArtifactReadSeekV4: Read + Seek {}
 impl<T: Read + Seek + ?Sized> KagemushaArtifactReadSeekV4 for T {}
 /// Immutable source for one separately authenticated production release.
@@ -47,10 +45,9 @@ pub trait KagemushaAuthenticatedArtifactSourceV4: Send + Sync {
     ) -> Result<(), String>;
     /// Return a prior complete-frame authentication retained by this source.
     ///
-    /// Sources which cannot pin immutable file identity should keep the safe
-    /// default. Core then performs both authentication and parser passes for
-    /// every access. A returned inspection never replaces the parser pass or
-    /// either manifest digest check.
+    /// Sources which cannot pin immutable file identity should keep the safe default. Core then
+    /// performs both authentication and parser passes for every access. A returned inspection never
+    /// replaces the parser pass or either manifest digest check.
     fn authenticated_inspection(
         &self,
         _parity: KagemushaPastaCycleParityV1,
@@ -61,10 +58,9 @@ pub trait KagemushaAuthenticatedArtifactSourceV4: Send + Sync {
 }
 /// Lightweight, release-bound semantic identity for one qualified parity.
 ///
-/// This deliberately retains no Halo2 parameters or keys.  The raw SHA-256
-/// identifies the signed `SerdeFormat::Processed` artifact payload; the
-/// verifier-key commitment applies Iroha's `iroha:zk:v1:vk` domain separation
-/// with the exact `halo2/ipa` backend and payload length.
+/// This deliberately retains no Halo2 parameters or keys. The raw SHA-256 identifies the signed
+/// `SerdeFormat::Processed` artifact payload; the verifier-key commitment applies Iroha's
+/// `iroha:zk:v1:vk` domain separation with the exact `halo2/ipa` backend and payload length.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaQualifiedParityMetadataV4 {
     parity: KagemushaPastaCycleParityV1,
@@ -156,11 +152,10 @@ impl KagemushaQualifiedParityMetadataV4 {
 }
 /// Core-owned proof that all eight signed roles passed semantic qualification.
 ///
-/// Construction is private to core.  The returned object inseparably retains
-/// the original pinned file source and a clone of the authenticated release as
-/// it existed before qualification.  Its source implementation always returns
-/// that clone, so a source with mutable release metadata cannot introduce a
-/// release/file time-of-check/time-of-use split after qualification.
+/// Construction is private to core. The returned object inseparably retains the original pinned
+/// file source and a clone of the authenticated release as it existed before qualification. Its
+/// source implementation always returns that clone, so a source with mutable release metadata
+/// cannot introduce a release/file time-of-check/time-of-use split after qualification.
 #[derive(Clone)]
 pub struct KagemushaQualifiedArtifactSourceV4 {
     source: Arc<dyn KagemushaAuthenticatedArtifactSourceV4>,
@@ -222,10 +217,9 @@ impl KagemushaQualifiedArtifactSourceV4 {
     }
     /// Lend one authenticated processed verifying-key payload without copying it.
     ///
-    /// Only a semantically qualified source exposes this projection.  Core
-    /// authenticates the complete framed file before the callback and hashes
-    /// the exact bytes consumed by it a second time.  The callback must consume
-    /// all `processed_verifying_key_len` bytes.
+    /// Only a semantically qualified source exposes this projection. Core authenticates the
+    /// complete framed file before the callback and hashes the exact bytes consumed by it a second
+    /// time. The callback must consume all `processed_verifying_key_len` bytes.
     pub fn with_authenticated_processed_verifying_key<T, F>(
         &self,
         parity: KagemushaPastaCycleParityV1,
@@ -337,11 +331,10 @@ impl<T> KagemushaSourceCallbackStateV4<T> {
 }
 /// Authenticate and parse one exact payload from a source-backed release.
 ///
-/// The callback sees a bounded hashing reader and must consume it completely.
-/// The selected file is authenticated before parsing unless its pinned source
-/// retains a complete prior inspection. In both cases the exact bytes consumed
-/// by `parse` are authenticated again. The source callback must run exactly
-/// once.
+/// The callback sees a bounded hashing reader and must consume it completely. The selected file is
+/// authenticated before parsing unless its pinned source retains a complete prior inspection. In
+/// both cases the exact bytes consumed by `parse` are authenticated again. The source callback must
+/// run exactly once.
 pub fn with_kagemusha_authenticated_artifact_payload_from_source_v4<T, F>(
     source: &dyn KagemushaAuthenticatedArtifactSourceV4,
     parity: KagemushaPastaCycleParityV1,

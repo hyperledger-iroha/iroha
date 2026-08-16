@@ -1,0 +1,12 @@
+
+        seiyaku NamedCall {
+            fn first() -> int { 1 }
+            fn second() -> bool { true }
+            fn combine(int left, bool right) -> int {
+                if right { left } else { 0 }
+            }
+            view fn main() -> int {
+                combine(right: second(), left: first())
+            }
+        }
+    

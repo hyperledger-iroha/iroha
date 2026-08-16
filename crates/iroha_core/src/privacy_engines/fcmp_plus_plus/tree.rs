@@ -4,8 +4,7 @@
 //! coordinates are hashed to Selene.  Each following layer alternates between
 //! 18 Selene-x children hashed to Helios and 38 Helios-x children hashed to
 //! Selene.  The frontier stores only the active leaf and the mixed-radix
-//! completed siblings, so persisted state is bounded independently of output
-//! set size.
+//! completed siblings, so persisted state is bounded independently of output set size.
 use super::{
     FCMP_LAYER_ONE_LEN_V1, FCMP_LAYER_TWO_LEN_V1, FcmpNativeErrorV1, FcmpOutputTupleV1,
     FcmpTreeRootV1,
@@ -27,8 +26,7 @@ pub struct FcmpFrontierPartsV1 {
     ///
     /// Level zero contains canonical Helioselene-field encodings of completed
     /// Selene-child x coordinates.  Level one contains Field25519 encodings of
-    /// completed Helios-child x coordinates, and the field alternates
-    /// thereafter.
+    /// completed Helios-child x coordinates, and the field alternates thereafter.
     pub levels: Vec<Vec<[u8; 32]>>,
     /// Root recomputed from all compact parts.
     pub root: FcmpTreeRootV1,
@@ -229,8 +227,7 @@ fn append_one(
     active_outputs.push(output);
     Ok(())
 }
-/// Build canonical compact frontier parts from a complete ordered genesis
-/// output set.
+/// Build canonical compact frontier parts from a complete ordered genesis output set.
 pub fn build_fcmp_frontier_v1(
     outputs: &[FcmpOutputTupleV1],
 ) -> Result<FcmpFrontierPartsV1, FcmpNativeErrorV1> {
@@ -266,13 +263,11 @@ pub fn validate_fcmp_frontier_v1(parts: &FcmpFrontierPartsV1) -> Result<(), Fcmp
     }
     Ok(())
 }
-/// Append a non-empty ordered output batch and return the validator-derived
-/// successor frontier.
+/// Append a non-empty ordered output batch and return the validator-derived successor frontier.
 ///
 /// The compact frontier can only detect duplicates in the active leaf and the
 /// new batch.  Ledger integration must additionally check each `output_id`
-/// against the protocol-scoped durable output registry before calling this
-/// function.
+/// against the protocol-scoped durable output registry before calling this function.
 pub fn append_fcmp_outputs_v1(
     current: &FcmpFrontierPartsV1,
     outputs: &[FcmpOutputTupleV1],

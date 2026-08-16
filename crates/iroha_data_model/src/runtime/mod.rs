@@ -158,8 +158,7 @@ impl RuntimeUpgradeManifest {
     ///
     /// # Errors
     ///
-    /// Returns a crypto error if the selected signing backend rejects the
-    /// key material or payload.
+    /// Returns a crypto error if the selected signing backend rejects the key material or payload.
     pub fn try_signed(mut self, key_pair: &KeyPair) -> Result<Self, CryptoError> {
         let payload = self.signature_payload_bytes();
         let signature = Signature::try_new(key_pair.private_key(), &payload)?;

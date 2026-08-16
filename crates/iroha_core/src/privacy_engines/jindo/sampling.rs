@@ -1,9 +1,8 @@
 //! Prover-only integer sampling for revised Jindo.
 //!
-//! The first-release sampler is entirely integer-defined. Its one admissible
-//! Gaussian width is a closed profile identifier and every
-//! probability comparison consumes one explicitly big-endian 256-bit draw.
-//! Every rejection loop is bounded and fails closed for adversarial randomness.
+//! The first-release sampler is entirely integer-defined. Its one admissible Gaussian width is a
+//! closed profile identifier and every probability comparison consumes one explicitly big-endian
+//! 256-bit draw. Every rejection loop is bounded and fails closed for adversarial randomness.
 #[cfg(test)]
 use super::field::JindoFieldElementV1;
 use super::{

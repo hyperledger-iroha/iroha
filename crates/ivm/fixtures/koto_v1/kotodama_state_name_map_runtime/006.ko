@@ -1,0 +1,20 @@
+
+        seiyaku C {
+            struct Entry { int amount, bool active }
+            state StateMap<Name, Entry> Entries;
+
+            fn read_score(Name key) -> int {
+                let entry = Entries.get(key).unwrap_or(Entry { amount: 0, active: false });
+                var value = entry.amount;
+                if (entry.active) {
+                    value = value + 1;
+                }
+                return value;
+            }
+
+            kotoage fn main() -> int authorize("WriteState") {
+                Entries[Name::parse("alice")] = Entry { amount: 41, active: true };
+                return read_score(Name::parse("alice"));
+            }
+        }
+    

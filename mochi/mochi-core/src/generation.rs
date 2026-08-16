@@ -529,10 +529,9 @@ fn generation_pointer_temporary_id(name: &OsStr) -> Result<Option<String>> {
 }
 /// Reclaim only transactions carrying Mochi's durable ownership marker.
 ///
-/// The caller holds the exclusive generation lock. Unmarked generation and
-/// storage paths are deliberately ignored because they may be intentionally
-/// retained publication history, even when that history has since been
-/// damaged and no longer passes strict verification.
+/// The caller holds the exclusive generation lock. Unmarked generation and storage paths are
+/// deliberately ignored because they may be intentionally retained publication history, even when
+/// that history has since been damaged and no longer passes strict verification.
 fn recover_abandoned_generation_transactions(root: &Path, generations: &Path) -> Result<()> {
     let mut entries = 0_usize;
     for marker in fs::read_dir(root)? {
@@ -755,9 +754,8 @@ fn abandoned_runtime_storage_paths(root: &Path, id: &str) -> Result<Vec<PathBuf>
 }
 /// Acquire a nonblocking shared lease on the selected-generation pointer.
 ///
-/// Exclusive generation publishers use the same lock, so retaining the
-/// returned file prevents an API writer from retiring paths resolved under
-/// this lease.
+/// Exclusive generation publishers use the same lock, so retaining the returned file prevents an
+/// API writer from retiring paths resolved under this lease.
 pub(crate) fn try_lock_generation_selection(root: &Path) -> Result<File> {
     reject_symlink(root, "network root")?;
     let root = fs::canonicalize(root)?;

@@ -79,8 +79,7 @@ pub struct IpaRoundChallenge<S: IpaScalar> {
 pub struct IpaVerifierTranscriptProjection<S: IpaScalar> {
     /// Public vector length absorbed by the IPA verifier.
     pub n: usize,
-    /// Transcript state after the polynomial-opening statement and before
-    /// absorbing `ipa.n`.
+    /// Transcript state after the polynomial-opening statement and before absorbing `ipa.n`.
     pub state_before_ipa_n: [u8; 32],
     /// Transcript state after absorbing `ipa.n` and before the first round.
     pub state_after_ipa_n: [u8; 32],
@@ -91,11 +90,10 @@ pub struct IpaVerifierTranscriptProjection<S: IpaScalar> {
 }
 /// Field-friendly binding of one verifier transcript projection.
 ///
-/// The native verifier still validates the exact SHA3 transcript projection.
-/// This structure additionally projects that byte transcript into scalar field
-/// elements and folds them with a transparent Pow5 accumulator so recursive
-/// verifier circuits can bind their public challenge inputs to the host-checked
-/// transcript without implementing SHA3 inside the circuit.
+/// The native verifier still validates the exact SHA3 transcript projection. This structure
+/// additionally projects that byte transcript into scalar field elements and folds them with a
+/// transparent Pow5 accumulator so recursive verifier circuits can bind their public challenge
+/// inputs to the host-checked transcript without implementing SHA3 inside the circuit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpaVerifierTranscriptBinding<S: IpaScalar> {
     /// Public vector length absorbed by the IPA verifier.
@@ -154,9 +152,8 @@ pub struct IpaVerifierBVectorReductionRound<S: IpaScalar> {
 }
 /// Native verifier-side public `b`-vector reduction projection.
 ///
-/// This is the scalar-side companion to [`IpaVerifierAccumulation`]. It gives a
-/// recursive verifier witness a deterministic path from the public opening
-/// vector `b` to the proof's final scalar.
+/// This is the scalar-side companion to [`IpaVerifierAccumulation`]. It gives a recursive verifier
+/// witness a deterministic path from the public opening vector `b` to the proof's final scalar.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpaVerifierBVectorReduction<S: IpaScalar> {
     /// Initial public `b` vector from the polynomial-opening statement.
@@ -168,10 +165,9 @@ pub struct IpaVerifierBVectorReduction<S: IpaScalar> {
 }
 /// Native verifier-side IPA accumulation projection.
 ///
-/// This is a deterministic witness layout for current recursive verification:
-/// it exposes the initial `Q`, every round's folded group state, the final
-/// folded generators, and the final expected term compared by the ordinary IPA
-/// verifier.
+/// This is a deterministic witness layout for current recursive verification: it exposes the
+/// initial `Q`, every round's folded group state, the final folded generators, and the final
+/// expected term compared by the ordinary IPA verifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpaVerifierAccumulation<G: IpaGroup> {
     /// Initial verifier accumulator `P * H(b) * U^t`.
@@ -189,10 +185,9 @@ pub struct IpaVerifierAccumulation<G: IpaGroup> {
 }
 /// Combined native verifier-side IPA witness for recursive verification.
 ///
-/// This bundles the transcript challenge projection, public `b`-vector
-/// reduction, and group-accumulation projection for one proof. It is the
-/// canonical host-side witness shape used by recursive in-circuit verifier
-/// assembly.
+/// This bundles the transcript challenge projection, public `b`-vector reduction, and
+/// group-accumulation projection for one proof. It is the canonical host-side witness shape used by
+/// recursive in-circuit verifier assembly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpaVerifierWitness<B: IpaBackend> {
     /// Public transcript projection for this proof.
@@ -233,11 +228,10 @@ fn scalar_pow5<S: IpaScalar>(value: S) -> S {
 }
 /// Transparent field compressor used by the transcript-binding accumulator.
 ///
-/// This is deliberately small and circuit-friendly: recursive verifier circuits
-/// can enforce it with quadratic constraints by witnessing the intermediate
-/// squares. It is not a replacement for the native SHA3 transcript; it binds
-/// scalar projections of a SHA3-validated transcript into the recursive public
-/// input surface.
+/// This is deliberately small and circuit-friendly: recursive verifier circuits can enforce it with
+/// quadratic constraints by witnessing the intermediate squares. It is not a replacement for the
+/// native SHA3 transcript; it binds scalar projections of a SHA3-validated transcript into the
+/// recursive public input surface.
 pub fn ipa_transcript_binding_compress<S: IpaScalar>(left: S, right: S) -> S {
     let left_shifted = left.add(scalar_from_u64::<S>(7));
     let right_shifted = right.add(scalar_from_u64::<S>(13));
@@ -359,8 +353,7 @@ pub fn derive_ipa_verifier_transcript_binding<S: IpaScalar>(
 ///
 /// # Errors
 ///
-/// Returns an error if the deterministic binding derived from `projection`
-/// differs from `binding`.
+/// Returns an error if the deterministic binding derived from `projection` differs from `binding`.
 pub fn validate_ipa_verifier_transcript_binding<S: IpaScalar>(
     projection: &IpaVerifierTranscriptProjection<S>,
     binding: &IpaVerifierTranscriptBinding<S>,
@@ -447,9 +440,8 @@ pub fn derive_ipa_verifier_transcript_projection<B: IpaBackend>(
 }
 /// Derive the verifier-side IPA round challenges from the current transcript.
 ///
-/// The caller must have already absorbed the polynomial-opening statement into
-/// `transcript`. This helper returns the per-round portion of
-/// [`derive_ipa_verifier_transcript_projection`].
+/// The caller must have already absorbed the polynomial-opening statement into `transcript`. This
+/// helper returns the per-round portion of [`derive_ipa_verifier_transcript_projection`].
 ///
 /// # Errors
 ///
@@ -487,9 +479,8 @@ pub fn validate_ipa_verifier_transcript_projection<B: IpaBackend>(
 }
 /// Project the verifier-side IPA public `b`-vector reduction.
 ///
-/// `round_challenges` must come from
-/// [`derive_ipa_verifier_round_challenges`] for the same statement and proof.
-/// The returned `final_b` is the value that must match `proof.b_final` in the
+/// `round_challenges` must come from [`derive_ipa_verifier_round_challenges`] for the same
+/// statement and proof. The returned `final_b` is the value that must match `proof.b_final` in the
 /// final IPA comparison.
 ///
 /// # Errors
@@ -555,11 +546,9 @@ pub fn derive_ipa_verifier_b_vector_reduction<S: IpaScalar>(
 }
 /// Project the verifier-side IPA scalar-multiplication accumulation.
 ///
-/// `round_challenges` must come from
-/// [`derive_ipa_verifier_round_challenges`] for the same statement and proof.
-/// The function does not mutate a transcript; it deterministically folds `Q`,
-/// `g`, and `h` exactly as the verifier does and returns the final comparison
-/// term.
+/// `round_challenges` must come from [`derive_ipa_verifier_round_challenges`] for the same
+/// statement and proof. The function does not mutate a transcript; it deterministically folds `Q`,
+/// `g`, and `h` exactly as the verifier does and returns the final comparison term.
 ///
 /// # Errors
 ///
@@ -677,16 +666,14 @@ pub fn derive_ipa_verifier_accumulation<B: IpaBackend>(
 }
 /// Derive the complete native verifier-side witness for one IPA proof.
 ///
-/// The caller must have already absorbed the polynomial-opening statement into
-/// `transcript`. The function mutates `transcript` exactly as the verifier does
-/// and returns the transcript, scalar-reduction, and group-accumulation witness
-/// projections used by recursive verification.
+/// The caller must have already absorbed the polynomial-opening statement into `transcript`. The
+/// function mutates `transcript` exactly as the verifier does and returns the transcript,
+/// scalar-reduction, and group-accumulation witness projections used by recursive verification.
 ///
 /// # Errors
 ///
-/// Returns an error if the proof shape is invalid, if `proof.b_final` is not the
-/// transcript-derived fold of the public `b` vector, or if any projected
-/// sub-witness cannot be derived.
+/// Returns an error if the proof shape is invalid, if `proof.b_final` is not the transcript-derived
+/// fold of the public `b` vector, or if any projected sub-witness cannot be derived.
 pub fn derive_ipa_verifier_witness<B: IpaBackend>(
     params: &Params<B>,
     transcript: &mut Transcript,
@@ -717,10 +704,9 @@ pub fn derive_ipa_verifier_witness<B: IpaBackend>(
 }
 /// Validate a supplied recursive-verifier IPA witness against the native verifier.
 ///
-/// The caller must have already absorbed the polynomial-opening statement into
-/// `transcript`. This recomputes the expected witness from the proof and public
-/// statement, compares it with `witness`, and enforces the final verifier group
-/// equality.
+/// The caller must have already absorbed the polynomial-opening statement into `transcript`. This
+/// recomputes the expected witness from the proof and public statement, compares it with `witness`,
+/// and enforces the final verifier group equality.
 ///
 /// # Errors
 ///

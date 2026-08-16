@@ -9,13 +9,12 @@
 //!
 //! Torii's current finalized query pages do not carry a portable consensus
 //! inclusion proof.  Cache authenticity is therefore rooted in the online
-//! reader's validation plus the private, identity-checked user cache directory;
-//! the domain-separated snapshot commitment detects subsequent corruption.
-//! Linux and Android bind catalog reads to the retained cache-root descriptor
-//! through `/proc/self/fd`; other platforms reject offline catalog reads until
-//! an equivalent safe descriptor-rooted primitive is available.
-//! TODO: Verify and retain a portable finalized-state inclusion proof here once
-//! the public query contract exposes one.
+//! reader's validation plus the private, identity-checked user cache directory; the
+//! domain-separated snapshot commitment detects subsequent corruption. Linux and Android bind
+//! catalog reads to the retained cache-root descriptor through `/proc/self/fd`; other platforms
+//! reject offline catalog reads until an equivalent safe descriptor-rooted primitive is available.
+//! TODO: Verify and retain a portable finalized-state inclusion proof here once the public query
+//! contract exposes one.
 use crate::{
     atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
     cache::{CacheError, MusubiCache},
@@ -592,7 +591,7 @@ impl CachedResolverSourceV1 {
         ))
     }
     /// Return the exact finalized anchor represented by this source.
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
     pub(super) const fn snapshot(&self) -> MusubiRegistrySnapshotV1 {
         self.snapshot.snapshot
     }

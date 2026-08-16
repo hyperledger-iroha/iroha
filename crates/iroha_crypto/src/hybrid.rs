@@ -1,10 +1,9 @@
 //! Hybrid KEM/DEM helpers powering the SoraFS payload envelope (SF-4b).
 //!
-//! The construction combines a classical X25519 ECDH exchange with ML-KEM-768
-//! (Kyber) and feeds the concatenated shared secrets into an HKDF-SHA3-256
-//! derive step together with a length-prefixed public transcript binding. The
-//! resulting 32-byte key material is suitable for ChaCha20-Poly1305 while the
-//! secondary output provides a deterministic re-key secret so callers can rotate
+//! The construction combines a classical X25519 ECDH exchange with ML-KEM-768 (Kyber) and feeds the
+//! concatenated shared secrets into an HKDF-SHA3-256 derive step together with a length-prefixed
+//! public transcript binding. The resulting 32-byte key material is suitable for ChaCha20-Poly1305
+//! while the secondary output provides a deterministic re-key secret so callers can rotate
 //! envelopes without advertising new long-term public keys.
 use crate::kex::is_x25519_low_order_public_key;
 use core::{fmt, str::FromStr};
@@ -475,10 +474,9 @@ impl fmt::Debug for DerivedSecret {
 ///
 /// # Errors
 ///
-/// Returns [`HybridError`] if encapsulation fails (for example, when the
-/// X25519 shared secret is all-zero due to a low-order public key, Kyber
-/// rejects the peer parameters, or HKDF expansion cannot produce the requested
-/// output length).
+/// Returns [`HybridError`] if encapsulation fails (for example, when the X25519 shared secret is
+/// all-zero due to a low-order public key, Kyber rejects the peer parameters, or HKDF expansion
+/// cannot produce the requested output length).
 pub fn encapsulate<R>(
     suite: HybridSuite,
     recipient: &HybridPublicKey,

@@ -249,10 +249,9 @@ impl PackagePlan {
     }
     /// Consume the plan and construct its bounded deterministic `SoraFS` `CARv2` bundle.
     ///
-    /// The CAR directory DAG contains the normalized source tree and verification
-    /// lock plus the exact semantic release manifest and typed artifact descriptor.
-    /// Providers can therefore attest to parsing the bundle rather than merely
-    /// storing an opaque byte string.
+    /// The CAR directory DAG contains the normalized source tree and verification lock plus the
+    /// exact semantic release manifest and typed artifact descriptor. Providers can therefore
+    /// attest to parsing the bundle rather than merely storing an opaque byte string.
     ///
     /// # Errors
     ///

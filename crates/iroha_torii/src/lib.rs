@@ -15802,6 +15802,13 @@ const ZK_IVM_MAX_PROVED_JSON_BYTES: usize = 16 * 1024 * 1024;
 const ZK_IVM_MAX_JOB_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const ZK_IVM_PROVE_JOB_MIN_PENDING_RESERVATION_BYTES: usize = 1024;
 const ZK_IVM_PROVE_JOB_MAX_ERROR_BYTES: usize = 1024;
+#[cfg(feature = "app_api")]
+fn zk_ivm_next_execution_height(committed_height: usize) -> Result<u64, String> {
+    u64::try_from(committed_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or_else(|| "execution height overflow while resolving verifier-key policy".to_owned())
+}
 #[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
 struct ZkIvmProofBoxJsonDto {
     backend: String,
@@ -16794,66 +16801,15 @@ async fn handler_zk_ivm_derive(
             endpoint: "v1/zk/ivm/derive",
             retry_after_secs,
         })?;
-    // Derivation needs only these lightweight policy fields. Borrow the
-    // registry record under admitted compute capacity and never clone its
-    // optional inline verifying-key bytes on the async runtime thread.
-    let (vk_circuit_id, vk_version, vk_gas_schedule_id) = {
-        let world = app.state.world_view();
-        let vk_record = world.verifying_keys().get(&req.vk_ref).ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "verifying key not found: {}::{}",
-                    req.vk_ref.backend, req.vk_ref.name
-                )),
-            ))
-        })?;
-        if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "verifying key is not Active".to_owned(),
-                ),
-            )));
-        }
-        if !circuit_id_matches(
-            backend,
-            &vk_record.circuit_id,
-            iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
-        ) {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "verifying key circuit_id is not compatible with `ivm-execution-v1` for backend `{backend}` (got `{}`)",
-                    vk_record.circuit_id,
-                )),
-            )));
-        }
-        let expected_schema_hash = iroha_core::zk::ivm_execution_public_inputs_schema_hash();
-        if vk_record.public_inputs_schema_hash != expected_schema_hash {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "verifying key schema hash is not compatible with `ivm-execution-v1`"
-                        .to_owned(),
-                ),
-            )));
-        }
-        let gas_schedule_id = vk_record.gas_schedule_id.clone().ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "verifying key missing gas_schedule_id".to_owned(),
-                ),
-            ))
-        })?;
-        (
-            vk_record.circuit_id.clone(),
-            vk_record.version,
-            gas_schedule_id,
-        )
-    };
     let network_id = *app.state.network_id_ref();
     let state = Arc::clone(&app.state);
-    let authority = req.authority;
-    let fee_payment = req.fee_payment;
-    let metadata = req.metadata;
-    let bytecode = req.bytecode;
+    let ZkIvmDeriveRequestDto {
+        vk_ref,
+        authority,
+        fee_payment,
+        metadata,
+        bytecode,
+    } = req;
     let derive_task = tokio::task::spawn_blocking(move || -> Result<Bytes, String> {
         // The owned permit lives inside the physical blocking task, so
         // request cancellation/timeout cannot detach unaccounted VM work.
@@ -16870,13 +16826,45 @@ async fn handler_zk_ivm_derive(
         .map_err(|err| format!("failed to sign synthetic IVM derive transaction: {err}"))?
         // Proof derivation needs a stable authority, but signature validity is not required here.
         .with_authority(authority);
+        // Resolve lifecycle and policy from the same snapshot used to execute the IVM.
         let view = state.query_view();
+        let execution_height = zk_ivm_next_execution_height(view.height())?;
+        let vk_record = view.world().verifying_keys().get(&vk_ref).ok_or_else(|| {
+            format!(
+                "verifying key not found: {}::{}",
+                vk_ref.backend, vk_ref.name
+            )
+        })?;
+        if !vk_record.is_active_at(execution_height) {
+            return Err("verifying key is not active at the execution height".to_owned());
+        }
+        if !circuit_id_matches(
+            vk_ref.backend.as_str(),
+            &vk_record.circuit_id,
+            iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+        ) {
+            return Err(format!(
+                "verifying key circuit_id is not compatible with `ivm-execution-v1` for backend `{}` (got `{}`)",
+                vk_ref.backend, vk_record.circuit_id,
+            ));
+        }
+        if vk_record.public_inputs_schema_hash
+            != iroha_core::zk::ivm_execution_public_inputs_schema_hash()
+        {
+            return Err(
+                "verifying key schema hash is not compatible with `ivm-execution-v1`".to_owned(),
+            );
+        }
+        let gas_schedule_id = vk_record
+            .gas_schedule_id
+            .as_deref()
+            .ok_or_else(|| "verifying key missing gas_schedule_id".to_owned())?;
         let proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context(
                 &view,
                 &tx,
-                &vk_circuit_id,
-                vk_version,
-                Some(&vk_gas_schedule_id),
+                &vk_record.circuit_id,
+                vk_record.version,
+                Some(gas_schedule_id),
                 ZK_IVM_MAX_PROVED_JSON_BYTES,
             )
             .map_err(|err| err.to_string())?;
@@ -17010,19 +16998,28 @@ async fn handler_zk_ivm_prove(
             retry_after_secs,
         })?;
     {
-        let world = app.state.world_view();
-        let vk_record = world.verifying_keys().get(&req.vk_ref).ok_or_else(|| {
+        let view = app.state.query_view();
+        let execution_height = zk_ivm_next_execution_height(view.height()).map_err(|message| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "verifying key not found: {}::{}",
-                    req.vk_ref.backend, req.vk_ref.name
-                )),
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
             ))
         })?;
-        if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
+        let vk_record = view
+            .world()
+            .verifying_keys()
+            .get(&req.vk_ref)
+            .ok_or_else(|| {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                        "verifying key not found: {}::{}",
+                        req.vk_ref.backend, req.vk_ref.name
+                    )),
+                ))
+            })?;
+        if !vk_record.is_active_at(execution_height) {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "verifying key is not Active".to_owned(),
+                    "verifying key is not active at the execution height".to_owned(),
                 ),
             )));
         }
@@ -17178,21 +17175,22 @@ async fn handler_zk_ivm_prove(
             // loading, execution, proving, and terminal serialization.
             let _inflight_permit = inflight_permit;
             let outcome = (|| -> ZkIvmProveOutcome {
-                let vk_record = {
-                    let world = state.world_view();
-                    world
-                        .verifying_keys()
-                        .get(&vk_ref)
-                        .cloned()
-                        .ok_or_else(|| {
-                            format!(
-                                "verifying key not found: {}::{}",
-                                vk_ref.backend, vk_ref.name
-                            )
-                        })?
-                };
-                if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
-                    return Err("verifying key is not Active".to_owned());
+                // Bind verifier admission and derived execution to one committed snapshot.
+                let view = state.query_view();
+                let execution_height = zk_ivm_next_execution_height(view.height())?;
+                let vk_record = view
+                    .world()
+                    .verifying_keys()
+                    .get(&vk_ref)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "verifying key not found: {}::{}",
+                            vk_ref.backend, vk_ref.name
+                        )
+                    })?;
+                if !vk_record.is_active_at(execution_height) {
+                    return Err("verifying key is not active at the execution height".to_owned());
                 }
                 if !circuit_id_matches(
                     backend.as_str(),
@@ -17282,7 +17280,6 @@ async fn handler_zk_ivm_prove(
                 .map_err(|err| format!("failed to sign synthetic IVM prove transaction: {err}"))?
                 // Proof derivation needs stable authority; signature validity is not required.
                 .with_authority(authority.clone());
-                let view = state.query_view();
                 let derived_proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context(
                     &view,
                     &tx,
@@ -51639,20 +51636,24 @@ async fn handler_mcp_jsonrpc(
     if mcp::is_initialized_notification(&payload) {
         return mcp::private_no_store_response(StatusCode::ACCEPTED);
     }
-    let response_payload = if let Some(batch) = payload.as_array() {
-        if batch.is_empty() {
+    let response_payload = match payload {
+        norito::json::Value::Array(batch) if batch.is_empty() => {
             mcp::jsonrpc_invalid_request("batch request must not be empty")
-        } else {
-            let mut responses = Vec::with_capacity(batch.len());
-            for request_value in batch {
-                let response =
-                    mcp::handle_jsonrpc_request(app.clone(), &headers, request_value.clone()).await;
-                responses.push(response);
-            }
-            norito::json::Value::Array(responses)
         }
-    } else {
-        mcp::handle_jsonrpc_request(app, &headers, payload).await
+        norito::json::Value::Array(batch) => {
+            let mut responses = Vec::new();
+            if responses.try_reserve_exact(batch.len()).is_err() {
+                mcp::jsonrpc_allocation_failed("failed to reserve MCP batch response storage")
+            } else {
+                for request_value in batch {
+                    let response =
+                        mcp::handle_jsonrpc_request(app.clone(), &headers, request_value).await;
+                    responses.push(response);
+                }
+                norito::json::Value::Array(responses)
+            }
+        }
+        payload => mcp::handle_jsonrpc_request(app, &headers, payload).await,
     };
     mcp::private_no_store_response((StatusCode::OK, JsonBody(response_payload)))
 }

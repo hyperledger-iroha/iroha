@@ -13,6 +13,11 @@ fn verified_zk_ivm_derive_request(
         verified_signers: vec![signer],
     })
 }
+#[test]
+fn zk_ivm_tooling_advances_the_committed_height_for_execution() {
+    assert_eq!(zk_ivm_next_execution_height(0), Ok(1));
+    assert_eq!(zk_ivm_next_execution_height(41), Ok(42));
+}
 #[tokio::test]
 async fn configured_proof_body_layer_accepts_above_axum_default_and_rejects_limit_plus_one() {
     let app = mk_app_state_for_tests();
@@ -882,6 +887,9 @@ async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
     vk_record.max_proof_bytes = 8 * 1024 * 1024;
     vk_record.key = Some(vk_box);
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+    // The committed VK block is height 1; both queue and worker target height 2.
+    vk_record.activation_height = Some(2);
+    vk_record.withdraw_height = Some(3);
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
     let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(
         vk_record.key.as_ref().expect("vk_box"),
@@ -1489,6 +1497,9 @@ async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
     vk_record.vk_len = vk_box.bytes.len() as u32;
     vk_record.key = Some(vk_box);
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+    // The committed VK block is height 1; derivation targets execution at height 2.
+    vk_record.activation_height = Some(2);
+    vk_record.withdraw_height = Some(3);
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
     {
         let height = next_block_height(&app);

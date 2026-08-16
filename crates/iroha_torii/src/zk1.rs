@@ -3,8 +3,7 @@
 pub(crate) const MAX_TLV_COUNT: usize = 64;
 const MAGIC: &[u8; 4] = b"ZK1\0";
 const MAX_TLV_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
-/// Parse and deduplicate the four-byte tags in a structurally valid `ZK1`
-/// envelope.
+/// Parse and deduplicate the four-byte tags in a structurally valid `ZK1` envelope.
 ///
 /// Unknown and non-UTF-8 tags remain structurally valid. Non-UTF-8 tags use a
 /// deterministic hexadecimal representation in app metadata. No tag metadata

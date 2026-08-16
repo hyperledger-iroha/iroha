@@ -230,9 +230,8 @@ where
     /// Decrypt an easy-envelope directly inside its source allocation.
     ///
     /// The input remains laid out as `nonce || message || tag`, but the returned
-    /// slice covers only the authenticated plaintext. This is useful for bounded
-    /// transports that already own the source bytes and must not allocate an
-    /// unaccounted second frame-sized buffer.
+    /// slice covers only the authenticated plaintext. This is useful for bounded transports that
+    /// already own the source bytes and must not allocate an unaccounted second frame-sized buffer.
     ///
     /// # Errors
     /// Returns [`Error::NotEnoughData`] when the ciphertext does not contain a

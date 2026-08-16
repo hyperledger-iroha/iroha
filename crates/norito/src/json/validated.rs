@@ -2,10 +2,9 @@
 use super::{BoundedJsonError, JsonWriteSink};
 /// Stream one already-validated JSON document into a checked sink.
 ///
-/// Unlike a single [`JsonWriteSink::push_str`] call, this preserves structural
-/// depth accounting for embedded arrays and objects. The caller must guarantee
-/// that `value` is one complete valid JSON document; this helper deliberately
-/// does not reparse or allocate a semantic value.
+/// Unlike a single [`JsonWriteSink::push_str`] call, this preserves structural depth accounting for
+/// embedded arrays and objects. The caller must guarantee that `value` is one complete valid JSON
+/// document; this helper deliberately does not reparse or allocate a semantic value.
 #[doc(hidden)]
 pub fn write_validated_json_to(
     value: &str,

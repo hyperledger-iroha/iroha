@@ -1,14 +1,12 @@
 //! Privacy-preserving telemetry summaries for the `SoraNet` anonymity layer.
 //!
-//! These types model the aggregated metrics emitted by the SNNet-8 secure
-//! telemetry pipeline. Buckets are materialised at minute granularity (or any
-//! configured interval) once the secure aggregation collector validates that
-//! enough circuit events contributed to the window. Individual handshake
-//! events, GAR abuse reports, and RTT measurements remain unlinkable; only the
-//! aggregated statistics described here are persisted or forwarded to
-//! dashboards. This mirrors the behaviour implemented by the reference relay
-//! privacy aggregator while providing schema-stable Norito payloads for
-//! long-term storage and operator dashboards.
+//! These types model the aggregated metrics emitted by the SNNet-8 secure telemetry pipeline.
+//! Buckets are materialised at minute granularity (or any configured interval) once the secure
+//! aggregation collector validates that enough circuit events contributed to the window. Individual
+//! handshake events, GAR abuse reports, and RTT measurements remain unlinkable; only the aggregated
+//! statistics described here are persisted or forwarded to dashboards. This mirrors the behaviour
+//! implemented by the reference relay privacy aggregator while providing schema-stable Norito
+//! payloads for long-term storage and operator dashboards.
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;

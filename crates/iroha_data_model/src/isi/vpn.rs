@@ -131,6 +131,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RefundExpiredVpnLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{
+        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+    };
     use crate::{
         account::AccountId,
         asset::AssetDefinitionId,
@@ -144,10 +147,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_primitives::numeric::{Numeric, Quantity};
-    use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
-    };
-    use norito::codec::Encode as _;
+    use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked VPN fixture account keypair");

@@ -174,11 +174,10 @@ pub(super) struct CircuitDimensions {
 }
 /// Canonical fixed-shape topology plus the exact unpadded synthesis counts.
 ///
-/// The raw counts distinguish a relation's emitted rows and private values
-/// from the empty power-of-two CSR padding. Exact A/B/C nonzero and distinct
-/// coefficient totals retain the canonical compact-CSR storage profile.
-/// Construct this once alongside the shape, then reuse it for every
-/// witness-only synthesis.
+/// The raw counts distinguish a relation's emitted rows and private values from the empty
+/// power-of-two CSR padding. Exact A/B/C nonzero and distinct coefficient totals retain the
+/// canonical compact-CSR storage profile. Construct this once alongside the shape, then reuse it
+/// for every witness-only synthesis.
 pub(super) struct CircuitProfile {
     shape: Arc<Shape>,
     raw_private_value_count: usize,

@@ -1,0 +1,7 @@
+
+            seiyaku Demo {
+                fn helper() {
+                    let _acct = test::actor_account("issuer");
+                }
+            }
+            

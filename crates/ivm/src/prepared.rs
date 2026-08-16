@@ -298,9 +298,8 @@ impl PreparedContract {
     }
     /// Return the manifest derived from the validated artifact.
     ///
-    /// The manifest is retained with the prepared contract so admission and
-    /// request paths can compare security claims without reparsing or
-    /// re-decoding the deployable image.
+    /// The manifest is retained with the prepared contract so admission and request paths can
+    /// compare security claims without reparsing or re-decoding the deployable image.
     #[must_use]
     pub fn manifest(&self) -> &ContractManifest {
         &self.inner.manifest

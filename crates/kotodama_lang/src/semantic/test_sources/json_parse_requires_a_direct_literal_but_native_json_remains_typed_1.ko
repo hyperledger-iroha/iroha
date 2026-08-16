@@ -1,0 +1,3 @@
+fn decode(string raw) -> Json {
+                Json::parse(raw)
+            }

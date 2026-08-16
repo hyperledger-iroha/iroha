@@ -50,15 +50,8 @@ fn is_fixed_size(ty: &syn::Type) -> Option<usize> {
                 _ => None,
             }
         }
-        syn::Type::Array(arr) => {
-            if let syn::Type::Path(tp) = &*arr.elem
-                && tp.path.is_ident("u8")
-            {
-                // [u8; N] serialized as raw bytes; treat as fixed-size
-                return Some(0);
-            }
-            None
-        }
+        // [u8; N] serializes as raw bytes and is therefore fixed-size.
+        syn::Type::Array(_) => u8_array_len(ty).map(|_| 0),
         _ => None,
     }
 }
@@ -73,15 +66,10 @@ fn is_self_delimiting(ty: &syn::Type) -> bool {
                 .last()
                 .map(|s| s.ident.to_string())
                 .unwrap_or_default();
-            // Conservative rule: only a tight allowlist of well-known
-            // primitives/wrappers that are guaranteed to carry their own
-            // length headers are considered self‑delimiting at the field
-            // boundary. This avoids requiring `DecodeFromSlice` on arbitrary
-            // user‑defined types (e.g., `*Id` newtypes/structs) which only
-            // implement Norito (de)serialization but not the strict slice API.
-            //
-            // Collections like Vec/Map/Set/Option/Result are self‑delimiting
-            // because they embed their own lengths.
+            // Only well-known primitives/wrappers guaranteed to carry length headers are
+            // self-delimiting at field boundaries. This avoids requiring `DecodeFromSlice`
+            // on arbitrary user types (such as `*Id`) that only implement Norito codecs.
+            // Collections such as Vec/Map/Set/Option/Result embed their own lengths.
             if matches!(id.as_str(), "String" | "Cow" | "PhantomData") {
                 return true;
             }
@@ -213,14 +201,8 @@ fn token_stream_mentions_generic(tokens: TokenStream2, generic_names: &[syn::Ide
         proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => false,
     })
 }
-/// Add a trait bound to the generated `where` clause when the field type
-/// depends on one of the container's generic parameters.
-///
-/// Concrete field types are checked directly while compiling the generated
-/// implementation, so repeating their trait obligations in a `where` clause
-/// is unnecessary. More importantly, such bounds turn a valid concrete
-/// recursive type such as `enum Expr { Nested(Box<Expr>) }` into the cyclic
-/// obligation `Box<Expr>: Trait -> Expr: Trait -> Box<Expr>: Trait`.
+/// Add a generated `where` bound only when the field depends on a container generic.
+/// Repeating concrete obligations is unnecessary and makes recursive types such as `Expr::Nested(Box<Expr>)` cyclic: `Box<Expr>: Trait -> Expr: Trait -> Box<Expr>: Trait`.
 fn add_bound(generics: &mut Generics, ty: &syn::Type, bound: TokenStream2) {
     let generic_names = generics
         .params
@@ -444,6 +426,13 @@ mod enum_variant_index_tests {
             panic!("test input must be an enum");
         };
         enum_variant_indices(&data)
+    }
+    #[test]
+    fn byte_array_length_classifier_rejects_other_arrays() {
+        let bytes: syn::Type = syn::parse_quote!([u8; 32]);
+        let words: syn::Type = syn::parse_quote!([u16; 32]);
+        assert!(u8_array_len(&bytes).is_some());
+        assert!(u8_array_len(&words).is_none());
     }
     #[test]
     fn explicit_discriminants_drive_implicit_successors() {
@@ -1082,9 +1071,7 @@ fn derive_struct_serialize(
                     continue;
                 }
                 let name = f.ident.as_ref().unwrap();
-                let is_u8_array = matches!(&f.ty,
-                    syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8"))
-                );
+                let is_u8_array = u8_array_len(&f.ty).is_some();
                 packed_field_exprs.push(quote! { &self.#name });
                 let packed_index = packed_field_checked_ser_calls.len();
                 if is_u8_array {
@@ -1139,9 +1126,7 @@ fn derive_struct_serialize(
                     continue;
                 }
                 let idx = Index::from(i);
-                let is_u8_array = matches!(&f.ty,
-                    syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8"))
-                );
+                let is_u8_array = u8_array_len(&f.ty).is_some();
                 packed_field_exprs.push(quote! { &self.#idx });
                 let packed_index = packed_field_checked_ser_calls.len();
                 if is_u8_array {
@@ -1190,16 +1175,6 @@ fn derive_struct_serialize(
         Fields::Unit => {}
     }
     let packed_field_count: usize = packed_field_exprs.len();
-    fn is_u8_array(ty: &syn::Type) -> bool {
-        matches!(
-            ty,
-            syn::Type::Array(arr)
-                if matches!(
-                    &*arr.elem,
-                    syn::Type::Path(tp) if tp.path.is_ident("u8")
-                )
-        )
-    }
     let has_signature_like_field = match fields {
         Fields::Named(named) => named
             .named
@@ -1235,7 +1210,7 @@ fn derive_struct_serialize(
                 }
                 count += 1;
                 let name = f.ident.as_ref().unwrap();
-                let length = if is_u8_array(&f.ty) && !attrs.flatten {
+                let length = if u8_array_len(&f.ty).is_some() && !attrs.flatten {
                     quote! { core::mem::size_of_val(&self.#name) }
                 } else {
                     quote! {
@@ -1300,7 +1275,7 @@ fn derive_struct_serialize(
                 }
                 count += 1;
                 let idx = Index::from(i);
-                let length = if is_u8_array(&f.ty) {
+                let length = if u8_array_len(&f.ty).is_some() {
                     quote! { core::mem::size_of_val(&self.#idx) }
                 } else {
                     quote! {
@@ -1361,7 +1336,7 @@ fn derive_struct_serialize(
                 }
                 count += 1;
                 let name = f.ident.as_ref().unwrap();
-                let length = if is_u8_array(&f.ty) && !attrs.flatten {
+                let length = if u8_array_len(&f.ty).is_some() && !attrs.flatten {
                     quote! { core::mem::size_of_val(&self.#name) }
                 } else {
                     quote! {
@@ -1426,7 +1401,7 @@ fn derive_struct_serialize(
                 }
                 count += 1;
                 let idx = Index::from(i);
-                let length = if is_u8_array(&f.ty) {
+                let length = if u8_array_len(&f.ty).is_some() {
                     quote! { core::mem::size_of_val(&self.#idx) }
                 } else {
                     quote! {
@@ -1678,16 +1653,6 @@ fn derive_struct_deserialize(
             .any(|f| FieldAttr::parse_validated(&f.attrs).flatten),
         _ => false,
     };
-    // Helper: detect [u8; N] arrays for a fast path
-    fn u8_array_len(ty: &syn::Type) -> Option<syn::Expr> {
-        if let syn::Type::Array(arr) = ty
-            && let syn::Type::Path(tp) = &*arr.elem
-            && tp.path.is_ident("u8")
-        {
-            return Some(arr.len.clone());
-        }
-        None
-    }
     let deserialize_fields: Vec<_> = match fields {
         Fields::Named(named) => named
             .named
@@ -2812,55 +2777,56 @@ fn derive_enum_serialize(
                 let bindings: Vec<_> = (0..fields.unnamed.len())
                     .map(|i| format_ident!("field{}", i))
                     .collect();
-                let serialize_calls = fields
-                    .unnamed
-                    .iter()
-                    .zip(bindings.iter())
-                    .filter_map(|(f, b)| {
-                        let attrs = FieldAttr::parse_validated(&f.attrs);
-                        if attrs.skip {
-                            return None;
-                        }
-                        add_bound(&mut r#gen, &f.ty, quote!(norito::core::NoritoSerialize));
-                        let is_sd = is_self_delimiting(&f.ty);
-                        let is_fixed = is_fixed_size(&f.ty).is_some();
-                        let is_u8_array = matches!(&f.ty, syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8")));
-                        let ser = if is_sd || is_fixed {
-                            if is_u8_array {
-                                quote! {
-                                    if __norito_packed {
-                                        writer.write_all(&#b[..])?;
-                                    } else {
-                                        let __len_bytes = core::mem::size_of_val(#b);
-                                        norito::core::write_len(writer, __len_bytes as u64)?;
-                                        writer.write_all(&#b[..])?;
+                let serialize_calls =
+                    fields
+                        .unnamed
+                        .iter()
+                        .zip(bindings.iter())
+                        .filter_map(|(f, b)| {
+                            let attrs = FieldAttr::parse_validated(&f.attrs);
+                            if attrs.skip {
+                                return None;
+                            }
+                            add_bound(&mut r#gen, &f.ty, quote!(norito::core::NoritoSerialize));
+                            let is_sd = is_self_delimiting(&f.ty);
+                            let is_fixed = is_fixed_size(&f.ty).is_some();
+                            let is_u8_array = u8_array_len(&f.ty).is_some();
+                            let ser = if is_sd || is_fixed {
+                                if is_u8_array {
+                                    quote! {
+                                        if __norito_packed {
+                                            writer.write_all(&#b[..])?;
+                                        } else {
+                                            let __len_bytes = core::mem::size_of_val(#b);
+                                            norito::core::write_len(writer, __len_bytes as u64)?;
+                                            writer.write_all(&#b[..])?;
+                                        }
+                                    }
+                                } else {
+                                    quote! {
+                                        if __norito_packed {
+                                            norito::core::NoritoSerialize::serialize(#b, writer)?;
+                                        } else {
+                                            norito::core::write_len_prefixed_exact(
+                                                writer,
+                                                #b,
+                                                &mut __norito_tmp,
+                                            )?;
+                                        }
                                     }
                                 }
                             } else {
                                 quote! {
-                                    if __norito_packed {
-                                        norito::core::NoritoSerialize::serialize(#b, writer)?;
-                                    } else {
-                                        norito::core::write_len_prefixed_exact(
-                                            writer,
-                                            #b,
-                                            &mut __norito_tmp,
-                                        )?;
-                                    }
+                                    // Non self-delimiting, non-fixed types keep outer length framing even in packed builds
+                                    norito::core::write_len_prefixed_exact(
+                                        writer,
+                                        #b,
+                                        &mut __norito_tmp,
+                                    )?;
                                 }
-                            }
-                        } else {
-                            quote! {
-                                // Non self-delimiting, non-fixed types keep outer length framing even in packed builds
-                                norito::core::write_len_prefixed_exact(
-                                    writer,
-                                    #b,
-                                    &mut __norito_tmp,
-                                )?;
-                            }
-                        };
-                        Some(ser)
-                    });
+                            };
+                            Some(ser)
+                        });
                 // Serialization calls without per-field outer length for needs-size fields
                 let _serialize_calls_nohdr =
                     fields
@@ -2914,16 +2880,14 @@ fn derive_enum_serialize(
                 });
                 // exact arms
                 let mut exact_adds = Vec::new();
-                for (i, _b) in bindings.iter().enumerate() {
-                    let b = &bindings[i];
-                    let field = &fields.unnamed[i];
+                for (b, field) in bindings.iter().zip(&fields.unnamed) {
                     if FieldAttr::parse_validated(&field.attrs).skip {
                         continue;
                     }
                     let ty = &field.ty;
                     let is_sd = is_self_delimiting(ty);
                     let is_fixed = is_fixed_size(ty).is_some();
-                    let is_u8_array = matches!(ty, syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8")));
+                    let is_u8_array = u8_array_len(ty).is_some();
                     let exact_len = if is_u8_array {
                         quote! { core::mem::size_of_val(#b) }
                     } else {
@@ -2970,7 +2934,7 @@ fn derive_enum_serialize(
                     add_bound(&mut r#gen, &f.ty, quote!(norito::core::NoritoSerialize));
                     let is_sd = is_self_delimiting(&f.ty);
                     let is_fixed = is_fixed_size(&f.ty).is_some();
-                    let is_u8_array = matches!(&f.ty, syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8")));
+                    let is_u8_array = u8_array_len(&f.ty).is_some();
                     let ser = if is_sd || is_fixed {
                         if is_u8_array {
                             quote! {
@@ -3025,15 +2989,14 @@ fn derive_enum_serialize(
                 });
                 // exact arm
                 let mut exact_adds = Vec::new();
-                for (i, name) in names.iter().enumerate() {
-                    let field = &fields.named[i];
+                for (name, field) in names.iter().zip(&fields.named) {
                     if FieldAttr::parse_validated(&field.attrs).skip {
                         continue;
                     }
                     let ty = &field.ty;
                     let is_sd = is_self_delimiting(ty);
                     let is_fixed = is_fixed_size(ty).is_some();
-                    let is_u8_array = matches!(ty, syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8")));
+                    let is_u8_array = u8_array_len(ty).is_some();
                     let exact_len = if is_u8_array {
                         quote! { core::mem::size_of_val(#name) }
                     } else {
@@ -3137,16 +3100,6 @@ fn derive_enum_deserialize(
         Ok(discriminants) => discriminants,
         Err(error) => return error.to_compile_error(),
     };
-    // Helper to detect [u8; N] array length for specialized AoS path
-    fn u8_array_len(ty: &syn::Type) -> Option<syn::Expr> {
-        if let syn::Type::Array(arr) = ty
-            && let syn::Type::Path(tp) = &*arr.elem
-            && tp.path.is_ident("u8")
-        {
-            return Some(arr.len.clone());
-        }
-        None
-    }
     for (variant, disc) in data.variants.iter().zip(discriminants) {
         let v_ident = &variant.ident;
         match &variant.fields {
@@ -5848,9 +5801,8 @@ fn has_no_fast_from_json_attr(attrs: &[syn::Attribute]) -> bool {
 /// Derive Norito JSON deserialization.
 ///
 /// Named structs and tagged enums may opt into closed object schemas with
-/// `#[norito(deny_unknown_fields)]`. The option rejects unknown object keys;
-/// nested types remain responsible for selecting the same policy when their
-/// schemas are also closed.
+/// `#[norito(deny_unknown_fields)]`. The option rejects unknown object keys; nested types remain
+/// responsible for selecting the same policy when their schemas are also closed.
 pub fn derive_json_deserialize(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as DeriveInput);
     if let Err(error) = validate_data_field_attrs(&parsed.data) {

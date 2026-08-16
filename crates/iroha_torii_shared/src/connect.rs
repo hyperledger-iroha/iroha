@@ -1,10 +1,9 @@
 //! Iroha Connect protocol wire types (scaffold).
 #![allow(clippy::size_of_ref)]
 //!
-//! Minimal, versioned Norito types for a WalletConnect‑style pairing and
-//! message exchange between a dApp and a wallet over Torii WebSockets and the
-//! Iroha P2P network. This module defines data only; transport/handlers live
-//! in server/client crates.
+//! Minimal, versioned Norito types for a WalletConnect‑style pairing and message exchange between a
+//! dApp and a wallet over Torii WebSockets and the Iroha P2P network. This module defines data
+//! only; transport/handlers live in server/client crates.
 use iroha_crypto::{Algorithm, Signature};
 use iroha_data_model::NetworkId;
 use norito::{
@@ -448,10 +447,9 @@ pub enum Role {
 }
 /// Canonical layout flags for Connect Norito payloads.
 ///
-/// Connect sticks to the AoS/default Norito layout (no packed structs, packed
-/// sequences, or compact lengths). Enum tags stay on the default 32‑bit
-/// little‑endian discriminant emitted by `norito::derive` (see `Dir`/`Role`
-/// optimisations in the derive helper).
+/// Connect sticks to the AoS/default Norito layout (no packed structs, packed sequences, or compact
+/// lengths). Enum tags stay on the default 32‑bit little‑endian discriminant emitted by
+/// `norito::derive` (see `Dir`/`Role` optimisations in the derive helper).
 pub const CONNECT_LAYOUT_FLAGS: u8 = 0;
 fn read_len(body: &[u8], offset: &mut usize) -> Result<usize, Error> {
     let start = *offset;
@@ -744,9 +742,8 @@ pub struct ConnectFrameV1 {
     pub sid: [u8; 32],
     /// Logical direction of the message.
     pub dir: Dir,
-    /// Monotonic per‑direction sequence number starting from 1 for each sender.
-    /// Server events use a separate server-side sequence and do not advance
-    /// app/wallet ciphertext sequencing.
+    /// Monotonic per‑direction sequence number starting from 1 for each sender. Server events use a
+    /// separate server-side sequence and do not advance app/wallet ciphertext sequencing.
     pub seq: u64,
     /// Frame payload: control or encrypted content.
     pub kind: FrameKind,

@@ -2,8 +2,7 @@
 //!
 //! These helpers build canonical JSON payloads that the query DSL can embed in
 //! [`CompoundPredicate`] values.  The structures keep field ordering stable so
-//! serialised predicates are deterministic and easy to compare in tests or
-//! caches.
+//! serialised predicates are deterministic and easy to compare in tests or caches.
 use crate::query::dsl::CompoundPredicate;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use std::{
@@ -264,9 +263,8 @@ impl PredicateJson {
     ///
     /// # Errors
     ///
-    /// Returns an error when the JSON structure does not match the predicate
-    /// schema or its destination vectors cannot be admitted by the active
-    /// decode-allocation limit.
+    /// Returns an error when the JSON structure does not match the predicate schema or its
+    /// destination vectors cannot be admitted by the active decode-allocation limit.
     pub fn try_from_owned_value(value: Value) -> Result<Self, PredicateParseError> {
         let map = match value {
             Value::Null => return Ok(Self::default()),
@@ -332,9 +330,8 @@ impl PredicateJson {
         predicate.sort_in_place();
         Ok(predicate)
     }
-    /// Convert into a [`CompoundPredicate`] by serialising the canonical JSON
-    /// representation. The resulting predicate carries the JSON payload that
-    /// backends can interpret later.
+    /// Convert into a [`CompoundPredicate`] by serialising the canonical JSON representation. The
+    /// resulting predicate carries the JSON payload that backends can interpret later.
     ///
     /// # Errors
     /// Returns an error when serialisation of the canonical JSON representation fails.
@@ -650,14 +647,14 @@ mod tests {
         let expected = PredicateJson::try_from_value(&input).expect("borrowed conversion");
         let limits = norito::DecodeLimits::new(64, 4 * 1_024, 256, 4 * 1_024, 16);
         let (actual, usage) = norito::core::with_decode_limits_measured(limits, || {
-            PredicateJson::try_from_owned_value(input)
+            PredicateJson::try_from_owned_value(input.clone())
         });
         assert_eq!(actual.expect("owned conversion"), expected);
         assert!(usage.total_allocated_bytes() > 0);
         let denied = norito::core::with_decode_limits(
             norito::DecodeLimits::new(64, 4 * 1_024, 256, 1, 16),
             || {
-                PredicateJson::try_from_owned_value(value())
+                PredicateJson::try_from_owned_value(input)
                     .map_err(|error| norito::core::Error::Message(error.to_string()))
             },
         );

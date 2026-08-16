@@ -1,11 +1,10 @@
 //! Durable, bounded, tamper-evident provenance for signed moderation results.
 //!
-//! Each update takes an exclusive sibling lock, re-reads and validates the
-//! latest canonical Norito segment, appends one hash-chained payload, writes a
-//! mode-`0600` temporary file, synchronizes it, atomically renames it, and
-//! synchronizes the containing directory. Unix file identity and link-count
-//! checks reject symlink and hard-link substitution. Non-Unix platforms fail
-//! closed until equivalent primitives are implemented.
+//! Each update takes an exclusive sibling lock, re-reads and validates the latest canonical Norito
+//! segment, appends one hash-chained payload, writes a mode-`0600` temporary file, synchronizes it,
+//! atomically renames it, and synchronizes the containing directory. Unix file identity and
+//! link-count checks reject symlink and hard-link substitution. Non-Unix platforms fail closed
+//! until equivalent primitives are implemented.
 use iroha_crypto::PublicKey;
 #[cfg(unix)]
 use iroha_data_model::sorafs::moderation::MODERATION_PROVENANCE_MAX_ENTRIES_V1;
@@ -163,10 +162,9 @@ impl ModerationProvenanceStoreV1 {
             .map_err(ModerationProvenanceStoreError::from)
         })
     }
-    /// Reconstruct, compare, and durably append the complete signed member set
-    /// followed by one authenticated committee aggregate. Distinct signer,
-    /// freshness, revocation, external governance, and quorum checks are all
-    /// repeated before the single atomic write.
+    /// Reconstruct, compare, and durably append the complete signed member set followed by one
+    /// authenticated committee aggregate. Distinct signer, freshness, revocation, external
+    /// governance, and quorum checks are all repeated before the single atomic write.
     #[expect(
         clippy::too_many_arguments,
         reason = "this public API keeps each authenticated aggregate input explicit and independently typed"

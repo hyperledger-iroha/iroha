@@ -2,9 +2,8 @@
 //!
 //! A list handle points at one contiguous deterministic heap allocation:
 //! `[len: u64][capacity: u64][element words...]`. Elements are flattened into
-//! a compiler-known, fixed number of 64-bit ABI words. The source type and
-//! boundary schema carry the element type and capacity; no runtime type tag is
-//! inferred from memory contents.
+//! a compiler-known, fixed number of 64-bit ABI words. The source type and boundary schema carry
+//! the element type and capacity; no runtime type tag is inferred from memory contents.
 use core::fmt;
 /// Minimum source-level list capacity.
 pub const LIST_MIN_CAPACITY_V1: u8 = 1;
@@ -103,8 +102,7 @@ impl ListLayoutV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`ListLayoutErrorV1::SizeOverflow`] on address arithmetic
-    /// overflow.
+    /// Returns [`ListLayoutErrorV1::SizeOverflow`] on address arithmetic overflow.
     pub fn allocation_bytes(self) -> Result<u64, ListLayoutErrorV1> {
         LIST_HEADER_WORDS_V1
             .checked_add(

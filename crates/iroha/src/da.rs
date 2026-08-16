@@ -451,8 +451,7 @@ fn duration_to_millis(duration: Duration) -> u64 {
 ///
 /// # Errors
 ///
-/// Returns an error when manifest or payload ingestion fails or if any proof
-/// fails verification.
+/// Returns an error when manifest or payload ingestion fails or if any proof fails verification.
 pub fn benchmark_da_proof_verification(
     manifest: &DaManifestV1,
     payload: &[u8],
@@ -591,8 +590,7 @@ fn default_retention_policy() -> RetentionPolicy {
 ///
 /// # Errors
 ///
-/// Returns an error if signature generation fails (should be infallible under
-/// normal conditions).
+/// Returns an error if signature generation fails (should be infallible under normal conditions).
 pub fn build_da_request(
     network_id: NetworkId,
     owner: AccountId,

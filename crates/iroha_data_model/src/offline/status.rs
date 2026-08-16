@@ -1,8 +1,7 @@
 //! Public offline-wallet protocol capability and legacy proof-release diagnostics.
 //!
-//! These types live in the data model because they are shared by Torii
-//! responses and node telemetry. Keeping them here prevents either transport
-//! layer from depending on the other.
+//! These types live in the data model because they are shared by Torii responses and node
+//! telemetry. Keeping them here prevents either transport layer from depending on the other.
 use iroha_schema::IntoSchema;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Legacy machine-readable diagnostic for an explicitly requested proof release.
@@ -45,10 +44,9 @@ pub struct OfflineVerifierId {
 }
 /// Active confidential-transfer verifier selected at a readiness snapshot.
 ///
-/// This is the public, key-material-free subset of the authoritative registry
-/// record. The inclusive activation and exclusive withdrawal bounds let a
-/// wallet prove that the same verifier was active at
-/// [`OfflineReadiness::evaluated_block_height`].
+/// This is the public, key-material-free subset of the authoritative registry record. The inclusive
+/// activation and exclusive withdrawal bounds let a wallet prove that the same verifier was active
+/// at [`OfflineReadiness::evaluated_block_height`].
 #[derive(
     Debug, Clone, PartialEq, Eq, IntoSchema, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
@@ -80,10 +78,9 @@ pub type OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier;
 pub type OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier;
 /// Authenticated ABI-21 recursive release selected at a readiness snapshot.
 ///
-/// Every digest is lowercase hexadecimal, non-zero, and distinct in public
-/// JSON. The identity is emitted only after Core authenticates the release
-/// policy, attestation, evidence, manifest, verifier records, and verifier-side
-/// artifact bytes.
+/// Every digest is lowercase hexadecimal, non-zero, and distinct in public JSON. The identity is
+/// emitted only after Core authenticates the release policy, attestation, evidence, manifest,
+/// verifier records, and verifier-side artifact bytes.
 #[derive(
     Debug,
     Clone,
@@ -265,8 +262,7 @@ pub struct OfflineStatus {
     pub required_bridge_abi_version: u32,
     /// Maximum peer-spend hop depth accepted by the protocol.
     pub max_hops: u32,
-    /// Protocol capability availability. This is independent of any asset or
-    /// dataspace catalog.
+    /// Protocol capability availability. This is independent of any asset or dataspace catalog.
     pub ready: bool,
     /// Optional diagnostics for release material explicitly referenced by
     /// offline operations, sorted by canonical asset definition id.

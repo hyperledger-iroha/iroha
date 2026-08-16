@@ -1,0 +1,10 @@
+
+誓約 BindingIntegrity {
+    fn inspect(Option<int> input, List<int, 4> values) -> int {
+        let int base = 1;
+        if let Option::some(payload) = input { return payload; }
+        if let Option::some(payload) = input { return payload; }
+        let List<int, 4> mapped = [item for item in values if true];
+        return base;
+    }
+}

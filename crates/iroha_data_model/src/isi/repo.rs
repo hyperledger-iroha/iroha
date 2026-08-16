@@ -386,11 +386,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RepoInstructionBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use crate::repo::RepoGovernance;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
-    use norito::codec::Encode;
-    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
+    use norito::{codec::Encode, core::DecodeFromSlice};
     #[derive(Encode)]
     struct ForgedRepoCashLeg {
         asset_definition_id: AssetDefinitionId,

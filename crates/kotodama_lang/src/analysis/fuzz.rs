@@ -19,9 +19,8 @@ const MAX_PARAMS: usize = 3;
 const DEFAULT_MAX_CASES: usize = 64;
 const DEFAULT_LOOP_LIMIT: usize = 128;
 const DEFAULT_RECURSION_LIMIT: usize = 16;
-/// Execute a lightweight interpreter-based fuzzing harness against the typed
-/// program. Only integer and boolean parameters are supported currently. Other
-/// functions are reported as skipped.
+/// Execute a lightweight interpreter-based fuzzing harness against the typed program. Only integer
+/// and boolean parameters are supported currently. Other functions are reported as skipped.
 pub fn run_fuzz(
     program: &Program,
     typed: &TypedProgram,

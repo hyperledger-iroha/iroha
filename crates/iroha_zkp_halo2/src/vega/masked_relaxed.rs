@@ -1,9 +1,8 @@
 //! Bounded setup-free masked relaxed-R1CS composition.
 //!
-//! This is the shared protocol boundary for native relations that use the
-//! T256 Hyrax commitment, sequential Nova folding, and one terminal Relaxed
-//! Spartan proof. A fresh full relaxed assignment masks every strict witness
-//! coordinate before Spartan's direct openings are released.
+//! This is the shared protocol boundary for native relations that use the T256 Hyrax commitment,
+//! sequential Nova folding, and one terminal Relaxed Spartan proof. A fresh full relaxed assignment
+//! masks every strict witness coordinate before Spartan's direct openings are released.
 #![allow(unexpected_cfgs)]
 use super::{
     VegaPointWireV1, VegaScalarWireV1, VegaT256ScalarV1 as Scalar,
@@ -214,10 +213,9 @@ pub(super) struct MaskedRelaxedProofWireV1 {
 }
 /// Producer-side masked Nova history before the terminal Spartan proof.
 ///
-/// The final folded witness remains inside a zeroizing wrapper. Public
-/// consumers may use the instances/folds to build an audit transcript, but
-/// settlement must derive the terminal instance again with
-/// [`verify_and_replay_masked_relaxed_v1`].
+/// The final folded witness remains inside a zeroizing wrapper. Public consumers may use the
+/// instances/folds to build an audit transcript, but settlement must derive the terminal instance
+/// again with [`verify_and_replay_masked_relaxed_v1`].
 pub(super) struct MaskedRelaxedPrecomputationV1 {
     pub(super) shape: Arc<Shape>,
     pub(super) mask_instance: RelaxedInstance,
@@ -362,10 +360,9 @@ pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
 /// Build the masked Nova history while materializing at most one strict
 /// circuit assignment at a time.
 ///
-/// `strict_public_inputs` fixes the complete transcript before the first
-/// assignment is requested. The factory is then called exactly once per row,
-/// in order; the returned witness is zeroized and released before the next
-/// call. This preserves the canonical transcript while avoiding a
+/// `strict_public_inputs` fixes the complete transcript before the first assignment is requested.
+/// The factory is then called exactly once per row, in order; the returned witness is zeroized and
+/// released before the next call. This preserves the canonical transcript while avoiding a
 /// release-sized `Vec<CircuitAssignment>` owner.
 pub(super) fn precompute_masked_relaxed_stream_v1<
     R: MaskedRelaxedRandomSourceV1,
@@ -494,13 +491,13 @@ pub(super) fn prove_masked_relaxed_precomputation_v1(
 /// Finish a masked relaxed-R1CS proof from a publicly replayable fold history
 /// and the one final folded witness reconstructed by the PBS.
 ///
-/// The caller cannot nominate the terminal relaxed instance. This function
-/// replays every Nova challenge from the mask, the ordered strict public
-/// inputs and witness commitments, and the ordered cross-term commitments.
-/// Only the resulting instance is accepted by the terminal Spartan prover.
-/// That hard boundary prevents a malicious PBS from replacing the encrypted
-/// fold history with an independently satisfiable relaxed assignment.
+/// The caller cannot nominate the terminal relaxed instance. This function replays every Nova
+/// challenge from the mask, the ordered strict public inputs and witness commitments, and the
+/// ordered cross-term commitments. Only the resulting instance is accepted by the terminal Spartan
+/// prover. That hard boundary prevents a malicious PBS from replacing the encrypted fold history
+/// with an independently satisfiable relaxed assignment.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn prove_precomputed_masked_relaxed_v1(
     domain: &'static [u8],
     context_frame: &[u8],
@@ -925,33 +922,6 @@ fn sample_relaxed_mask<R: MaskedRelaxedRandomSourceV1>(
             error_blindings: core::mem::take(&mut *error_blindings),
         },
     ))
-}
-/// Construct the sole masked-Nova composition transcript used by plaintext,
-/// encrypted, prover, and verifier paths.
-pub(super) fn masked_relaxed_composition_transcript_v1(
-    domain: &'static [u8],
-    context_frame: &[u8],
-    shape: &Shape,
-    strict_public_inputs: &[Vec<Scalar>],
-) -> Result<VegaTranscriptV1, MaskedRelaxedErrorV1> {
-    validate_count(strict_public_inputs.len())?;
-    if domain.is_empty() || context_frame.is_empty() {
-        return Err(MaskedRelaxedErrorV1::InvalidProfile);
-    }
-    let dimensions = MaskedRelaxedDimensionsV1::from_shape(shape)?;
-    if strict_public_inputs
-        .iter()
-        .any(|inputs| inputs.len() != dimensions.public_input_count)
-    {
-        return Err(MaskedRelaxedErrorV1::InvalidProfile);
-    }
-    composition_transcript(
-        domain,
-        context_frame,
-        shape,
-        strict_public_inputs,
-        dimensions,
-    )
 }
 fn composition_transcript(
     domain: &'static [u8],
@@ -1613,7 +1583,7 @@ mod tests {
             "#[cfg(test)]\nstruct SecretCircuitAssignmentsV1(VecDeque<CircuitAssignment>)"
         ));
         assert!(source.contains("#[cfg(test)]\npub(super) fn precompute_masked_relaxed_v1"));
-        assert!(!source.contains("fn prove_masked_relaxed_v1"));
+        assert!(!production.contains("fn prove_masked_relaxed_v1"));
         assert!(source.contains("self.0.pop_front()"));
         assert!(production.contains("Arc::ptr_eq(&assignment.shape, &shape)"));
         assert!(!production.contains("remove(0)"));

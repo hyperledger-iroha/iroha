@@ -1,10 +1,9 @@
 //! Intermediate representation for Kotodama programs.
 //!
-//! This lowering IR is three-address code with explicit basic-block jumps. It
-//! retains deterministic edge assignments as the compiler's de-SSA transport
-//! form. Before code generation, [`crate::ssa`] converts it to strict SSA MIR
-//! with explicit Phi nodes, verifies dominance and definition uniqueness, and
-//! deterministically lowers it back for register allocation.
+//! This lowering IR is three-address code with explicit basic-block jumps. It retains deterministic
+//! edge assignments as the compiler's de-SSA transport form. Before code generation, [`crate::ssa`]
+//! converts it to strict SSA MIR with explicit Phi nodes, verifies dominance and definition
+//! uniqueness, and deterministically lowers it back for register allocation.
 use super::{
     abi_schema::{json_construction_schema, state_value_kind_for_type, state_value_schema},
     ast::{BinaryOp, PatternBinding, STATE_MAP_GET_INTRINSIC, SumVariant, UnaryOp},
@@ -789,10 +788,9 @@ pub enum Instr {
         domain: Temp,
         to: Temp,
     },
-    /// A typed data reference to be placed in the data section and accessed
-    /// via the pointer-ABI. The compiler will emit a load from the literal
-    /// table into a register, yielding a pointer to a len-prefixed Norito blob
-    /// of the encoded value.
+    /// A typed data reference to be placed in the data section and accessed via the pointer-ABI.
+    /// The compiler will emit a load from the literal table into a register, yielding a pointer to
+    /// a len-prefixed Norito blob of the encoded value.
     DataRef {
         dest: Temp,
         kind: DataRefKind,
@@ -940,8 +938,7 @@ pub enum Instr {
         dest: Temp,
         payload: Temp,
     },
-    /// Specialist byte-returning query helper retained outside the five V1
-    /// projected core families.
+    /// Specialist byte-returning query helper retained outside the five V1 projected core families.
     QueryGet {
         dest: Temp,
         key: Temp,
@@ -1029,9 +1026,8 @@ pub enum Instr {
         limit: Temp,
         /// Exact source scan provenance retained through SSA optimization.
         ///
-        /// Direct `state::keys` calls carry `None`; only a semantically
-        /// validated bounded scan of a declared top-level StateMap carries a
-        /// manifest hint.
+        /// Direct `state::keys` calls carry `None`; only a semantically validated bounded scan of a
+        /// declared top-level StateMap carries a manifest hint.
         dynamic_access_hint: Option<DynamicAccessHint>,
     },
     /// Decode a canonical map key from a `Vec<StatePath>` page returned by
@@ -1652,9 +1648,8 @@ fn sum_active_payload_type(ty: &Type, tag: u64) -> Option<Option<Type>> {
 }
 /// Allocate one canonical active-only sum value.
 ///
-/// The allocation reserves the larger branch once, writes the discriminant,
-/// and writes only the selected branch. In particular, this helper never
-/// evaluates or constructs an inactive payload.
+/// The allocation reserves the larger branch once, writes the discriminant, and writes only the
+/// selected branch. In particular, this helper never evaluates or constructs an inactive payload.
 fn emit_sum_value(ctx: &mut LowerCtx, sum_ty: &Type, tag: u64, payload: Option<Temp>) -> Temp {
     let Some(layout) = sum_layout_for_type(sum_ty) else {
         ctx.record_error("internal error: invalid sum layout".into());
@@ -4932,9 +4927,8 @@ fn lower_expr_as_numeric(
 /// Select a source builtin's direct host operation exclusively through its
 /// canonical registry record.
 ///
-/// This is deliberately fail-closed: passing an instruction-only or derived
-/// builtin is a compiler invariant violation, not an opportunity for lowering
-/// to invent an unregistered syscall number.
+/// This is deliberately fail-closed: passing an instruction-only or derived builtin is a compiler
+/// invariant violation, not an opportunity for lowering to invent an unregistered syscall number.
 fn direct_builtin_syscall(builtin: Builtin) -> u32 {
     let spec = builtin.spec();
     assert_eq!(
@@ -7147,11 +7141,10 @@ fn lower_surface_builtin_call(
 }
 /// Return whether a named argument must be captured at its source position.
 ///
-/// Literal leaves are total and independent of mutable compiler state, so a
-/// builtin may continue to consume them directly (and, for literal-only ABI
-/// fields, entirely at compile time). Every other value is captured exactly
-/// once before ABI-slot permutation. `StateMap` handles are declarations, not
-/// runtime values, and their lowering is performed by the callee ABI helper.
+/// Literal leaves are total and independent of mutable compiler state, so a builtin may continue to
+/// consume them directly (and, for literal-only ABI fields, entirely at compile time). Every other
+/// value is captured exactly once before ABI-slot permutation. `StateMap` handles are declarations,
+/// not runtime values, and their lowering is performed by the callee ABI helper.
 fn named_argument_requires_capture(argument: &TypedExpr) -> bool {
     if matches!(
         semantic::resolve_struct_type(&argument.ty),

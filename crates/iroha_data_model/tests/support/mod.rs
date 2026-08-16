@@ -1,9 +1,8 @@
 //! Test support helpers for parsing `#[model]` modules and collecting model items.
 //!
-//! These helpers live in tests to avoid pulling heavy dependencies (like `syn`)
-//! into the library or build script. They provide deterministic and safe
-//! behavior, especially around filesystem traversal where symlinks are
-//! explicitly ignored to prevent infinite recursion.
+//! These helpers live in tests to avoid pulling heavy dependencies (like `syn`) into the library or
+//! build script. They provide deterministic and safe behavior, especially around filesystem
+//! traversal where symlinks are explicitly ignored to prevent infinite recursion.
 use std::{
     collections::{BTreeMap, VecDeque},
     fs,

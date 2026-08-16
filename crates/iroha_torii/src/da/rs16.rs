@@ -34,11 +34,10 @@ const MAX_MANIFEST_CHUNK_COMMITMENTS: usize = 16 * 1024;
 /// Reject erasure layouts whose bounded dimensions still multiply into an
 /// excessive CPU or memory workload.
 ///
-/// Dimension-by-dimension limits are insufficient here: for example, 32
-/// two-mebibyte source chunks with one data shard and 64 parity shards satisfy
-/// every individual cap but would generate four gibibytes of parity. Keep the
-/// product limits in one helper so HTTP admission and internal callers enforce
-/// the same budget.
+/// Dimension-by-dimension limits are insufficient here: for example, 32 two-mebibyte source chunks
+/// with one data shard and 64 parity shards satisfy every individual cap but would generate four
+/// gibibytes of parity. Keep the product limits in one helper so HTTP admission and internal
+/// callers enforce the same budget.
 pub(super) fn validate_erasure_work_budget(
     data_chunk_count: usize,
     chunk_size: usize,

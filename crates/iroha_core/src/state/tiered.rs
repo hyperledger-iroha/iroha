@@ -1,11 +1,10 @@
 //! Tiered storage backend for the World State View (WSV).
 //!
-//! The backend promotes frequently updated keys to a hot in-memory tier while
-//! demoting colder entries to an on-disk spill. Each snapshot computes
-//! recency-based priorities, writes cold payloads using the canonical Norito
-//! encoding, and emits a manifest so hosts can hydrate cold shards lazily.
-//! Snapshots can be built incrementally from per-block diffs to avoid full WSV scans,
-//! and heavy snapshot work can be offloaded after commit to reduce block latency.
+//! The backend promotes frequently updated keys to a hot in-memory tier while demoting colder
+//! entries to an on-disk spill. Each snapshot computes recency-based priorities, writes cold
+//! payloads using the canonical Norito encoding, and emits a manifest so hosts can hydrate cold
+//! shards lazily. Snapshots can be built incrementally from per-block diffs to avoid full WSV
+//! scans, and heavy snapshot work can be offloaded after commit to reduce block latency.
 use super::World;
 use crate::telemetry::StateTelemetry;
 use eyre::{Context, Result};

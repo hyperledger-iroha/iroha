@@ -1,9 +1,8 @@
 //! Canonical, host-independent admission for deployable IVM contract artifacts.
 //!
-//! This crate is the single policy implementation used by the native IVM and
-//! browser WebAssembly. It deliberately depends on the stable `ivm_abi`
-//! surface and canonical primitive codecs, not on the VM runtime, caches,
-//! proof systems, or host integrations.
+//! This crate is the single policy implementation used by the native IVM and browser WebAssembly.
+//! It deliberately depends on the stable `ivm_abi` surface and canonical primitive codecs, not on
+//! the VM runtime, caches, proof systems, or host integrations.
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -131,9 +130,8 @@ pub fn verify_contract_artifact(
 /// Verify a compiler-produced generic IVM 1.0 Kotodama test harness against
 /// its compiler-owned interface sidecar.
 ///
-/// This is intentionally hidden from ordinary artifact consumers. Native IVM
-/// preparation uses it so production and local-test profiles still share one
-/// policy implementation.
+/// This is intentionally hidden from ordinary artifact consumers. Native IVM preparation uses it so
+/// production and local-test profiles still share one policy implementation.
 #[doc(hidden)]
 pub fn verify_koto_test_artifact(
     artifact: &[u8],

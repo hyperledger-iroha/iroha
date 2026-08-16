@@ -1,9 +1,8 @@
 //! Exact setup-free masked R1CS relation for Iroha ZK-AMS admission.
 //!
-//! Each strict instance proves one canonical fixed PHC preimage, its SHA-256
-//! digest, one canonical low-s ES256 issuer signature, and one deterministic
-//! registry-root transition. A full random relaxed assignment masks the
-//! sequential Nova fold before the terminal Spartan proof.
+//! Each strict instance proves one canonical fixed PHC preimage, its SHA-256 digest, one canonical
+//! low-s ES256 issuer signature, and one deterministic registry-root transition. A full random
+//! relaxed assignment masks the sequential Nova fold before the terminal Spartan proof.
 #![allow(unexpected_cfgs)]
 use super::{
     VEGA_T256_BASE_MODULUS_BE_V1, VegaT256ScalarV1 as Scalar,
@@ -372,9 +371,8 @@ struct ZkAmsAdmissionProofWireV1 {
     version: u8,
     relation: MaskedRelaxedProofWireV1,
 }
-/// Encode the sole canonical admission-relation wire. Phase-III terminal
-/// producers use this helper so transaction proof bytes cannot drift into a
-/// second outer schema.
+/// Encode the sole canonical admission-relation wire. Phase-III terminal producers use this helper
+/// so transaction proof bytes cannot drift into a second outer schema.
 pub(super) fn encode_zk_ams_admission_relation_wire_v1(
     relation: MaskedRelaxedProofWireV1,
 ) -> Result<Vec<u8>, ZkAmsAdmissionRelationErrorV1> {
@@ -439,8 +437,7 @@ pub fn zk_ams_admission_relation_dimensions_v1()
         inner_sumcheck_rounds: dimensions.inner_sumcheck_rounds,
     })
 }
-/// Return the digest of the exact circuit/composer profile admitted by
-/// governance.
+/// Return the digest of the exact circuit/composer profile admitted by governance.
 pub fn zk_ams_compiled_profile_digest_v1() -> Result<[u8; 32], ZkAmsAdmissionRelationErrorV1> {
     let readiness = zk_ams_mkhe_readiness_v1()
         .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)?;
@@ -448,11 +445,10 @@ pub fn zk_ams_compiled_profile_digest_v1() -> Result<[u8; 32], ZkAmsAdmissionRel
 }
 /// Return the digest of the frozen, but not release-ready, candidate profile.
 ///
-/// This function exists only for deterministic release-evidence builders and
-/// native negative-test fixtures that must bind the exact candidate while the
-/// readiness gates remain open. It must never be used to authorize production
-/// activation, admission proving, or verification; those paths must call
-/// [`zk_ams_compiled_profile_digest_v1`] and remain readiness-gated.
+/// This function exists only for deterministic release-evidence builders and native negative-test
+/// fixtures that must bind the exact candidate while the readiness gates remain open. It must never
+/// be used to authorize production activation, admission proving, or verification; those paths must
+/// call [`zk_ams_compiled_profile_digest_v1`] and remain readiness-gated.
 pub fn zk_ams_release_candidate_profile_digest_v1()
 -> Result<[u8; 32], ZkAmsAdmissionRelationErrorV1> {
     canonical_shape()?;

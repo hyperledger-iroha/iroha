@@ -1,0 +1,14 @@
+
+      seiyaku Queries {
+        view fn read() -> bytes {
+            let account = ledger::query::account(context::authority());
+            let definition = ledger::query::asset_definition(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+            let domain = ledger::query::domain(DomainId::parse("wonderland.universal"));
+            let nft = ledger::query::nft(NftId::parse("n0$wonderland.universal"));
+            let parameter = ledger::query::parameter(Name::parse("block.max_transactions"));
+            let manifest = ledger::query::seiyaku_manifest(b"hash");
+            let instance = ledger::query::seiyaku_instance(Name::parse("router::universal"));
+            return instance;
+        }
+      }
+    

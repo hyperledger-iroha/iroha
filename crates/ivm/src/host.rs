@@ -67,8 +67,7 @@ use std::{
 pub struct AccessLog {
     pub read_keys: HashSet<StateKey>,
     pub write_keys: HashSet<StateKey>,
-    /// Concrete durable-state paths observed by the host, including any
-    /// contract-instance scope.
+    /// Concrete durable-state paths observed by the host, including any contract-instance scope.
     pub durable_read_paths: HashSet<StateKey>,
     /// Whether `durable_read_paths` completely covers every durable read.
     ///
@@ -186,9 +185,8 @@ const SM4_GAS_BASE: u64 = gas::HOST_VERIFY_GAS_BASE;
 const SM4_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 /// Minimum gas charged before a host may inspect durable or ledger state.
 ///
-/// Preparation rejects a smaller budget before the host is invoked. Stateful
-/// scans then spend one additional gas unit per examined item and stop as soon
-/// as the pre-debited reserve is exhausted.
+/// Preparation rejects a smaller budget before the host is invoked. Stateful scans then spend one
+/// additional gas unit per examined item and stop as soon as the pre-debited reserve is exhausted.
 pub const STATE_QUERY_GAS_BASE: u64 = gas::STATE_QUERY_GAS_BASE;
 /// Validate and return a durable-state path's canonical pointer payload size.
 ///
@@ -241,8 +239,7 @@ pub fn validate_state_path_text(path: &str) -> Result<(), VMError> {
     let path: StatePath = path.parse().map_err(|_| VMError::NoritoInvalid)?;
     validate_state_path(&path)
 }
-/// Validate a canonical durable-state path against the V1 text and
-/// canonical-frame bounds.
+/// Validate a canonical durable-state path against the V1 text and canonical-frame bounds.
 ///
 /// # Errors
 ///
@@ -472,11 +469,10 @@ fn resolve_declared_state_path<'a>(
 }
 /// Bind one value operation to the loaded CNTR durable-state declaration.
 ///
-/// The VM rejects every durable-state syscall from generic programs before
-/// host dispatch. For self-describing contracts, the first path segment must
-/// name exactly one declared scalar or one canonical `StateMap` entry. The
-/// bare map base is a collection prefix and is therefore invalid for value
-/// operations.
+/// The VM rejects every durable-state syscall from generic programs before host dispatch. For
+/// self-describing contracts, the first path segment must name exactly one declared scalar or one
+/// canonical `StateMap` entry. The bare map base is a collection prefix and is therefore invalid
+/// for value operations.
 pub fn validate_declared_state_path(vm: &IVM, path: &StatePath) -> Result<(), VMError> {
     match resolve_declared_state_path(vm, path)? {
         Some(DeclaredStatePath::MapBase) => Err(VMError::NoritoInvalid),
@@ -485,10 +481,9 @@ pub fn validate_declared_state_path(vm: &IVM, path: &StatePath) -> Result<(), VM
 }
 /// Bind a scan/count prefix to the loaded CNTR durable-state declaration.
 ///
-/// Unlike value operations, scans may address the bare base of a declared
-/// `StateMap`. Generic programs never reach this host-side check because the
-/// VM rejects their durable-state syscalls before quoting or dispatch, while
-/// malformed or undeclared typed paths still fail closed.
+/// Unlike value operations, scans may address the bare base of a declared `StateMap`. Generic
+/// programs never reach this host-side check because the VM rejects their durable-state syscalls
+/// before quoting or dispatch, while malformed or undeclared typed paths still fail closed.
 pub fn validate_declared_state_scan_path(vm: &IVM, path: &StatePath) -> Result<(), VMError> {
     resolve_declared_state_path(vm, path).map(drop)
 }
@@ -513,11 +508,10 @@ pub fn validate_declared_state_value_payload(
 }
 /// Validate header-only `StateMap` path inputs and return their gas lengths.
 ///
-/// `base_payload_len` is the framed canonical `Name` payload length from the
-/// pointer ABI, while `key_payload_len` is the raw canonical key payload. The
-/// returned output length is conservative and includes framing slack; the
-/// decoded execution path repeats the semantic base/key checks and validates
-/// the final canonical `StatePath` against [`syscalls::STATE_MAX_PATH_BYTES`].
+/// `base_payload_len` is the framed canonical `Name` payload length from the pointer ABI, while
+/// `key_payload_len` is the raw canonical key payload. The returned output length is conservative
+/// and includes framing slack; the decoded execution path repeats the semantic base/key checks and
+/// validates the final canonical `StatePath` against [`syscalls::STATE_MAX_PATH_BYTES`].
 pub(crate) fn quote_canonical_state_map_path_lengths(
     base_payload_len: usize,
     key_payload_len: usize,
@@ -749,11 +743,10 @@ pub fn quote_zk_single_at(
 }
 /// Inspect a ZK batch TLV and compute a conservative pre-decode quote.
 ///
-/// Only the fixed archive header, bounded alignment padding, and top-level
-/// count are inspected. Schema, flags, and checksums are intentionally left to
-/// execution after the quote is debited. Malformed headers fall back to one
-/// proof, while counts above the V1 cap are clamped to `cap + 1`; neither case
-/// can reach decoding or backend verification.
+/// Only the fixed archive header, bounded alignment padding, and top-level count are inspected.
+/// Schema, flags, and checksums are intentionally left to execution after the quote is debited.
+/// Malformed headers fall back to one proof, while counts above the V1 cap are clamped to `cap +
+/// 1`; neither case can reach decoding or backend verification.
 ///
 /// # Errors
 ///
@@ -1012,10 +1005,9 @@ pub struct HostSyscallMeteringSpec {
 }
 /// Return the explicitly registered gas formula for one ABI-v1 syscall.
 ///
-/// This registry deliberately does not derive a formula from the access class:
-/// access and metering are independent security claims. Adding a syscall to the
-/// ABI therefore requires updating both registries, otherwise preparation fails
-/// closed with [`VMError::UnknownSyscall`].
+/// This registry deliberately does not derive a formula from the access class: access and metering
+/// are independent security claims. Adding a syscall to the ABI therefore requires updating both
+/// registries, otherwise preparation fails closed with [`VMError::UnknownSyscall`].
 #[must_use]
 pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSyscallGasFormula> {
     if syscalls::is_numeric_v1_syscall(number) {
@@ -1459,10 +1451,9 @@ pub fn preflight_reserved_state_scan_work(
 }
 /// Charge one key comparison while preserving gas for later response work.
 ///
-/// `reserved_tail_gas` is the cumulative response or allocation bound that
-/// every successful scan must leave untouched. `STATE_KEYS` starts with its
-/// empty framed page and grows the tail by each selected key's exact canonical
-/// encoded length before cloning or parsing that key.
+/// `reserved_tail_gas` is the cumulative response or allocation bound that every successful scan
+/// must leave untouched. `STATE_KEYS` starts with its empty framed page and grows the tail by each
+/// selected key's exact canonical encoded length before cloning or parsing that key.
 ///
 /// # Errors
 ///
@@ -1488,10 +1479,9 @@ pub fn preflight_reserved_state_scan_work_with_tail(
 }
 /// Return a conservative framed-Norito byte bound for one `STATE_KEYS` page.
 ///
-/// The calculation borrows the selected paths and performs no serialization or
-/// allocation. It covers both plain sequences (one length prefix per element)
-/// and packed sequences (an `n + 1` offset table), plus the Norito header and
-/// alignment padding.
+/// The calculation borrows the selected paths and performs no serialization or allocation. It
+/// covers both plain sequences (one length prefix per element) and packed sequences (an `n + 1`
+/// offset table), plus the Norito header and alignment padding.
 fn state_keys_page_payload_bound_from_parts(
     item_count: usize,
     encoded_elements: usize,
@@ -1567,11 +1557,10 @@ fn state_keys_page_payload_bound(
 }
 /// Return the prepare-time minimum for a `STATE_KEYS` response page.
 ///
-/// Preparation reserves the empty framed page plus the decoded prefix. During
-/// the ordered scan, the host grows that response tail using each selected
-/// key's exact canonical encoded length and preflights it before cloning or
-/// parsing the key. This lets ordinary 64-item calls fit the one-million-cycle
-/// default while pathological maximum-size pages fail before materialization.
+/// Preparation reserves the empty framed page plus the decoded prefix. During the ordered scan, the
+/// host grows that response tail using each selected key's exact canonical encoded length and
+/// preflights it before cloning or parsing the key. This lets ordinary 64-item calls fit the
+/// one-million-cycle default while pathological maximum-size pages fail before materialization.
 ///
 /// # Errors
 ///
@@ -1835,19 +1824,17 @@ pub(crate) fn normalize_norito_bytes(vm: &mut IVM) -> Result<u64, VMError> {
 pub trait IVMHost {
     /// Return a deterministic upper bound for the syscall's additional gas.
     ///
-    /// Preparation must be side-effect-free. For
-    /// [`SyscallMetering::Reserved`] calls the VM debits this quote before
-    /// invoking [`Self::syscall`] and refunds the unused portion afterwards.
-    /// The VM does not invoke this method for registered staged syscalls.
+    /// Preparation must be side-effect-free. For [`SyscallMetering::Reserved`] calls the VM debits
+    /// this quote before invoking [`Self::syscall`] and refunds the unused portion afterwards. The
+    /// VM does not invoke this method for registered staged syscalls.
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError>;
     /// Handle a syscall invoked by the VM. `number` is the syscall ID and the
     /// mutable reference to the VM gives access to registers and memory.
     ///
-    /// A reserved handler returns the actual additional gas cost, which must not
-    /// exceed [`Self::prepare_syscall`]. Metered errors report their actual cost
-    /// through [`VMError::Metered`]; an unmetered error consumes the complete
-    /// prepared quote so potentially completed host work is never refunded
-    /// implicitly.
+    /// A reserved handler returns the actual additional gas cost, which must not exceed
+    /// [`Self::prepare_syscall`]. Metered errors report their actual cost through
+    /// [`VMError::Metered`]; an unmetered error consumes the complete prepared quote so potentially
+    /// completed host work is never refunded implicitly.
     ///
     /// A staged handler calls [`IVM::charge_syscall_stage`] before each phase and
     /// returns zero. Returning non-zero actual gas or a [`VMError::Metered`]
@@ -1858,9 +1845,8 @@ pub trait IVMHost {
     /// This policy check must be side-effect-free because it runs before gas is
     /// reserved for the syscall.
     ///
-    /// The default is the canonical public ABI surface. Tooling hosts may
-    /// explicitly opt in to host-private syscalls without changing the ABI hash
-    /// or weakening production admission.
+    /// The default is the canonical public ABI surface. Tooling hosts may explicitly opt in to
+    /// host-private syscalls without changing the ABI hash or weakening production admission.
     fn allows_syscall(&self, policy: SyscallPolicy, number: u32) -> bool {
         syscalls::is_syscall_allowed(policy, number)
     }
@@ -1942,10 +1928,9 @@ struct DefaultHostNestedCallJournal;
 /// Lightweight rollback token for the subset of [`DefaultHost`] operations
 /// forwarded by the production Iroha host during a nested contract call.
 ///
-/// Immutable inputs, durable state, verifying keys, and configuration are not
-/// copied. The bounded committed-output buffer is checkpointed directly. The
-/// production adapter's forwarded subset does not mutate this host's durable
-/// state or access log.
+/// Immutable inputs, durable state, verifying keys, and configuration are not copied. The bounded
+/// committed-output buffer is checkpointed directly. The production adapter's forwarded subset does
+/// not mutate this host's durable state or access log.
 pub struct DefaultHostForwardedCallCheckpoint {
     journal_depth: usize,
     pub_output: Vec<u8>,
@@ -2015,10 +2000,9 @@ impl DefaultHost {
     }
     /// Provide bounded, untrusted encoded private-input records from transport.
     ///
-    /// Records are deliberately not decoded here. Runtime execution validates
-    /// the selected record only after the fixed quote has been debited. Count,
-    /// per-record, and aggregate byte limits are enforced before this host
-    /// retains any of the supplied buffers.
+    /// Records are deliberately not decoded here. Runtime execution validates the selected record
+    /// only after the fixed quote has been debited. Count, per-record, and aggregate byte limits
+    /// are enforced before this host retains any of the supplied buffers.
     ///
     /// # Errors
     /// Returns [`VMError::NoritoInvalid`] when any V1 transport bound is

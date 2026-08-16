@@ -1,12 +1,10 @@
 //! Soracloud manifest schema for deterministic service hosting on Sora3.
 //!
-//! The initial Soracloud release uses canonical Norito payloads:
-//! [`SoraContainerManifestV1`], [`SoraServiceManifestV1`],
-//! [`SoraStateBindingV1`], [`AgentApartmentManifestV1`], [`FheParamSetV1`],
-//! and [`FheExecutionPolicyV1`]. Together they describe executable bundles,
-//! deployment/routing policy, state mutation limits, agent-policy envelopes,
-//! and deterministic confidential-compute policy in a form suitable for
-//! validator admission and audit trails.
+//! The initial Soracloud release uses canonical Norito payloads: [`SoraContainerManifestV1`],
+//! [`SoraServiceManifestV1`], [`SoraStateBindingV1`], [`AgentApartmentManifestV1`],
+//! [`FheParamSetV1`], and [`FheExecutionPolicyV1`]. Together they describe executable bundles,
+//! deployment/routing policy, state mutation limits, agent-policy envelopes, and deterministic
+//! confidential-compute policy in a form suitable for validator admission and audit trails.
 #![allow(clippy::module_name_repetitions)]
 use crate::{
     account::AccountId,

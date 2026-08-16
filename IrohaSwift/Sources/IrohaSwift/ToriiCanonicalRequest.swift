@@ -10,14 +10,17 @@ public enum ToriiCanonicalRequestError: Error, Equatable {
     case tooManyQueryPairs
     case accountTooLarge
     case methodTooLarge
+    case invalidMethod
     case pathTooLarge
+    case invalidPath
 }
 
 /// Helpers for building canonical request signatures accepted by Torii app endpoints.
 public enum ToriiCanonicalRequest {
-    public static let maxQueryPairsV1 = 64
-    public static let maxRawQueryBytesV1 = 64 * 1024
+    public static let maxQueryPairsV1 = canonicalRequestMaxQueryPairsV1
+    public static let maxRawQueryBytesV1 = canonicalRequestMaxRawQueryBytesV1
     public static let maxAccountLiteralBytesV1 = 36 * 1024
+    public static let maxAliasLiteralBytesV1 = canonicalRequestMaxAliasLiteralBytesV1
     public static let maxMethodBytesV1 = 32
     public static let maxPathBytesV1 = 64 * 1024
 
@@ -26,8 +29,9 @@ public enum ToriiCanonicalRequest {
     public static let headerTimestampMs = "X-Iroha-Timestamp-Ms"
     public static let headerNonce = "X-Iroha-Nonce"
 
-    /// Canonicalise a raw query string by decoding, sorting, and re-encoding.
-    public static func canonicalQueryString(from raw: String?) -> String {
+    /// Canonicalise a bounded raw query string by decoding, sorting, and re-encoding.
+    public static func canonicalQueryString(from raw: String?) throws -> String {
+        try validateCanonicalQuery(raw)
         guard let raw, !raw.isEmpty else { return "" }
         var pairs: [(String, String)] = []
         for component in raw.split(separator: "&", omittingEmptySubsequences: false) {
@@ -53,14 +57,18 @@ public enum ToriiCanonicalRequest {
     /// Build the canonical request bytes for signing.
     public static func canonicalRequestMessage(method: String,
                                                url: URL,
-                                               body: Data? = nil) -> Data {
-        let components = URLComponents(url: url, resolvingAgainstBaseURL: true)
-        let query = canonicalQueryString(from: components?.percentEncodedQuery ?? url.query)
-        let encodedPath = components?.percentEncodedPath
-        let path = encodedPath.flatMap { $0.isEmpty ? nil : $0 } ?? "/"
-        let upperMethod = method.uppercased()
+                                               body: Data? = nil) throws -> Data {
+        let exactMethod: String
+        let target: CanonicalRequestV1Target
+        do {
+            exactMethod = try canonicalRequestV1Method(method)
+            target = try canonicalRequestV1Target(url)
+        } catch let failure as CanonicalRequestV1TargetValidationError {
+            throw canonicalRequestError(from: failure)
+        }
+        let query = try canonicalQueryString(from: target.query)
         let digest = SHA256.hash(data: body ?? Data())
-        let rendered = "\(upperMethod)\n\(path)\n\(query)\n\(hexString(from: digest))"
+        let rendered = "\(exactMethod.uppercased())\n\(target.path)\n\(query)\n\(hexString(from: digest))"
         return Data(rendered.utf8)
     }
 
@@ -71,20 +79,10 @@ public enum ToriiCanonicalRequest {
                                         body: Data? = nil,
                                         timestampMs: UInt64,
                                         nonce: String) throws -> Data {
-        guard method.utf8.count <= maxMethodBytesV1 else {
-            throw ToriiCanonicalRequestError.methodTooLarge
-        }
-        let components = URLComponents(url: url, resolvingAgainstBaseURL: true)
-        let encodedPath = components?.percentEncodedPath
-        let path = encodedPath.flatMap { $0.isEmpty ? nil : $0 } ?? "/"
-        guard path.utf8.count <= maxPathBytesV1 else {
-            throw ToriiCanonicalRequestError.pathTooLarge
-        }
         try validateNonce(nonce)
-        try validateCanonicalQuery(components?.percentEncodedQuery ?? url.query)
         var message = Data("iroha.app.request.network.v1\0".utf8)
         message.append(networkId.bytes)
-        message.append(canonicalRequestMessage(method: method, url: url, body: body))
+        message.append(try canonicalRequestMessage(method: method, url: url, body: body))
         message.append(Data("\n\(timestampMs)\n\(nonce)".utf8))
         return message
     }
@@ -156,6 +154,9 @@ public enum ToriiCanonicalRequest {
         guard trimmed == value else {
             throw ToriiCanonicalRequestError.invalidAccountId
         }
+        guard canonicalRequestAccountHeaderValue(value) != nil else {
+            throw ToriiCanonicalRequestError.invalidAccountId
+        }
     }
 
     private static func validateNonce(_ value: String) throws {
@@ -169,16 +170,27 @@ public enum ToriiCanonicalRequest {
     }
 
     private static func validateCanonicalQuery(_ raw: String?) throws {
-        guard let raw, !raw.isEmpty else { return }
-        guard raw.utf8.count <= maxRawQueryBytesV1 else {
+        do {
+            try validateCanonicalRequestV1Query(raw)
+        } catch CanonicalRequestV1QueryValidationError.queryTooLarge {
             throw ToriiCanonicalRequestError.queryTooLarge
+        } catch CanonicalRequestV1QueryValidationError.tooManyQueryPairs {
+            throw ToriiCanonicalRequestError.tooManyQueryPairs
         }
-        var pairCount = 0
-        for component in raw.split(separator: "&", omittingEmptySubsequences: false) where !component.isEmpty {
-            pairCount += 1
-            guard pairCount <= maxQueryPairsV1 else {
-                throw ToriiCanonicalRequestError.tooManyQueryPairs
-            }
+    }
+
+    private static func canonicalRequestError(
+        from failure: CanonicalRequestV1TargetValidationError
+    ) -> ToriiCanonicalRequestError {
+        switch failure {
+        case .methodTooLarge:
+            return .methodTooLarge
+        case .invalidMethod:
+            return .invalidMethod
+        case .pathTooLarge:
+            return .pathTooLarge
+        case .invalidPath:
+            return .invalidPath
         }
     }
 

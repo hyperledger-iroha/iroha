@@ -88,11 +88,9 @@ const GOVERNANCE_PUBLICATION_SOURCE_PAIR_ID_DOMAIN_V1: &[u8] =
     b"sorafs.governance.publication_source_pair.id.v1";
 /// Derive the authenticated-account commitment stored in signed DAG provenance.
 ///
-/// `canonical_account_bytes` must be the canonical Norito encoding of the
-/// authenticated `AccountId`. Keeping
-/// that dependency at the producer boundary lets this wire-format crate commit
-/// the identity without embedding an unbounded or presentation-dependent
-/// account string.
+/// `canonical_account_bytes` must be the canonical Norito encoding of the authenticated
+/// `AccountId`. Keeping that dependency at the producer boundary lets this wire-format crate commit
+/// the identity without embedding an unbounded or presentation-dependent account string.
 #[must_use]
 pub fn governance_dag_submission_account_digest_v1(
     canonical_account_bytes: &[u8],
@@ -109,10 +107,9 @@ pub fn governance_dag_submission_account_digest_v1(
 }
 /// Derive the content identity for one filesystem publication source pair.
 ///
-/// The identity binds the internal payload kind plus the exact encoded and JSON
-/// byte lengths and BLAKE3 digests. Filesystem publishers use it as the only
-/// variable path component, so presentation labels and model identifiers never
-/// become path authority.
+/// The identity binds the internal payload kind plus the exact encoded and JSON byte lengths and
+/// BLAKE3 digests. Filesystem publishers use it as the only variable path component, so
+/// presentation labels and model identifiers never become path authority.
 #[must_use]
 pub fn governance_publication_source_pair_id_v1(
     payload_kind: &str,
@@ -159,12 +156,11 @@ pub const GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1: usize =
 /// Maximum canonical bytes hashed or signed for one first-release Governance
 /// DAG node, block, or head payload.
 ///
-/// The largest independently bounded embedded envelope is a signed reputation
-/// snapshot. Reserving an equal amount for the enclosing Governance enum,
-/// node/block fields, CIDs, peer identity, and signature metadata keeps the
-/// wire globally bounded while admitting every canonical V1 snapshot.
-/// Signing and CID helpers encode borrowed canonical views, so these bounds do
-/// not require cloning the embedded payload or node.
+/// The largest independently bounded embedded envelope is a signed reputation snapshot. Reserving
+/// an equal amount for the enclosing Governance enum, node/block fields, CIDs, peer identity, and
+/// signature metadata keeps the wire globally bounded while admitting every canonical V1 snapshot.
+/// Signing and CID helpers encode borrowed canonical views, so these bounds do not require cloning
+/// the embedded payload or node.
 pub const GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1: usize =
     GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1 * 2;
 /// Fixed allowance for the canonical block signature and outer Norito envelope.
@@ -179,10 +175,9 @@ const fn governance_dag_block_max_canonical_bytes_v1() -> usize {
 }
 /// Maximum canonical header-bearing Norito bytes for one V1 Governance DAG block.
 ///
-/// The block signing payload is capped independently above. This ceiling adds
-/// one checked, fixed allowance for the block signature and outer schema
-/// envelope so persistence and transport readers do not reject a block whose
-/// canonical signing payload was admitted.
+/// The block signing payload is capped independently above. This ceiling adds one checked, fixed
+/// allowance for the block signature and outer schema envelope so persistence and transport readers
+/// do not reject a block whose canonical signing payload was admitted.
 pub const GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1: usize =
     governance_dag_block_max_canonical_bytes_v1();
 /// Number of newest blocks committed by a checkpointed first-release head.
@@ -1118,10 +1113,9 @@ impl SoraFsAppealFinanceSettlementReceiptV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`SoraFsAppealFinanceSettlementReceiptValidationError`] when
-    /// required identifiers are missing or noncanonical, finalized-state
-    /// labels are unsupported or inconsistent, digest fields are malformed,
-    /// or required timestamps, finalized cursors, or counts are zero.
+    /// Returns [`SoraFsAppealFinanceSettlementReceiptValidationError`] when required identifiers
+    /// are missing or noncanonical, finalized-state labels are unsupported or inconsistent, digest
+    /// fields are malformed, or required timestamps, finalized cursors, or counts are zero.
     pub fn validate(&self) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
         if self.version != SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1 {
             return Err(
@@ -1435,9 +1429,8 @@ pub struct SoraFsAppealFinanceWeeklyRollupV1 {
 impl SoraFsAppealFinanceWeeklyRollupV1 {
     /// Build a deterministic weekly rollup from validated appeal finance reports.
     ///
-    /// Source report order does not affect the resulting rollup. Report ids and
-    /// config versions are sorted, and outcome rows are emitted in stable enum
-    /// order.
+    /// Source report order does not affect the resulting rollup. Report ids and config versions are
+    /// sorted, and outcome rows are emitted in stable enum order.
     ///
     /// # Errors
     ///
@@ -2577,12 +2570,11 @@ impl GovernanceLogPayloadV1 {
     }
     /// Validate the server-derived provenance required by this payload kind.
     ///
-    /// Caller-supplied finance payloads must retain their authenticated ingress
-    /// identity. Proof-token and transparency-ledger payloads may be produced
-    /// by a trusted in-process producer; when they instead enter through an
-    /// authenticated route, the signed node must retain the matching identity.
-    /// All other internally produced payloads reject provenance so a node
-    /// cannot misleadingly label them as caller submissions.
+    /// Caller-supplied finance payloads must retain their authenticated ingress identity.
+    /// Proof-token and transparency-ledger payloads may be produced by a trusted in-process
+    /// producer; when they instead enter through an authenticated route, the signed node must
+    /// retain the matching identity. All other internally produced payloads reject provenance so a
+    /// node cannot misleadingly label them as caller submissions.
     pub fn validate_submission_provenance(
         &self,
         provenance: Option<&GovernanceDagSubmissionProvenanceV1>,
@@ -4909,14 +4901,12 @@ pub enum GovernanceDagHeadChainValidationError {
 }
 /// Validates a canonical contiguous Governance DAG history or checkpoint tail.
 ///
-/// A root history begins at sequence zero. A checkpoint tail may begin at a
-/// non-zero sequence and leave the first block and node parent references
-/// outside the supplied slice. Every later block and node must link exactly to
-/// its predecessor in the supplied root-to-head order. This standalone
-/// validator requires one stable publisher identity and key across the supplied
-/// slice. Rotation-aware consumers must separately authenticate their authority
-/// transitions and then bind the signed head with
-/// [`validate_governance_dag_head_against_rotatable_chain_v1`].
+/// A root history begins at sequence zero. A checkpoint tail may begin at a non-zero sequence and
+/// leave the first block and node parent references outside the supplied slice. Every later block
+/// and node must link exactly to its predecessor in the supplied root-to-head order. This
+/// standalone validator requires one stable publisher identity and key across the supplied slice.
+/// Rotation-aware consumers must separately authenticate their authority transitions and then bind
+/// the signed head with [`validate_governance_dag_head_against_rotatable_chain_v1`].
 pub fn validate_governance_dag_chain_v1(
     blocks: &[GovernanceDagBlockV1],
     expected_head_cid: Option<&[u8]>,
@@ -4993,27 +4983,24 @@ fn validate_governance_dag_chain_with_authority_policy_v1(
 /// Validates a stable-authority signed head against a full history or its exact newest
 /// checkpoint window.
 ///
-/// Full histories start at sequence zero and contain `head.block_count`
-/// blocks. Histories of at most 64 blocks omit the checkpoint; longer
-/// histories commit the first block in their newest 64-block window. A bounded
-/// checkpoint replay supplies exactly those newest 64 blocks, beginning at
-/// sequence `head.block_count - 64`. One publisher identity and key must sign
-/// every supplied block, and that authority must also sign the head.
+/// Full histories start at sequence zero and contain `head.block_count` blocks. Histories of at
+/// most 64 blocks omit the checkpoint; longer histories commit the first block in their newest
+/// 64-block window. A bounded checkpoint replay supplies exactly those newest 64 blocks, beginning
+/// at sequence `head.block_count - 64`. One publisher identity and key must sign every supplied
+/// block, and that authority must also sign the head.
 pub fn validate_governance_dag_head_against_chain_v1(
     head: &GovernanceDagHeadV1,
     blocks: &[GovernanceDagBlockV1],
 ) -> Result<(), GovernanceDagHeadChainValidationError> {
     validate_governance_dag_head_against_chain_with_authority_policy_v1(head, blocks, true)
 }
-/// Validates a signed head against a chain whose authority rotations were
-/// authenticated separately.
+/// Validates a signed head against a chain whose authority rotations were authenticated separately.
 ///
-/// This performs every structural, signature, checkpoint, count, and timestamp
-/// check made by [`validate_governance_dag_head_against_chain_v1`], but permits
-/// predecessor blocks to have different publisher identities and keys. The
-/// head must still be signed by the newest supplied block's authority. Callers
-/// must authenticate every authority transition before trusting this result;
-/// this helper deliberately does not define or verify a rotation policy.
+/// This performs every structural, signature, checkpoint, count, and timestamp check made by
+/// [`validate_governance_dag_head_against_chain_v1`], but permits predecessor blocks to have
+/// different publisher identities and keys. The head must still be signed by the newest supplied
+/// block's authority. Callers must authenticate every authority transition before trusting this
+/// result; this helper deliberately does not define or verify a rotation policy.
 pub fn validate_governance_dag_head_against_rotatable_chain_v1(
     head: &GovernanceDagHeadV1,
     blocks: &[GovernanceDagBlockV1],

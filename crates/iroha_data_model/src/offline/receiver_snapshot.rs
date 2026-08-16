@@ -220,9 +220,8 @@ impl KagemushaActiveReceiverSnapshotV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for a zero height or policy hash, an oversized or
-    /// duplicate entry set, an invalid entry, or a snapshot tree that cannot
-    /// be encoded canonically.
+    /// Returns an error for a zero height or policy hash, an oversized or duplicate entry set, an
+    /// invalid entry, or a snapshot tree that cannot be encoded canonically.
     pub fn available(
         evaluated_height: u64,
         evaluated_at_ms: u64,
@@ -264,8 +263,7 @@ impl KagemushaActiveReceiverSnapshotV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error when the evaluated height is zero or the failure
-    /// reason is empty.
+    /// Returns an error when the evaluated height is zero or the failure reason is empty.
     pub fn unavailable(
         evaluated_height: u64,
         evaluated_at_ms: u64,

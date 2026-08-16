@@ -522,9 +522,8 @@ fn validate_appeal_identifier(
 }
 /// Return whether a moderation identifier is bounded canonical ASCII.
 ///
-/// This grammar is shared by appeal, case, round, and challenge identifiers so
-/// control characters, Unicode confusables, and whitespace cannot create
-/// ambiguous state keys or operator displays.
+/// This grammar is shared by appeal, case, round, and challenge identifiers so control characters,
+/// Unicode confusables, and whitespace cannot create ambiguous state keys or operator displays.
 #[must_use]
 pub fn is_canonical_moderation_identifier_v1(value: &str) -> bool {
     !value.is_empty()
@@ -1710,10 +1709,9 @@ pub fn sorafs_repair_idempotency_digest_v1(ticket_id: &str, key: &str) -> [u8; 3
 }
 /// Derive the consensus action digest for one authority-bound repair instruction.
 ///
-/// Clients and durable transaction forwarders use this exact helper to
-/// reconcile an idempotency receipt against finalized state. Keeping the
-/// preimage construction in the data model prevents replicas from
-/// reimplementing a consensus-private hash contract.
+/// Clients and durable transaction forwarders use this exact helper to reconcile an idempotency
+/// receipt against finalized state. Keeping the preimage construction in the data model prevents
+/// replicas from reimplementing a consensus-private hash contract.
 ///
 /// # Errors
 ///

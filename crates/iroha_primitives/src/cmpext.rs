@@ -8,8 +8,7 @@ use core::cmp::Ordering;
 /// - [`MinMaxExt::Min`] is smaller than every real value
 /// - [`MinMaxExt::Max`] is greater than every real value
 ///
-/// This enables prefix queries over composite keys in a `BTreeMap` or
-/// `BTreeSet`.
+/// This enables prefix queries over composite keys in a `BTreeMap` or `BTreeSet`.
 ///
 /// Suppose a compound key of three parts: `K = (A, B, C)`. Keys are
 /// ordered first by `A`, then `B`, then `C`. To fetch all records with a
@@ -63,10 +62,9 @@ impl<T> From<T> for MinMaxExt<T> {
 /// Helper macro to enable casting map keys to trait objects and derive
 /// the required comparison traits.
 ///
-/// This bypasses the limitation of [`core::borrow::Borrow`], which doesn't allow
-/// constructing a value on the fly and returning a reference to it. The
-/// macro is primarily used when a lookup needs only a subset of the key
-/// fields.
+/// This bypasses the limitation of [`core::borrow::Borrow`], which doesn't allow constructing a
+/// value on the fly and returning a reference to it. The macro is primarily used when a lookup
+/// needs only a subset of the key fields.
 #[macro_export]
 macro_rules! impl_as_dyn_key {
     (target: $ty:ty, key: $key:ty, trait: $trait:ident) => {

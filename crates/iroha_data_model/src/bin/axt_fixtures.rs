@@ -80,9 +80,9 @@ fn fixture_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
         effect_binding: None,
     }
 }
-fn encoded_account(public_key_hex: &str) -> String {
-    iroha_data_model::account::AccountId::new(public_key_hex.parse().expect("public key"))
-        .to_string()
+fn encoded_account(seed: u8) -> String {
+    let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+    iroha_data_model::account::AccountId::new(key_pair.public_key().clone()).to_string()
 }
 fn build_descriptor_fixture() -> Result<DescriptorFixture, Box<dyn Error>> {
     let descriptor = AxtDescriptorBuilder::new()
@@ -290,12 +290,9 @@ fn build_envelope_fixture(
             proof: proof_seven.clone(),
         },
     ];
-    let alice =
-        encoded_account("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
-    let bob =
-        encoded_account("ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016");
-    let carol =
-        encoded_account("ed0120ED77765E503B45FF9C059A1C19BF1DDE82C60432B7C2D01F7FCD75F5F9F3C07C");
+    let alice = encoded_account(0xA1);
+    let bob = encoded_account(0xB2);
+    let carol = encoded_account(0xC3);
     let happy_handles = vec![
         transfer_handle_fixture(binding, manifest_root_one, proof_one, alice, bob.clone()),
         lock_handle_fixture(binding, manifest_root_seven, proof_seven, bob, carol),

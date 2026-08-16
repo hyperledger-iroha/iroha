@@ -117,9 +117,8 @@ pub const VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1: u8 = 1;
 pub const VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1: u8 = 150;
 /// Tight first-release cap for one canonical Norito Vega proof.
 ///
-/// A 512 KiB ceiling leaves room for the exact 368-byte Figure 9 relation and
-/// Norito framing while preventing this engine from inheriting the much
-/// broader per-action opaque-byte allowance.
+/// A 512 KiB ceiling leaves room for the exact 368-byte Figure 9 relation and Norito framing while
+/// preventing this engine from inheriting the much broader per-action opaque-byte allowance.
 pub const MAX_VEGA_PROOF_BYTES_V1: usize = 512 * 1024;
 /// Big-endian modulus of the canonical T256 scalar field.
 ///
@@ -140,8 +139,7 @@ impl Drop for ZeroizingVegaScalarBytesV1 {
 /// Failure while translating canonical Vega field material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaFieldError {
-    /// The supplied big-endian integer is not smaller than the T256 scalar
-    /// modulus.
+    /// The supplied big-endian integer is not smaller than the T256 scalar modulus.
     #[error("integer is not a canonical T256 scalar")]
     NonCanonicalScalar,
     /// The zero scalar does not have a multiplicative inverse.
@@ -150,10 +148,9 @@ pub enum VegaFieldError {
 }
 /// Canonical T256 scalar used by Vega public inputs and proof-system algebra.
 ///
-/// Construction is deliberately non-reducing: byte strings at or above the
-/// modulus are rejected rather than silently mapped into the field.
-/// Secret scalars must be converted to explicit wire types before crossing a
-/// serialization boundary:
+/// Construction is deliberately non-reducing: byte strings at or above the modulus are rejected
+/// rather than silently mapped into the field. Secret scalars must be converted to explicit wire
+/// types before crossing a serialization boundary:
 ///
 /// ```compile_fail
 /// use iroha_zkp_halo2::vega::VegaT256ScalarV1;
@@ -199,8 +196,7 @@ impl VegaT256ScalarV1 {
             .ok_or(VegaFieldError::NonCanonicalScalar)?;
         Ok(Self(value))
     }
-    /// Parse one canonical 32-byte little-endian proof scalar without modular
-    /// reduction.
+    /// Parse one canonical 32-byte little-endian proof scalar without modular reduction.
     ///
     /// # Errors
     ///
@@ -270,9 +266,8 @@ impl VegaT256ScalarV1 {
     }
     /// Replace this scalar instance with exact zero using a safe best-effort wipe.
     ///
-    /// This scalar is [`Copy`]; callers must separately clear every independent
-    /// copy that contains secret material. Rust also does not guarantee erasure
-    /// of compiler-created temporaries.
+    /// This scalar is [`Copy`]; callers must separately clear every independent copy that contains
+    /// secret material. Rust also does not guarantee erasure of compiler-created temporaries.
     pub fn clear_secret(&mut self) {
         *self = Self::zero();
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);

@@ -269,9 +269,8 @@ impl norito::core::NoritoSerialize for MusubiOrderedPackagePageSource<'_> {
 }
 /// Internal typed Musubi query failure retained through the Torii telemetry boundary.
 ///
-/// The public query error remains [`QueryExecutionFail`]. This wrapper carries
-/// a Musubi-only cursor reason in-process without changing the global query
-/// wire enum or its variant indices.
+/// The public query error remains [`QueryExecutionFail`]. This wrapper carries a Musubi-only cursor
+/// reason in-process without changing the global query wire enum or its variant indices.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MusubiQueryExecutionErrorV1 {
     query_error: QueryExecutionFail,
@@ -305,9 +304,8 @@ impl From<QueryExecutionFail> for MusubiQueryExecutionErrorV1 {
 }
 /// Execute a paged Musubi query while retaining its exact cursor-failure reason.
 ///
-/// Ordinary Core callers continue to use [`ValidSingularQuery`]. Torii uses
-/// this trait only to observe the bounded reason before returning the same
-/// public [`QueryExecutionFail`] value.
+/// Ordinary Core callers continue to use [`ValidSingularQuery`]. Torii uses this trait only to
+/// observe the bounded reason before returning the same public [`QueryExecutionFail`] value.
 pub trait ValidMusubiSingularQuery: iroha_data_model::query::SingularQuery {
     /// Execute against one read-only state view with typed cursor diagnostics.
     fn execute_musubi(

@@ -1,9 +1,8 @@
 //! Minimal Keccak-f[1600] sponge constructions required by canonical Vega.
 //!
-//! `tiny-keccak` already supplies the audited permutation under the crate's
-//! existing `sha3` feature. Vega needs the original Keccak-256 delimiter and
-//! SHAKE256 XOF, so this module applies their standardized sponge padding
-//! directly without adding or changing dependencies.
+//! `tiny-keccak` already supplies the audited permutation under the crate's existing `sha3`
+//! feature. Vega needs the original Keccak-256 delimiter and SHAKE256 XOF, so this module applies
+//! their standardized sponge padding directly without adding or changing dependencies.
 use tiny_keccak::keccakf;
 const KECCAK_256_RATE: usize = 136;
 fn clear_sensitive_bytes_v1(bytes: &mut [u8]) {
@@ -81,6 +80,7 @@ impl Keccak256 {
     /// Fork the exact internal absorb state without exposing a general-purpose
     /// `Clone` capability. Both descendants retain independent zeroizing owners
     /// and produce the same digest until different suffixes are absorbed.
+    #[cfg(test)]
     pub(super) fn fork_v1(&self) -> Self {
         Self {
             state: self.state,
@@ -95,10 +95,9 @@ impl Keccak256 {
     }
     /// Finalize directly into caller-owned storage.
     ///
-    /// The caller retains the owner so secret-derived users can keep the
-    /// sponge in a stable allocation from first absorption through explicit
-    /// drop. `Drop` optimizer-resistantly erases the state and pending rate
-    /// bytes on success, error, or unwind, while this method avoids an
+    /// The caller retains the owner so secret-derived users can keep the sponge in a stable
+    /// allocation from first absorption through explicit drop. `Drop` optimizer-resistantly erases
+    /// the state and pending rate bytes on success, error, or unwind, while this method avoids an
     /// intermediate returned digest array.
     pub(super) fn finalize_into(&mut self, output: &mut [u8; 32]) {
         self.pending[self.pending_len] ^= 0x01;
@@ -198,11 +197,13 @@ fn sponge(input: &[u8], delimiter: u8, output_len: usize) -> Vec<u8> {
 /// This keeps only one Keccak rate block in memory, which is required by the
 /// release-size deterministic RNS samplers.  Reading the same total number of
 /// bytes in any chunking produces the exact one-shot `shake256` stream.
+#[cfg(test)]
 pub(super) struct Shake256Reader {
     state: [u64; 25],
     block: [u8; KECCAK_256_RATE],
     cursor: usize,
 }
+#[cfg(test)]
 impl Shake256Reader {
     pub(super) fn new(input: &[u8]) -> Self {
         let mut reader = Self {
@@ -235,6 +236,7 @@ impl Shake256Reader {
         }
     }
 }
+#[cfg(test)]
 impl Drop for Shake256Reader {
     fn drop(&mut self) {
         clear_sensitive_lanes_v1(&mut self.state);

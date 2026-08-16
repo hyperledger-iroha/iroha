@@ -1,4 +1,3 @@
-using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 
 namespace Hyperledger.Iroha.Http;
@@ -12,8 +11,7 @@ public sealed class CanonicalRequestHeaders
         var exactNonce = CanonicalRequest.RequireExactNonBlank(nonce, nameof(nonce));
 
         AccountId = CanonicalRequest.RequireCanonicalAccountId(exactAccountId, nameof(accountId));
-        accountHeaderValue = AccountAddress.Parse(AccountId, AccountAddress.DefaultChainDiscriminant)
-            .CanonicalHex;
+        accountHeaderValue = CanonicalRequest.CanonicalAccountHeaderValue(AccountId);
         SignatureBase64 = RequireCanonicalSignatureBase64(exactSignatureBase64, nameof(signatureBase64));
         TimestampMs = CanonicalRequest.RequirePositiveTimestamp(timestampMs, nameof(timestampMs));
         Nonce = CanonicalRequest.RequireCanonicalNonce(exactNonce, nameof(nonce));

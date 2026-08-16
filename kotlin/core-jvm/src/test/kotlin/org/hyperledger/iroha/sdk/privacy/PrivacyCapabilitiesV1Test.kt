@@ -313,7 +313,7 @@ class PrivacyCapabilitiesV1Test {
         .build()
 
     private fun canonicalAuth(): ToriiCanonicalRequestAuth = ToriiCanonicalRequestAuth(
-        "alice",
+        "alice@universal",
         keyPair.private,
         1_700_000_000_000L,
         "privacy-capabilities-1",

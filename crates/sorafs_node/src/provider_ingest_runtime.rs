@@ -160,8 +160,7 @@ pub struct ProviderIngestFinalizedAssignmentV1 {
     pub pin: PinManifestFinalizedRecordV1,
     /// Chain-authoritative replication order.
     pub order: ReplicationOrderRecord,
-    /// Reader-authenticated Musubi archive claim, absent for generic
-    /// non-Musubi replication orders.
+    /// Reader-authenticated Musubi archive claim, absent for generic non-Musubi replication orders.
     pub musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
     /// Reader-authenticated Musubi archive and this provider's exact finalized
     /// completion, absent until the local provider completion is committed.
@@ -175,19 +174,16 @@ pub struct ProviderIngestFinalizedAssignmentV1 {
     /// Exact committed transaction hash, when the finalized reader exposes it.
     pub committed_transaction_hash: Option<[u8; 32]>,
 }
-/// Opaque consensus-authenticated Musubi archive binding emitted only by a
-/// finalized-ledger reader.
+/// Opaque consensus-authenticated Musubi archive binding emitted only by a finalized-ledger reader.
 ///
-/// The private representation deliberately prevents publisher request DTOs
-/// from being reinterpreted as finalized evidence. A reader can create this
-/// value only while servicing a runtime-issued
+/// The private representation deliberately prevents publisher request DTOs from being reinterpreted
+/// as finalized evidence. A reader can create this value only while servicing a runtime-issued
 /// [`ProviderIngestFinalizedClaimFactoryV1`].
 ///
-/// This pre-completion claim binds the exact genesis-derived network identity and
-/// the exact finalized archive cursor. The source and storage path may use it
-/// only to fetch and semantically verify the bundle before replication
-/// completion. It contains no post-completion finalized row and therefore
-/// cannot authorize a Musubi provider attestation.
+/// This pre-completion claim binds the exact genesis-derived network identity and the exact
+/// finalized archive cursor. The source and storage path may use it only to fetch and semantically
+/// verify the bundle before replication completion. It contains no post-completion finalized row
+/// and therefore cannot authorize a Musubi provider attestation.
 ///
 /// ```compile_fail
 /// use sorafs_node::ProviderIngestFinalizedMusubiArchiveClaimV1;
@@ -229,8 +225,7 @@ impl ProviderIngestFinalizedMusubiArchiveClaimV1 {
     pub const fn archive_id(&self) -> ArchiveId {
         self.binding.archive_id
     }
-    /// Complete immutable archive commitment authenticated by the finalized
-    /// reader.
+    /// Complete immutable archive commitment authenticated by the finalized reader.
     #[must_use]
     pub const fn commitment(&self) -> &MusubiArchiveCommitmentV1 {
         &self.binding.commitment
@@ -267,10 +262,9 @@ impl ProviderIngestFinalizedMusubiArchiveClaimV1 {
 /// Process-local identity of the exact storage/outbox instance allowed to
 /// derive completed-Musubi attestation work.
 ///
-/// Instance matching uses pointer identity. The marker deliberately has no
-/// stable bytes, hash, codec, or public constructor: it is an in-process
-/// authority fence, not part of any persistent claim, approval ID, or wire
-/// transcript.
+/// Instance matching uses pointer identity. The marker deliberately has no stable bytes, hash,
+/// codec, or public constructor: it is an in-process authority fence, not part of any persistent
+/// claim, approval ID, or wire transcript.
 #[derive(Clone)]
 pub(crate) struct CompletedMusubiStoreInstanceV1(Arc<CompletedMusubiStoreInstanceInnerV1>);
 struct CompletedMusubiStoreInstanceInnerV1 {
@@ -290,10 +284,9 @@ impl CompletedMusubiStoreInstanceV1 {
     /// Reserve the one completed-Musubi capture coordinator allowed for this
     /// exact storage/outbox instance.
     ///
-    /// The reservation is deliberately non-resetting. Dropping a coordinator,
-    /// failing its lazy reader binding, or cloning the surrounding
-    /// [`crate::NodeHandle`] can never reopen reader selection for the same
-    /// process-local store incarnation.
+    /// The reservation is deliberately non-resetting. Dropping a coordinator, failing its lazy
+    /// reader binding, or cloning the surrounding [`crate::NodeHandle`] can never reopen reader
+    /// selection for the same process-local store incarnation.
     pub(crate) fn try_take_capture_coordinator(&self) -> bool {
         self.0
             .capture_coordinator_taken
@@ -309,13 +302,12 @@ impl fmt::Debug for CompletedMusubiStoreInstanceV1 {
 /// Opaque consensus-authenticated Musubi claim sealed only from this provider's
 /// finalized completion row.
 ///
-/// This value is intentionally distinct from
-/// [`ProviderIngestFinalizedMusubiArchiveClaimV1`]. The pre-completion claim can
-/// authorize fetching and semantic verification before storage completion, but
-/// only this completed-row capability may enter the later provider-attestation
-/// path. It has no public constructor or serialization implementation.
-/// Equality compares finalized semantic evidence only; the private process-local
-/// authority marker is checked separately and is never an equality capability.
+/// This value is intentionally distinct from [`ProviderIngestFinalizedMusubiArchiveClaimV1`]. The
+/// pre-completion claim can authorize fetching and semantic verification before storage completion,
+/// but only this completed-row capability may enter the later provider-attestation path. It has no
+/// public constructor or serialization implementation. Equality compares finalized semantic
+/// evidence only; the private process-local authority marker is checked separately and is never an
+/// equality capability.
 ///
 /// ```compile_fail
 /// use sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedMusubiCompletionClaimV1;
@@ -455,11 +447,10 @@ pub enum ProviderIngestMusubiAttestationApprovalRequestErrorV1 {
 /// verifier's opaque output. Construction performs no signing and activates no runtime path.
 ///
 /// Neither pre-completion receipt nor verifier evidence can bypass the storage lifecycle lease.
-/// Both the raw evidence constructor and lease-level request minting are
-/// crate-private. Downstream code cannot turn verifier evidence or a generic
-/// finalized-ledger claim into an approval request.
-/// Public equality compares the stable request semantics and deliberately omits
-/// the private process-local authority marker.
+/// Both the raw evidence constructor and lease-level request minting are crate-private. Downstream
+/// code cannot turn verifier evidence or a generic finalized-ledger claim into an approval request.
+/// Public equality compares the stable request semantics and deliberately omits the private
+/// process-local authority marker.
 ///
 /// ```compile_fail
 /// use sorafs_node::{
@@ -625,9 +616,8 @@ impl ProviderIngestMusubiAttestationApprovalRequestV1 {
     }
     /// Return the stable domain-separated digest of the completed-row evidence.
     ///
-    /// The observation cursor is retained separately and deliberately excluded
-    /// from this digest so an identical completed row can be reverified at a
-    /// later finalized head after restart.
+    /// The observation cursor is retained separately and deliberately excluded from this digest so
+    /// an identical completed row can be reverified at a later finalized head after restart.
     #[must_use]
     pub const fn completion_claim_digest(&self) -> [u8; 32] {
         self.completion_claim_digest
@@ -652,14 +642,12 @@ impl ProviderIngestMusubiAttestationApprovalRequestV1 {
 impl AdmittedPayloadReadLeaseV1<'_> {
     /// Reverify one completed Musubi bundle and mint its opaque unsigned approval request.
     ///
-    /// This crate-private request-minting boundary binds the retained finalized
-    /// authorization and sealed completed-row claim to both the exact
-    /// storage/outbox instance and this storage-admitted manifest. It checks the
-    /// supplied reconstruction plan against the admitted payload and opens all
-    /// three byte-zero readers itself while the storage lifecycle lease remains
-    /// held. The canonical Musubi V1 verifier applies its fixed consensus
-    /// bounds; no caller-controlled limit or previously retained verifier
-    /// result is accepted.
+    /// This crate-private request-minting boundary binds the retained finalized authorization and
+    /// sealed completed-row claim to both the exact storage/outbox instance and this
+    /// storage-admitted manifest. It checks the supplied reconstruction plan against the admitted
+    /// payload and opens all three byte-zero readers itself while the storage lifecycle lease
+    /// remains held. The canonical Musubi V1 verifier applies its fixed consensus bounds; no
+    /// caller-controlled limit or previously retained verifier result is accepted.
     ///
     /// # Errors
     ///
@@ -786,18 +774,15 @@ fn musubi_artifact_descriptor_digest_v1(
     hasher.update(&descriptor_bytes);
     Some(MusubiContentDigestV1::new(*hasher.finalize().as_bytes()))
 }
-/// Runtime-owned capability for constructing opaque claims inside one
-/// finalized-ledger read.
+/// Runtime-owned capability for constructing opaque claims inside one finalized-ledger read.
 ///
-/// This type has no public constructor. Generic finalized-ledger reads receive
-/// an unbound factory for ordinary ingest claims. Only the private signed-page
-/// scanner can create the store-bound variant used for completed-Musubi
-/// attestation claims.
+/// This type has no public constructor. Generic finalized-ledger reads receive an unbound factory
+/// for ordinary ingest claims. Only the private signed-page scanner can create the store-bound
+/// variant used for completed-Musubi attestation claims.
 ///
-/// The capability authenticates the configured finalized-ledger
-/// implementation boundary, not arbitrary bytes. That trusted implementation
-/// receives ownership and can retain the capability; production wiring must
-/// therefore install only the qualified archive-backed reader.
+/// The capability authenticates the configured finalized-ledger implementation boundary, not
+/// arbitrary bytes. That trusted implementation receives ownership and can retain the capability;
+/// production wiring must therefore install only the qualified archive-backed reader.
 #[derive(Debug)]
 pub struct ProviderIngestFinalizedClaimFactoryV1 {
     network_id: NetworkId,
@@ -1109,15 +1094,13 @@ pub struct ProviderIngestSourceRequestV1 {
 impl ProviderIngestSourceRequestV1 {
     /// Construct one canonical request for an authenticated provider source.
     ///
-    /// The optional Musubi value is informational transport data, not
-    /// finalized evidence. It must agree exactly with the ordinary finalized
-    /// ingest authorization.
+    /// The optional Musubi value is informational transport data, not finalized evidence. It must
+    /// agree exactly with the ordinary finalized ingest authorization.
     ///
     /// # Errors
     ///
-    /// Returns a fixed rejection for an invalid authorization, an empty,
-    /// oversized, unsorted, duplicate, self-referential, or zero source list,
-    /// or a substituted Musubi binding.
+    /// Returns a fixed rejection for an invalid authorization, an empty, oversized, unsorted,
+    /// duplicate, self-referential, or zero source list, or a substituted Musubi binding.
     pub fn new(
         authorization: FinalizedProviderIngestAuthorizationV1,
         source_provider_ids: Vec<[u8; 32]>,
@@ -1241,8 +1224,7 @@ impl ProviderIngestSourceQualificationV1 {
 }
 /// Independently configured public binding for one authenticated provider source.
 ///
-/// The binding contains no endpoint credentials, grants, tokens, private keys,
-/// or payload material.
+/// The binding contains no endpoint credentials, grants, tokens, private keys, or payload material.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestAuthenticatedSourceBindingV1 {
     /// Exact governed provider identity served by the source.
@@ -1277,13 +1259,11 @@ impl ProviderIngestAuthenticatedSourceBindingV1 {
 }
 /// Authenticated source fetch boundary.
 ///
-/// Production implementations must resolve only current governance-admitted
-/// signed adverts, authenticate a bounded stream grant, require HTTPS with
-/// pinned trust and DNS-rebinding defenses, reject redirects and implicit
-/// decompression, and enforce the exact manifest, chunk-plan, payload-length,
-/// chunk digest, and PoR-root binding in the request. Implementations try only
-/// a bounded canonical source list and never persist tokens, URLs, or payload
-/// bytes in the outbox.
+/// Production implementations must resolve only current governance-admitted signed adverts,
+/// authenticate a bounded stream grant, require HTTPS with pinned trust and DNS-rebinding defenses,
+/// reject redirects and implicit decompression, and enforce the exact manifest, chunk-plan,
+/// payload-length, chunk digest, and PoR-root binding in the request. Implementations try only a
+/// bounded canonical source list and never persist tokens, URLs, or payload bytes in the outbox.
 pub trait ProviderIngestAuthenticatedSourceFetchV1: Send + Sync + 'static {
     /// Verified material passed directly to local storage.
     type Fetched: Send + 'static;
@@ -1295,11 +1275,10 @@ pub trait ProviderIngestAuthenticatedSourceFetchV1: Send + Sync + 'static {
 }
 /// One independently authenticated provider source used by the production pool.
 ///
-/// Implementations own their runtime-only endpoint, grant, credential, and
-/// pinned-trust material. The stable handle and provider identity are public
-/// policy identifiers only. A fetch must use a hard transport deadline, reject
-/// redirects and implicit decompression, and verify the exact finalized
-/// authorization before returning.
+/// Implementations own their runtime-only endpoint, grant, credential, and pinned-trust material.
+/// The stable handle and provider identity are public policy identifiers only. A fetch must use a
+/// hard transport deadline, reject redirects and implicit decompression, and verify the exact
+/// finalized authorization before returning.
 pub trait ProviderIngestAuthenticatedProviderSourceV1: Send + Sync + 'static {
     /// Verified material returned by this source.
     type Fetched: Send + 'static;
@@ -1311,8 +1290,7 @@ pub trait ProviderIngestAuthenticatedProviderSourceV1: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns a fixed payload-free source failure when the qualification
-    /// cannot be authenticated.
+    /// Returns a fixed payload-free source failure when the qualification cannot be authenticated.
     fn qualification(
         &self,
     ) -> Result<ProviderIngestSourceQualificationV1, ProviderIngestSourceFetchErrorV1>;
@@ -1395,13 +1373,12 @@ struct PinnedProviderIngestSourceV1<Fetched: Send + 'static> {
 }
 /// Bounded, identity-pinned authenticated multi-provider source coordinator.
 ///
-/// The pool freezes a canonical public provider inventory at construction,
-/// retains an independent top-level revision/policy-digest qualification,
-/// rejects missing or substituted sources before contacting any transport, and
-/// tries only the exact canonical source list carried by finalized assignment
-/// state. Each selected source is rechecked before and after its fetch. Source
-/// locations, grants, credentials, and payload bytes remain inside the child
-/// adapters and are never copied into pool metadata or durable state.
+/// The pool freezes a canonical public provider inventory at construction, retains an independent
+/// top-level revision/policy-digest qualification, rejects missing or substituted sources before
+/// contacting any transport, and tries only the exact canonical source list carried by finalized
+/// assignment state. Each selected source is rechecked before and after its fetch. Source
+/// locations, grants, credentials, and payload bytes remain inside the child adapters and are never
+/// copied into pool metadata or durable state.
 pub struct ProviderIngestAuthenticatedSourcePoolV1<Fetched: Send + 'static> {
     runtime_handle: String,
     qualification: ProviderIngestRuntimeProviderQualificationV1,
@@ -1503,10 +1480,9 @@ impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderIngestSourceFetchErrorV1::Unavailable`] when no
-    /// independently qualified source is currently ready, or
-    /// [`ProviderIngestSourceFetchErrorV1::Rejected`] when any pinned source is
-    /// substituted, stale, or policy-rejected.
+    /// Returns [`ProviderIngestSourceFetchErrorV1::Unavailable`] when no independently qualified
+    /// source is currently ready, or [`ProviderIngestSourceFetchErrorV1::Rejected`] when any pinned
+    /// source is substituted, stale, or policy-rejected.
     pub fn check_readiness(&self) -> Result<(), ProviderIngestSourceFetchErrorV1> {
         if !is_production_runtime_handle(&self.runtime_handle)
             || !self.qualification.is_valid()
@@ -2182,12 +2158,11 @@ pub trait ProviderIngestCompletionSignerV1: Send + Sync + 'static {
     /// Revalidate the live owner/key/policy authority represented by this
     /// signer and return its exact current policy identity.
     ///
-    /// This method runs on the async worker thread and therefore must be a
-    /// bounded, non-blocking read of a locally maintained eligibility snapshot;
-    /// it must never perform HSM/KMS, network, filesystem, or other blocking
-    /// I/O. Implementations must update that snapshot on revocation/rotation
-    /// and fail closed when it is stale or unavailable. The timed [`Self::sign`]
-    /// operation remains responsible for the HSM/KMS-side atomic check.
+    /// This method runs on the async worker thread and therefore must be a bounded, non-blocking
+    /// read of a locally maintained eligibility snapshot; it must never perform HSM/KMS, network,
+    /// filesystem, or other blocking I/O. Implementations must update that snapshot on
+    /// revocation/rotation and fail closed when it is stale or unavailable. The timed
+    /// [`Self::sign`] operation remains responsible for the HSM/KMS-side atomic check.
     fn current_eligibility(
         &self,
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerErrorV1>;
@@ -2285,9 +2260,8 @@ pub enum ProviderIngestIngressDispositionV1 {
 pub enum ProviderIngestTransactionObservationV1 {
     /// The exact transaction committed and execution succeeded.
     ///
-    /// This proves only the transaction-level outcome. The finalized
-    /// replication-order projection remains the sole semantic completion
-    /// authority.
+    /// This proves only the transaction-level outcome. The finalized replication-order projection
+    /// remains the sole semantic completion authority.
     CommittedSuccess,
     /// The exact transaction committed but execution was rejected.
     CommittedRejected,
@@ -2994,11 +2968,10 @@ where
     }
     /// Await an in-flight atomic storage mutation without ever detaching it.
     ///
-    /// The configured operation timeout is a soft diagnostic boundary for
-    /// mutating storage. Once storage may be writing, the runtime keeps the
-    /// durable claim renewed and waits for the exact operation to finish before
-    /// it can persist success or schedule a retry. This prevents a timed-out
-    /// blocking writer from racing a replacement attempt.
+    /// The configured operation timeout is a soft diagnostic boundary for mutating storage. Once
+    /// storage may be writing, the runtime keeps the durable claim renewed and waits for the exact
+    /// operation to finish before it can persist success or schedule a retry. This prevents a
+    /// timed-out blocking writer from racing a replacement attempt.
     async fn await_mutating_storage_with_lease<T, Fut>(
         &self,
         mut claim: ProviderIngestSourceClaimV1,

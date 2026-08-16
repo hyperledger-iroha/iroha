@@ -155,10 +155,9 @@ fn verify_bound_presentation_encoded_enabled_v1(
 }
 /// Prove one canonical typed Bootle/Lantern presentation.
 ///
-/// This is the producer-side counterpart of the consensus verifier. It
-/// compiles the exact governed issuer-policy record, derives the canonical
-/// protocol-tagged statement digest, binds the chain genesis hash and
-/// transaction intent, and releases proof bytes only after the native prover's
+/// This is the producer-side counterpart of the consensus verifier. It compiles the exact governed
+/// issuer-policy record, derives the canonical protocol-tagged statement digest, binds the chain
+/// genesis hash and transaction intent, and releases proof bytes only after the native prover's
 /// independent self-verification succeeds.
 ///
 /// # Errors
@@ -169,10 +168,9 @@ fn verify_bound_presentation_encoded_enabled_v1(
 ///
 /// # Timing boundary
 ///
-/// This producer API inherits the native prover's bounded, variable-work
-/// rejection samplers. Invoke it only across a local authenticated boundary
-/// with process isolation; proof completion timing is not safe to expose to an
-/// untrusted remote observer or hostile co-tenant.
+/// This producer API inherits the native prover's bounded, variable-work rejection samplers. Invoke
+/// it only across a local authenticated boundary with process isolation; proof completion timing is
+/// not safe to expose to an untrusted remote observer or hostile co-tenant.
 pub fn prove_bound_presentation_v1<R: CryptoRng + RngCore>(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -185,9 +183,8 @@ pub fn prove_bound_presentation_v1<R: CryptoRng + RngCore>(
     }
     prove_bound_presentation_enabled_v1(statement, policy, canonical_genesis_hash, witness, rng)
 }
-/// Verify one canonical typed Bootle/Lantern presentation through the same
-/// governed policy, statement digest, genesis binding, and compiled relation
-/// used by the producer.
+/// Verify one canonical typed Bootle/Lantern presentation through the same governed policy,
+/// statement digest, genesis binding, and compiled relation used by the producer.
 ///
 /// # Errors
 ///
@@ -206,10 +203,9 @@ pub fn verify_bound_presentation_v1(
 }
 /// Strictly decode and verify one canonical typed Bootle/Lantern presentation.
 ///
-/// This is the sole encoded production verifier. It composes the fixed-width,
-/// exact canonical decoder with [`verify_bound_presentation_v1`], so callers
-/// cannot accidentally stop after structural wire validation or reconstruct a
-/// weaker transcript.
+/// This is the sole encoded production verifier. It composes the fixed-width, exact canonical
+/// decoder with [`verify_bound_presentation_v1`], so callers cannot accidentally stop after
+/// structural wire validation or reconstruct a weaker transcript.
 ///
 /// # Errors
 ///

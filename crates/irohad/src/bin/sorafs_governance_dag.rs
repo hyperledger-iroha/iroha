@@ -1,9 +1,8 @@
 //! Stock broker-backed SoraFS Governance DAG service launcher.
 //!
-//! The standalone config loader admits only the service's public endpoint
-//! policy, expected identities, stable provider handles, revisions, bounds,
-//! and policy digests. Runtime credentials and private keys remain behind the
-//! platform-fixed local provider broker.
+//! The standalone config loader admits only the service's public endpoint policy, expected
+//! identities, stable provider handles, revisions, bounds, and policy digests. Runtime credentials
+//! and private keys remain behind the platform-fixed local provider broker.
 use clap::Parser;
 use iroha_data_model::{ChainId, NetworkId};
 use irohad::StockGovernanceDagServiceRuntimeProviderRegistryV1;

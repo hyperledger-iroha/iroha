@@ -1,3 +1,4 @@
+impl Reducer {
     fn on_certificate(
         &mut self,
         certificate: QuorumCertificate,
@@ -66,11 +67,11 @@
         {
             effects.push(self.ensure_body_fetch(&certificate));
         }
-        let should_persist_high = self
+        if self
             .durable
             .highest_prepare()
-            .is_none_or(|existing| certificate.round().view() > existing.round().view());
-        if should_persist_high {
+            .is_none_or(|existing| certificate.round().view() > existing.round().view())
+        {
             let persist =
                 self.start_persistence(WalRecord::ObservePrepare(certificate), Continuation::None)?;
             effects.push(persist);
@@ -81,17 +82,13 @@
         let current_view = self.durable.current_view();
         self.pending_prepare
             .retain(|_, certificate| certificate.round().view() == current_view);
-        let retained = self
+        self.known_prepare = self
             .durable
             .highest_prepare()
             .into_iter()
             .chain(self.durable.locked())
             .chain(self.pending_prepare.values())
-            .cloned()
-            .collect::<Vec<_>>();
-        self.known_prepare.clear();
-        for certificate in retained {
-            self.known_prepare
-                .insert(certificate.reference(), certificate);
-        }
+            .map(|certificate| (certificate.reference(), certificate.clone()))
+            .collect();
     }
+}

@@ -20,10 +20,9 @@ use std::{borrow::ToOwned as _, format, hash, marker::PhantomData, str::FromStr,
 /// Hash of Iroha entities. Currently supports only blake2b-32.
 /// The least significant bit of hash is set to 1.
 ///
-/// The marker is a logical invariant rather than a Rust validity invariant:
-/// the byte-array storage deliberately has no niche or invalid bit pattern.
-/// This lets untrusted archived bytes be inspected and rejected safely before
-/// an owned `Hash` is constructed.
+/// The marker is a logical invariant rather than a Rust validity invariant: the byte-array storage
+/// deliberately has no niche or invalid bit pattern. This lets untrusted archived bytes be
+/// inspected and rejected safely before an owned `Hash` is constructed.
 #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, TypeId)]
 #[display("{}", hex::encode(self.as_ref()))]
 #[debug("{}", hex::encode(self.as_ref()))]
@@ -154,8 +153,7 @@ impl Hash {
     ///
     /// # Errors
     ///
-    /// Returns the reader's I/O error or an invalid-data error when the bound
-    /// is exceeded.
+    /// Returns the reader's I/O error or an invalid-data error when the bound is exceeded.
     pub fn new_from_reader_bounded(
         mut reader: impl std::io::Read,
         max_bytes: u64,
@@ -418,8 +416,7 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for HashOf<T> {
     }
 }
 impl<T> HashOf<T> {
-    /// Transmutes hash to some specific type.
-    /// Don't use this method if not required.
+    /// Transmutes hash to some specific type. Don't use this method if not required.
     #[inline]
     #[must_use]
     pub(crate) const fn transmute<F>(self) -> HashOf<F> {

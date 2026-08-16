@@ -43,7 +43,12 @@ class HttpClientTransportGovernanceTest {
         )
 
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_100L, "governance-read")
+        val auth = ToriiCanonicalRequestAuth(
+            "alice@universal",
+            keyPair.private,
+            1_700_000_000_100L,
+            "governance-read",
+        )
         val response = transport.getGovernanceContract(contractAddress, auth).join()
 
         assertTrue(response.found)

@@ -1,9 +1,8 @@
 //! Norito-encoded provider advertisements for the SoraFS node ↔ client protocol.
 //!
-//! The complete advertisement envelope is signed by governed providers and
-//! propagated through the discovery mesh. TTLs are capped at 24 hours with
-//! clients refreshing half-way through the validity window to avoid stale
-//! routes.
+//! The complete advertisement envelope is signed by governed providers and propagated through the
+//! discovery mesh. TTLs are capped at 24 hours with clients refreshing half-way through the
+//! validity window to avoid stale routes.
 use crate::{chunker_registry, deal::XorQuantity};
 use core::time::Duration;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};

@@ -371,10 +371,9 @@ pub mod wire {
             }
         }
     }
-    /// Stable wire representation for `BlockSignature` consisting of the
-    /// validator index and raw signature bytes. This avoids relying on packed
-    /// struct memcopies during Norito decoding and keeps the on-wire tuple
-    /// layout explicit.
+    /// Stable wire representation for `BlockSignature` consisting of the validator index and raw
+    /// signature bytes. This avoids relying on packed struct memcopies during Norito decoding and
+    /// keeps the on-wire tuple layout explicit.
     #[derive(Clone)]
     pub struct BlockSignatureWire(
         /// Validator index in the topology ordering.
@@ -776,7 +775,7 @@ mod tests {
     use iroha_crypto::{Hash, KeyPair, Signature};
     use nonzero_ext::nonzero;
     use norito::{
-        codec::{DecodeAll as _, Encode as _, decode_adaptive, encode_with_header_flags},
+        codec::{DecodeAll as _, decode_adaptive, encode_with_header_flags},
         core::NoritoSerialize,
     };
     struct SamplePayload {

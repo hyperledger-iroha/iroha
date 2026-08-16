@@ -1,7 +1,6 @@
 //! Tools to work with file- and environment-based configuration.
 //!
-//! The main tool here is [`read::ConfigReader`].
-//! It is built around these key concepts:
+//! The main tool here is [`read::ConfigReader`]. It is built around these key concepts:
 //!
 //! - Read config from TOML files;
 //! - Identify each configuration parameter by its path in the file;
@@ -14,12 +13,10 @@
 //! - Give origins of values for later use in error reports (see [`WithOrigin`]);
 //! - Gives traces for debugging purposes (by [`log`] crate).
 //!
-//! File-backed TOML loading is fail-closed and allocation-bounded. Each source
-//! must be a stable regular file, and `extends` traversal rejects cycles,
-//! duplicate diamond loads, excessive depth/source fanout, and excessive
-//! aggregate encoded bytes. The exact first-release ceilings are exposed by
-//! [`toml::MAX_TOML_SOURCE_BYTES`] and the `MAX_TOML_EXTENDS_*` constants in
-//! [`read`].
+//! File-backed TOML loading is fail-closed and allocation-bounded. Each source must be a stable
+//! regular file, and `extends` traversal rejects cycles, duplicate diamond loads, excessive
+//! depth/source fanout, and excessive aggregate encoded bytes. The exact first-release ceilings are
+//! exposed by [`toml::MAX_TOML_SOURCE_BYTES`] and the `MAX_TOML_EXTENDS_*` constants in [`read`].
 //!
 //! ## Example: raw usage
 //!

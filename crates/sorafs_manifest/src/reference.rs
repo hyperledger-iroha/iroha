@@ -3144,10 +3144,9 @@ pub fn build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
 }
 /// Signs an already-encoded mutable orderbook payload and returns signed Norito bytes.
 ///
-/// This helper accepts `OrderRequestV1`, `OrderCancelV1`, and
-/// `SettlementReceiptV1` payloads. Runtime-generated trade events, settlement
-/// channels are intentionally not accepted because they are not directly
-/// signed by SDK users.
+/// This helper accepts `OrderRequestV1`, `OrderCancelV1`, and `SettlementReceiptV1` payloads.
+/// Runtime-generated trade events, settlement channels are intentionally not accepted because they
+/// are not directly signed by SDK users.
 pub fn sign_orderbook_payload_bytes_ed25519_v1(
     kind: OrderbookValidationPayloadKindV1,
     bytes: &[u8],
@@ -4641,11 +4640,10 @@ pub fn validate_pdp_commitment_challenge_proof_bytes(
 }
 /// Exhaustively verifies canonical PDP bytes against an active governed admission record.
 ///
-/// `active_admission` must come from the caller's current council-verified,
-/// revocation-aware admission registry. Unlike the structural reference
-/// validators, this function hashes sampled bytes, verifies every Merkle path
-/// against both roots, verifies the provider signature, and binds the signer to
-/// the immutable admission record.
+/// `active_admission` must come from the caller's current council-verified, revocation-aware
+/// admission registry. Unlike the structural reference validators, this function hashes sampled
+/// bytes, verifies every Merkle path against both roots, verifies the provider signature, and binds
+/// the signer to the immutable admission record.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn validate_pdp_commitment_challenge_proof_with_admission_bytes(

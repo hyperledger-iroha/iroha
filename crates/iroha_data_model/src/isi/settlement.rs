@@ -876,9 +876,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
 mod tests {
     use super::*;
     use crate::domain::DomainId;
-    use iroha_primitives::numeric::Numeric;
-    use norito::codec::{Decode, Encode};
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
+    use iroha_primitives::numeric::Numeric;
+    use norito::{
+        codec::{Decode, Encode},
+        core::DecodeFromSlice,
+    };
     #[derive(Encode)]
     struct ForgedSettleFxCorridor {
         policy_id: Name,
@@ -1215,7 +1218,7 @@ mod tests {
         };
         let encoded = norito::json::to_json(&policy).expect("serialize FX policy instruction");
         assert!(encoded.contains("\"owner\":"));
-        assert!(encoded.contains("\"oracle_feed_id\":\"aed_pkr\""));
+        assert!(encoded.contains("\"oracle_feed_id\":[\"aed_pkr\"]"));
         assert!(
             encoded.contains("\"allowed_destination_alias_domains\":[\"hbl.sbp\",\"ubl.sbp\"]")
         );

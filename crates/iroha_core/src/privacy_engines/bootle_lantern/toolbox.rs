@@ -822,8 +822,7 @@ fn trace_sigma_minus_one_v1(
         .scale_canonical(PROOF_INVERSE_TWO_V1)
         .map_err(|_| ToolboxErrorV1::InternalInvariant)
 }
-/// Compute the canonical digest of the complete compiled application
-/// relation.
+/// Compute the canonical digest of the complete compiled application relation.
 #[must_use]
 pub fn application_relation_digest_v1(relation: &BootleLanternApplicationRelationV1) -> [u8; 32] {
     let mut hash = Sha3_256::new();
@@ -861,8 +860,7 @@ pub fn application_relation_digest_v1(relation: &BootleLanternApplicationRelatio
     }
     hash.finalize().into()
 }
-/// Validate and lift an application witness, including the two binary norm
-/// slack polynomials.
+/// Validate and lift an application witness, including the two binary norm slack polynomials.
 pub(crate) fn lift_short_witness_v1(
     relation: &BootleLanternApplicationRelationV1,
     witness: &BootleLanternPresentationWitnessV1,

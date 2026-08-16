@@ -223,8 +223,7 @@ impl MultisigPolicy {
         }
         Ok(buffer)
     }
-    /// Encode the policy into the CTAP2-style canonical CBOR map used for
-    /// multisignature fixtures.
+    /// Encode the policy into the CTAP2-style canonical CBOR map used for multisignature fixtures.
     #[must_use]
     pub fn encode_ctap2(&self) -> Vec<u8> {
         self.try_encode_ctap2()
@@ -250,8 +249,7 @@ impl MultisigPolicy {
         output.copy_from_slice(&tag);
         Ok(output)
     }
-    /// Compute the canonical Blake2b-256 digest (personalised) over the
-    /// CTAP2-encoded policy.
+    /// Compute the canonical Blake2b-256 digest (personalised) over the CTAP2-encoded policy.
     #[must_use]
     pub fn digest_blake2b256(&self) -> [u8; CTAP2_POLICY_DIGEST_LEN] {
         self.try_digest_blake2b256()

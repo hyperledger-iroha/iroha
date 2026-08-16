@@ -840,10 +840,9 @@ async fn execute_torii_read_fanout_for_resolved_routes(
 /// Execute an authenticated incoming Read request inside one complete fanout
 /// working-set reservation.
 ///
-/// The request representation is admitted before route execution. The local
-/// response is then collected and canonicalized under the same envelope, and
-/// the permit moves into the returned body so transport buffering cannot
-/// release it early.
+/// The request representation is admitted before route execution. The local response is then
+/// collected and canonicalized under the same envelope, and the permit moves into the returned body
+/// so transport buffering cannot release it early.
 #[cfg(feature = "app_api")]
 async fn execute_incoming_torii_read_request_locally_bounded(
     app: &SharedAppState,

@@ -911,7 +911,7 @@ pub fn parse_transfer_public_inputs(
 > {
     let columns = extract_confidential_public_columns(proof_bytes)
         .ok_or_else(|| "failed to decode transfer proof public inputs".to_owned())?;
-    if columns.len() < 9 || columns.iter().take(9).any(|column| column.len() != 1) {
+    if columns.len() != 9 || columns.iter().any(|column| column.len() != 1) {
         return Err("transfer proof must expose 9 single-row instance columns".to_owned());
     }
     Ok((
@@ -1172,10 +1172,9 @@ where
         hasher.squeeze()
     })
 }
-/// Shared confidential relation expressions used by standalone proofs and
-/// Kagemusha's recursive Eq step. Keeping this module as the single source of
-/// the note, nullifier, and Merkle formulas prevents the recursive circuit from
-/// drifting away from the public confidential proof system.
+/// Shared confidential relation expressions used by standalone proofs and Kagemusha's recursive Eq
+/// step. Keeping this module as the single source of the note, nullifier, and Merkle formulas
+/// prevents the recursive circuit from drifting away from the public confidential proof system.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(super) mod confidential_relation_gadget {
     use halo2_base::{
@@ -1222,10 +1221,9 @@ pub(super) mod confidential_relation_gadget {
 /// Secure-permutation confidential relations built entirely in one constrained
 /// `halo2-base` execution trace.
 ///
-/// Every value consumed by this relation, including public instances, range
-/// checks, presence flags, note openings, nullifiers, and Merkle paths, is an
-/// `AssignedValue` in the same copy-constraint graph. This avoids unconstrained
-/// bridges between advice cells and virtual-region hashes.
+/// Every value consumed by this relation, including public instances, range checks, presence flags,
+/// note openings, nullifiers, and Merkle paths, is an `AssignedValue` in the same copy-constraint
+/// graph. This avoids unconstrained bridges between advice cells and virtual-region hashes.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(in crate::zk) mod secure_relation_v3 {
     use super::{
@@ -3992,10 +3990,9 @@ fn compute_confidential_prefix_roots_v3(commitments: &[[u8; 32]]) -> Result<Vec<
 }
 /// One authenticated compact projection of the fixed confidential tree.
 ///
-/// The projection stores only nodes whose subtrees intersect the persisted
-/// commitment prefix. Building it hashes every commitment leaf exactly once
-/// and takes linear time and space. Authentication paths then take exactly the
-/// fixed tree depth without rescanning commitments.
+/// The projection stores only nodes whose subtrees intersect the persisted commitment prefix.
+/// Building it hashes every commitment leaf exactly once and takes linear time and space.
+/// Authentication paths then take exactly the fixed tree depth without rescanning commitments.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub struct ConfidentialTreeProjectionV2 {
     layers: Vec<Vec<Scalar>>,
@@ -4297,11 +4294,10 @@ fn confidential_sparse_fixture_subtree_root_v3(
 }
 /// Build a test-only V3 authentication path for an explicitly sparse tree.
 ///
-/// Production trees are append-only dense prefixes, so their public helpers
-/// intentionally reject a zero commitment rather than interpreting it as a
-/// hole. Adversarial circuit tests still need internally valid paths for a
-/// tree that violates that append-only invariant; `None` represents such an
-/// empty position without weakening the production API.
+/// Production trees are append-only dense prefixes, so their public helpers intentionally reject a
+/// zero commitment rather than interpreting it as a hole. Adversarial circuit tests still need
+/// internally valid paths for a tree that violates that append-only invariant; `None` represents
+/// such an empty position without weakening the production API.
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 pub(in crate::zk) fn compute_confidential_sparse_fixture_path_v3(
     commitments: &[Option<[u8; 32]>],

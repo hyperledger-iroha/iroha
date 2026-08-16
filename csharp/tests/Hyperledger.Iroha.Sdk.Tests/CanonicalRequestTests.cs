@@ -66,33 +66,53 @@ public sealed class CanonicalRequestTests
     }
 
     [Theory]
-    [InlineData("note=%")]
-    [InlineData("note=%2")]
-    [InlineData("note=%GG")]
-    [InlineData("%GG=value")]
-    [InlineData("note=%FF")]
-    [InlineData("note=%C3%28")]
-    [InlineData("note=%00")]
-    [InlineData("note=%1F")]
-    [InlineData("note=line%0Abreak")]
-    public void CanonicalQueryStringRejectsMalformedOrControlPercentEscapes(string query)
+    [InlineData("note=%", "note=%25")]
+    [InlineData("note=%2", "note=%252")]
+    [InlineData("note=%GG", "note=%25GG")]
+    [InlineData("%GG=value", "%25GG=value")]
+    [InlineData("note=%FF", "note=%EF%BF%BD")]
+    [InlineData("note=%C3%28", "note=%EF%BF%BD%28")]
+    [InlineData("note=%E2%82", "note=%EF%BF%BD")]
+    [InlineData("note=%E2%28%A1", "note=%EF%BF%BD%28%EF%BF%BD")]
+    [InlineData("note=%ED%A0%80", "note=%EF%BF%BD%EF%BF%BD%EF%BF%BD")]
+    [InlineData("note=%F0%80%80%80", "note=%EF%BF%BD%EF%BF%BD%EF%BF%BD%EF%BF%BD")]
+    [InlineData("note=%00", "note=%00")]
+    [InlineData("note=%1F", "note=%1F")]
+    [InlineData("note=line%0Abreak", "note=line%0Abreak")]
+    public void CanonicalQueryStringUsesRustLossyFormDecoding(string query, string expected)
     {
-        Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildCanonicalQueryString(query));
+        Assert.Equal(expected, CanonicalRequest.BuildCanonicalQueryString(query));
     }
 
     [Theory]
-    [InlineData("?")]
-    [InlineData("&gas=1")]
-    [InlineData("gas=1&")]
-    [InlineData("gas=1&&cursor=2")]
-    [InlineData("=value")]
-    [InlineData("%20=value")]
-    [InlineData("gas=1&%20=value")]
-    [InlineData("?&gas=1")]
-    [InlineData("?=value")]
-    public void CanonicalQueryStringRejectsAmbiguousSegmentsAndBlankNames(string query)
+    [InlineData("?", "")]
+    [InlineData("&&", "")]
+    [InlineData("&gas=1", "gas=1")]
+    [InlineData("gas=1&", "gas=1")]
+    [InlineData("gas=1&&cursor=2", "cursor=2&gas=1")]
+    [InlineData("=value", "=value")]
+    [InlineData("%20=value", "+=value")]
+    [InlineData("gas=1&%20=value", "+=value&gas=1")]
+    [InlineData("?&gas=1", "gas=1")]
+    [InlineData("?=value", "=value")]
+    [InlineData("empty", "empty=")]
+    [InlineData("empty=", "empty=")]
+    public void CanonicalQueryStringIgnoresEmptySegmentsAndAllowsEmptyNamesOrValues(
+        string query,
+        string expected)
     {
-        Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildCanonicalQueryString(query));
+        Assert.Equal(expected, CanonicalRequest.BuildCanonicalQueryString(query));
+    }
+
+    [Fact]
+    public void CanonicalQueryStringReplacesRawUnpairedSurrogatesAndSortsUtf8Bytes()
+    {
+        var canonical = CanonicalRequest.BuildCanonicalQueryString(
+            "astral=%F0%90%80%80&raw=\uD800&%F0%90%80%80=x&%EE%80%80=x");
+
+        Assert.Equal(
+            "astral=%F0%90%80%80&raw=%EF%BF%BD&%EE%80%80=x&%F0%90%80%80=x",
+            canonical);
     }
 
     [Fact]
@@ -150,6 +170,27 @@ public sealed class CanonicalRequestTests
             timestampMs: 1735000000123,
             nonce: "abcdef0123456789abcdef0123456789");
         Assert.Equal(FixtureAccountId, headers.AccountId);
+        var escapedHeaders = CanonicalRequest.BuildHeadersForExactPath(
+            FixtureNetworkId,
+            FixtureAccountId,
+            FixturePrivateKeySeed,
+            "GET",
+            "/v1/%E3%81%82",
+            timestampMs: 1735000000123,
+            nonce: "valid-percent-escaped-path");
+        Assert.Equal(FixtureAccountId, escapedHeaders.AccountId);
+        foreach (var preservedPath in new[] { "/v1/query:http", "/v1/%FF", "/v1/%00" })
+        {
+            var preservedHeaders = CanonicalRequest.BuildHeadersForExactPath(
+                FixtureNetworkId,
+                FixtureAccountId,
+                FixturePrivateKeySeed,
+                "GET",
+                preservedPath,
+                timestampMs: 1735000000123,
+                nonce: "opaque-percent-escape");
+            Assert.Equal(FixtureAccountId, preservedHeaders.AccountId);
+        }
         AssertArgumentException(
             "path",
             () => CanonicalRequest.BuildHeadersForExactPath(
@@ -160,6 +201,29 @@ public sealed class CanonicalRequestTests
                 exactPath + "a",
                 timestampMs: 1735000000123,
                 nonce: "abcdef0123456789abcdef0123456789"));
+        AssertArgumentException(
+            "path",
+            () => CanonicalRequest.BuildHeadersForExactPath(
+                FixtureNetworkId,
+                FixtureAccountId,
+                FixturePrivateKeySeed,
+                "GET",
+                "/v1/café",
+                timestampMs: 1735000000123,
+                nonce: "abcdef0123456789abcdef0123456789"));
+        foreach (var rewrittenPath in new[] { "/v1/../admin", "/v1/%2e%2E/admin", "/v1/%GG", "/v1/a[b" })
+        {
+            AssertArgumentException(
+                "path",
+                () => CanonicalRequest.BuildHeadersForExactPath(
+                    FixtureNetworkId,
+                    FixtureAccountId,
+                    FixturePrivateKeySeed,
+                    "GET",
+                    rewrittenPath,
+                    timestampMs: 1735000000123,
+                    nonce: "rewritten-path"));
+        }
     }
 
     [Fact]
@@ -186,6 +250,70 @@ public sealed class CanonicalRequestTests
         Assert.All(accountHeader, static character => Assert.True(character <= '\u007f'));
         Assert.Equal(1735000000123, headers.TimestampMs);
         Assert.Equal("abcdef0123456789abcdef0123456789", headers.Nonce);
+    }
+
+    [Theory]
+    [InlineData("wallet@universal")]
+    [InlineData("wallet@bank.universal")]
+    [InlineData("wallet_name@bank_universal")]
+    [InlineData("xn--bcher-kva@universal")]
+    [InlineData("wallet@xn--fa-hia")]
+    [InlineData("wallet@xn--3xa")]
+    [InlineData("wallet@xn--11b2ezcw70k")]
+    [InlineData("wallet@xn--mgba3gch31f060k")]
+    [InlineData("wallet@xn--ngba7iz95i")]
+    [InlineData("wallet@xn--ab-0ea")]
+    [InlineData("wallet@xn--a-jib")]
+    [InlineData("wallet@xn--ab-3n4a")]
+    [InlineData("xn--alice@universal")]
+    [InlineData("xn--a@universal")]
+    [InlineData("wallet@xn--ab-uuba211bca8057b")]
+    [InlineData("wallet@xn--ab-j1t")]
+    [InlineData("wallet@xn--11b2er09f")]
+    [InlineData("wallet@xn--4u8c")]
+    [InlineData("wallet@xn--pq1d")]
+    [InlineData("wallet@xn--kx7e")]
+    [InlineData("wallet@xn--5h0f")]
+    [InlineData("wallet@xn--zo5h")]
+    [InlineData("wallet@xn--fi3d")]
+    [InlineData("wallet@xn--d4f")]
+    public void BuildHeadersCarriesStructurallyValidAsciiAliasHeadersUnchanged(string alias)
+    {
+        var credentials = new CanonicalRequestCredentials(alias, FixturePrivateKeySeed);
+        var headers = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
+            accountId: credentials.AccountId,
+            privateKeySeed: credentials.PrivateKeySeed,
+            method: "post",
+            path: "/v1/query",
+            query: "gas_units=100&cursor_mode=stored",
+            body: Encoding.UTF8.GetBytes("{\"selector\":\"assets\"}"),
+            timestampMs: 1735000000123,
+            nonce: "alias-request-nonce");
+
+        Assert.Equal(alias, headers.AccountId);
+        Assert.Equal(alias, headers.ToDictionary()["X-Iroha-Account"]);
+        Assert.Equal(alias, credentials.AccountId);
+    }
+
+    [Fact]
+    public void CanonicalAccountAliasesEnforceSegmentAndStructuralBounds()
+    {
+        var longestLabel = new string('a', 63) + "@universal";
+        Assert.Equal(
+            longestLabel,
+            CanonicalRequest.RequireCanonicalAccountId(longestLabel, "accountId"));
+
+        var overlongLabel = new string('a', 64) + "@universal";
+        AssertArgumentException(
+            "accountId",
+            () => CanonicalRequest.RequireCanonicalAccountId(overlongLabel, "accountId"));
+
+        var overlongStructuralAlias = new string('a', CanonicalRequest.MaxAliasLiteralBytesV1)
+            + "@universal";
+        AssertArgumentException(
+            "accountId",
+            () => CanonicalRequest.RequireCanonicalAccountId(overlongStructuralAlias, "accountId"));
     }
 
     [Fact]
@@ -577,23 +705,71 @@ public sealed class CanonicalRequestTests
     }
 
     [Theory]
-    [InlineData("")]
-    [InlineData(" ")]
+    [InlineData("!")]
     [InlineData("abcdef0123456789abcdef012345678")]
     [InlineData("abcdef0123456789abcdef01234567890")]
     [InlineData("ABCDEF0123456789abcdef0123456789")]
     [InlineData("abcdef0123456789abcdef01234567g")]
     [InlineData("abcdef0123456789abcdef01234567-")]
     [InlineData("abcdef0123456789abcdef01234567_")]
-    public void CanonicalRequestHeadersRejectsNonCanonicalNonces(string nonce)
+    [InlineData("~")]
+    public void CanonicalRequestAuthAcceptsPrintableAsciiNonces(string nonce)
     {
-        var error = Assert.Throws<ArgumentException>(() => new CanonicalRequestHeaders(
+        var headers = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
             FixtureAccountId,
-            FixtureSignatureBase64,
+            FixturePrivateKeySeed,
+            "GET",
+            "/v1/query",
+            timestampMs: 1735000000123,
+            nonce: nonce);
+        var message = CanonicalRequest.BuildSignatureMessage(
+            FixtureNetworkId,
+            "GET",
+            "/v1/query",
+            timestampMs: 1735000000123,
+            nonce: nonce);
+        var manualHeaders = new CanonicalRequestHeaders(
+            FixtureAccountId,
+            headers.SignatureBase64,
             1735000000123,
-            nonce));
+            nonce);
 
-        Assert.Equal("nonce", error.ParamName);
+        Assert.NotEmpty(message);
+        Assert.Equal(nonce, headers.Nonce);
+        Assert.Equal(nonce, manualHeaders.Nonce);
+    }
+
+    [Fact]
+    public void CanonicalRequestAuthEnforcesPrintableAsciiNonceBoundary()
+    {
+        var exact = new string('!', 256);
+        var tooLong = exact + "!";
+
+        var headers = CanonicalRequest.BuildHeaders(
+            FixtureNetworkId,
+            FixtureAccountId,
+            FixturePrivateKeySeed,
+            "GET",
+            "/v1/query",
+            timestampMs: 1735000000123,
+            nonce: exact);
+        Assert.Equal(exact, headers.Nonce);
+        AssertArgumentException(
+            "nonce",
+            () => CanonicalRequest.BuildSignatureMessage(
+                FixtureNetworkId,
+                "GET",
+                "/v1/query",
+                timestampMs: 1735000000123,
+                nonce: tooLong));
+        AssertArgumentException(
+            "nonce",
+            () => new CanonicalRequestHeaders(
+                FixtureAccountId,
+                FixtureSignatureBase64,
+                1735000000123,
+                tooLong));
     }
 
     [Theory]
@@ -608,7 +784,16 @@ public sealed class CanonicalRequestTests
     [InlineData("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     [InlineData("sorauﾛ1N\u001FｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     [InlineData("sorauﾛ1N\u007FｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
-    [InlineData("merchant@sora")]
+    [InlineData("wallet")]
+    [InlineData("wallet@")]
+    [InlineData("@universal")]
+    [InlineData("wallet@bank.universal.extra")]
+    [InlineData("Wallet@universal")]
+    [InlineData("wallet@Universal")]
+    [InlineData("ab--wallet@universal")]
+    [InlineData("wallet+admin@universal")]
+    [InlineData("wallet@univérsal")]
+    [InlineData("0xwallet@universal")]
     [InlineData("0x0a00012022d3c25e96fa1178ae08b3d30081a31a0d09e8f7321b1e015140cd37b332109ca")]
     [InlineData("n753uﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     public void BuildHeadersRejectsNonExactAccountIds(string accountId)
@@ -682,7 +867,8 @@ public sealed class CanonicalRequestTests
     [InlineData("https://evil.example/v1/query")]
     [InlineData("http://evil.example/v1/query")]
     [InlineData("//evil.example/v1/query")]
-    [InlineData("/v1/query:http")]
+    [InlineData("/v1/query?admin=1")]
+    [InlineData("/v1/query#fragment")]
     [InlineData("/v1/../admin")]
     [InlineData("/v1/%2e%2e/admin")]
     [InlineData("/v1/%2E%2E/admin")]
@@ -692,8 +878,7 @@ public sealed class CanonicalRequestTests
     [InlineData("/v1/%")]
     [InlineData("/v1/%2")]
     [InlineData("/v1/%GG")]
-    [InlineData("/v1/%FF")]
-    [InlineData("/v1/%00")]
+    [InlineData("/v1/café")]
     public void BuildHeadersRejectsNonExactPaths(string path)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
@@ -743,7 +928,8 @@ public sealed class CanonicalRequestTests
     [InlineData("https://evil.example/v1/query")]
     [InlineData("http://evil.example/v1/query")]
     [InlineData("//evil.example/v1/query")]
-    [InlineData("/v1/query:http")]
+    [InlineData("/v1/query?admin=1")]
+    [InlineData("/v1/query#fragment")]
     [InlineData("/v1/../admin")]
     [InlineData("/v1/%2e%2e/admin")]
     [InlineData("/v1/%2E%2E/admin")]
@@ -753,8 +939,7 @@ public sealed class CanonicalRequestTests
     [InlineData("/v1/%")]
     [InlineData("/v1/%2")]
     [InlineData("/v1/%GG")]
-    [InlineData("/v1/%FF")]
-    [InlineData("/v1/%00")]
+    [InlineData("/v1/café")]
     public void BuildMessageRejectsNonExactPaths(string path)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildMessage(
@@ -777,12 +962,6 @@ public sealed class CanonicalRequestTests
     [InlineData("abcdef0123456789\u0000abcdef0123456789")]
     [InlineData("abcdef0123456789\u001Fabcdef0123456789")]
     [InlineData("abcdef0123456789\u007Fabcdef0123456789")]
-    [InlineData("abcdef0123456789abcdef012345678")]
-    [InlineData("abcdef0123456789abcdef01234567890")]
-    [InlineData("ABCDEF0123456789abcdef0123456789")]
-    [InlineData("abcdef0123456789abcdef01234567g")]
-    [InlineData("abcdef0123456789abcdef01234567-")]
-    [InlineData("abcdef0123456789abcdef01234567_")]
     public void BuildHeadersRejectsNonExactCallerProvidedNonces(string nonce)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildHeaders(
@@ -803,12 +982,9 @@ public sealed class CanonicalRequestTests
     [InlineData("abcdef0123456789abcdef0123456789 ")]
     [InlineData("abcdef0123456789 abcdef0123456789")]
     [InlineData("abcdef0123456789\u0000abcdef0123456789")]
-    [InlineData("abcdef0123456789abcdef012345678")]
-    [InlineData("abcdef0123456789abcdef01234567890")]
-    [InlineData("ABCDEF0123456789abcdef0123456789")]
-    [InlineData("abcdef0123456789abcdef01234567g")]
-    [InlineData("abcdef0123456789abcdef01234567-")]
-    [InlineData("abcdef0123456789abcdef01234567_")]
+    [InlineData("abcdef0123456789\u001Fabcdef0123456789")]
+    [InlineData("abcdef0123456789\u007Fabcdef0123456789")]
+    [InlineData("abcdef0123456789éabcdef0123456789")]
     public void BuildSignatureMessageRejectsNonExactCallerProvidedNonces(string nonce)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildSignatureMessage(
@@ -845,7 +1021,8 @@ public sealed class CanonicalRequestTests
     [InlineData("post", "https://evil.example/v1/query")]
     [InlineData("post", "http://evil.example/v1/query")]
     [InlineData("post", "//evil.example/v1/query")]
-    [InlineData("post", "/v1/query:http")]
+    [InlineData("post", "/v1/query?admin=1")]
+    [InlineData("post", "/v1/query#fragment")]
     [InlineData("post", "/v1/../admin")]
     [InlineData("post", "/v1/%2e%2e/admin")]
     [InlineData("post", "/v1/%2E%2E/admin")]
@@ -855,8 +1032,7 @@ public sealed class CanonicalRequestTests
     [InlineData("post", "/v1/%")]
     [InlineData("post", "/v1/%2")]
     [InlineData("post", "/v1/%GG")]
-    [InlineData("post", "/v1/%FF")]
-    [InlineData("post", "/v1/%00")]
+    [InlineData("post", "/v1/café")]
     public void BuildSignatureMessageRejectsNonExactMethodsAndPaths(string method, string path)
     {
         Assert.Throws<ArgumentException>(() => CanonicalRequest.BuildSignatureMessage(
@@ -875,7 +1051,10 @@ public sealed class CanonicalRequestTests
     [InlineData("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
     [InlineData("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     [InlineData("sorauﾛ1N\u001FｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
-    [InlineData("merchant@sora")]
+    [InlineData("wallet@bank.universal.extra")]
+    [InlineData("Wallet@universal")]
+    [InlineData("wallet@univérsal")]
+    [InlineData("ab--wallet@universal")]
     [InlineData("0x0a00012022d3c25e96fa1178ae08b3d30081a31a0d09e8f7321b1e015140cd37b332109ca")]
     [InlineData("n753uﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     public void CanonicalRequestCredentialsRejectsNonExactAccountIds(string accountId)

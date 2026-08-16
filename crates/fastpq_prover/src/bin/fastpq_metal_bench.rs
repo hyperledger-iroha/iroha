@@ -1,8 +1,7 @@
 //! FASTPQ Metal benchmark harness.
 //!
-//! Measures CPU vs GPU planner operations when the Metal backend is enabled
-//! and emits JSON suitable for dashboards or release artefacts. See
-//! `specs/fastpq_plan.md` (Stage 5) for expected usage.
+//! Measures CPU vs GPU planner operations when the Metal backend is enabled and emits JSON suitable
+//! for dashboards or release artefacts. See `specs/fastpq_plan.md` (Stage 5) for expected usage.
 #![allow(
     clippy::assigning_clones,
     clippy::case_sensitive_file_extension_comparisons,

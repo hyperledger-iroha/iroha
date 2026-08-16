@@ -1,9 +1,8 @@
 //! Verifier-owned zk-X509 public-input and release-profile declarations.
 //!
-//! These declarations remain part of every node build. They depend only on
-//! the typed consensus statement and authoritative finalized state; private
-//! witness parsing and proof construction live behind the release-evidence
-//! boundary.
+//! These declarations remain part of every node build. They depend only on the typed consensus
+//! statement and authoritative finalized state; private witness parsing and proof construction live
+//! behind the release-evidence boundary.
 use super::der_air::{ZkX509DerEkuV1, ZkX509Rfc5280StatementV1};
 use crate::privacy_state::PrivacyZkX509AuthoritativeStateV1;
 use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyX509ExtendedKeyUsageV1};

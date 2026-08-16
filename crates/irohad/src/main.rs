@@ -1,4 +1,4 @@
-//! Iroha node executable and feature-isolated real-network consensus fault-injection control.
+// Iroha node executable and feature-isolated real-network consensus fault-injection control.
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
@@ -4802,7 +4802,7 @@ mod network_relay_tests {
         nexus::{DataSpaceId, LaneId},
         peer::{Peer, PeerId},
     };
-    use std::{num::NonZeroU64, time::Duration};
+    use std::{num::NonZeroU64, sync::Arc, time::Duration};
     fn dummy_block_hash(byte: u8) -> HashOf<BlockHeader> {
         let mut bytes = [0_u8; Hash::LENGTH];
         bytes[0] = byte;
@@ -9823,7 +9823,6 @@ impl Iroha {
             );
             #[cfg(not(feature = "embedded-soracloud-runtime"))]
             let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
-                Arc::new(config.common.chain.clone()),
                 Arc::clone(&queue),
                 Arc::clone(&state),
                 signer,
@@ -18553,7 +18552,6 @@ mod tests {
             use std::sync::Arc;
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
-            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("valid domain id");

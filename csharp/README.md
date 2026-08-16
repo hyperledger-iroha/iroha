@@ -19,14 +19,25 @@ This initial slice provides the foundation needed for a usable managed SDK:
   scale-bounded `decimal`, and nominal non-negative `quantity`, with canonical
   string-only JSON, minimal two's-complement Norito frames, authenticated
   pointer envelopes, and no conversion through CLR floating-point types
-- canonical Torii request signing headers with exact account, matching
-  Ed25519 private seed, method, path, 16-byte lowercase-hex nonce, canonical
-  64-byte signature-header base64, and positive timestamp validation before
-  signing
+- canonical Torii request signing headers with an exact canonical I105 account
+  or a bounded structurally valid lowercase-ASCII account alias, an HTTP-token method, an
+  exact percent-encoded root-relative ASCII wire path without query or fragment text, a 1--256 byte
+  printable-ASCII nonce, canonical 64-byte signature-header base64, and
+  positive timestamp validation before signing; I105 identities must match the
+  Ed25519 private seed and are emitted as portable lowercase canonical-address
+  hex, while aliases are resolved and authorized by Torii. `BuildHeaders`
+  signs the same `Uri.AbsolutePath` and percent-encoded query spelling that
+  `HttpRequestMessage` sends; the pure message/query helpers continue to accept
+  an already exact wire target.
+  This first-release
+  helper is single-signature only; it does not yet construct or encode
+  `X-Iroha-Witness` multisignature proofs
 - canonical request credentials and Ed25519 key pairs require exact 32-byte
-  Ed25519 private seeds, require canonical request accounts to match the seed
-  public key, and defensively copy private seed and public-key byte arrays on
-  construction and access; Ed25519 signing and verification use
+  Ed25519 private seeds, require canonical I105 request accounts to match the
+  seed public key, and defensively copy private seed and public-key byte arrays
+  on construction and access; canonical aliases are state-bound and therefore
+  remain Torii-authoritative for UTS-46, active-catalog resolution, and
+  controller verification. Ed25519 signing and verification use
   exception-safe zeroing for managed temporary seed, expanded-key, message,
   signature, and public-key copies after use or failure
 - a `LedgerClient` plus `TransactionBuilder` that can build, sign, and submit canonical asset/domain/asset-definition/NFT transfer transactions, asset mint/burn transactions, `SetAssetKeyValue`, `RemoveAssetKeyValue`, `SetDomainKeyValue`, `RemoveDomainKeyValue`, `SetAccountKeyValue`, `RemoveAccountKeyValue`, `SetAssetDefinitionKeyValue`, `RemoveAssetDefinitionKeyValue`, `SetNftKeyValue`, `RemoveNftKeyValue`, `SetTriggerKeyValue`, `RemoveTriggerKeyValue`, `MintTriggerRepetitions`, `BurnTriggerRepetitions`, and `ExecuteTrigger` transactions with deterministic hashes and pipeline-status polling
@@ -336,24 +347,23 @@ sends the nonce-bearing body once without redirects or retries.
   preserving exact path prefixes; low-level request setup validates exact
   HTTP Bearer token grammar, HTTP-token method text, and root-relative path
   request parts, rejects
-  relative, absolute, scheme-relative, raw-colon, raw-backslash, malformed
-  percent-escape, percent-decoded control-byte, and raw/percent-encoded
-  dot-segment paths before dispatch or canonical signing, and validates
+  relative, absolute, scheme-relative, raw-backslash, malformed percent-escape,
+  and raw/percent-encoded dot-segment paths before dispatch or canonical
+  signing, while preserving other exact ASCII path text and opaque percent
+  escapes, and validates
   optional query and single-media-range `Accept` text; the replay-capable
   explorer stream helpers separately validate `Last-Event-ID` text, with
-  optional query text
-  rejecting raw whitespace, ambiguous empty segments, empty/blank decoded
-  parameter names, malformed percent escapes, invalid percent-encoded UTF-8,
-  and percent-decoded controls before URI construction while still allowing
-  percent-encoded or `+`-encoded spaces in values; public `configureRequest`
+  optional query text; canonical form processing ignores empty `&` segments,
+  permits empty names and values, treats malformed percent escapes literally,
+  and follows Rust's byte-by-byte lossy UTF-8 replacement and UTF-8 sorting
+  before URI construction; public `configureRequest`
   hooks may add ordinary headers but cannot mutate the validated method, URI,
   content object, Authorization/Accept headers, signed content bytes, or
   canonical signing headers after request setup; canonical request signing
   requires an immutable exact `NetworkId`, generated or caller-supplied
-  16-byte lowercase-hex nonces, and
-  applies the same root-relative path guard and canonical query signing rejects
-  the same ambiguous segments/names plus malformed-escape/control-byte drift
-  before sorting or signing; SSE event-filter query preflight rejects malformed
+  1--256 byte printable-ASCII nonces, and applies the same root-relative path
+  guard and canonical form-query processing before sorting or signing; SSE
+  event-filter query preflight separately rejects malformed
   percent escapes, invalid percent-encoded UTF-8, percent-decoded control bytes,
   malformed JSON-shaped filter payloads, padded JSON filter payloads, and
   duplicate-key JSON filters before production filter validation; raw

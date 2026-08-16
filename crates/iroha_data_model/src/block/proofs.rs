@@ -1,13 +1,11 @@
 //! Stable wrappers for Merkle proofs over block entrypoints and execution results.
 //!
-//! These types bundle the carrier identity, leaf hash, canonical audit path,
-//! and exact root/count commitments required to verify inclusion without
-//! depending on internal structures. Block proof responses use the full
-//! executed-entrypoint tree, including scheduled entrypoints, so entry and
-//! result indices share one execution order. A fully verified Sumeragi-v2
-//! `CommitQC` authenticates the exact executed block wire and therefore that
-//! tree. `BlockHeader::merkle_root` is checked as proposal metadata, but is
-//! never selected as the entry-proof anchor.
+//! These types bundle the carrier identity, leaf hash, canonical audit path, and exact root/count
+//! commitments required to verify inclusion without depending on internal structures. Block proof
+//! responses use the full executed-entrypoint tree, including scheduled entrypoints, so entry and
+//! result indices share one execution order. A fully verified Sumeragi-v2 `CommitQC` authenticates
+//! the exact executed block wire and therefore that tree. `BlockHeader::merkle_root` is checked as
+//! proposal metadata, but is never selected as the entry-proof anchor.
 use crate::{
     block::{
         BlockHeader, SignedBlock,
@@ -141,10 +139,9 @@ pub struct BlockProofs {
 /// Trusted block identity, Merkle commitments, and executed transcript projection used to verify
 /// [`BlockProofs`].
 ///
-/// This capability is intentionally not serializable and its fields are
-/// private. Its public constructor verifies untrusted Sumeragi-v2 finality,
-/// exact header association, and executed-wire binding before recomputing the
-/// Merkle commitments.
+/// This capability is intentionally not serializable and its fields are private. Its public
+/// constructor verifies untrusted Sumeragi-v2 finality, exact header association, and executed-wire
+/// binding before recomputing the Merkle commitments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustedBlockProofAnchor {
     block_height: NonZeroU64,

@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 860
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "43488145df2b3d502786684c24ce5ebf7c709289f6b76bc667f22484daff5746"
+        "d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "7889178b600c6d35b4782ae76bd914616ec3b8c7224bd71db97d34de8be3da36"
+        "cb5ac98055cd99b84cb5736fd3f352e027f293188000f0505173baa6fda198b2"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2203,6 +2203,15 @@ kura.claim_autonomous_lifecycle_process_generation(
     )
     assert late_passive_fetch_regression in production_inventory
     assert late_passive_fetch_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
+    autonomous_retirement_regression = (
+        "sumeragi::v2_worker::tests::"
+        "applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only"
+    )
+    assert autonomous_retirement_regression in production_inventory
+    assert (
+        autonomous_retirement_regression
+        in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
+    )
     assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 441
     assert "readonly expected_production_liveness_test_count=860" in release_source
     assert (
@@ -2540,10 +2549,10 @@ kura.claim_autonomous_lifecycle_process_generation(
         '"preflight-release-receipt",\n                "pytest",\n                367,'
         in receipt_source
     )
-    assert "did not run exactly 5446 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 5446" in release_source
+    assert "did not run exactly 5485 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 5485" in release_source
     assert (
-        "^5446 passed in [0-9]+([.][0-9]+)?s( "
+        "^5485 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -2595,7 +2604,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert len(proof_fidelity_runner_nodes) == 18
     assert len(set(proof_fidelity_runner_nodes)) == 18
     assert proof_fidelity_runner_nodes == proof_fidelity_receipt_nodes
-    assert "Collection is source-bound as 5,344 ledger/checker cases" in release_source
+    assert "Collection is source-bound as 5,383 ledger/checker cases" in release_source
     for selector in (
         "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
         "test_inflight_composed_contract_rejects_legacy_layout_only_claim",
@@ -2625,7 +2634,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert selector in release_source
         assert selector in proof_fidelity_receipt_command
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                5446,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                5485,'
         in receipt_source
     )
     assert "did not run exactly 27 passing tests" in release_source
@@ -3664,7 +3673,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "43488145df2b3d502786684c24ce5ebf"',
+            '    "d34132eb817e08216180c7db186826f1"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),

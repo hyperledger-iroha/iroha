@@ -1,11 +1,10 @@
 //! Fixed first-release FCMP++ wallet note encryption.
 //!
-//! There is exactly one codec: X25519 key agreement, a SHA-256 domain-separated
-//! key derivation, and XChaCha20-Poly1305 over one fixed-width note. The AEAD
-//! associated data binds the governed pool (which transitively fixes its
-//! asset), recipient identity, ephemeral key, output identifier, and complete
-//! `(O,I,C)` tuple. Consensus validates this exact public shape; recipient
-//! wallets additionally authenticate and decode the note.
+//! There is exactly one codec: X25519 key agreement, a SHA-256 domain-separated key derivation, and
+//! XChaCha20-Poly1305 over one fixed-width note. The AEAD associated data binds the governed pool
+//! (which transitively fixes its asset), recipient identity, ephemeral key, output identifier, and
+//! complete `(O,I,C)` tuple. Consensus validates this exact public shape; recipient wallets
+//! additionally authenticate and decode the note.
 use super::{
     FCMP_OUTPUT_TUPLE_BYTES_V1, FcmpNativeErrorV1, FcmpOutputCommitmentOpeningV1,
     FcmpOutputTupleV1,
@@ -392,8 +391,7 @@ fn model_output(output: PrivacyFcmpOutputTupleV1) -> Result<FcmpOutputTupleV1, F
         output.amount_commitment,
     )
 }
-/// Derive the sole first-release recipient identity from a canonical X25519
-/// public key.
+/// Derive the sole first-release recipient identity from a canonical X25519 public key.
 pub fn derive_fcmp_recipient_id_v1(
     recipient_public_key: [u8; 32],
 ) -> Result<PrivacyRecipientIdV1, FcmpNativeErrorV1> {
@@ -636,9 +634,9 @@ mod tests {
         let owner = WalletSecretCopyValueV1::copy_from_ref(&borrowed);
         assert_eq!(borrowed.0, 11);
         assert_eq!(owner.expose_ref().0, 11);
-        assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 0);
-        drop(owner);
         assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 1);
+        drop(owner);
+        assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 2);
     }
     #[test]
     fn wallet_secret_sha256_matches_the_frozen_note_kdf() {

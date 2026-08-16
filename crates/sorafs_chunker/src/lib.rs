@@ -1,12 +1,11 @@
 //! Deterministic content-defined chunking utilities for the SoraFS stack.
 //!
-//! The implementation follows the profile described in the SoraFS Architecture
-//! RFC (SF-1): a FastCDC-inspired rolling hash with a 256 KiB target chunk
-//! size, 64 KiB minimum, 512 KiB maximum, and a 16-bit break mask. The chunker
-//! emits consistent splits across platforms by avoiding architecture-specific
-//! optimisations and by deriving the gear table from a fixed SHA3-256 seed.
-//! Empty inputs still emit a single zero-length chunk so that manifests preserve
-//! deterministic ordering for empty files.
+//! The implementation follows the profile described in the SoraFS Architecture RFC (SF-1): a
+//! FastCDC-inspired rolling hash with a 256 KiB target chunk size, 64 KiB minimum, 512 KiB maximum,
+//! and a 16-bit break mask. The chunker emits consistent splits across platforms by avoiding
+//! architecture-specific optimisations and by deriving the gear table from a fixed SHA3-256 seed.
+//! Empty inputs still emit a single zero-length chunk so that manifests preserve deterministic
+//! ordering for empty files.
 //!
 //! # Examples
 //!
@@ -76,10 +75,9 @@ pub struct ChunkDigest {
 }
 /// Compute the canonical SHA3-256 commitment for an ordered chunk plan.
 ///
-/// Each entry contributes its little-endian 64-bit offset, little-endian
-/// 64-bit length, and 32-byte BLAKE3 content digest, in that order. Including
-/// the content digest ensures that changing bytes without changing chunk
-/// boundaries also changes the plan commitment.
+/// Each entry contributes its little-endian 64-bit offset, little-endian 64-bit length, and 32-byte
+/// BLAKE3 content digest, in that order. Including the content digest ensures that changing bytes
+/// without changing chunk boundaries also changes the plan commitment.
 #[must_use]
 pub fn compute_chunk_plan_digest_sha3(
     chunks: impl IntoIterator<Item = (u64, u64, [u8; 32])>,
@@ -262,9 +260,8 @@ pub fn chunk_bytes_with_digests(input: &[u8]) -> Vec<ChunkDigest> {
 pub fn chunk_bytes_with_digests_profile(profile: ChunkProfile, input: &[u8]) -> Vec<ChunkDigest> {
     try_chunk_bytes_with_digests_profile(profile, input).expect("invalid SoraFS chunk profile")
 }
-/// Chunks the input with a custom profile and computes BLAKE3 digests per
-/// chunk, returning validation errors instead of panicking on invalid profile
-/// parameters.
+/// Chunks the input with a custom profile and computes BLAKE3 digests per chunk, returning
+/// validation errors instead of panicking on invalid profile parameters.
 pub fn try_chunk_bytes_with_digests_profile(
     profile: ChunkProfile,
     input: &[u8],
@@ -314,8 +311,7 @@ fn gear_table() -> &'static [u64; 256] {
         table
     })
 }
-/// Incremental chunker that streams input and emits deterministic chunk
-/// boundaries as data is fed.
+/// Incremental chunker that streams input and emits deterministic chunk boundaries as data is fed.
 #[derive(Debug, Clone, Copy)]
 pub struct Chunker {
     profile: ChunkProfile,

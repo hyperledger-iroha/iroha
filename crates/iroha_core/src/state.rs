@@ -13910,6 +13910,41 @@ mod stake_snapshot_tests {
             world_block.consensus_keys_by_pk.insert(pk, by_pk);
         }
     }
+    fn lane_validator_record(
+        lane_id: LaneId,
+        validator: &DMAccountId,
+        peer_id: PeerId,
+        stake: u32,
+        status: PublicLaneValidatorStatus,
+    ) -> PublicLaneValidatorRecord {
+        PublicLaneValidatorRecord {
+            lane_id,
+            validator: validator.clone(),
+            peer_id,
+            stake_account: validator.clone(),
+            total_stake: iroha_primitives::numeric::Quantity::from(stake),
+            self_stake: iroha_primitives::numeric::Quantity::from(stake),
+            metadata: Metadata::default(),
+            status,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        }
+    }
+    fn active_lane_validator_record(
+        lane_id: LaneId,
+        validator: &DMAccountId,
+        peer_id: PeerId,
+        stake: u32,
+    ) -> PublicLaneValidatorRecord {
+        lane_validator_record(
+            lane_id,
+            validator,
+            peer_id,
+            stake,
+            PublicLaneValidatorStatus::Active,
+        )
+    }
     fn seed_active_public_lane_validator(
         world_block: &mut WorldBlock<'_>,
         keypair: &KeyPair,
@@ -13922,19 +13957,7 @@ mod stake_snapshot_tests {
         seed_consensus_key(world_block, &peer, ConsensusKeyStatus::Active, 0);
         world_block.public_lane_validators.insert(
             (lane_id, validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id,
-                validator: validator.clone(),
-                peer_id: peer.clone(),
-                stake_account: validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(stake),
-                self_stake: iroha_primitives::numeric::Quantity::from(stake),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(lane_id, &validator, peer.clone(), stake),
         );
         peer
     }
@@ -14322,67 +14345,41 @@ mod stake_snapshot_tests {
             let mut block = world.public_lane_validators.block();
             block.insert(
                 (LaneId::new(1), active_validator.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(1),
-                    validator: active_validator.clone(),
-                    peer_id: active_peer.clone(),
-                    stake_account: active_validator,
-                    total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                active_lane_validator_record(
+                    LaneId::new(1),
+                    &active_validator,
+                    active_peer.clone(),
+                    10_u32,
+                ),
             );
             block.insert(
                 (LaneId::new(2), jailed_validator.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(2),
-                    validator: jailed_validator.clone(),
-                    peer_id: jailed_peer.clone(),
-                    stake_account: jailed_validator,
-                    total_stake: iroha_primitives::numeric::Quantity::from(20_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(20_u32),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Jailed("downtime".to_string()),
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                lane_validator_record(
+                    LaneId::new(2),
+                    &jailed_validator,
+                    jailed_peer.clone(),
+                    20_u32,
+                    PublicLaneValidatorStatus::Jailed("downtime".to_string()),
+                ),
             );
             block.insert(
                 (LaneId::new(3), exiting_validator.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(3),
-                    validator: exiting_validator.clone(),
-                    peer_id: exiting_peer.clone(),
-                    stake_account: exiting_validator,
-                    total_stake: iroha_primitives::numeric::Quantity::from(30_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(30_u32),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Exiting(7),
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                lane_validator_record(
+                    LaneId::new(3),
+                    &exiting_validator,
+                    exiting_peer.clone(),
+                    30_u32,
+                    PublicLaneValidatorStatus::Exiting(7),
+                ),
             );
             block.insert(
                 (LaneId::new(4), mismatched_validator.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(5),
-                    validator: mismatched_validator.clone(),
-                    peer_id: mismatched_peer.clone(),
-                    stake_account: mismatched_validator,
-                    total_stake: iroha_primitives::numeric::Quantity::from(40_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(40_u32),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                active_lane_validator_record(
+                    LaneId::new(5),
+                    &mismatched_validator,
+                    mismatched_peer.clone(),
+                    40_u32,
+                ),
             );
             block.commit();
         }
@@ -14418,35 +14415,23 @@ mod stake_snapshot_tests {
             let mut block = world.public_lane_validators.block();
             block.insert(
                 (valid_lane, valid_validator.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: valid_lane,
-                    validator: valid_validator.clone(),
-                    peer_id: PeerId::from(valid_kp.public_key().clone()),
-                    stake_account: valid_validator.clone(),
-                    total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::PendingActivation(3),
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                lane_validator_record(
+                    valid_lane,
+                    &valid_validator,
+                    PeerId::from(valid_kp.public_key().clone()),
+                    10_u32,
+                    PublicLaneValidatorStatus::PendingActivation(3),
+                ),
             );
             block.insert(
                 (mismatched_key_lane, mismatched_validator.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: mismatched_record_lane,
-                    validator: mismatched_validator.clone(),
-                    peer_id: PeerId::from(mismatched_kp.public_key().clone()),
-                    stake_account: mismatched_validator.clone(),
-                    total_stake: iroha_primitives::numeric::Quantity::from(20_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(20_u32),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::PendingActivation(3),
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                lane_validator_record(
+                    mismatched_record_lane,
+                    &mismatched_validator,
+                    PeerId::from(mismatched_kp.public_key().clone()),
+                    20_u32,
+                    PublicLaneValidatorStatus::PendingActivation(3),
+                ),
             );
             block.commit();
         }
@@ -14526,19 +14511,7 @@ mod stake_snapshot_tests {
         let jailed_sibling_validator = DMAccountId::of(jailed_sibling_kp.public_key().clone());
         let record =
             |lane_id, validator: DMAccountId, peer_key, status: PublicLaneValidatorStatus| {
-                PublicLaneValidatorRecord {
-                    lane_id,
-                    validator: validator.clone(),
-                    peer_id: PeerId::from(peer_key),
-                    stake_account: validator,
-                    total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                    metadata: Metadata::default(),
-                    status,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                }
+                lane_validator_record(lane_id, &validator, PeerId::from(peer_key), 10_u32, status)
             };
         {
             let mut block = state.world.public_lane_validators.block();
@@ -14771,19 +14744,12 @@ mod stake_snapshot_tests {
         seed_consensus_key(&mut wb, &stale_peer, ConsensusKeyStatus::Active, 0);
         wb.public_lane_validators.insert(
             (stale_lane, stale_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: stale_lane,
-                validator: stale_validator.clone(),
-                peer_id: stale_peer.clone(),
-                stake_account: stale_validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(
+                stale_lane,
+                &stale_validator,
+                stale_peer.clone(),
+                10_000_u32,
+            ),
         );
         wb.commit();
         let sv = state.view();
@@ -14826,19 +14792,7 @@ mod stake_snapshot_tests {
                           validator: AccountId,
                           peer_id: PeerId,
                           status: PublicLaneValidatorStatus| {
-            PublicLaneValidatorRecord {
-                lane_id,
-                validator: validator.clone(),
-                peer_id,
-                stake_account: validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                metadata: Metadata::default(),
-                status,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            }
+            lane_validator_record(lane_id, &validator, peer_id, 10_u32, status)
         };
         {
             let mut block = world.public_lane_validators.block();
@@ -15081,19 +15035,7 @@ mod stake_snapshot_tests {
         for (account, peer) in accounts.iter().cloned().zip(peers.iter().cloned()) {
             wb.public_lane_validators.insert(
                 (LaneId::SINGLE, account.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::SINGLE,
-                    validator: account.clone(),
-                    peer_id: peer,
-                    stake_account: account,
-                    total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                active_lane_validator_record(LaneId::SINGLE, &account, peer, 10_u32),
             );
         }
         wb.council.insert(
@@ -15148,35 +15090,22 @@ mod stake_snapshot_tests {
         }
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, active_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: active_validator.clone(),
-                peer_id: PeerId::from(active_validator.expect_single_signatory().clone()),
-                stake_account: active_validator.clone(),
-                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(
+                LaneId::SINGLE,
+                &active_validator,
+                PeerId::from(active_validator.expect_single_signatory().clone()),
+                1_000_u32,
+            ),
         );
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, jailed_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: jailed_validator.clone(),
-                peer_id: PeerId::from(jailed_validator.expect_single_signatory().clone()),
-                stake_account: jailed_validator.clone(),
-                total_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Jailed("downtime".to_string()),
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            lane_validator_record(
+                LaneId::SINGLE,
+                &jailed_validator,
+                PeerId::from(jailed_validator.expect_single_signatory().clone()),
+                10_000_u32,
+                PublicLaneValidatorStatus::Jailed("downtime".to_string()),
+            ),
         );
         for keypair in &extra_active_keypairs {
             seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
@@ -15216,35 +15145,21 @@ mod stake_snapshot_tests {
         seed_consensus_key(&mut wb, &stale_peer, ConsensusKeyStatus::Active, 0);
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, active_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: active_validator.clone(),
-                peer_id: active_peer.clone(),
-                stake_account: active_validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(
+                LaneId::SINGLE,
+                &active_validator,
+                active_peer.clone(),
+                1_000_u32,
+            ),
         );
         wb.public_lane_validators.insert(
             (unknown_lane, stale_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: unknown_lane,
-                validator: stale_validator.clone(),
-                peer_id: stale_peer.clone(),
-                stake_account: stale_validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(
+                unknown_lane,
+                &stale_validator,
+                stale_peer.clone(),
+                10_000_u32,
+            ),
         );
         for keypair in &extra_active_keypairs {
             seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
@@ -15286,35 +15201,21 @@ mod stake_snapshot_tests {
         }
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, present_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: present_validator.clone(),
-                peer_id: PeerId::from(present_validator.expect_single_signatory().clone()),
-                stake_account: present_validator.clone(),
-                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(
+                LaneId::SINGLE,
+                &present_validator,
+                PeerId::from(present_validator.expect_single_signatory().clone()),
+                1_000_u32,
+            ),
         );
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, missing_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: missing_validator.clone(),
-                peer_id: PeerId::from(missing_validator.expect_single_signatory().clone()),
-                stake_account: missing_validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(
+                LaneId::SINGLE,
+                &missing_validator,
+                PeerId::from(missing_validator.expect_single_signatory().clone()),
+                2_000_u32,
+            ),
         );
         for keypair in &extra_present_keypairs {
             seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
@@ -15352,19 +15253,12 @@ mod stake_snapshot_tests {
             let validator = DMAccountId::of(kp.public_key().clone());
             wb.public_lane_validators.insert(
                 (LaneId::SINGLE, validator.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::SINGLE,
-                    validator: validator.clone(),
-                    peer_id: PeerId::from(kp.public_key().clone()),
-                    stake_account: validator.clone(),
-                    total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                active_lane_validator_record(
+                    LaneId::SINGLE,
+                    &validator,
+                    PeerId::from(kp.public_key().clone()),
+                    1_000_u32,
+                ),
             );
         }
         wb.commit();
@@ -15429,38 +15323,24 @@ mod stake_snapshot_tests {
             let validator = DMAccountId::of(kp.public_key().clone());
             wb.public_lane_validators.insert(
                 (LaneId::SINGLE, validator.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::SINGLE,
-                    validator: validator.clone(),
-                    peer_id: PeerId::from(kp.public_key().clone()),
-                    stake_account: validator,
-                    total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                active_lane_validator_record(
+                    LaneId::SINGLE,
+                    &validator,
+                    PeerId::from(kp.public_key().clone()),
+                    1_000_u32,
+                ),
             );
         }
         for kp in &restricted_keypairs {
             let validator = DMAccountId::of(kp.public_key().clone());
             wb.public_lane_validators.insert(
                 (LaneId::new(1), validator.clone()),
-                PublicLaneValidatorRecord {
-                    lane_id: LaneId::new(1),
-                    validator: validator.clone(),
-                    peer_id: PeerId::from(kp.public_key().clone()),
-                    stake_account: validator,
-                    total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-                    self_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-                    metadata: Metadata::default(),
-                    status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
-                    last_reward_epoch: None,
-                },
+                active_lane_validator_record(
+                    LaneId::new(1),
+                    &validator,
+                    PeerId::from(kp.public_key().clone()),
+                    2_000_u32,
+                ),
             );
         }
         wb.commit();
@@ -15535,51 +15415,15 @@ mod stake_snapshot_tests {
         seed_consensus_key(&mut wb, &peer_b, ConsensusKeyStatus::Active, 0);
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, account_a_high.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: account_a_high.clone(),
-                peer_id: peer_a.clone(),
-                stake_account: account_a_high,
-                total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(LaneId::SINGLE, &account_a_high, peer_a.clone(), 10_u32),
         );
         wb.public_lane_validators.insert(
             (secondary_lane, account_a_low.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: secondary_lane,
-                validator: account_a_low.clone(),
-                peer_id: peer_a.clone(),
-                stake_account: account_a_low,
-                total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(secondary_lane, &account_a_low, peer_a.clone(), 1_u32),
         );
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, account_b.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: account_b.clone(),
-                peer_id: peer_b.clone(),
-                stake_account: account_b,
-                total_stake: iroha_primitives::numeric::Quantity::from(5_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(5_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(LaneId::SINGLE, &account_b, peer_b.clone(), 5_u32),
         );
         let extra_peers: Vec<_> = extra_peer_keys
             .iter()
@@ -15652,35 +15496,21 @@ mod stake_snapshot_tests {
             .insert(expired_key_id, vec![expired_record.id.clone()]);
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, live_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: live_validator.clone(),
-                peer_id: live_peer.clone(),
-                stake_account: live_validator.clone(),
-                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(
+                LaneId::SINGLE,
+                &live_validator,
+                live_peer.clone(),
+                1_000_u32,
+            ),
         );
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, expired_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: expired_validator.clone(),
-                peer_id: expired_peer.clone(),
-                stake_account: expired_validator,
-                total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(
+                LaneId::SINGLE,
+                &expired_validator,
+                expired_peer.clone(),
+                2_000_u32,
+            ),
         );
         for keypair in &extra_live_keypairs {
             seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
@@ -15713,19 +15543,7 @@ mod stake_snapshot_tests {
         seed_consensus_key(&mut wb, &peer, ConsensusKeyStatus::Disabled, 0);
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator,
-                peer_id: peer.clone(),
-                stake_account: DMAccountId::of(kp.public_key().clone()),
-                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(LaneId::SINGLE, &validator, peer.clone(), 1_000_u32),
         );
         wb.commit();
         let sv = state.view();
@@ -15781,35 +15599,21 @@ mod stake_snapshot_tests {
         seed_consensus_key(&mut wb, &admin_peer, ConsensusKeyStatus::Active, 0);
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, stake_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: stake_validator,
-                peer_id: stake_peer.clone(),
-                stake_account: DMAccountId::of(stake_kp.public_key().clone()),
-                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(
+                LaneId::SINGLE,
+                &stake_validator,
+                stake_peer.clone(),
+                1_000_u32,
+            ),
         );
         wb.public_lane_validators.insert(
             (LaneId::new(1), admin_validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::new(1),
-                validator: admin_validator,
-                peer_id: admin_peer.clone(),
-                stake_account: DMAccountId::of(admin_kp.public_key().clone()),
-                total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(
+                LaneId::new(1),
+                &admin_validator,
+                admin_peer.clone(),
+                2_000_u32,
+            ),
         );
         for keypair in &extra_stake_keypairs {
             seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
@@ -15869,19 +15673,7 @@ mod stake_snapshot_tests {
         let validator_id = DMAccountId::of(kp_a.public_key().clone());
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, validator_id.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: validator_id.clone(),
-                peer_id: peer_a.clone(),
-                stake_account: validator_id,
-                total_stake: iroha_primitives::numeric::Quantity::from(500_u32),
-                self_stake: iroha_primitives::numeric::Quantity::from(500_u32),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
+            active_lane_validator_record(LaneId::SINGLE, &validator_id, peer_a.clone(), 500_u32),
         );
         wb.commit();
         let sv = state.view();

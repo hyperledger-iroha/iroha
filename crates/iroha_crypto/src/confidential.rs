@@ -1,9 +1,8 @@
 //! Confidential key hierarchy utilities (wallet-facing).
 //!
-//! These helpers derive the nullifier/viewing keys from a 32-byte spend key
-//! using a domain-separated HKDF. They are intentionally lightweight so
-//! wallets and offline tooling can reuse the exact same derivations as the
-//! on-chain host.
+//! These helpers derive the nullifier/viewing keys from a 32-byte spend key using a
+//! domain-separated HKDF. They are intentionally lightweight so wallets and offline tooling can
+//! reuse the exact same derivations as the on-chain host.
 use hkdf::Hkdf;
 use rand_core::TryCryptoRng;
 use sha3::Sha3_512;

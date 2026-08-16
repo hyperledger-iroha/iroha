@@ -1,19 +1,16 @@
 //! Canonical `SoraFS` ledger data model.
 //!
-//! This module defines the V1 `SoraFS` pin registry and related governance
-//! flows. The pin registry operates alongside the manifest
-//! schema defined in `sorafs_manifest` and stores both canonical manifest
-//! digests (the envelope identity) and exact binary root CIDs (the content DAG
-//! identity), plus replication policies and lifecycle metadata. These two
-//! commitments are distinct and replication/alias records bind both where
-//! applicable. The orderbook and reserve modules define the native storage
-//! market, while the pricing module captures governance-controlled tariffs so
-//! ISI definitions can coordinate incentives deterministically. The repair
-//! module models audit-driven repair queues that tie proof failures to
-//! remediation workflows, and the transparency module defines canonical
-//! moderation ledger payloads/proofs for public SFM-4c verifiers. The
-//! `pop_registry` module defines the consensus-owned, payload-free credential
-//! issuer commitments and signed root/revocation publications used by SFM-4b1.
+//! This module defines the V1 `SoraFS` pin registry and related governance flows. The pin registry
+//! operates alongside the manifest schema defined in `sorafs_manifest` and stores both canonical
+//! manifest digests (the envelope identity) and exact binary root CIDs (the content DAG identity),
+//! plus replication policies and lifecycle metadata. These two commitments are distinct and
+//! replication/alias records bind both where applicable. The orderbook and reserve modules define
+//! the native storage market, while the pricing module captures governance-controlled tariffs so
+//! ISI definitions can coordinate incentives deterministically. The repair module models
+//! audit-driven repair queues that tie proof failures to remediation workflows, and the
+//! transparency module defines canonical moderation ledger payloads/proofs for public SFM-4c
+//! verifiers. The `pop_registry` module defines the consensus-owned, payload-free credential issuer
+//! commitments and signed root/revocation publications used by SFM-4b1.
 /// Capacity marketplace records (provider declarations, telemetry, fees).
 pub mod capacity;
 /// Gateway Authorization Record policy payload types.

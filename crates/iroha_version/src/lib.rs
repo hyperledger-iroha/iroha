@@ -15,10 +15,9 @@ pub use norito::codec::{Decode, DecodeAll, Encode};
 pub const VERSION_FIELD_NAME: &str = "version";
 /// JSON field name storing the versioned payload.
 pub const CONTENT_FIELD_NAME: &str = "content";
-/// Internal helpers used by derive-generated JSON code. Provides a stable path
-/// to JSON facilities so downstream crates do not need to depend on Norito
-/// directly when using `iroha_version_derive` macros with the `json` feature.
-/// JSON utilities used by derive-generated code.
+/// Internal helpers used by derive-generated JSON code. Provides a stable path to JSON facilities
+/// so downstream crates do not need to depend on Norito directly when using `iroha_version_derive`
+/// macros with the `json` feature. JSON utilities used by derive-generated code.
 #[cfg(feature = "json")]
 pub mod json_helpers {
     pub use norito::json::{
@@ -211,9 +210,8 @@ pub mod codec {
     /// # Errors
     ///
     /// Returns [`crate::error::Error::NotVersioned`] when the input is empty,
-    /// [`crate::error::Error::UnsupportedVersion`] when the leading byte is not
-    /// supported by `T`, or a wrapped Norito decode error when the payload body
-    /// is malformed.
+    /// [`crate::error::Error::UnsupportedVersion`] when the leading byte is not supported by `T`,
+    /// or a wrapped Norito decode error when the payload body is malformed.
     pub fn decode_exact_versioned<T>(input: &[u8]) -> Result<T>
     where
         T: Version + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,

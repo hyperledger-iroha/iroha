@@ -137,7 +137,55 @@ final class AliasSetupV1Tests: XCTestCase {
             try AccountAliasName(parsing: "merchant@例え").canonicalText,
             "merchant@xn--r8jz45g"
         )
-        for invalid in ["", " merchant@paynet", "merchant", "merchant@", "@paynet", "a@b.c.d", "merchant@Ḁ"] {
+        XCTAssertEqual(
+            try AccountAliasName(parsing: "xn--bcher-kva@paynet").canonicalText,
+            "xn--bcher-kva@paynet"
+        )
+        XCTAssertEqual(
+            try AccountAliasName(parsing: "xn--fa-hia@paynet").canonicalText,
+            "xn--fa-hia@paynet"
+        )
+        for ace in [
+            "xn--3xa",
+            "xn--11b2ezcw70k",
+            "xn--mgba3gch31f060k",
+            "xn--ngba7iz95i",
+            "xn--jqa59mba",
+            "xn--ab-0ea",
+            "xn--a-jib",
+            "xn--ab-3n4a",
+        ] {
+            XCTAssertEqual(
+                try AccountAliasName(parsing: "merchant@\(ace)").dataspace,
+                ace
+            )
+        }
+        XCTAssertEqual(
+            try AccountAliasName(parsing: "xn--ll-0ea@paynet").canonicalText,
+            "xn--ll-0ea@paynet"
+        )
+        XCTAssertEqual(
+            try AccountAliasName(parsing: "0xmerchant@paynet").canonicalText,
+            "0xmerchant@paynet"
+        )
+        XCTAssertEqual(
+            try AccountAliasName(
+                parsing: "\(String(repeating: "a", count: 63))@paynet"
+            ).label.count,
+            63
+        )
+        for invalid in [
+            "",
+            " merchant@paynet",
+            "merchant",
+            "merchant@",
+            "@paynet",
+            "a@b.c.d",
+            "merchant@Ḁ",
+            "xn--alice@paynet",
+            "xn--ab-uuba211bca8057b@paynet",
+            "\(String(repeating: "a", count: 64))@paynet",
+        ] {
             XCTAssertThrowsError(try AccountAliasName(parsing: invalid), invalid)
         }
     }

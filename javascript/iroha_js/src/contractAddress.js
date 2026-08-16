@@ -1,4 +1,5 @@
 import { Buffer } from "buffer";
+import { JS_TYPE_STRING } from "./commonLiterals.js";
 
 export const CONTRACT_ADDRESS_V1_VERSION = 1;
 export const CONTRACT_ADDRESS_HRP = "irohac";
@@ -71,7 +72,7 @@ function hrpExpand(hrp) {
 
 /** Parse an exact canonical lowercase V1 Bech32m contract address. */
 export function parseCanonicalContractAddress(value, context = "contractAddress") {
-  if (typeof value !== "string" || value.length === 0 || value.length > 90) {
+  if (typeof value !== JS_TYPE_STRING || value.length === 0 || value.length > 90) {
     throw new TypeError(`${context} must be a canonical V1 Bech32m contract address`);
   }
   if (value !== value.toLowerCase()) {

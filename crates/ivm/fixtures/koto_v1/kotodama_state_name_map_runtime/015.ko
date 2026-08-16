@@ -1,0 +1,8 @@
+
+        seiyaku C {
+            state StateMap<Name, int> Foo;
+            view fn main() -> int {
+                return Foo.get(Name::parse("alice")).unwrap_or(0);
+            }
+        }
+    

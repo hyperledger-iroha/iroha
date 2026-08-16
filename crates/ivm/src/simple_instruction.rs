@@ -86,9 +86,8 @@ pub enum Instruction {
         src_addr: u64,
         len: u64,
     },
-    /// Verify an Ed25519 signature over a message in memory. The public key and
-    /// signature are also read from memory. Result is placed in `result_reg`
-    /// (1 for valid, 0 for invalid).
+    /// Verify an Ed25519 signature over a message in memory. The public key and signature are also
+    /// read from memory. Result is placed in `result_reg` (1 for valid, 0 for invalid).
     Ed25519Verify {
         pubkey_addr: u64,
         sig_addr: u64,

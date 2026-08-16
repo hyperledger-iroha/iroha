@@ -162,11 +162,10 @@ struct NativeRepairStorageOutcomeV1 {
 impl NodeHandle {
     /// Execute storage repair only under one exact finalized native lease.
     ///
-    /// The caller must read `finalized_task` from the same immutable finalized
-    /// view identified by `transaction_context.finalized_cursor`. Any cursor,
-    /// provider, canonical-report, terminal-state, lease-owner, generation, or
-    /// expiry mismatch is rejected before storage I/O. Success and bounded
-    /// failure both enqueue one deterministic native terminal action through
+    /// The caller must read `finalized_task` from the same immutable finalized view identified by
+    /// `transaction_context.finalized_cursor`. Any cursor, provider, canonical-report,
+    /// terminal-state, lease-owner, generation, or expiry mismatch is rejected before storage I/O.
+    /// Success and bounded failure both enqueue one deterministic native terminal action through
     /// the durable transaction forwarder.
     pub fn execute_finalized_native_repair(
         &self,

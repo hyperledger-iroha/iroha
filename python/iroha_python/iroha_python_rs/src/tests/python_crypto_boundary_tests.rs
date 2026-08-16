@@ -1,4 +1,6 @@
 // Python crypto/admission boundary regressions share the parent test module's fixtures.
+use iroha_data_model::transaction::TransactionSubmissionReceipt;
+
 #[test]
 fn fee_sponsor_program_ids_require_exact_canonical_literals() {
     let sponsor_literal = taira_i105_from_seed(0x74);

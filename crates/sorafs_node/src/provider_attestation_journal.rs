@@ -1,11 +1,10 @@
 //! Durable, approval-only handoff for completed Musubi provider attestations.
 //!
-//! This module is intentionally inert: it defines the isolated signer,
-//! content-addressed journal, and idempotent coordinator-inventory contracts,
-//! but no daemon launcher or transaction ingress. An approval intent retains
-//! the exact finalized evidence identity while deliberately omitting the
-//! opaque approval request. After restart, callers must rederive that request
-//! from a fresh completed-row claim and lifecycle-leased bundle verification.
+//! This module is intentionally inert: it defines the isolated signer, content-addressed journal,
+//! and idempotent coordinator-inventory contracts, but no daemon launcher or transaction ingress.
+//! An approval intent retains the exact finalized evidence identity while deliberately omitting the
+//! opaque approval request. After restart, callers must rederive that request from a fresh
+//! completed-row claim and lifecycle-leased bundle verification.
 use crate::{
     provider_attestation_clock::{
         MusubiProviderAttestationClockErrorV1, MusubiProviderAttestationClockScopeV1,
@@ -92,9 +91,8 @@ pub struct MusubiProviderAttestationSignerQualificationV1 {
     pub adapter_revision: u64,
     /// Non-zero deployment policy digest for the signer adapter itself.
     ///
-    /// This is independent of both the governed signer policy and the
-    /// authority controller digest, which may change without replacing the
-    /// deployment adapter.
+    /// This is independent of both the governed signer policy and the authority controller digest,
+    /// which may change without replacing the deployment adapter.
     pub adapter_policy_digest: [u8; 32],
     /// Exact governed signer policy currently implemented by the adapter.
     pub signer_policy: ProviderIngestCompletionSignerPolicyV1,
@@ -225,10 +223,9 @@ pub trait MusubiProviderAttestationSignerV1: Send + Sync + 'static {
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, MusubiProviderAttestationSignerErrorV1>;
     /// Approve only the supplied opaque, post-completion request.
     ///
-    /// Repeating one exact request under an unchanged qualification must yield
-    /// the same canonical attestation, including the same sorted controller
-    /// approval set. This replay-stability requirement prevents retries from
-    /// selecting different valid multisig subsets.
+    /// Repeating one exact request under an unchanged qualification must yield the same canonical
+    /// attestation, including the same sorted controller approval set. This replay-stability
+    /// requirement prevents retries from selecting different valid multisig subsets.
     fn approve<'a>(
         &'a self,
         request: &'a ProviderIngestMusubiAttestationApprovalRequestV1,
@@ -270,11 +267,10 @@ pub enum MusubiProviderAttestationApprovalErrorV1 {
 }
 /// Validate, invoke, and revalidate one approval-only provider signer.
 ///
-/// The coordinator checks the production handle, exact provider-owner
-/// authority, governed policy, and eligibility both before and after signing.
-/// It then requires byte-for-byte payload equality and verifies the complete
-/// controller approval quorum. `timeout_ms` is a non-zero upper bound for the
-/// external signer operation.
+/// The coordinator checks the production handle, exact provider-owner authority, governed policy,
+/// and eligibility both before and after signing. It then requires byte-for-byte payload equality
+/// and verifies the complete controller approval quorum. `timeout_ms` is a non-zero upper bound for
+/// the external signer operation.
 ///
 /// # Errors
 ///
@@ -560,11 +556,10 @@ impl MusubiProviderAttestationInventoryItemV1 {
 }
 /// One authenticated exact inventory read with its authoritative revision.
 ///
-/// The value is intentionally not a wire receipt and carries no authentication
-/// authority by itself. A deployment-qualified inventory reader constructs it
-/// only after authenticating the coordinator's response, and the crate-private
-/// handoff driver still compares both fields with the immediately preceding
-/// idempotent `put` before recording delivery.
+/// The value is intentionally not a wire receipt and carries no authentication authority by itself.
+/// A deployment-qualified inventory reader constructs it only after authenticating the
+/// coordinator's response, and the crate-private handoff driver still compares both fields with the
+/// immediately preceding idempotent `put` before recording delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusubiProviderAttestationInventoryReadbackV1 {
     item: MusubiProviderAttestationInventoryItemV1,
@@ -573,9 +568,8 @@ pub struct MusubiProviderAttestationInventoryReadbackV1 {
 impl MusubiProviderAttestationInventoryReadbackV1 {
     /// Construct one structurally validated inventory readback.
     ///
-    /// This constructor does not authenticate the source of `item` or
-    /// `inventory_revision`; implementations of
-    /// [`MusubiProviderAttestationInventoryReaderV1`] must do so before calling
+    /// This constructor does not authenticate the source of `item` or `inventory_revision`;
+    /// implementations of [`MusubiProviderAttestationInventoryReaderV1`] must do so before calling
     /// it.
     ///
     /// # Errors
@@ -617,11 +611,10 @@ impl MusubiProviderAttestationInventoryReadbackV1 {
 }
 /// Bounded opaque acknowledgement retained after a trusted inventory handoff.
 ///
-/// The receipt deliberately has neither a public constructor nor public
-/// Norito codecs. It is constructed only inside the journal after a trusted
-/// sink's non-zero revision is confirmed by an authenticated exact readback,
-/// so downstream safe Rust cannot mint or decode an acknowledgement to bypass
-/// that boundary.
+/// The receipt deliberately has neither a public constructor nor public Norito codecs. It is
+/// constructed only inside the journal after a trusted sink's non-zero revision is confirmed by an
+/// authenticated exact readback, so downstream safe Rust cannot mint or decode an acknowledgement
+/// to bypass that boundary.
 ///
 /// ```compile_fail
 /// use sorafs_node::{
@@ -862,10 +855,9 @@ pub enum MusubiProviderAttestationInventoryRuntimeErrorV1 {
 }
 /// Idempotent trusted write boundary for the coordinator's immutable inventory.
 ///
-/// Implementations are deployment-qualified adapters. A successful response is
-/// the non-zero coordinator revision for this exact item; the journal converts
-/// it into an opaque local acknowledgement only after validating the item and
-/// revision.
+/// Implementations are deployment-qualified adapters. A successful response is the non-zero
+/// coordinator revision for this exact item; the journal converts it into an opaque local
+/// acknowledgement only after validating the item and revision.
 pub trait MusubiProviderAttestationInventorySinkV1: Send + Sync + 'static {
     /// Insert or replay one exact immutable item.
     ///
@@ -909,14 +901,13 @@ pub trait MusubiProviderAttestationInventoryReaderV1: Send + Sync + 'static {
 }
 /// Deployment-qualified write/read boundary for coordinator inventory handoff.
 ///
-/// Implementations own authentication material and transport diagnostics. The
-/// public handle and qualification contain no credentials or attestation
-/// payload. `check_readiness` must be non-mutating; callers execute its future
-/// under the same hard deadline as the associated handoff. This trait exposes
-/// no transaction, queue, or registry-mutation surface. Runtime snapshots
-/// establish structural validity and operation-local stability only; a daemon
-/// integration must also compare handle, revision, and policy digest with its
-/// exact independently configured binding on every call, not only at startup.
+/// Implementations own authentication material and transport diagnostics. The public handle and
+/// qualification contain no credentials or attestation payload. `check_readiness` must be
+/// non-mutating; callers execute its future under the same hard deadline as the associated handoff.
+/// This trait exposes no transaction, queue, or registry-mutation surface. Runtime snapshots
+/// establish structural validity and operation-local stability only; a daemon integration must also
+/// compare handle, revision, and policy digest with its exact independently configured binding on
+/// every call, not only at startup.
 pub trait MusubiProviderAttestationInventoryRuntimeV1:
     MusubiProviderAttestationInventorySinkV1 + MusubiProviderAttestationInventoryReaderV1
 {
@@ -2194,12 +2185,11 @@ impl MusubiProviderAttestationJournalV1 {
     }
     /// Check retained intent first, then the authenticated exact inventory entry.
     ///
-    /// This read-only probe never reserves journal capacity or manufactures a
-    /// delivery receipt. Callers must still invoke [`Self::enqueue`] for an
-    /// absent result so its compare-and-set transition resolves concurrent
-    /// journal changes. The inventory operation is bounded by the same hard
-    /// deadline as a handoff and fences runtime identity, qualification, and
-    /// readiness before and after the exact read.
+    /// This read-only probe never reserves journal capacity or manufactures a delivery receipt.
+    /// Callers must still invoke [`Self::enqueue`] for an absent result so its compare-and-set
+    /// transition resolves concurrent journal changes. The inventory operation is bounded by the
+    /// same hard deadline as a handoff and fences runtime identity, qualification, and readiness
+    /// before and after the exact read.
     ///
     /// # Errors
     ///
@@ -2427,14 +2417,12 @@ impl MusubiProviderAttestationJournalV1 {
     }
     /// Return a deterministic bounded page of retained dead-letter identities.
     ///
-    /// Operators can rediscover terminal work after restart without a second
-    /// durable index, inspect status, and then explicitly requeue or acknowledge
-    /// it using generation fencing.
+    /// Operators can rediscover terminal work after restart without a second durable index, inspect
+    /// status, and then explicitly requeue or acknowledge it using generation fencing.
     ///
     /// # Errors
     ///
-    /// Returns an error for an invalid page bound, corrupt persistence, or
-    /// store failure.
+    /// Returns an error for an invalid page bound, corrupt persistence, or store failure.
     pub(crate) async fn dead_letter_page(
         &self,
         after: Option<MusubiProviderAttestationJournalScanKeyV1>,
@@ -2660,10 +2648,9 @@ impl MusubiProviderAttestationJournalV1 {
     }
     /// Invoke the qualified approval-only signer and durably store its exact result.
     ///
-    /// The signer timeout must fit wholly inside the retained approval lease.
-    /// The low-level state transition is not exposed outside this crate, so a
-    /// downstream caller cannot bypass live signer qualification by supplying
-    /// an independently constructed attestation.
+    /// The signer timeout must fit wholly inside the retained approval lease. The low-level state
+    /// transition is not exposed outside this crate, so a downstream caller cannot bypass live
+    /// signer qualification by supplying an independently constructed attestation.
     ///
     /// # Errors
     ///
@@ -2957,14 +2944,12 @@ impl MusubiProviderAttestationJournalV1 {
     /// Send one exact item through the trusted idempotent inventory boundary
     /// and durably retain its acknowledgement.
     ///
-    /// The handoff timeout must fit wholly inside the retained handoff lease.
-    /// The combined sink/reader/runtime is a deployment-qualified adapter which
-    /// authenticates its remote coordinator. This driver remains crate-private,
-    /// so a downstream trait implementation cannot directly manufacture durable
-    /// delivery state. A successful `put` is always followed by an exact
-    /// readback, and both its item and authoritative revision must match before
-    /// delivery. Handle, qualification, and readiness are fenced before and
-    /// after those calls.
+    /// The handoff timeout must fit wholly inside the retained handoff lease. The combined
+    /// sink/reader/runtime is a deployment-qualified adapter which authenticates its remote
+    /// coordinator. This driver remains crate-private, so a downstream trait implementation cannot
+    /// directly manufacture durable delivery state. A successful `put` is always followed by an
+    /// exact readback, and both its item and authoritative revision must match before delivery.
+    /// Handle, qualification, and readiness are fenced before and after those calls.
     ///
     /// # Errors
     ///
@@ -3536,10 +3521,9 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
     }
     /// Invoke one structurally qualified signer inside the live sealed-time lease.
     ///
-    /// The standard daemon composer supplies a governed signer that fences the
-    /// configured handle, revision, policy, deployment context, and finalized
-    /// owner around every approval. This operation additionally enforces the
-    /// signer's structural validity and snapshot stability.
+    /// The standard daemon composer supplies a governed signer that fences the configured handle,
+    /// revision, policy, deployment context, and finalized owner around every approval. This
+    /// operation additionally enforces the signer's structural validity and snapshot stability.
     ///
     /// # Errors
     ///
@@ -3891,10 +3875,9 @@ fn decode_checkpoint(
 }
 /// Validate one nonempty canonical checkpoint and return its monotonic sequence.
 ///
-/// The file-store adapter uses this crate-private boundary to bind physical
-/// two-slot generations to the journal schema without exposing the private
-/// checkpoint DTO. Every retained intent must belong to the exact configured
-/// exact network and provider.
+/// The file-store adapter uses this crate-private boundary to bind physical two-slot generations to
+/// the journal schema without exposing the private checkpoint DTO. Every retained intent must
+/// belong to the exact configured exact network and provider.
 pub(crate) fn validate_musubi_provider_attestation_journal_checkpoint_bytes_v1(
     bytes: &[u8],
     policy: MusubiProviderAttestationJournalPolicyV1,

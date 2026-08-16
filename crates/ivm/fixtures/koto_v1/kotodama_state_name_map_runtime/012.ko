@@ -1,0 +1,14 @@
+
+        seiyaku C {
+            struct PolicyState { int version, bytes document }
+            struct WrongState { int version }
+            state StateMap<Name, PolicyState> Policies;
+
+            view fn main() -> int {
+                let policy = Policies.get(Name::parse("spend")).unwrap_or(
+                    WrongState { version: 0 },
+                );
+                return policy.version;
+            }
+        }
+    

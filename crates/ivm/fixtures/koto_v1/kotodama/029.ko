@@ -1,0 +1,6 @@
+
+        seiyaku BoundedStateIteration {
+            state StateMap<int, int> values;
+            fn f() { for (key, value) in values.take(1) { let seen = key; } }
+        }
+    

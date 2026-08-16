@@ -1,10 +1,9 @@
 //! Deterministic dependency resolution for the Musubi V1 universal sparse index.
 //!
-//! Resolution consumes only finalized [`MusubiResolverReleaseRowV1`] values and
-//! produces a consumer-owned exact [`LockfileV1`]. The search order is part of
-//! the first-release behavior: reuse a compatible selection already present in
-//! the graph, then a still-valid parent-local lock edge, then fresh releases in
-//! descending `SemVer` order.
+//! Resolution consumes only finalized [`MusubiResolverReleaseRowV1`] values and produces a
+//! consumer-owned exact [`LockfileV1`]. The search order is part of the first-release behavior:
+//! reuse a compatible selection already present in the graph, then a still-valid parent-local lock
+//! edge, then fresh releases in descending `SemVer` order.
 use crate::lockfile::{
     LockedRootV1, LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1,
 };

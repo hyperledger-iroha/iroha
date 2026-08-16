@@ -1,10 +1,9 @@
 //! Confidential parameter registries and lifecycle helpers.
 //!
-//! The confidential asset roadmap introduces on-ledger registries that track
-//! zero-knowledge verifier metadata together with Pedersen and Poseidon
-//! parameter sets. These structures model the governance state transitions
-//! (publish → activate → deprecate → withdraw) and advertise the hashes that
-//! wallets and validators must verify before accepting an upgrade.
+//! The confidential asset roadmap introduces on-ledger registries that track zero-knowledge
+//! verifier metadata together with Pedersen and Poseidon parameter sets. These structures model the
+//! governance state transitions (publish → activate → deprecate → withdraw) and advertise the
+//! hashes that wallets and validators must verify before accepting an upgrade.
 #[cfg(feature = "json")]
 use crate::json_helpers::fixed_bytes;
 use core::fmt::{self, Display, Formatter};
@@ -261,11 +260,10 @@ impl<'a> norito_core::DecodeFromSlice<'a> for ConfidentialEncryptedPayload {
 }
 /// Status of a confidential registry entry.
 ///
-/// Entries begin in the `Proposed` state once governance publishes new
-/// metadata. They become `Active` at the scheduled height and transition
-/// to `Withdrawn` once retired, at which point they must not be used by
-/// validators or wallets. The lifecycle applies uniformly to verifier keys
-/// and parameter sets.
+/// Entries begin in the `Proposed` state once governance publishes new metadata. They become
+/// `Active` at the scheduled height and transition to `Withdrawn` once retired, at which point they
+/// must not be used by validators or wallets. The lifecycle applies uniformly to verifier keys and
+/// parameter sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[repr(u8)]
 #[norito(reuse_archived)]

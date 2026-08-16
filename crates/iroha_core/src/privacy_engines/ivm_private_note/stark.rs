@@ -748,10 +748,9 @@ pub(super) fn compile_private_note_prover_columns_v1(
 }
 /// Construct the canonical private-note proof with injected masking entropy.
 ///
-/// The witness is compiled and checked by the native interpreter before the
-/// shared proof driver sees any columns. The proof driver then checks the same
-/// relation algebraically on the native and extension domains and
-/// self-verifies the encoded proof before returning it.
+/// The witness is compiled and checked by the native interpreter before the shared proof driver
+/// sees any columns. The proof driver then checks the same relation algebraically on the native and
+/// extension domains and self-verifies the encoded proof before returning it.
 pub(super) fn prove_private_note_stark_v1_with_rng<R: TryRngCore>(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,

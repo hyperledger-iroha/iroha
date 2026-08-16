@@ -35,10 +35,9 @@ const VERIFIED_SOURCE_JSON_MAX_ESCAPE_BYTES_PER_INPUT_BYTE_V1: usize = 6;
 const VERIFIED_SOURCE_SUBMISSION_JSON_STRUCTURAL_BYTES_V1: usize = 1024;
 /// First-release HTTP envelope ceiling for a verified-source submission.
 ///
-/// This derives from Kotodama's canonical source and logical-path limits and
-/// admits the worst-case six-byte JSON escape for every UTF-8 input byte. The
-/// route therefore bounds transport memory without reducing the language's V1
-/// source surface.
+/// This derives from Kotodama's canonical source and logical-path limits and admits the worst-case
+/// six-byte JSON escape for every UTF-8 input byte. The route therefore bounds transport memory
+/// without reducing the language's V1 source surface.
 pub(crate) const VERIFIED_SOURCE_SUBMISSION_MAX_HTTP_BODY_BYTES_V1: usize =
     VERIFIED_SOURCE_JSON_MAX_ESCAPE_BYTES_PER_INPUT_BYTE_V1
         * (VERIFIED_SOURCE_TEXT_MAX_BYTES_V1
@@ -1299,9 +1298,8 @@ fn write_diagnostic_source(
 }
 /// Render compiler diagnostics directly into a fixed-size UTF-8 buffer.
 ///
-/// In particular, this must not call `DiagnosticBundle::to_string` or
-/// `render_human`: both first allocate the complete attacker-influenced
-/// rendering before a caller can truncate it.
+/// In particular, this must not call `DiagnosticBundle::to_string` or `render_human`: both first
+/// allocate the complete attacker-influenced rendering before a caller can truncate it.
 fn bounded_verified_source_diagnostic_message(
     bundle: &ivm::kotodama::diagnostic::DiagnosticBundle,
 ) -> String {

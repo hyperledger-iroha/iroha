@@ -1,0 +1,7 @@
+
+        seiyaku TypedPointers {
+            kotoage fn f() authorize("Admin") {
+                ledger::account::set_detail(account: context::authority(), key: Name::parse("k"), value: Json::parse("1"));
+            }
+        }
+    

@@ -126,10 +126,9 @@ pub(crate) enum LaneDrainSigningGuardError {
 }
 /// Crash-safe, per-incarnation journal used before lane commit and drain signatures.
 ///
-/// Each decision is written, fsynced, atomically renamed, and directory-fsynced
-/// before the caller may create a signature. A crash can therefore retain a
-/// harmless decision whose signature was never sent, but cannot leave a sent
-/// signature without its durable anti-equivocation lock.
+/// Each decision is written, fsynced, atomically renamed, and directory-fsynced before the caller
+/// may create a signature. A crash can therefore retain a harmless decision whose signature was
+/// never sent, but cannot leave a sent signature without its durable anti-equivocation lock.
 #[derive(Debug)]
 pub(crate) struct LaneDrainSigningGuard {
     directory: PathBuf,
@@ -137,9 +136,8 @@ pub(crate) struct LaneDrainSigningGuard {
     serial: Mutex<()>,
 }
 impl LaneDrainSigningGuard {
-    /// Open the journal below the Kura root and discard records for finalized,
-    /// inactive incarnations. Malformed files, symlinks, and non-canonical
-    /// encodings fail startup closed.
+    /// Open the journal below the Kura root and discard records for finalized, inactive
+    /// incarnations. Malformed files, symlinks, and non-canonical encodings fail startup closed.
     pub(crate) fn open(
         store_root: &Path,
         active_incarnations: &BTreeSet<(LaneId, Hash)>,
@@ -370,14 +368,12 @@ impl LaneDrainSigningGuard {
         record.highest_commit_vote = Some(attempted);
         self.persist_record(&record)
     }
-    /// Durably close one lane incarnation before producing a drain vote.
-    /// The certified frontier must cover the exact descriptor of every locally
-    /// signed lane commit high-water. Structural validation includes the exact
-    /// embedded committee length, hash, uniqueness, BLS key type, and quorum.
-    /// The caller must still derive the final frontier from canonical state.
-    /// An unchanged intent may advance monotonically when delayed pre-close
-    /// work reaches the global frontier; the lane remains permanently closed
-    /// to Commit votes throughout that refresh.
+    /// Durably close one lane incarnation before producing a drain vote. The certified frontier
+    /// must cover the exact descriptor of every locally signed lane commit high-water. Structural
+    /// validation includes the exact embedded committee length, hash, uniqueness, BLS key type, and
+    /// quorum. The caller must still derive the final frontier from canonical state. An unchanged
+    /// intent may advance monotonically when delayed pre-close work reaches the global frontier;
+    /// the lane remains permanently closed to Commit votes throughout that refresh.
     pub(crate) fn authorize_drain(
         &self,
         body: &LaneDrainCertificateBodyV1,

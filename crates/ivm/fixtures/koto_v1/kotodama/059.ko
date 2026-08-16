@@ -1,0 +1,7 @@
+
+        seiyaku RemovedCodecAliases {
+            view fn main(bytes payload) -> Json {
+                return decode_json(payload);
+            }
+        }
+    

@@ -7,12 +7,10 @@
 //! and a purpose-built Goldilocks STARK.  No compatibility or fallback proof
 //! format is accepted.
 //!
-//! [`profile`] fixes the intended relation and AIR resource envelope, while
-//! [`merkle`] implements accumulator semantics shared by the native reference
-//! relation and constrained execution. Consensus activation is controlled by
-//! the frozen soundness, resource, and governance release gates; no
-//! projection-only or unbound collection of subproofs is treated as a
-//! credential proof.
+//! [`profile`] fixes the intended relation and AIR resource envelope, while [`merkle`] implements
+//! accumulator semantics shared by the native reference relation and constrained execution.
+//! Consensus activation is controlled by the frozen soundness, resource, and governance release
+//! gates; no projection-only or unbound collection of subproofs is treated as a credential proof.
 pub(crate) mod accumulator_air;
 pub(crate) mod accumulator_stark;
 pub(crate) mod air;

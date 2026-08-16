@@ -1632,6 +1632,9 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
     ),
+    "observe_effects": (
+        "23d97acae28bbe7990bc3316cb6f38f38c412511f4613657a842e12f9a5517a7"
+    ),
     "step": "bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
     "finish_dispatched_step": (
         "79b15a8142c81629b078a64822c4bba3a7cc930d1da75eb816c7f64609021285"
@@ -1786,6 +1789,12 @@ _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
+    "same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner": (
+        "9c2930e2bec6e33904f20f6135300bcce4164b36a2cd03d9c8e516729ab84666"
+    ),
+    "dormant_fresh_owner_cache_is_derived_bounded_and_purged_by_round_tag": (
+        "fe0bed714176dd7a285e7dcdd448f9468c60b13aee7dcac8a8c67affc2a3c333"
+    ),
     "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
         "4173b41c9622f676b9c9d412a267cb0b3b2aca91ed9725e2a5c450485d7442d9"
     ),

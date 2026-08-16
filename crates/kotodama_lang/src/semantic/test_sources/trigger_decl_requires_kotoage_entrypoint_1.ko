@@ -1,0 +1,8 @@
+
+            seiyaku C {
+                fn run() {}
+                trigger wake -> run {
+                    on time pre_commit;
+                }
+            }
+            

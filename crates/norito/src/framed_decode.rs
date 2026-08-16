@@ -1,10 +1,9 @@
 /// Derive default limits for a validated frame header.
 ///
-/// Structural limits must cover the uncompressed payload, while the cumulative
-/// allocation limit stays anchored to the bytes supplied by the caller. The
-/// latter keeps a small compressed frame from authorizing arbitrary expansion;
-/// [`deserialize_stream`] charges the complete declared payload before it
-/// allocates or decompresses it.
+/// Structural limits must cover the uncompressed payload, while the cumulative allocation limit
+/// stays anchored to the bytes supplied by the caller. The latter keeps a small compressed frame
+/// from authorizing arbitrary expansion; [`deserialize_stream`] charges the complete declared
+/// payload before it allocates or decompresses it.
 fn framed_decode_limits(frame_len: usize, uncompressed_payload_len: usize) -> DecodeLimits {
     let frame_limits = canonical_decode_limits(frame_len);
     let structural_len = frame_len.max(uncompressed_payload_len);
@@ -20,13 +19,12 @@ fn framed_decode_limits(frame_len: usize, uncompressed_payload_len: usize) -> De
 /// Decode an object from Norito-encoded bytes (compressed or not) under a
 /// payload-derived resource budget.
 ///
-/// Structural byte and element limits cover the validated header's declared
-/// uncompressed payload length. The cumulative allocation budget remains
-/// derived from the complete frame length, so a short input cannot force an
-/// allocation proportional only to an attacker-declared uncompressed length.
-/// Callers with a narrower schema limit, or trusted compressed data whose
-/// legitimate expansion exceeds the default envelope, can use
-/// [`decode_from_bytes_with_limits`] with an explicit budget.
+/// Structural byte and element limits cover the validated header's declared uncompressed payload
+/// length. The cumulative allocation budget remains derived from the complete frame length, so a
+/// short input cannot force an allocation proportional only to an attacker-declared uncompressed
+/// length. Callers with a narrower schema limit, or trusted compressed data whose legitimate
+/// expansion exceeds the default envelope, can use [`decode_from_bytes_with_limits`] with an
+/// explicit budget.
 pub fn decode_from_bytes<T>(bytes: &[u8]) -> Result<T, Error>
 where
     for<'de> T: NoritoDeserialize<'de>,

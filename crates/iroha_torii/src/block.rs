@@ -22,8 +22,7 @@ impl From<stream::Error> for Error {
 }
 /// Result type for `Consumer`
 pub type Result<T> = core::result::Result<T, Error>;
-/// Consumer for Iroha `Block`(s).
-/// Passes the blocks over the corresponding connection `stream`.
+/// Consumer for Iroha `Block`(s). Passes the blocks over the corresponding connection `stream`.
 #[derive(Debug)]
 pub struct Consumer<'ws> {
     pub stream: &'ws mut WebSocketNorito,

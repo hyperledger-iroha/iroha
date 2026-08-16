@@ -321,9 +321,8 @@ impl Signature {
     }
     /// Fallibly create a signature from hex received from an external boundary.
     ///
-    /// This preserves [`Signature::from_hex`] for tests and compatibility code
-    /// that intentionally reproduce opaque bytes, while rejecting empty or
-    /// all-zero payloads for admission paths.
+    /// This preserves [`Signature::from_hex`] for tests and compatibility code that intentionally
+    /// reproduce opaque bytes, while rejecting empty or all-zero payloads for admission paths.
     ///
     /// # Errors
     /// Returns [`ParseError`] when the string is not valid hex, or when the
@@ -733,8 +732,7 @@ impl<'a, T> DecodeFromSlice<'a> for SignatureOf<T> {
     }
 }
 impl<T> SignatureOf<T> {
-    /// Fallibly create [`SignatureOf`] from the given hash with
-    /// [`crate::KeyPair::private_key`].
+    /// Fallibly create [`SignatureOf`] from the given hash with [`crate::KeyPair::private_key`].
     ///
     /// # Errors
     ///

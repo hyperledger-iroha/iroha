@@ -1,0 +1,9 @@
+
+        module Tuples {
+            fn f(int a, int b) {
+                let t = (a, b);
+                let x = t.0;
+                let y = t.1;
+            }
+        }
+    

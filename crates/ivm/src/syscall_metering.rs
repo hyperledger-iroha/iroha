@@ -1,9 +1,8 @@
 //! Syscall metering modes and staged-call accounting.
 //!
-//! Existing host calls retain their prepare/reserve/execute/refund lifecycle.
-//! Kotodama V1 numeric calls instead debit deterministic phases immediately
-//! before the associated work. An unaffordable phase leaves remaining gas
-//! intact; charges for earlier completed phases are never refunded.
+//! Existing host calls retain their prepare/reserve/execute/refund lifecycle. Kotodama V1 numeric
+//! calls instead debit deterministic phases immediately before the associated work. An unaffordable
+//! phase leaves remaining gas intact; charges for earlier completed phases are never refunded.
 use crate::VMError;
 /// Fixed entry charge for a staged syscall lifecycle.
 pub(crate) const STAGED_SYSCALL_ENTRY_GAS: u64 = crate::numeric_gas::NUMERIC_ENTRY_GAS;

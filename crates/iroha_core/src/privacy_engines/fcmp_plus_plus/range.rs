@@ -5,17 +5,15 @@
 //! bounded amounts.  This module supplies the missing RingCT relation with one
 //! aggregate Monero Bulletproofs+ proof.  For every output commitment `C` the
 //! proof contains both `C` and `C - H` in its ordered public statement.  A
-//! 64-bit range proof for both points proves that the hidden amount is in
-//! `1..=u64::MAX`: the first relation establishes the upper bound and the
-//! second excludes zero.
+//! 64-bit range proof for both points proves that the hidden amount is in `1..=u64::MAX`: the first
+//! relation establishes the upper bound and the second excludes zero.
 //!
 //! The equations and Monero generator derivation are a native port of the
 //! MIT-licensed `monero-bulletproofs` implementation by Luke Parker at Serai
 //! commit `971951a1a66014fce5a943b4c78fc24c63187dbb`.  Iroha adds an explicit
 //! transcript domain, the complete typed-statement digest, and the ordered
 //! output commitments before the standard Figure-3 challenges.  Proofs cannot
-//! therefore be transplanted across pools, assets, roots, transactions, or
-//! output orderings.
+//! therefore be transplanted across pools, assets, roots, transactions, or output orderings.
 use super::{
     FCMP_MAX_OUTPUTS_NATIVE_V1, FcmpNativeErrorV1, FcmpOutputTupleV1,
     field::{
@@ -138,10 +136,9 @@ impl<T: Zeroize> Drop for PendingZeroizingValue<T> {
 }
 /// Exact-capacity owner for prover-secret vectors.
 ///
-/// Storage is reserved before the first secret copy is accepted. The logical
-/// capacity is public proof-shape data; the separately remembered allocation
-/// capacity lets every insertion assert that no reallocation occurred. Drop
-/// clears the complete allocation on success, error, and unwind.
+/// Storage is reserved before the first secret copy is accepted. The logical capacity is public
+/// proof-shape data; the separately remembered allocation capacity lets every insertion assert that
+/// no reallocation occurred. Drop clears the complete allocation on success, error, and unwind.
 struct ExactSizeZeroizingVec<T: Zeroize> {
     values: Vec<T>,
     exact_capacity: usize,
@@ -1866,9 +1863,9 @@ mod tests {
         let owner = RangeSecretCopyValueV1::copy_from_ref(&borrowed);
         assert_eq!(borrowed.0, 9);
         assert_eq!(owner.expose_ref().0, 9);
-        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 0);
-        drop(owner);
         assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 1);
+        drop(owner);
+        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
         assert!(
             std::panic::catch_unwind(|| {
@@ -1884,14 +1881,14 @@ mod tests {
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
         let mut values = ExactSizeZeroizingVec::new(1).expect("one fixed copy slot");
         values.push_copy(TrackingCopy(17)).expect("sole copy fits");
-        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 1);
+        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
         assert_eq!(
             values.push_copy(TrackingCopy(19)),
             Err(FcmpNativeErrorV1::RangeArithmeticInvariant)
         );
-        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
+        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 4);
         drop(values);
-        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 3);
+        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 5);
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
         assert!(
             std::panic::catch_unwind(|| {
@@ -1903,7 +1900,7 @@ mod tests {
             })
             .is_err()
         );
-        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
+        assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 3);
         let source = include_str!("range.rs");
         let exact_vector = source
             .split_once("impl<T: Zeroize> ExactSizeZeroizingVec<T> {")
@@ -1932,8 +1929,8 @@ mod tests {
             .expect("retained final copy");
         let drop = copy_vector.find("drop(value)").expect("owner drop");
         assert!(take < capacity && capacity < push && push < drop);
-        assert!(!source.contains("vector.0.push(Scalar::"));
-        assert!(!source.contains("a_l.0.push(Scalar::"));
+        assert!(!source.contains(concat!("vector.0.push(", "Scalar::")));
+        assert!(!source.contains(concat!("a_l.0.push(", "Scalar::")));
         assert!(source.contains("witnesses.push_owned(RangeWitnessCommitment {"));
         assert!(source.contains("self.terms.push_owned(SecretMultiexpTerm {"));
         let scalar_vector = source
@@ -2207,7 +2204,7 @@ mod tests {
             .find("let mask_component =")
             .expect("owned mask component");
         let expected_owner = check
-            .find("let expected_owner = RangeSecretCopyValueV1::new(")
+            .find("let expected_owner =")
             .expect("owned final commitment");
         let comparison = check
             .find("expected_owner.expose_ref() == point")

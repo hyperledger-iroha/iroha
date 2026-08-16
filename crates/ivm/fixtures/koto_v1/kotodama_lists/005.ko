@@ -1,0 +1,53 @@
+
+            seiyaku MultiwordMutationFailures {
+                struct Pair { int first, int second }
+
+                view fn main(int operation, int index) -> List<Pair, 2> {
+                    if operation < 2 {
+                        var List<Pair, 2> values = [
+                            Pair { first: 10, second: 20 },
+                        ];
+                        let Pair replacement = Pair { first: 90, second: 91 };
+                        let Pair control_poison = Pair { first: -1, second: -1 };
+                        let Pair failure_poison = Pair { first: -2, second: -2 };
+                        if operation == 0 {
+                            // Match the exact bounds-proof allocation performed by
+                            // try_set before comparing its failure branch to control.
+                            let int length = values.len();
+                            let bool non_negative = index >= 0;
+                            let bool below_length = index < length;
+                            let bool present = non_negative && below_length;
+                            if present {
+                                values.try_set(
+                                    index: 0,
+                                    value: control_poison,
+                                );
+                            }
+                        } else if values.try_set(
+                            index: index,
+                            value: replacement,
+                        ) {
+                            values.try_set(
+                                index: 0,
+                                value: failure_poison,
+                            );
+                        }
+                        return values;
+                    }
+
+                    var List<Pair, 2> values = [
+                        Pair { first: 10, second: 20 },
+                        Pair { first: 30, second: 40 },
+                    ];
+                    let Pair replacement = Pair { first: 90, second: 91 };
+                    let Pair failure_poison = Pair { first: -3, second: -3 };
+                    if operation == 3 && values.try_push(replacement) {
+                        values.try_set(
+                            index: 0,
+                            value: failure_poison,
+                        );
+                    }
+                    return values;
+                }
+            }
+            

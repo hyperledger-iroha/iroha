@@ -211,9 +211,8 @@ pub struct TronNativeFinalityProofV1 {
 }
 /// Cheap deterministic reservation for native TRON finality verification.
 ///
-/// The estimate uses proof framing only and performs no protobuf parsing,
-/// hashing, or secp256k1 recovery, so Core can reserve consensus work before
-/// dispatching cryptographic verification.
+/// The estimate uses proof framing only and performs no protobuf parsing, hashing, or secp256k1
+/// recovery, so Core can reserve consensus work before dispatching cryptographic verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TronNativeFinalityWorkEstimateV1 {
     /// Number of post-anchor continuation headers.
@@ -1377,8 +1376,7 @@ pub fn verify_tron_native_sccp_transaction(
 /// The returned authentication model is deliberately explicit: the native
 /// header chain proves scheduled production, solidity, the successful call,
 /// and its transaction Merkle inclusion.  The registry governs the exact
-/// runtime-code/configuration identity because TRON headers do not commit those
-/// contract records.
+/// runtime-code/configuration identity because TRON headers do not commit those contract records.
 ///
 /// # Errors
 ///

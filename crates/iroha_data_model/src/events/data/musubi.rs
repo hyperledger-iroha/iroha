@@ -308,7 +308,7 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norito::codec::{DecodeAll as _, Encode as _};
+    use norito::codec::DecodeAll as _;
     #[test]
     fn provider_attestation_registration_event_is_compact_and_archive_routable() {
         let archive_id = crate::musubi::ArchiveId::new([0x31; 32]);

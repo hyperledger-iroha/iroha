@@ -1,15 +1,13 @@
 //! Transaction overlay scaffolding.
 //!
-//! A `TxOverlay` represents the sequence of stateful operations (ISIs) that a
-//! transaction intends to perform. In the future, overlays will be created in a
-//! read-only execution prepass and later committed in a deterministic order.
-//! For now, this module provides a thin wrapper around a list of
-//! `InstructionBox` and an `apply` method that executes them via the executor.
+//! A `TxOverlay` represents the sequence of stateful operations (ISIs) that a transaction intends
+//! to perform. In the future, overlays will be created in a read-only execution prepass and later
+//! committed in a deterministic order. For now, this module provides a thin wrapper around a list
+//! of `InstructionBox` and an `apply` method that executes them via the executor.
 //!
-//! Future work will extend overlays to be produced by IVM prepasses (draining
-//! queued ISIs without mutating state) and to incorporate trigger side effects.
-//! For now the type is mostly a thin wrapper that keeps chunking logic and
-//! admission limits (`pipeline.overlay_max_*`) in one place.
+//! Future work will extend overlays to be produced by IVM prepasses (draining queued ISIs without
+//! mutating state) and to incorporate trigger side effects. For now the type is mostly a thin
+//! wrapper that keeps chunking logic and admission limits (`pipeline.overlay_max_*`) in one place.
 use crate::{
     executor::{
         ContractEntrypointAuthorizationSnapshot, ensure_asset_definition_registration_allowed,
@@ -1187,11 +1185,10 @@ pub(crate) struct PreparedTxOverlay {
 }
 /// Conservative scheduler scope required by the reachable syscall surface.
 ///
-/// Concrete host logs are useful for diagnostics and conflict precision, but
-/// they describe only the block-start execution. If a predecessor changes a
-/// value used for control flow, selective re-execution may choose a different
-/// target. This bytecode-derived fence keeps that target change inside the DAG
-/// relation established before any overlay is applied.
+/// Concrete host logs are useful for diagnostics and conflict precision, but they describe only the
+/// block-start execution. If a predecessor changes a value used for control flow, selective
+/// re-execution may choose a different target. This bytecode-derived fence keeps that target change
+/// inside the DAG relation established before any overlay is applied.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum VmAccessFence {
     /// Every reachable syscall is VM-local.
@@ -1262,11 +1259,10 @@ pub(crate) struct DurableStateReadSnapshot {
 impl DurableStateReadSnapshot {
     /// Capture all exact values and descendants covered by the host read log.
     ///
-    /// The host uses the same logical key for exact reads and prefix operations
-    /// such as `STATE_KEYS`. Fingerprinting the whole prefix is conservative for
-    /// exact reads and complete for both forms. Deployed contracts report the
-    /// concrete contract-instance namespace; raw IVM execution reports the
-    /// unscoped path it actually uses.
+    /// The host uses the same logical key for exact reads and prefix operations such as
+    /// `STATE_KEYS`. Fingerprinting the whole prefix is conservative for exact reads and complete
+    /// for both forms. Deployed contracts report the concrete contract-instance namespace; raw IVM
+    /// execution reports the unscoped path it actually uses.
     pub(crate) fn capture<R>(
         tx: &SignedTransaction,
         access_log: Option<&ivm::host::AccessLog>,
@@ -1310,8 +1306,7 @@ impl DurableStateReadSnapshot {
             fingerprint,
         })
     }
-    /// Return whether every observed durable-state prefix still has its
-    /// block-preparation value.
+    /// Return whether every observed durable-state prefix still has its block-preparation value.
     pub(crate) fn is_current<R>(&self, state_ro: &R) -> bool
     where
         R: StateReadOnly,
@@ -9703,11 +9698,10 @@ pub enum OverlayBuildError {
     IvmProvedReplay(String),
 }
 impl OverlayBuildError {
-    /// Return whether rebuilding against a later serial state may change the
-    /// result. Structural, policy, gas, cryptographic-proof, and quarantine
-    /// failures are invariant and must remain rejected without another
-    /// execution attempt. A proved replay mismatch is state-dependent because
-    /// an earlier transaction in the block can change the replayed trace.
+    /// Return whether rebuilding against a later serial state may change the result. Structural,
+    /// policy, gas, cryptographic-proof, and quarantine failures are invariant and must remain
+    /// rejected without another execution attempt. A proved replay mismatch is state-dependent
+    /// because an earlier transaction in the block can change the replayed trace.
     #[must_use]
     pub(crate) const fn may_change_with_live_state(&self) -> bool {
         matches!(

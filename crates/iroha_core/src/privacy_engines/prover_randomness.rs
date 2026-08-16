@@ -1,10 +1,9 @@
 //! Shared fail-closed health wrappers for privacy-prover entropy.
 //!
-//! The wrapper samples the source in canonical 64-byte blocks, rejects a
-//! catastrophic initial constant or short-period stream, and serves every API
-//! through one bounded reservoir. Honest source bytes are therefore invariant
-//! under caller chunking. A failed or unwinding refill zeroizes the caller
-//! buffer and permanently poisons the wrapper before witness-dependent proving.
+//! The wrapper samples the source in canonical 64-byte blocks, rejects a catastrophic initial
+//! constant or short-period stream, and serves every API through one bounded reservoir. Honest
+//! source bytes are therefore invariant under caller chunking. A failed or unwinding refill
+//! zeroizes the caller buffer and permanently poisons the wrapper before witness-dependent proving.
 use rand::{TryCryptoRng, TryRngCore};
 use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest as _, Sha256};

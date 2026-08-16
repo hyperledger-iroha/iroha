@@ -1,10 +1,9 @@
 #![allow(unexpected_cfgs)]
 //! Norito-encoded manifest model for SoraFS artifacts.
 //!
-//! The structure tracks the metadata described in the SoraFS Architecture
-//! RFC (SF-1): chunking profile, CAR commitments, pin policies, and governance
-//! attestations. Encoding uses Norito so manifests can be validated by Torii,
-//! gateways, and storage nodes without bespoke parsers.
+//! The structure tracks the metadata described in the SoraFS Architecture RFC (SF-1): chunking
+//! profile, CAR commitments, pin policies, and governance attestations. Encoding uses Norito so
+//! manifests can be validated by Torii, gateways, and storage nodes without bespoke parsers.
 use blake3::Hash;
 use ed25519_dalek::Signature as DalekSig;
 use norito::{

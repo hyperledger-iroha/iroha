@@ -20976,7 +20976,7 @@ mod subscription_http_tests {
 }
 #[cfg(test)]
 mod tx_hash_tests {
-    use super::{hashes_match, test_network_id};
+    use super::hashes_match;
     use crate::{
         crypto::{Hash, HashOf},
         data_model::transaction::{SignedTransaction, TransactionEntrypoint},
@@ -29037,28 +29037,7 @@ mod tests {
             }
         };
     }
-    sorafs_filter_query_test!(
-        sorafs_alias_filter_sets_query_params,
-        "v1/sorafs/aliases",
-        SorafsAliasListFilter {
-            limit: Some(10),
-            offset: Some(3),
-            namespace: Some("docs"),
-            manifest_digest: Some("deadbeef"),
-        },
-        "limit=10&offset=3&namespace=docs&manifest_digest=deadbeef",
-    );
-    sorafs_filter_query_test!(
-        sorafs_replication_filter_sets_query_params,
-        "v1/sorafs/replication",
-        SorafsReplicationListFilter {
-            limit: Some(50),
-            offset: Some(2),
-            status: Some("completed"),
-            manifest_digest: Some("abc123"),
-        },
-        "limit=50&offset=2&status=completed&manifest_digest=abc123",
-    );
+    include!("client/sorafs_url_filter_tests.rs");
     sorafs_filter_query_test!(
         sorafs_repair_filters_set_finalized_cursor_params,
         "v1/sorafs/audit/repair/tasks",

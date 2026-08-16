@@ -1,10 +1,9 @@
 //! Oracle layer data model and scheduling helpers.
 //!
-//! This module defines the schemas and deterministic helpers required by the
-//! validator-operated oracle layer (see `specs/soracles.md`). The data
-//! model covers feed configuration, signed observations, aggregated reports,
-//! and replay protection/gossip keys used to distribute oracle messages across
-//! validators.
+//! This module defines the schemas and deterministic helpers required by the validator-operated
+//! oracle layer (see `specs/soracles.md`). The data model covers feed configuration, signed
+//! observations, aggregated reports, and replay protection/gossip keys used to distribute oracle
+//! messages across validators.
 use crate::{account::AccountId, error::ParseError, name::Name, nexus::UniversalAccountId};
 use iroha_crypto::{Hash, HashOf, SignatureOf};
 use iroha_primitives::numeric::Quantity;
@@ -105,10 +104,9 @@ pub struct DefiOracleAttestationSource {
 }
 /// Native Soracles attestation carrying ABI-compatible `DeFi` oracle bytes.
 ///
-/// `source_events` can link the attestation back to retained native feed
-/// events for full auditability. Empty `source_events` are also valid for
-/// direct provider-signed attestations when the provider account is itself the
-/// submitting authority and signature controller.
+/// `source_events` can link the attestation back to retained native feed events for full
+/// auditability. Empty `source_events` are also valid for direct provider-signed attestations when
+/// the provider account is itself the submitting authority and signature controller.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -950,10 +948,9 @@ impl ObservationValue {
     }
     /// Derive a deterministic fixed-point value from a hash digest (scale = 0).
     ///
-    /// This helper is intended for hashed identifiers such as UAIDs or keyed
-    /// social IDs so oracle feeds can agree on an encoded value without leaking
-    /// the underlying PII. The top bit is cleared to keep the mantissa
-    /// non-negative.
+    /// This helper is intended for hashed identifiers such as UAIDs or keyed social IDs so oracle
+    /// feeds can agree on an encoded value without leaking the underlying PII. The top bit is
+    /// cleared to keep the mantissa non-negative.
     #[must_use]
     pub fn from_hash(hash: &Hash) -> Self {
         let mut mantissa_bytes = [0_u8; 16];

@@ -340,15 +340,13 @@ pub fn build_transfer_smt_witness_pair(
 /// Attach chained V1 transfer SMT witnesses to all deltas in transcript order
 /// and return the resulting `(old_root, new_root)` pair.
 ///
-/// This helper is intended for fixture builders and execution-captured V1 batch
-/// materialization. It does not synthesize independent row paths: every witness
-/// is derived from one shared transfer SMT and the returned roots must be used
-/// as the batch public roots.
+/// This helper is intended for fixture builders and execution-captured V1 batch materialization. It
+/// does not synthesize independent row paths: every witness is derived from one shared transfer SMT
+/// and the returned roots must be used as the batch public roots.
 ///
 /// # Errors
-/// Returns [`Error::TransferInvariant`] if a balance cannot be normalized, two
-/// leaves collide in the 32-bit V1 transfer tree, or a declared transfer delta
-/// is not arithmetically valid.
+/// Returns [`Error::TransferInvariant`] if a balance cannot be normalized, two leaves collide in
+/// the 32-bit V1 transfer tree, or a declared transfer delta is not arithmetically valid.
 pub fn attach_transfer_smt_witnesses(
     transcripts: &mut [TransferTranscript],
 ) -> Result<([u8; 32], [u8; 32]), Error> {

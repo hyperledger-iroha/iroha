@@ -62,11 +62,9 @@ pub struct Args {
     bound_manifest_out: Option<PathBuf>,
     /// Write the exact signed consensus-header hash as one lowercase line.
     ///
-    /// This also atomically publishes a sibling `*.identity.toml` containing
-    /// the same exact value as both client `network_id` and
-    /// `genesis.expected_hash`. Deployment tooling must consume that paired
-    /// identity artifact rather than assembling the two trust domains
-    /// independently.
+    /// This also atomically publishes a sibling `*.identity.toml` containing the same exact value
+    /// as both client `network_id` and `genesis.expected_hash`. Deployment tooling must consume
+    /// that paired identity artifact rather than assembling the two trust domains independently.
     #[clap(long, value_name = "PATH")]
     expected_hash_out: Option<PathBuf>,
     /// Use this topology instead of specified in genesis.json.
@@ -597,9 +595,8 @@ pub(crate) fn bind_and_sign_staged_sumeragi_v2_context(
     )?;
     Ok((bound_manifest, block))
 }
-/// Stage a raw genesis transaction and return its exact Nexus/AMX consensus
-/// and execution-policy commitments without committing state or touching
-/// persistent node storage.
+/// Stage a raw genesis transaction and return its exact Nexus/AMX consensus and execution-policy
+/// commitments without committing state or touching persistent node storage.
 fn staged_sumeragi_v2_context_hashes(
     genesis: &RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
@@ -2407,7 +2404,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let published = fs::read(&identity_path).expect("read deployment identity");
         publish_deployment_identity(&identity_path, &expected_hash)
             .expect("same deployment identity must be idempotent");
-        publish_deployment_identity(&identity_path, &different_hash)
+        let _error = publish_deployment_identity(&identity_path, &different_hash)
             .expect_err("different deployment identity must not replace the trust root");
         assert_eq!(
             fs::read(&identity_path).expect("reread deployment identity"),

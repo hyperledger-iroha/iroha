@@ -1,10 +1,9 @@
 //! Durable forwarding for native SoraFS reserve and rent transactions.
 //!
-//! The forwarder persists only validated native operations and finalized-ledger
-//! bindings. It never mutates a process-local reserve model. Exact governed or
-//! provider authorities are derived from the finalized projection, signing is
-//! isolated from submission, and exact signed bytes are durable before they can
-//! be exposed to a submitter.
+//! The forwarder persists only validated native operations and finalized-ledger bindings. It never
+//! mutates a process-local reserve model. Exact governed or provider authorities are derived from
+//! the finalized projection, signing is isolated from submission, and exact signed bytes are
+//! durable before they can be exposed to a submitter.
 use crate::durable_transaction_forwarder::{
     self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
     DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
@@ -472,10 +471,9 @@ pub fn validate_reserve_pending_delivery_v1(
 }
 /// Validate that exported pending and reconciliation snapshots retain one operation.
 ///
-/// Stable identity and semantic digests are recomputed through the forwarder's
-/// private canonical domains. This prevents a worker from accepting a
-/// different operation that happens to share the same kind, provider, policy,
-/// and revision fields.
+/// Stable identity and semantic digests are recomputed through the forwarder's private canonical
+/// domains. This prevents a worker from accepting a different operation that happens to share the
+/// same kind, provider, policy, and revision fields.
 pub fn validate_reserve_reconciliation_material_v1(
     delivery: &ReserveTransactionPendingV1,
     retained: &ReserveTransactionReconciliationV1,

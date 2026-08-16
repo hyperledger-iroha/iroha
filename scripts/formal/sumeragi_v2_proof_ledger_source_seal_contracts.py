@@ -343,6 +343,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/lane_artifact_budget.rs",
     "kura/autonomous_lifecycle_terminal_outcomes.rs",
     "kura/autonomous_release_authority.rs",
+    "kura/autonomous_retired_attempt.rs",
     "kura/autonomous_application_evidence.rs",
     "kura/indexed_sidecar_io.rs",
     "kura/indexed_sidecar_rewrite.rs",
@@ -678,10 +679,12 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lane_work/native_amx_route_and_receipt_tests.rs',
         'tests/v2_lane_work_observer_role.rs',
         'tests/v2_lane_work_native_body_recovery.rs',
-        'tests/v2_lane_work_effect_queue.rs',
-        'v2_lane_work/canonical_lock_and_recovery_tests.rs',
+        'tests/v2_lane_work_lifecycle_and_recovery_cases.rs',
         'v2_lane_work/historical_recovery_and_carrier_tests.rs',
         'v2_lane_work_autonomous_ready_durability_tests.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs': (
+        'v2_lane_work_effect_queue.rs',
     ),
     'integration_tests/tests/sumeragi_v2_runner.rs': (
         'sumeragi_v2_runner/restart_timing_test.rs',
@@ -1624,12 +1627,6 @@ _TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
     ),
 }
 
-_TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
-    "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier": (
-        "394810ab62d382e3016e5a6c88660778c34beca86d0804b567a74be47f8694d5"
-    ),
-}
-
 _TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {
     "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier": (
         "6b66126a0ae12666093b2126bfadf1149738c9e19c3cd3ff9990fe0be46587bf"
@@ -2112,10 +2109,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 860
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "43488145df2b3d502786684c24ce5ebf7c709289f6b76bc667f22484daff5746"
+    "d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "7889178b600c6d35b4782ae76bd914616ec3b8c7224bd71db97d34de8be3da36"
+    "cb5ac98055cd99b84cb5736fd3f352e027f293188000f0505173baa6fda198b2"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2869,8 +2866,22 @@ _PRODUCTION_EFFECT_SCHEDULER_HANDOFF_ITEM_SHA256 = {
 # target-local/global FIFO ownership, round-robin service, and exact returned
 # post retention.  The retirement digests bind the narrow Retransmit whitelist
 # and the Kura receipt/finality-artifact authority checked before output is
-# handed to durable reconstruction.
+# handed to durable reconstruction. Autonomous retirement additionally binds
+# the current-height noncanonical fallback to one immutable retired attempt and
+# the same finalized carrier's nonwinning authority.
 _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
+    "autonomous_new_view_body_matches_durable_payload": (
+        "d1720512781a97bde960a6467e59016e15310cf69047787a5176350386e371e8"
+    ),
+    "autonomous_lane_output_matches_payload_identity": (
+        "6ad31433c9592ac390c299fb4bc0d7174b9dc36cde05a8168f208482a6ac9d18"
+    ),
+    "autonomous_lane_output_has_exact_retirement_source": (
+        "f160be0e0bcce5a09813d9b1ce971c361991bff4ac9a33469a5130bbd11b80f6"
+    ),
+    "autonomous_lane_output_has_durable_reconstruction_source": (
+        "201b33a705d475efd18a2b3eda36b9a7997d7d1e7f947c7aaa4f81e200409f5b"
+    ),
     "take_attempt": "acc18d3997a0cc6fcca4926b72a63fedf5d0987ecb33c1114e93e0da3b2254d7",
     "mark_admitted": "c6e502433ef5249540446d75e0f88f665a7ffc456bf4014216f808fd123f072c",
     "retain_returned": "8f1436db10edaa22360b416024817e8da58752a2fa7b604d97b0f6819976b0cd",
@@ -2906,6 +2917,12 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
     ),
     "handoff_applied_height_output_to_durable_reconstruction": (
         "7444ffcb40c52af925865f03520de3eac64f59d1c31ae6e549c5bf92e17aaf84"
+    ),
+}
+
+_AUTONOMOUS_RETIREMENT_HANDOFF_TEST_SHA256 = {
+    "applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only": (
+        "a5d1b6452466c325c8b019b45b249e755c8529e55ee3e3a3abf3036ac473bc32"
     ),
 }
 
@@ -3169,6 +3186,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
     "V2LaneWorkAdapter::drain_effects": "478982ec7c7cec9990a70993011e34e0cf79f57fb903b3c7cbabc040052b1aba",
+    "V2LaneWorkAdapter::proposal_predecessor_is_ready_for_progress": "af90f5ebe15136bfc8255dc8d1a8aeac7101d4226c79ef8a94e4821eeeb0d78a",
     "V2LaneWorkAdapter::preflight_effect_insertion": "ed3875247788398142bf50a42def4acd00988688e272a94a4dddffc8a2c9bf87",
     "V2LaneWorkAdapter::push_effect": "8974bca860609c853efe07e78397cb4be80e8bf1a688831bf1c28b1807293441",
     "V2LaneWorkAdapter::schedule_retransmission": "7468d25a90d61258242527880622e74ff38143c0f75c2e7bf572c9792c9f6232",

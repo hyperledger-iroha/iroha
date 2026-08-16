@@ -1,13 +1,11 @@
 //! Native zk-X509 engine boundary.
 //!
-//! The consensus verifier is present in every node build. Prover preparation
-//! and proof construction are compiled only for tests or the explicitly
-//! non-shipping `privacy-release-evidence` workflow.
+//! The consensus verifier is present in every node build. Prover preparation and proof construction
+//! are compiled only for tests or the explicitly non-shipping `privacy-release-evidence` workflow.
 //!
-//! The sole credential path constructs and independently verifies the bound
-//! `X5S1` MAIN/compact-CA envelope. A native reference check, projection-only
-//! proof, or collection of unbound subproofs is never accepted as a
-//! credential proof.
+//! The sole credential path constructs and independently verifies the bound `X5S1` MAIN/compact-CA
+//! envelope. A native reference check, projection-only proof, or collection of unbound subproofs is
+//! never accepted as a credential proof.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     accumulator_stark::{
@@ -261,12 +259,11 @@ fn verify_zk_x509_credential_subproofs_v1(
 }
 /// Verify one canonical credential proof against verifier-owned consensus data.
 ///
-/// This is the sole consensus entry point for `X5S1`. It already performs
-/// strict envelope decoding and binds the complete typed statement to the
-/// committed genesis hash before inspecting any aggregate. The caller must
-/// supply the same authoritative snapshot it already validated against trusted
-/// block time and consensus limits; the engine compiles the RFC public input
-/// from that snapshot rather than from proof metadata.
+/// This is the sole consensus entry point for `X5S1`. It already performs strict envelope decoding
+/// and binds the complete typed statement to the committed genesis hash before inspecting any
+/// aggregate. The caller must supply the same authoritative snapshot it already validated against
+/// trusted block time and consensus limits; the engine compiles the RFC public input from that
+/// snapshot rather than from proof metadata.
 pub(crate) fn verify_zk_x509_credential_proof_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     authoritative_state: &PrivacyZkX509AuthoritativeStateV1,

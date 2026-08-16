@@ -4,9 +4,8 @@
 //! signs the chain-id-prefixed execution header with secp256k1, while a native
 //! `VoteAttestation` uses BLS12-381 to justify a target and finalize its source.
 //! This module replays both layers from a governed, immutable snapshot.  It
-//! supports the post-Mendel first-release protocol and refuses unknown header
-//! layouts or validator-set changes that were not finalized by the preceding
-//! set.
+//! supports the post-Mendel first-release protocol and refuses unknown header layouts or
+//! validator-set changes that were not finalized by the preceding set.
 use super::{
     H256, SccpPayloadV1, canonical_sccp_payload_bytes, decode_canonical_sccp_payload_bytes,
     prefixed_blake2b, sccp_lane_id_hash_v1, sccp_message_id, sccp_source_identity_hash_v1,
@@ -2269,9 +2268,8 @@ fn parse_account(value: &[u8]) -> Option<(H256, H256)> {
 ///
 /// # Errors
 ///
-/// Returns [`BscNativeEmitterStateError`] when the Merkle-Patricia proof is
-/// malformed or unbounded, the account is absent, or its runtime code hash
-/// does not match the expected source identity.
+/// Returns [`BscNativeEmitterStateError`] when the Merkle-Patricia proof is malformed or unbounded,
+/// the account is absent, or its runtime code hash does not match the expected source identity.
 pub fn verify_bsc_native_emitter_state(
     proof: &BscNativeEmitterStateProofV1,
     state_root: H256,
@@ -2298,9 +2296,8 @@ pub fn verify_bsc_native_emitter_state(
 ///
 /// # Errors
 ///
-/// Returns [`BscNativeSourceError`] when the typed source identity is invalid
-/// or when any finality, receipt-inclusion, lane-binding, or emitter-state
-/// verification step fails.
+/// Returns [`BscNativeSourceError`] when the typed source identity is invalid or when any finality,
+/// receipt-inclusion, lane-binding, or emitter-state verification step fails.
 pub fn verify_bsc_native_source(
     proof: &BscNativeSourceProofV1,
     source_identity: &SccpSourceIdentityV1,

@@ -8369,36 +8369,6 @@ def build_cross_tool_evidence(
     }
 
 
-def _first_json_mismatch(expected: Any, observed: Any, path: str = "$") -> str | None:
-    """Return the first path at which two evidence values differ."""
-
-    if type(expected) is not type(observed):
-        return path
-    if isinstance(expected, dict):
-        if set(expected) != set(observed):
-            return path
-        for key in sorted(expected):
-            mismatch = _first_json_mismatch(
-                expected[key], observed[key], f"{path}.{key}"
-            )
-            if mismatch is not None:
-                return mismatch
-        return None
-    if isinstance(expected, list):
-        if len(expected) != len(observed):
-            return path
-        # Exact lengths were checked above; plain zip keeps this verifier
-        # compatible with the repository's Python 3.9 floor.
-        for index, (expected_item, observed_item) in enumerate(zip(expected, observed)):
-            mismatch = _first_json_mismatch(
-                expected_item, observed_item, f"{path}[{index}]"
-            )
-            if mismatch is not None:
-                return mismatch
-        return None
-    return None if expected == observed else path
-
-
 def _cross_tool_evidence_errors(
     ledger: dict[str, Any],
     cross_tool_evidence: dict[str, Any] | None,
@@ -16959,308 +16929,8 @@ def _reachable_oracle_guard_errors(formal_dir: Path) -> list[str]:
     return errors
 
 
-def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
-    """Keep deductive and finite specs on one canonical state/fairness surface."""
-
-    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    expected = {
-        "AsyncBaseInit": "AsyncBaseInitAt(ContextRecord(0, <<>>))",
-        "AsyncInitAt": "AsyncBaseInitAt(initialContext) /\\ ViewDomain = Nat",
-        "AsyncInit": "AsyncInitAt(ContextRecord(0, <<>>))",
-        "AsyncFiniteInitAt": (
-            "AsyncBaseInitAt(initialContext) /\\ ViewDomain = FiniteViews"
-        ),
-        "AsyncFiniteInit": "AsyncFiniteInitAt(ContextRecord(0, <<>>))",
-        "AsyncAllVars": (
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, "
-            "AsyncProducerVars, asyncFixedCorridorDeadlines, "
-            "asyncServeProducerEpisodeDue>>"
-        ),
-        "AsyncSpec": "AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
-        "AsyncSpecAt": (
-            "AsyncInitAt(initialContext) /\\ [][AsyncNext]_AsyncAllVars "
-            "/\\ AsyncFairnessAt(initialContext)"
-        ),
-        "AsyncFiniteSpec": (
-            "AsyncFiniteInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness"
-        ),
-        "AsyncFiniteSpecAt": (
-            "AsyncFiniteInitAt(initialContext) "
-            "/\\ [][AsyncNext]_AsyncAllVars "
-            "/\\ AsyncFairnessAt(initialContext)"
-        ),
-        "AsyncInstallGenerationBudget": (
-            "\\A request \\in pendingInstallTC: "
-            "(StrictSameRoundTcUpgrade(request.node, request.tc) "
-            "=> GenerationCanIncrement(generation[request.node]))"
-        ),
-        "AsyncRepresentativeLiveConfiguration": "N >= 4",
-        "AsyncLiveSpecAt": (
-            "AsyncRepresentativeLiveConfiguration /\\ AsyncSpecAt(initialContext)"
-        ),
-        "AsyncFiniteLiveSpec": (
-            "AsyncRepresentativeLiveConfiguration /\\ AsyncFiniteSpec"
-        ),
-        "AsyncFairness": "AsyncFairnessAt(ContextRecord(0, <<>>))",
-    }
-    errors: list[str] = []
-    if path.is_file():
-        source = path.read_text(encoding="utf-8")
-        for symbol, exact_body in expected.items():
-            extracted = _top_level_operator_body(source, symbol)
-            if extracted is None:
-                errors.append(f"{path}: missing required asynchronous operator {symbol}")
-                continue
-            body, line = extracted
-            normalized = " ".join(body.split())
-            if normalized != exact_body:
-                errors.append(
-                    f"{path}:{line}: {symbol} must equal only {exact_body!r}; "
-                    f"found {normalized!r}"
-                )
-
-        stripped = strip_tla_comments(source)
-        for forbidden in (
-            "AsyncTlcAllVars",
-            "AsyncTlcFairnessAt",
-            "AsyncTlcFairness",
-        ):
-            for match in re.finditer(rf"\b{re.escape(forbidden)}\b", stripped):
-                line = stripped.count("\n", 0, match.start()) + 1
-                errors.append(
-                    f"{path}:{line}: TLC-only duplicate {forbidden} is prohibited; "
-                    "finite and deductive specs must share AsyncAllVars and "
-                    "AsyncFairnessAt"
-                )
-
-        public_fairness = _top_level_operator_body(
-            source, "AsyncFairnessAt", preserve_string_contents=True
-        )
-        if public_fairness is None:
-            errors.append(f"{path}: missing required asynchronous operator AsyncFairnessAt")
-        else:
-            public_body, public_line = public_fairness
-            public_subscripts = set(
-                re.findall(r"\bWF_([A-Za-z][A-Za-z0-9_]*)\s*\(", public_body)
-            )
-            if public_subscripts != {"AsyncAllVars"}:
-                errors.append(
-                    f"{path}:{public_line}: AsyncFairnessAt may use only the "
-                    f"public AsyncAllVars subscript; found {sorted(public_subscripts)}"
-                )
-
-    for module in ("SumeragiV2LivenessProofs", "SumeragiV2AsyncLivenessProofs"):
-        proof_path = formal_dir / f"{module}.tla"
-        if not proof_path.is_file():
-            continue
-        stripped = strip_tla_comments(proof_path.read_text(encoding="utf-8"))
-        for match in re.finditer(r"\bAsyncFiniteSpec\b", stripped):
-            line = stripped.count("\n", 0, match.start()) + 1
-            errors.append(
-                f"{proof_path}:{line}: deductive liveness proofs must use "
-                "unbounded AsyncSpec, not the finite TLC instance"
-            )
-    return errors
 
 
-def _acyclic_liveness_debt_topology_errors(formal_dir: Path) -> list[str]:
-    """Keep retained-lock proof leaves strictly below the async debt shard."""
-
-    vocabulary_module = "SumeragiV2LivenessProofs"
-    lower_consumers = (
-        "SumeragiV2Stage2BusyRankScratch",
-        "SumeragiV2Stage3CursorKernelScratch",
-        "SumeragiV2Stage6CapacityScratch",
-        "SumeragiV2LockedBodyProposalActionProofs",
-    )
-    historical_kernel_module = "SumeragiV2AsyncHistoricalRecoveryLivenessProofs"
-    topology_modules = (
-        vocabulary_module,
-        *lower_consumers,
-        historical_kernel_module,
-        ASYNC_LIVENESS_DEBT_SHARD,
-    )
-    topology_present = any(
-        (formal_dir / f"{module}.tla").is_file()
-        for module in (
-            *lower_consumers,
-            historical_kernel_module,
-            ASYNC_LIVENESS_DEBT_SHARD,
-        )
-    )
-    if not topology_present and not (formal_dir / "proof_coverage.json").is_file():
-        return []
-
-    errors: list[str] = []
-    sources: dict[str, str] = {}
-    for module in topology_modules:
-        module_path = formal_dir / f"{module}.tla"
-        if not module_path.is_file():
-            errors.append(
-                f"missing required acyclic liveness-debt topology module "
-                f"{module}.tla"
-            )
-            continue
-        sources[module] = module_path.read_text(encoding="utf-8")
-
-    expected_extends = {
-        vocabulary_module: (
-            "SumeragiV2AsyncNetwork",
-            "SumeragiV2Proofs",
-        ),
-        **{
-            module: ("SumeragiV2AsyncTimeoutOwnershipProofs",)
-            for module in lower_consumers
-        },
-        historical_kernel_module: (
-            "SumeragiV2AsyncTimeoutOwnershipProofs",
-            "TLAPS",
-        ),
-    }
-    forbidden_dependencies = (
-        ASYNC_LIVENESS_DEBT_SHARD,
-        ASYNC_LIVENESS_FACADE,
-    )
-    for module, expected in expected_extends.items():
-        source = sources.get(module)
-        if source is None:
-            continue
-        actual = _module_extends(source)
-        if actual != expected:
-            errors.append(
-                f"{module}.tla must EXTEND exactly {list(expected)} to remain "
-                f"below the proofless async liveness debt; found {list(actual)}"
-            )
-        stripped = strip_tla_comments(source)
-        for forbidden in forbidden_dependencies:
-            if re.search(rf"\b{re.escape(forbidden)}\b", stripped):
-                errors.append(
-                    f"{module}.tla must not depend on {forbidden}; retained-lock "
-                    "proof leaves must remain below their async debt consumers"
-                )
-
-    temporal_root = "SumeragiV2AsyncTemporalClosureProofs"
-    temporal_root_path = formal_dir / f"{temporal_root}.tla"
-    if temporal_root_path.is_file():
-        import_graph = {
-            path.stem: _module_extends(path.read_text(encoding="utf-8"))
-            for path in sorted(formal_dir.glob("*.tla"))
-        }
-        for forbidden in forbidden_dependencies:
-            queue: list[tuple[str, tuple[str, ...]]] = [
-                (temporal_root, (temporal_root,))
-            ]
-            visited = {temporal_root}
-            found_path: tuple[str, ...] | None = None
-            while queue and found_path is None:
-                module, module_path = queue.pop(0)
-                for dependency in import_graph.get(module, ()):
-                    dependency_path = (*module_path, dependency)
-                    if dependency == forbidden:
-                        found_path = dependency_path
-                        break
-                    if dependency in import_graph and dependency not in visited:
-                        visited.add(dependency)
-                        queue.append((dependency, dependency_path))
-            if found_path is not None:
-                errors.append(
-                    f"{temporal_root}.tla must not transitively depend on "
-                    f"{forbidden}; found import path {' -> '.join(found_path)}"
-                )
-
-    expected_operator_bodies = {
-        "StableAvailableRetainedLock": r"""
-            /\ gst
-            /\ node \in AsyncCurrentResponsiveVoters \cap up
-            /\ lockedRound \in Views
-            /\ subject \in Subjects
-            /\ lockRank[node] = lockedRound
-            /\ lockSubject[node] = subject
-            /\ BodyHeldBy(durableBodies, node, context, lockedRound, subject)
-            /\ RetainedLockedBodyHeldBy(
-                 retainedLockedBodies, node, context, subject)
-        """,
-        "LockedBodyCommittedInOldRound": r"""
-            \E qc \in commitQCs:
-              /\ qc.context = context
-              /\ qc.phase = "Commit"
-              /\ qc.view = lockedRound
-              /\ qc.subject = subject
-              /\ node \in qc.signers
-        """,
-        "LockedBodyReproposedUnchangedLater": r"""
-            \E envelope \in proposalNetwork:
-              /\ envelope.proposal.context = context
-              /\ envelope.proposal.view > lockedRound
-              /\ envelope.proposal.subject = subject
-        """,
-        "LockedBodyLegitimatelyDecidedOrSuperseded": r"""
-            \/ NodeHasDecision(node)
-            \/ /\ lockRank[node] > lockedRound
-               /\ \E qc \in prepareQCs:
-                    /\ qc.context = context
-                    /\ qc.phase = "Prepare"
-                    /\ qc.view = lockRank[node]
-                    /\ qc.subject = lockSubject[node]
-        """,
-        "LockedBodyReproposalOutcome": r"""
-            \/ LockedBodyCommittedInOldRound(node, lockedRound, subject)
-            \/ LockedBodyReproposedUnchangedLater(lockedRound, subject)
-            \/ LockedBodyLegitimatelyDecidedOrSuperseded(
-                 node, lockedRound, subject)
-        """,
-        "LockedBodyReproposalProgressProperty": r"""
-            specification
-              => \A node \in ValidatorIds, lockedRound \in Views,
-                    subject \in Subjects:
-                   StableAvailableRetainedLock(node, lockedRound, subject)
-                     ~> LockedBodyReproposalOutcome(node, lockedRound, subject)
-        """,
-    }
-    all_sources = {
-        path.stem: path.read_text(encoding="utf-8")
-        for path in sorted(formal_dir.glob("*.tla"))
-    }
-    vocabulary_source = sources.get(vocabulary_module)
-    for symbol, expected_body in expected_operator_bodies.items():
-        providers = sorted(
-            module
-            for module, source in all_sources.items()
-            if _top_level_operator_body(source, symbol) is not None
-        )
-        if providers != [vocabulary_module]:
-            errors.append(
-                f"acyclic liveness vocabulary operator {symbol} must have "
-                f"exactly one lower provider {vocabulary_module}.tla; found "
-                f"{[provider + '.tla' for provider in providers]}"
-            )
-        if vocabulary_source is None:
-            continue
-        extracted = _top_level_operator_body(
-            vocabulary_source,
-            symbol,
-            preserve_string_contents=True,
-        )
-        if extracted is None:
-            continue
-        body, line = extracted
-        normalized = " ".join(body.split())
-        expected_normalized = " ".join(expected_body.split())
-        if normalized != expected_normalized:
-            errors.append(
-                f"{vocabulary_module}.tla:{line}: {symbol} must equal only "
-                f"{expected_normalized!r}; found {normalized!r}"
-            )
-
-    debt_source = sources.get(ASYNC_LIVENESS_DEBT_SHARD)
-    if debt_source is not None:
-        for symbol in expected_operator_bodies:
-            if _top_level_operator_body(debt_source, symbol) is not None:
-                errors.append(
-                    f"{ASYNC_LIVENESS_DEBT_SHARD}.tla must not redeclare lower "
-                    f"liveness vocabulary operator {symbol}"
-                )
-    return errors
 
 
 def _height_productivity_continuation_contract_errors(
@@ -59581,6 +59251,170 @@ if let Err(error) =
     return errors
 
 
+_AUTONOMOUS_RETIREMENT_EXACT_OUTPUT_ITEM_NAMES = (
+    "autonomous_new_view_body_matches_durable_payload",
+    "autonomous_lane_output_matches_payload_identity",
+    "autonomous_lane_output_has_exact_retirement_source",
+    "autonomous_lane_output_has_durable_reconstruction_source",
+)
+
+
+def _require_autonomous_retirement_source_contract(
+    worker_path: Path,
+    worker_source: str,
+    errors: list[str],
+) -> dict[str, RustItem | None]:
+    """Bind exact autonomous retirement helpers and their release regression."""
+
+    items: dict[str, RustItem | None] = {}
+    for item_name in _AUTONOMOUS_RETIREMENT_EXACT_OUTPUT_ITEM_NAMES:
+        item = _require_rust_item(worker_path, worker_source, item_name, errors)
+        items[item_name] = item
+        _require_rust_item_context(
+            worker_path,
+            item,
+            (),
+            f"exact-output {item_name} production item",
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            worker_path,
+            item,
+            _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256[item_name],
+            f"exact-output {item_name} production item",
+            errors,
+        )
+
+    test_items: dict[str, RustItem | None] = {}
+    for item_name, expected_sha256 in (
+        _AUTONOMOUS_RETIREMENT_HANDOFF_TEST_SHA256.items()
+    ):
+        item = _require_rust_item(worker_path, worker_source, item_name, errors)
+        test_items[item_name] = item
+        _require_rust_item_context(
+            worker_path,
+            item,
+            (
+                (
+                    "#",
+                    "[",
+                    "cfg",
+                    "(",
+                    "test",
+                    ")",
+                    "]",
+                    "pub",
+                    "(",
+                    "super",
+                    ")",
+                    "mod",
+                    "tests",
+                ),
+            ),
+            "autonomous-lane retirement release regression",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            worker_path,
+            item,
+            expected_sha256,
+            "autonomous-lane retirement release regression",
+            errors,
+        )
+
+    for item_name, sequence_name, description in (
+        (
+            "autonomous_new_view_body_matches_durable_payload",
+            "autonomous_new_view_exact_body",
+            "autonomous NewView reconstruction must reject an older source view and compare the exact regenerated body",
+        ),
+        (
+            "autonomous_lane_output_matches_payload_identity",
+            "autonomous_payload_identity",
+            "autonomous rollover identity must exhaustively bind payload, vote, and certificate outputs to the durable payload",
+        ),
+        (
+            "autonomous_lane_output_has_exact_retirement_source",
+            "autonomous_exact_attempt_and_retirement",
+            "autonomous retirement must use the immutable exact attempt, same-finality nonwinning authority, and exact retirement equality",
+        ),
+        (
+            "autonomous_lane_output_has_exact_retirement_source",
+            "autonomous_exact_retired_payload",
+            "autonomous payload retirement must compare the exact local durable payload and retirement",
+        ),
+        (
+            "autonomous_lane_output_has_exact_retirement_source",
+            "autonomous_exact_retired_vote",
+            "autonomous vote retirement must compare its exact regenerated body and retired validator cursor",
+        ),
+        (
+            "autonomous_lane_output_has_exact_retirement_source",
+            "autonomous_exact_retired_certificate",
+            "autonomous certificate retirement must find the exact durable certificate under local validator authority",
+        ),
+        (
+            "autonomous_lane_output_has_durable_reconstruction_source",
+            "autonomous_current_height_retirement_fallback",
+            "only a current-height noncanonical autonomous output may fall back to exact retirement before canonical winning validation",
+        ),
+    ):
+        _require_rust_token_sequence(
+            worker_path,
+            items.get(item_name),
+            _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES[sequence_name],
+            description,
+            errors,
+        )
+
+    regression = test_items.get(
+        "applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only"
+    )
+    for sequence_name, description in (
+        (
+            "autonomous_retirement_regression_success",
+            "autonomous retirement regression must exercise payload, vote, and certificate identity",
+        ),
+        (
+            "autonomous_retirement_regression_retire_all",
+            "autonomous retirement regression must retire exactly all three outputs and atomically empty pending state",
+        ),
+        (
+            "autonomous_retirement_regression_atomic",
+            "autonomous retirement regression must preserve pending state after an inexact retirement failure",
+        ),
+    ):
+        _require_rust_token_sequence(
+            worker_path,
+            regression,
+            _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES[sequence_name],
+            description,
+            errors,
+        )
+    return items
+
+
+def _autonomous_retirement_source_contract_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Check only the worker autonomous-retirement source contract."""
+
+    errors: list[str] = []
+    worker_path, worker_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        errors,
+        "autonomous-lane retirement production source",
+    )
+    _require_autonomous_retirement_source_contract(
+        worker_path,
+        worker_source,
+        errors,
+    )
+    return errors
+
+
 def _exact_output_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -59682,9 +59516,24 @@ def _exact_output_production_source_fidelity_errors(
         errors,
         "production exact-output runner source",
     )
-    lifecycle_runner_source = lifecycle_runner_path.read_text(encoding="utf-8")
-    pending_runner_source = pending_runner_path.read_text(encoding="utf-8")
-    ordinary_ingress_consumer_source = ordinary_ingress_consumer_path.read_text(encoding="utf-8")
+    lifecycle_runner_path, lifecycle_runner_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        errors,
+        "production exact-output ordinary lifecycle runner source",
+    )
+    pending_runner_path, pending_runner_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        errors,
+        "production exact-output pending-Kura lifecycle runner source",
+    )
+    ordinary_ingress_consumer_path, ordinary_ingress_consumer_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        errors,
+        "production exact-output ordinary ingress consumer source",
+    )
     required_sources = (
         (network_message_path, "production network-message carrier source"),
         (merge_path, "production merge-sidecar source"),
@@ -61692,6 +61541,7 @@ if self.pending_server_closures.is_empty() {
         "effect_count",
         "requeue_effect",
         "drain_effects",
+        "proposal_predecessor_is_ready_for_progress",
         "preflight_effect_insertion",
         "push_effect",
         "schedule_retransmission",
@@ -67652,6 +67502,8 @@ loop {
     }
     exact_output_items: dict[str, RustItem | None] = {}
     for item_name, expected_sha256 in _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256.items():
+        if item_name in _AUTONOMOUS_RETIREMENT_EXACT_OUTPUT_ITEM_NAMES:
+            continue
         item = _require_rust_item(worker_path, worker_source, item_name, errors)
         exact_output_items[item_name] = item
         if item_name in fanout_items:
@@ -67682,6 +67534,14 @@ loop {
                     f"reviewed token digest {expected_sha256}; found "
                     f"{observed_sha256}"
                 )
+
+    exact_output_items.update(
+        _require_autonomous_retirement_source_contract(
+            worker_path,
+            worker_source,
+            errors,
+        )
+    )
 
     _require_exact_rust_tokens(
         worker_path,
@@ -68434,6 +68294,44 @@ let ownership_unit_capacity = shared_ownership_unit_capacity
         "reply-control units",
         errors,
     )
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        "const ATOMIC_PROPOSAL_FANOUT_COUNT: usize = 2;",
+        "one atomic Proposal admission may drive exactly its proposal and chunk fanouts",
+        errors,
+        count=1,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("PendingExactOutput::new"),
+        """
+let drive_attempt_budget = max_peers_per_fanout
+    .max(super::v2_core::MAX_EFFECTS_PER_STEP)
+    .checked_mul(ATOMIC_PROPOSAL_FANOUT_COUNT)
+    .ok_or_else(|| "Sumeragi v2 outbound drive budget overflowed".to_owned())?;
+""",
+        "exact-output construction must deterministically checked-multiply the two-fanout atomic Proposal drive budget by the larger protocol service bound",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("PendingExactOutput::new"),
+        """
+drive_attempt_budget,
+max_messages_per_fanout,
+max_peers_per_fanout,
+""",
+        "exact-output construction must retain its checked atomic Proposal drive budget",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get("PendingExactOutput::drive_bounded_with_ack"),
+        "self.drive_with_budget_ack(self.drive_attempt_budget, attempt)",
+        "the production exact-output driver must consume the checked atomic Proposal drive budget",
+        errors,
+    )
     _require_rust_token_sequence(
         worker_path,
         reservation_items.get("PendingExactOutput::ownership_addition_load"),
@@ -68762,6 +68660,21 @@ Self::start_inner(""",
     )
     _require_rust_token_sequence(
         worker_path,
+        reservation_items.get("ProductionV2Services::start"),
+        """
+chunk_root,
+body_store,
+None,
+state,
+kura,
+apply_service,
+consensus_io_capacity,
+""",
+        "ordinary startup must explicitly omit recovered Certified-Serve payload-store identity while transferring the live body and Apply owners",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
         reservation_items.get("ProductionV2Services::start_inner"),
         """
 let reply_route_source_capacity = network.reply_route_source_capacity().max(1);
@@ -68789,6 +68702,28 @@ let pending_exact_output = PendingExactOutput::new(
 )?;
 """,
         "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("ProductionV2Services::start_inner"),
+        """
+body_store: V2BodyStore,
+lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
+state: Arc<crate::state::State>,
+""",
+        "the shared worker constructor must receive recovered Certified-Serve payload-store identity beside the transferred body-store owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        reservation_items.get("ProductionV2Services::start_inner"),
+        """
+lifecycle_body_store_identity: Some(lifecycle_body_store_identity),
+lifecycle_payload_store_identity,
+fetches: BTreeMap::new(),
+""",
+        "the live worker must retain both exact recovered lifecycle store identities before accepting fetch work",
         errors,
     )
     _require_rust_token_sequence(
@@ -69699,6 +69634,9 @@ let certificate = match self.reconstruct_durable_lane_certificate(proposal, send
 """,
         "lane recovery emitter must require a nonempty route set with a live authenticated source",
         errors,
+    )
+    _require_lane_predecessor_ordering_source_contracts(
+        lane_path, lane_ack_items, lane_items, errors
     )
     _require_rust_token_sequence(
         lane_path,
@@ -70814,6 +70752,14 @@ if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
     _require_rust_token_sequence(
         ordinary_ingress_consumer_path,
         ordinary_ingress_consumer,
+        "Some(ProductionPreparedCertifiedServeV1::Admitted(_)) | None => { "
+        'return Err(V2RunnerError::Service("".to_owned(),)); }',
+        "a Decision-superseded exact request may cross ingress removal only with its durable negative outcome",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ordinary_ingress_consumer_path,
+        ordinary_ingress_consumer,
         """
 match prepared_serve.take() {
     Some(ProductionPreparedCertifiedServeV1::Admitted(admission)) => {
@@ -70834,8 +70780,7 @@ match prepared_serve.take() {
     }
     None => {
         return Err(V2RunnerError::Service(
-            "current-height certified-body ingress crossed fair removal without an atomic Serve admission"
-                .to_owned(),
+            "current-height certified-body ingress crossed fair removal without an atomic Serve admission".to_owned(),
         ));
     }
 }

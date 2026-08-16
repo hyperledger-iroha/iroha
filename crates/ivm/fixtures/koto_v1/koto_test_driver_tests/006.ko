@@ -1,0 +1,10 @@
+
+            module DemoTests {
+              koto_test { target: "demo.ko" }
+
+              #[test]
+              fn standalone() {
+                test::assert_eq(actual: increment(2), expected: 3);
+              }
+            }
+            

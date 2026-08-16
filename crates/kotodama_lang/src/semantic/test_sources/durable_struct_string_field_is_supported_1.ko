@@ -1,0 +1,5 @@
+seiyaku C {
+                struct S { string label }
+                state S s;
+                hajimari() { s = S { label: "ready" }; }
+            }

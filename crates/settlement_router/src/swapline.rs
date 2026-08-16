@@ -90,8 +90,7 @@ impl SwapLineConfig {
     }
     /// Return the minimum collateral required for an outstanding balance.
     ///
-    /// The result rounds upward at XOR's precision boundary so collateral is
-    /// never understated.
+    /// The result rounds upward at XOR's precision boundary so collateral is never understated.
     pub fn required_collateral(
         &self,
         outstanding: &XorQuantity,

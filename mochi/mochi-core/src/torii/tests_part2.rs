@@ -557,15 +557,16 @@ fn sign_query_requires_an_exact_network_identity() {
     let client = ToriiClient::new("http://127.0.0.1:8080").expect("client");
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
-    let error = client
-        .sign_query(
-            QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
-                FindExecutorDataModel,
-            )),
-            account_id,
-            &keypair,
-        )
-        .expect_err("a general Torii client must not invent signed-query lineage");
+    let error = match client.sign_query(
+        QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+            FindExecutorDataModel,
+        )),
+        account_id,
+        &keypair,
+    ) {
+        Ok(_) => panic!("a general Torii client must not invent signed-query lineage"),
+        Err(error) => error,
+    };
     assert!(matches!(error, ToriiError::SignedQueryContext(_)));
 }
 #[test]

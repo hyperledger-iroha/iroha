@@ -99,9 +99,8 @@ pub fn encode_axt_fastpq_payload(batch: &TransitionBatch, proof: Proof) -> Resul
 }
 /// Decode the canonical AXT binding already embedded in a `FastPQ` batch.
 ///
-/// This helper never mutates the batch. It is intended for export paths that
-/// need to package proof material after the batch has already been bound before
-/// proof generation.
+/// This helper never mutates the batch. It is intended for export paths that need to package proof
+/// material after the batch has already been bound before proof generation.
 ///
 /// # Errors
 /// Returns [`Error::MissingMetadata`] when the batch carries no AXT binding and
@@ -115,9 +114,8 @@ pub fn embedded_axt_binding(batch: &TransitionBatch) -> Result<AxtFastpqBinding>
 }
 /// Build an AXT proof envelope from an already AXT-bound batch and proof.
 ///
-/// The batch must already contain canonical AXT metadata and the batch seal
-/// created before proof generation. This helper does not add or repair AXT
-/// binding metadata after the fact.
+/// The batch must already contain canonical AXT metadata and the batch seal created before proof
+/// generation. This helper does not add or repair AXT binding metadata after the fact.
 ///
 /// # Errors
 /// Returns an error when the embedded binding is missing/malformed, does not
@@ -160,15 +158,13 @@ pub fn axt_proof_blob_from_bound_batch(
 /// Bind an already-captured FASTPQ batch to an AXT statement.
 ///
 /// This helper inserts the canonical AXT metadata and batch seal required by
-/// [`verify_axt_proof_envelope`]. Call it only after the batch transitions and
-/// public inputs have been finalized and the batch already carries the
-/// execution `entry_hash` metadata matching `source_tx_commitment`; changing
-/// the batch after this call invalidates the seal.
+/// [`verify_axt_proof_envelope`]. Call it only after the batch transitions and public inputs have
+/// been finalized and the batch already carries the execution `entry_hash` metadata matching
+/// `source_tx_commitment`; changing the batch after this call invalidates the seal.
 ///
 /// # Errors
-/// Returns [`Error::InvalidAxtBinding`] when the binding is malformed or does
-/// not match the batch parameter/public dataspace, and [`Error::Encode`] when
-/// Norito serialization fails.
+/// Returns [`Error::InvalidAxtBinding`] when the binding is malformed or does not match the batch
+/// parameter/public dataspace, and [`Error::Encode`] when Norito serialization fails.
 pub fn bind_axt_batch(batch: &mut TransitionBatch, binding: &AxtFastpqBinding) -> Result<()> {
     let canonical = canonicalize_binding(binding)?;
     let context = BindingContext::from_binding(&canonical)?;

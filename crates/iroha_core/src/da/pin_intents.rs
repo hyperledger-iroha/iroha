@@ -105,16 +105,14 @@ pub enum DaPinIntentSpoolError {
 }
 /// Load all DA pin intents from the spool directory.
 ///
-/// Files are filtered by filename (`da-pin-intent-*.norito`), checked against
-/// their advertised lane/epoch/sequence/ticket tuple, decoded using Norito,
-/// sorted deterministically, and returned as a vector. When the directory is
-/// missing or no intents are present, this returns `Ok(None)`.
+/// Files are filtered by filename (`da-pin-intent-*.norito`), checked against their advertised
+/// lane/epoch/sequence/ticket tuple, decoded using Norito, sorted deterministically, and returned
+/// as a vector. When the directory is missing or no intents are present, this returns `Ok(None)`.
 ///
 /// # Errors
 ///
-/// Returns a [`DaPinIntentSpoolError`] if the spool directory cannot be read.
-/// Matching pin intent files must be readable, decodable, and match their
-/// advertised filename tuple.
+/// Returns a [`DaPinIntentSpoolError`] if the spool directory cannot be read. Matching pin intent
+/// files must be readable, decodable, and match their advertised filename tuple.
 pub fn load_pin_intents(
     spool_dir: &Path,
 ) -> Result<Option<Vec<DaPinIntent>>, DaPinIntentSpoolError> {

@@ -38,7 +38,7 @@ const GUARD_DIRECTORY_DECODE_MAX_ALLOCATED_BYTES_V1: usize =
     2 * GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1;
 const GUARD_DIRECTORY_DECODE_MAX_NESTING_DEPTH_V1: usize = 16;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x2000_0000;
+const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
 #[cfg(any(
@@ -75,9 +75,8 @@ const fn guard_directory_decode_limits_v1() -> DecodeLimits {
 }
 /// Read one guard-directory snapshot from a stable, direct regular file.
 ///
-/// The final path component is opened without following symbolic links or
-/// Windows reparse points. File identity, type, and length must remain stable
-/// across a read capped at one byte beyond
+/// The final path component is opened without following symbolic links or Windows reparse points.
+/// File identity, type, and length must remain stable across a read capped at one byte beyond
 /// [`GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1`].
 ///
 /// # Errors
@@ -230,8 +229,7 @@ impl GuardDirectorySnapshotV2 {
     /// Encode the snapshot to Norito bytes.
     ///
     /// # Errors
-    /// Returns an error if a first-release resource bound is exceeded or
-    /// serialization fails.
+    /// Returns an error if a first-release resource bound is exceeded or serialization fails.
     pub fn to_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         self.validate_resource_bounds()?;
         let bytes = to_bytes(self)?;
@@ -240,10 +238,9 @@ impl GuardDirectorySnapshotV2 {
     }
     /// Decode and inspect a snapshot without establishing external trust or freshness.
     ///
-    /// This verifies schema invariants and the self-consistency of signatures
-    /// against issuer keys embedded in the same snapshot. It must not be used
-    /// as an authentication decision. Use [`Self::authenticate_bytes_at`] at a
-    /// runtime trust boundary.
+    /// This verifies schema invariants and the self-consistency of signatures against issuer keys
+    /// embedded in the same snapshot. It must not be used as an authentication decision. Use
+    /// [`Self::authenticate_bytes_at`] at a runtime trust boundary.
     ///
     /// # Errors
     /// Returns an error if decoding or intrinsic validation fails.
@@ -254,10 +251,9 @@ impl GuardDirectorySnapshotV2 {
     }
     /// Authenticate an exact snapshot artifact and validate it at a supplied time.
     ///
-    /// `expected_snapshot_digest` must arrive over a trust path independent of
-    /// `bytes`. It is a domain-separated BLAKE3 digest of the exact Norito
-    /// snapshot bytes, so it commits to the embedded issuer set as well as all
-    /// relay certificates. Validity uses a half-open interval:
+    /// `expected_snapshot_digest` must arrive over a trust path independent of `bytes`. It is a
+    /// domain-separated BLAKE3 digest of the exact Norito snapshot bytes, so it commits to the
+    /// embedded issuer set as well as all relay certificates. Validity uses a half-open interval:
     /// `valid_after_unix <= at_unix < valid_until_unix`.
     ///
     /// # Errors
@@ -1006,6 +1002,23 @@ mod tests {
             .expect_err("directory path must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("direct regular file"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_file_reader_allows_symlinked_parent_path() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target_directory = directory.path().join("target");
+        let linked_directory = directory.path().join("linked");
+        fs::create_dir(&target_directory).expect("create target directory");
+        symlink(&target_directory, &linked_directory).expect("link parent directory");
+        fs::write(target_directory.join("directory.norito"), b"snapshot")
+            .expect("write target snapshot");
+        assert_eq!(
+            read_guard_directory_snapshot_file(&linked_directory.join("directory.norito"))
+                .expect("read through linked parent"),
+            b"snapshot"
+        );
     }
     #[cfg(unix)]
     #[test]

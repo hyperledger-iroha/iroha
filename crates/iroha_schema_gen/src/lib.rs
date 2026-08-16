@@ -1,6 +1,5 @@
-//! Iroha schema generation support library. Contains the
-//! `build_schemas` `fn`, which is the function which decides which
-//! types are included in the schema.
+//! Iroha schema generation support library. Contains the `build_schemas` `fn`, which is the
+//! function which decides which types are included in the schema.
 use iroha_data_model::{
     block::stream::{BlockMessage, BlockSubscriptionRequest},
     query::{QueryResponse, SignedQuery},
@@ -96,8 +95,7 @@ macro_rules! schema_types {
 }
 /// Builds the schema for the current state of Iroha.
 ///
-/// You should only include the top-level types because other types
-/// shall be included recursively.
+/// You should only include the top-level types because other types shall be included recursively.
 pub fn build_schemas() -> MetaMap {
     use iroha_data_model::prelude::*;
     macro_rules! schemas {

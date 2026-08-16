@@ -1,0 +1,10 @@
+
+            seiyaku ExactGraph {
+                view fn current() -> int { return calc::value(); }
+
+                #[test]
+                fn dependency_is_exact() {
+                    test::assert(calc::value() == 7);
+                }
+            }
+            

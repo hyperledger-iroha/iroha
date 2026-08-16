@@ -1,10 +1,9 @@
 //! Norito-encoded consensus message types shared across Sumeragi implementations.
 //!
-//! These types cover QC voting (prepare/commit/new-view), evidence, VRF
-//! commit/reveal envelopes, and optional reliable broadcast
-//! helpers. They are split out of `iroha_core` so that other crates (e.g.,
-//! Torii, genesis tooling, or test harnesses) can construct and inspect
-//! consensus payloads without depending on the core runtime crate.
+//! These types cover QC voting (prepare/commit/new-view), evidence, VRF commit/reveal envelopes,
+//! and optional reliable broadcast helpers. They are split out of `iroha_core` so that other crates
+//! (e.g., Torii, genesis tooling, or test harnesses) can construct and inspect consensus payloads
+//! without depending on the core runtime crate.
 use super::{BlockSignature, Header as BlockHeader};
 use crate::{
     NetworkId,
@@ -358,18 +357,15 @@ pub enum EvidenceKind {
     InvalidProposal = 3,
     /// Transaction censorship proof (submission receipts).
     Censorship = 4,
-    /// Exact conflicting Sumeragi v2 artifacts authenticated under one frozen
-    /// height context.
+    /// Exact conflicting Sumeragi v2 artifacts authenticated under one frozen height context.
     SumeragiV2Equivocation = 5,
 }
-/// Self-contained frozen context and exact signed artifacts for one Sumeragi
-/// v2 equivocation proof.
+/// Self-contained frozen context and exact signed artifacts for one Sumeragi v2 equivocation proof.
 ///
-/// Proofs of possession are retained in roster order so an auditor can verify
-/// current-context aggregate certificates referenced by the artifacts without
-/// consulting mutable validator state. Production persistence additionally
-/// compares this context and `PoP` vector with the locally verified immutable
-/// context record.
+/// Proofs of possession are retained in roster order so an auditor can verify current-context
+/// aggregate certificates referenced by the artifacts without consulting mutable validator state.
+/// Production persistence additionally compares this context and `PoP` vector with the locally
+/// verified immutable context record.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -399,8 +395,7 @@ pub struct InvalidQcEvidencePayloadSchema {
     /// Human-readable invalidity reason.
     pub reason: String,
 }
-/// Schema projection of the named fields in
-/// [`EvidencePayload::InvalidProposal`].
+/// Schema projection of the named fields in [`EvidencePayload::InvalidProposal`].
 #[derive(IntoSchema)]
 pub struct InvalidProposalEvidencePayloadSchema {
     /// Proposal flagged as invalid.
@@ -956,10 +951,9 @@ impl LaneBlockDescriptorV1 {
 }
 /// Advisory pointer to the canonical global block that carried a lane payload.
 ///
-/// This is deliberately not part of [`LaneBlockProposalV1::computed_proposal_hash`].
-/// Peers use it only as a recovery hint for fetching a certified block body;
-/// the fetched block still has to validate against its commit certificate and
-/// the lane descriptor before any payload is replayed.
+/// This is deliberately not part of [`LaneBlockProposalV1::computed_proposal_hash`]. Peers use it
+/// only as a recovery hint for fetching a certified block body; the fetched block still has to
+/// validate against its commit certificate and the lane descriptor before any payload is replayed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1120,10 +1114,9 @@ impl LaneBlockVoteBodyV1 {
 }
 /// Exact autonomous lane payload retained by one READY signer.
 ///
-/// The body names both the immutable payload's origin proposal and the
-/// view-specific proposal being prepared. This prevents a valid payload
-/// certificate from being rebound across networks, epochs, lane incarnations,
-/// proposals, `NewView` transitions, or DA/RBC instances.
+/// The body names both the immutable payload's origin proposal and the view-specific proposal being
+/// prepared. This prevents a valid payload certificate from being rebound across networks, epochs,
+/// lane incarnations, proposals, `NewView` transitions, or DA/RBC instances.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1240,10 +1233,9 @@ pub struct LaneBlockQcV1 {
 }
 /// Complete certified lane-block artifact used for authenticated recovery.
 ///
-/// A lagging validator retransmits the exact canonical proposal as an
-/// idempotent request. A peer which durably retains the matching Kura artifact
-/// returns this single envelope, so Prepare and Commit evidence cannot be split
-/// across a volatile transport-capacity boundary.
+/// A lagging validator retransmits the exact canonical proposal as an idempotent request. A peer
+/// which durably retains the matching Kura artifact returns this single envelope, so Prepare and
+/// Commit evidence cannot be split across a volatile transport-capacity boundary.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1848,10 +1840,9 @@ impl NativeAmxAttestationBodyV2 {
     }
     /// Build the exact grouped zero-effect participant settlement certified by this body.
     ///
-    /// The ordered source group is shared by every receipt in one Native AMX
-    /// control. It must contain this body's source exactly once and remain
-    /// strictly ordered so callers cannot accidentally construct the obsolete
-    /// singleton projection for a grouped control.
+    /// The ordered source group is shared by every receipt in one Native AMX control. It must
+    /// contain this body's source exactly once and remain strictly ordered so callers cannot
+    /// accidentally construct the obsolete singleton projection for a grouped control.
     ///
     /// # Errors
     ///
@@ -2157,11 +2148,10 @@ pub struct NativeAmxReceipt {
 impl NativeAmxLegRecordV2 {
     /// Return whether this leg needs block-wide mixed-role anchor validation.
     ///
-    /// A participant proposal that does not contain the current transaction's
-    /// entrypoint can still be valid when it is the exact executable proposal
-    /// for another role in the same block. Stateless receipt validation records
-    /// that condition through this predicate; only authority-aware admission can
-    /// prove the corresponding block-wide anchor.
+    /// A participant proposal that does not contain the current transaction's entrypoint can still
+    /// be valid when it is the exact executable proposal for another role in the same block.
+    /// Stateless receipt validation records that condition through this predicate; only
+    /// authority-aware admission can prove the corresponding block-wide anchor.
     #[must_use]
     pub fn requires_mixed_role_anchor_validation(&self) -> bool {
         let entrypoint_hash = Hash::from(self.prepare_qc.body.tx_entrypoint_hash);
@@ -2546,12 +2536,11 @@ fn validate_native_amx_leg_shape(
 impl LaneBlockCommitment {
     /// Validate grouped Native AMX receipt structure without live authority state.
     ///
-    /// This validates clean-break versions, bounds, ordered source membership,
-    /// participant proposal hashes, prepare/commit identity, committee geometry,
-    /// bitmaps/quorum, 96-byte proof/signature fields, zero-effect settlements,
-    /// and exact same-route coordinator identity. It deliberately does not claim
-    /// that an embedded committee, incarnation, predecessor, proof of possession,
-    /// or aggregate signature is authoritative at its historical height.
+    /// This validates clean-break versions, bounds, ordered source membership, participant proposal
+    /// hashes, prepare/commit identity, committee geometry, bitmaps/quorum, 96-byte proof/signature
+    /// fields, zero-effect settlements, and exact same-route coordinator identity. It deliberately
+    /// does not claim that an embedded committee, incarnation, predecessor, proof of possession, or
+    /// aggregate signature is authoritative at its historical height.
     ///
     /// # Errors
     ///
@@ -3951,13 +3940,11 @@ pub struct SumeragiPipelineExecutionStatus {
 /// Maximum number of Native AMX participant-application rows exposed by one
 /// `/v1/sumeragi/diagnostics` response.
 ///
-/// The bound matches the compiled maximum number of active execution lanes,
-/// so diagnostics never need to truncate an active route/incarnation while
-/// still refusing an unbounded operator payload.
+/// The bound matches the compiled maximum number of active execution lanes, so diagnostics never
+/// need to truncate an active route/incarnation while still refusing an unbounded operator payload.
 pub const SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX: usize =
     crate::nexus::MAX_ACTIVE_EXECUTION_LANES;
-/// Maximum number of grouped Native AMX sources represented by one
-/// participant-application row.
+/// Maximum number of grouped Native AMX sources represented by one participant-application row.
 pub const SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATION_SOURCES_MAX: u64 = 4_096;
 /// Maximum number of autonomous lane-execution rows exposed by one
 /// `/v1/sumeragi/diagnostics` response.
@@ -4323,9 +4310,8 @@ impl SumeragiAutonomousLaneExecution {
     ///
     /// # Errors
     ///
-    /// Returns a stable reason when identity fields are zero, carrier fields
-    /// are incomplete, counters exceed protocol bounds, or durable stage and
-    /// wait-state evidence disagree.
+    /// Returns a stable reason when identity fields are zero, carrier fields are incomplete,
+    /// counters exceed protocol bounds, or durable stage and wait-state evidence disagree.
     pub fn validate(&self) -> Result<(), &'static str> {
         self.validate_identity_and_counts()?;
         let nonzero = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
@@ -4446,10 +4432,9 @@ impl norito::json::JsonDeserialize for SumeragiNativeAmxParticipantApplicationSt
 }
 /// One bounded Native AMX participant-application diagnostics row.
 ///
-/// Rows are ordered by `(lane_id, dataspace_id, lane_incarnation)` in the
-/// containing diagnostics response. The record carries only hashes and
-/// counters; transaction bodies and other unbounded application material stay
-/// in Kura.
+/// Rows are ordered by `(lane_id, dataspace_id, lane_incarnation)` in the containing diagnostics
+/// response. The record carries only hashes and counters; transaction bodies and other unbounded
+/// application material stay in Kura.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
     feature = "json",
@@ -4497,8 +4482,7 @@ impl SumeragiNativeAmxParticipantApplication {
     ///
     /// # Errors
     ///
-    /// Returns a stable reason when the row is malformed or internally
-    /// inconsistent.
+    /// Returns a stable reason when the row is malformed or internally inconsistent.
     pub fn validate(&self) -> Result<(), &'static str> {
         let nonzero_hash = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
         if !nonzero_hash(self.lane_incarnation.as_ref())
@@ -4558,9 +4542,8 @@ impl SumeragiNativeAmxParticipantApplication {
 }
 /// Operator and lane diagnostics returned by `/v1/sumeragi/diagnostics`.
 ///
-/// This payload deliberately excludes reducer phase, height, view, leader,
-/// certificates, mode, and timing. `/v1/sumeragi/status` is the sole source of
-/// authoritative consensus state.
+/// This payload deliberately excludes reducer phase, height, view, leader, certificates, mode, and
+/// timing. `/v1/sumeragi/status` is the sole source of authoritative consensus state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
     feature = "json",

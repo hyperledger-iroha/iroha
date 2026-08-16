@@ -1,21 +1,23 @@
 //! Transparent (untrusted-setup) Halo2-style proof system skeleton.
 //!
-//! This crate provides a from-scratch, transparent polynomial-commitment and
-//! Inner-Product Argument (IPA) based opening scheme suitable as the backbone
-//! for Halo2/PLONKish arithmetizations. It focuses on determinism and
-//! portability, and avoids any trusted setup by deriving generators
-//! deterministically from a transcript domain separation tag (DST).
+//! This crate provides a from-scratch, transparent polynomial-commitment and Inner-Product Argument
+//! (IPA) based opening scheme suitable as the backbone for Halo2/PLONKish arithmetizations. It
+//! focuses on determinism and portability, and avoids any trusted setup by mapping generators
+//! deterministically under a dedicated hash-to-curve domain separation tag (DST).
 //!
 //! Notes
 //! - This is a foundational, minimal implementation intended for integration
 //!   and iteration. It implements deterministic transcripts (SHA3-256/512),
 //!   polynomial commit/open with IPA proofs, and ships deterministic backends
-//!   for Pasta/Pallas and BN254. An optional Goldilocks backend remains
-//!   available for compatibility testing.
+//!   for Pasta/Pallas and BN254. Their IPA bases use the curve implementations'
+//!   domain-separated hash-to-curve maps so no public discrete-log relationship
+//!   is introduced between bases. An optional, algebraic Goldilocks backend
+//!   remains available only for compatibility testing.
 //! - Cryptographic security depends on the chosen backend curve/field. Both
-//!   backends derive generators transparently from the shared DST so proofs are
-//!   reproducible across hosts. Additional backends can be added in the future
-//!   as deterministic implementations mature.
+//!   production backends derive generators transparently from the generator DST so
+//!   proofs are reproducible across hosts. The Goldilocks test backend is not a
+//!   cryptographically binding commitment group. Additional backends can be
+//!   added in the future as deterministic implementations mature.
 //! - API is designed to be no-std-friendly in the future, but currently
 //!   targets `std` for simplicity.
 #![deny(missing_docs)]
@@ -83,9 +85,8 @@ pub use norito_types::{
 pub use transcript::Transcript;
 /// Resource limits for standalone `OpenVerifyEnvelope` decoding.
 ///
-/// Limits are always finite. Runtime callers should construct this value from
-/// their configured ZK policy; convenience APIs use the conservative V1
-/// defaults.
+/// Limits are always finite. Runtime callers should construct this value from their configured ZK
+/// policy; convenience APIs use the conservative V1 defaults.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OpenVerifyLimits {
     /// Maximum allowed circuit/domain size exponent (`n <= 2^max_k`).
@@ -114,8 +115,10 @@ impl Default for OpenVerifyLimits {
 }
 /// Crate constants and domain separation tags.
 pub mod constants {
-    /// Domain Separation Tag for generator derivation and transcript usage.
+    /// Domain Separation Tag for IPA transcripts and challenges.
     pub const DST: &str = "IROHA-ZK-HALO2-IPA-v1";
+    /// Hash-to-curve domain for transparent IPA generator derivation.
+    pub const GENERATOR_HASH_TO_CURVE_DST: &str = "IROHA-ZK-HALO2-IPA-v1-generator";
 }
 // Test module (private)
 #[cfg(test)]
@@ -419,17 +422,14 @@ pub mod norito_helpers {
     }
     /// Derive a Pallas verifier witness with explicit envelope resource limits.
     ///
-    /// This is the bounded form of
-    /// [`derive_pallas_ipa_verifier_witness_from_envelope`]. It applies the
-    /// same decoding and final verifier-equality checks, but rejects envelopes
-    /// exceeding the supplied limits before backend-specific parameter/proof
-    /// reconstruction.
+    /// This is the bounded form of [`derive_pallas_ipa_verifier_witness_from_envelope`]. It applies
+    /// the same decoding and final verifier-equality checks, but rejects envelopes exceeding the
+    /// supplied limits before backend-specific parameter/proof reconstruction.
     ///
     /// # Errors
     ///
-    /// Returns an error when the envelope exceeds the supplied limits, is
-    /// malformed, is not a Pallas opening, or does not verify under the
-    /// transparent IPA verifier.
+    /// Returns an error when the envelope exceeds the supplied limits, is malformed, is not a
+    /// Pallas opening, or does not verify under the transparent IPA verifier.
     pub fn derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
         env: &OpenVerifyEnvelope,
         limits: OpenVerifyLimits,
@@ -648,21 +648,11 @@ pub mod batch {
                 metadata,
             ),
             #[cfg(feature = "goldilocks_backend")]
-            DecodedEnvelope::Goldilocks {
-                params,
-                proof,
-                z,
-                t,
-                p_g,
-            } => backend::goldilocks::Polynomial::verify_open_with_metadata(
-                params.as_ref(),
-                &mut transcript,
-                z,
-                p_g,
-                t,
-                proof.as_ref(),
-                metadata,
-            ),
+            DecodedEnvelope::Goldilocks { .. } => {
+                return Err(Error::UnsupportedBackend {
+                    backend: ZkCurveId::Goldilocks,
+                });
+            }
             #[cfg(not(feature = "goldilocks_backend"))]
             DecodedEnvelope::Goldilocks => {
                 return Err(Error::UnsupportedBackend {

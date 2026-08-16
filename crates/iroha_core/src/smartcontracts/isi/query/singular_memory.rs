@@ -2,13 +2,11 @@
 use super::Error;
 use norito::core::{DecodeFlagsGuard, DeriveSmallBuf, Encoder, NoritoDeserialize, NoritoSerialize};
 use std::{cell::Cell, marker::PhantomData, ops::Deref};
-/// Dynamic source/output ceilings for one singular query executed by a
-/// server-owned memory lane.
+/// Dynamic source/output ceilings for one singular query executed by a server-owned memory lane.
 ///
-/// The frame ceiling bounds the canonical transient used instead of an
-/// unmetered deep clone. The allocation ceiling is installed while decoding
-/// that frame into the owned query result. Both are deterministic limits
-/// supplied by the embedding server's already-acquired memory reservation.
+/// The frame ceiling bounds the canonical transient used instead of an unmetered deep clone. The
+/// allocation ceiling is installed while decoding that frame into the owned query result. Both are
+/// deterministic limits supplied by the embedding server's already-acquired memory reservation.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SingularQueryOutputLimits {
     max_frame_bytes: u64,
@@ -160,10 +158,9 @@ where
 }
 /// Materialize an output from an owned wire-equivalent source.
 ///
-/// The source is encoded into the admitted frame and dropped before the
-/// destination is decoded. This is used by paged singular producers whose
-/// source owns a bounded result builder but borrows request or world fields:
-/// neither those borrowed fields nor the complete destination are cloned
+/// The source is encoded into the admitted frame and dropped before the destination is decoded.
+/// This is used by paged singular producers whose source owns a bounded result builder but borrows
+/// request or world fields: neither those borrowed fields nor the complete destination are cloned
 /// while the source builder remains resident.
 pub(crate) fn own_singular_query_serialized_source<S, T>(source: S) -> Result<T, Error>
 where
@@ -317,8 +314,7 @@ where
         })
     }
 }
-/// Return the currently admitted complete-frame ceiling, capped by a producer
-/// protocol maximum.
+/// Return the currently admitted complete-frame ceiling, capped by a producer protocol maximum.
 pub(crate) fn singular_query_frame_limit(protocol_max: usize) -> usize {
     ACTIVE_LIMITS.get().map_or(protocol_max, |limits| {
         usize::try_from(limits.max_frame_bytes)
@@ -330,14 +326,12 @@ pub(crate) fn singular_query_frame_limit(protocol_max: usize) -> usize {
 pub(crate) fn singular_query_limits_active() -> bool {
     ACTIVE_LIMITS.get().is_some()
 }
-/// Fallibly build one retained singular-query sequence under the active
-/// resident-output allowance.
+/// Fallibly build one retained singular-query sequence under the active resident-output allowance.
 ///
-/// Each inserted value is first measured through the canonical codec. The
-/// value's complete frame must fit `E`, and the final vector capacity plus the
-/// conservative measured allocation charge for all retained elements must fit
-/// `D`. The source value and its bounded frame are dropped before insertion,
-/// so a producer retains only this builder between loop iterations.
+/// Each inserted value is first measured through the canonical codec. The value's complete frame
+/// must fit `E`, and the final vector capacity plus the conservative measured allocation charge for
+/// all retained elements must fit `D`. The source value and its bounded frame are dropped before
+/// insertion, so a producer retains only this builder between loop iterations.
 pub(crate) struct SingularQueryVecBuilder<T> {
     values: Vec<T>,
     item_allocation_bytes: Vec<usize>,
@@ -510,10 +504,9 @@ where
     }
     /// Finish into a vector that keeps its aggregate builder charge attached.
     ///
-    /// This form is for producers that retain several source collections and
-    /// consume them into one final builder. Moving one item into the current
-    /// corridor releases only that item's nested source charge; the source
-    /// allocation itself remains charged until its iterator is dropped.
+    /// This form is for producers that retain several source collections and consume them into one
+    /// final builder. Moving one item into the current corridor releases only that item's nested
+    /// source charge; the source allocation itself remains charged until its iterator is dropped.
     #[must_use]
     pub(crate) fn into_retained_vec(mut self) -> SingularQueryRetainedVec<T> {
         let values = core::mem::take(&mut self.values);
@@ -626,8 +619,7 @@ impl<T> Iterator for SingularQueryRetainedVecIntoIter<T> {
     }
 }
 impl<T> SingularQueryRetainedVecIntoIter<T> {
-    /// Move the next value into the current corridor with its measured nested
-    /// allocation charge.
+    /// Move the next value into the current corridor with its measured nested allocation charge.
     pub(crate) fn next_with_allocation_charge(&mut self) -> Result<Option<(T, usize)>, Error> {
         let Some(value) = self.values.next() else {
             if ACTIVE_LIMITS.get().is_some() && !self.item_allocation_bytes.as_slice().is_empty() {
@@ -787,9 +779,8 @@ pub(crate) struct SingularQueryCurrentAllocation {
 }
 /// A current-value vector with one immutable, logically admitted item count.
 ///
-/// The backing allocator may round its physical capacity up, but callers can
-/// only insert through [`Self::push`], which never admits more than the count
-/// charged to the current-value allowance.
+/// The backing allocator may round its physical capacity up, but callers can only insert through
+/// [`Self::push`], which never admits more than the count charged to the current-value allowance.
 pub(crate) struct SingularQueryFixedVec<T> {
     values: Vec<T>,
     admitted_capacity: usize,
@@ -840,10 +831,9 @@ impl SingularQueryCurrentAllocation {
     /// Cap one additional source decode by the unoccupied part of this
     /// current value's resident allowance.
     ///
-    /// Callers measure the successful decode and feed its allocation charge
-    /// back through [`Self::add_nested`]. This permits several records that are
-    /// genuinely live at once while preventing each nested reader from
-    /// independently claiming a complete `D` allowance.
+    /// Callers measure the successful decode and feed its allocation charge back through
+    /// [`Self::add_nested`]. This permits several records that are genuinely live at once while
+    /// preventing each nested reader from independently claiming a complete `D` allowance.
     pub(crate) fn decode_limits(
         &self,
         encoded_len: usize,

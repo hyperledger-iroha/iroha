@@ -2029,3 +2029,645 @@ fn current_height_sidecar_service_rejects_a_different_carrier_parent() {
     );
     assert!(adapter.sidecar_effects.is_empty());
 }
+#[test]
+fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() {
+    let (mut parent, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+    let autonomous_lane_id = LaneId::new(1);
+    let autonomous_dataspace_id = DataSpaceId::new(7);
+    enable_multilane_nexus(
+        &mut parent,
+        &keys,
+        autonomous_lane_id,
+        autonomous_dataspace_id,
+    );
+    let (parent_block, parent_proposal) = globally_anchored_lane_block_fixture(&parent, &keys);
+    parent
+        .kura
+        .store_block(parent_block.clone())
+        .expect("persist exact raw lane predecessor");
+    let parent_finality = verified_finality_artifact_for_block(&parent, &keys, &parent_block);
+    let _ = parent
+        .kura
+        .store_v2_finality_artifact(&parent_finality)
+        .expect("persist raw predecessor finality authority");
+    let committed_parent = ValidBlock::committed_from_replay_signed_block(parent_block.clone());
+    commit_test_block_to_state(parent.state.as_ref(), &committed_parent, &parent.context);
+    assert_eq!(
+        parent
+            .state
+            .unapplied_lane_block_artifact_heights_snapshot_cached()
+            .get(&(
+                parent_proposal.descriptor.lane_id,
+                parent_proposal.descriptor.dataspace_id,
+            )),
+        Some(&parent_proposal.descriptor.lane_block_height),
+        "the regression requires a canonical predecessor whose independent lane sidecars are still pending"
+    );
+    assert!(
+        !parent
+            .kura
+            .lane_block_application_receipt_available(&parent_proposal),
+        "the raw canonical predecessor must not already have an application receipt"
+    );
+    let successor_context = successor_context_for_parent(&parent, &parent_block);
+    let local_peer = parent.local_peer.clone();
+    let local_key = parent.key_pair.clone();
+    let state = Arc::clone(&parent.state);
+    let kura = Arc::clone(&parent.kura);
+    let limits = parent.limits;
+    drop(parent);
+    let mut successor = V2LaneWorkAdapter::new(
+        successor_context,
+        local_peer,
+        local_key,
+        true,
+        Arc::clone(&state),
+        Arc::clone(&kura),
+        limits,
+        None,
+    )
+    .expect("open successor while predecessor sidecars remain pending");
+    let (autonomous_source_block, mut autonomous_proposal) =
+        planned_lane_candidate_block_for_route_at_view(
+            &successor,
+            &keys,
+            0,
+            autonomous_lane_id,
+            autonomous_dataspace_id,
+        );
+    autonomous_proposal.payload_block_hint = None;
+    let autonomous_entrypoint = autonomous_source_block
+        .external_entrypoints_cloned()
+        .next()
+        .expect("autonomous mixed-carrier entrypoint");
+    let autonomous_accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+        std::borrow::Cow::Owned(autonomous_entrypoint.clone()),
+    );
+    let autonomous_routing_plan = RoutingPlan::single(RoutingDecision::new(
+        autonomous_lane_id,
+        autonomous_dataspace_id,
+    ));
+    let mut autonomous_reservation = crate::queue::LaneQueueReservationKeyV2 {
+        version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+        signed_transaction_hash: autonomous_accepted.hash(),
+        entrypoint_hash: autonomous_entrypoint.hash(),
+        queue_plan_admission_binding_hash: Hash::new(
+            b"mixed-raw-successor-queue-plan-admission-binding",
+        ),
+        routing_plan_digest: autonomous_routing_plan.digest(),
+        coordinator_leg: autonomous_routing_plan.coordinator_leg(),
+        lane_id: autonomous_lane_id,
+        dataspace_id: autonomous_dataspace_id,
+        lane_incarnation: autonomous_proposal.descriptor.lane_incarnation,
+        proposal_height: autonomous_proposal.descriptor.proposal_height,
+        lane_block_height: autonomous_proposal.descriptor.lane_block_height,
+        lane_block_view: autonomous_proposal.descriptor.lane_block_view,
+        reservation_owner_hash: Hash::new(b"mixed-raw-successor-reservation-owner"),
+        proposal_identity_hash: autonomous_proposal.proposal_hash,
+    };
+    let autonomous_producer = successor
+        .expected_autonomous_lane_author(&autonomous_proposal)
+        .expect("deterministic mixed-carrier autonomous producer")
+        .clone();
+    bind_canonical_autonomous_reservation_identity(
+        &successor,
+        &autonomous_proposal,
+        &autonomous_producer,
+        &mut autonomous_reservation,
+    );
+    let autonomous_producer_key = keys
+        .iter()
+        .find(|key| key.public_key() == autonomous_producer.public_key())
+        .expect("mixed-carrier fixture contains its autonomous producer");
+    let autonomous_payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+        successor.native_network_id(),
+        successor.context.epoch,
+        autonomous_proposal.clone(),
+        vec![autonomous_entrypoint],
+        vec![autonomous_reservation],
+        vec![autonomous_routing_plan],
+        vec![None],
+        autonomous_producer.clone(),
+        autonomous_producer_key.private_key(),
+    )
+    .expect("construct exact autonomous mixed-carrier payload");
+    successor
+        .kura
+        .persist_lane_executable_payload(
+            &autonomous_payload,
+            successor.native_network_id(),
+            successor.context.epoch,
+        )
+        .expect("persist autonomous mixed-carrier payload");
+    assert_eq!(
+        successor.accept_lane_message(
+            InboundBlockMessage::new(
+                BlockMessage::LaneExecutablePayload(autonomous_payload.clone()),
+                Some(autonomous_producer),
+            ),
+            0,
+        ),
+        V2LaneIngressOutcome::Inserted
+    );
+    let autonomous_envelope = autonomous_lane_payload_envelope(
+        &autonomous_payload,
+        successor.native_network_id(),
+        successor.context.epoch,
+    )
+    .expect("encode exact autonomous mixed-carrier envelope");
+    let mut malformed_autonomous_envelope = autonomous_envelope.clone();
+    malformed_autonomous_envelope.proposal_hash =
+        Hash::new(b"malformed mixed-carrier autonomous proposal");
+    assert!(
+        decode_autonomous_lane_payload_envelope(
+            &malformed_autonomous_envelope,
+            successor.native_network_id(),
+            successor.context.epoch,
+        )
+        .is_err(),
+        "the unchanged autonomous envelope validator must reject a malformed mixed-carrier member"
+    );
+    let transaction_key = KeyPair::try_from_seed(vec![0xD4; 32], Algorithm::Ed25519)
+        .expect("deterministic successor transaction key");
+    let transaction = TransactionBuilder::new(
+        successor.context.network_id,
+        AccountId::new(transaction_key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .sign(transaction_key.private_key());
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let global_view = 0;
+    let leader_index = usize::try_from(successor.context.leader(global_view))
+        .expect("successor leader index fits usize");
+    let global_leader = &successor.context.roster[leader_index].validator;
+    let strict = prepare_v2_lane_payload_plan(
+        state.as_ref(),
+        kura.as_ref(),
+        &successor.context,
+        global_view,
+        global_leader,
+        std::slice::from_ref(&route),
+        std::slice::from_ref(&Hash::from(entrypoint_hash)),
+    )
+    .expect("strict producer planning remains deterministic");
+    assert_eq!(
+        strict.unavailable_indices,
+        BTreeSet::from([0]),
+        "fresh local production must remain blocked on the missing predecessor sidecars"
+    );
+    let recovered = prepare_v2_lane_payload_validation_plan(
+        state.as_ref(),
+        kura.as_ref(),
+        &successor.context,
+        global_view,
+        global_leader,
+        std::slice::from_ref(&route),
+        std::slice::from_ref(&Hash::from(entrypoint_hash)),
+    )
+    .expect("derive received ownership from the exact canonical predecessor");
+    assert!(recovered.unavailable_indices.is_empty());
+    assert_eq!(recovered.ownerships.len(), 1);
+    assert_eq!(
+        recovered.ownerships[0].previous_lane_block_height,
+        parent_proposal.descriptor.lane_block_height
+    );
+    assert_eq!(
+        recovered.ownerships[0].previous_lane_block_descriptor_hash,
+        Some(parent_proposal.descriptor.descriptor_hash)
+    );
+    let header = BlockHeader::new(
+        NonZeroU64::new(successor.context.height).expect("non-zero successor height"),
+        Some(parent_block.hash()),
+        None,
+        None,
+        successor.context.height,
+        global_view,
+    );
+    let mut builder = BlockBuilder::new(header);
+    builder.push_transaction(transaction);
+    builder.set_execution_context(Some(
+        BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+            entrypoint_hash,
+            route.lane_id,
+            route.dataspace_id,
+        )])
+        .with_lane_payload_ownerships(recovered.ownerships)
+        .with_autonomous_lane_payloads(vec![autonomous_envelope]),
+    ));
+    let successor_block = builder
+        .build_with_signature(
+            u64::try_from(leader_index).expect("successor leader index fits u64"),
+            keys[leader_index].private_key(),
+        )
+        .canonical_resultless_proposal();
+    let successor_ownership = successor_block
+        .execution_context()
+        .expect("successor execution context")
+        .lane_payload_ownerships[0]
+        .clone();
+    let successor_proposal = proposal_from_ownership(&successor_ownership, successor_block.hash())
+        .expect("reconstruct exact raw successor proposal");
+    let mut wrong_raw_successor = successor_proposal.clone();
+    wrong_raw_successor
+        .descriptor
+        .previous_lane_block_descriptor_hash =
+        Some(Hash::new(b"wrong canonical raw predecessor descriptor"));
+    assert!(
+        !canonical_raw_lane_predecessor_matches_proposal(
+            successor.state.as_ref(),
+            successor.kura.as_ref(),
+            &wrong_raw_successor,
+        ),
+        "raw fallback must reject a mismatched predecessor descriptor"
+    );
+    let (locked_round, locked_subject) = global_lock_for_block(&successor, &successor_block);
+    assert_eq!(
+        successor.mark_global_body_locked(locked_round, locked_subject),
+        Ok(GlobalBodyLockOutcome::Inserted)
+    );
+    assert_ne!(
+        successor.bind_locked_global_body(&successor_block),
+        V2LaneIngressOutcome::Rejected,
+        "an exact PrepareQC-locked successor must not kill a validator merely because its independent predecessor sidecars are catching up"
+    );
+    assert!(!successor.proposal_can_progress(&successor_proposal));
+    assert!(
+        successor
+            .lane_sessions
+            .local_vote_rebroadcast_artifacts_for(&successor.local_peer)
+            .iter()
+            .all(|(proposal, _)| proposal != &successor_proposal),
+        "raw predecessor authentication must not authorize a local successor vote"
+    );
+    let _ = successor.drain_effects(usize::MAX);
+    successor
+        .kura
+        .store_block(successor_block.clone())
+        .expect("persist exact raw successor carrier");
+    let successor_finality =
+        verified_finality_artifact_for_block(&successor, &keys, &successor_block);
+    let successor_receipt = KuraV2CommitReceipt::for_test(&successor_finality);
+    let committed_successor =
+        ValidBlock::committed_from_replay_signed_block(successor_block.clone());
+    commit_test_block_to_state(
+        successor.state.as_ref(),
+        &committed_successor,
+        &successor.context,
+    );
+    assert!(
+        !canonical_v2_lane_payload_matches_kura(
+            successor.state.as_ref(),
+            successor.kura.as_ref(),
+            &successor.context,
+            &successor_block,
+        ),
+        "the strict canonical matcher must retain applied-predecessor semantics"
+    );
+    assert!(canonical_v2_lane_payload_matches_kura_inner(
+        successor.state.as_ref(),
+        successor.kura.as_ref(),
+        &successor.context,
+        &successor_block,
+        true,
+    ));
+    successor
+        .retain_merge_sidecars_for_global_view(
+            locked_round.view,
+            Some(locked_subject),
+            Some(locked_subject),
+        )
+        .expect("install exact raw-successor Decision");
+    assert_ne!(
+        successor
+            .recover_decided_canonical_lane_body(&successor_receipt, &successor_finality,)
+            .expect("recover decided carrier over exact raw predecessor"),
+        V2LaneIngressOutcome::Rejected
+    );
+    assert!(
+        successor
+            .lane_sessions
+            .proposals_without_commit_qc()
+            .contains(&parent_proposal),
+        "decided recovery hydrates the oldest exact raw predecessor"
+    );
+    assert!(
+        successor
+            .lane_sessions
+            .proposals_without_commit_qc()
+            .contains(&successor_proposal),
+        "decided recovery retains the exact raw successor"
+    );
+    let successor_session = CommittedLaneBlockSession {
+        proposal: successor_proposal.clone(),
+        prepare_qc: lane_qc_for_phase(&successor_proposal, &keys[..3], CertPhase::Prepare),
+        commit_qc: lane_qc_for_phase(&successor_proposal, &keys[..3], CertPhase::Commit),
+    };
+    successor
+        .pending_committed_lanes
+        .push_back(successor_session.clone());
+    assert_eq!(
+        successor
+            .persist_anchored_sessions()
+            .expect("defer successor certificate behind raw predecessor"),
+        0
+    );
+    assert!(
+        successor
+            .kura
+            .read_certified_lane_block_artifact(
+                successor_proposal.descriptor.lane_id,
+                successor_proposal.descriptor.lane_block_height,
+            )
+            .is_none(),
+        "the successor certificate must not become durable before its predecessor receipt"
+    );
+    assert!(
+        !successor
+            .kura
+            .lane_block_application_receipt_available(&successor_proposal)
+    );
+    successor
+        .schedule_retransmission()
+        .expect("solicit raw predecessor certificate without consensus progress");
+    let effects = successor.drain_effects(usize::MAX);
+    assert!(effects.iter().any(|effect| {
+        matches!(
+            effect,
+            V2LaneWorkEffect::PostLaneBlock {
+                message: BlockMessage::LaneBlockProposal(proposal),
+                ..
+            } if proposal == &parent_proposal
+        )
+    }));
+    assert!(effects.iter().all(|effect| match effect {
+        V2LaneWorkEffect::PostLaneBlock {
+            message: BlockMessage::LaneBlockVote(vote),
+            ..
+        } => vote.body.proposal_hash != successor_proposal.proposal_hash,
+        V2LaneWorkEffect::PostLaneBlock {
+            message: BlockMessage::LaneBlockQc(qc),
+            ..
+        } => qc.body.proposal_hash != successor_proposal.proposal_hash,
+        V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => {
+            certificate.proposal.proposal_hash != successor_proposal.proposal_hash
+        }
+        _ => true,
+    }));
+    let parent_certificate = LaneBlockCertificateV1 {
+        proposal: parent_proposal.clone(),
+        prepare_qc: lane_qc_for_phase(&parent_proposal, &keys[..3], CertPhase::Prepare),
+        commit_qc: lane_qc_for_phase(&parent_proposal, &keys[..3], CertPhase::Commit),
+    };
+    assert_eq!(
+        successor.accept_lane_message(
+            InboundBlockMessage::new(
+                BlockMessage::LaneBlockCertificate(Box::new(parent_certificate)),
+                Some(PeerId::new(keys[1].public_key().clone())),
+            ),
+            locked_round.view,
+        ),
+        V2LaneIngressOutcome::Inserted
+    );
+    assert!(matches!(
+        successor
+            .service_next_historical_recovery()
+            .expect("persist exact predecessor certificate and receipt"),
+        HistoricalRecoveryServiceOutcome::Complete(_)
+    ));
+    assert!(
+        successor
+            .kura
+            .lane_block_application_receipt_available(&parent_proposal)
+    );
+    assert!(successor.proposal_can_progress(&successor_proposal));
+    assert!(
+        successor
+            .lane_sessions
+            .local_vote_rebroadcast_artifacts_for(&successor.local_peer)
+            .iter()
+            .any(|(proposal, _)| proposal == &successor_proposal),
+        "predecessor receipt completion wakes the retained successor session"
+    );
+    let resumed_effects = successor.drain_effects(usize::MAX);
+    assert!(
+        resumed_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                V2LaneWorkEffect::PostLaneBlock {
+                    message: BlockMessage::LaneBlockVote(vote),
+                    ..
+                } if vote.body == successor_proposal.vote_body(CertPhase::Prepare)
+            )
+        }),
+        "the unblocked exact H2 Prepare vote must cross the decided-carrier fanout gate"
+    );
+    assert_eq!(
+        successor
+            .persist_anchored_sessions()
+            .expect("persist unblocked successor certificate and receipt"),
+        1
+    );
+    assert!(
+        successor
+            .kura
+            .lane_block_application_receipt_available(&successor_proposal)
+    );
+}
+#[test]
+fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
+    let (first, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+    let (first_block, first_proposal) = globally_anchored_lane_block_fixture(&first, &keys);
+    first
+        .kura
+        .store_block(first_block.clone())
+        .expect("persist first raw lane artifact");
+    let committed_first = ValidBlock::committed_from_replay_signed_block(first_block.clone());
+    commit_test_block_to_state(first.state.as_ref(), &committed_first, &first.context);
+    assert!(
+        first
+            .kura
+            .read_lane_block_application_receipt_without_sidecar_repair(
+                first_proposal.descriptor.lane_id,
+                first_proposal.descriptor.lane_block_height,
+            )
+            .is_none(),
+        "the first raw artifact must not gain an application receipt"
+    );
+    let second_context = successor_context_for_parent(&first, &first_block);
+    let local_peer = first.local_peer.clone();
+    let local_key = first.key_pair.clone();
+    let state = Arc::clone(&first.state);
+    let kura = Arc::clone(&first.kura);
+    let mut limits = first.limits;
+    limits.session_capacity = NonZeroUsize::new(2).expect("two-link hydration bound");
+    drop(first);
+    let second = V2LaneWorkAdapter::new(
+        second_context,
+        local_peer.clone(),
+        local_key.clone(),
+        true,
+        Arc::clone(&state),
+        Arc::clone(&kura),
+        limits,
+        None,
+    )
+    .expect("open second height over an unreceipted raw predecessor");
+    let transaction_key = KeyPair::try_from_seed(vec![0xD5; 32], Algorithm::Ed25519)
+        .expect("deterministic second-link transaction key");
+    let transaction = TransactionBuilder::new(
+        second.context.network_id,
+        AccountId::new(transaction_key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .sign(transaction_key.private_key());
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let global_view = 0;
+    let leader_index = usize::try_from(second.context.leader(global_view))
+        .expect("second-link leader index fits usize");
+    let global_leader = &second.context.roster[leader_index].validator;
+    let strict = prepare_v2_lane_payload_plan(
+        state.as_ref(),
+        kura.as_ref(),
+        &second.context,
+        global_view,
+        global_leader,
+        std::slice::from_ref(&route),
+        std::slice::from_ref(&Hash::from(entrypoint_hash)),
+    )
+    .expect("strict second-link producer planning remains deterministic");
+    assert_eq!(strict.unavailable_indices, BTreeSet::from([0]));
+    let recovered = prepare_v2_lane_payload_validation_plan(
+        state.as_ref(),
+        kura.as_ref(),
+        &second.context,
+        global_view,
+        global_leader,
+        std::slice::from_ref(&route),
+        std::slice::from_ref(&Hash::from(entrypoint_hash)),
+    )
+    .expect("recover second-link ownership from the exact raw predecessor");
+    assert!(recovered.unavailable_indices.is_empty());
+    assert_eq!(recovered.ownerships.len(), 1);
+    assert_eq!(
+        recovered.ownerships[0].previous_lane_block_height,
+        first_proposal.descriptor.lane_block_height
+    );
+    assert_eq!(
+        recovered.ownerships[0].previous_lane_block_descriptor_hash,
+        Some(first_proposal.descriptor.descriptor_hash)
+    );
+    let header = BlockHeader::new(
+        NonZeroU64::new(second.context.height).expect("non-zero second-link height"),
+        Some(first_block.hash()),
+        None,
+        None,
+        second.context.height,
+        global_view,
+    );
+    let mut builder = BlockBuilder::new(header);
+    builder.push_transaction(transaction);
+    builder.set_execution_context(Some(
+        BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+            entrypoint_hash,
+            route.lane_id,
+            route.dataspace_id,
+        )])
+        .with_lane_payload_ownerships(recovered.ownerships),
+    ));
+    let second_block = builder
+        .build_with_signature(
+            u64::try_from(leader_index).expect("second-link leader index fits u64"),
+            keys[leader_index].private_key(),
+        )
+        .canonical_resultless_proposal();
+    let second_ownership = second_block
+        .execution_context()
+        .expect("second-link block carries execution context")
+        .lane_payload_ownerships[0]
+        .clone();
+    let second_proposal = proposal_from_ownership(&second_ownership, second_block.hash())
+        .expect("reconstruct exact second raw proposal");
+    second
+        .kura
+        .store_block(second_block.clone())
+        .expect("persist second raw lane artifact");
+    let committed_second = ValidBlock::committed_from_replay_signed_block(second_block.clone());
+    commit_test_block_to_state(second.state.as_ref(), &committed_second, &second.context);
+    assert!(canonical_v2_lane_payload_matches_kura_inner(
+        second.state.as_ref(),
+        second.kura.as_ref(),
+        &second.context,
+        &second_block,
+        true,
+    ));
+    assert!(canonical_raw_lane_predecessor_matches_proposal(
+        second.state.as_ref(),
+        second.kura.as_ref(),
+        &second_proposal,
+    ));
+    assert_eq!(
+        second
+            .state
+            .unapplied_lane_block_artifact_heights_snapshot_cached()
+            .get(&(route.lane_id, route.dataspace_id)),
+        Some(&second_proposal.descriptor.lane_block_height)
+    );
+    for proposal in [&first_proposal, &second_proposal] {
+        assert!(
+            second
+                .kura
+                .read_lane_block_application_receipt_without_sidecar_repair(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_none(),
+            "neither raw link may gain an application receipt before restart"
+        );
+    }
+    let third_context = successor_context_for_parent(&second, &second_block);
+    drop(second);
+    let third = V2LaneWorkAdapter::new(
+        third_context,
+        local_peer,
+        local_key,
+        true,
+        state,
+        kura,
+        limits,
+        None,
+    )
+    .expect("cold-open the third height over a two-link raw chain");
+    assert!(
+        !third.output_guard.restart_required() && third.output_guard.acquire().is_some(),
+        "bounded raw-chain hydration must leave authoritative admission healthy"
+    );
+    assert_eq!(
+        third.lane_sessions.proposals_without_commit_qc(),
+        vec![first_proposal.clone(), second_proposal.clone()],
+        "cold hydration must reconstruct the exact raw chain oldest first"
+    );
+    for proposal in [&first_proposal, &second_proposal] {
+        assert!(third.canonical_anchor_for_proposal(proposal).is_some());
+        assert!(third.historical_raw_proposal_can_solicit_certificate(proposal));
+        assert!(!third.proposal_can_progress(proposal));
+        assert!(
+            third
+                .kura
+                .read_lane_block_application_receipt_without_sidecar_repair(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_none()
+        );
+    }
+    assert!(
+        third
+            .lane_sessions
+            .local_vote_rebroadcast_artifacts_for(&third.local_peer)
+            .iter()
+            .all(|(proposal, _)| { proposal != &first_proposal && proposal != &second_proposal }),
+        "cold hydration must not mint votes for either unreceipted raw link"
+    );
+}

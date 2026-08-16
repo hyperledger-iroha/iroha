@@ -171,8 +171,7 @@ impl RelayRewardCalculator {
     ///
     /// Returns [`RelayIncentiveError::InvalidWeights`],
     /// [`RelayIncentiveError::ZeroBandwidthTarget`], or
-    /// [`RelayIncentiveError::InvalidBasePayoutScale`] when configuration
-    /// invariants are violated.
+    /// [`RelayIncentiveError::InvalidBasePayoutScale`] when configuration invariants are violated.
     pub fn new(config: RewardConfig) -> Result<Self, RelayIncentiveError> {
         config.weights.validate()?;
         if config.bandwidth_target_bytes == 0 {

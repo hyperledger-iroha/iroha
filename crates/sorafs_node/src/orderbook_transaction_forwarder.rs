@@ -1,12 +1,11 @@
 //! Durable forwarding for native SoraFS orderbook transactions.
 //!
-//! The forwarder persists validated matching, maintenance, and settlement
-//! operations without mutating a process-local orderbook. An isolated signer
-//! receives the exact configured transaction authority and native instruction, while a
-//! separate submitter receives exact canonical signed transaction bytes only
-//! after those bytes are durable. Finalized-ledger reconcilers retain sole
-//! responsibility for deciding whether an operation committed, remained
-//! absent, or conflicted with a newer policy/book revision.
+//! The forwarder persists validated matching, maintenance, and settlement operations without
+//! mutating a process-local orderbook. An isolated signer receives the exact configured transaction
+//! authority and native instruction, while a separate submitter receives exact canonical signed
+//! transaction bytes only after those bytes are durable. Finalized-ledger reconcilers retain sole
+//! responsibility for deciding whether an operation committed, remained absent, or conflicted with
+//! a newer policy/book revision.
 use crate::durable_transaction_forwarder::{
     self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
     DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
@@ -295,10 +294,9 @@ pub fn validate_orderbook_reconciliation_material_v1(
 }
 /// Validate retained material against one coherent finalized policy/book snapshot.
 ///
-/// Governed matcher authority selection and revision CAS remain private
-/// implementation details of this forwarder. Provider-signed settlement
-/// receipts are relayable, so their outer transaction authority is retained
-/// for audit/idempotency but is not compared with the custody release
+/// Governed matcher authority selection and revision CAS remain private implementation details of
+/// this forwarder. Provider-signed settlement receipts are relayable, so their outer transaction
+/// authority is retained for audit/idempotency but is not compared with the custody release
 /// authority.
 #[must_use]
 pub fn validate_orderbook_finalized_context_v1(
@@ -693,10 +691,9 @@ impl OrderbookTransactionForwarder {
     }
     /// Validate and durably accept one unsigned operation for an explicit signer.
     ///
-    /// Match and maintenance still require the active governed matcher.
-    /// Settlement receipts accept any explicitly configured relayer account;
-    /// the canonical provider signature remains the delivery authorization and
-    /// ledger execution uses the channel's immutable custody authority.
+    /// Match and maintenance still require the active governed matcher. Settlement receipts accept
+    /// any explicitly configured relayer account; the canonical provider signature remains the
+    /// delivery authorization and ledger execution uses the channel's immutable custody authority.
     pub fn enqueue_unsigned_operation_with_authority(
         &self,
         authority: AccountId,
@@ -716,11 +713,10 @@ impl OrderbookTransactionForwarder {
     }
     /// Validate and durably accept one exact canonical signed transaction.
     ///
-    /// Match and maintenance signatures must use the exact governed matcher.
-    /// A settlement receipt may be wrapped by any valid transaction signer
-    /// because the canonical receipt carries the provider authorization. Every
-    /// signed transaction must bind the exact active network retained in the
-    /// finalized context.
+    /// Match and maintenance signatures must use the exact governed matcher. A settlement receipt
+    /// may be wrapped by any valid transaction signer because the canonical receipt carries the
+    /// provider authorization. Every signed transaction must bind the exact active network retained
+    /// in the finalized context.
     pub fn enqueue_signed_transaction(
         &self,
         signed_transaction_bytes: &[u8],

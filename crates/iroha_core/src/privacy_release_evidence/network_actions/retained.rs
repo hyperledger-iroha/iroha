@@ -1,10 +1,9 @@
 //! Deterministic network-bound builders for retained native privacy engines.
 //!
-//! This module is reachable only through the non-shipping
-//! `privacy-release-evidence` feature. It keeps every witness inside
-//! `iroha_core` and returns ordinary production transactions and governance
-//! records so integration gates exercise the exact Torii, DA/RBC, verifier,
-//! and atomic state-transition paths used by validators.
+//! This module is reachable only through the non-shipping `privacy-release-evidence` feature. It
+//! keeps every witness inside `iroha_core` and returns ordinary production transactions and
+//! governance records so integration gates exercise the exact Torii, DA/RBC, verifier, and atomic
+//! state-transition paths used by validators.
 use super::{
     PrivacyReleaseTransactionContextV1, network_seed_v1, signed_payload_v1, statement_context_v1,
     transaction_payload_v1,
@@ -129,8 +128,7 @@ pub struct PrivacyReleaseAnonymousPgcNetworkActionV1 {
     /// Exact public payment statement carried by `transaction`.
     pub statement: AnonymousPgcKOutOfNStatementV1,
 }
-/// One canonical FCMP++ action and its complete authoritative output-set
-/// bootstrap.
+/// One canonical FCMP++ action and its complete authoritative output-set bootstrap.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseFcmpNetworkActionV1 {
     /// Ordinary signed transaction carrying exactly one FCMP++ proof.
@@ -140,8 +138,7 @@ pub struct PrivacyReleaseFcmpNetworkActionV1 {
     /// Exact public statement carried by `transaction`.
     pub statement: MoneroFcmpPlusPlusStatementV1,
 }
-/// One canonical private-IVM note action and its authoritative program-pool
-/// bootstrap.
+/// One canonical private-IVM note action and its authoritative program-pool bootstrap.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseIvmPrivateNoteNetworkActionV1 {
     /// Ordinary signed transaction carrying exactly one private-note proof.

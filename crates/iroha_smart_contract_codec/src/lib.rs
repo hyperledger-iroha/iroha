@@ -1,17 +1,15 @@
 //! Shared codec helpers bridging smart contracts and the host runtime.
 //!
-//! These helpers provide a stable length-prefixed envelope that both the IVM
-//! guest and the Rust host understand. They are used by the executor, smart
-//! contracts, and utils crates to exchange Norito-encoded payloads without
-//! duplicating pointer-handling logic.
+//! These helpers provide a stable length-prefixed envelope that both the IVM guest and the Rust
+//! host understand. They are used by the executor, smart contracts, and utils crates to exchange
+//! Norito-encoded payloads without duplicating pointer-handling logic.
 #![allow(unsafe_code)]
 use core::{convert::TryInto, mem, ops::RangeFrom};
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 /// Encode the given value with a `usize` length prefix.
 ///
-/// The returned allocation owns the encoded bytes and is suitable for passing
-/// across the IVM FFI boundary where the callee reads the prefix to determine
-/// how many bytes follow.
+/// The returned allocation owns the encoded bytes and is suitable for passing across the IVM FFI
+/// boundary where the callee reads the prefix to determine how many bytes follow.
 #[must_use]
 pub fn encode_with_length_prefix<T: NoritoSerialize>(value: &T) -> Box<[u8]> {
     let len_size_bytes = mem::size_of::<usize>();

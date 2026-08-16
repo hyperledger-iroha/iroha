@@ -1327,7 +1327,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`43488145df2b3d502786684c24ce5ebf7c709289f6b76bc667f22484daff5746`.
+`d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5`.
 Nine of those legs execute the separate 525-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 526 TSV lines and has SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.

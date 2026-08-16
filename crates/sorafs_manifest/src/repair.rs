@@ -1,9 +1,8 @@
 //! Repair automation payloads for SoraFS (SF-8b).
 //!
-//! These types capture auditor-submitted repair reports, scheduler state, and
-//! slash proposals emitted when storage providers miss remediation SLAs. All
-//! payloads are Norito-encoded so governance, Torii, and tooling can exchange
-//! deterministic artefacts without bespoke serializers.
+//! These types capture auditor-submitted repair reports, scheduler state, and slash proposals
+//! emitted when storage providers miss remediation SLAs. All payloads are Norito-encoded so
+//! governance, Torii, and tooling can exchange deterministic artefacts without bespoke serializers.
 #![allow(clippy::size_of_ref)]
 use crate::deal::{BASIS_POINTS_PER_UNIT, XorQuantity};
 #[cfg(test)]

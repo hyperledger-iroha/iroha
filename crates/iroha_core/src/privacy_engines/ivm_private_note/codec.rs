@@ -14,9 +14,8 @@ pub(crate) const PRIVATE_PROGRAM_BYTES_V1: usize = PRIVATE_PROGRAM_HEADER_BYTES_
 ///
 /// # Errors
 ///
-/// Rejects invalid opcodes, non-zero reserved operands, register indices
-/// outside the compiled bank, a missing halt, or non-zero instructions after
-/// the first halt.
+/// Rejects invalid opcodes, non-zero reserved operands, register indices outside the compiled bank,
+/// a missing halt, or non-zero instructions after the first halt.
 pub(crate) fn encode_private_program_v1(
     program: &PrivateProgramV1,
 ) -> Result<[u8; PRIVATE_PROGRAM_BYTES_V1], IvmPrivateNoteRelationErrorV1> {

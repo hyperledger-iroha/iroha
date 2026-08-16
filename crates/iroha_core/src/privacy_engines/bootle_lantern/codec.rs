@@ -230,10 +230,9 @@ impl BootleLanternPresentationProofV1 {
 /// Strictly decoded canonical blind-issuance-request proof.
 ///
 /// This nominal P1 type deliberately has no public conversion to or from
-/// [`BootleLanternPresentationProofV1`]. Its body uses the same validated
-/// fixed-profile polynomial layout, but its `ILB1` header and nonzero purpose
-/// tag prevent an encoded P1 request from being accepted as an `ILN1`
-/// presentation. The distinct transcript purpose supplies the cryptographic
+/// [`BootleLanternPresentationProofV1`]. Its body uses the same validated fixed-profile polynomial
+/// layout, but its `ILB1` header and nonzero purpose tag prevent an encoded P1 request from being
+/// accepted as an `ILN1` presentation. The distinct transcript purpose supplies the cryptographic
 /// separation after structural decoding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootleLanternBlindIssuanceRequestProofV1 {
@@ -244,9 +243,8 @@ impl BootleLanternBlindIssuanceRequestProofV1 {
     ///
     /// # Errors
     ///
-    /// Rejects the configured ceiling first, then every non-canonical length,
-    /// `ILB1` header, purpose tag, residue, compressed commitment, or challenge
-    /// representation.
+    /// Rejects the configured ceiling first, then every non-canonical length, `ILB1` header,
+    /// purpose tag, residue, compressed commitment, or challenge representation.
     pub fn decode_exact(bytes: &[u8], max_bytes: u32) -> Result<Self, ProofCodecErrorV1> {
         Ok(Self {
             validated_body: BootleLanternPresentationProofV1 {

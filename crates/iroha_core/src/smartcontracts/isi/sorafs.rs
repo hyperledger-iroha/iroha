@@ -643,8 +643,7 @@ fn parse_pin_expiry_key(
     })?;
     Ok((retention_epoch, ManifestDigest::new(digest)))
 }
-/// Retire every pin whose prepaid retention window has elapsed at this block's
-/// consensus timestamp.
+/// Retire every pin whose prepaid retention window has elapsed at this block's consensus timestamp.
 ///
 /// The expiry index is part of authenticated world state. All due retirements
 /// are staged in one state transaction so a corrupt marker or accounting

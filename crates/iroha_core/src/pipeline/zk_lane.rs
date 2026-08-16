@@ -1,9 +1,8 @@
 //! ZK lane: capture IVM formal traces, verify in the background, and report.
 //!
-//! This module provides a lightweight, non-forking background worker that can
-//! receive formal execution traces from IVM runs, verify constraints and
-//! Merkle-authenticated logs, and report outcomes. It does not mutate WSV and
-//! is intended purely for diagnostics/telemetry.
+//! This module provides a lightweight, non-forking background worker that can receive formal
+//! execution traces from IVM runs, verify constraints and Merkle-authenticated logs, and report
+//! outcomes. It does not mutate WSV and is intended purely for diagnostics/telemetry.
 //!
 //! Integration points:
 //! - Overlay builder: after running IVM to collect queued ISIs, capture the
@@ -34,9 +33,8 @@ pub struct ZkTask {
     pub code_hash: [u8; 32],
     /// Shared immutable program bytes executed to produce this trace.
     pub program: Arc<[u8]>,
-    /// Optional block header associated with this trace (for warnings/events).
-    /// If not provided, the ZK lane will emit a warning with a minimal header
-    /// carrying height=1.
+    /// Optional block header associated with this trace (for warnings/events). If not provided, the
+    /// ZK lane will emit a warning with a minimal header carrying height=1.
     pub header: Option<iroha_data_model::block::BlockHeader>,
     /// Expanded register trace.
     pub trace: Vec<RegisterState>,
@@ -693,9 +691,8 @@ pub fn register_events_sender(sender: crate::EventsSender) {
 }
 /// Start the background ZK lane if Halo2 verification is enabled.
 ///
-/// Returns an optional handle and a `tokio` task `JoinHandle` wrapped for
-/// supervisor registration. If the lane is already running, returns the
-/// existing handle and no new task.
+/// Returns an optional handle and a `tokio` task `JoinHandle` wrapped for supervisor registration.
+/// If the lane is already running, returns the existing handle and no new task.
 pub fn start(
     cfg: &iroha_config::parameters::actual::Halo2,
 ) -> Option<(ZkLaneHandle, tokio::task::JoinHandle<()>)> {

@@ -1,9 +1,8 @@
 //! Reference validation outcome adapter for manifest/CAR replay.
 //!
-//! The SoraFS manifest crate owns the stable `ValidationOutcomeV1` schema, while
-//! this crate owns CAR parsing and trustless replay. Keeping the adapter here
-//! avoids a dependency cycle and lets operators receive the same outcome shape
-//! as the rest of the SF-11 reference validators.
+//! The SoraFS manifest crate owns the stable `ValidationOutcomeV1` schema, while this crate owns
+//! CAR parsing and trustless replay. Keeping the adapter here avoids a dependency cycle and lets
+//! operators receive the same outcome shape as the rest of the SF-11 reference validators.
 use crate::{TrustlessVerificationError, TrustlessVerificationOutcome, TrustlessVerifierConfig};
 use sorafs_manifest::{
     ManifestV1, decode_manifest_v1_canonical,

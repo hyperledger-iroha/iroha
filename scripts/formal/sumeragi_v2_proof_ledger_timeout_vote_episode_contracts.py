@@ -496,6 +496,29 @@ let selected = select_fair_v2_ingress_candidate(
         "the checked dequeue must delegate its frozen occurrences and downstream predicate to the shared strict-before-dependency selector",
         errors,
     )
+    _require_rust_token_sequence(
+        ingress_path,
+        shared_selector,
+        """
+for dependency_pass in [false, true] {
+    for (source_index, source_candidates) in candidates.iter().enumerate() {
+        for candidate in source_candidates {
+            let (ordinal, gate, obsolete) = projection(candidate);
+            let dependency = gate == FairV2IngressQueueGateVerdict::Dependency;
+            if gate == FairV2IngressQueueGateVerdict::Blocked || dependency != dependency_pass {
+                continue;
+            }
+            if obsolete || predicate(candidate) {
+                let disposition = if obsolete {
+                    FairV2IngressDequeueDisposition::RetireObsolete
+                } else {
+                    FairV2IngressDequeueDisposition::Admit
+                };
+                return Some((source_index, ordinal, disposition));
+""",
+        "shared TimeoutVote selector must preserve strict-before-dependency, Blocked exclusion, downstream predicate, and exact disposition",
+        errors,
+    )
     if selector is not None:
         selector_tokens = rust_code_tokens(selector.body)
         forbidden_predequeue_claims = [

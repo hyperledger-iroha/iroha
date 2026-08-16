@@ -1,10 +1,9 @@
 //! Fixed first-release private-note wallet encryption.
 //!
-//! There is exactly one codec: strict X25519 key agreement, a SHA-256
-//! domain-separated key derivation, and XChaCha20-Poly1305 over one fixed-width
-//! private note. Associated data authenticates the pool, governed program,
-//! recipient, ephemeral key, and public note commitment. The action digest
-//! cannot be included because it already commits the ciphertext.
+//! There is exactly one codec: strict X25519 key agreement, a SHA-256 domain-separated key
+//! derivation, and XChaCha20-Poly1305 over one fixed-width private note. Associated data
+//! authenticates the pool, governed program, recipient, ephemeral key, and public note commitment.
+//! The action digest cannot be included because it already commits the ciphertext.
 use super::relation::{PrivateNotePlaintextV1, derive_note_commitment_v1};
 use crate::privacy_engines::{
     prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1},
@@ -65,8 +64,7 @@ pub enum IvmPrivateNoteWalletErrorV1 {
     /// Authenticated decryption failed.
     #[error("private-note ciphertext authentication failed")]
     Authentication,
-    /// The decrypted fixed-width note is malformed or does not open the
-    /// expected commitment.
+    /// The decrypted fixed-width note is malformed or does not open the expected commitment.
     #[error("private-note wallet plaintext is invalid")]
     Note,
 }
@@ -139,8 +137,7 @@ fn decode_note_v1(
     }
     Ok(note)
 }
-/// Derive the private-IVM recipient identity from a strict canonical X25519
-/// public key.
+/// Derive the private-IVM recipient identity from a strict canonical X25519 public key.
 pub fn derive_ivm_private_recipient_id_v1(
     recipient_public_key: [u8; 32],
 ) -> Result<PrivacyRecipientIdV1, IvmPrivateNoteWalletErrorV1> {
@@ -333,8 +330,7 @@ pub fn encrypt_ivm_private_wallet_note_v1(
 ///
 /// # Errors
 ///
-/// Returns the same closed typed failures as
-/// [`encrypt_ivm_private_wallet_note_v1`].
+/// Returns the same closed typed failures as [`encrypt_ivm_private_wallet_note_v1`].
 pub fn encrypt_ivm_private_wallet_note_with_os_rng_v1(
     pool_id: PrivacyPoolIdV1,
     program_id: PrivacyProgramIdV1,

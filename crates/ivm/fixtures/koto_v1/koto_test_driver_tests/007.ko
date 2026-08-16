@@ -1,0 +1,8 @@
+
+            module IgnoredTests {
+              koto_test { target: "../other.ko" }
+
+              #[test]
+              fn ignored() {}
+            }
+            

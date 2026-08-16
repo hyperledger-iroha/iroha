@@ -108,6 +108,10 @@ def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
         ),
         Path(
             "formal/sumeragi_v2/"
+            "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs.tla"
+        ),
+        Path(
+            "formal/sumeragi_v2/"
             "SumeragiV2AdequateLeaderServiceClosureProofs.tla"
         ),
         Path(
@@ -120,6 +124,71 @@ def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
         shutil.copy2(module.ROOT_DIR / relative, destination)
     copy_reviewed_rust_include_components(tmp_path)
     return tmp_path / "formal" / "sumeragi_v2"
+
+
+def test_timeout_vote_episode_source_fidelity_rejects_missing_reviewed_include_component(
+    tmp_path: Path,
+) -> None:
+    """The timeout episode fails closed when a reviewed Rust include is absent."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    missing_relative = Path(
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+    )
+    missing_component = tmp_path / missing_relative
+    canonical_component = ROOT_DIR / missing_relative
+    assert missing_component.is_file() and not missing_component.is_symlink()
+    assert missing_component.read_bytes() == canonical_component.read_bytes()
+    missing_component.unlink()
+    missing_errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    runner_parent = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    assert (
+        f"{missing_component}: reviewed Rust include component for "
+        f"{runner_parent} must be a regular non-symlink file"
+        in missing_errors
+    ), missing_errors
+
+
+def test_timeout_vote_episode_selector_preserves_strict_before_dependency_after_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """The shared selector cannot service dependencies before ordinary ingress."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    assert (
+        module._timeout_vote_episode_source_fidelity_errors(
+            tmp_path, formal_dir
+        )
+        == []
+    )
+    relative = Path("crates/iroha_core/src/sumeragi/mod.rs")
+    item_name = "select_fair_v2_ingress_candidate"
+    mutate_rust_item_source(
+        module,
+        reviewed_rust_item_provider(module, tmp_path, relative, item_name),
+        item_name,
+        "for dependency_pass in [false, true]",
+        "for dependency_pass in [true, false]",
+    )
+    rebind_timeout_vote_episode_rust_item_seal(
+        module,
+        tmp_path,
+        relative,
+        item_name,
+    )
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(
+        "shared TimeoutVote selector must preserve strict-before-dependency, "
+        "Blocked exclusion, downstream predicate, and exact disposition"
+        in error
+        for error in errors
+    ), errors
 
 
 def rebind_timeout_vote_episode_rust_item_seal(
@@ -233,6 +302,7 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
         Path("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -658,6 +728,46 @@ def rebind_remote_proposal_replay_mutation_digest(
     )
 
 
+def test_same_view_generation_owner_purge_survives_runtime_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """EnterView must evict dormant clock owners by the complete round tag."""
+
+    module = load_checker()
+    copy_serviced_candidate_production_fixture(tmp_path)
+    runtime_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    mutate_rust_item_source(
+        module,
+        runtime_path,
+        "observe_effects",
+        """self.dormant_fresh_lifecycle_owners
+                    .retain(|_, owner| owner.causal_origin().root_tag == tag);""",
+        """self.dormant_fresh_lifecycle_owners.retain(|_, owner| {
+                    let root = owner.causal_origin().root_tag;
+                    root.height() == tag.height() && root.view() == tag.view()
+                });""",
+    )
+    mutated = runtime_path.read_text(encoding="utf-8")
+    items = module.rust_function_items_from_structural(
+        mutated,
+        module.mask_rust_comments_and_literals(mutated),
+        "observe_effects",
+    )
+    assert len(items) == 1
+    module._SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256["observe_effects"] = (
+        module._rust_item_token_sha256(items[0])
+    )
+
+    errors = module._serviced_candidate_production_source_fidelity_errors(
+        tmp_path
+    )
+    assert any(
+        "EnterView must retire every stale full round-tag clock owner" in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+
 def exact_output_production_fixture(tmp_path: Path) -> None:
     """Copy every production source consumed by the exact-output checker."""
 
@@ -675,6 +785,7 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/iroha_config/src/parameters/actual.rs"),
         Path("crates/iroha_config/src/parameters/defaults.rs"),
@@ -684,6 +795,154 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
     copy_reviewed_rust_include_components(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("item_name", "old", "new", "expected_error"),
+    (
+        (
+            "autonomous_lane_output_has_durable_reconstruction_source",
+            "if proposal_height != artifact.height {",
+            "if proposal_height == artifact.height {",
+            "only a current-height noncanonical autonomous output may fall back",
+        ),
+        (
+            "autonomous_lane_output_has_exact_retirement_source",
+            "|| durable_lane_authority.winning_proposal_hash(durable_proposal_hash)",
+            "&& durable_lane_authority.winning_proposal_hash(durable_proposal_hash)",
+            "same-finality nonwinning authority",
+        ),
+        (
+            "autonomous_lane_output_has_exact_retirement_source",
+            """let bound_supersession_source = durable_lane_authority.covered_source_hash(
+        artifact,
+        &BlockMessage::LaneBlockProposal(durable_payload.origin_proposal.clone()),
+    )?;""",
+            "let bound_supersession_source = Some(durable_proposal_hash);",
+            "same-finality nonwinning authority",
+        ),
+        (
+            "autonomous_lane_output_has_exact_retirement_source",
+            ".read_autonomous_lane_retired_attempt(",
+            ".read_autonomous_lane_block_artifact(",
+            "immutable exact attempt",
+        ),
+        (
+            "autonomous_lane_output_has_exact_retirement_source",
+            """if retired.retirement
+        != crate::kura::AutonomousLaneSlotRetirementV1::from_payload(durable_payload)""",
+            """if retired.retirement
+        == crate::kura::AutonomousLaneSlotRetirementV1::from_payload(durable_payload)""",
+            "exact retirement equality",
+        ),
+        (
+            "autonomous_lane_output_has_exact_retirement_source",
+            "|| payload != durable_payload",
+            "|| payload.payload_hash != durable_payload.payload_hash",
+            "compare the exact local durable payload",
+        ),
+        (
+            "autonomous_new_view_body_matches_durable_payload",
+            ".is_ok_and(|expected| expected == *body)",
+            ".is_ok_and(|_| true)",
+            "compare the exact regenerated body",
+        ),
+        (
+            "autonomous_lane_output_has_exact_retirement_source",
+            ".find(|stored| stored.certificate == *certificate)",
+            ".find(|_| true)",
+            "find the exact durable certificate",
+        ),
+    ),
+)
+def test_autonomous_retirement_mutations_survive_item_digest_refresh(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Refreshed helper seals cannot hide weakened autonomous retirement."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    component = (
+        tmp_path
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_worker"
+        / "autonomous_lane_output_retirement.rs"
+    )
+    mutate_rust_item_source(module, component, item_name, old, new)
+    original = rebind_reviewed_rust_item_digests(
+        module,
+        component,
+        item_name,
+        (),
+        ((module._PRODUCTION_EXACT_OUTPUT_ITEM_SHA256, item_name),),
+    )
+    try:
+        errors = module._autonomous_retirement_source_contract_errors(tmp_path)
+    finally:
+        restore_reviewed_rust_item_digests(original)
+
+    assert any(expected_error in error for error in errors), errors
+    assert not any(
+        f"exact-output {item_name} production item declaration and complete "
+        "control flow" in error
+        for error in errors
+    ), errors
+
+
+def test_autonomous_retirement_atomic_regression_survives_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """The sealed regression must assert atomic pending ownership on failure."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    regression = (
+        tmp_path
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_worker"
+        / "applied_height_handoff_tests.rs"
+    )
+    item_name = (
+        "applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only"
+    )
+    mutate_rust_item_source(
+        module,
+        regression,
+        item_name,
+        'assert!(mutated.is_pending(), "failed handoff remains atomic");',
+        'assert!(!mutated.is_pending(), "failed handoff remains atomic");',
+    )
+    original = rebind_reviewed_rust_item_digests(
+        module,
+        regression,
+        item_name,
+        (),
+        ((module._AUTONOMOUS_RETIREMENT_HANDOFF_TEST_SHA256, item_name),),
+    )
+    try:
+        errors = module._autonomous_retirement_source_contract_errors(tmp_path)
+    finally:
+        restore_reviewed_rust_item_digests(original)
+
+    assert any(
+        "preserve pending state after an inexact retirement failure" in error
+        for error in errors
+    ), errors
+    assert not any(
+        "autonomous-lane retirement release regression declaration and complete control flow"
+        in error
+        for error in errors
+    ), errors
 
 
 def test_restart_physical_high_water_mutation_survives_item_digest_refresh(

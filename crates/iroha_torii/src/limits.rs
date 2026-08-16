@@ -1,8 +1,7 @@
 //! Rate limiting and API token utilities for Torii.
 //!
-//! Implements a sharded token-bucket rate limiter keyed by a caller identity
-//! (API token or authority id). This protects the node from abuse without
-//! introducing gas/fees on read endpoints.
+//! Implements a sharded token-bucket rate limiter keyed by a caller identity (API token or
+//! authority id). This protects the node from abuse without introducing gas/fees on read endpoints.
 
 #![allow(clippy::redundant_pub_crate)]
 use axum::http::HeaderMap;
@@ -392,8 +391,7 @@ impl RateLimiter {
     }
     /// Atomically consumes `count` tokens for one key.
     ///
-    /// Rejection leaves the bucket unchanged, including when `count` exceeds
-    /// the configured burst.
+    /// Rejection leaves the bucket unchanged, including when `count` exceeds the configured burst.
     #[allow(clippy::unused_async)]
     pub async fn allow_repeated(&self, key: &str, count: usize) -> bool {
         if self.inner.disabled || count == 0 {
@@ -421,10 +419,9 @@ pub const FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
 const MAX_FORWARDED_FOR_HOPS: usize = 32;
 /// Resolve the effective client IP for downstream policy decisions.
 ///
-/// The canonical remote address header is preferred because ingress middleware
-/// overwrites it with the accepted socket address or a trusted proxy-forwarded
-/// client IP. Falling back to the transport address keeps direct handler
-/// invocations working in narrow tests.
+/// The canonical remote address header is preferred because ingress middleware overwrites it with
+/// the accepted socket address or a trusted proxy-forwarded client IP. Falling back to the
+/// transport address keeps direct handler invocations working in narrow tests.
 pub fn effective_remote_ip(headers: &HeaderMap, remote: Option<IpAddr>) -> Option<IpAddr> {
     headers
         .get(REMOTE_ADDR_HEADER)
@@ -434,12 +431,11 @@ pub fn effective_remote_ip(headers: &HeaderMap, remote: Option<IpAddr>) -> Optio
 }
 /// Resolve the remote IP that ingress middleware should inject.
 ///
-/// If the transport peer belongs to a configured trusted proxy CIDR, the
-/// `X-Forwarded-For` chain is evaluated from right to left and the first
-/// untrusted address is used as the client IP. This remains safe when a proxy
-/// appends to a client-supplied chain: the proxy-observed client address is
-/// encountered before any attacker-selected prefix. Malformed or oversized
-/// chains fail closed to the accepted transport peer.
+/// If the transport peer belongs to a configured trusted proxy CIDR, the `X-Forwarded-For` chain is
+/// evaluated from right to left and the first untrusted address is used as the client IP. This
+/// remains safe when a proxy appends to a client-supplied chain: the proxy-observed client address
+/// is encountered before any attacker-selected prefix. Malformed or oversized chains fail closed to
+/// the accepted transport peer.
 ///
 /// The internal [`REMOTE_ADDR_HEADER`] is deliberately ignored here. Ingress
 /// middleware writes that header only after this function returns, so accepting
@@ -630,8 +626,7 @@ pub fn is_allowed_by_cidr(headers: &HeaderMap, remote: Option<IpAddr>, allow: &[
     let candidate_ip = effective_remote_ip(headers, remote);
     candidate_ip.map_or(false, |ip| cidr_contains(allow, ip))
 }
-/// Returns true if a forwarded header is present and the TCP peer belongs to a
-/// trusted proxy CIDR.
+/// Returns true if a forwarded header is present and the TCP peer belongs to a trusted proxy CIDR.
 pub fn has_trusted_forwarded_header(
     headers: &HeaderMap,
     remote: Option<IpAddr>,

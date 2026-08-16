@@ -9,8 +9,7 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-/// Canonical error envelope containing the stable reason code and structured
-/// context.
+/// Canonical error envelope containing the stable reason code and structured context.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct CanonicalError {
@@ -20,8 +19,7 @@ pub struct CanonicalError {
     pub detail: CanonicalErrorKind,
 }
 impl CanonicalError {
-    /// Construct an error using the canonical reason code for the given detail
-    /// variant.
+    /// Construct an error using the canonical reason code for the given detail variant.
     #[must_use]
     pub const fn new(detail: CanonicalErrorKind) -> Self {
         let reason_code = detail.reason_code();
@@ -39,18 +37,15 @@ impl CanonicalError {
     norito(tag = "code", content = "context")
 )]
 pub enum CanonicalErrorKind {
-    /// Fewer than `required_receipts` DA attestations arrived before
-    /// `deadline_ms`.
+    /// Fewer than `required_receipts` DA attestations arrived before `deadline_ms`.
     DaDeadlineExceeded(DaDeadlineExceeded),
     /// Oracle data was stale beyond the configured limit for the dataspace.
     OracleStale(OracleStale),
     /// A circuit breaker prevented execution (e.g., liquidity/volatility guard).
     CircuitBreakerActive(CircuitBreakerActive),
-    /// Dataspace buffer dropped below configured floor, forcing XOR-only
-    /// inclusion.
+    /// Dataspace buffer dropped below configured floor, forcing XOR-only inclusion.
     BufferDepletedXorOnly(BufferDepletedXorOnly),
-    /// Static analysis could not bound the declared read/write set for a
-    /// program.
+    /// Static analysis could not bound the declared read/write set for a program.
     RwsetUnbounded(RwsetUnbounded),
     /// AMX exceeded its prepare/execute/commit budget for a dataspace slice.
     AmxTimeout(AmxTimeout),

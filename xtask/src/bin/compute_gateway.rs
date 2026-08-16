@@ -1,10 +1,9 @@
 //! Minimal compute gateway harness to exercise SSC compute tasks.
 //!
-//! This standalone binary validates `ComputeCall` envelopes against a manifest,
-//! enforces replay and rate limits, and executes deterministic built-in
-//! entrypoints (e.g., `echo`) to produce `ComputeReceipt` outputs. It is
-//! intentionally lightweight so CI can replay requests and lock determinism
-//! without running the full node.
+//! This standalone binary validates `ComputeCall` envelopes against a manifest, enforces replay and
+//! rate limits, and executes deterministic built-in entrypoints (e.g., `echo`) to produce
+//! `ComputeReceipt` outputs. It is intentionally lightweight so CI can replay requests and lock
+//! determinism without running the full node.
 #![allow(clippy::too_many_lines)]
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},

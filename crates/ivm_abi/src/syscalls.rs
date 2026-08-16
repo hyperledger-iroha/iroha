@@ -1,11 +1,10 @@
 //! Iroha-specific syscall number definitions.
 //!
-//! The VM uses the `SCALL` instruction to invoke host-provided ledger
-//! operations.  Section 7 of the IVM specification assigns concrete numeric
-//! codes to those operations.  The constants below mirror that table so that VM
-//! users can refer to the syscalls symbolically.  Actual behaviour and gas
-//! charges are implemented by the host. These calls are collectively known as
-//! **Iroha Special Instructions** (ISI).
+//! The VM uses the `SCALL` instruction to invoke host-provided ledger operations. Section 7 of the
+//! IVM specification assigns concrete numeric codes to those operations. The constants below mirror
+//! that table so that VM users can refer to the syscalls symbolically. Actual behaviour and gas
+//! charges are implemented by the host. These calls are collectively known as **Iroha Special
+//! Instructions** (ISI).
 //!
 //! The table below includes helper syscalls used for cryptographic proof
 //! generation and verification, Merkle path queries and hardware feature
@@ -20,8 +19,7 @@ use iroha_data_model::prelude::{
 };
 /// Debug helper for development; part of the ABI v1 surface.
 pub const SYSCALL_DEBUG_PRINT: u32 = 0;
-/// Lifecycle and utility syscalls.
-/// Gracefully terminate the program and return a value.
+/// Lifecycle and utility syscalls. Gracefully terminate the program and return a value.
 pub const SYSCALL_EXIT: u32 = 0x01;
 /// Abort execution and revert state changes.
 pub const SYSCALL_ABORT: u32 = 0x02;
@@ -72,8 +70,7 @@ pub const SYSCALL_NFT_SET_METADATA: u32 = 0x27;
 pub const SYSCALL_NFT_BURN_ASSET: u32 = 0x28;
 /// Smart-contract durable state (key-value by path).
 ///
-/// Pointer-ABI arguments: paths use
-/// `&NoritoBytes(canonical Norito StatePath)` TLV; values use
+/// Pointer-ABI arguments: paths use `&NoritoBytes(canonical Norito StatePath)` TLV; values use
 /// `&NoritoBytes` TLV.
 ///
 /// GET:  r10 = &NoritoBytes(StatePath)  -> On success, r10 = &NoritoBytes
@@ -93,8 +90,7 @@ pub const SYSCALL_STATE_DEL: u32 = 0x52;
 pub const SYSCALL_STATE_KEYS: u32 = 0x01_0030;
 /// Test whether a durable-state key is currently present.
 ///
-/// Args: r10 = &NoritoBytes(StatePath)
-/// Ret:  r10 = 1 when present, 0 when absent
+/// Args: r10 = &NoritoBytes(StatePath) Ret: r10 = 1 when present, 0 when absent
 pub const SYSCALL_STATE_HAS: u32 = 0x01_0031;
 /// Return the byte length of a durable-state value without copying the value.
 ///
@@ -103,44 +99,37 @@ pub const SYSCALL_STATE_HAS: u32 = 0x01_0031;
 pub const SYSCALL_STATE_LEN: u32 = 0x01_0032;
 /// Count durable-state keys under a prefix without copying the key list.
 ///
-/// Args: r10 = &NoritoBytes(StatePath)
-/// Ret:  r10 = total matching keys
+/// Args: r10 = &NoritoBytes(StatePath) Ret: r10 = total matching keys
 pub const SYSCALL_STATE_COUNT: u32 = 0x01_0033;
-/// Decode one canonical Kotodama `StateMap` key from a page returned by
-/// [`SYSCALL_STATE_KEYS`].
+/// Decode one canonical Kotodama `StateMap` key from a page returned by [`SYSCALL_STATE_KEYS`].
 ///
 /// Args: r10 = &NoritoBytes(Vec<StatePath>), r11 = &Name(base), r12 = index
 /// Ret:  r10 = &NoritoBytes(canonical key), or 0 when index is out of range
 pub const SYSCALL_STATE_MAP_KEY_AT: u32 = 0x01_0034;
 /// Encode one compiler-flattened typed durable value.
 ///
-/// Args: r10 = &NoritoBytes(StateValueSchemaV1), r11 = aligned raw word table,
-/// r12 = word count
+/// Args: r10 = &NoritoBytes(StateValueSchemaV1), r11 = aligned raw word table, r12 = word count
 /// Ret: r10 = &NoritoBytes(StateValueRecordV1)
 pub const SYSCALL_STATE_VALUE_ENCODE: u32 = 0x01_0035;
 /// Decode one typed durable value into an aligned compiler word table.
 ///
-/// Args: r10 = &NoritoBytes(StateValueSchemaV1),
-/// r11 = &NoritoBytes(StateValueRecordV1); zero is rejected because absence is
-/// represented by `StateMap.get`'s outer `Option`, never by a typed value
-/// Ret: r10 = &Blob(pad:u8 then flattened u64 words)
+/// Args: r10 = &NoritoBytes(StateValueSchemaV1), r11 = &NoritoBytes(StateValueRecordV1); zero is
+/// rejected because absence is represented by `StateMap.get`'s outer `Option`, never by a typed
+/// value Ret: r10 = &Blob(pad:u8 then flattened u64 words)
 pub const SYSCALL_STATE_VALUE_DECODE: u32 = 0x01_0036;
 /// Convert one canonical nominal `Name` into a durable-state `StatePath`.
 ///
-/// Args: r10 = &Name
-/// Ret:  r10 = &NoritoBytes(canonical Norito StatePath)
+/// Args: r10 = &Name Ret: r10 = &NoritoBytes(canonical Norito StatePath)
 pub const SYSCALL_STATE_PATH_FROM_NAME: u32 = 0x01_0037;
 /// Maximum number of entries returned by one V1 durable-state key page.
 pub const STATE_KEYS_MAX_ITEMS: u64 = 64;
 /// Maximum UTF-8 byte length of a canonical V1 durable-state `StatePath`.
 ///
-/// The 16 KiB path accommodates a canonical `Name` base of at most 255 UTF-8
-/// bytes, one separator, and the lowercase-hex expansion of a 4 KiB canonical
-/// key. Keep this synchronized with
+/// The 16 KiB path accommodates a canonical `Name` base of at most 255 UTF-8 bytes, one separator,
+/// and the lowercase-hex expansion of a 4 KiB canonical key. Keep this synchronized with
 /// `iroha_data_model::state_path::MAX_STATE_PATH_BYTES`.
 pub const STATE_MAX_PATH_BYTES: usize = iroha_data_model::state_path::MAX_STATE_PATH_BYTES;
-/// Conservative maximum canonical Norito frame carried inside the
-/// `NoritoBytes` path TLV.
+/// Conservative maximum canonical Norito frame carried inside the `NoritoBytes` path TLV.
 ///
 /// This separately ABI-binds transport framing so header-only gas quoting can
 /// reject oversized input without reducing the 16 KiB UTF-8 path ceiling.
@@ -159,8 +148,7 @@ pub const STATE_MAX_VALUE_BYTES: usize = 512 * 1024;
 pub const STATE_MAP_MAX_KEY_BYTES: usize = 4 * 1024;
 /// Maximum UTF-8 bytes in the canonical `Name` used as a V1 `StateMap` base.
 pub const STATE_MAP_MAX_BASE_BYTES: usize = iroha_data_model::name::MAX_NAME_BYTES;
-/// Conservative maximum canonical Norito `Name` frame accepted for a V1
-/// `StateMap` base.
+/// Conservative maximum canonical Norito `Name` frame accepted for a V1 `StateMap` base.
 pub const STATE_MAP_MAX_BASE_FRAME_BYTES: usize = STATE_MAP_MAX_BASE_BYTES
     + norito::core::Header::SIZE
     + (core::mem::align_of::<u64>() - 1)
@@ -170,13 +158,11 @@ pub const STATE_MAP_MAX_PAGE_BYTES: usize = 1024 * 1024;
 /// Decode a NoritoBytes value containing a signed decimal ASCII integer and return
 /// the value in `x10` as a 64-bit signed integer (two's complement).
 ///
-/// Args: r10 = &NoritoBytes (ASCII decimal)
-/// Ret:  r10 = value (as u64 bits)
+/// Args: r10 = &NoritoBytes (ASCII decimal) Ret: r10 = value (as u64 bits)
 pub const SYSCALL_DECODE_INT: u32 = 0x53;
 /// Return payload length for a pointer-ABI TLV.
 ///
-/// Args: r10 = &TLV
-/// Ret:  r10 = payload length (u64)
+/// Args: r10 = &TLV Ret: r10 = payload length (u64)
 pub const SYSCALL_TLV_LEN: u32 = 0x77;
 /// JSON object field getters.
 ///
@@ -199,18 +185,15 @@ pub const SYSCALL_JSON_GET_BLOB_HEX: u32 = 0x7D;
 pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID: u32 = 0x80;
 /// Construct an empty JSON object.
 ///
-/// Args: none
-/// Ret:  r10 = host-owned &Json
+/// Args: none Ret: r10 = host-owned &Json
 pub const SYSCALL_JSON_OBJECT: u32 = 0x81;
 /// Insert or replace an integer field in a JSON object.
 ///
-/// Args: r10 = &Json object, r11 = &Name key, r12 = value (i64 as u64)
-/// Ret:  r10 = host-owned &Json
+/// Args: r10 = &Json object, r11 = &Name key, r12 = value (i64 as u64) Ret: r10 = host-owned &Json
 pub const SYSCALL_JSON_SET_I64: u32 = 0x82;
 /// Insert or replace an account-id field in a JSON object using canonical string encoding.
 ///
-/// Args: r10 = &Json object, r11 = &Name key, r12 = &AccountId
-/// Ret:  r10 = host-owned &Json
+/// Args: r10 = &Json object, r11 = &Name key, r12 = &AccountId Ret: r10 = host-owned &Json
 pub const SYSCALL_JSON_SET_ACCOUNT_ID: u32 = 0x83;
 /// Permanently retired pre-release decimal-i64 path helper number.
 ///
@@ -219,15 +202,13 @@ pub const SYSCALL_JSON_SET_ACCOUNT_ID: u32 = 0x83;
 pub const RETIRED_SYSCALL_BUILD_PATH_MAP_KEY: u32 = 0x54;
 /// Encode a 64-bit signed integer in ASCII decimal and return a host-owned `&NoritoBytes` TLV.
 ///
-/// Args: r10 = value (i64 as u64)
-/// Ret:  r10 = &NoritoBytes (ASCII decimal)
+/// Args: r10 = value (i64 as u64) Ret: r10 = &NoritoBytes (ASCII decimal)
 pub const SYSCALL_ENCODE_INT: u32 = 0x55;
 /// Build a state path from a base Name and a NoritoBytes key by appending
 /// `"/" + lowercase_hex(payload)`.
 ///
-/// The encoding is injective and its lexical order is the unsigned bytewise
-/// order of canonical Norito key payloads. Payloads larger than
-/// [`STATE_MAP_MAX_KEY_BYTES`] are rejected.
+/// The encoding is injective and its lexical order is the unsigned bytewise order of canonical
+/// Norito key payloads. Payloads larger than [`STATE_MAP_MAX_KEY_BYTES`] are rejected.
 ///
 /// Args: r10 = &Name base, r11 = &NoritoBytes key
 /// Ret:  r10 = host-owned &NoritoBytes(canonical Norito StatePath)
@@ -245,8 +226,7 @@ pub const SYSCALL_SCHEMA_DECODE: u32 = 0x5A;
 pub const SYSCALL_SCHEMA_INFO: u32 = 0x5B;
 /// Decode a canonical Norito-framed `Name` from `NoritoBytes` and return a host-owned `&Name` TLV.
 ///
-/// Args: r10 = &NoritoBytes (canonical Norito `Name` frame)
-/// Ret:  r10 = host-owned &Name
+/// Args: r10 = &NoritoBytes (canonical Norito `Name` frame) Ret: r10 = host-owned &Name
 pub const SYSCALL_NAME_DECODE: u32 = 0x5C;
 /// Encode an arbitrary pointer-ABI TLV into NoritoBytes by copying its envelope bytes.
 ///
@@ -262,8 +242,7 @@ pub const SYSCALL_POINTER_TO_NORITO: u32 = 0x5D;
 pub const SYSCALL_POINTER_FROM_NORITO: u32 = 0x5E;
 /// Compare two pointer-ABI TLVs for deep equality by content (header + payload).
 ///
-/// Args: r10 = &TLV, r11 = &TLV
-/// Ret:  r10 = 1 if equal, 0 if not
+/// Args: r10 = &TLV, r11 = &TLV Ret: r10 = 1 if equal, 0 if not
 pub const SYSCALL_TLV_EQ: u32 = 0x5F;
 /// Roles and permissions.
 pub const SYSCALL_CREATE_ROLE: u32 = 0x30;
@@ -294,9 +273,8 @@ pub const SYSCALL_REGISTER_SMART_CONTRACT_CODE: u32 = 0x45;
 pub const SYSCALL_REGISTER_SMART_CONTRACT_BYTES: u32 = 0x46;
 /// Governance activation of a contract instance binding.
 pub const SYSCALL_ACTIVATE_CONTRACT_INSTANCE: u32 = 0x47;
-/// Zero-knowledge mode helpers.
-/// Commit two opaque typed private numeric inputs without truncating either
-/// projection or the compressed Pedersen point.
+/// Zero-knowledge mode helpers. Commit two opaque typed private numeric inputs without truncating
+/// either projection or the compressed Pedersen point.
 ///
 /// Args: r10 = private `&Int|&Decimal|&Quantity` value,
 /// r11 = private `&Int|&Decimal|&Quantity` blinding input.
@@ -354,14 +332,12 @@ pub const SYSCALL_PROVE_EXECUTION: u32 = 0xF4;
 pub const SYSCALL_GROW_HEAP: u32 = 0xF5;
 /// Verify a Norito-encoded OpenVerifyEnvelope against the on-chain verifying-key registry.
 pub const SYSCALL_VERIFY_PROOF: u32 = 0xF6;
-/// Write the Merkle path for address `x10` to memory at `x11`.
-/// Optional: if `x12 != 0`, write the current Merkle root to the 32-byte
-/// buffer at `x12`.
+/// Write the Merkle path for address `x10` to memory at `x11`. Optional: if `x12 != 0`, write the
+/// current Merkle root to the 32-byte buffer at `x12`.
 pub const SYSCALL_GET_MERKLE_PATH: u32 = 0xF7;
-/// Write a compact Merkle proof for address `x10` to memory at `x11` using the
-/// layout: `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]`. If `x12 != 0`,
-/// cap the depth to `min(x12, 32)`. If `x13 != 0`, write the current 32-byte
-/// Merkle root to `x13`.
+/// Write a compact Merkle proof for address `x10` to memory at `x11` using the layout: `[u8
+/// depth][u32 dirs_le][u32 count][count*32 siblings]`. If `x12 != 0`, cap the depth to `min(x12,
+/// 32)`. If `x13 != 0`, write the current 32-byte Merkle root to `x13`.
 pub const SYSCALL_GET_MERKLE_COMPACT: u32 = 0xFA;
 /// Write a compact Merkle proof for the register leaf at index `x10` to memory
 /// at `x11` using the same layout as `GET_MERKLE_COMPACT`. If `x12 != 0`, cap
@@ -438,10 +414,9 @@ pub const SYSCALL_VERIFY_DS_PROOF: u32 = 0xB3;
 pub const SYSCALL_USE_ASSET_HANDLE: u32 = 0xB4;
 /// Return whether `number` is one of the state-backed AXT envelope syscalls.
 ///
-/// AXT remains available to both contract and generic ABI V1 programs when
-/// execution is bound to a live world-state snapshot. State-free tools use
-/// this predicate to reject the whole envelope surface before execution
-/// instead of running against an implicit allow-all policy.
+/// AXT remains available to both contract and generic ABI V1 programs when execution is bound to a
+/// live world-state snapshot. State-free tools use this predicate to reject the whole envelope
+/// surface before execution instead of running against an implicit allow-all policy.
 #[must_use]
 pub const fn is_axt_syscall(number: u32) -> bool {
     matches!(
@@ -495,8 +470,7 @@ pub const SYSCALL_QUERY_EXECUTE_NORITO: u32 = 0x01_0000;
 ///
 /// [`CoreQueryEntityTagV1`]: crate::core_query::CoreQueryEntityTagV1
 pub const SYSCALL_CORE_QUERY_GET: u32 = 0x01_0001;
-/// Read one bounded page of projected core-ledger entities by stable
-/// [`CoreQueryEntityTagV1`].
+/// Read one bounded page of projected core-ledger entities by stable [`CoreQueryEntityTagV1`].
 ///
 /// [`CoreQueryEntityTagV1`]: crate::core_query::CoreQueryEntityTagV1
 pub const SYSCALL_CORE_QUERY_PAGE: u32 = 0x01_0002;
@@ -529,17 +503,15 @@ pub const SYSCALL_SYSVAR_CONTRACT_SUBJECT: u32 = 0x01_0027;
 /// Ret: r10 = a fresh host-owned `&NoritoBytes` TLV with the identical payload.
 /// Null, malformed, disallowed, and non-bytes pointer types are rejected.
 pub const SYSCALL_NORMALIZE_NORITO_BYTES: u32 = 0x01_0028;
-/// Invoke a deployed ABI-v1 contract through the first production typed
-/// nested-call profile.
+/// Invoke a deployed ABI-v1 contract through the first production typed nested-call profile.
 ///
 /// This profile is deliberately closed over the exact public schema
 /// `{amount_in: quantity, min_out: quantity} -> quantity`. The compiler owns
 /// the field names and return type; source can select only the dynamic contract
 /// address and a literal entrypoint.
 ///
-/// Args: `r10 = &Blob(contract_address)`, `r11 = &Blob(entrypoint)`,
-/// `r12 = &Quantity(amount_in)`, `r13 = &Quantity(min_out)`.
-/// Ret: `r10 = &Quantity`.
+/// Args: `r10 = &Blob(contract_address)`, `r11 = &Blob(entrypoint)`, `r12 = &Quantity(amount_in)`,
+/// `r13 = &Quantity(min_out)`. Ret: `r10 = &Quantity`.
 pub const SYSCALL_CALL_CONTRACT_QUANTITY2: u32 = 0x01_0029;
 /// Decode a complete schema-bound public argument record.
 ///
@@ -702,9 +674,8 @@ pub const fn is_numeric_v1_syscall(number: u32) -> bool {
 }
 /// Construct one native JSON value from a compiler-emitted schema and flattened words.
 ///
-/// Args: r10 = `&NoritoBytes(JsonConstructionSchemaV1)`, r11 = aligned public
-/// word-table address, r12 = exact word count.
-/// Ret: r10 = `&Json`.
+/// Args: r10 = `&NoritoBytes(JsonConstructionSchemaV1)`, r11 = aligned public word-table address,
+/// r12 = exact word count. Ret: r10 = `&Json`.
 pub const SYSCALL_JSON_BUILD: u32 = 0x01_004E;
 /// Return whether `number` is one of the canonical typed JSON getters.
 #[must_use]
@@ -724,9 +695,8 @@ pub const fn is_json_getter_syscall(number: u32) -> bool {
 }
 /// Kotodama test-runner helper: resolve a fixture actor alias to an `AccountId` TLV.
 ///
-/// These host-private helpers are intentionally outside [`abi_syscall_list`].
-/// Production hosts reject them, while `koto_test` opts in explicitly when it
-/// executes test-mode bytecode.
+/// These host-private helpers are intentionally outside [`abi_syscall_list`]. Production hosts
+/// reject them, while `koto_test` opts in explicitly when it executes test-mode bytecode.
 pub const SYSCALL_KOTO_TEST_ACTOR_ACCOUNT: u32 = 0x00FE_0001;
 /// Kotodama test-runner helper: return a fixture actor public key as a `Blob` TLV.
 pub const SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY: u32 = 0x00FE_0002;
@@ -749,11 +719,10 @@ pub const fn is_koto_test_syscall(number: u32) -> bool {
 }
 /// Returns whether a syscall number is allowed for the given ABI policy.
 ///
-/// This function centralizes the mapping between `ProgramMetadata.abi_version`
-/// and the set of syscalls available to programs compiled against that ABI.
-/// Hosts should call this before attempting to handle a syscall to ensure
-/// stable first-release behavior; unknown or disallowed numbers must be
-/// rejected with `VMError::UnknownSyscall`.
+/// This function centralizes the mapping between `ProgramMetadata.abi_version` and the set of
+/// syscalls available to programs compiled against that ABI. Hosts should call this before
+/// attempting to handle a syscall to ensure stable first-release behavior; unknown or disallowed
+/// numbers must be rejected with `VMError::UnknownSyscall`.
 pub fn is_syscall_allowed(policy: crate::SyscallPolicy, number: u32) -> bool {
     syscalls_for_policy(policy).binary_search(&number).is_ok()
 }
@@ -821,10 +790,9 @@ pub enum SyscallAccess {
 }
 /// Return the explicitly registered host-state access class for a syscall.
 ///
-/// Unlike [`syscall_access`], this function has no conservative fallback. Host
-/// metering uses it to distinguish a deliberately classified dynamic syscall
-/// from a newly allowed syscall whose security metadata was never registered.
-/// Such a syscall must fail closed during preparation.
+/// Unlike [`syscall_access`], this function has no conservative fallback. Host metering uses it to
+/// distinguish a deliberately classified dynamic syscall from a newly allowed syscall whose
+/// security metadata was never registered. Such a syscall must fail closed during preparation.
 #[must_use]
 pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
     if is_numeric_v1_syscall(number) || number == SYSCALL_JSON_BUILD {
@@ -1034,9 +1002,8 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
 }
 /// Return the conservative host-state access class for an ABI v1 syscall.
 ///
-/// The fallback is [`SyscallAccess::Dynamic`]. New or unknown syscalls
-/// therefore still serialize conservatively, while
-/// [`registered_syscall_access`] lets admission and host metering reject an
+/// The fallback is [`SyscallAccess::Dynamic`]. New or unknown syscalls therefore still serialize
+/// conservatively, while [`registered_syscall_access`] lets admission and host metering reject an
 /// allowed-but-unclassified syscall outright.
 #[must_use]
 pub const fn syscall_access(number: u32) -> SyscallAccess {
@@ -1830,11 +1797,10 @@ fn append_abi_field(bytes: &mut Vec<u8>, value: &[u8]) -> Result<(), AbiSurfaceE
 }
 /// Canonical encoder for the ABI hash descriptor.
 ///
-/// Every value is paired with a stable field name and both byte strings are
-/// length-prefixed. Nested records and sequence items are themselves framed
-/// fields, so no two different partitions of the same byte stream can alias.
-/// Inputs are explicit integers, booleans, and UTF-8 protocol names; encoding
-/// never depends on debug formatting, a codec configuration, or host hardware.
+/// Every value is paired with a stable field name and both byte strings are length-prefixed. Nested
+/// records and sequence items are themselves framed fields, so no two different partitions of the
+/// same byte stream can alias. Inputs are explicit integers, booleans, and UTF-8 protocol names;
+/// encoding never depends on debug formatting, a codec configuration, or host hardware.
 #[derive(Default)]
 struct AbiDescriptorEncoder {
     bytes: Vec<u8>,
@@ -3494,27 +3460,21 @@ fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8],
 }
 /// Compute the stable first-release ABI hash for the complete allowed surface.
 ///
-/// The domain-separated, versioned, length-prefixed descriptor binds the
-/// ABI-v1 policy tag; indexed-literal opcodes, table kinds, and payload layouts;
-/// every sorted syscall signature and host-access class; every allowed pointer
-/// type; the CNTR marker, section layout, nominal schema identities, complete
-/// embedded state-type tag/layout table, admission rules, depth limit, and
-/// durable-state caps, ordering, storage, paging, and path derivation;
-/// typed durable-state nominal schema identities, exact schema-binding domain,
-/// kind/node/atom discriminants and layouts, pointer mappings, traversal rules,
-/// decoded-table layout, and aggregate caps;
-/// typed core-query entity tags, projections, and page semantics; recursive
-/// entrypoint `List`, `Int`, `Decimal`, and `Quantity` kinds; and canonical
-/// numeric domains, exact arithmetic/conversion/wrapping rules, JSON grammar,
-/// fault ordering, frame schema/layout, error-precedence, and rounding rules;
-/// and the bounded typed private-input record, nominal kind tags, projection
-/// domains, full-width commitment derivation, independent generator, and
-/// declassification rule.
-/// Gas prices and staged-metering phase tags remain bound independently by the
-/// gas-schedule hash. A malformed compiled registry
-/// returns a diagnostic sentinel with an invalid Iroha-hash marker; release
-/// tests require that path to be unreachable, and a valid Iroha hash can never
-/// equal such a sentinel.
+/// The domain-separated, versioned, length-prefixed descriptor binds the ABI-v1 policy tag;
+/// indexed-literal opcodes, table kinds, and payload layouts; every sorted syscall signature and
+/// host-access class; every allowed pointer type; the CNTR marker, section layout, nominal schema
+/// identities, complete embedded state-type tag/layout table, admission rules, depth limit, and
+/// durable-state caps, ordering, storage, paging, and path derivation; typed durable-state nominal
+/// schema identities, exact schema-binding domain, kind/node/atom discriminants and layouts,
+/// pointer mappings, traversal rules, decoded-table layout, and aggregate caps; typed core-query
+/// entity tags, projections, and page semantics; recursive entrypoint `List`, `Int`, `Decimal`, and
+/// `Quantity` kinds; and canonical numeric domains, exact arithmetic/conversion/wrapping rules,
+/// JSON grammar, fault ordering, frame schema/layout, error-precedence, and rounding rules; and the
+/// bounded typed private-input record, nominal kind tags, projection domains, full-width commitment
+/// derivation, independent generator, and declassification rule. Gas prices and staged-metering
+/// phase tags remain bound independently by the gas-schedule hash. A malformed compiled registry
+/// returns a diagnostic sentinel with an invalid Iroha-hash marker; release tests require that path
+/// to be unreachable, and a valid Iroha hash can never equal such a sentinel.
 pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
     match abi_surface_descriptor(policy) {
         Ok(descriptor) => *iroha_crypto::Hash::new(descriptor).as_ref(),

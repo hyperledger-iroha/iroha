@@ -1793,3 +1793,414 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
         "terminal auxiliary retries must not mutate the retained file inventory"
     );
 }
+
+#[test]
+fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
+    let temp_dir = TempDir::new().expect("carrier-hint promotion temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let catalog = autonomous_temp_recovery_catalog();
+    let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+    let lane = lane_config.primary();
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (network_id, epoch, mut payload_template) =
+        autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+    let carrier_hint = payload_template
+        .origin_proposal
+        .payload_block_hint
+        .take()
+        .expect("fixture global carrier hint");
+    let local_peer = PeerId::new(signer.public_key().clone());
+    let mut roster = vec![ValidatorPower {
+        validator: local_peer.clone(),
+        power: 1,
+    }];
+    while roster.len() < 4 {
+        let validator = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let validator = PeerId::new(validator.public_key().clone());
+        if roster.iter().all(|entry| entry.validator != validator) {
+            roster.push(ValidatorPower {
+                validator,
+                power: 1,
+            });
+        }
+    }
+    roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+    let context = HeightContext {
+        network_id,
+        protocol_version: PROTOCOL_VERSION,
+        height: carrier_hint.proposal_height,
+        epoch,
+        epoch_end_height: carrier_hint.proposal_height.saturating_add(100),
+        next_epoch_snapshot: None,
+        mode: ConsensusMode::Permissioned,
+        parent_commit_qc: None,
+        snapshot_bootstrap: Some(
+            iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor {
+                snapshot_height: carrier_hint.proposal_height.saturating_sub(1),
+                snapshot_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"kura-carrier-hint-promotion-snapshot-block",
+                )),
+                snapshot_block_creation_time_ms: carrier_hint.proposal_height,
+                snapshot_state_hash: Hash::new(b"kura-carrier-hint-promotion-snapshot-state"),
+            },
+        ),
+        quorum: DualQuorum::from_roster(&roster).expect("carrier-hint promotion quorum"),
+        roster,
+        nexus_amx_context_hash: Hash::new(b"kura-carrier-hint-promotion-nexus"),
+        execution_policy_hash: Hash::new(b"kura-carrier-hint-promotion-policy"),
+        da_layout: DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+        leader_seed: [0xC7; 32],
+    };
+    context
+        .validate()
+        .expect("valid carrier-hint promotion height context");
+    let height_context_id = context.id();
+    let (reservation_owner_hash, proposal_identity_hash) =
+        autonomous_lane_reservation_identity_hashes_for_proposal(
+            network_id,
+            height_context_id,
+            epoch,
+            &payload_template.origin_proposal,
+            &local_peer,
+        )
+        .expect("derive carrier-hint promotion reservation identities");
+    let mut reservation_keys = payload_template.reservation_keys.clone();
+    for reservation in &mut reservation_keys {
+        reservation.reservation_owner_hash = reservation_owner_hash;
+        reservation.proposal_identity_hash = proposal_identity_hash;
+    }
+    let hint_free = LaneExecutablePayloadV1::new_signed_with_reservations(
+        network_id,
+        epoch,
+        payload_template.origin_proposal.clone(),
+        payload_template.entrypoints.clone(),
+        reservation_keys,
+        payload_template.routing_plans.clone(),
+        payload_template.native_amx_receipts.clone(),
+        local_peer.clone(),
+        signer.private_key(),
+    )
+    .expect("construct hint-free Queue payload");
+    assert!(hint_free.origin_proposal.payload_block_hint.is_none());
+    let hinted = hint_free
+        .attach_global_hint_exact(carrier_hint, network_id, epoch)
+        .expect("attach the exact protected carrier hint");
+    let reservation_group =
+        lane_queue_reservation_group_binding_from_ordered_keys(hint_free.reservation_keys.iter())
+            .expect("bind carrier-hint promotion reservation group");
+    let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+        height_context_id,
+        1,
+        &hint_free,
+        reservation_group,
+        &local_peer,
+    )
+    .expect("bind carrier-hint promotion lifecycle attempt");
+    let binding_a = canonical_lane_queue_reservation_group_identity_projection(reservation_group);
+    let before_activate = ProductionInFlightFirstReleaseStateProjection {
+        validator_count: 1,
+        producer: 1,
+        producer_selected_owner: 1,
+        replicated_carrier_owners: 0,
+        payload_binding_a: 1,
+        binding_a,
+        queue: ProductionInFlightFirstReleaseQueueProjection {
+            plan_state: IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
+            selected_count: reservation_group.reservation_count,
+            reservation_state: IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE,
+        },
+        carrier: ProductionInFlightFirstReleaseCarrierProjection::default(),
+        session: ProductionInFlightFirstReleaseSessionProjection {
+            bodies: 1,
+            producer_alive: true,
+            ..ProductionInFlightFirstReleaseSessionProjection::default()
+        },
+        history: ProductionInFlightFirstReleaseHistoryProjection {
+            ever_queue_plan_v4: true,
+            ever_reservation_v5: true,
+            ..ProductionInFlightFirstReleaseHistoryProjection::default()
+        },
+        decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
+        release: ProductionInFlightFirstReleaseReleaseProjection::default(),
+    };
+    let mut after_activate = before_activate;
+    after_activate.carrier.kura_active = 1;
+    let activate = ProductionInFlightFirstReleaseTransitionProjection {
+        action: IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
+        actor: 1,
+        target: 0,
+        before: before_activate,
+        after: after_activate,
+    };
+    let checked_activate = || {
+        check_production_in_flight_first_release_transition(activate)
+            .expect("carrier-hint promotion uses the production ActivateKura transition")
+    };
+    let sign_cursor = |sequence, previous_cursor_hash, phase: AutonomousLifecycleCursorPhaseV2| {
+        let unsigned = AutonomousLifecycleCursorUnsignedV2::new(
+            sequence,
+            previous_cursor_hash,
+            binding.clone(),
+            phase,
+            local_peer.clone(),
+        )
+        .expect("construct carrier-hint promotion lifecycle cursor");
+        let preimage = unsigned
+            .signing_preimage()
+            .expect("encode carrier-hint promotion cursor preimage");
+        let signature = Signature::try_new(signer.private_key(), &preimage)
+            .expect("sign carrier-hint promotion lifecycle cursor");
+        unsigned
+            .finalize(
+                <[u8; 96]>::try_from(signature.payload())
+                    .expect("BLS-normal cursor signature is exactly 96 bytes"),
+                &hint_free.origin_proposal.descriptor.validator_set,
+            )
+            .expect("finalize carrier-hint promotion lifecycle cursor")
+    };
+    let prepared_activate = sign_cursor(
+        1,
+        None,
+        AutonomousLifecycleCursorPhaseV2::prepared(1, activate)
+            .expect("construct Queue Prepared ActivateKura"),
+    );
+    let live_activate = sign_cursor(
+        2,
+        Some(prepared_activate.cursor_hash()),
+        AutonomousLifecycleCursorPhaseV2::live(1, after_activate)
+            .expect("construct Queue Live ActivateKura"),
+    );
+    let authentication_facts = (height_context_id, 1, 1, reservation_group);
+    let bootstrap_path = Kura::autonomous_lifecycle_bootstrap_path_for_entry(
+        lane,
+        temp_dir.path(),
+        1,
+        hint_free.origin_proposal.descriptor.proposal_height,
+    );
+
+    let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
+        .expect("authenticated carrier-hint promotion Kura");
+    for entry in lane_config.entries() {
+        let incarnation = Hash::new(
+            format!(
+                "kura-lane-incarnation:{}:{}",
+                entry.lane_id.as_u32(),
+                entry.dataspace_id.as_u64()
+            )
+            .as_bytes(),
+        );
+        kura.install_lane_incarnation_marker_for_test(entry, incarnation, 0)
+            .expect("install explicit carrier-hint promotion lane marker");
+    }
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &hint_free);
+    publish_temp_recovery_catalog_baseline(&kura, &catalog);
+    drop(kura);
+    let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
+        .expect("reopen authenticated carrier-hint promotion Kura");
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind carrier-hint promotion local peer");
+    let generation_one = kura
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
+        .expect("claim carrier-hint promotion generation");
+    let queue_preimage = kura
+        .autonomous_lifecycle_bootstrap_signing_preimage_for_tests(
+            &generation_one,
+            &hint_free,
+            binding.clone(),
+            prepared_activate.clone(),
+            live_activate.clone(),
+            authentication_facts,
+        )
+        .expect("build hint-free Queue bootstrap preimage");
+    let queue_signature = <[u8; 96]>::try_from(
+        Signature::try_new(signer.private_key(), &queue_preimage)
+            .expect("sign hint-free Queue bootstrap")
+            .payload(),
+    )
+    .expect("BLS-normal Queue bootstrap signature is exactly 96 bytes");
+    let queue_authority = kura
+        .persist_autonomous_lifecycle_bootstrap_for_tests(
+            &generation_one,
+            &hint_free,
+            binding.clone(),
+            prepared_activate.clone(),
+            live_activate.clone(),
+            queue_signature,
+            authentication_facts,
+        )
+        .expect("persist hint-free Queue bootstrap");
+    let queue_permit = kura
+        .authenticate_autonomous_lifecycle_bootstrap_recovery_for_tests(
+            queue_authority,
+            authentication_facts,
+        )
+        .expect("authenticate hint-free Queue bootstrap");
+    let AutonomousLifecycleBootstrapCompletionOutcome::Completed(queue_completion) = kura
+        .complete_autonomous_lifecycle_bootstrap(queue_permit)
+        .expect("complete hint-free Queue bootstrap")
+    else {
+        panic!("hint-free Queue bootstrap must complete before any terminal receipt");
+    };
+    assert!(!queue_completion.takeover_required());
+    assert_eq!(queue_completion.cursor(), &live_activate);
+    assert!(!bootstrap_path.exists());
+    assert_eq!(
+        kura.current_autonomous_lane_payload(lane.lane_id, 1, network_id, epoch)
+            .expect("read durable hint-free Queue payload")
+            .0,
+        hint_free,
+    );
+
+    let locked_round = ConsensusRound {
+        context_id: height_context_id,
+        height: context.height,
+        view: carrier_hint.proposal_view,
+    };
+    let locked_subject = BlockSubject {
+        parent_block_hash: None,
+        block_hash: carrier_hint.proposal_block_hash,
+        payload_hash: hinted.payload_hash,
+    };
+    let wrong_locked_subject = BlockSubject {
+        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"wrong-carrier-hint-promotion-block",
+        )),
+        ..locked_subject
+    };
+    assert!(
+        kura.authorize_protected_carrier_receive_payload_custody(
+            &hinted,
+            binding.clone(),
+            &context,
+            locked_round,
+            wrong_locked_subject,
+            &local_peer,
+            checked_activate(),
+        )
+        .is_err(),
+        "a protected lock for another block must not authorize carrier-hint promotion",
+    );
+    let promotion_authorization = kura
+        .authorize_protected_carrier_receive_payload_custody(
+            &hinted,
+            binding.clone(),
+            &context,
+            locked_round,
+            locked_subject,
+            &local_peer,
+            checked_activate(),
+        )
+        .expect("authorize exact protected-carrier custody");
+    let promotion_authorization = kura
+        .classify_autonomous_payload_custody_for_persistence(&hinted, promotion_authorization)
+        .expect("classify exact carrier-hint promotion")
+        .expect("hint-free Live state requires a promotion bootstrap");
+    let promotion_preimage = kura
+        .autonomous_lifecycle_bootstrap_signing_preimage_with_payload_custody(
+            &generation_one,
+            &hinted,
+            binding.clone(),
+            prepared_activate.clone(),
+            live_activate.clone(),
+            &promotion_authorization,
+        )
+        .expect("build protected-carrier promotion bootstrap preimage");
+    let promotion_signature = <[u8; 96]>::try_from(
+        Signature::try_new(signer.private_key(), &promotion_preimage)
+            .expect("sign protected-carrier promotion bootstrap")
+            .payload(),
+    )
+    .expect("BLS-normal promotion bootstrap signature is exactly 96 bytes");
+    let promotion_authority = kura
+        .persist_autonomous_lifecycle_bootstrap_with_payload_custody(
+            &generation_one,
+            &hinted,
+            binding.clone(),
+            prepared_activate.clone(),
+            live_activate.clone(),
+            promotion_signature,
+            promotion_authorization,
+        )
+        .expect("persist protected-carrier promotion bootstrap around exact Live state");
+    assert_eq!(
+        promotion_authority.stage(),
+        AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+    );
+    assert_eq!(
+        promotion_authority.custody_source(),
+        AutonomousLifecyclePayloadCustodySourceV1::ProtectedCarrierReceive,
+    );
+    assert_eq!(promotion_authority.executable_payload(), &hinted);
+    let promotion_path = promotion_authority.path.clone();
+    assert_eq!(
+        fs::canonicalize(&promotion_path).expect("canonical promotion bootstrap path"),
+        fs::canonicalize(&bootstrap_path).expect("canonical expected bootstrap path"),
+    );
+    assert!(promotion_path.is_file());
+    assert_eq!(
+        kura.current_autonomous_lane_payload(lane.lane_id, 1, network_id, epoch)
+            .expect("read payload before promotion-bootstrap completion")
+            .0,
+        hint_free,
+        "bootstrap publication alone must not mutate the hint-free payload",
+    );
+    drop(kura);
+
+    let (kura, _) = Kura::new(&config, &lane_config)
+        .expect("Live-durable carrier-hint promotion boundary is restartable");
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("rebind carrier-hint promotion local peer");
+    let generation_two = kura
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
+        .expect("claim post-crash carrier-hint promotion generation");
+    let mut inventory = kura
+        .autonomous_lifecycle_bootstrap_recovery_inventory(
+            &generation_two,
+            lane.lane_id,
+            lane.dataspace_id,
+            hinted.origin_proposal.descriptor.lane_incarnation,
+        )
+        .expect("inventory Live-durable carrier-hint promotion boundary");
+    assert_eq!(inventory.len(), 1);
+    let promotion_authority = inventory.pop().expect("promotion recovery authority");
+    assert_eq!(
+        promotion_authority.stage(),
+        AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+    );
+    assert_eq!(promotion_authority.executable_payload(), &hinted);
+    let promotion_permit = kura
+        .authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody(
+            promotion_authority,
+        )
+        .expect("authenticate promotion from durable protected-carrier custody");
+    let AutonomousLifecycleBootstrapCompletionOutcome::Completed(promotion_completion) = kura
+        .complete_autonomous_lifecycle_bootstrap(promotion_permit)
+        .expect("complete restarted carrier-hint promotion bootstrap")
+    else {
+        panic!("carrier-hint promotion must complete before any terminal receipt");
+    };
+    assert!(promotion_completion.takeover_required());
+    assert_eq!(
+        promotion_completion.cursor(),
+        &live_activate,
+        "carrier-hint promotion must retain the exact pre-crash Live cursor",
+    );
+    assert!(!promotion_path.exists());
+    assert_eq!(
+        kura.current_autonomous_lane_payload(lane.lane_id, 1, network_id, epoch)
+            .expect("read completed carrier-hinted payload")
+            .0,
+        hinted,
+    );
+    let recovered = kura
+        .recover_autonomous_lane_block_payload(&hinted.origin_proposal, network_id, epoch)
+        .expect("recover exact carrier-hinted payload after promotion restart");
+    assert_eq!(recovered.proposal, hinted.origin_proposal);
+}

@@ -1522,7 +1522,7 @@ fn verify_soracloud_fhe_input_admission_backend(
                 "FHE input admission verifying key not found".into(),
             )
         })?;
-    if record.status != ConfidentialStatus::Active {
+    if !record.is_active_at(state_transaction.block_height()) {
         return Err(InstructionExecutionError::InvariantViolation(
             "FHE input admission verifying key is not active".into(),
         ));
@@ -2831,7 +2831,7 @@ fn verify_soracloud_fhe_public_key_proof_backend(
                 "FHE public-key verifying key not found".into(),
             )
         })?;
-    if record.status != ConfidentialStatus::Active {
+    if !record.is_active_at(state_transaction.block_height()) {
         return Err(InstructionExecutionError::InvariantViolation(
             "FHE public-key verifying key is not active".into(),
         ));
@@ -3043,7 +3043,7 @@ fn verify_soracloud_fhe_bootstrap_key_proof_backend(
                 "FHE bootstrap-key verifying key not found".into(),
             )
         })?;
-    if record.status != ConfidentialStatus::Active {
+    if !record.is_active_at(state_transaction.block_height()) {
         return Err(InstructionExecutionError::InvariantViolation(
             "FHE bootstrap-key verifying key is not active".into(),
         ));
@@ -3741,7 +3741,7 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proof_backend(
                 "FHE full-bootstrap execution verifying key not found".into(),
             )
         })?;
-    if record.status != ConfidentialStatus::Active {
+    if !record.is_active_at(state_transaction.block_height()) {
         return Err(InstructionExecutionError::InvariantViolation(
             "FHE full-bootstrap execution verifying key is not active".into(),
         ));
@@ -27864,6 +27864,7 @@ mod tests {
     enum FullBootstrapVerifierRecordRejection {
         MissingRecord,
         InactiveRecord,
+        OutsideHeightWindow,
         Metadata(FullBootstrapVerifierRecordMetadataTamper),
         FakeProof,
     }
@@ -27913,6 +27914,17 @@ mod tests {
                     .get_mut(vk_id.as_ref().expect("installed verifier key id"))
                     .expect("installed full-bootstrap execution verifier record")
                     .status = ConfidentialStatus::Withdrawn;
+            }
+            FullBootstrapVerifierRecordRejection::OutsideHeightWindow => {
+                let activation_height = stx
+                    .block_height()
+                    .checked_add(1)
+                    .expect("test block height has a successor");
+                stx.world
+                    .verifying_keys
+                    .get_mut(vk_id.as_ref().expect("installed verifier key id"))
+                    .expect("installed full-bootstrap execution verifier record")
+                    .activation_height = Some(activation_height);
             }
             FullBootstrapVerifierRecordRejection::Metadata(tamper) => {
                 let vk_id = vk_id.as_ref().expect("installed verifier key id");
@@ -28007,6 +28019,9 @@ mod tests {
             FullBootstrapVerifierRecordRejection::InactiveRecord => {
                 "withdrawn full-bootstrap execution verifier must fail closed"
             }
+            FullBootstrapVerifierRecordRejection::OutsideHeightWindow => {
+                "out-of-window full-bootstrap execution verifier must fail closed"
+            }
             FullBootstrapVerifierRecordRejection::Metadata(_) => {
                 "metadata-drifted full-bootstrap execution verifier must fail closed"
             }
@@ -28034,6 +28049,9 @@ mod tests {
                 assert_invariant_contains(err, "verifying key not found");
             }
             FullBootstrapVerifierRecordRejection::InactiveRecord => {
+                assert_invariant_contains(err, "verifying key is not active");
+            }
+            FullBootstrapVerifierRecordRejection::OutsideHeightWindow => {
                 assert_invariant_contains(err, "verifying key is not active");
             }
             FullBootstrapVerifierRecordRejection::Metadata(tamper) => {
@@ -28075,6 +28093,8 @@ mod tests {
             MissingRecord,
         soracloud_fhe_full_bootstrap_execution_proof_rejects_inactive_governed_verifier_record =>
             InactiveRecord,
+        soracloud_fhe_full_bootstrap_execution_proof_rejects_out_of_window_governed_verifier_record =>
+            OutsideHeightWindow,
     }
     #[test]
     #[allow(clippy::too_many_lines)]

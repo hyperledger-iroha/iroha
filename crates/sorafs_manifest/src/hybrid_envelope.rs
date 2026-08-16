@@ -1,10 +1,9 @@
 //! Hybrid payload envelope for SoraFS manifests and chunk payloads (SF-4b).
 //!
-//! This module wires the `iroha_crypto::hybrid` primitives into a Norito-serialisable
-//! envelope so manifests can be sealed with a hybrid X25519 + ML-KEM-768 exchange
-//! and ChaCha20-Poly1305 DEM. Gateways and SDKs use the helpers exposed here as
-//! part of the `sorafs_manifest_builder` CLI and Torii publishing flows to wrap and
-//! unwrap manifest payloads.
+//! This module wires the `iroha_crypto::hybrid` primitives into a Norito-serialisable envelope so
+//! manifests can be sealed with a hybrid X25519 + ML-KEM-768 exchange and ChaCha20-Poly1305 DEM.
+//! Gateways and SDKs use the helpers exposed here as part of the `sorafs_manifest_builder` CLI and
+//! Torii publishing flows to wrap and unwrap manifest payloads.
 use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit as _,
     aead::{Aead as _, Payload},

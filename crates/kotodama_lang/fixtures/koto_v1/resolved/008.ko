@@ -1,0 +1,10 @@
+
+seiyaku Stable {
+    fn helper(int value) -> int {
+        let int copy = value;
+        return copy;
+    }
+    view fn read(int value) -> int {
+        return helper(value: value);
+    }
+}

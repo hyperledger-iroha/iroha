@@ -2868,18 +2868,18 @@ mod tests {
     fn register_asset_definition_fixture_source_is_current_and_semantic() {
         let register = semantic_register_asset_definition().expect("semantic register source");
         assert_eq!(
-            register.object.id.to_string(),
+            register.object().id.to_string(),
             "6pEP9RjNoZ7beWkT3pLfKoM1dyfi"
         );
-        assert_eq!(register.object.name, "Rose Token");
-        assert_eq!(register.object.spec, NumericSpec::default());
-        assert_eq!(register.object.mintable, Mintable::Infinitely);
+        assert_eq!(register.object().name, "Rose Token");
+        assert_eq!(register.object().spec, NumericSpec::default());
+        assert_eq!(register.object().mintable, Mintable::Infinitely);
         assert_eq!(
-            register.object.balance_scope_policy,
+            register.object().balance_scope_policy,
             AssetBalancePolicy::Global
         );
-        assert!(register.object.owning_domain.is_none());
-        let value = json::to_value(&register.object).expect("serialize semantic source");
+        assert!(register.object().owning_domain.is_none());
+        let value = json::to_value(register.object()).expect("serialize semantic source");
         let object = value.as_object().expect("NewAssetDefinition JSON object");
         assert_eq!(object.get("owning_domain"), Some(&Value::Null));
         assert!(!object.contains_key("confidential_policy"));
@@ -2931,15 +2931,17 @@ mod tests {
                 (InstructionSourceSlot::Instructions(1), "iroha.register"),
             ],
         ] {
-            validate_semantic_instruction_observations("register_asset_definition", &malformed)
-                .expect_err("semantic source shape must fail closed");
+            let _error =
+                validate_semantic_instruction_observations("register_asset_definition", &malformed)
+                    .expect_err("semantic source shape must fail closed");
         }
         let shifted_batch = [
             (InstructionSourceSlot::Batch(0), "iroha.register"),
             (InstructionSourceSlot::Batch(1), "iroha.register"),
         ];
-        validate_semantic_instruction_observations("mixed_executable_batch", &shifted_batch)
-            .expect_err("mixed-batch semantic instruction slots are exact");
+        let _error =
+            validate_semantic_instruction_observations("mixed_executable_batch", &shifted_batch)
+                .expect_err("mixed-batch semantic instruction slots are exact");
     }
     #[test]
     fn generated_register_asset_definition_roundtrips_current_register_box() {

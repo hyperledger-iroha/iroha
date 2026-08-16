@@ -525,6 +525,56 @@ SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TEST = (
 SORAFS_CLI_SOURCE_FILE_BUDGET_COMMAND = (
     "python3 scripts/check_source_file_budget.py --require-objective"
 )
+SORAFS_CLI_L1_QUALIFICATION_TESTS = (
+    "scripts/tests/check_sorafs_l1_deployment_qualification_test.py",
+    "scripts/tests/check_sorafs_l1_resilience_qualification_test.py",
+)
+SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_SOURCE_PATHS = (
+    "scripts/check_sorafs_ai_prescreen_rollout_evidence.py",
+    "scripts/check_sorafs_appeal_finance_rollout_evidence.py",
+    "scripts/check_sorafs_gateway_compliance_rollout_evidence.py",
+    "scripts/check_sorafs_gateway_load_rollout_evidence.py",
+    "scripts/check_sorafs_governance_dag_rollout_evidence.py",
+    "scripts/check_sorafs_hedging_rollout_evidence.py",
+    "scripts/check_sorafs_moderation_panel_rollout_evidence.py",
+    "scripts/check_sorafs_orderbook_rollout_evidence.py",
+    "scripts/check_sorafs_pdp_rollout_evidence.py",
+    "scripts/check_sorafs_pop_credentials_rollout_evidence.py",
+    "scripts/check_sorafs_por_rollout_evidence.py",
+    "scripts/check_sorafs_potr_rollout_evidence.py",
+    "scripts/check_sorafs_repair_rollout_evidence.py",
+    "scripts/check_sorafs_reputation_rollout_evidence.py",
+    "scripts/check_sorafs_reserve_rent_rollout_evidence.py",
+    "scripts/check_sorafs_transparency_rollout_evidence.py",
+    "scripts/sorafs_archive_path_components.py",
+    "scripts/sorafs_required_kinds.py",
+)
+SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS = (
+    "scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_gateway_load_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_hedging_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_pdp_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_por_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_potr_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_repair_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_reputation_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py",
+    "scripts/tests/check_sorafs_transparency_rollout_evidence_test.py",
+    "scripts/tests/sorafs_archive_path_components_test.py",
+    "scripts/tests/sorafs_required_kinds_test.py",
+)
+SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TRIGGER_PATHS = frozenset(
+    (
+        *SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_SOURCE_PATHS,
+        *SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS,
+    )
+)
 SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TRIGGER_PATHS = frozenset(
     {
         "ci/build_efficiency_provenance.json",
@@ -537,6 +587,8 @@ SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS = frozenset(
         ".github/workflows/sorafs-cli-release.yml",
         "ci/check_sorafs_cli_release.sh",
         "scripts/build_sorafs_topology_qualification_envelope.py",
+        "scripts/check_sorafs_l1_deployment_qualification.py",
+        "scripts/check_sorafs_l1_resilience_qualification.py",
         "scripts/check_sorafs_release_automation.py",
         "scripts/check_sorafs_release_version_map.py",
         "scripts/sccp_release_common.py",
@@ -555,14 +607,20 @@ SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS = frozenset(
         "scripts/sorafs_topology_qualification.py",
         "scripts/taira_constants.py",
         "scripts/tests/check_sorafs_release_automation_test.py",
+        "scripts/tests/check_sorafs_l1_deployment_qualification_test.py",
+        "scripts/tests/check_sorafs_l1_resilience_qualification_test.py",
         "scripts/tests/sorafs_evidence_json_test.py",
         "scripts/tests/sorafs_foundational_receipt_test_support.py",
         "scripts/tests/sorafs_resilience_test_support.py",
         "scripts/tests/sorafs_response_args_test.py",
         "scripts/tests/sorafs_topology_qualification_test.py",
         "scripts/requirements.txt",
+        "scripts/examples/sorafs_l1_deployment_qualification.args.example",
+        "scripts/examples/sorafs_l1_deployment_qualification_manifest.json.example",
+        "scripts/examples/sorafs_l1_resilience_qualification.args.example",
         "scripts/examples/sorafs_l1_topology_qualification_envelope.md",
         "specs/sorafs/l1_deployment_qualification.md",
+        "specs/sorafs/l1_resilience_qualification.md",
     }
 )
 SORAFS_CLI_SOURCE_FILE_BUDGET_TRIGGER_PATHS = frozenset(
@@ -1494,8 +1552,8 @@ def _validate_runtime_provider_deployment_contract(root: Path) -> list[str]:
     return errors
 
 
-def _pull_request_paths(source: str) -> frozenset[str] | None:
-    """Return the exact quoted ``pull_request.paths`` entries, if present."""
+def _pull_request_path_entries(source: str) -> tuple[str, ...] | None:
+    """Return the ordered quoted ``pull_request.paths`` entries, if present."""
 
     pull_request = re.search(
         r"(?ms)^  pull_request:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:|\Z)",
@@ -1510,7 +1568,14 @@ def _pull_request_paths(source: str) -> frozenset[str] | None:
     if paths is None:
         return None
     entries = re.findall(r'(?m)^      - "([^"]+)"\s*$', paths.group("body"))
-    return frozenset(entries)
+    return tuple(entries)
+
+
+def _pull_request_paths(source: str) -> frozenset[str] | None:
+    """Return the unique quoted ``pull_request.paths`` entries, if present."""
+
+    entries = _pull_request_path_entries(source)
+    return None if entries is None else frozenset(entries)
 
 
 def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
@@ -1583,6 +1648,18 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
             f"{relative}: release helper tests must execute the build-efficiency "
             "provenance regression suite exactly once"
         )
+    for qualification_test in SORAFS_CLI_L1_QUALIFICATION_TESTS:
+        if source.count(qualification_test) != 1:
+            errors.append(
+                f"{relative}: release helper tests must execute L1 qualification "
+                f"regression suite {qualification_test!r} exactly once"
+            )
+    for promotion_import_test in SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS:
+        if source.count(promotion_import_test) != 1:
+            errors.append(
+                f"{relative}: release helper tests must execute production-promotion "
+                f"import regression suite {promotion_import_test!r} exactly once"
+            )
 
     first_cargo_command = re.search(r"(?m)^\s*cargo(?:\s|$)", source)
     if first_cargo_command is None:
@@ -1624,7 +1701,22 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             errors.append(f"{relative}: missing contract marker `{marker}`")
 
     if relative == ".github/workflows/sorafs-cli-release.yml":
+        pull_request_path_entries = _pull_request_path_entries(source)
         pull_request_paths = _pull_request_paths(source)
+        invalid_promotion_trigger_counts = sorted(
+            (trigger, (pull_request_path_entries or ()).count(trigger))
+            for trigger in SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TRIGGER_PATHS
+            if (pull_request_path_entries or ()).count(trigger) != 1
+        )
+        if invalid_promotion_trigger_counts:
+            rendered = ", ".join(
+                f"{trigger}={count}"
+                for trigger, count in invalid_promotion_trigger_counts
+            )
+            errors.append(
+                f"{relative}: pull_request.paths must list each production-promotion "
+                f"import trigger exactly once: {rendered}"
+            )
         missing_triggers = sorted(
             SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS - (pull_request_paths or frozenset())
         )

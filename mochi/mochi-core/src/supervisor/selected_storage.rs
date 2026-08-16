@@ -1,10 +1,8 @@
 use super::*;
-/// Managed mutable paths bound to the immutable generation selected by
-/// `current-generation`.
+/// Managed mutable paths bound to the immutable generation selected by `current-generation`.
 ///
-/// This value retains a shared selection lease. Keep it alive for the entire
-/// operation that uses its paths; cloning it extends the lease until every
-/// clone is dropped.
+/// This value retains a shared selection lease. Keep it alive for the entire operation that uses
+/// its paths; cloning it extends the lease until every clone is dropped.
 #[derive(Debug, Clone)]
 pub struct SelectedPeerStoragePaths {
     config_generation_id: String,
@@ -121,10 +119,9 @@ fn validate_peer_alias(alias: &str) -> Result<()> {
 }
 /// Strictly validate the selected immutable config and mutable peer hierarchy.
 ///
-/// The caller must retain either a shared selection lease or the exclusive
-/// generation transaction for the entire call. This helper deliberately does
-/// not acquire a nested lock descriptor because dropping one duplicate can
-/// release process-associated locks on some supported platforms.
+/// The caller must retain either a shared selection lease or the exclusive generation transaction
+/// for the entire call. This helper deliberately does not acquire a nested lock descriptor because
+/// dropping one duplicate can release process-associated locks on some supported platforms.
 pub(super) fn validate_selected_peer_storage_paths_under_lock(
     network_root: &Path,
     alias: &str,

@@ -8,11 +8,8 @@ use iroha_data_model::{
         MusubiProviderBundleVerificationApprovalV1, MusubiProviderBundleVerificationBindingV1,
         MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1,
     },
-    sorafs::pin_registry::{
-        ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionAuthorityV1,
-    },
+    sorafs::pin_registry::ProviderIngestCompletionAuthorityV1,
 };
-use sorafs_node::FinalizedProviderIngestMusubiContextV1;
 use sorafs_node::provider_ingest_runtime::{
     ProviderIngestAuthenticatedProviderSourceV1, ProviderIngestAuthenticatedSourceBindingV1,
     ProviderIngestAuthenticatedSourceRegistrationV1, ProviderIngestMusubiArchiveFetchBindingV1,

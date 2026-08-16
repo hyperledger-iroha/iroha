@@ -95,10 +95,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelTwitterEscrow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_primitives::numeric::{Numeric, Quantity};
     use crate::isi::test_support::{
         assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
     };
+    use iroha_primitives::numeric::{Numeric, Quantity};
+    use norito::core::DecodeFromSlice;
     #[derive(norito::codec::Encode)]
     struct ForgedSendToTwitter {
         binding_hash: crate::oracle::KeyedHash,

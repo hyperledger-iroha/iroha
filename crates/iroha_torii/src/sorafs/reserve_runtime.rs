@@ -1,11 +1,10 @@
 //! Supervised Torii runtime for durable native SoraFS reserve/rent transactions.
 //!
-//! The durable [`sorafs_node::reserve_transaction_forwarder`] is the only local
-//! delivery state. Reserve policy, provider state, movements, appeals, and
-//! transaction outcomes are read from one immutable finalized ledger view.
-//! Signing and submission are deliberately separate boundaries: an injected
-//! runtime/HSM signer sees only an exact fee-quoted payload, while only Torii's
-//! strict durable ingress can expose the resulting signed transaction.
+//! The durable [`sorafs_node::reserve_transaction_forwarder`] is the only local delivery state.
+//! Reserve policy, provider state, movements, appeals, and transaction outcomes are read from one
+//! immutable finalized ledger view. Signing and submission are deliberately separate boundaries: an
+//! injected runtime/HSM signer sees only an exact fee-quoted payload, while only Torii's strict
+//! durable ingress can expose the resulting signed transaction.
 
 #![cfg(feature = "app_api")]
 use super::reserve_worker::{
@@ -140,10 +139,9 @@ impl SorafsReserveFinalizedTelemetryErrorV1 {
 }
 /// Reserve supervision uses one role-activation predicate.
 ///
-/// Provider storage keeps durable drain/reconciliation active even when new
-/// reserve generation is disabled. When both storage and generation are
-/// disabled, no worker is started and therefore no external progress occurs.
-/// Opening the local [`sorafs_node::NodeHandle`] may still normalize an
+/// Provider storage keeps durable drain/reconciliation active even when new reserve generation is
+/// disabled. When both storage and generation are disabled, no worker is started and therefore no
+/// external progress occurs. Opening the local [`sorafs_node::NodeHandle`] may still normalize an
 /// interrupted signer-only claim from `Signing` to `Ready`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReserveWorkerSupervisionV1 {
@@ -1060,10 +1058,9 @@ fn decode_exact_reserve_signed_transaction(
 }
 /// Start reserve generation and durable drain/reconciliation when the role is active.
 ///
-/// Storage enablement keeps the role active for restart recovery even when
-/// `reserve_worker.enabled` suppresses generation of new worker-owned
-/// operations. When both controls are disabled, retained entries stay durable
-/// but make zero external progress because no task is spawned. Opening the
+/// Storage enablement keeps the role active for restart recovery even when `reserve_worker.enabled`
+/// suppresses generation of new worker-owned operations. When both controls are disabled, retained
+/// entries stay durable but make zero external progress because no task is spawned. Opening the
 /// local node may still release interrupted signer-only claims back to `Ready`.
 pub(crate) fn spawn_sorafs_reserve_transaction_forwarder_worker(
     state: SharedAppState,

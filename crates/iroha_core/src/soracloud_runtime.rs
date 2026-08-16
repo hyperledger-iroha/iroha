@@ -591,9 +591,8 @@ pub struct SoracloudRuntimeLeaseVolumePlan {
     pub authoritative_generation: u64,
     /// Node-local materialization directory used by the current host.
     ///
-    /// `PersistentRootLeaseVolume` plans use a per-revision/per-replica namespace,
-    /// while non-root service volumes are shared across replicas of the same
-    /// revision by default.
+    /// `PersistentRootLeaseVolume` plans use a per-revision/per-replica namespace, while non-root
+    /// service volumes are shared across replicas of the same revision by default.
     pub local_materialization_dir: String,
 }
 /// Node-local runtime topology projected for one hosted-HTTP replica slot.
@@ -742,8 +741,7 @@ pub struct SoracloudApartmentAutonomyWorkflowStepSummaryV1 {
 /// Node-local execution summary for one approved apartment autonomy run.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudApartmentAutonomyExecutionSummaryV1 {
-    /// Schema version; must equal
-    /// [`SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1`].
+    /// Schema version; must equal [`SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1`].
     pub schema_version: u16,
     /// Apartment that executed the run.
     pub apartment_name: String,

@@ -396,13 +396,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RwaInstructionBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_primitives::{
         json::Json,
         numeric::{Numeric, NumericSpec},
     };
-    use norito::codec::Encode;
-    use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
+    use norito::{codec::Encode, core::DecodeFromSlice};
     #[derive(Encode)]
     struct ForgedTransferRwa {
         source: AccountId,

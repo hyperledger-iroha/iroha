@@ -17,14 +17,23 @@ pub(super) fn build_connect_session_create_body(arguments: &Map) -> Result<Value
         }
     }
     let network_id_literal = required_string(arguments, "network_id")?;
-    let network_id = network_id_literal
-        .parse::<iroha_data_model::NetworkId>()
+    let network_id_body = norito::literal::parse("hash", network_id_literal)
         .map_err(|error| format!("`network_id` must be a canonical NetworkId: {error}"))?;
-    if network_id.to_string() != network_id_literal {
+    if network_id_body
+        .bytes()
+        .any(|byte| byte.is_ascii_lowercase())
+        || norito::literal::format("hash", network_id_body) != network_id_literal
+    {
         return Err(
             "`network_id` must use the canonical checksummed NetworkId spelling".to_owned(),
         );
     }
+    let genesis_hash = network_id_body
+        .parse::<iroha_crypto::Hash>()
+        .map_err(|error| format!("`network_id` must be a canonical NetworkId: {error}"))?;
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(genesis_hash),
+    );
     let app_pk: [u8; 32] = decode_canonical(arguments, "app_pk", 32)?
         .try_into()
         .map_err(|_| "validated Connect app key had the wrong length".to_owned())?;

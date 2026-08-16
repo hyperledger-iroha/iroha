@@ -68,6 +68,29 @@ def test_topology_envelope_dependency_triggers_are_mandatory(
 
 @pytest.mark.parametrize(
     "relative",
+    sorted(automation.SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TRIGGER_PATHS),
+)
+@pytest.mark.parametrize("mutation", ("remove", "duplicate"))
+def test_production_promotion_import_triggers_are_exactly_once(
+    tmp_path: Path, relative: str, mutation: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    replacement = "" if mutation == "remove" else trigger * 2
+    workflow.write_text(source.replace(trigger, replacement, 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"must list each production-promotion import trigger exactly once",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative",
     sorted(automation.SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TRIGGER_PATHS),
 )
 def test_build_efficiency_provenance_contract_triggers_are_mandatory(
@@ -145,6 +168,52 @@ def test_source_file_budget_release_gate_fails_closed_before_cargo(
     release_gate.write_text(drifted, encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize("relative", automation.SORAFS_CLI_L1_QUALIFICATION_TESTS)
+def test_l1_qualification_regression_suites_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    release_gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    source = release_gate.read_text(encoding="utf-8")
+    assert source.count(relative) == 1
+    release_gate.write_text(
+        source.replace(relative, "removed-l1-suite", 1), encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"must execute L1 qualification regression suite",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "relative", automation.SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS
+)
+@pytest.mark.parametrize("mutation", ("remove", "duplicate"))
+def test_production_promotion_import_regression_suites_are_exactly_once(
+    tmp_path: Path, relative: str, mutation: str
+) -> None:
+    _copy_workflows(tmp_path)
+    release_gate = tmp_path / automation.SORAFS_CLI_RELEASE_GATE_SCRIPT
+    source = release_gate.read_text(encoding="utf-8")
+    assert source.count(relative) == 1
+    replacement = (
+        "removed-production-promotion-suite"
+        if mutation == "remove"
+        else f"{relative} {relative}"
+    )
+    release_gate.write_text(
+        source.replace(relative, replacement, 1), encoding="utf-8"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"must execute production-promotion import regression suite",
+    ):
         automation.validate_release_automation(tmp_path)
 
 

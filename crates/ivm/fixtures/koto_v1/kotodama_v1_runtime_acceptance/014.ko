@@ -1,0 +1,11 @@
+
+seiyaku StateMapIterationAcceptance {
+  error enum IterationError {
+    OutOfOrder = 1,
+    WrongValue = 2,
+    WrongItemCount = 3
+  }
+
+  state StateMap<int, int> Values;
+
+  kotoage fn run() -> int authorize("WriteState") {

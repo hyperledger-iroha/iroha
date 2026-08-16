@@ -1,15 +1,16 @@
 //! BN254 backend wiring for IPA commitments.
 //!
-//! This backend leverages `halo2curves` BN254 types to expose deterministic
-//! generators along with canonical scalar/group encodings compatible with the
-//! Norito wire types used across Iroha.
+//! This backend leverages `halo2curves` BN254 types to expose deterministic generators along with
+//! canonical scalar/group encodings compatible with the Norito wire types used across Iroha.
 use crate::{
-    backend::{IpaBackend, IpaGroup, IpaScalar},
+    backend::{IpaBackend, IpaGroup, IpaScalar, traits::generator_derivation_message},
+    constants::GENERATOR_HASH_TO_CURVE_DST,
     errors::Error,
     norito_types::ZkCurveId,
 };
 use core::fmt;
 use halo2curves::{
+    CurveExt as _,
     bn256::{Fr, G1, G1Affine},
     ff::{Field, FromUniformBytes, PrimeField},
     group::{Group as HaloGroup, GroupEncoding},
@@ -184,9 +185,25 @@ impl IpaBackend for Bn254Backend {
     type Scalar = Scalar;
     type Group = GroupElem;
     const CURVE_ID: ZkCurveId = ZkCurveId::Bn254;
-    fn group_from_scalar(scalar: Self::Scalar) -> Self::Group {
-        let inner: Fr = scalar.into();
-        GroupElem::from_projective(G1::generator() * inner)
+    fn derive_group_elem(kind: &[u8], n: u64, i: u64) -> Self::Group {
+        let mut message = generator_derivation_message(kind, n, i);
+        let base_len = message.len();
+        let map = G1::hash_to_curve(GENERATOR_HASH_TO_CURVE_DST);
+        let mut retry = 0u64;
+        loop {
+            if retry > 0 {
+                message.truncate(base_len);
+                message.push(0xff);
+                message.extend_from_slice(&retry.to_le_bytes());
+            }
+            let candidate = GroupElem::from_projective(map(&message));
+            if candidate != GroupElem::identity() {
+                return candidate;
+            }
+            retry = retry
+                .checked_add(1)
+                .expect("hash-to-curve retry counter cannot be exhausted");
+        }
     }
     fn msm(bases: &[Self::Group], scalars: &[Self::Scalar]) -> Result<Self::Group, Error> {
         if bases.len() != scalars.len() {
@@ -213,3 +230,71 @@ pub type IpaProof = crate::ipa::IpaProof<Bn254Backend>;
 pub type IpaProver = crate::ipa::IpaProver<Bn254Backend>;
 /// IPA verifier alias for the BN254 backend.
 pub type IpaVerifier = crate::ipa::IpaVerifier<Bn254Backend>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{constants::DST, hash::sha3_512};
+    use hex_literal::hex;
+
+    fn legacy_generator_scalar(kind: &[u8], n: u64, i: u64) -> Scalar {
+        let mut message = Vec::with_capacity(DST.len() + kind.len() + 16);
+        message.extend_from_slice(DST.as_bytes());
+        message.extend_from_slice(kind);
+        message.extend_from_slice(&n.to_le_bytes());
+        message.extend_from_slice(&i.to_le_bytes());
+        Scalar::from_uniform(&sha3_512(&message))
+    }
+
+    #[test]
+    fn transparent_generators_use_hash_to_curve_and_break_the_legacy_known_relation() {
+        let params = Params::new(2).expect("derive BN254 parameters");
+        for (actual, kind, index) in [
+            (params.g()[0], b"G".as_slice(), 0),
+            (params.h()[0], b"H".as_slice(), 0),
+            (params.u(), b"U".as_slice(), 0),
+        ] {
+            let message = generator_derivation_message(kind, 2, index);
+            let expected = GroupElem::from_projective(G1::hash_to_curve(
+                GENERATOR_HASH_TO_CURVE_DST,
+            )(&message));
+            assert_eq!(actual, expected);
+            assert_ne!(actual, GroupElem::identity());
+        }
+        assert_ne!(params.g()[0], params.h()[0]);
+        assert_ne!(params.g()[0], params.u());
+        assert_ne!(params.h()[0], params.u());
+        assert_eq!(
+            params.g()[0].to_bytes(),
+            hex!("3fada648ba55001692a8499434ce1414f5ed5a179f521aaae1f0c235a929fc2c")
+        );
+        assert_eq!(
+            params.g()[1].to_bytes(),
+            hex!("2d72f599baeecf9c3cbf11a0d65c63890ca154a4cfe3170565de561f5ed6ea9b")
+        );
+        assert_eq!(
+            params.h()[0].to_bytes(),
+            hex!("d4f2d34a5b5a9358fdc1ce80fdb69a95fa5f70e8827a32208720688a2fd41207")
+        );
+        assert_eq!(
+            params.h()[1].to_bytes(),
+            hex!("33d3149ea5267a363186e6b69ca43f5528135049180f114d3c36efec69090baf")
+        );
+        assert_eq!(
+            params.u().to_bytes(),
+            hex!("086dce930f8fe4ab06efa12ec34ff5876a741456818341d5b108371a8cdee381")
+        );
+
+        let legacy_0 = legacy_generator_scalar(b"G", 2, 0);
+        let legacy_1 = legacy_generator_scalar(b"G", 2, 1);
+        let colliding_coefficients = vec![legacy_1, legacy_0.neg()];
+        let commitment = Polynomial::from_coeffs(colliding_coefficients)
+            .commit(&params)
+            .expect("commit adversarial coefficient vector");
+        assert_ne!(
+            commitment,
+            GroupElem::identity(),
+            "the old scalar-derived bases made this nonzero vector commit to identity"
+        );
+    }
+}

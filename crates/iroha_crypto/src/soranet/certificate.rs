@@ -4,9 +4,8 @@
 //! for a relay. Certificates are CBOR-encoded, dual-signed (Ed25519 +
 //! ML-DSA-65), and referenced by the directory consensus artefacts.
 //!
-//! This module provides a minimal CBOR encoder/decoder tailored to the `SRCv2`
-//! schema so we can avoid pulling an additional dependency while keeping the
-//! encoding canonical and deterministic.
+//! This module provides a minimal CBOR encoder/decoder tailored to the `SRCv2` schema so we can
+//! avoid pulling an additional dependency while keeping the encoding canonical and deterministic.
 use crate::soranet::handshake::HandshakeSuite;
 use blake3::Hasher as Blake3;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
@@ -974,8 +973,7 @@ impl RelayCertificateV2 {
     }
     /// Returns the checked length of the validity window.
     ///
-    /// Returns `None` when the certificate carries an inverted or unrepresentable
-    /// timestamp range.
+    /// Returns `None` when the certificate carries an inverted or unrepresentable timestamp range.
     pub fn checked_validity_duration(&self) -> Option<Duration> {
         let seconds = self.valid_until.checked_sub(self.valid_after)?;
         let seconds = u64::try_from(seconds).ok()?;
@@ -3095,7 +3093,7 @@ mod tests {
         );
     }
     #[test]
-    fn parse_certificate_payload_rejects_invalid_endpoint_tags() {
+    fn certificate_encoding_rejects_invalid_endpoint_tags() {
         for tags in [
             vec![String::new()],
             vec!["nk 3".to_string()],
@@ -3104,8 +3102,9 @@ mod tests {
         ] {
             let mut certificate = sample_certificate();
             certificate.endpoints[0].tags = tags;
-            let err = parse_certificate_payload(&certificate.to_cbor())
-                .expect_err("ambiguous endpoint tags must fail");
+            let err = certificate
+                .try_to_cbor()
+                .expect_err("ambiguous endpoint tags must not encode");
             match err {
                 CertificateError::InvalidFieldValue { field, .. } => {
                     assert_eq!(field, "endpoint.tags");

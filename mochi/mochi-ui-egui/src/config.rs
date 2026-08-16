@@ -1,10 +1,9 @@
 //! Bundle configuration loading for the MOCHI egui shell.
 //!
-//! The desktop bundle ships with `config/local.toml` so operators can override
-//! data directories, port allocations, and external binary paths without
-//! recompiling the application. This module discovers that file (or an explicit
-//! `MOCHI_CONFIG` override), parses the TOML document, and yields a strongly
-//! typed configuration for the UI to apply while constructing the supervisor.
+//! The desktop bundle ships with `config/local.toml` so operators can override data directories,
+//! port allocations, and external binary paths without recompiling the application. This module
+//! discovers that file (or an explicit `MOCHI_CONFIG` override), parses the TOML document, and
+//! yields a strongly typed configuration for the UI to apply while constructing the supervisor.
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
 use mochi_core::{
     GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder,

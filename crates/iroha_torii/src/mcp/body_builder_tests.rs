@@ -1,4 +1,9 @@
 // MCP canonical request-body builder regressions.
+fn materialize_borrowed_body(body: &BorrowedMcpJson<'_>) -> Value {
+    let encoded = encode_mcp_json_body(body, "encode borrowed test body").expect("encoded body");
+    json::from_slice(&encoded).expect("decoded body")
+}
+
 #[test]
 fn build_query_envelope_body_collects_shortcut_fields() {
     let args = norito::json!({
@@ -14,6 +19,7 @@ fn build_query_envelope_body_collects_shortcut_fields() {
         "fetch_size": 10
     });
     let body = build_query_envelope_body(args.as_object().expect("object")).expect("body");
+    let body = materialize_borrowed_body(&body);
     let body = body.as_object().expect("body object");
     assert!(body.contains_key("filter"));
     assert!(body.contains_key("aggregate"));
@@ -42,6 +48,7 @@ fn build_accounts_onboard_plan_body_accepts_only_secret_free_intent() {
     });
     let body =
         build_accounts_onboard_plan_body(args.as_object().expect("object")).expect("plan body");
+    let body = materialize_borrowed_body(&body);
     let body = body.as_object().expect("object");
     assert_eq!(body.get("version").and_then(Value::as_u64), Some(1));
     assert_eq!(
@@ -89,6 +96,7 @@ fn build_accounts_onboard_apply_body_accepts_only_receipt() {
     let args = norito::json!({ "receipt": { "body": {}, "plan_hash": "hash", "signature": {} } });
     let body =
         build_accounts_onboard_apply_body(args.as_object().expect("object")).expect("apply body");
+    let body = materialize_borrowed_body(&body);
     assert!(
         body.as_object()
             .is_some_and(|body| body.contains_key("receipt"))
@@ -104,6 +112,7 @@ fn build_accounts_faucet_body_collects_shortcut_field() {
         "account_id": TEST_ACCOUNT_I105
     });
     let body = build_accounts_faucet_body(args.as_object().expect("object")).expect("body");
+    let body = materialize_borrowed_body(&body);
     let body = body.as_object().expect("object");
     assert_eq!(
         body.get("account_id").and_then(Value::as_str),
@@ -124,6 +133,7 @@ fn build_object_body_or_default_uses_empty_object_when_missing() {
         "headers": { "x-test": "1" }
     });
     let body = build_object_body_or_default(args.as_object().expect("object")).expect("body");
+    let body = materialize_borrowed_body(&body);
     assert_eq!(
         body,
         Value::Object(Map::new()),
@@ -151,6 +161,7 @@ fn build_object_body_or_flat_shortcuts_collects_top_level_fields() {
         &["body", "headers", "accept"],
     )
     .expect("body");
+    let body = materialize_borrowed_body(&body);
     let body = body.as_object().expect("object");
     assert_eq!(
         body.get("authority").and_then(Value::as_str),

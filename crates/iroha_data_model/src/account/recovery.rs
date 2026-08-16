@@ -167,9 +167,8 @@ pub struct AccountRecoveryRequest {
     pub approvals: BTreeSet<AccountId>,
     /// Native multisig proposals invalidated atomically by finalization.
     ///
-    /// The hashes are retained on the terminal request so clients can resolve
-    /// corresponding `CANCELED` or already-`EXPIRED` evidence after the alias
-    /// rekeys.
+    /// The hashes are retained on the terminal request so clients can resolve corresponding
+    /// `CANCELED` or already-`EXPIRED` evidence after the alias rekeys.
     pub invalidated_multisig_proposal_hashes: Vec<HashOf<Vec<InstructionBox>>>,
     /// Account that proposed the recovery request.
     pub proposed_by: AccountId,

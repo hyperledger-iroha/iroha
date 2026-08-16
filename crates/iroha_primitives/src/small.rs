@@ -248,9 +248,8 @@ mod tests {
 }
 mod small_vector {
     use super::*;
-    /// Wrapper struct around [`smallvec::SmallVec`] type. Keeps `N`
-    /// elements on the stack if `self.len()` is less than `N`, if not,
-    /// produces a heap-allocated vector.
+    /// Wrapper struct around [`smallvec::SmallVec`] type. Keeps `N` elements on the stack if
+    /// `self.len()` is less than `N`, if not, produces a heap-allocated vector.
     ///
     /// To instantiate a vector with `N` stack elements,
     /// ```ignore

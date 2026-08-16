@@ -34,8 +34,7 @@ impl TimeSource {
             unix_time,
         ))))
     }
-    /// Creates a mock [`TimeSource`] that must be advanced manually via
-    /// [`MockTimeHandle`].
+    /// Creates a mock [`TimeSource`] that must be advanced manually via [`MockTimeHandle`].
     pub fn new_mock(start_unix_time: Duration) -> (MockTimeHandle, Self) {
         let handle = MockTimeHandle::new(start_unix_time);
         let source = handle.source();

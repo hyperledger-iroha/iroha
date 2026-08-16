@@ -14,9 +14,8 @@ fn to_u64(bytes: &[u8]) -> u64 {
     arr.copy_from_slice(&bytes[..8]);
     u64::from_le_bytes(arr)
 }
-/// Compute a Pedersen commitment C = value*G + blind*H on BLS12-381.
-/// Returns the full compressed G1 bytes to preserve precision for callers
-/// that need the complete point.
+/// Compute a Pedersen commitment C = value*G + blind*H on BLS12-381. Returns the full compressed G1
+/// bytes to preserve precision for callers that need the complete point.
 pub fn pedersen_commit(value: u64, blind: u64) -> [u8; 48] {
     pedersen_commit_scalars(Scalar::from(value), Scalar::from(blind))
 }

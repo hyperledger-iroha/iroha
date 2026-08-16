@@ -560,9 +560,8 @@ fn active_lane_config_entry_at_height_with_snapshot<'a>(
 }
 /// Reusable active-lane policy view over one immutable Nexus snapshot.
 ///
-/// Constructing the view derives catalog geometry once. Query paths that
-/// classify many historical records should reuse it instead of rebuilding the
-/// full lane configuration for every record.
+/// Constructing the view derives catalog geometry once. Query paths that classify many historical
+/// records should reuse it instead of rebuilding the full lane configuration for every record.
 #[derive(Debug)]
 pub struct ActiveLaneProofPolicyContext<'a> {
     nexus: &'a Nexus,
@@ -715,10 +714,9 @@ fn lane_config_entries_match_for_da(lhs: &LaneConfigEntry, rhs: &LaneConfigEntry
 ///
 /// # Errors
 ///
-/// Returns [`DaProofPolicyError::UnknownLane`] when the lane is absent from the
-/// authoritative catalog, when derived runtime geometry is missing or drifted
-/// from the catalog, or when the lane dataspace is absent from the active
-/// dataspace catalog.
+/// Returns [`DaProofPolicyError::UnknownLane`] when the lane is absent from the authoritative
+/// catalog, when derived runtime geometry is missing or drifted from the catalog, or when the lane
+/// dataspace is absent from the active dataspace catalog.
 pub fn active_lane_proof_policy(
     nexus: &Nexus,
     lane_id: LaneId,
@@ -755,9 +753,8 @@ pub fn active_lane_proof_policy_at_height(
 ///
 /// # Errors
 ///
-/// Returns [`DaProofPolicyError`] when the lane is inactive, the derived runtime
-/// geometry drifted from the authoritative catalog, or the commitment violates
-/// the active lane proof scheme.
+/// Returns [`DaProofPolicyError`] when the lane is inactive, the derived runtime geometry drifted
+/// from the authoritative catalog, or the commitment violates the active lane proof scheme.
 pub fn enforce_active_lane_proof_policy(
     record: &DaCommitmentRecord,
     nexus: &Nexus,

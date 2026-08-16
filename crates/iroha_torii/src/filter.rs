@@ -982,9 +982,8 @@ fn is_supported_field(path: &str) -> bool {
 }
 /// Validate a filter expression structurally.
 ///
-/// Ensures field paths use supported prefixes; logical and membership operands
-/// are non-empty; membership values are unique; and depth, node, and set sizes
-/// stay within deterministic bounds.
+/// Ensures field paths use supported prefixes; logical and membership operands are non-empty;
+/// membership values are unique; and depth, node, and set sizes stay within deterministic bounds.
 ///
 /// # Errors
 ///

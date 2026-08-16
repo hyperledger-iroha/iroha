@@ -1,0 +1,4 @@
+fn decode() -> Json {
+                let string raw = "{}";
+                Json::parse(value: raw)
+            }

@@ -101,9 +101,8 @@ impl DaPinIntentBundle {
     }
     /// Canonical Merkle root over the bundled pin intents.
     ///
-    /// Leaves and internal nodes use distinct, versioned hash domains. Odd
-    /// leaves are promoted unchanged to the next layer instead of being
-    /// duplicated.
+    /// Leaves and internal nodes use distinct, versioned hash domains. Odd leaves are promoted
+    /// unchanged to the next layer instead of being duplicated.
     #[must_use]
     pub fn merkle_root(&self) -> Option<Hash> {
         if self.intents.is_empty() {

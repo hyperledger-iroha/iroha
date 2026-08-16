@@ -993,9 +993,8 @@ impl IvmBuilder {
     }
     /// Consume the builder and return both the final configuration and VM.
     ///
-    /// The returned configuration is the exact snapshot applied to the VM and
-    /// can be fed back into [`IvmBuilder::with_config`] to construct additional
-    /// VMs with identical settings.
+    /// The returned configuration is the exact snapshot applied to the VM and can be fed back into
+    /// [`IvmBuilder::with_config`] to construct additional VMs with identical settings.
     pub fn build_with_config(self) -> (IvmConfig, IVM) {
         let cfg = self.config;
         let vm = self.build();
@@ -1350,10 +1349,9 @@ pub struct IVM {
     pub memory: Memory,
     /// Canonical byte ranges that currently contain private data.
     ///
-    /// ZK register tags must survive compiler-generated spills without allowing
-    /// bytecode to launder a secret through an untagged load. Guest private
-    /// stores remain stack-only; the host may additionally publish opaque typed
-    /// private-input envelopes in owned HEAP memory.
+    /// ZK register tags must survive compiler-generated spills without allowing bytecode to launder
+    /// a secret through an untagged load. Guest private stores remain stack-only; the host may
+    /// additionally publish opaque typed private-input envelopes in owned HEAP memory.
     private_memory_bytes: PrivateMemoryRanges,
     pub pc: u64,
     host: Option<Box<dyn IVMHost + Send + Sync>>,
@@ -1398,8 +1396,7 @@ pub struct IVM {
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
     prepared: Option<PreparedProgram>,
     prepared_required: bool,
-    /// Unforgeable local capability installed only by the crate-private
-    /// Kotodama test-suite loader.
+    /// Unforgeable local capability installed only by the crate-private Kotodama test-suite loader.
     allow_koto_test_syscalls: bool,
     /// Whether the loaded image is a deployable contract with protected calls.
     strict_return_integrity: bool,
@@ -1855,10 +1852,9 @@ impl IVM {
     }
     /// Decode the next instruction from code memory and advance the program counter.
     ///
-    /// The simple decoder understands a compact 16-bit encoding for basic
-    /// arithmetic, memory and branch operations as well as a 32-bit form for
-    /// absolute jumps. Unknown opcodes or invalid fetches yield
-    /// `VMError::DecodeError`.
+    /// The simple decoder understands a compact 16-bit encoding for basic arithmetic, memory and
+    /// branch operations as well as a 32-bit form for absolute jumps. Unknown opcodes or invalid
+    /// fetches yield `VMError::DecodeError`.
     pub fn decode_next(&self) -> Result<(crate::simple_instruction::Instruction, u8), VMError> {
         use crate::simple_instruction::Instruction;
         let half = self
@@ -2221,16 +2217,9 @@ impl IVM {
                         crate::cuda::ed25519_verify_cuda(msg, &sig_bytes_arr, &pk_bytes)
                 {
                     let value = if res { 1 } else { 0 };
-                    if result_reg == 0 {
-                        self.registers.force_set(0, value);
-                        if self.zk_mode {
-                            self.registers.force_set_tag(0, false);
-                        }
-                    } else {
-                        self.registers.set(result_reg as usize, value);
-                        if self.zk_mode {
-                            self.registers.set_tag(result_reg as usize, false);
-                        }
+                    self.registers.set(result_reg as usize, value);
+                    if self.zk_mode {
+                        self.registers.set_tag(result_reg as usize, false);
                     }
                     return Ok(());
                 }
@@ -2243,16 +2232,9 @@ impl IVM {
                 };
                 let valid = pk.verify_strict(msg, &sig).is_ok();
                 let value = if valid { 1 } else { 0 };
-                if result_reg == 0 {
-                    self.registers.force_set(0, value);
-                    if self.zk_mode {
-                        self.registers.force_set_tag(0, false);
-                    }
-                } else {
-                    self.registers.set(result_reg as usize, value);
-                    if self.zk_mode {
-                        self.registers.set_tag(result_reg as usize, false);
-                    }
+                self.registers.set(result_reg as usize, value);
+                if self.zk_mode {
+                    self.registers.set_tag(result_reg as usize, false);
                 }
             }
             SimpleInstruction::DilithiumVerify {
@@ -2375,16 +2357,9 @@ impl IVM {
                     _ => false,
                 };
                 let value = if valid { 1 } else { 0 };
-                if result_reg == 0 {
-                    self.registers.force_set(0, value);
-                    if self.zk_mode {
-                        self.registers.force_set_tag(0, false);
-                    }
-                } else {
-                    self.registers.set(result_reg as usize, value);
-                    if self.zk_mode {
-                        self.registers.set_tag(result_reg as usize, false);
-                    }
+                self.registers.set(result_reg as usize, value);
+                if self.zk_mode {
+                    self.registers.set_tag(result_reg as usize, false);
                 }
             }
             SimpleInstruction::Halt => {}
@@ -2515,7 +2490,10 @@ impl IVM {
     pub fn set_max_cycles(&mut self, max: u64) {
         self.max_cycles = max;
     }
-    /// Load raw code bytes into memory without parsing metadata.
+    /// Load raw code bytes under the default non-ZK, non-vector execution profile.
+    ///
+    /// Any profile and per-program execution state from a previously loaded artifact is discarded.
+    /// Guest registers and the INPUT/STACK memory regions remain available to preload arguments.
     pub fn load_code(&mut self, code: &[u8]) -> Result<(), VMError> {
         if code.len() > Memory::HEAP_START as usize {
             return Err(VMError::MemoryOutOfBounds);
@@ -2523,6 +2501,11 @@ impl IVM {
         if !self.scrub_private_memory() {
             return Err(VMError::PrivacyViolation);
         }
+        self.metadata = ProgramMetadata::default();
+        self.vector_enabled = false;
+        self.vector_length = default_vector_length();
+        self.max_cycles = 0;
+        self.zk_mode = false;
         // Preserve INPUT/STACK contents but reset OUTPUT for a clean run.
         self.memory.load_code(code);
         self.memory.clear_output();
@@ -2541,6 +2524,14 @@ impl IVM {
         self.contract_return_stack.clear();
         self.contract_outer_return_pc = None;
         self.code_hash = iroha_crypto::Hash::new(code).into();
+        self.pc_alignment = 0;
+        self.halted = false;
+        self.constraint_failed = false;
+        self.contract_abort_code = None;
+        self.clear_zk_trace_logs();
+        self.pc_trace.clear();
+        self.delta_trace = zk::DeltaTraceLog::default();
+        self.cycles = 0;
         self.memory.commit();
         self.memory.mark_template_clean();
         Ok(())
@@ -2957,10 +2948,9 @@ impl IVM {
             Ok(None)
         }
     }
-    /// Reject private operands before an operation whose trap behavior depends
-    /// on their values. A private divide-by-zero, failed assertion, or inverse
-    /// failure would otherwise reveal a witness predicate through the public
-    /// execution result.
+    /// Reject private operands before an operation whose trap behavior depends on their values. A
+    /// private divide-by-zero, failed assertion, or inverse failure would otherwise reveal a
+    /// witness predicate through the public execution result.
     #[inline]
     fn zk_require_public_trap_operands(&self, registers: &[usize]) -> Result<(), VMError> {
         if self.zk_mode
@@ -3285,13 +3275,11 @@ impl IVM {
             .ok_or(VMError::OutOfMemory)?;
         Self::preflight_host_tlv_allocations_from(0, 0, available_heap_limit, tlv_lengths)
     }
-    /// Require a prospective pointer-ABI envelope range to have public,
-    /// VM-owned provenance.
+    /// Require a prospective pointer-ABI envelope range to have public, VM-owned provenance.
     ///
-    /// Pointer envelopes may reside in immutable program data, INPUT, or the
-    /// allocated portion of HEAP. Guest stack/output bytes and unallocated
-    /// heap capacity are not pointer-ABI object stores, even when their bytes
-    /// happen to form a valid envelope.
+    /// Pointer envelopes may reside in immutable program data, INPUT, or the allocated portion of
+    /// HEAP. Guest stack/output bytes and unallocated heap capacity are not pointer-ABI object
+    /// stores, even when their bytes happen to form a valid envelope.
     pub(crate) fn ensure_owned_public_tlv_range(
         &self,
         address: u64,
@@ -3548,12 +3536,11 @@ impl IVM {
     }
     /// Execute a full block of transactions using the parallel scheduler.
     ///
-    /// Each transaction is run on a cloned instance of the VM so worker
-    /// threads never share mutable state. When hardware transactional memory is
-    /// available the scheduler wraps the entire execution in an RTM region which
-    /// eliminates the global mutex normally used for committing updates. The
-    /// shared [`State`] uses a `DashMap` internally for thread-safe access so
-    /// applying the write sets is safe from multiple threads.
+    /// Each transaction is run on a cloned instance of the VM so worker threads never share mutable
+    /// state. When hardware transactional memory is available the scheduler wraps the entire
+    /// execution in an RTM region which eliminates the global mutex normally used for committing
+    /// updates. The shared [`State`] uses a `DashMap` internally for thread-safe access so applying
+    /// the write sets is safe from multiple threads.
     pub fn execute_block(&mut self, block: Block) -> BlockResult {
         let allow_parallel = self
             .host
@@ -3768,10 +3755,9 @@ impl IVM {
     }
     /// Restore a warmed VM to a previously captured post-load baseline.
     ///
-    /// Program metadata and predecoded code are immutable and remain in place.
-    /// Invocation-specific hosts, registers, traces, gas, entrypoints, input,
-    /// heap, and output are reset. Memory restoration is proportional to the
-    /// number of chunks modified by the invocation.
+    /// Program metadata and predecoded code are immutable and remain in place. Invocation-specific
+    /// hosts, registers, traces, gas, entrypoints, input, heap, and output are reset. Memory
+    /// restoration is proportional to the number of chunks modified by the invocation.
     ///
     /// # Errors
     ///
@@ -3809,16 +3795,13 @@ impl IVM {
     pub fn register(&self, idx: usize) -> u64 {
         self.registers.get(idx)
     }
-    /// Reject a private-tagged register before its value crosses a public host
-    /// boundary.
+    /// Reject a private-tagged register before its value crosses a public host boundary.
     ///
-    /// Hosts must call this for contract return registers and other values
-    /// they expose outside the VM. Non-ZK programs have no private register
-    /// tags and therefore always pass this check.
+    /// Hosts must call this for contract return registers and other values they expose outside the
+    /// VM. Non-ZK programs have no private register tags and therefore always pass this check.
     ///
     /// # Errors
-    /// Returns [`VMError::PrivacyViolation`] when `idx` contains a private
-    /// value in ZK mode.
+    /// Returns [`VMError::PrivacyViolation`] when `idx` contains a private value in ZK mode.
     pub fn ensure_public_register(&self, idx: usize) -> Result<(), VMError> {
         if self.zk_mode && self.registers.tag(idx) {
             return Err(VMError::PrivacyViolation);
@@ -3923,12 +3906,10 @@ impl IVM {
     pub const fn last_staged_syscall_context(&self) -> Option<&StagedSyscallContext> {
         self.last_staged_syscall.as_ref()
     }
-    /// Debit one staged syscall phase immediately before the corresponding
-    /// work begins.
+    /// Debit one staged syscall phase immediately before the corresponding work begins.
     ///
-    /// If the phase is unaffordable, no gas is deducted for it and the method
-    /// returns [`VMError::SyscallOutOfGas`]. Gas charged by earlier completed
-    /// phases remains consumed.
+    /// If the phase is unaffordable, no gas is deducted for it and the method returns
+    /// [`VMError::SyscallOutOfGas`]. Gas charged by earlier completed phases remains consumed.
     ///
     /// # Errors
     ///
@@ -3965,8 +3946,7 @@ impl IVM {
     ///
     /// # Errors
     ///
-    /// Returns [`VMError::SyscallMeteringModeMismatch`] outside an active
-    /// staged syscall.
+    /// Returns [`VMError::SyscallMeteringModeMismatch`] outside an active staged syscall.
     pub fn mark_staged_syscall_recoverable_failure(&mut self) -> Result<(), VMError> {
         let context = self
             .staged_syscall
@@ -3992,9 +3972,8 @@ impl IVM {
     }
     /// Get the canonical hash of the loaded program image.
     ///
-    /// Self-describing contract programs use the domain-separated full-artifact
-    /// hash, while raw code loaded through [`Self::load_code`] hashes that raw
-    /// instruction image.
+    /// Self-describing contract programs use the domain-separated full-artifact hash, while raw
+    /// code loaded through [`Self::load_code`] hashes that raw instruction image.
     pub fn code_hash(&self) -> [u8; 32] {
         self.code_hash
     }
@@ -4317,11 +4296,10 @@ impl IVM {
         }
         Ok(())
     }
-    /// Snapshot and clear output-only registers before entering the host. Registers that
-    /// overlap the declared input window are already proven public by
-    /// `validate_syscall_privacy` and must remain intact for the host call.
-    /// This prevents a successful no-write or partial-write host from
-    /// declassifying stale private register contents.
+    /// Snapshot and clear output-only registers before entering the host. Registers that overlap
+    /// the declared input window are already proven public by `validate_syscall_privacy` and must
+    /// remain intact for the host call. This prevents a successful no-write or partial-write host
+    /// from declassifying stale private register contents.
     #[inline]
     fn sanitize_syscall_output_privacy(&mut self, number: u32) -> SavedSyscallOutputRegisters {
         let mut saved = SavedSyscallOutputRegisters::default();
@@ -4520,13 +4498,11 @@ impl IVM {
     }
     /// Execute the loaded program starting at the current `pc`.
     ///
-    /// This is the heart of the VM: a classic fetch‑decode‑execute loop.  For
-    /// each instruction we deduct gas, perform the operation and then advance
-    /// the program counter by the actual length of the instruction (16 or
-    /// 32 bits). When zero-knowledge trace collection is active the register
-    /// state is logged on every cycle so that a prover can later reconstruct a
-    /// trace.
-    /// The loop terminates on `HALT` or when an error is encountered.
+    /// This is the heart of the VM: a classic fetch‑decode‑execute loop. For each instruction we
+    /// deduct gas, perform the operation and then advance the program counter by the actual length
+    /// of the instruction (16 or 32 bits). When zero-knowledge trace collection is active the
+    /// register state is logged on every cycle so that a prover can later reconstruct a trace. The
+    /// loop terminates on `HALT` or when an error is encountered.
     pub fn run(&mut self) -> Result<(), VMError> {
         let Some(mut host) = self.host.take() else {
             return Err(VMError::HostUnavailable);
@@ -5688,7 +5664,7 @@ impl IVM {
                         if self.strict_return_integrity && !(rd == 0 && rs == 1 && imm == 0) {
                             return Err(VMError::AssertionFailed);
                         }
-                        let raw_target = ((self.registers.get(rs) as i64) + imm) as u64;
+                        let raw_target = self.registers.get(rs).wrapping_add_signed(imm);
                         let target =
                             ((raw_target.wrapping_sub(self.pc_alignment)) & !3) | self.pc_alignment;
                         if self.strict_return_integrity {
@@ -6843,9 +6819,8 @@ impl IVM {
     pub fn read_output_used(&self) -> &[u8] {
         self.memory.read_output_used()
     }
-    /// Produce a CompactProofBundle for the memory chunk containing `addr` by
-    /// invoking the metered GET_MERKLE_COMPACT host path. This helper writes
-    /// temporary data into the OUTPUT region.
+    /// Produce a CompactProofBundle for the memory chunk containing `addr` by invoking the metered
+    /// GET_MERKLE_COMPACT host path. This helper writes temporary data into the OUTPUT region.
     pub fn get_memory_compact_bundle(
         &mut self,
         addr: u64,
@@ -7663,9 +7638,8 @@ fn schedule_batches(metas: &[InstrMeta]) -> Vec<Vec<usize>> {
 impl IVM {
     /// Execute a slice of instructions using simple ILP scheduling.
     ///
-    /// Gas for each independent batch is reserved before any worker starts.
-    /// Once work begins, the full reservation remains charged even if an
-    /// instruction in that batch faults.
+    /// Gas for each independent batch is reserved before any worker starts. Once work begins, the
+    /// full reservation remains charged even if an instruction in that batch faults.
     pub fn execute_block_parallel(&mut self, block: &[SimpleInstruction]) -> Result<(), VMError> {
         let zk_memory_access = self.zk_mode
             && block.iter().any(|instruction| {
@@ -8848,6 +8822,50 @@ mod tests {
         assert!(!vm.strict_return_integrity);
         assert!(vm.contract_return_stack.is_empty());
         assert_eq!(vm.contract_outer_return_pc, None);
+    }
+    #[test]
+    fn raw_code_resets_the_prior_program_execution_profile() {
+        set_banner_enabled(false);
+        let metadata = ProgramMetadata {
+            mode: crate::metadata::mode::VECTOR | crate::metadata::mode::ZK,
+            vector_length: 8,
+            max_cycles: 7,
+            ..ProgramMetadata::default()
+        };
+        let mut profiled_program = metadata.encode();
+        profiled_program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let mut reused = IVM::new(u64::MAX);
+        reused
+            .load_program(&profiled_program)
+            .expect("profiled program loads");
+        assert!(reused.vector_enabled);
+        assert!(reused.zk_mode_enabled());
+        reused.pc_alignment = 3;
+        reused.cycles = 9;
+        reused.request_contract_abort(17);
+        let mut raw = Vec::new();
+        raw.extend_from_slice(
+            &crate::encoding::wide::encode_rr(instruction::wide::crypto::SETVL, 0, 0, 8)
+                .to_le_bytes(),
+        );
+        raw.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        reused.load_code(&raw).expect("raw code loads");
+        assert_eq!(reused.metadata.mode, 0);
+        assert!(!reused.vector_enabled);
+        assert!(!reused.zk_mode_enabled());
+        assert_eq!(reused.max_cycles, 0);
+        assert_eq!(reused.vector_length(), default_vector_length());
+        assert_eq!(reused.pc_alignment, 0);
+        assert_eq!(reused.cycles, 0);
+        assert!(!reused.halted);
+        assert!(!reused.constraint_failed);
+        assert_eq!(reused.contract_abort_code, None);
+        let reused_result = reused.run();
+        let mut fresh = IVM::new(u64::MAX);
+        fresh.load_code(&raw).expect("raw code loads in fresh VM");
+        let fresh_result = fresh.run();
+        assert_eq!(reused_result, fresh_result);
+        assert_eq!(fresh_result, Err(VMError::VectorExtensionDisabled));
     }
     #[test]
     fn deployable_contract_rejects_noncanonical_indirect_control_flow_at_admission() {

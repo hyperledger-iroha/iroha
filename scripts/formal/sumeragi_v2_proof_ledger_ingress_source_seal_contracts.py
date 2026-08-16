@@ -263,14 +263,212 @@ lane_message @ (BlockMessage::LaneBlockProposal(_) | BlockMessage::LaneBlockVote
     lane_output_is_covered(lane_message)?
 }
 """,
+    "autonomous_new_view_exact_body": """
+let origin_view = payload.origin_proposal.descriptor.lane_block_view;
+if body.from_view < origin_view {
+    return false;
+}
+let source = if body.from_view == origin_view {
+    payload.origin_proposal.clone()
+} else {
+    let Ok(source) = crate::lane_consensus::retarget_lane_block_proposal_exact_view(
+        &payload.origin_proposal,
+        body.from_view,
+    ) else {
+        return false;
+    };
+    source
+};
+crate::lane_consensus::LaneBlockNewViewBodyV1::for_transition(
+    &source,
+    payload,
+    body.target_view,
+    expected_network_id,
+    expected_epoch,
+)
+.is_ok_and(|expected| expected == *body)
+""",
+    "autonomous_payload_identity": """
+match message {
+    BlockMessage::LaneExecutablePayload(candidate) => {
+        candidate.origin_proposal.proposal_hash == payload.origin_proposal.proposal_hash
+            && candidate.payload_hash == payload.payload_hash
+    }
+    BlockMessage::LaneBlockNewViewVote(vote) => {
+        vote.body.executable_payload_hash == payload.payload_hash
+    }
+    BlockMessage::LaneBlockNewViewCertificate(certificate) => {
+        certificate.body.executable_payload_hash == payload.payload_hash
+    }
+    _ => false,
+}
+""",
+    "autonomous_exact_attempt_and_retirement": """
+let retired = kura
+    .read_autonomous_lane_retired_attempt(
+        lane_id,
+        lane_block_height,
+        proposal_height,
+        network_id,
+        epoch,
+    )
+    .map_err(|error| format!("autonomous-lane exact retirement validation failed: {error}"))?
+    .ok_or_else(|| {
+        "current autonomous-lane output has no exact durable slot retirement".to_owned()
+    })?;
+let durable_payload = &retired.artifact.executable_payload;
+let durable_proposal_hash = durable_payload.origin_proposal.proposal_hash;
+let bound_supersession_source = durable_lane_authority.covered_source_hash(
+    artifact,
+    &BlockMessage::LaneBlockProposal(durable_payload.origin_proposal.clone()),
+)?;
+if durable_payload.origin_proposal.descriptor.proposal_height != proposal_height
+    || durable_lane_authority.winning_proposal_hash(durable_proposal_hash)
+    || bound_supersession_source.is_none()
+{
+    return Err(
+        "retired autonomous-lane output is not bound to a nonwinning finalized carrier"
+            .to_owned(),
+    );
+}
+if retired.retirement
+    != crate::kura::AutonomousLaneSlotRetirementV1::from_payload(durable_payload)
+{
+    return Err(
+        "autonomous-lane output differs from its exact durable slot retirement".to_owned(),
+    );
+}
+""",
+    "autonomous_exact_retired_payload": """
+if payload.producer != *local_peer
+    || payload.origin_proposal.descriptor.proposal_height != proposal_height
+    || payload != durable_payload
+    || retired.retirement
+        != crate::kura::AutonomousLaneSlotRetirementV1::from_payload(payload)
+{
+    return Err(
+        "autonomous-lane payload differs from its exact retired local attempt".to_owned(),
+    );
+}
+""",
+    "autonomous_exact_retired_vote": """
+if vote.signer != *local_peer
+    || body.proposal_height != proposal_height
+    || !autonomous_new_view_body_matches_durable_payload(
+        body,
+        durable_payload,
+        network_id,
+        epoch,
+    )
+    || !retired
+        .current_proposal
+        .descriptor
+        .validator_set
+        .contains(&vote.signer)
+{
+    return Err(
+        "autonomous NewView vote differs from its exact retired local attempt".to_owned(),
+    );
+}
+""",
+    "autonomous_exact_retired_certificate": """
+let exact_durable = retired
+    .artifact
+    .new_view_certificates
+    .iter()
+    .find(|stored| stored.certificate == *certificate)
+    .or_else(|| {
+        retired
+            .artifact
+            .view_checkpoint
+            .as_ref()
+            .and_then(|checkpoint| {
+                (checkpoint.certificate.certificate == *certificate)
+                    .then_some(&checkpoint.certificate)
+            })
+    });
+if !certificate.validator_set.contains(local_peer) || exact_durable.is_none() {
+    return Err(
+        "autonomous NewView certificate lacks an exact retired local retransmit source"
+            .to_owned(),
+    );
+}
+""",
+    "autonomous_current_height_retirement_fallback": """
+let Some(canonical_payload) = canonical_payloads.get(&route).filter(|payload| {
+    autonomous_lane_output_matches_payload_identity(envelope.as_message(), payload)
+}) else {
+    if proposal_height != artifact.height {
+        return Err(
+            "autonomous-lane output is not owned by the canonical Kura carrier".to_owned(),
+        );
+    }
+    autonomous_lane_output_has_exact_retirement_source(
+        envelope.as_message(),
+        artifact,
+        durable_lane_authority,
+        kura,
+        local_peer,
+        proposal_height,
+        network_id,
+        epoch,
+    )?;
+    continue;
+};
+let proposal_hash = canonical_payload.origin_proposal.proposal_hash;
+if proposal_height == artifact.height
+    && !durable_lane_authority.winning_proposal_hash(proposal_hash)
+{
+    return Err(
+        "autonomous-lane output is not owned by the finalized winning carrier".to_owned(),
+    );
+}
+""",
+    "autonomous_retirement_regression_success": """
+for output in [
+    BlockMessage::LaneExecutablePayload(retired.payload.clone()),
+    BlockMessage::LaneBlockNewViewVote(retired.new_view_vote.clone()),
+    BlockMessage::LaneBlockNewViewCertificate(retired.new_view_certificate.clone()),
+] {
+    assert!(autonomous_lane_output_matches_payload_identity(
+        &output,
+        &retired.payload,
+    ));
+}
+""",
+    "autonomous_retirement_regression_retire_all": """
+assert_eq!(
+    pending
+        .handoff_applied_height_to_durable_reconstruction(
+            &artifact,
+            Some(&authority),
+            Some(retired.kura.as_ref()),
+        )
+        .expect("exact retired attempt supersedes all autonomous output variants"),
+    3
+);
+assert!(!pending.is_pending());
+""",
+    "autonomous_retirement_regression_atomic": """
+mutated
+    .handoff_applied_height_to_durable_reconstruction(
+        &artifact,
+        Some(&authority),
+        Some(retired.kura.as_ref()),
+    )
+    .expect_err("mutated output cannot borrow the exact retirement");
+assert!(mutated.is_pending(), "failed handoff remains atomic");
+
+let unretired = crate::kura::tests::unretired_autonomous_lane_attempt_fixture(&validators[0]);
+""",
     "runner_service_owner": """
 Arc::clone(&output_guard),
 Arc::clone(&block_rx),
 Arc::clone(&kura_replica_advert_refresh),
 leader_wire_recovery_authority,
-exact_output_service_owner,
-)
-.map_err(V2RunnerError::Service)?;
+    exact_output_service_owner,
+    )
+    .map_err(V2RunnerError::Service)?;
 """,
 "historical_body_guard": """
 let served = serve_block_sync_while_guarded(
@@ -399,5 +597,11 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
     "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (
         "9fdace5f2d7203c48221a9ea47be4bf0522a126403cb3dfd6d9397fefd63e989"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
+    "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier": (
+        "394810ab62d382e3016e5a6c88660778c34beca86d0804b567a74be47f8694d5"
     ),
 }

@@ -1,8 +1,7 @@
 //! Lane privacy commitment registry bridging manifest data to runtime users.
 //!
-//! This module wires the NX-10 domain-separated Merkle descriptors into a
-//! deterministic registry so admission/compliance logic can look up the
-//! commitments advertised by each lane.
+//! This module wires the NX-10 domain-separated Merkle descriptors into a deterministic registry so
+//! admission/compliance logic can look up the commitments advertised by each lane.
 use crate::governance::manifest::{LaneManifestRegistry, LaneManifestStatus};
 use iroha_crypto::privacy::{
     LaneCommitmentId, LanePrivacyCommitment, PrivacyError, PrivacyWitness,
@@ -57,10 +56,9 @@ impl LanePrivacyRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`LanePrivacyRegistryError::LaneMissing`] when the lane does not
-    /// advertise commitments, [`LanePrivacyRegistryError::UnknownCommitment`]
-    /// when the identifier is not registered, or propagates cryptographic
-    /// verification failures via
+    /// Returns [`LanePrivacyRegistryError::LaneMissing`] when the lane does not advertise
+    /// commitments, [`LanePrivacyRegistryError::UnknownCommitment`] when the identifier is not
+    /// registered, or propagates cryptographic verification failures via
     /// [`LanePrivacyRegistryError::Verification`].
     pub fn verify(
         &self,

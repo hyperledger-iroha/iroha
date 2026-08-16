@@ -72,11 +72,10 @@ impl crate::seal::Instruction for CommitContractDeployment {}
 isi! {
     /// Register compiled contract bytecode on-chain keyed by its `code_hash`.
     ///
-    /// The bytecode is the full compiled `.to` image including the IVM header.
-    /// Nodes verify that `code_hash` equals the domain-separated canonical hash of the
-    /// complete deployable `.to` artifact, including the execution header, `CNTR`,
-    /// literals, and code, before storing. The authority must hold
-    /// `CanRegisterSmartContractCode`.
+    /// The bytecode is the full compiled `.to` image including the IVM header. Nodes verify that
+    /// `code_hash` equals the domain-separated canonical hash of the complete deployable `.to`
+    /// artifact, including the execution header, `CNTR`, literals, and code, before storing. The
+    /// authority must hold `CanRegisterSmartContractCode`.
     pub struct RegisterSmartContractBytes {
         /// Domain-separated canonical hash of the complete deployable `.to` artifact.
         pub code_hash: iroha_crypto::Hash,
@@ -416,15 +415,16 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSmartContractBytes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{
+        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+    };
     use crate::{
         account::AccountId,
         nexus::DataSpaceId,
         smart_contract::{ContractAddress, ContractAlias},
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
-    };
+    use norito::core::DecodeFromSlice;
     fn account() -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519)
             .expect("derive checked smart-contract-code fixture account keypair");
@@ -432,7 +432,7 @@ mod tests {
     }
     fn contract_address() -> ContractAddress {
         ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &account(),

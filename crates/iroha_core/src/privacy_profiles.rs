@@ -1,11 +1,10 @@
 //! Deterministic manifest for native first-release privacy engines.
 //!
-//! Governance does not get to turn arbitrary non-zero digests into executable
-//! consensus code. Every activatable protocol must have one compiled profile
-//! whose parameter, verifier, structurally derived statement-schema,
-//! engine-manifest, and limit
-//! bindings exactly match the proposed activation record. A protocol whose
-//! complete verifier is not compiled is rejected before it enters world state.
+//! Governance does not get to turn arbitrary non-zero digests into executable consensus code. Every
+//! activatable protocol must have one compiled profile whose parameter, verifier, structurally
+//! derived statement-schema, engine-manifest, and limit bindings exactly match the proposed
+//! activation record. A protocol whose complete verifier is not compiled is rejected before it
+//! enters world state.
 #[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{
     ZK_ACE_AIR_RELATION_SCHEMA_V1, ZK_ACE_AUTHORIZATION_PROJECTION_V1,
@@ -480,11 +479,10 @@ fn build_compiled_privacy_profile_catalog_v1()
 }
 /// Validate an archive as the exact compiled-profile catalog of this binary.
 ///
-/// The data-model validator first enforces canonical bounded decoding and the
-/// exact twelve-row shape. This second layer then requires byte-equivalent
-/// typed content to the catalog derived from the current binary, preventing a
-/// canonical but substituted profile digest from being accepted as local build
-/// metadata. Success still does not establish network activation or readiness.
+/// The data-model validator first enforces canonical bounded decoding and the exact twelve-row
+/// shape. This second layer then requires byte-equivalent typed content to the catalog derived from
+/// the current binary, preventing a canonical but substituted profile digest from being accepted as
+/// local build metadata. Success still does not establish network activation or readiness.
 #[must_use]
 pub fn validate_local_privacy_compiled_profile_catalog_archive_v1(
     archive: &[u8],
@@ -541,13 +539,11 @@ pub fn committed_privacy_capability_snapshot_v1(
 ///
 /// # Errors
 ///
-/// Returns [`CompiledPrivacyProfileErrorV1::EngineUnavailable`] for a protocol
-/// whose complete end-to-end verifier is not compiled or whose independent
-/// release-readiness gates remain closed, or
-/// [`CompiledPrivacyProfileErrorV1::ProfileInitializationFailed`] if fixed
-/// transparent parameters cannot be derived, or
-/// [`CompiledPrivacyProfileErrorV1::StatementSchemaInvalid`] when the emitted
-/// schema is ambiguous or internally unresolved.
+/// Returns [`CompiledPrivacyProfileErrorV1::EngineUnavailable`] for a protocol whose complete
+/// end-to-end verifier is not compiled or whose independent release-readiness gates remain closed,
+/// or [`CompiledPrivacyProfileErrorV1::ProfileInitializationFailed`] if fixed transparent
+/// parameters cannot be derived, or [`CompiledPrivacyProfileErrorV1::StatementSchemaInvalid`] when
+/// the emitted schema is ambiguous or internally unresolved.
 pub fn compiled_privacy_profile_v1(
     protocol_id: PrivacyProtocolIdV1,
 ) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
@@ -587,13 +583,11 @@ fn compiled_zk_x509_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
 }
 /// Derive the deterministic ZK-X509 release-candidate profile material.
 ///
-/// This accessor exists only for unsigned/offline intent preparation, release
-/// KATs, and isolated resource measurements that must bind the exact profile
-/// candidate before activation. Success does not imply compiled readiness,
-/// activation, verifier availability, or permission to sign or submit a proof.
-/// Production proof paths must use [`compiled_privacy_profile_v1`], which keeps
-/// returning `EngineUnavailable` until every activation-readiness capture is
-/// canonically admitted.
+/// This accessor exists only for unsigned/offline intent preparation, release KATs, and isolated
+/// resource measurements that must bind the exact profile candidate before activation. Success does
+/// not imply compiled readiness, activation, verifier availability, or permission to sign or submit
+/// a proof. Production proof paths must use [`compiled_privacy_profile_v1`], which keeps returning
+/// `EngineUnavailable` until every activation-readiness capture is canonically admitted.
 pub fn zk_x509_release_candidate_profile_material_v1()
 -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
@@ -1494,10 +1488,9 @@ pub fn validate_compiled_privacy_activation_v1(
 }
 /// Validate a governance record against an already selected compiled profile.
 ///
-/// This contains the consensus-critical binding comparison shared by normal
-/// activation admission and pre-activation release-candidate evidence. The
-/// caller selecting `compiled` is responsible for the separate availability
-/// and readiness decision.
+/// This contains the consensus-critical binding comparison shared by normal activation admission
+/// and pre-activation release-candidate evidence. The caller selecting `compiled` is responsible
+/// for the separate availability and readiness decision.
 pub(crate) fn validate_compiled_privacy_activation_against_profile_v1(
     activation: &PrivacyProtocolActivationRecordV1,
     compiled: &CompiledPrivacyProfileV1,
@@ -1653,11 +1646,10 @@ fn compiled_zk_ams_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
 }
 /// Derive the deterministic ZK-AMS release-candidate profile material.
 ///
-/// This accessor is restricted to unsigned/offline intent construction,
-/// release KATs, adversarial tests, and resource measurements that must bind
-/// the exact candidate before activation. Success does not imply that the MKHE
-/// release gates are closed or that the profile may be activated, signed, or
-/// submitted. Production paths must use [`compiled_privacy_profile_v1`].
+/// This accessor is restricted to unsigned/offline intent construction, release KATs, adversarial
+/// tests, and resource measurements that must bind the exact candidate before activation. Success
+/// does not imply that the MKHE release gates are closed or that the profile may be activated,
+/// signed, or submitted. Production paths must use [`compiled_privacy_profile_v1`].
 pub fn zk_ams_release_candidate_profile_material_v1()
 -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkAmsV1;
@@ -2834,15 +2826,13 @@ fn append_digest_field_v1(hash: &mut Sha256, field: &[u8]) {
 }
 /// Hash the complete structural schema of `T` in a platform-independent order.
 ///
-/// The `iroha_schema` map is keyed internally by Rust [`core::any::TypeId`],
-/// whose ordering is not a wire contract. This function replaces every such
-/// reference with its declared stable string identifier, collapses only
-/// representation aliases with identical canonical metadata, rejects
-/// conflicting reuse of an identifier, sorts top-level entries by that stable
-/// identifier, and preserves field/variant order where order is part of the
-/// representation. Consequently, adding, deleting, reordering, or retyping a
-/// statement field changes the governed digest without relying on a
-/// hand-maintained schema string.
+/// The `iroha_schema` map is keyed internally by Rust [`core::any::TypeId`], whose ordering is not
+/// a wire contract. This function replaces every such reference with its declared stable string
+/// identifier, collapses only representation aliases with identical canonical metadata, rejects
+/// conflicting reuse of an identifier, sorts top-level entries by that stable identifier, and
+/// preserves field/variant order where order is part of the representation. Consequently, adding,
+/// deleting, reordering, or retyping a statement field changes the governed digest without relying
+/// on a hand-maintained schema string.
 ///
 /// # Errors
 ///

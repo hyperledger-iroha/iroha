@@ -279,8 +279,7 @@ pub struct PeersGossiper {
     configured_validator_peers: BTreeSet<PeerId>,
     /// Peers we can re-promote once trust decays above the floor.
     trust_candidates: BTreeSet<PeerId>,
-    /// Peers received via gossiping from other peers
-    /// First-level key corresponds to `SocketAddr`
+    /// Peers received via gossiping from other peers First-level key corresponds to `SocketAddr`
     /// Second-level key - peer from which such `SocketAddr` was received
     gossip_peers: BTreeMap<PeerId, BTreeMap<PeerId, SocketAddr>>,
     /// Transport capabilities known for peers in topology.

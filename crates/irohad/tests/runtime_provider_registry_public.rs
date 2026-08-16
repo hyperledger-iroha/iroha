@@ -35,8 +35,7 @@ impl MusubiPublicationPrivateServiceFactoryV1 for ExternalMusubiPublicationFacto
         context: MusubiPublicationPrivateServiceContextV1,
     ) -> Result<MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateServiceFactoryErrorV1>
     {
-        let _chain_id = context.chain_id();
-        let _genesis_hash = context.genesis_block_hash();
+        let _network_id = context.network_id();
         let _state = context.state();
         let _queue = context.queue();
         let _sorafs_node = context.sorafs_node();

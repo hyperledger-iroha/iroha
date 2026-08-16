@@ -297,10 +297,9 @@ const GOVERNANCE_FENCED_PRIVACY_STORE_SPEC_V1: GovernanceTwoSlotStoreSpecV1 =
     };
 /// Public, non-secret qualification returned by a Governance DAG runtime provider.
 ///
-/// `revision` identifies the deployment-owned adapter/policy revision and
-/// `policy_digest` binds the exact public provider policy. Runtime wrappers pin
-/// this observation at startup and require it to remain identical on every
-/// subsequent operation.
+/// `revision` identifies the deployment-owned adapter/policy revision and `policy_digest` binds the
+/// exact public provider policy. Runtime wrappers pin this observation at startup and require it to
+/// remain identical on every subsequent operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GovernanceDagRuntimeProviderQualificationV1 {
     /// Non-zero deployment policy revision.
@@ -353,9 +352,8 @@ const GOVERNANCE_DAG_REQUEST_INGRESS_BINDING_DOMAIN_V1: &[u8] =
     b"sorafs.governance-dag.request-ingress-binding.v1\0";
 /// Receiver posture required from every first-release Governance DAG endpoint.
 ///
-/// There is deliberately no permissive or signer-only variant. A provider can
-/// qualify only an endpoint whose backend is reachable exclusively through the
-/// authenticated V1 receiver.
+/// There is deliberately no permissive or signer-only variant. A provider can qualify only an
+/// endpoint whose backend is reachable exclusively through the authenticated V1 receiver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum GovernanceDagRequestIngressEnforcementV1 {
@@ -431,16 +429,14 @@ impl fmt::Display for GovernanceDagRequestIngressQualificationErrorV1 {
 impl std::error::Error for GovernanceDagRequestIngressQualificationErrorV1 {}
 /// Compute the exact public binding for one configured request-ingress endpoint.
 ///
-/// IPFS endpoints bind their normalized base URL with exactly one trailing
-/// slash. Signed-head endpoints bind the exact normalized URL. Credentials,
-/// query strings, fragments, percent-escaped paths, non-HTTP schemes, and
-/// hostless URLs are rejected.
-/// The digest is domain-separated by endpoint scope.
+/// IPFS endpoints bind their normalized base URL with exactly one trailing slash. Signed-head
+/// endpoints bind the exact normalized URL. Credentials, query strings, fragments, percent-escaped
+/// paths, non-HTTP schemes, and hostless URLs are rejected. The digest is domain-separated by
+/// endpoint scope.
 ///
 /// # Errors
 ///
-/// Returns a stable error when `endpoint` cannot name a canonical public
-/// Governance DAG endpoint.
+/// Returns a stable error when `endpoint` cannot name a canonical public Governance DAG endpoint.
 pub fn governance_dag_request_ingress_endpoint_binding_v1(
     scope: GovernanceDagAuthenticationScope,
     endpoint: &str,
@@ -572,9 +568,8 @@ impl GovernanceDagRequestIngressBindingV1 {
     }
     /// Domain-separated digest of the complete endpoint, key, body, and timing policy.
     ///
-    /// Rollout evidence uses this identity to bind deployment approval to the
-    /// exact policy qualified by the runtime provider rather than to a
-    /// collection of unanchored boolean claims.
+    /// Rollout evidence uses this identity to bind deployment approval to the exact policy
+    /// qualified by the runtime provider rather than to a collection of unanchored boolean claims.
     #[must_use]
     pub fn binding_digest(self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
@@ -592,10 +587,9 @@ impl GovernanceDagRequestIngressBindingV1 {
 /// Live provider proof that an exact endpoint enforces receiver authentication
 /// and shared sealed replay consumption.
 ///
-/// Construction has no signer-only or process-local posture. Providers must
-/// return this value only after actively checking that the exact endpoint is
-/// exclusively receiver-fronted and that every ingress replica atomically
-/// consumes the same sealed replay namespace through envelope expiry.
+/// Construction has no signer-only or process-local posture. Providers must return this value only
+/// after actively checking that the exact endpoint is exclusively receiver-fronted and that every
+/// ingress replica atomically consumes the same sealed replay namespace through envelope expiry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GovernanceDagRequestIngressQualificationV1 {
     provider: GovernanceDagRuntimeProviderQualificationV1,
@@ -779,9 +773,8 @@ impl GovernanceDagCanonicalRequestHeaderV1 {
 }
 /// Bounded canonical descriptor of one complete Governance DAG HTTP request.
 ///
-/// The descriptor contains public routing metadata and a body commitment only.
-/// It cannot carry credentials, private keys, cookies, streaming bodies, or
-/// process-local request authority.
+/// The descriptor contains public routing metadata and a body commitment only. It cannot carry
+/// credentials, private keys, cookies, streaming bodies, or process-local request authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GovernanceDagCanonicalRequestV1 {
     scope: GovernanceDagAuthenticationScope,
@@ -795,10 +788,9 @@ pub struct GovernanceDagCanonicalRequestV1 {
 impl GovernanceDagCanonicalRequestV1 {
     /// Construct a descriptor from exact bounded HTTP request parts.
     ///
-    /// Callers must supply every present V1-selected public header exactly
-    /// once. Names must already be lowercase and values must be visible ASCII.
-    /// The constructor sorts them, rejects duplicates, and commits the exact
-    /// body bytes without retaining them.
+    /// Callers must supply every present V1-selected public header exactly once. Names must already
+    /// be lowercase and values must be visible ASCII. The constructor sorts them, rejects
+    /// duplicates, and commits the exact body bytes without retaining them.
     ///
     /// # Errors
     ///
@@ -974,12 +966,11 @@ enum GovernanceDagAuthenticationHeaderDispositionV1 {
 }
 /// Build one canonical outbound descriptor from a complete HTTP request.
 ///
-/// Only the fixed V1 selected-public-header set is committed. Ordinary public
-/// transport headers are deliberately excluded, while credential headers and
-/// every Governance DAG authentication-prefix header are rejected. A
-/// canonical `content-length`, when present, must occur exactly once and match
-/// the complete byte body; `transfer-encoding` is never accepted because this
-/// contract authenticates a finalized in-memory body rather than HTTP framing.
+/// Only the fixed V1 selected-public-header set is committed. Ordinary public transport headers are
+/// deliberately excluded, while credential headers and every Governance DAG authentication-prefix
+/// header are rejected. A canonical `content-length`, when present, must occur exactly once and
+/// match the complete byte body; `transfer-encoding` is never accepted because this contract
+/// authenticates a finalized in-memory body rather than HTTP framing.
 ///
 /// # Errors
 ///
@@ -1011,12 +1002,10 @@ pub fn canonicalize_governance_dag_outbound_http_request_v1<'a>(
 }
 /// A complete HTTP request authorized for Governance DAG backend dispatch.
 ///
-/// Construction is restricted to [`GovernanceDagHttpRequestReceiverV1`]. The
-/// receiver consumes the original typed HTTP request, verifies its transport
-/// authority, signature, and replay state, and removes the public
-/// authentication-envelope headers. Its returned URI is the canonical
-/// origin-form path and query, so a backend cannot reinterpret a matching
-/// absolute-form authority.
+/// Construction is restricted to [`GovernanceDagHttpRequestReceiverV1`]. The receiver consumes the
+/// original typed HTTP request, verifies its transport authority, signature, and replay state, and
+/// removes the public authentication-envelope headers. Its returned URI is the canonical
+/// origin-form path and query, so a backend cannot reinterpret a matching absolute-form authority.
 #[derive(Debug)]
 pub struct GovernanceDagVerifiedHttpRequestV1<B> {
     request: Request<B>,
@@ -1041,18 +1030,16 @@ impl<B> GovernanceDagVerifiedHttpRequestV1<B> {
 }
 /// Reusable receiver boundary for authenticated Governance DAG HTTP requests.
 ///
-/// The receiver consumes one actual [`Request`] so the method, URI, headers,
-/// and finalized body cannot be supplied from different request objects. It
-/// derives the canonical absolute URL from the qualified endpoint and the
-/// typed request parts, requires an unambiguous HTTP/1.x `Host`, validates any
-/// URI authority against that host and endpoint, and rejects every unsigned
-/// semantic header before signature or replay verification.
+/// The receiver consumes one actual [`Request`] so the method, URI, headers, and finalized body
+/// cannot be supplied from different request objects. It derives the canonical absolute URL from
+/// the qualified endpoint and the typed request parts, requires an unambiguous HTTP/1.x `Host`,
+/// validates any URI authority against that host and endpoint, and rejects every unsigned semantic
+/// header before signature or replay verification.
 ///
-/// Replay state is deliberately caller-owned and borrowed for this receiver's
-/// lifetime. A production implementation must supply an atomic shared sealed
-/// store used by every replica in the qualified ingress set. The concrete
-/// process-local cache in this crate is suitable only for isolated validation
-/// and tests and cannot support a production ingress qualification.
+/// Replay state is deliberately caller-owned and borrowed for this receiver's lifetime. A
+/// production implementation must supply an atomic shared sealed store used by every replica in the
+/// qualified ingress set. The concrete process-local cache in this crate is suitable only for
+/// isolated validation and tests and cannot support a production ingress qualification.
 #[derive(Debug)]
 pub struct GovernanceDagHttpRequestReceiverV1<'a> {
     endpoint: Url,
@@ -1097,9 +1084,8 @@ impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
     ///
     /// # Errors
     ///
-    /// Returns a stable, payload-free rejection and retains ownership of the
-    /// request until every transport, structural, timing, signature, and replay
-    /// check succeeds.
+    /// Returns a stable, payload-free rejection and retains ownership of the request until every
+    /// transport, structural, timing, signature, and replay check succeeds.
     pub fn verify_http_request<B: AsRef<[u8]>>(
         &mut self,
         request: Request<B>,
@@ -1626,18 +1612,16 @@ impl GovernanceDagRequestAuthenticationPolicyV1 {
 }
 /// Replay-consumption boundary used by the V1 authenticated receiver.
 ///
-/// Production implementations must atomically consume one nonce in a shared,
-/// durably sealed namespace visible to every qualified ingress replica and
-/// retain the evidence through `expires_at_unix_secs`. An unavailable or
-/// ambiguous store must fail closed.
+/// Production implementations must atomically consume one nonce in a shared, durably sealed
+/// namespace visible to every qualified ingress replica and retain the evidence through
+/// `expires_at_unix_secs`. An unavailable or ambiguous store must fail closed.
 pub trait GovernanceDagRequestAuthenticationReplayStoreV1: fmt::Debug {
     /// Atomically reject or consume one live nonce.
     ///
     /// # Errors
     ///
-    /// Returns [`GovernanceDagRequestAuthenticationErrorV1::Replay`] when the
-    /// nonce was already consumed, and a fail-closed store error when durable
-    /// consumption cannot be proven.
+    /// Returns [`GovernanceDagRequestAuthenticationErrorV1::Replay`] when the nonce was already
+    /// consumed, and a fail-closed store error when durable consumption cannot be proven.
     fn consume_nonce(
         &mut self,
         nonce: [u8; 32],
@@ -1647,10 +1631,9 @@ pub trait GovernanceDagRequestAuthenticationReplayStoreV1: fmt::Debug {
 }
 /// Caller-owned process-local bounded live-nonce cache for V1 validation.
 ///
-/// This cache never evicts a live nonce to admit another request; capacity
-/// pressure therefore fails closed. It is useful for isolated receivers and
-/// tests, but it is neither shared nor sealed and must not be cited as evidence
-/// for a production [`GovernanceDagRequestIngressQualificationV1`].
+/// This cache never evicts a live nonce to admit another request; capacity pressure therefore fails
+/// closed. It is useful for isolated receivers and tests, but it is neither shared nor sealed and
+/// must not be cited as evidence for a production [`GovernanceDagRequestIngressQualificationV1`].
 #[derive(Debug)]
 pub struct GovernanceDagRequestAuthenticationReplayCacheV1 {
     entries: BTreeMap<[u8; 32], u64>,
@@ -1669,8 +1652,7 @@ impl GovernanceDagRequestAuthenticationReplayCacheV1 {
     ///
     /// # Errors
     ///
-    /// Rejects zero or a capacity above
-    /// [`GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1`].
+    /// Rejects zero or a capacity above [`GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1`].
     pub fn try_with_capacity(
         capacity: usize,
     ) -> Result<Self, GovernanceDagRequestAuthenticationErrorV1> {
@@ -1719,10 +1701,9 @@ impl Default for GovernanceDagRequestAuthenticationReplayCacheV1 {
 }
 /// Public HSM-signed authentication envelope for one canonical request.
 ///
-/// The envelope deliberately exposes only fixed public authentication fields.
-/// It contains no bearer token, cookie, mTLS identity, private key, or backend
-/// diagnostic. The signature binds the complete descriptor plus the public
-/// key, issuance interval, nonce, and request digest.
+/// The envelope deliberately exposes only fixed public authentication fields. It contains no bearer
+/// token, cookie, mTLS identity, private key, or backend diagnostic. The signature binds the
+/// complete descriptor plus the public key, issuance interval, nonce, and request digest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GovernanceDagRequestAuthenticationEnvelopeV1 {
     scope: GovernanceDagAuthenticationScope,
@@ -1736,14 +1717,12 @@ pub struct GovernanceDagRequestAuthenticationEnvelopeV1 {
 impl GovernanceDagRequestAuthenticationEnvelopeV1 {
     /// Construct one structurally canonical signed envelope.
     ///
-    /// Freshness, pinned-key equality, request equality, replay, and signature
-    /// verification are enforced by
-    /// [`verify_governance_dag_request_authentication_v1`].
+    /// Freshness, pinned-key equality, request equality, replay, and signature verification are
+    /// enforced by [`verify_governance_dag_request_authentication_v1`].
     ///
     /// # Errors
     ///
-    /// Rejects zero or inverted timing fields and zero nonce, digest, key, or
-    /// signature values.
+    /// Rejects zero or inverted timing fields and zero nonce, digest, key, or signature values.
     pub fn try_new(
         descriptor: &GovernanceDagCanonicalRequestV1,
         issued_at_unix_secs: u64,
@@ -1874,16 +1853,14 @@ pub fn governance_dag_request_authentication_headers_v1(
 }
 /// Parse exactly one V1 public authentication-envelope header set.
 ///
-/// Ordinary HTTP headers are ignored. Every name using the Governance DAG
-/// authentication prefix is part of this hard-cut contract: aliases,
-/// extensions, case variants, duplicates, and missing fields are rejected.
-/// Parsing alone grants no authority; receivers must pass the result to
+/// Ordinary HTTP headers are ignored. Every name using the Governance DAG authentication prefix is
+/// part of this hard-cut contract: aliases, extensions, case variants, duplicates, and missing
+/// fields are rejected. Parsing alone grants no authority; receivers must pass the result to
 /// [`verify_governance_dag_request_authentication_v1`] before dispatch.
 ///
 /// # Errors
 ///
-/// Returns a stable, payload-free header rejection without exposing header
-/// values.
+/// Returns a stable, payload-free header rejection without exposing header values.
 pub fn parse_governance_dag_request_authentication_headers_v1<'a>(
     headers: impl IntoIterator<Item = (&'a str, &'a [u8])>,
 ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticationErrorV1>
@@ -1975,9 +1952,8 @@ pub fn verify_governance_dag_request_authentication_v1(
 }
 /// Verify every request-auth property except receiver-side nonce consumption.
 ///
-/// This exists only for the outbound service's non-authoritative signer sanity
-/// check. An ingress receiver must call
-/// [`verify_governance_dag_request_authentication_v1`] so the shared sealed
+/// This exists only for the outbound service's non-authoritative signer sanity check. An ingress
+/// receiver must call [`verify_governance_dag_request_authentication_v1`] so the shared sealed
 /// replay store is atomically consumed before backend dispatch.
 pub(crate) fn verify_governance_dag_request_authentication_without_replay_v1(
     request: &GovernanceDagCanonicalRequestV1,
@@ -2065,25 +2041,22 @@ fn append_governance_request_auth_field(bytes: &mut Vec<u8>, field: &[u8]) {
 }
 /// Rotation-aware, receiver-qualified runtime authenticator for Governance DAG publication.
 ///
-/// Implementations own an Ed25519 HSM signing boundary and return only the
-/// public signed envelope for a complete canonical request. The adapter never
-/// receives a `reqwest` client, builder, body owner, or mutable header map and
-/// therefore cannot inject bearer tokens, cookies, mTLS credentials, or other
-/// opaque request authority. First-release providers must additionally own the
-/// live deployment proof that the exact backend endpoint is exclusively
-/// receiver-fronted and that all ingress replicas share one sealed atomic
-/// replay namespace.
+/// Implementations own an Ed25519 HSM signing boundary and return only the public signed envelope
+/// for a complete canonical request. The adapter never receives a `reqwest` client, builder, body
+/// owner, or mutable header map and therefore cannot inject bearer tokens, cookies, mTLS
+/// credentials, or other opaque request authority. First-release providers must additionally own
+/// the live deployment proof that the exact backend endpoint is exclusively receiver-fronted and
+/// that all ingress replicas share one sealed atomic replay namespace.
 pub trait GovernanceDagRequestAuthenticator: Send + Sync + fmt::Debug {
     /// Opaque, non-secret deployment handle for this authenticator.
     fn handle(&self) -> &str;
     /// Actively qualify the adapter, receiver, endpoint, and replay store.
     ///
-    /// Implementations must probe the exact receiver and shared sealed replay
-    /// namespace before returning. They must fail when the credential boundary,
-    /// receiver, replica set, or replay store is unavailable, bypassable,
-    /// revoked, stale, test-marked, process-local, or otherwise not
-    /// production-ready. Returning configuration text without a live probe
-    /// violates this trust-boundary contract.
+    /// Implementations must probe the exact receiver and shared sealed replay namespace before
+    /// returning. They must fail when the credential boundary, receiver, replica set, or replay
+    /// store is unavailable, bypassable, revoked, stale, test-marked, process-local, or otherwise
+    /// not production-ready. Returning configuration text without a live probe violates this
+    /// trust-boundary contract.
     fn ingress_qualification(&self) -> Result<GovernanceDagRequestIngressQualificationV1, String>;
     /// Sign one exact bounded canonical outbound request descriptor.
     ///
@@ -2129,10 +2102,9 @@ impl GovernanceDagSealedStateSlot {
 }
 /// Return the canonical V1 payload ceiling for one sealed-state slot.
 ///
-/// Producer filesystem intents contain only checkpoint metadata and digests
-/// for a durably staged transaction. Their deliberately small ceiling prevents
-/// a checkpoint provider from forcing a full mutable index allocation during
-/// sealed-record decoding.
+/// Producer filesystem intents contain only checkpoint metadata and digests for a durably staged
+/// transaction. Their deliberately small ceiling prevents a checkpoint provider from forcing a full
+/// mutable index allocation during sealed-record decoding.
 #[must_use]
 pub const fn governance_dag_sealed_state_payload_max_bytes_v1(
     slot: GovernanceDagSealedStateSlot,
@@ -2203,19 +2175,17 @@ pub fn governance_dag_sealed_state_revision(
 }
 /// Runtime-only sealed, monotonic Governance DAG checkpoint storage.
 ///
-/// Implementations must seal payloads at rest and enforce linearizable
-/// compare-and-swap. A generation may stay equal while an in-flight publish
-/// intent advances, but it must never decrease. Checkpoint generation must
-/// strictly advance, request-replay generations must strictly advance, and
-/// deletes must compare-and-swap the exact last transient-intent revision.
+/// Implementations must seal payloads at rest and enforce linearizable compare-and-swap. A
+/// generation may stay equal while an in-flight publish intent advances, but it must never
+/// decrease. Checkpoint generation must strictly advance, request-replay generations must strictly
+/// advance, and deletes must compare-and-swap the exact last transient-intent revision.
 pub trait GovernanceDagSealedCheckpointStore: Send + Sync + fmt::Debug {
     /// Opaque, non-secret deployment handle for this store.
     fn handle(&self) -> &str;
     /// Qualify the active adapter and its public policy revision.
     ///
-    /// Implementations must fail when the sealed monotonic store is
-    /// unavailable, revoked, stale, test-marked, or otherwise not
-    /// production-ready.
+    /// Implementations must fail when the sealed monotonic store is unavailable, revoked, stale,
+    /// test-marked, or otherwise not production-ready.
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
     /// Load and unseal the latest record for `slot`.
     fn load(
@@ -2246,9 +2216,8 @@ pub trait FencedTransparencyAuthoritativeHeadReaderV1: Send + Sync + fmt::Debug 
     fn handle(&self) -> &str;
     /// Qualify the active adapter and its public policy revision.
     ///
-    /// Implementations must fail when the authenticated transport or readback
-    /// provider is unavailable, revoked, stale, test-marked, or otherwise not
-    /// production-ready.
+    /// Implementations must fail when the authenticated transport or readback provider is
+    /// unavailable, revoked, stale, test-marked, or otherwise not production-ready.
     ///
     /// # Errors
     ///
@@ -2258,19 +2227,17 @@ pub trait FencedTransparencyAuthoritativeHeadReaderV1: Send + Sync + fmt::Debug 
     /// Authenticate the current head and verify every exact requested ancestor
     /// and publication inclusion.
     ///
-    /// Implementations must verify target-owned immutable-history or inclusion
-    /// evidence. Generation and fencing-floor comparisons alone are never an
-    /// ancestry proof. `None` is an authenticated genesis observation, not a
-    /// local default. Production adapters must implement this complete operation;
-    /// there is no read-only fallback that can defer inclusion verification until
-    /// after an append.
+    /// Implementations must verify target-owned immutable-history or inclusion evidence. Generation
+    /// and fencing-floor comparisons alone are never an ancestry proof. `None` is an authenticated
+    /// genesis observation, not a local default. Production adapters must implement this complete
+    /// operation; there is no read-only fallback that can defer inclusion verification until after
+    /// an append.
     ///
     /// # Errors
     ///
-    /// Returns a redacted diagnostic when the target cannot authenticate the
-    /// read, prove that every requested head reaches its exact current head, or
-    /// prove an exact stable publication identity and payload at its claimed
-    /// inclusion head.
+    /// Returns a redacted diagnostic when the target cannot authenticate the read, prove that every
+    /// requested head reaches its exact current head, or prove an exact stable publication identity
+    /// and payload at its claimed inclusion head.
     fn read_authoritative_head_with_ancestry(
         &self,
         required_ancestors: &[FencedTransparencyTargetHeadV1],
@@ -2552,8 +2519,7 @@ impl GovernancePublicationSnapshotV1 {
     pub(crate) fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
     }
-    /// Consume the snapshot without cloning its potentially large canonical
-    /// publication body.
+    /// Consume the snapshot without cloning its potentially large canonical publication body.
     pub(crate) fn into_parts(self) -> (Vec<u8>, u64, [u8; 32]) {
         (
             self.canonical_bytes,
@@ -2584,8 +2550,7 @@ impl RuntimeDagCommittedSnapshotV1 {
         &self.index_bytes
     }
 }
-/// One read-only runtime-DAG generation authenticated by an exact sealed
-/// producer checkpoint.
+/// One read-only runtime-DAG generation authenticated by an exact sealed producer checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthenticatedRuntimeDagSnapshotV1 {
     committed: RuntimeDagCommittedSnapshotV1,
@@ -2825,10 +2790,9 @@ impl FilesystemGovernancePublisher {
     }
     /// Atomically attach and reconcile the signed-producer runtime providers.
     ///
-    /// Neither provider is installed until both qualifications and the sealed
-    /// recovery transaction succeed. This keeps partial crash state recoverable:
-    /// the signer never performs a standalone filesystem audit before the
-    /// checkpoint store can replay its exact write-ahead intent.
+    /// Neither provider is installed until both qualifications and the sealed recovery transaction
+    /// succeed. This keeps partial crash state recoverable: the signer never performs a standalone
+    /// filesystem audit before the checkpoint store can replay its exact write-ahead intent.
     pub(crate) fn with_qualified_runtime_dag_providers(
         mut self,
         signer: GovernanceRuntimeDagSigner,
@@ -2856,10 +2820,9 @@ impl FilesystemGovernancePublisher {
     }
     /// Authenticate and install one explicit signer/store qualification rotation.
     ///
-    /// Every change advances one canonical authority segment. Both outgoing and
-    /// incoming HSM authorities sign the exact predecessor/current-head
-    /// transition, so signer-key or publisher-identity rotation remains
-    /// continuous with the already retained block chain.
+    /// Every change advances one canonical authority segment. Both outgoing and incoming HSM
+    /// authorities sign the exact predecessor/current-head transition, so signer-key or
+    /// publisher-identity rotation remains continuous with the already retained block chain.
     pub(crate) fn transition_qualified_runtime_dag_providers(
         &mut self,
         next_signer: GovernanceRuntimeDagSigner,
@@ -3074,9 +3037,8 @@ impl FilesystemGovernancePublisher {
     /// Archive an authenticated prefix and retain at most `retain_latest`
     /// live provider transitions.
     ///
-    /// The immutable archive is installed and read back first, then its digest
-    /// is advanced through sealed monotonic CAS. Only after that readback may
-    /// the live journal prefix be pruned.
+    /// The immutable archive is installed and read back first, then its digest is advanced through
+    /// sealed monotonic CAS. Only after that readback may the live journal prefix be pruned.
     pub(crate) fn compact_runtime_dag_qualification_history(
         &self,
         retain_latest: usize,
@@ -5671,9 +5633,8 @@ fn decode_governance_publication_state_snapshot(
 }
 /// Load one exact publication-authority generation through a retained root.
 ///
-/// An entirely pristine root is reported as `None`; once initialization state
-/// or immutable publication history exists, a missing typed authority fails
-/// closed.
+/// An entirely pristine root is reported as `None`; once initialization state or immutable
+/// publication history exists, a missing typed authority fails closed.
 pub(crate) fn load_governance_publication_snapshot_v1(
     root_guard: &GovernanceFilesystemRootGuard,
 ) -> Result<Option<GovernancePublicationSnapshotV1>, GovernancePublishError> {
@@ -12450,9 +12411,8 @@ fn validate_runtime_dag_committed_state_v1(
 }
 /// Load one exact committed runtime-DAG generation through a retained root.
 ///
-/// This is the sole read boundary for consumers of mutable head/index state.
-/// The two values are selected from one fixed-slot record, and an empty
-/// initialized store is reported as `None`.
+/// This is the sole read boundary for consumers of mutable head/index state. The two values are
+/// selected from one fixed-slot record, and an empty initialized store is reported as `None`.
 pub(crate) fn load_runtime_dag_committed_snapshot_v1(
     root_guard: &GovernanceFilesystemRootGuard,
 ) -> Result<Option<RuntimeDagCommittedSnapshotV1>, GovernancePublishError> {

@@ -1,0 +1,9 @@
+
+            seiyaku C {
+                kotoage fn run() authorize("RunTrigger") {}
+                trigger wake -> run {
+                    on time pre_commit;
+                    authority "not-an-account";
+                }
+            }
+            

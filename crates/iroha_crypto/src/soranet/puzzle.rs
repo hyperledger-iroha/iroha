@@ -1,10 +1,9 @@
 //! `Argon2id`-based puzzle helpers for the `SoraNet` admission path.
 //!
-//! The puzzle format intentionally mirrors the existing hashcash-style `PoW`
-//! tickets so clients can attach a single frame regardless of which policy a
-//! relay enforces. Difficulty adjustments and TTL validation follow the same
-//! rules as the `PoW` implementation, while the work predicate is backed by
-//! Argon2id to raise the cost of GPU/ASIC optimisations.
+//! The puzzle format intentionally mirrors the existing hashcash-style `PoW` tickets so clients can
+//! attach a single frame regardless of which policy a relay enforces. Difficulty adjustments and
+//! TTL validation follow the same rules as the `PoW` implementation, while the work predicate is
+//! backed by Argon2id to raise the cost of GPU/ASIC optimisations.
 use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket};
 use argon2::{Algorithm, Argon2, Params, Version};
 use blake3::Hasher;
@@ -67,9 +66,8 @@ pub const MAX_TIME_COST: u32 = 8;
 pub const MAX_LANES: u32 = 16;
 /// Largest supported proof-of-work difficulty.
 ///
-/// Higher values are operationally indistinguishable from disabling inbound
-/// connectivity and therefore are rejected instead of silently partitioning a
-/// node.
+/// Higher values are operationally indistinguishable from disabling inbound connectivity and
+/// therefore are rejected instead of silently partitioning a node.
 pub const MAX_DIFFICULTY: u8 = 32;
 /// Default first-release proof-of-work difficulty.
 ///
@@ -126,10 +124,9 @@ pub enum ParameterError {
 impl Parameters {
     /// Construct a new parameter set.
     ///
-    /// Invalid timing bounds produce a fail-closed policy that rejects all
-    /// minted and verified tickets. Runtime configuration loaders should prefer
-    /// [`Parameters::try_new`] so invalid policy input can be surfaced as a
-    /// configuration error.
+    /// Invalid timing bounds produce a fail-closed policy that rejects all minted and verified
+    /// tickets. Runtime configuration loaders should prefer [`Parameters::try_new`] so invalid
+    /// policy input can be surfaced as a configuration error.
     #[must_use]
     pub fn new(
         memory_kib: NonZeroU32,

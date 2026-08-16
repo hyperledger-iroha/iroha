@@ -19,10 +19,9 @@ pub fn hash_conditional_escrow_evidence_digest(raw_digest: &[u8; Hash::LENGTH]) 
 }
 /// Stable identifier for a native asset escrow.
 ///
-/// In the first-release V1 contract, Norito binary and JSON codecs delegate
-/// directly to [`Hash`]: the binary payload is exactly 32 hash bytes and JSON
-/// is one scalar hash literal. The wrapper remains a distinct nominal Rust and
-/// [`IntoSchema`] type.
+/// In the first-release V1 contract, Norito binary and JSON codecs delegate directly to [`Hash`]:
+/// the binary payload is exactly 32 hash bytes and JSON is one scalar hash literal. The wrapper
+/// remains a distinct nominal Rust and [`IntoSchema`] type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
 pub struct EscrowId(pub Hash);

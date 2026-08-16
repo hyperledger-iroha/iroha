@@ -1,0 +1,3 @@
+fn duplicate(AccountId owner) -> Json {
+                json { owner: owner, "owner": owner }
+            }

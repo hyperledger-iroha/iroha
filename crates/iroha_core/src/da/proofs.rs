@@ -123,9 +123,8 @@ pub enum DaPinIntentProofVerificationError {
 }
 /// Build a Merkle membership proof for a commitment.
 ///
-/// Returns `None` when the bundle is empty, the requested index lies outside
-/// the bundle bounds, or the bundle length cannot be represented in proof
-/// metadata.
+/// Returns `None` when the bundle is empty, the requested index lies outside the bundle bounds, or
+/// the bundle length cannot be represented in proof metadata.
 #[must_use]
 pub fn build_da_commitment_proof(
     bundle: &DaCommitmentBundle,
@@ -192,16 +191,14 @@ pub fn build_da_commitment_proof(
         path,
     })
 }
-/// Verify a DA commitment proof against a caller-authenticated block header and
-/// its policy sidecar.
+/// Verify a DA commitment proof against a caller-authenticated block header and its policy sidecar.
 ///
 /// The header commitment authenticates the V1 tree version, leaf count, and
 /// root, so verification is logarithmic and does not require the full bundle.
 ///
 /// # Errors
 ///
-/// Returns an error when the header binding, path, location, or committed lane
-/// policy is invalid.
+/// Returns an error when the header binding, path, location, or committed lane policy is invalid.
 pub fn verify_da_commitment_proof(
     proof: &DaCommitmentProof,
     header: &BlockHeader,
@@ -341,16 +338,14 @@ pub fn build_da_pin_intent_proof(
         path,
     })
 }
-/// Verify a pin-intent membership proof against a caller-authenticated block
-/// header.
+/// Verify a pin-intent membership proof against a caller-authenticated block header.
 ///
 /// The header commitment authenticates the V1 tree version, leaf count, and
 /// root, so the full pin-intent bundle is not required.
 ///
 /// # Errors
 ///
-/// Returns an error when header binding, location, or Merkle path verification
-/// fails.
+/// Returns an error when header binding, location, or Merkle path verification fails.
 pub fn verify_da_pin_intent_proof(
     proof: &DaPinIntentProof,
     header: &BlockHeader,

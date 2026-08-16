@@ -48,8 +48,7 @@ mod model {
     }
     /// Executor data model.
     ///
-    /// Defined from within the executor, it describes certain structures the executor
-    /// works with.
+    /// Defined from within the executor, it describes certain structures the executor works with.
     ///
     /// Executor can define:
     ///

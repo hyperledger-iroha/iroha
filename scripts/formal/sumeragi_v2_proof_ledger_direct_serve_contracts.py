@@ -1704,3 +1704,237 @@ if exact_target_active
         )
 
     return errors
+
+
+def _require_lane_predecessor_ordering_source_contracts(
+    lane_path: Path,
+    lane_ack_items: dict[str, RustItem | None],
+    lane_items: dict[str, RustItem | None],
+    errors: list[str],
+) -> None:
+    """Bind raw recovery transport separately from applied-predecessor output."""
+
+    predecessor = lane_ack_items.get(
+        "V2LaneWorkAdapter::proposal_predecessor_is_ready_for_progress"
+    )
+    _require_exact_rust_tokens(
+        lane_path,
+        predecessor,
+        """
+fn proposal_predecessor_is_ready_for_progress(
+    &self,
+    proposal: &LaneBlockProposalV1
+) -> bool {
+    if self
+        .historical_autonomous_recovery_record_for_proposal(proposal)
+        .is_some()
+        || self.autonomous_payload_is_expected_for(proposal)
+    {
+        self.state
+            .certified_autonomous_lane_block_predecessor_is_globally_applied_cached(proposal)
+    } else {
+        self.state
+            .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(proposal)
+    }
+}
+""",
+        "lane predecessor readiness must dispatch autonomous and ordinary proofs to their exact applied-state authorities",
+        errors,
+    )
+    preflight = lane_ack_items.get("V2LaneWorkAdapter::preflight_effect_insertion")
+    _require_exact_rust_tokens(
+        lane_path,
+        preflight,
+        """
+fn preflight_effect_insertion(
+    &mut self,
+    effect: &V2LaneWorkEffect,
+) -> Result<Hash, LaneWorkEffectInsertionOutcome> {
+    let predecessor_ready = match effect {
+        V2LaneWorkEffect::PostLaneBlock { message, .. } => {
+            self.outbound_lane_message_predecessor_is_ready(message)
+        }
+        V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => {
+            self.proposal_predecessor_is_ready_for_progress(&certificate.proposal)
+        }
+        _ => true,
+    };
+    if !predecessor_ready {
+        return Err(LaneWorkEffectInsertionOutcome::Rejected);
+    }
+    if !lane_work_effect_reply_routes_have_valid_shape(effect) {
+        return Err(LaneWorkEffectInsertionOutcome::Rejected);
+    }
+    let key = lane_work_effect_key(effect);
+    if self.effect_keys.contains(&key) {
+        return Err(
+            if self
+                .effects
+                .iter_mut()
+                .find(|queued| lane_work_effect_key(queued) == key)
+                .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, effect))
+            {
+                LaneWorkEffectInsertionOutcome::Duplicate
+            } else {
+                LaneWorkEffectInsertionOutcome::Rejected
+            },
+        );
+    }
+    if !lane_work_effect_reply_routes_are_valid(effect) {
+        return Err(LaneWorkEffectInsertionOutcome::Rejected);
+    }
+    if self.effects.len() >= self.limits.effect_capacity.get() {
+        return Err(LaneWorkEffectInsertionOutcome::Rejected);
+    }
+    Ok(key)
+}
+""",
+        "ordinary lane effect preflight must retain exact identity, bounded capacity, complete reply-route history, and predecessor readiness",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        preflight,
+        """
+let predecessor_ready = match effect {
+    V2LaneWorkEffect::PostLaneBlock { message, .. } => {
+        self.outbound_lane_message_predecessor_is_ready(message)
+    }
+    V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => {
+        self.proposal_predecessor_is_ready_for_progress(&certificate.proposal)
+    }
+    _ => true,
+};
+if !predecessor_ready {
+    return Err(LaneWorkEffectInsertionOutcome::Rejected);
+}
+""",
+        "lane effect admission must reject every fresh consensus output whose economic predecessor is not durably applied",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::persist_anchored_sessions"),
+        """
+if !self.proposal_predecessor_is_ready_for_progress(&session.proposal) {
+    retained.push_back(session);
+    continue;
+}
+""",
+        "anchored lane persistence must retain a certified successor until its economic predecessor is durably applied",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("reconstruct_durable_lane_certificate"),
+        """
+if !self.proposal_predecessor_is_ready_for_progress(proposal) {
+    return Ok(None);
+}
+""",
+        "lane recovery reconstruction must not emit a successor certificate before its economic predecessor is durably applied",
+        errors,
+    )
+    hydration = lane_ack_items.get("V2LaneWorkAdapter::hydrate_canonical_lane_artifacts")
+    for expected, description in (
+        (
+            """
+if !raw_slots.insert((lane_id, lane_block_height)) {
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "canonical raw lane hydration contains a duplicate or cyclic slot".to_owned(),
+    ));
+}
+""",
+            "raw lane hydration must fail stop on a duplicate or cyclic predecessor slot",
+        ),
+        (
+            """
+if raw_proposals.len().saturating_add(route_chain.len())
+    >= ordinary_hydration_capacity
+{
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "canonical raw lane hydration exceeds bounded session capacity".to_owned(),
+    ));
+}
+let artifact = self
+    .kura
+    .read_lane_block_artifact_without_sidecar_repair(lane_id, lane_block_height)
+    .ok_or_else(|| {
+        self.output_guard.close_admission_for_restart();
+        V2LaneWorkError::Persistence(
+            "canonical raw lane hydration is missing an indexed artifact".to_owned(),
+        )
+    })?;
+""",
+            "raw lane hydration must fail stop at the exact bounded inventory and read only the indexed immutable artifact",
+        ),
+        (
+            """
+|| !canonical_shape
+|| !self.lane_route_active(
+    ownership.lane_id,
+    ownership.dataspace_id,
+    ownership.lane_incarnation,
+    ownership.proposal_height,
+)
+|| self
+    .state
+    .committed_block_hash_at_height(ownership.proposal_height)
+    != Some(artifact.proposal_block_hash)
+""",
+            "raw lane hydration must reject malformed, inactive, or non-canonical carrier ownership",
+        ),
+        (
+            """
+if canonical.as_slice() != [artifact.clone()] {
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "canonical raw lane hydration found non-unique ownership".to_owned(),
+    ));
+}
+""",
+            "raw lane hydration must require one exact canonical ownership artifact",
+        ),
+        (
+            """
+if !canonical_raw_lane_predecessor_matches_proposal(
+    self.state.as_ref(),
+    self.kura.as_ref(),
+    &proposal,
+) {
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "canonical raw lane hydration found a gap or conflicting predecessor".to_owned(),
+    ));
+}
+lane_block_height = previous_height;
+""",
+            "raw lane hydration must authenticate every unapplied predecessor link before walking backward",
+        ),
+        (
+            """
+route_chain.reverse();
+raw_proposals.extend(route_chain);
+""",
+            "raw lane hydration must restore each predecessor chain in forward application order",
+        ),
+        (
+            """
+raw_proposals.sort_by_key(|proposal| {
+    let descriptor = &proposal.descriptor;
+    (
+        descriptor.proposal_height,
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        descriptor.lane_block_height,
+        proposal.proposal_hash,
+    )
+});
+for proposal in raw_proposals {
+""",
+            "raw lane hydration must install independent chains in canonical deterministic order",
+        ),
+    ):
+        _require_rust_token_sequence(lane_path, hydration, expected, description, errors)

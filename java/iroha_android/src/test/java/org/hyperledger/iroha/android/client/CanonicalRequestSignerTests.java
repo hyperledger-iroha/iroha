@@ -20,12 +20,15 @@ public final class CanonicalRequestSignerTests {
   public static void main(final String[] args) throws Exception {
     canonicalQuerySortsPairs();
     canonicalQueryMatchesRustFormEncodingAndUtf8Ordering();
+    canonicalQueryMatchesRustLossyUtf8MalformedSequenceBoundaries();
     canonicalQueryEnforcesV1PairAndByteLimits();
     canonicalRequestEnforcesV1MethodLimit();
     canonicalRequestEnforcesV1PathLimit();
     canonicalRequestRejectsNegativeTimestamp();
     canonicalAuthEnforcesV1AccountAndNonceLimits();
     canonicalHeadersUseAsciiHexForI105AndPreserveAlias();
+    canonicalAuthRejectsInvalidAliasSpellings();
+    canonicalAuthRejectsInvalidCallbackSignatures();
     callbackHeadersReceiveCanonicalMessage();
     unsignedBodyAuthJsonRemovesOnlyTopLevelProofFields();
     callbackBodySignatureReceivesCanonicalMessage();
@@ -57,6 +60,21 @@ public final class CanonicalRequestSignerTests {
             .equals(
                 CanonicalRequestSigner.canonicalQueryString("k=\uD800\uDC00&k=\uE000"))
         : "decoded query values must sort by UTF-8 bytes";
+  }
+
+  private static void canonicalQueryMatchesRustLossyUtf8MalformedSequenceBoundaries() {
+    assert "x=%EF%BF%BD%EF%BF%BD%EF%BF%BD"
+            .equals(CanonicalRequestSigner.canonicalQueryString("x=%ED%A0%80"))
+        : "encoded surrogate bytes must each decode to one replacement character";
+    assert "x=%EF%BF%BDA".equals(
+            CanonicalRequestSigner.canonicalQueryString("x=%E2%82%41"))
+        : "a malformed third byte must replace the valid two-byte prefix";
+    assert "x=%EF%BF%BD".equals(
+            CanonicalRequestSigner.canonicalQueryString("x=%F0%9F%92"))
+        : "an incomplete trailing sequence must decode to one replacement character";
+    assert "x=%EF%BF%BDA%EF%BF%BD".equals(
+            CanonicalRequestSigner.canonicalQueryString("x=%F0%9F%41%80"))
+        : "a malformed four-byte sequence must retain Rust replacement boundaries";
   }
 
   private static void canonicalQueryEnforcesV1PairAndByteLimits() {
@@ -102,6 +120,12 @@ public final class CanonicalRequestSignerTests {
                 uri,
                 new byte[0]),
         "method byte limit");
+    CanonicalRequestSigner.canonicalRequestMessage("M-SEARCH", uri, new byte[0]);
+    for (final String method : new String[] {"", "GET POST", "GET\n", "GÉT"}) {
+      assertIllegalArgument(
+          () -> CanonicalRequestSigner.canonicalRequestMessage(method, uri, new byte[0]),
+          "invalid HTTP method token");
+    }
   }
 
   private static void canonicalRequestEnforcesV1PathLimit() throws Exception {
@@ -121,6 +145,57 @@ public final class CanonicalRequestSignerTests {
     assertIllegalArgument(
         () -> CanonicalRequestSigner.canonicalRequestMessage("GET", excessive, new byte[0]),
         "path byte limit");
+    assertIllegalArgument(
+        () ->
+            CanonicalRequestSigner.canonicalRequestMessage(
+                "GET", URI.create("v1/relative"), new byte[0]),
+        "relative path");
+    for (final URI invalidUri :
+        new URI[] {
+          URI.create("?a=1"),
+          URI.create("mailto:alice@example.com"),
+          URI.create("//torii.example/v1/test"),
+          URI.create("https:/v1/test"),
+          URI.create("/v1/test#fragment")
+        }) {
+      assertIllegalArgument(
+          () ->
+              CanonicalRequestSigner.canonicalRequestMessage(
+                  "GET", invalidUri, new byte[0]),
+          "ambiguous or non-HTTP URI: " + invalidUri);
+    }
+    assertIllegalArgument(
+        () ->
+            CanonicalRequestSigner.canonicalRequestMessage(
+                "GET", URI.create("/café"), new byte[0]),
+        "non-ASCII raw path");
+    CanonicalRequestSigner.canonicalRequestMessage(
+        "GET", URI.create("/caf%C3%A9"), new byte[0]);
+    final byte[] structuralEscapes =
+        CanonicalRequestSigner.canonicalRequestMessage(
+            "GET", URI.create("/v1/%2e%2Fasset/%252e"), new byte[0]);
+    assert "/v1/%2e%2Fasset/%252e"
+            .equals(new String(structuralEscapes, StandardCharsets.UTF_8).split("\\n")[1])
+        : "valid percent escapes must retain their exact raw spelling";
+    for (final String invalidPath :
+        new String[] {
+          "/.",
+          "/..",
+          "/v1/./asset",
+          "/v1/../asset",
+          "/v1/%2e/asset",
+          "/v1/%2E%2e/asset",
+          "/v1/.%2E/asset"
+        }) {
+      assertIllegalArgument(
+          () ->
+              CanonicalRequestSigner.canonicalRequestMessage(
+                  "GET", URI.create(invalidPath), new byte[0]),
+          "raw or percent-decoded dot segment: " + invalidPath);
+    }
+    for (final String malformedPath : new String[] {"/v1/%", "/v1/%2", "/v1/%GG"}) {
+      assertIllegalArgument(() -> URI.create(malformedPath), "malformed percent escape");
+    }
   }
 
   private static void canonicalRequestRejectsNegativeTimestamp() throws Exception {
@@ -135,18 +210,17 @@ public final class CanonicalRequestSignerTests {
   private static void canonicalAuthEnforcesV1AccountAndNonceLimits() throws Exception {
     final URI uri = new URI("https://torii.example/v1/accounts");
     final long timestampMs = 1_717_171_717_005L;
-    final String exactAccount =
-        repeat('a', CanonicalRequestSigner.CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1);
-    assert exactAccount.getBytes(StandardCharsets.UTF_8).length
-        == CanonicalRequestSigner.CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1;
+    final String validAlias = "alice@universal";
     CanonicalRequestSigner.buildHeaders(
         NETWORK_ID,
         "get",
         uri,
         new byte[0],
-        new ToriiCanonicalRequestAuth(exactAccount, CanonicalRequestSignerTests::fakeSignature),
+        new ToriiCanonicalRequestAuth(validAlias, CanonicalRequestSignerTests::fakeSignature),
         timestampMs,
         "account-limit");
+    final String excessiveAccount =
+        repeat('a', CanonicalRequestSigner.CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 + 1);
     assertIllegalArgument(
         () ->
             CanonicalRequestSigner.buildHeaders(
@@ -155,7 +229,7 @@ public final class CanonicalRequestSignerTests {
                 uri,
                 new byte[0],
                 new ToriiCanonicalRequestAuth(
-                    exactAccount + "a", CanonicalRequestSignerTests::fakeSignature),
+                    excessiveAccount, CanonicalRequestSignerTests::fakeSignature),
                 timestampMs,
                 "account-limit-plus-one"),
         "account literal byte limit");
@@ -224,6 +298,146 @@ public final class CanonicalRequestSignerTests {
         : "body authentication must preserve the semantic I105 account id";
   }
 
+  private static void canonicalAuthRejectsInvalidAliasSpellings() throws Exception {
+    final URI uri = new URI("https://torii.example/v1/accounts");
+    final long timestampMs = 1_717_171_717_007L;
+    for (final String alias :
+        new String[] {
+          "alice",
+          "0x1234",
+          "0xalice@universal",
+          "Alice@universal",
+          "alice@@universal",
+          "alice@a.b.c",
+          "-alice@universal",
+          "alice-@universal",
+          "ab--cd@universal",
+          "alice@Universal",
+          "alice@universal.",
+          "xn--@universal",
+          repeat('a', 64) + "@universal"
+        }) {
+      assertIllegalArgument(
+          () ->
+              CanonicalRequestSigner.buildHeaders(
+                  NETWORK_ID,
+                  "get",
+                  uri,
+                  new byte[0],
+                  new ToriiCanonicalRequestAuth(alias, CanonicalRequestSignerTests::fakeSignature),
+                  timestampMs,
+                  "invalid-alias"),
+          "invalid header alias: " + alias);
+      assertIllegalArgument(
+          () ->
+              CanonicalRequestSigner.withBodySignature(
+                  NETWORK_ID,
+                  "post",
+                  uri,
+                  new LinkedHashMap<>(),
+                  new ToriiCanonicalRequestAuth(alias, CanonicalRequestSignerTests::fakeSignature),
+                  timestampMs,
+                  "invalid-body-alias"),
+          "invalid body alias: " + alias);
+    }
+
+    for (final String alias :
+        new String[] {
+          "alice_1@universal",
+          "merchant@banka.paynet",
+          "xn--bcher-kva@paynet",
+          "alice@xn--fa-hia",
+          "alice@xn--3xa",
+          "alice@xn--nxa6a",
+          "alice@xn--11b2ezcw70k",
+          "alice@xn--mgba3gch31f060k",
+          "alice@xn--ngba7iz95i",
+          "alice@xn--ab-0ea",
+          "alice@xn--a-jib",
+          "alice@xn--ab-3n4a",
+          "xn--alice@universal",
+          "xn--a@universal",
+          "alice@xn--ab-j1t",
+          "alice@xn--mgba000r",
+          "alice@xn--ngba000r",
+          "alice@xn--ab-uuba211bca8057b",
+          "alice@xn--4u8c",
+          "alice@xn--pq1d",
+          "alice@xn--kx7e",
+          "alice@xn--5h0f",
+          "alice@xn--zo5h",
+          "alice@xn--fi3d",
+          "alice@xn--d4f"
+        }) {
+      final Map<String, String> headers =
+          CanonicalRequestSigner.buildHeaders(
+              NETWORK_ID,
+              "get",
+              uri,
+              new byte[0],
+              new ToriiCanonicalRequestAuth(alias, CanonicalRequestSignerTests::fakeSignature),
+              timestampMs,
+              "valid-alias");
+      assert alias.equals(headers.get(CanonicalRequestSigner.HEADER_ACCOUNT))
+          : "structurally valid alias header spelling must remain exact";
+    }
+  }
+
+  private static void canonicalAuthRejectsInvalidCallbackSignatures() throws Exception {
+    final URI uri = new URI("https://torii.example/v1/accounts");
+    final long timestampMs = 1_717_171_717_008L;
+    final String alias = "alice@universal";
+    final byte[] maximum =
+        new byte[CanonicalRequestSigner.CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1];
+    Arrays.fill(maximum, (byte) 1);
+    CanonicalRequestSigner.buildHeaders(
+        NETWORK_ID,
+        "get",
+        uri,
+        new byte[0],
+        new ToriiCanonicalRequestAuth(alias, ignored -> maximum.clone()),
+        timestampMs,
+        "maximum-signature");
+
+    assertIllegalState(
+        () ->
+            CanonicalRequestSigner.buildHeaders(
+                NETWORK_ID,
+                "get",
+                uri,
+                new byte[0],
+                new ToriiCanonicalRequestAuth(alias, ignored -> new byte[0]),
+                timestampMs,
+                "empty-signature"),
+        "empty callback signature");
+    assertIllegalState(
+        () ->
+            CanonicalRequestSigner.buildHeaders(
+                NETWORK_ID,
+                "get",
+                uri,
+                new byte[0],
+                new ToriiCanonicalRequestAuth(alias, ignored -> new byte[64]),
+                timestampMs,
+                "zero-signature"),
+        "all-zero callback signature");
+    assertIllegalState(
+        () ->
+            CanonicalRequestSigner.buildHeaders(
+                NETWORK_ID,
+                "get",
+                uri,
+                new byte[0],
+                new ToriiCanonicalRequestAuth(
+                    alias,
+                    ignored ->
+                        new byte[
+                            CanonicalRequestSigner.CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1 + 1]),
+                timestampMs,
+                "oversized-signature"),
+        "oversized callback signature");
+  }
+
   private static void callbackHeadersReceiveCanonicalMessage() throws Exception {
     final URI uri = new URI("https://torii.example/v1/offline/top-up?b=2&a=1");
     final byte[] body = "{\"operation_id\":\"operation-1\"}".getBytes(StandardCharsets.UTF_8);
@@ -236,7 +450,7 @@ public final class CanonicalRequestSignerTests {
     final AtomicReference<byte[]> signedMessage = new AtomicReference<>();
     final ToriiCanonicalRequestAuth auth =
         new ToriiCanonicalRequestAuth(
-            "alice",
+            "alice@universal",
             message -> {
               signedMessage.set(Arrays.copyOf(message, message.length));
               return fakeSignature(message);
@@ -249,7 +463,7 @@ public final class CanonicalRequestSignerTests {
             NETWORK_ID, "post", uri, body, auth, timestampMs, nonce);
 
     assert Arrays.equals(expectedMessage, signedMessage.get()) : "callback header message mismatch";
-    assert "alice".equals(headers.get(CanonicalRequestSigner.HEADER_ACCOUNT))
+    assert "alice@universal".equals(headers.get(CanonicalRequestSigner.HEADER_ACCOUNT))
         : "callback account header mismatch";
     assert Long.toString(timestampMs)
             .equals(headers.get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS))
@@ -289,7 +503,7 @@ public final class CanonicalRequestSignerTests {
     final AtomicReference<byte[]> signedMessage = new AtomicReference<>();
     final ToriiCanonicalRequestAuth auth =
         new ToriiCanonicalRequestAuth(
-            "alice",
+            "alice@universal",
             message -> {
               signedMessage.set(Arrays.copyOf(message, message.length));
               return fakeSignature(message);
@@ -307,7 +521,7 @@ public final class CanonicalRequestSignerTests {
             NETWORK_ID, "post", uri, signed, timestampMs, nonce);
 
     assert Arrays.equals(expectedMessage, signedMessage.get()) : "callback body message mismatch";
-    assert "alice".equals(signed.get(CanonicalRequestSigner.BODY_ACCOUNT_ID))
+    assert "alice@universal".equals(signed.get(CanonicalRequestSigner.BODY_ACCOUNT_ID))
         : "callback body account_id mismatch";
     assert Long.valueOf(timestampMs).equals(signed.get(CanonicalRequestSigner.BODY_TIMESTAMP_MS))
         : "callback body timestamp mismatch";
@@ -340,7 +554,8 @@ public final class CanonicalRequestSignerTests {
                 "post",
                 uri,
                 bodyBytes,
-                new ToriiCanonicalRequestAuth("alice ", CanonicalRequestSignerTests::fakeSignature),
+                new ToriiCanonicalRequestAuth(
+                    "alice@universal ", CanonicalRequestSignerTests::fakeSignature),
                 timestampMs,
                 "nonce"),
         "padded header account");
@@ -351,7 +566,8 @@ public final class CanonicalRequestSignerTests {
                 "post",
                 uri,
                 bodyBytes,
-                new ToriiCanonicalRequestAuth("alice", CanonicalRequestSignerTests::fakeSignature),
+                new ToriiCanonicalRequestAuth(
+                    "alice@universal", CanonicalRequestSignerTests::fakeSignature),
                 timestampMs,
                 "\nnonce"),
         "padded header nonce");
@@ -362,7 +578,8 @@ public final class CanonicalRequestSignerTests {
                 "post",
                 uri,
                 body,
-                new ToriiCanonicalRequestAuth(" alice", CanonicalRequestSignerTests::fakeSignature),
+                new ToriiCanonicalRequestAuth(
+                    " alice@universal", CanonicalRequestSignerTests::fakeSignature),
                 timestampMs,
                 "nonce"),
         "padded body account");
@@ -373,7 +590,8 @@ public final class CanonicalRequestSignerTests {
                 "post",
                 uri,
                 body,
-                new ToriiCanonicalRequestAuth("alice", CanonicalRequestSignerTests::fakeSignature),
+                new ToriiCanonicalRequestAuth(
+                    "alice@universal", CanonicalRequestSignerTests::fakeSignature),
                 timestampMs,
                 "nonce "),
         "padded body nonce");
@@ -406,6 +624,15 @@ public final class CanonicalRequestSignerTests {
     try {
       body.run();
     } catch (IllegalArgumentException expected) {
+      return;
+    }
+    throw new AssertionError(label + " should reject");
+  }
+
+  private static void assertIllegalState(final Runnable body, final String label) {
+    try {
+      body.run();
+    } catch (IllegalStateException expected) {
       return;
     }
     throw new AssertionError(label + " should reject");

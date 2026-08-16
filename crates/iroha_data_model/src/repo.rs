@@ -157,8 +157,7 @@ pub struct RepoAgreement {
     pub governance: RepoGovernance,
     /// Agreed settlement timestamp once this one-shot agreement is closed.
     ///
-    /// A settled agreement remains on-chain as a tombstone so its identifier
-    /// can never be replayed.
+    /// A settled agreement remains on-chain as a tombstone so its identifier can never be replayed.
     pub settlement_timestamp_ms: Option<u64>,
 }
 impl RepoAgreement {
@@ -211,11 +210,10 @@ impl RepoAgreement {
     }
     /// Compute the next margin check timestamp after the provided moment.
     ///
-    /// Returns `None` when the governance policy disables margin sweeps
-    /// (frequency set to zero). Otherwise returns the earliest timestamp
-    /// strictly greater than `after_timestamp_ms` that aligns to the
-    /// configured cadence starting from the last recorded margin check
-    /// (initially the initiation timestamp).
+    /// Returns `None` when the governance policy disables margin sweeps (frequency set to zero).
+    /// Otherwise returns the earliest timestamp strictly greater than `after_timestamp_ms` that
+    /// aligns to the configured cadence starting from the last recorded margin check (initially the
+    /// initiation timestamp).
     pub fn next_margin_check_after(&self, after_timestamp_ms: u64) -> Option<u64> {
         let freq_ms = self.governance.margin_frequency_millis()?;
         let start = self.last_margin_check_timestamp_ms;

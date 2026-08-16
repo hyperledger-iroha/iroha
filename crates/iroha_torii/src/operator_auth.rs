@@ -1,8 +1,7 @@
 //! Optional WebAuthn/mTLS second-factor authentication for Torii operator endpoints.
 //!
-//! Exact-network operator request signatures remain mandatory at the route
-//! middleware boundary; sessions and bootstrap tokens never authorize a route
-//! by themselves.
+//! Exact-network operator request signatures remain mandatory at the route middleware boundary;
+//! sessions and bootstrap tokens never authorize a route by themselves.
 use crate::{
     JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value, limits,
     routing::MaybeTelemetry,

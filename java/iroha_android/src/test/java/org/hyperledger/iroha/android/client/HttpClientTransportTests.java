@@ -441,7 +441,7 @@ public final class HttpClientTransportTests {
     boolean legacySnapshotRejected = false;
     try {
       client
-          .getPrivacyCapabilities(canonicalAuth("alice", keyPair, 1_700_000_000_000L, "privacy-1"))
+          .getPrivacyCapabilities(canonicalAuth("alice@universal", keyPair, 1_700_000_000_000L, "privacy-1"))
           .join();
     } catch (final CompletionException expected) {
       legacySnapshotRejected = true;
@@ -478,7 +478,7 @@ public final class HttpClientTransportTests {
                     .putDefaultHeader(defaultAcceptName, "application/x-norito")
                     .build())
             .getPrivacyCapabilities(
-                canonicalAuth("alice", keyPair, 1_700_000_000_000L, "privacy-2"));
+                canonicalAuth("alice@universal", keyPair, 1_700_000_000_000L, "privacy-2"));
       } catch (final IllegalArgumentException expected) {
         overrideRejected = true;
       }
@@ -588,7 +588,7 @@ public final class HttpClientTransportTests {
               new OneResponseExecutor(response),
               signedClientConfig("https://torii.example"))
           .getPrivacyCapabilities(
-              canonicalAuth("alice", keyPair, 1_700_000_000_000L, "privacy-hostile"))
+              canonicalAuth("alice@universal", keyPair, 1_700_000_000_000L, "privacy-hostile"))
           .join();
     } catch (final CompletionException expected) {
       rejected = true;
@@ -2224,7 +2224,7 @@ public final class HttpClientTransportTests {
             201, vpnQuoteJson(quoteId, meteringKey).getBytes(StandardCharsets.UTF_8));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
-        canonicalAuth("alice", keyPair, 1_700_000_000_000L, "vpn-nonce-1");
+        canonicalAuth("alice@universal", keyPair, 1_700_000_000_000L, "vpn-nonce-1");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
@@ -2248,7 +2248,7 @@ public final class HttpClientTransportTests {
     assert readBody(request)
         .equals("{\"exit_class\":\"low-latency\",\"metering_public_key_hex\":\"" + meteringKey + "\"}")
         : "VPN quote body mismatch";
-    assert "alice".equals(request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0))
+    assert "alice@universal".equals(request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0))
         : "VPN quote account header mismatch";
     assert "1700000000000"
         .equals(request.headers().get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS).get(0))
@@ -2298,7 +2298,7 @@ public final class HttpClientTransportTests {
         new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
-        canonicalAuth("alice", keyPair, 1_700_000_000_020L, "fee-quote-1");
+        canonicalAuth("alice@universal", keyPair, 1_700_000_000_020L, "fee-quote-1");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
@@ -2307,7 +2307,7 @@ public final class HttpClientTransportTests {
     unsignedPayload.put(
         "domain",
         Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
-    unsignedPayload.put("authority", "alice");
+    unsignedPayload.put("authority", "alice@universal");
     unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
 
     final FeeQuoteResponse quote = transport.quoteFees(unsignedPayload, auth).join();
@@ -2331,7 +2331,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             transport.quoteFees(
-                unsignedPayload, canonicalAuth("bob", keyPair, null, null)),
+                unsignedPayload, canonicalAuth("bob@universal", keyPair, null, null)),
         "fee quote must reject an auth payer mismatch");
     assert executor.lastRequest() == request : "payer mismatch must fail before dispatch";
   }
@@ -2349,12 +2349,12 @@ public final class HttpClientTransportTests {
           "domain",
           Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
       unsignedPayload.put(legacyField, VERIFYING_KEY_NETWORK_ID.literal());
-      unsignedPayload.put("authority", "alice");
+      unsignedPayload.put("authority", "alice@universal");
       unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
       expectIllegalArgument(
           () ->
               transport.quoteFees(
-                  unsignedPayload, canonicalAuth("alice", keyPair, null, null)),
+                  unsignedPayload, canonicalAuth("alice@universal", keyPair, null, null)),
           "fee quote must reject legacy flat transaction identity key " + legacyField);
       assert executor.lastRequest == null : "legacy identity must fail before dispatch";
     }
@@ -2377,7 +2377,7 @@ public final class HttpClientTransportTests {
         new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
-        canonicalAuth("alice", keyPair, 1_700_000_000_021L, "fee-program-1");
+        canonicalAuth("alice@universal", keyPair, 1_700_000_000_021L, "fee-program-1");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
@@ -2420,7 +2420,7 @@ public final class HttpClientTransportTests {
             Collections.emptyList(),
             9_000L);
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
-    final ToriiCanonicalRequestAuth auth = canonicalAuth("alice", keyPair, null, null);
+    final ToriiCanonicalRequestAuth auth = canonicalAuth("alice@universal", keyPair, null, null);
 
     final Object[][] cases = {
       {
@@ -2456,7 +2456,7 @@ public final class HttpClientTransportTests {
       unsignedPayload.put(
           "domain",
           Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
-      unsignedPayload.put("authority", "alice");
+      unsignedPayload.put("authority", "alice@universal");
       unsignedPayload.put("fee_payment", requested.toJsonMap());
 
       expectCompletionIllegalArgument(
@@ -2483,7 +2483,7 @@ public final class HttpClientTransportTests {
     expectCompletionIllegalArgument(
         transport.getFeeSponsorProgram(
             new FeeSponsorProgramId(sponsor, "wallet_fx"),
-            canonicalAuth("alice", keyPair, null, null)),
+            canonicalAuth("alice@universal", keyPair, null, null)),
         "fee sponsor lookup must reject a substituted response id");
   }
 
@@ -2502,7 +2502,7 @@ public final class HttpClientTransportTests {
                 new QueuedResponse(200, "{\"items\":[" + settledReceipt + "],\"total\":1}")));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
-        canonicalAuth("alice", keyPair, 1_700_000_000_001L, "vpn-nonce-2");
+        canonicalAuth("alice@universal", keyPair, 1_700_000_000_001L, "vpn-nonce-2");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
@@ -3669,7 +3669,7 @@ public final class HttpClientTransportTests {
         transport
             .getGovernanceContract(
                 contractAddress,
-                canonicalAuth("alice", keyPair, 1_700_000_000_100L, "governance-read"))
+                canonicalAuth("alice@universal", keyPair, 1_700_000_000_100L, "governance-read"))
             .join();
 
     assert response.found() : "Governance binding should be found";
@@ -3742,7 +3742,7 @@ public final class HttpClientTransportTests {
             signedClientConfig("https://torii.example/api"));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
-        canonicalAuth("alice", keyPair, 1_700_000_000_000L, "alias-resolve-nonce-1");
+        canonicalAuth("alice@universal", keyPair, 1_700_000_000_000L, "alias-resolve-nonce-1");
 
     final Optional<AccountAliasResolution> response =
         transport.resolveAccountAlias("merchant@private", auth).join();
@@ -3752,7 +3752,7 @@ public final class HttpClientTransportTests {
         : "Restricted alias target mismatch";
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Restricted alias request must be captured";
-    assert "alice".equals(request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0))
+    assert "alice@universal".equals(request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0))
         : "Canonical account header mismatch";
     assert "1700000000000"
         .equals(request.headers().get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS).get(0))
@@ -3836,7 +3836,7 @@ public final class HttpClientTransportTests {
     assert "POST".equals(request.method()) : "Alias setup planning must use POST";
     assert "https://torii.example/api/v1/aliases/setup/plan".equals(request.uri().toString())
         : "Alias setup planning must use the read-only planner route";
-    assert authority.equals(
+    assert CanonicalRequestSigningTestSupport.canonicalAccountHeader(authority).equals(
         request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0));
     @SuppressWarnings("unchecked")
     final Map<String, Object> sent = (Map<String, Object>) JsonParser.parse(readBody(request));

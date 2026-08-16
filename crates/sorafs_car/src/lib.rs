@@ -1,12 +1,11 @@
 //! Planning and encoding utilities for assembling CARv2 archives for SoraFS.
 //!
-//! The crate exposes deterministic planning structures that describe which
-//! chunks must be included (and in which order) alongside a reference
-//! implementation of a spec-compliant CARv2 writer. Downstream tooling can use
-//! `CarBuildPlan` to reason about chunk boundaries and pass the plan to
-//! `CarWriter` when it is time to emit a CARv2 archive (pragma + header +
-//! CARv1 payload + MultihashIndexSorted index), or to `CarStreamingWriter`
-//! when the source payload cannot be buffered in memory.
+//! The crate exposes deterministic planning structures that describe which chunks must be included
+//! (and in which order) alongside a reference implementation of a spec-compliant CARv2 writer.
+//! Downstream tooling can use `CarBuildPlan` to reason about chunk boundaries and pass the plan to
+//! `CarWriter` when it is time to emit a CARv2 archive (pragma + header + CARv1 payload +
+//! MultihashIndexSorted index), or to `CarStreamingWriter` when the source payload cannot be
+//! buffered in memory.
 #![allow(unexpected_cfgs)]
 use blake3::{Hash, Hasher};
 #[cfg(feature = "manifest")]
@@ -98,9 +97,8 @@ pub fn compute_chunk_digest(payload: &[u8]) -> [u8; 32] {
 }
 /// Compute the SHA3-256 commitment of a deterministic CAR chunk plan.
 ///
-/// The canonical transcript is the ordered concatenation of each chunk's
-/// little-endian 64-bit offset, little-endian 64-bit length, and 32-byte
-/// BLAKE3 content digest.
+/// The canonical transcript is the ordered concatenation of each chunk's little-endian 64-bit
+/// offset, little-endian 64-bit length, and 32-byte BLAKE3 content digest.
 #[must_use]
 pub fn compute_chunk_plan_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
     sorafs_chunker::compute_chunk_plan_digest_sha3(
@@ -1544,9 +1542,8 @@ pub fn taikai_segment_hint_from_manifest(
 }
 /// Derive a Taikai segment hint from a stored SoraFS manifest (metadata-based).
 ///
-/// Returns `Ok(None)` when no Taikai metadata keys are present; otherwise
-/// validates the fields and surfaces the same errors as
-/// [`taikai_segment_hint_from_manifest`].
+/// Returns `Ok(None)` when no Taikai metadata keys are present; otherwise validates the fields and
+/// surfaces the same errors as [`taikai_segment_hint_from_manifest`].
 #[cfg(feature = "manifest")]
 pub fn taikai_segment_hint_from_sorafs_manifest(
     manifest: &SorafsManifestV1,
@@ -6440,13 +6437,11 @@ impl CarBuildPlan {
         }
         Self::from_files_with_profile(files, profile)
     }
-    /// Builds a CAR plan for multiple files, returning the plan alongside the
-    /// concatenated payload bytes that must be passed to [`CarWriter`]. The
-    /// files are addressed by their UTF-8 path components (relative to the
-    /// dataset root). Paths are validated as portable normal components and
-    /// must be strictly ordered after sorting. Empty files are represented by
-    /// a zero-sized file range and zero chunks; synthetic zero-length chunks
-    /// are never emitted.
+    /// Builds a CAR plan for multiple files, returning the plan alongside the concatenated payload
+    /// bytes that must be passed to [`CarWriter`]. The files are addressed by their UTF-8 path
+    /// components (relative to the dataset root). Paths are validated as portable normal components
+    /// and must be strictly ordered after sorting. Empty files are represented by a zero-sized file
+    /// range and zero chunks; synthetic zero-length chunks are never emitted.
     pub fn from_files(files: Vec<FileEntry>) -> Result<(Self, Vec<u8>), CarPlanError> {
         Self::from_files_with_profile(files, ChunkProfile::DEFAULT)
     }
@@ -6538,9 +6533,8 @@ impl CarBuildPlan {
     }
     /// Tries to build the list of chunk fetch specifications derived from this validated plan.
     ///
-    /// This helper is convenient for multi-source retrieval orchestrators that
-    /// need to schedule chunk downloads while verifying digests and payload
-    /// offsets deterministically.
+    /// This helper is convenient for multi-source retrieval orchestrators that need to schedule
+    /// chunk downloads while verifying digests and payload offsets deterministically.
     pub fn try_chunk_fetch_specs(&self) -> Result<Vec<ChunkFetchSpec>, CarPlanError> {
         self.validate()?;
         let mut estimated = self

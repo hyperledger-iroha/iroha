@@ -1,10 +1,9 @@
 //! Proof-of-Data Possession (PDP) commitment, challenge, and proof primitives.
 //!
-//! V1 commits to a payload twice: once as a global tree of 4 KiB hot leaves,
-//! and once as a global tree of 256 KiB segment commitments. Each segment
-//! commitment contains its own hot-leaf Merkle root. A valid proof therefore
-//! demonstrates possession of the challenged bytes against both advertised
-//! roots rather than merely replaying precomputed leaf hashes.
+//! V1 commits to a payload twice: once as a global tree of 4 KiB hot leaves, and once as a global
+//! tree of 256 KiB segment commitments. Each segment commitment contains its own hot-leaf Merkle
+//! root. A valid proof therefore demonstrates possession of the challenged bytes against both
+//! advertised roots rather than merely replaying precomputed leaf hashes.
 use super::{BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, ProfileId};
 use crate::AdmissionRecord;
 use ed25519_dalek::{Signer as _, SigningKey};

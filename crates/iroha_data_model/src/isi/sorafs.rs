@@ -88,10 +88,9 @@ impl crate::seal::Instruction for BindManifestAlias {}
 isi! {
     /// Register or update capacity for an already governed, bonded provider.
     ///
-    /// Execution requires the transaction authority to be the exact registered
-    /// provider owner and the declaration's stake to be covered by the
-    /// owner-funded native reserve ledger. This instruction never creates or
-    /// changes a provider-owner binding.
+    /// Execution requires the transaction authority to be the exact registered provider owner and
+    /// the declaration's stake to be covered by the owner-funded native reserve ledger. This
+    /// instruction never creates or changes a provider-owner binding.
 pub struct RegisterCapacityDeclaration {
     /// Declaration record persisted by the capacity registry.
     pub record: CapacityDeclarationRecord,
@@ -2112,6 +2111,9 @@ impl_sorafs_decode_from_slice!(FinalizeSorafsModerationCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{
+        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+    };
     use crate::sorafs::{
         capacity::{CapacityDisputeEvidence, CapacityDisputeId},
         reputation::{
@@ -2121,9 +2123,7 @@ mod tests {
         },
     };
     use iroha_primitives::numeric::{Numeric, Quantity};
-    use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
-    };
+    use norito::core::DecodeFromSlice;
     fn owner() -> AccountId {
         AccountId::new(
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -2141,7 +2141,7 @@ mod tests {
     fn provider_governance_actions_are_closed_canonical_and_compare_and_set() {
         let current = owner();
         let next = AccountId::new(
-            "ed01201111111111111111111111111111111111111111111111111111111111111111"
+            "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
                 .parse()
                 .expect("replacement public key"),
         );

@@ -255,9 +255,8 @@ pub fn validate_resolved_alias_target(
 ///
 /// # Errors
 ///
-/// Returns [`AliasSetupError`] when the guard has expired, its policy version
-/// or payment asset differs from live policy, or the exact charge exceeds the
-/// authorized cap.
+/// Returns [`AliasSetupError`] when the guard has expired, its policy version or payment asset
+/// differs from live policy, or the exact charge exceeds the authorized cap.
 pub fn validate_alias_quote_guard(
     world: &impl WorldReadOnly,
     quote: &crate::sns::LeaseQuote,
@@ -911,10 +910,9 @@ pub fn classify_alias_intent(
 }
 /// Classify one declarative intent while enforcing the live domain-endorsement policy.
 ///
-/// Per-domain policy stored in `world` overrides
-/// `default_domain_endorsement_required`, matching domain registration. Because
-/// [`iroha_data_model::alias_setup::AliasDomainIntentV1`] cannot carry immutable
-/// endorsement metadata, an absent domain that requires it is blocked before an
+/// Per-domain policy stored in `world` overrides `default_domain_endorsement_required`, matching
+/// domain registration. Because [`iroha_data_model::alias_setup::AliasDomainIntentV1`] cannot carry
+/// immutable endorsement metadata, an absent domain that requires it is blocked before an
 /// executable acquisition disposition can be returned.
 ///
 /// # Errors
@@ -941,10 +939,9 @@ pub fn classify_alias_intent_with_endorsement_policy(
 }
 /// Classify an ordered intent while accepting exact parent dataspaces planned earlier.
 ///
-/// `planned_dataspaces` must contain only canonical text/ID pairs from preceding
-/// dataspace intents in the same unsplit transaction plan. Live static/SNS
-/// evidence remains authoritative: a conflicting live or planned pair fails
-/// closed with `alias.catalog.mapping_conflict`.
+/// `planned_dataspaces` must contain only canonical text/ID pairs from preceding dataspace intents
+/// in the same unsplit transaction plan. Live static/SNS evidence remains authoritative: a
+/// conflicting live or planned pair fails closed with `alias.catalog.mapping_conflict`.
 ///
 /// # Errors
 ///
@@ -968,10 +965,9 @@ pub fn classify_alias_intent_with_planned_dataspaces(
 }
 /// Classify an ordered intent while accepting exact parent resources planned earlier.
 ///
-/// The planner supplies only successfully classified preceding dataspace and
-/// domain resources. Execution calls [`classify_alias_intent`] instead, so each
-/// parent must already be active in the transaction overlay before its child is
-/// evaluated.
+/// The planner supplies only successfully classified preceding dataspace and domain resources.
+/// Execution calls [`classify_alias_intent`] instead, so each parent must already be active in the
+/// transaction overlay before its child is evaluated.
 ///
 /// # Errors
 ///
@@ -997,10 +993,9 @@ pub fn classify_alias_intent_with_planned_parents(
 }
 /// Classify an ordered intent while enforcing the live domain-endorsement policy.
 ///
-/// This is the policy-aware form of [`classify_alias_intent_with_planned_parents`].
-/// Per-domain policy stored in `world` overrides
-/// `default_domain_endorsement_required`, exactly as it does during consensus
-/// domain registration.
+/// This is the policy-aware form of [`classify_alias_intent_with_planned_parents`]. Per-domain
+/// policy stored in `world` overrides `default_domain_endorsement_required`, exactly as it does
+/// during consensus domain registration.
 ///
 /// # Errors
 ///
@@ -1092,16 +1087,14 @@ pub const fn target_suffix_id(target: &AliasTargetV1) -> u16 {
 }
 /// Verify that the target namespace policy uses the configured, registered fee asset.
 ///
-/// Planning calls this only after classifying an operation that will actually
-/// acquire or renew a lease. This preserves free no-op and repair semantics while
-/// ensuring every executable quote passes the same policy/configuration check as
-/// consensus execution.
+/// Planning calls this only after classifying an operation that will actually acquire or renew a
+/// lease. This preserves free no-op and repair semantics while ensuring every executable quote
+/// passes the same policy/configuration check as consensus execution.
 ///
 /// # Errors
 ///
-/// Returns [`AliasSetupError`] when the namespace is unknown, the configured fee
-/// asset is invalid or absent, or either the policy or a pricing tier names a
-/// different payment asset.
+/// Returns [`AliasSetupError`] when the namespace is unknown, the configured fee asset is invalid
+/// or absent, or either the policy or a pricing tier names a different payment asset.
 pub fn validate_configured_alias_payment_asset(
     world: &impl WorldReadOnly,
     target: &AliasTargetV1,

@@ -1,9 +1,8 @@
 //! Complete finalized-ledger repair projections used by destructive local work.
 //!
-//! A projection can be constructed only by consuming every page anchored to
-//! one finalized cursor and matching the chain-authoritative status count.
-//! Callers cannot obtain a partially collected projection, so local storage
-//! deletion never relies on a stale or truncated repair-task cache.
+//! A projection can be constructed only by consuming every page anchored to one finalized cursor
+//! and matching the chain-authoritative status count. Callers cannot obtain a partially collected
+//! projection, so local storage deletion never relies on a stale or truncated repair-task cache.
 use crate::repair_transaction_forwarder::{decode_repair_report, decode_slash_proposal};
 use iroha_data_model::sorafs::moderation_ledger::{
     REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_RECEIPTS_V1,
@@ -17,9 +16,8 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 /// Maximum finalized task pages accepted for one GC projection.
 ///
-/// The page bound is independent of the number of tasks retained by consensus.
-/// A larger ledger therefore fails closed instead of authorizing deletion from
-/// a prefix.
+/// The page bound is independent of the number of tasks retained by consensus. A larger ledger
+/// therefore fails closed instead of authorizing deletion from a prefix.
 pub const REPAIR_GC_PROJECTION_MAX_PAGES_V1: usize = 1_024;
 /// Maximum finalized repair tasks accepted for one GC projection.
 pub const REPAIR_GC_PROJECTION_MAX_TASKS_V1: usize = 65_536;
@@ -253,9 +251,8 @@ impl RepairLedgerTaskProjectionV1 {
     }
     /// Non-terminal tasks for one provider.
     ///
-    /// Filtering is deliberately available only on a finished projection, so
-    /// provider-local GC cannot treat a globally truncated page set as proof
-    /// that no active repair exists.
+    /// Filtering is deliberately available only on a finished projection, so provider-local GC
+    /// cannot treat a globally truncated page set as proof that no active repair exists.
     pub fn active_tasks_for_provider(
         &self,
         provider_id: [u8; 32],
@@ -296,9 +293,8 @@ fn validate_status(status: RepairLedgerStatusV1) -> Result<(), RepairLedgerProje
 #[allow(clippy::too_many_lines)]
 /// Validate one finalized native repair task and all embedded provenance.
 ///
-/// This is shared by destructive storage execution and Torii finality
-/// reconciliation so malformed task/receipt/slash/appeal records are rejected
-/// before either consumer performs a side effect.
+/// This is shared by destructive storage execution and Torii finality reconciliation so malformed
+/// task/receipt/slash/appeal records are rejected before either consumer performs a side effect.
 pub fn validate_task(task: &RepairLedgerTaskV1) -> Result<(), RepairLedgerProjectionErrorV1> {
     let report = decode_repair_report(&task.canonical_report)
         .map_err(|_| RepairLedgerProjectionErrorV1::InvalidTask)?;

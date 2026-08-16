@@ -679,15 +679,7 @@ mod tests {
     }
     #[test]
     fn commitments_are_the_explicit_declassification_boundary() {
-        let source = r#"
-            seiyaku Privacy {
-                fn commitment() -> int {
-                    let Secret<int> value = crypto::private_input(0);
-                    let Secret<int> blinding = crypto::private_input(1);
-                    return crypto::valcom(left: value, right: blinding);
-                }
-            }
-        "#;
+        let source = include_str!("../fixtures/koto_v1/secret/001.ko").strip_suffix('\n').expect("fixture sentinel newline");
         let program = parse(source).expect("commitment fixture should parse");
         SemanticContext::with_zk_enabled(true)
             .analyze(&program)
@@ -711,98 +703,43 @@ mod tests {
     #[test]
     fn public_secret_return_is_rejected() {
         let error = analyze_error(
-            r#"
-                seiyaku Privacy {
-                    kotoage fn leak() -> Secret<int> authorize("ReadPrivate") {
-                        return crypto::private_input(0);
-                    }
-                }
-            "#,
+            include_str!("../fixtures/koto_v1/secret/002.ko").strip_suffix('\n').expect("fixture sentinel newline"),
         );
         assert_eq!(error.code, "E_SECRET_PUBLIC_RETURN");
     }
     #[test]
     fn secret_control_flow_is_rejected() {
         let error = analyze_error(
-            r#"
-                seiyaku Privacy {
-                    fn branch() -> int {
-                        let Secret<int> left = crypto::private_input(0);
-                        let Secret<int> right = crypto::private_input(1);
-                        if (left == right) { return 1; }
-                        return 0;
-                    }
-                }
-            "#,
+            include_str!("../fixtures/koto_v1/secret/003.ko").strip_suffix('\n').expect("fixture sentinel newline"),
         );
         assert_eq!(error.code, "E_SECRET_ARITHMETIC");
     }
     #[test]
     fn secret_logs_and_host_writes_are_rejected() {
         let log_error = analyze_error(
-            r#"
-                seiyaku Privacy {
-                    fn leak() {
-                        let Secret<int> value = crypto::private_input(0);
-                        debug::info(value);
-                    }
-                }
-            "#,
+            include_str!("../fixtures/koto_v1/secret/004.ko").strip_suffix('\n').expect("fixture sentinel newline"),
         );
         assert_eq!(log_error.code, "E_SECRET_LOG");
         let host_error = analyze_error(
-            r#"
-                seiyaku Privacy {
-                    fn leak() {
-                        let Secret<int> path = crypto::private_input(0);
-                        state::set(path: path, value: 1);
-                    }
-                }
-            "#,
+            include_str!("../fixtures/koto_v1/secret/005.ko").strip_suffix('\n').expect("fixture sentinel newline"),
         );
         assert_eq!(host_error.code, "E_SECRET_STATE_SINK");
     }
     #[test]
     fn secret_state_keys_and_values_are_rejected() {
         let key_error = analyze_error(
-            r#"
-                seiyaku Privacy {
-                    state StateMap<int, int> values;
-                    fn leak() -> int {
-                        let Secret<int> key = crypto::private_input(0);
-                        return values[key];
-                    }
-                }
-            "#,
+            include_str!("../fixtures/koto_v1/secret/006.ko").strip_suffix('\n').expect("fixture sentinel newline"),
         );
         assert_eq!(key_error.code, "E_SECRET_STATE_KEY");
         let value_error = analyze_error(
-            r#"
-                seiyaku Privacy {
-                    state StateMap<int, int> values;
-                    fn leak() {
-                        let Secret<int> value = crypto::private_input(0);
-                        values[0] = value;
-                    }
-                }
-            "#,
+            include_str!("../fixtures/koto_v1/secret/007.ko").strip_suffix('\n').expect("fixture sentinel newline"),
         );
         assert_eq!(value_error.code, "E_SECRET_STATE_WRITE");
     }
     #[test]
     fn commitment_operands_cannot_mix_public_and_secret_values() {
         let error = analyze_error(
-            r#"
-                seiyaku Privacy {
-                    fn weak_commitment() -> int {
-                        let Secret<int> value = crypto::private_input(0);
-                        return crypto::valcom(
-                            left: value,
-                            right: 7,
-                        );
-                    }
-                }
-            "#,
+            include_str!("../fixtures/koto_v1/secret/008.ko").strip_suffix('\n').expect("fixture sentinel newline"),
         );
         assert_eq!(error.code, "E_SECRET_MIXED_COMMITMENT");
     }

@@ -88,8 +88,7 @@ impl PartialEq for InstructionBox {
     }
 }
 impl Eq for InstructionBox {}
-/// Client-side wrapper preserving an instruction wire-id plus already encoded
-/// payload bytes.
+/// Client-side wrapper preserving an instruction wire-id plus already encoded payload bytes.
 ///
 /// This is intended for compatibility flows where a remote node returns a draft
 /// instruction in framed wire form and the local client needs to resubmit that
@@ -1678,9 +1677,8 @@ pub trait Instruction: InstructionDynClone + seal::Instruction + Send + Sync + '
     fn as_any(&self) -> &dyn Any;
     /// Identifier of this instruction type.
     ///
-    /// By default, it resolves to the name of the concrete type at
-    /// compile time, providing a stable identifier without relying on
-    /// runtime reflection.
+    /// By default, it resolves to the name of the concrete type at compile time, providing a stable
+    /// identifier without relying on runtime reflection.
     fn id(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
@@ -1887,10 +1885,9 @@ pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
 }
 /// Encode one registered instruction into its stable wire id and exact Norito frame.
 ///
-/// The returned payload is the same framed byte sequence embedded in an
-/// [`InstructionBox`] wire tuple. It can be decoded with
-/// [`decode_instruction_from_pair`] and is suitable for planner responses that
-/// clients must verify and submit without altering instruction bytes.
+/// The returned payload is the same framed byte sequence embedded in an [`InstructionBox`] wire
+/// tuple. It can be decoded with [`decode_instruction_from_pair`] and is suitable for planner
+/// responses that clients must verify and submit without altering instruction bytes.
 #[must_use]
 pub fn framed_instruction_payload(instr: &InstructionBox) -> Option<(&'static str, Vec<u8>)> {
     let inner = peel_instruction_box(&**instr);
@@ -2374,8 +2371,7 @@ impl iroha_schema::TypeId for InstructionBox {
 /// the Norito header as produced by [`frame_instruction_payload`].
 ///
 /// # Errors
-/// Returns `norito::Error` if the instruction name is not registered or payload
-/// decoding fails.
+/// Returns `norito::Error` if the instruction name is not registered or payload decoding fails.
 pub fn decode_instruction_from_pair(
     name: &str,
     payload: &[u8],
@@ -2498,10 +2494,9 @@ impl IntoSchema for InstructionBox {
 }
 /// Function signature used to construct an [`crate::isi::Instruction`] from header-framed bytes.
 ///
-/// The `header_flags` argument propagates Norito metadata alongside the encoded
-/// payload. Existing constructors ignore the value, but keeping it in the
-/// signature allows future instructions to react to packed-layout flags without
-/// widening the registry interface again.
+/// The `header_flags` argument propagates Norito metadata alongside the encoded payload. Existing
+/// constructors ignore the value, but keeping it in the signature allows future instructions to
+/// react to packed-layout flags without widening the registry interface again.
 pub type InstructionConstructor = fn(u8, &[u8]) -> Result<InstructionBox, norito::Error>;
 /// Registry storing constructors for [`crate::isi::Instruction`] types keyed by their type names.
 #[derive(Default, Clone)]
@@ -2725,9 +2720,8 @@ impl InstructionRegistry {
     /// Decode an [`crate::isi::Instruction`] providing explicit Norito layout flags.
     ///
     /// The `header_flags` argument mirrors the values produced by
-    /// [`norito::codec::encode_with_header_flags`] and ensures the decoder
-    /// reconstructs packed-struct layouts consistently for instructions that
-    /// rely on adaptive encoding.
+    /// [`norito::codec::encode_with_header_flags`] and ensures the decoder reconstructs
+    /// packed-struct layouts consistently for instructions that rely on adaptive encoding.
     pub fn decode_with_flags(
         &self,
         name: &str,
@@ -3123,8 +3117,7 @@ pub mod alias_setup;
 pub mod asset_alias;
 /// Asset-scoped outbound transfer control instructions.
 pub mod asset_transfer_control;
-/// Confidential registry management instructions.
-/// Bridge proof ingestion instructions.
+/// Confidential registry management instructions. Bridge proof ingestion instructions.
 pub mod bridge;
 /// Confidential registry management instructions.
 pub mod confidential;
@@ -3253,8 +3246,7 @@ enum_type! {
 isi_box! {
     /// Enum with all supported [`RemoveKeyValue`] instructions.
     ///
-    /// Dev note: "Box" here means a boxed-up family of variants, not
-    /// heap allocation.
+    /// Dev note: "Box" here means a boxed-up family of variants, not heap allocation.
     pub enum RemoveKeyValueBox {
         /// Remove key value from [`Domain`].
         Domain(RemoveKeyValue<Domain>),
@@ -3438,9 +3430,8 @@ pub mod error {
         }
         /// Typed asset-transfer policy failure.
         ///
-        /// The variant is the stable machine classification. Human-readable
-        /// detail is deliberately carried separately so receipt codes never
-        /// depend on matching display text.
+        /// The variant is the stable machine classification. Human-readable detail is deliberately
+        /// carried separately so receipt codes never depend on matching display text.
         #[derive(
             Debug,
             displaydoc::Display,

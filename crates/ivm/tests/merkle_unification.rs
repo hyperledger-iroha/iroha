@@ -1,8 +1,7 @@
 //! Cross-crate Merkle unification tests
 //!
-//! These tests ensure that IVM’s Merkle helpers (`ByteMerkleTree` and
-//! register-state wrapper) are equivalent to the canonical
-//! `iroha_crypto::MerkleTree` implementation in roots and proofs.
+//! These tests ensure that IVM’s Merkle helpers (`ByteMerkleTree` and register-state wrapper) are
+//! equivalent to the canonical `iroha_crypto::MerkleTree` implementation in roots and proofs.
 use iroha_crypto::{MerkleProof, MerkleTree};
 use ivm::ByteMerkleTree;
 // No extra helpers needed in this test; keep dependencies minimal.

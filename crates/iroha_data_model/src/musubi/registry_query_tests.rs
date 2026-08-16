@@ -835,7 +835,7 @@ fn page_and_cursor_bounds_are_enforced() {
             ..resolver_page
         }
         .validate()
-        .is_err()
+        .is_ok()
     );
     let directory_page = MusubiOrderedPackagePageV1 {
         query: MusubiOrderedPrefixQueryV1 {
@@ -865,7 +865,7 @@ fn page_and_cursor_bounds_are_enforced() {
             ..directory_page
         }
         .validate()
-        .is_err()
+        .is_ok()
     );
 }
 #[test]

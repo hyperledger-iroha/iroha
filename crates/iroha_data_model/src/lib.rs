@@ -2,13 +2,11 @@
 //! non-specific functions like serialization.
 //!
 //! ## Note about IVM and deserialization
-//! Some structs perform validation during deserialization
-//! (e.g. `transaction::candidate::SignedTransactionCandidate`).
-//! However, when targeting the Iroha Virtual Machine (IVM), this validation
-//! is disabled. Validation inside the IVM is not necessary
-//! because it has already been performed on the host side,
-//! which is a trusted entity.
-//! This gives about 50% performance boost, see #4995.
+//! Some structs perform validation during deserialization (e.g.
+//! `transaction::candidate::SignedTransactionCandidate`). However, when targeting the Iroha Virtual
+//! Machine (IVM), this validation is disabled. Validation inside the IVM is not necessary because
+//! it has already been performed on the host side, which is a trusted entity. This gives about 50%
+//! performance boost, see #4995.
 #![allow(unexpected_cfgs)]
 #![allow(semicolon_in_expressions_from_macros)]
 #![cfg_attr(
@@ -38,13 +36,11 @@ pub use norito_derive::{
 };
 /// Data model compatibility version for SDK and node handshakes.
 ///
-/// Version 2 makes the signature-bound fee payment intent mandatory and
-/// replaces account/policy fee sponsorship with on-chain sponsor programs.
-/// Version 3 adds the flat ordered transaction/trigger executable batch that
-/// atomically interleaves native instructions and deployed-contract calls.
-/// Version 4 requires validation-fee policy and payout-lifecycle proposals,
-/// plus their retained registry entries, to bind the exact PLAIN electorate
-/// rules used by their ballot lifecycle.
+/// Version 2 makes the signature-bound fee payment intent mandatory and replaces account/policy fee
+/// sponsorship with on-chain sponsor programs. Version 3 adds the flat ordered transaction/trigger
+/// executable batch that atomically interleaves native instructions and deployed-contract calls.
+/// Version 4 requires validation-fee policy and payout-lifecycle proposals, plus their retained
+/// registry entries, to bind the exact PLAIN electorate rules used by their ballot lifecycle.
 pub const DATA_MODEL_VERSION: u32 = 4;
 #[macro_use]
 mod id_macros;
@@ -268,10 +264,9 @@ pub trait HasMetadata {
 }
 /// Trait for objects that are registered by proxy.
 pub trait Registered: Identifiable {
-    /// The proxy type that is used to register this entity. Usually
-    /// `Self`, but if you have a complex structure where most fields
-    /// would be empty, to save space you create a builder for it, and
-    /// set `With` to the builder's type.
+    /// The proxy type that is used to register this entity. Usually `Self`, but if you have a
+    /// complex structure where most fields would be empty, to save space you create a builder for
+    /// it, and set `With` to the builder's type.
     type With;
 }
 /// Auxiliary trait for objects which are stored in parts in `World`.

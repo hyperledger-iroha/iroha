@@ -9,9 +9,8 @@ pub enum BuildLine {
     Iroha3,
 }
 impl BuildLine {
-    /// Derive the build line from the binary name. Any binary starting with
-    /// `iroha2` is treated as an Iroha 2 artefact; everything else defaults to
-    /// the Iroha 3 line.
+    /// Derive the build line from the binary name. Any binary starting with `iroha2` is treated as
+    /// an Iroha 2 artefact; everything else defaults to the Iroha 3 line.
     #[must_use]
     pub fn from_bin_name(bin_name: &str) -> Self {
         let lowered = bin_name.trim().to_ascii_lowercase();

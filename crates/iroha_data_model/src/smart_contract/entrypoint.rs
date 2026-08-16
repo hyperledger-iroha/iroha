@@ -70,9 +70,8 @@ pub const MAX_ENTRYPOINT_RETURN_RECORD_BYTES: usize =
     MAX_ENTRYPOINT_BOUNDARY_BYTES - ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1;
 /// Byte offset of the first naturally aligned word in a decoded argument table.
 ///
-/// Pointer-ABI envelopes have a seven-byte header; the result `Blob` therefore
-/// reserves one payload byte so every following `u64` starts at an eight-byte
-/// aligned address.
+/// Pointer-ABI envelopes have a seven-byte header; the result `Blob` therefore reserves one payload
+/// byte so every following `u64` starts at an eight-byte aligned address.
 pub const DECODED_ARGUMENT_TABLE_OFFSET: i16 = 8;
 /// Width of one decoded argument word in the returned table.
 pub const DECODED_ARGUMENT_WORD_BYTES: i16 = 8;
@@ -145,10 +144,9 @@ pub struct EntrypointStructTypeNodeV1 {
 }
 /// Metadata carried by an [`EntrypointValueTypeNodeV1::List`] node.
 ///
-/// The exact element subtree immediately follows this node in the enclosing
-/// preorder tape. Keeping every aggregate in one flat tape makes decoding,
-/// validation, cloning, comparison, and destruction bounded by the explicit
-/// V1 node budget rather than the native call stack.
+/// The exact element subtree immediately follows this node in the enclosing preorder tape. Keeping
+/// every aggregate in one flat tape makes decoding, validation, cloning, comparison, and
+/// destruction bounded by the explicit V1 node budget rather than the native call stack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -355,13 +353,11 @@ fn entrypoint_node_child_count(node: &EntrypointValueTypeNodeV1) -> usize {
         EntrypointValueTypeNodeV1::Leaf(_) => 0,
     }
 }
-/// Return the exact preorder range occupied by one structurally complete
-/// boundary-type subtree.
+/// Return the exact preorder range occupied by one structurally complete boundary-type subtree.
 ///
-/// This cursor helper deliberately checks only flat-tree structure. Callers
-/// accepting an entire untrusted schema must still use
-/// [`EntrypointValueTypeV1::validate`] to enforce identifiers, capacities,
-/// reserved nominal shapes, and the V1 node/depth budgets.
+/// This cursor helper deliberately checks only flat-tree structure. Callers accepting an entire
+/// untrusted schema must still use [`EntrypointValueTypeV1::validate`] to enforce identifiers,
+/// capacities, reserved nominal shapes, and the V1 node/depth budgets.
 #[must_use]
 pub fn entrypoint_value_subtree_range_v1(
     nodes: &[EntrypointValueTypeNodeV1],

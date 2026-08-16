@@ -187,8 +187,8 @@ pub(crate) fn verify_ipa_proof(
     proof_payload: &[u8],
     instances: &[&[&[Scalar]]],
 ) -> Result<(), PlonkError> {
-    let mut transcript =
-        Blake2bRead::<_, Curve, Challenge255<Curve>>::init(io::Cursor::new(proof_payload));
+    let mut cursor = io::Cursor::new(proof_payload);
+    let mut transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(&mut cursor);
     let strategy = SingleStrategy::new(params);
     halo2_verify_proof::<
         IPACommitmentScheme<Curve>,
@@ -196,8 +196,15 @@ pub(crate) fn verify_ipa_proof(
         Challenge255<Curve>,
         _,
         _,
-    >(params, vk, strategy, instances, &mut transcript)
-    .map(|_| ())
+    >(params, vk, strategy, instances, &mut transcript)?;
+    drop(transcript);
+    if cursor.position() != u64::try_from(proof_payload.len()).expect("proof length must fit u64") {
+        return Err(PlonkError::Transcript(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Halo2 IPA proof contains trailing transcript bytes",
+        )));
+    }
+    Ok(())
 }
 /// Verify a Pasta IPA proof that has no public instances.
 #[allow(dead_code)]
@@ -231,11 +238,10 @@ mod tests {
             ipa::{multiopen::VerifierIPA, strategy::AccumulatorStrategy},
         },
     };
-    /// A deliberately tiny circuit used to exercise Halo2's native IPA
-    /// accumulator strategy. This is a host-side batch-verification proof of
-    /// concept, not a recursive verifier circuit: `AccumulatorStrategy` keeps
-    /// an unevaluated MSM in private Rust state and `finalize` decides it on the
-    /// host.
+    /// A deliberately tiny circuit used to exercise Halo2's native IPA accumulator strategy. This
+    /// is a host-side batch-verification proof of concept, not a recursive verifier circuit:
+    /// `AccumulatorStrategy` keeps an unevaluated MSM in private Rust state and `finalize` decides
+    /// it on the host.
     #[derive(Clone, Default)]
     struct PublicValue {
         value: Scalar,
@@ -275,6 +281,31 @@ mod tests {
             layouter.constrain_instance(cell, instance, 0);
             Ok(())
         }
+    }
+    #[test]
+    fn verify_ipa_proof_rejects_trailing_transcript_bytes() {
+        let params = params_new(5);
+        let value = Scalar::from(7);
+        let circuit = PublicValue { value };
+        let vk = keygen_vk(&params, &circuit).expect("tiny verifier key");
+        let pk = keygen_pk(&params, vk.clone(), &circuit).expect("tiny proving key");
+        let column = [value];
+        let columns: [&[Scalar]; 1] = [&column];
+        let instances: [&[&[Scalar]]; 1] = [&columns];
+        let mut proof = create_ipa_proof(&params, &pk, &[circuit], &instances)
+            .expect("create canonical tiny IPA proof");
+        verify_ipa_proof(&params, &vk, &proof, &instances).expect("canonical proof must verify");
+
+        proof.push(0);
+        let error = verify_ipa_proof(&params, &vk, &proof, &instances)
+            .expect_err("a trailing byte must make the transcript non-canonical");
+        assert!(
+            matches!(
+                &error,
+                PlonkError::Transcript(inner) if inner.kind() == io::ErrorKind::InvalidData
+            ),
+            "unexpected trailing-byte error: {error}"
+        );
     }
     #[test]
     fn native_ipa_accumulator_batches_full_plonk_proofs_but_is_not_recursive() {

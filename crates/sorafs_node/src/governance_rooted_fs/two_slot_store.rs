@@ -110,9 +110,8 @@ pub(super) struct TwoSlotStoreConfigV1 {
 }
 /// Validated deadline and polling cadence for one two-slot initialization lock.
 ///
-/// This bound applies only while opening or creating the fixed store. Normal
-/// loads and compare-and-swap operations retain their separate blocking or
-/// typed nonblocking contracts.
+/// This bound applies only while opening or creating the fixed store. Normal loads and
+/// compare-and-swap operations retain their separate blocking or typed nonblocking contracts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TwoSlotInitializationWaitV1 {
     timeout: Duration,
@@ -1215,12 +1214,11 @@ impl RootedDirectory {
     }
     /// Atomically replace the target only if its stable identity is unchanged.
     ///
-    /// Linux/macOS exchange both bindings before retaining the predecessor.
-    /// Windows supports create-only installation and exact-byte no-ops, but
-    /// fails changed existing-target replacement closed because it has no
-    /// rooted atomic exchange that preserves every raced object. Retained
-    /// generations are immutable online; saturation requires offline archival
-    /// or cleanup while the writer is stopped.
+    /// Linux/macOS exchange both bindings before retaining the predecessor. Windows supports
+    /// create-only installation and exact-byte no-ops, but fails changed existing-target
+    /// replacement closed because it has no rooted atomic exchange that preserves every raced
+    /// object. Retained generations are immutable online; saturation requires offline archival or
+    /// cleanup while the writer is stopped.
     pub(super) fn atomic_write(
         &self,
         name: &OsStr,

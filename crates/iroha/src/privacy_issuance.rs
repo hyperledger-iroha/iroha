@@ -258,9 +258,8 @@ impl BootleLanternIssuanceClientV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error when the request has the wrong length or magic, request
-    /// construction or the single network attempt fails, or Torii returns a
-    /// non-canonical response or protocol error.
+    /// Returns an error when the request has the wrong length or magic, request construction or the
+    /// single network attempt fails, or Torii returns a non-canonical response or protocol error.
     pub fn issue(
         &self,
         credential: &BootleLanternIssuanceCredentialV1,

@@ -1,12 +1,10 @@
 //! Cross-segment private I/O copy argument for zk-X509.
 //!
-//! DER, SHA-256, P-256, accumulator, projection, and public-input segments
-//! exchange byte strings through fixed channels. Each channel has exactly one
-//! producer and one or more fixed consumers. Four independently challenged
-//! grand products bind the execution-order endpoint cells to an
-//! address-sorted table; the sorted table enforces one write per byte address
-//! and identical values for every read. Public-input reads are additionally
-//! fixed to verifier-supplied bytes.
+//! DER, SHA-256, P-256, accumulator, projection, and public-input segments exchange byte strings
+//! through fixed channels. Each channel has exactly one producer and one or more fixed consumers.
+//! Four independently challenged grand products bind the execution-order endpoint cells to an
+//! address-sorted table; the sorted table enforces one write per byte address and identical values
+//! for every read. Public-input reads are additionally fixed to verifier-supplied bytes.
 //!
 //! The transcript challenges must be sampled only after both endpoint and
 //! address-sorted traces have been committed.
@@ -242,9 +240,8 @@ pub(crate) fn build_zk_x509_io_trace_v1(
 }
 /// Construct the challenge-independent endpoint and address-sorted tables.
 ///
-/// A STARK prover commits these tables before deriving the permutation
-/// challenges. Keeping this phase separate prevents a caller from building a
-/// challenge-adaptive base trace.
+/// A STARK prover commits these tables before deriving the permutation challenges. Keeping this
+/// phase separate prevents a caller from building a challenge-adaptive base trace.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_io_base_tables_v1(
     witnesses: &[ZkX509IoChannelWitnessV1],

@@ -1,13 +1,11 @@
 //! Authenticated, projection-only SoraFS hedging and billing HTTP boundary.
 //!
-//! Every data read is served only while the supervised finalized-ledger
-//! projector passes its live head and freshness fence; payload-free health
-//! remains observable while unready. Statement ownership comes exclusively from
-//! Torii's canonical account-signature
-//! authentication; callers cannot supply an account identifier in a query or
-//! body. The only mutation is an owner acknowledgement carrying one bounded
-//! external-authority proof. Pricing feeds, policy changes, signer material,
-//! and hedge execution are deliberately absent from this V1 surface.
+//! Every data read is served only while the supervised finalized-ledger projector passes its live
+//! head and freshness fence; payload-free health remains observable while unready. Statement
+//! ownership comes exclusively from Torii's canonical account-signature authentication; callers
+//! cannot supply an account identifier in a query or body. The only mutation is an owner
+//! acknowledgement carrying one bounded external-authority proof. Pricing feeds, policy changes,
+//! signer material, and hedge execution are deliberately absent from this V1 surface.
 
 #![cfg(feature = "app_api")]
 use crate::{JsonBody, SharedAppState};

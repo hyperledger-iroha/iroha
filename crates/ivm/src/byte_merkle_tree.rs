@@ -209,8 +209,7 @@ impl ByteMerkleTree {
             cached: Mutex::new(Some(canonical)),
         }
     }
-    /// Construct a tree from raw bytes in parallel using exactly `num_leaves`
-    /// padded chunks.
+    /// Construct a tree from raw bytes in parallel using exactly `num_leaves` padded chunks.
     pub(crate) fn from_bytes_parallel_with_leaf_count(
         data: &[u8],
         chunk: usize,
@@ -514,10 +513,9 @@ impl ByteMerkleTree {
     /// the provided `data` buffer. Intended for high-throughput update paths
     /// (e.g., memory commits) to avoid serial contention on the cached tree.
     ///
-    /// When a cached canonical tree exists, the touched leaves are applied in
-    /// deterministic index order through the canonical incremental update path.
-    /// If no cache exists, the next call to `root()` or `path()` performs one
-    /// full rebuild.
+    /// When a cached canonical tree exists, the touched leaves are applied in deterministic index
+    /// order through the canonical incremental update path. If no cache exists, the next call to
+    /// `root()` or `path()` performs one full rebuild.
     pub fn update_leaves_from_bytes_parallel(&self, data: &[u8], indices: &[usize]) {
         use rayon::prelude::*;
         if indices.is_empty() {
@@ -663,10 +661,9 @@ impl ByteMerkleTree {
         metrics.merkle_root_cpu_total.inc();
         *canonical.root().expect("non-empty").as_ref()
     }
-    /// Compute a SHA-256 digest for inputs up to 32 bytes by constructing a
-    /// single padded block and using the accelerated `sha256_compress`.
-    /// This leverages Metal/CUDA/ARMv8/x86 SHA-NI where available and falls
-    /// back to a scalar implementation otherwise.
+    /// Compute a SHA-256 digest for inputs up to 32 bytes by constructing a single padded block and
+    /// using the accelerated `sha256_compress`. This leverages Metal/CUDA/ARMv8/x86 SHA-NI where
+    /// available and falls back to a scalar implementation otherwise.
     #[inline]
     #[allow(dead_code)]
     fn sha256_from_bytes_le32(input: &[u8]) -> [u8; 32] {

@@ -106,14 +106,12 @@ impl SoraHfResourceProfileV1 {
         }
     }
 }
-/// Return the exact first-release maximum compute reservation charge for an
-/// HF shared-lease window.
+/// Return the exact first-release maximum compute reservation charge for an HF shared-lease window.
 ///
-/// Host reservation tariffs are nominal per-window charges in V1, so the
-/// amount does not scale with `lease_term_ms`. The lease term is nevertheless
-/// part of this function's contract so callers cannot accidentally quote a
-/// zero-duration window and so a future version cannot silently change the
-/// signed arithmetic.
+/// Host reservation tariffs are nominal per-window charges in V1, so the amount does not scale with
+/// `lease_term_ms`. The lease term is nevertheless part of this function's contract so callers
+/// cannot accidentally quote a zero-duration window and so a future version cannot silently change
+/// the signed arithmetic.
 ///
 /// The cap is the adaptive placement target multiplied by the greatest
 /// permitted V1 host-class tariff for the profile's model-size bucket:
@@ -123,8 +121,7 @@ impl SoraHfResourceProfileV1 {
 /// - large: 2 hosts × 0.000006 XOR.
 ///
 /// # Errors
-/// Returns [`SoracloudManifestError`] when the profile is invalid or the lease
-/// term is zero.
+/// Returns [`SoracloudManifestError`] when the profile is invalid or the lease term is zero.
 pub fn hf_shared_lease_max_compute_reservation_fee_v1(
     resource_profile: &SoraHfResourceProfileV1,
     lease_term_ms: u64,
@@ -1749,9 +1746,8 @@ impl SoraAgentApartmentRecordV1 {
     /// Validate apartment lifecycle and deterministic-accounting invariants.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when schema versions mismatch, the
-    /// embedded manifest is invalid, or the recorded lifecycle/accounting
-    /// state is inconsistent.
+    /// Returns [`SoracloudManifestError`] when schema versions mismatch, the embedded manifest is
+    /// invalid, or the recorded lifecycle/accounting state is inconsistent.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         self.validate_required_fields()?;
         self.validate_restart_fields()?;
@@ -2690,8 +2686,7 @@ impl SoraServiceAuditEventV1 {
     /// Validate Soracloud lifecycle audit records.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when event sequencing or version
-    /// fields are malformed.
+    /// Returns [`SoracloudManifestError`] when event sequencing or version fields are malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         self.validate_required_fields()?;
         self.validate_optional_fields()?;

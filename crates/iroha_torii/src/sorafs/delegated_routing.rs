@@ -1,9 +1,8 @@
 //! Admission-bound HTTP Routing V1 projections for SoraFS.
 //!
-//! The routing view is deliberately derived from committed pin-registry state
-//! and the validated provider-advert cache for every request. It is not a
-//! second content-ownership database: approved manifests and completed
-//! replication orders remain the sole authority, while adverts only supply
+//! The routing view is deliberately derived from committed pin-registry state and the validated
+//! provider-advert cache for every request. It is not a second content-ownership database: approved
+//! manifests and completed replication orders remain the sole authority, while adverts only supply
 //! current peer connectivity metadata.
 use crate::{SharedAppState, sorafs::ProviderAdvertCache};
 use axum::{

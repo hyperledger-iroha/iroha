@@ -41,10 +41,9 @@ pub struct VegaMdlWitnessV1 {
 impl VegaMdlWitnessV1 {
     /// Construct one exact-shape raw witness.
     ///
-    /// `issuer_authentication_sig_structure` is the exact COSE
-    /// `Sig_structure` signed by the issuer. It is deliberately distinct from
-    /// `mobile_security_object_payload`, which is the exact payload byte string
-    /// embedded in that structure.
+    /// `issuer_authentication_sig_structure` is the exact COSE `Sig_structure` signed by the
+    /// issuer. It is deliberately distinct from `mobile_security_object_payload`, which is the
+    /// exact payload byte string embedded in that structure.
     ///
     /// # Errors
     ///
@@ -281,8 +280,7 @@ impl VegaMdlValidatedWitnessV1 {
     pub const fn device_ecdsa(&self) -> &VegaEcdsaWitnessV1 {
         &self.device_ecdsa
     }
-    /// Borrow the exact private assignment accepted by the native Figure 9
-    /// proof circuit.
+    /// Borrow the exact private assignment accepted by the native Figure 9 proof circuit.
     ///
     /// # Errors
     ///
@@ -311,11 +309,10 @@ impl fmt::Debug for VegaMdlValidatedWitnessV1 {
 }
 /// Parse and preflight the complete Figure 9 witness.
 ///
-/// This validates strict deterministic CBOR, exact COSE payload binding,
-/// Figure 8 unique-prefix/contiguity requirements, the signed birth digest,
-/// Gregorian validity and age semantics, and both ES256 signatures. These
-/// checks reject malformed witnesses cheaply; the proof circuit independently
-/// constrains the same relation.
+/// This validates strict deterministic CBOR, exact COSE payload binding, Figure 8
+/// unique-prefix/contiguity requirements, the signed birth digest, Gregorian validity and age
+/// semantics, and both ES256 signatures. These checks reject malformed witnesses cheaply; the proof
+/// circuit independently constrains the same relation.
 ///
 /// # Errors
 ///

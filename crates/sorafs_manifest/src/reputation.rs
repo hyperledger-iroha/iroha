@@ -40,9 +40,8 @@ pub const MAX_REPUTATION_MERKLE_PROOF_LEN: usize = 64;
 pub const MAX_REPUTATION_DEGRADATION_FLAGS: usize = 5;
 /// Maximum provider records accepted in one reputation snapshot.
 ///
-/// The bound applies before any provider-sized allocation. It also keeps leaf
-/// indices exactly representable by the V1 proof schema on every supported
-/// host.
+/// The bound applies before any provider-sized allocation. It also keeps leaf indices exactly
+/// representable by the V1 proof schema on every supported host.
 pub const MAX_REPUTATION_PROVIDERS: usize = 65_536;
 /// Maximum trust edges accepted in one scoring run.
 pub const MAX_REPUTATION_TRUST_EDGES: usize = 1_048_576;

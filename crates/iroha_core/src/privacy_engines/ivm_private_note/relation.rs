@@ -246,8 +246,7 @@ impl PrivateProgramV1 {
     ///
     /// # Errors
     ///
-    /// Rejects non-canonical operands, instructions after the first halt, or a
-    /// tape without a halt.
+    /// Rejects non-canonical operands, instructions after the first halt, or a tape without a halt.
     pub fn new(
         instructions: [PrivateInstructionV1; PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1],
     ) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
@@ -474,13 +473,11 @@ impl fmt::Debug for IvmPrivateNoteOutputWitnessV1 {
 }
 /// Complete bounded wallet-local witness.
 ///
-/// The sole first-release `IPNE` wallet codec is structurally checked by the
-/// data model and native verifier, while the action digest binds its exact
-/// public fields and bytes into this proof statement. The recipient wallet
-/// authenticates and decrypts the XChaCha20-Poly1305 payload. As with the FCMP
-/// wallet codec, the STARK proves the output commitment opening; it does not
-/// duplicate the recipient-local AEAD computation inside the arithmetic
-/// relation.
+/// The sole first-release `IPNE` wallet codec is structurally checked by the data model and native
+/// verifier, while the action digest binds its exact public fields and bytes into this proof
+/// statement. The recipient wallet authenticates and decrypts the XChaCha20-Poly1305 payload. As
+/// with the FCMP wallet codec, the STARK proves the output commitment opening; it does not
+/// duplicate the recipient-local AEAD computation inside the arithmetic relation.
 #[derive(Clone, PartialEq, Eq)]
 pub struct IvmPrivateNoteWitnessV1 {
     /// Exact governed program preimage.
@@ -748,10 +745,9 @@ pub fn derive_note_commitment_v1(
 }
 /// Derive the sole canonical input nullifier.
 ///
-/// The nullifier is deliberately independent of transaction context, action
-/// index, accumulator root/position, and execution epoch. A committed note
-/// therefore has one stable nullifier in its pool/program namespace and cannot
-/// acquire a fresh nullifier by being replayed in another action.
+/// The nullifier is deliberately independent of transaction context, action index, accumulator
+/// root/position, and execution epoch. A committed note therefore has one stable nullifier in its
+/// pool/program namespace and cannot acquire a fresh nullifier by being replayed in another action.
 pub fn derive_note_nullifier_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     spending_secret: &[u8; 32],
@@ -991,13 +987,11 @@ pub(super) fn public_balance_sides(balance: PrivacyValueBalanceV1) -> (u128, u12
         PrivacyValueBalanceDirectionV1::OutOfPool => (0, balance.amount),
     }
 }
-/// Validate the complete witness relation and build the sole STARK witness
-/// schedule.
+/// Validate the complete witness relation and build the sole STARK witness schedule.
 ///
-/// Register four is canonically reserved as zero. Transaction fees live only
-/// in the separately authorized `FeePaymentIntent`, which is already bound by
-/// the statement's transaction-intent digest; duplicating a fee here would
-/// create an unreconciled, potentially uncharged public input.
+/// Register four is canonically reserved as zero. Transaction fees live only in the separately
+/// authorized `FeePaymentIntent`, which is already bound by the statement's transaction-intent
+/// digest; duplicating a fee here would create an unreconciled, potentially uncharged public input.
 pub(super) fn validate_private_note_relation_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     witness: &IvmPrivateNoteWitnessV1,

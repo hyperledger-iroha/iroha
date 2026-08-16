@@ -2,7 +2,6 @@ use super::*;
 use std::{
     env,
     fs::{self, OpenOptions},
-    io::Write as _,
     path::{Path, PathBuf},
 };
 const FIXTURE_STAGE_ENV: &str = "IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE";

@@ -2,8 +2,7 @@
 //!
 //! Queries implement the [`crate::query::Query`] trait and can be stored as trait objects for
 //! dynamic dispatch. The [`crate::query::QueryBox`] alias wraps a `Box<dyn ErasedQuery + Send + Sync>` and is used
-//! throughout the data model whenever heterogeneous queries need to be passed
-//! around.
+//! throughout the data model whenever heterogeneous queries need to be passed around.
 #![allow(clippy::missing_inline_in_public_items)]
 pub use self::model::*;
 use self::{
@@ -590,9 +589,8 @@ pub trait Query: seal::Query + Send + Sync + 'static {
     fn execute(&self) {}
     /// Return the wire discriminator for this concrete iterable query.
     ///
-    /// Most queries use the discriminator of their output item. Queries whose
-    /// payloads would otherwise be ambiguous can override this method with a
-    /// query-specific discriminator.
+    /// Most queries use the discriminator of their output item. Queries whose payloads would
+    /// otherwise be ambiguous can override this method with a query-specific discriminator.
     fn query_item_kind(&self) -> QueryItemKind
     where
         Self::Item: ItemKindTag,
@@ -670,9 +668,8 @@ impl QueryRegistry {
     }
     /// Register a query type with an explicit, path-independent wire identifier.
     ///
-    /// The concrete Rust [`std::any::type_name`] remains a valid lookup key for
-    /// in-process cloning, while `wire_id` is the canonical identifier emitted
-    /// by query serializers.
+    /// The concrete Rust [`std::any::type_name`] remains a valid lookup key for in-process cloning,
+    /// while `wire_id` is the canonical identifier emitted by query serializers.
     #[must_use]
     pub fn register_with_id<T>(mut self, wire_id: &'static str) -> Self
     where
@@ -805,8 +802,7 @@ define_builtin_query_registry! {
 }
 /// Set the global query registry used to decode queries by type name or stable wire identifier.
 ///
-/// This should be called exactly once during application start-up. Subsequent
-/// calls are ignored.
+/// This should be called exactly once during application start-up. Subsequent calls are ignored.
 ///
 /// If this function is never invoked, the data model falls back to a built-in
 /// registry covering the standard iterable query set, allowing JSON and Norito
@@ -940,10 +936,9 @@ mod model {
         ) -> Result<usize, norito::core::Error>;
         /// Return the concrete Rust type key used for in-process registry lookup.
         ///
-        /// The registry maps this key to the stable identifier emitted on the
-        /// wire. Using a dedicated method avoids relying on `type_name_of_val`
-        /// for trait objects, which returns the trait object type rather than
-        /// the concrete type.
+        /// The registry maps this key to the stable identifier emitted on the wire. Using a
+        /// dedicated method avoids relying on `type_name_of_val` for trait objects, which returns
+        /// the trait object type rather than the concrete type.
         fn type_name_key(&self) -> &'static str;
     }
     impl<T, Q> ErasedQuery<T> for Q
@@ -1671,11 +1666,10 @@ mod model {
     impl QueryWithParams {
         /// Construct the canonical query envelope from an erased query and parameters.
         ///
-        /// An erased carrier retains only the output item type, so it cannot
-        /// distinguish query types whose payload shapes are identical. Build
-        /// seller-, buyer-, and status-filtered escrow queries through
-        /// [`crate::query::builder::QueryBuilder`] (or construct this envelope
-        /// with the corresponding query-specific [`QueryItemKind`]) instead.
+        /// An erased carrier retains only the output item type, so it cannot distinguish query
+        /// types whose payload shapes are identical. Build seller-, buyer-, and status-filtered
+        /// escrow queries through [`crate::query::builder::QueryBuilder`] (or construct this
+        /// envelope with the corresponding query-specific [`QueryItemKind`]) instead.
         pub fn new(query: &QueryBox<QueryOutputBatchBox>, params: QueryParams) -> Self {
             macro_rules! try_build {
                 ($item:ty, $kind:ident) => {
@@ -1814,10 +1808,9 @@ mod model {
         FeeSponsorProgramId,
         /// Native asset escrows filtered by seller (wire tag 28).
         ///
-        /// This query-specific tag is appended because seller and buyer query
-        /// payloads both encode as a single [`AccountId`]. The tag is therefore
-        /// the consensus-visible discriminator; existing variants above must
-        /// never be reordered.
+        /// This query-specific tag is appended because seller and buyer query payloads both encode
+        /// as a single [`AccountId`]. The tag is therefore the consensus-visible discriminator;
+        /// existing variants above must never be reordered.
         AssetEscrowsBySeller,
         /// Native asset escrows filtered by buyer (wire tag 29).
         AssetEscrowsByBuyer,
@@ -2130,10 +2123,10 @@ mod model {
             })?;
             norito::core::reserve_decode_allocation(bytes.len())
                 .map_err(norito::json::Error::from_decode_resource)?;
-            let signature = iroha_crypto::Signature::try_from_bytes(&bytes).map_err(|_| {
+            let signature = iroha_crypto::Signature::try_from_bytes(&bytes).map_err(|error| {
                 norito::json::Error::InvalidField {
                     field: String::from("QuerySignature"),
-                    message: String::from("invalid signature payload"),
+                    message: error.to_string(),
                 }
             })?;
             Ok(QuerySignature(SignatureOf::from_signature(signature)))
@@ -2518,6 +2511,21 @@ where
     /// `asset_definition` for `FindAccountsWithAsset`) are preserved.
     payload: Vec<u8>,
 }
+
+struct QueryFieldRef<'a>(&'a dyn norito::core::NoritoSerialize);
+
+impl norito::core::NoritoSerialize for QueryFieldRef<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+}
+
+fn query_field_encoded_len(value: &dyn norito::core::NoritoSerialize) -> Option<usize> {
+    value
+        .encoded_len_exact()
+        .or_else(|| norito::core::encoded_payload_len(&QueryFieldRef(value)).ok())
+}
+
 struct ErasedIterQueryStreaming<'a, T>(&'a ErasedIterQuery<T>)
 where
     T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync;
@@ -2533,9 +2541,6 @@ where
         let values: [&dyn norito::core::NoritoSerialize; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
-            if value.encoded_len_exact().is_none() {
-                return Err(norito::core::Error::LengthMismatch);
-            }
             norito::core::write_len_prefixed_exact(writer, value, &mut field)?;
         }
         Ok(())
@@ -2551,7 +2556,7 @@ where
         let values: [&dyn norito::core::NoritoSerialize; 3] =
             [&self.0.predicate, &self.0.selector, &self.0.payload];
         for value in values {
-            let field_len = value.encoded_len_exact()?;
+            let field_len = query_field_encoded_len(value)?;
             total = total
                 .checked_add(norito::core::len_prefix_len(field_len))?
                 .checked_add(field_len)?;
@@ -3191,16 +3196,14 @@ impl SignedQuery {
     }
     /// Verify that the single-key authority signed the complete query payload.
     ///
-    /// Decoding a [`SignedQuery`] is intentionally structural only. Network
-    /// ingress must validate inexpensive network and freshness bounds before
-    /// calling this method, then consume the request nonce before performing
-    /// authorization or query work.
+    /// Decoding a [`SignedQuery`] is intentionally structural only. Network ingress must validate
+    /// inexpensive network and freshness bounds before calling this method, then consume the
+    /// request nonce before performing authorization or query work.
     ///
     /// # Errors
     ///
-    /// Returns an error when the authority is not single-key, the signature
-    /// material is malformed, or the signature does not authenticate the
-    /// complete payload.
+    /// Returns an error when the authority is not single-key, the signature material is malformed,
+    /// or the signature does not authenticate the complete payload.
     pub fn verify_signature(&self) -> Result<(), SignedQueryValidationError> {
         let QuerySignature(signature) = &self.signature;
         let signatory = self
@@ -4002,13 +4005,14 @@ mod json_roundtrip_tests {
             norito::codec::Encode::encode(&CompoundPredicate::<AssetEscrowRecord>::PASS);
         let selector_bytes =
             norito::codec::Encode::encode(&SelectorTuple::<AssetEscrowRecord>::default());
+        let params = parameters::QueryParams::default();
         let seller_envelope = QueryWithParams {
             query: (),
             query_payload: seller_payload.clone(),
             item: QueryItemKind::AssetEscrowsBySeller,
             predicate_bytes: predicate_bytes.clone(),
             selector_bytes: selector_bytes.clone(),
-            params: parameters::QueryParams::default(),
+            params: params.clone(),
         };
         let buyer_envelope = QueryWithParams {
             query: (),
@@ -4016,61 +4020,63 @@ mod json_roundtrip_tests {
             item: QueryItemKind::AssetEscrowsByBuyer,
             predicate_bytes: predicate_bytes.clone(),
             selector_bytes: selector_bytes.clone(),
-            params: parameters::QueryParams::default(),
+            params: params.clone(),
         };
         let status_envelope = QueryWithParams {
             query: (),
             query_payload: status_payload.clone(),
             item: QueryItemKind::AssetEscrowsByStatus,
-            predicate_bytes,
-            selector_bytes,
-            params: parameters::QueryParams::default(),
+            predicate_bytes: predicate_bytes.clone(),
+            selector_bytes: selector_bytes.clone(),
+            params: params.clone(),
         };
         let seller_wire = norito::codec::Encode::encode(&seller_envelope);
         let buyer_wire = norito::codec::Encode::encode(&buyer_envelope);
         let status_wire = norito::codec::Encode::encode(&status_envelope);
-        let tag_offset = norito::codec::Encode::encode(&()).len()
-            + norito::codec::Encode::encode(&seller_payload).len();
-        assert_eq!(&seller_wire[..tag_offset], &buyer_wire[..tag_offset]);
-        assert_eq!(
-            &seller_wire[tag_offset..tag_offset + 4],
-            &28_u32.to_le_bytes()
+        assert_ne!(
+            seller_wire, buyer_wire,
+            "the envelope discriminator must distinguish identical query payloads"
         );
-        assert_eq!(
-            &buyer_wire[tag_offset..tag_offset + 4],
-            &29_u32.to_le_bytes()
-        );
-        assert_eq!(
-            &seller_wire[tag_offset + 4..],
-            &buyer_wire[tag_offset + 4..]
-        );
-        let status_tag_offset = norito::codec::Encode::encode(&()).len()
-            + norito::codec::Encode::encode(&status_payload).len();
-        assert_eq!(
-            &status_wire[status_tag_offset..status_tag_offset + 4],
-            &30_u32.to_le_bytes()
-        );
-        let mut seller_input = seller_wire.as_slice();
-        let decoded_seller = <QueryWithParams as norito::codec::Decode>::decode(&mut seller_input)
-            .expect("decode seller envelope");
-        assert!(seller_input.is_empty());
-        assert_eq!(decoded_seller.item, QueryItemKind::AssetEscrowsBySeller);
-        assert_eq!(decoded_seller.query_payload, seller_payload);
-        let mut buyer_input = buyer_wire.as_slice();
-        let decoded_buyer = <QueryWithParams as norito::codec::Decode>::decode(&mut buyer_input)
-            .expect("decode buyer envelope");
-        assert!(buyer_input.is_empty());
-        assert_eq!(decoded_buyer.item, QueryItemKind::AssetEscrowsByBuyer);
-        assert_eq!(decoded_buyer.query_payload, buyer_payload);
-        let mut status_input = status_wire.as_slice();
-        let decoded_status = <QueryWithParams as norito::codec::Decode>::decode(&mut status_input)
-            .expect("decode status envelope");
-        assert!(status_input.is_empty());
-        assert_eq!(decoded_status.item, QueryItemKind::AssetEscrowsByStatus);
-        assert_eq!(decoded_status.query_payload, status_payload);
+        for (wire, expected_item, expected_payload) in [
+            (
+                seller_wire.as_slice(),
+                QueryItemKind::AssetEscrowsBySeller,
+                seller_payload.as_slice(),
+            ),
+            (
+                buyer_wire.as_slice(),
+                QueryItemKind::AssetEscrowsByBuyer,
+                buyer_payload.as_slice(),
+            ),
+            (
+                status_wire.as_slice(),
+                QueryItemKind::AssetEscrowsByStatus,
+                status_payload.as_slice(),
+            ),
+        ] {
+            let mut input = wire;
+            let decoded = <QueryWithParams as norito::codec::Decode>::decode(&mut input)
+                .expect("decode escrow query envelope");
+            assert!(input.is_empty());
+            assert_eq!(decoded.item, expected_item);
+            assert_eq!(decoded.query_payload, expected_payload);
+            assert_eq!(decoded.predicate_bytes, predicate_bytes);
+            assert_eq!(decoded.selector_bytes, selector_bytes);
+            assert_eq!(decoded.params, params);
+            assert_eq!(norito::codec::Encode::encode(&decoded), wire);
+        }
     }
     #[test]
     fn query_with_params_encoding_preserves_canonical_field_order() {
+        #[derive(norito::codec::Encode)]
+        struct CanonicalFieldOrder {
+            query: (),
+            query_payload: Vec<u8>,
+            item: QueryItemKind,
+            predicate_bytes: Vec<u8>,
+            selector_bytes: Vec<u8>,
+            params: parameters::QueryParams,
+        }
         let query_payload = vec![0x11, 0x22];
         let predicate_bytes = vec![0x33];
         let selector_bytes = vec![0x44, 0x55, 0x66];
@@ -4083,15 +4089,31 @@ mod json_roundtrip_tests {
             selector_bytes: selector_bytes.clone(),
             params: params.clone(),
         };
-        let mut expected = norito::codec::Encode::encode(&());
-        expected.extend(norito::codec::Encode::encode(&query_payload));
-        expected.extend(norito::codec::Encode::encode(
-            &QueryItemKind::AssetEscrowRecord,
-        ));
-        expected.extend(norito::codec::Encode::encode(&predicate_bytes));
-        expected.extend(norito::codec::Encode::encode(&selector_bytes));
-        expected.extend(norito::codec::Encode::encode(&params));
-        assert_eq!(norito::codec::Encode::encode(&query), expected);
+        let canonical = CanonicalFieldOrder {
+            query: (),
+            query_payload: query_payload.clone(),
+            item: QueryItemKind::AssetEscrowRecord,
+            predicate_bytes: predicate_bytes.clone(),
+            selector_bytes: selector_bytes.clone(),
+            params: params.clone(),
+        };
+        let wire = norito::codec::Encode::encode(&query);
+        assert_eq!(
+            wire,
+            norito::codec::Encode::encode(&canonical),
+            "the envelope must retain its canonical structural field order"
+        );
+        let mut input = wire.as_slice();
+        let decoded = <QueryWithParams as norito::codec::Decode>::decode(&mut input)
+            .expect("decode canonical query envelope");
+        assert!(input.is_empty());
+        let (item, predicate, selector, payload) = decoded.parts();
+        assert_eq!(item, QueryItemKind::AssetEscrowRecord);
+        assert_eq!(predicate, predicate_bytes);
+        assert_eq!(selector, selector_bytes);
+        assert_eq!(payload, query_payload);
+        assert_eq!(decoded.params, params);
+        assert_eq!(norito::codec::Encode::encode(&decoded), wire);
     }
 }
 /// Use a custom syntax to implement [`Query`] for applicable types
@@ -4247,6 +4269,7 @@ mod trait_object_tests {
     use super::*;
     use crate::query::dsl::{HasProjection, PredicateMarker, SelectorMarker};
     use norito::codec::Encode;
+
     fn bare_bytes_with_flags(value: &dyn norito::core::NoritoSerialize, flags: u8) -> Vec<u8> {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
@@ -4254,14 +4277,21 @@ mod trait_object_tests {
         value.serialize(&mut encoder).expect("encode bare value");
         bytes
     }
+
     #[test]
     fn query_box_streaming_wire_matches_owned_tuple_for_all_sequence_layouts() {
         let concrete = domain::FindDomains;
-        let query: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Domain>::new(
+        let erased = ErasedIterQuery::<Domain>::new(
             CompoundPredicate::PASS,
             SelectorTuple::default(),
             concrete.encode(),
-        ));
+        );
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(&erased.selector),
+            None,
+            "the fixture must exercise the count-first field path"
+        );
+        let query: QueryBox<QueryOutputBatchBox> = Box::new(erased);
         let expected = (
             query_wire_id(query.type_name_key()).to_owned(),
             query.encode_bytes(),
@@ -4425,8 +4455,7 @@ pub mod trigger {
     use derive_more::Display;
     use std::{format, string::String, vec::Vec};
     queries! {
-        /// Find all currently active (as in not disabled and/or expired)
-        /// trigger IDs.
+        /// Find all currently active (as in not disabled and/or expired) trigger IDs.
         #[derive(Copy, Display)]
         #[display("Find all trigger ids")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -4503,8 +4532,7 @@ pub mod block {
     use derive_more::Display;
     use std::{format, string::String, vec::Vec};
     queries! {
-        /// [`FindBlocks`] Iroha Query lists all blocks sorted by
-        /// height in descending order
+        /// [`FindBlocks`] Iroha Query lists all blocks sorted by height in descending order
         #[derive(Copy, Display)]
         #[display("Find all blocks")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]

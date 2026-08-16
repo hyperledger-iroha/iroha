@@ -150,9 +150,8 @@ impl Halo2ProofEnvelopeHeader {
     }
     /// Construct a canonical header for the provided parameters.
     ///
-    /// The redundant count and byte-length fields are validated together so
-    /// callers cannot construct a header with two different public-input
-    /// shapes.
+    /// The redundant count and byte-length fields are validated together so callers cannot
+    /// construct a header with two different public-input shapes.
     pub fn new(
         k: u8,
         n_in: u8,

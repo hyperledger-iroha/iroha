@@ -8,9 +8,8 @@ use rand_core::{
 use rand_core_06::{self, CryptoRng as CryptoRngOld, RngCore as RngCoreOld};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
-/// Adapter that makes a modern `rand_core` RNG implement both the new (0.9)
-/// and 0.6 trait sets required by downstream dependencies (e.g., `signature`,
-/// `ed25519-dalek`, `x25519-dalek`).
+/// Adapter that makes a modern `rand_core` RNG implement both the new (0.9) and 0.6 trait sets
+/// required by downstream dependencies (e.g., `signature`, `ed25519-dalek`, `x25519-dalek`).
 pub struct CompatRng<R> {
     inner: R,
 }
@@ -72,10 +71,9 @@ impl<R> CryptoRngOld for CompatRng<R> where R: TryRngCoreNew + TryCryptoRng {}
 ///
 /// # Security
 ///
-/// SHA-256 normalizes the seed length; it does not add entropy. Use a secret
-/// seed with at least 256 bits of entropy for production key derivation. Prefer
-/// operating-system-backed random key generation unless reproducibility is an
-/// explicit protocol requirement.
+/// SHA-256 normalizes the seed length; it does not add entropy. Use a secret seed with at least 256
+/// bits of entropy for production key derivation. Prefer operating-system-backed random key
+/// generation unless reproducibility is an explicit protocol requirement.
 pub fn rng_from_seed(mut seed: Vec<u8>) -> CompatRng<ChaChaRng> {
     let rng = rng_from_seed_slice(&seed);
     seed.zeroize();

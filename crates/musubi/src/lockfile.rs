@@ -47,11 +47,10 @@ pub const MUSUBI_MAX_VERIFICATION_LOCK_BYTES_V1: u64 = MUSUBI_MAX_BUNDLE_METADAT
 pub const MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1: usize = 257;
 /// Maximum total dependency edges across every root and registry node.
 ///
-/// The aggregate corridor admits one fully populated 256-edge package plus its
-/// incoming edge, while preventing every one of the 1,024 nodes from consuming
-/// that allowance independently. It also keeps deterministic resolver
-/// backtracking within 512 edge-bearing frames plus one terminal frame and
-/// bounds its structurally shared metadata.
+/// The aggregate corridor admits one fully populated 256-edge package plus its incoming edge, while
+/// preventing every one of the 1,024 nodes from consuming that allowance independently. It also
+/// keeps deterministic resolver backtracking within 512 edge-bearing frames plus one terminal frame
+/// and bounds its structurally shared metadata.
 pub const MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1: usize = 512;
 const ROOT_KEYS: &[&str] = &[
     "schema",
@@ -205,9 +204,8 @@ impl LockfileV1 {
     }
     /// Parse a strict first-release lock document.
     ///
-    /// The UTF-8 document must be no larger than
-    /// [`MUSUBI_MAX_CONSUMER_LOCK_BYTES_V1`]. Duplicate TOML keys are rejected
-    /// by the parser and every unknown field is rejected here. A missing or
+    /// The UTF-8 document must be no larger than [`MUSUBI_MAX_CONSUMER_LOCK_BYTES_V1`]. Duplicate
+    /// TOML keys are rejected by the parser and every unknown field is rejected here. A missing or
     /// retired schema returns [`LockfileError::Legacy`].
     pub fn parse(document: &str) -> Result<Self, LockfileError> {
         validate_consumer_lock_document_bytes(document.len())?;
@@ -258,11 +256,10 @@ impl LockfileV1 {
     }
     /// Render the unique canonical TOML representation.
     ///
-    /// Root, node, and aggregate-edge counts are rejected before full semantic
-    /// validation. Rendering never clones or silently repairs a caller-mutated
-    /// invalid graph; callers may invoke [`Self::canonicalize`] explicitly.
-    /// The formatter stops accepting bytes at the exact consumer-lock ceiling
-    /// and returns [`LockfileError::Invalid`] instead of growing beyond it.
+    /// Root, node, and aggregate-edge counts are rejected before full semantic validation.
+    /// Rendering never clones or silently repairs a caller-mutated invalid graph; callers may
+    /// invoke [`Self::canonicalize`] explicitly. The formatter stops accepting bytes at the exact
+    /// consumer-lock ceiling and returns [`LockfileError::Invalid`] instead of growing beyond it.
     pub fn render(&self) -> Result<String, LockfileError> {
         validate_consumer_lock_collection_counts(&self.roots, &self.nodes)?;
         self.validate()?;

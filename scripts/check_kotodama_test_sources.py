@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the sealed Kotodama compiler test-source fixture inventory."""
+"""Verify the sealed Kotodama compiler test-source fixture inventories."""
 
 from __future__ import annotations
 
@@ -11,12 +11,28 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 
 FORMAT = "iroha.kotodama.test-sources"
 SCHEMA_VERSION = 1
 DEFAULT_MANIFEST = Path("crates/kotodama_lang/kotodama_fixtures_v1.manifest.json")
+LEGACY_FORMAT = "iroha.kotodama.legacy-test-sources"
+LEGACY_SCHEMA_VERSION = 1
+LEGACY_ORIGIN_MERGE = "58a8040dc1726359edfdc72759b73ea3649ae38c"
+DEFAULT_LEGACY_MANIFEST = Path(
+    "crates/kotodama_lang/kotodama_legacy_test_sources_v1.manifest.json"
+)
+EXPECTED_LEGACY_FIXTURE_COUNT = 52
+EXPECTED_LEGACY_SOURCES = (
+    "crates/kotodama_lang/src/semantic.rs",
+    "crates/kotodama_lang/src/ir.rs",
+    "crates/kotodama_lang/src/ir_tail_tests.rs",
+)
+EXPECTED_LEGACY_DIRECTORIES = (
+    "crates/kotodama_lang/src/semantic/test_sources",
+    "crates/kotodama_lang/src/ir/test_sources",
+)
 EXPECTED_SOURCES = (
     "crates/kotodama_lang/src/compiler.rs",
     "crates/kotodama_lang/src/semantic.rs",
@@ -56,6 +72,17 @@ COMMON_LITERAL_KEYS = frozenset(
     }
 )
 FIXTURE_KEYS = COMMON_LITERAL_KEYS | frozenset({"asset", "include_path"})
+LEGACY_ROOT_KEYS = frozenset(
+    {
+        "format",
+        "schema_version",
+        "origin_merge",
+        "inventory_sha256",
+        "source_files",
+        "fixtures",
+    }
+)
+LEGACY_FIXTURE_KEYS = frozenset({"path", "byte_len", "content_sha256"})
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RAW_STRING_RE = re.compile(r'(?<![A-Za-z0-9_])r(?P<hashes>#{0,255})"')
 INCLUDE_STR_RE = re.compile(r'include_str!\(\s*"(?P<path>[^"]+)"\s*\)')
@@ -101,6 +128,7 @@ class ValidationStats:
     """Summary returned after a successful validation."""
 
     fixtures: int
+    legacy_fixtures: int
     retained_templates: int
     tests: int
 
@@ -322,7 +350,108 @@ def _regular_bytes(path: Path, label: str) -> bytes:
     return path.read_bytes()
 
 
-def validate_manifest(root: Path, manifest_path: Path) -> ValidationStats:
+def _validate_legacy_manifest(root: Path, manifest_path: Path) -> int:
+    """Validate the recovered legacy test-source assets and their Rust includes."""
+
+    try:
+        payload: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValidationError(f"failed to read legacy manifest: {error}") from error
+    payload = _exact_keys(payload, LEGACY_ROOT_KEYS, "legacy_manifest")
+    if payload["format"] != LEGACY_FORMAT:
+        _fail(f"legacy manifest format must be {LEGACY_FORMAT!r}")
+    if payload["schema_version"] != LEGACY_SCHEMA_VERSION:
+        _fail(f"legacy manifest schema_version must be {LEGACY_SCHEMA_VERSION}")
+    if payload["origin_merge"] != LEGACY_ORIGIN_MERGE:
+        _fail(f"legacy manifest origin_merge must be {LEGACY_ORIGIN_MERGE}")
+
+    source_files = payload["source_files"]
+    fixtures = payload["fixtures"]
+    if source_files != list(EXPECTED_LEGACY_SOURCES):
+        _fail(
+            "legacy manifest source_files must be exactly "
+            f"{list(EXPECTED_LEGACY_SOURCES)} in order"
+        )
+    if not isinstance(fixtures, list) or len(fixtures) != EXPECTED_LEGACY_FIXTURE_COUNT:
+        _fail(
+            "legacy manifest fixtures must contain exactly "
+            f"{EXPECTED_LEGACY_FIXTURE_COUNT} entries"
+        )
+    inventory = {"fixtures": fixtures, "source_files": source_files}
+    if (
+        _sha256(payload["inventory_sha256"], "legacy_manifest.inventory_sha256")
+        != _digest_json(inventory)
+    ):
+        _fail("legacy manifest inventory_sha256 does not authenticate the inventory")
+
+    expected_paths: list[str] = []
+    allowed_directories = frozenset(EXPECTED_LEGACY_DIRECTORIES)
+    for index, raw_entry in enumerate(fixtures):
+        label = f"legacy_manifest.fixtures[{index}]"
+        entry = _exact_keys(raw_entry, LEGACY_FIXTURE_KEYS, label)
+        path = _relative_path(entry["path"], f"{label}.path")
+        if PurePosixPath(path).parent.as_posix() not in allowed_directories:
+            _fail(f"{label}.path is outside the legacy fixture directories")
+        if not path.endswith(".ko"):
+            _fail(f"{label}.path must name a .ko source fixture")
+        expected_paths.append(path)
+        asset = root / path
+        try:
+            data = _regular_bytes(asset, path)
+        except FileNotFoundError:
+            _fail(f"legacy fixture is missing: {path}")
+        if len(data) != _integer(entry["byte_len"], f"{label}.byte_len", minimum=1):
+            _fail(f"{path} byte length changed")
+        if hashlib.sha256(data).hexdigest() != _sha256(
+            entry["content_sha256"], f"{label}.content_sha256"
+        ):
+            _fail(f"{path} content hash changed")
+
+    if expected_paths != sorted(expected_paths) or len(expected_paths) != len(
+        set(expected_paths)
+    ):
+        _fail("legacy fixture paths must be unique and sorted")
+
+    observed_includes: list[str] = []
+    for source_path in source_files:
+        try:
+            source = _regular_bytes(root / source_path, source_path).decode("utf-8")
+        except FileNotFoundError:
+            _fail(f"legacy fixture owner source is missing: {source_path}")
+        source_parent = PurePosixPath(source_path).parent
+        for match in INCLUDE_STR_RE.finditer(source):
+            include_path = match.group("path")
+            if "/test_sources/" not in include_path:
+                continue
+            include_path = _relative_path(include_path, "legacy include path")
+            observed_includes.append((source_parent / include_path).as_posix())
+    if len(observed_includes) != len(set(observed_includes)):
+        _fail("legacy fixture include inventory contains duplicates")
+    if set(observed_includes) != set(expected_paths):
+        _fail("legacy fixture include inventory differs from the sealed manifest")
+
+    for directory in EXPECTED_LEGACY_DIRECTORIES:
+        observed_assets = {
+            path.relative_to(root).as_posix()
+            for path in (root / directory).glob("*.ko")
+            if path.is_file()
+        }
+        expected_assets = {
+            path
+            for path in expected_paths
+            if PurePosixPath(path).parent.as_posix() == directory
+        }
+        if observed_assets != expected_assets:
+            _fail(f"legacy fixture directory membership changed under {directory}")
+
+    return len(fixtures)
+
+
+def validate_manifest(
+    root: Path,
+    manifest_path: Path,
+    legacy_manifest_path: Optional[Path] = None,
+) -> ValidationStats:
     """Validate every source reference, payload byte, and reconstruction hash."""
 
     root = root.resolve()
@@ -516,8 +645,15 @@ def validate_manifest(root: Path, manifest_path: Path) -> ValidationStats:
         if observed != expected:
             _fail(f"{label} content/order/ownership changed")
 
+    if legacy_manifest_path is None:
+        legacy_manifest_path = root / DEFAULT_LEGACY_MANIFEST
+    elif not legacy_manifest_path.is_absolute():
+        legacy_manifest_path = root / legacy_manifest_path
+    legacy_fixtures = _validate_legacy_manifest(root, legacy_manifest_path.resolve())
+
     return ValidationStats(
         fixtures=len(fixtures),
+        legacy_fixtures=legacy_fixtures,
         retained_templates=len(retained),
         tests=total_tests,
     )
@@ -537,6 +673,12 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_MANIFEST,
         help="manifest path, relative to --root by default",
     )
+    parser.add_argument(
+        "--legacy-manifest",
+        type=Path,
+        default=DEFAULT_LEGACY_MANIFEST,
+        help="legacy fixture manifest path, relative to --root by default",
+    )
     return parser.parse_args()
 
 
@@ -546,14 +688,18 @@ def main() -> int:
     manifest = args.manifest
     if not manifest.is_absolute():
         manifest = root / manifest
+    legacy_manifest = args.legacy_manifest
+    if not legacy_manifest.is_absolute():
+        legacy_manifest = root / legacy_manifest
     try:
-        stats = validate_manifest(root, manifest)
+        stats = validate_manifest(root, manifest, legacy_manifest)
     except (OSError, UnicodeError, ValidationError) as error:
         print(f"ERROR: Kotodama test-source validation failed: {error}", file=sys.stderr)
         return 1
     print(
         "kotodama_test_sources: "
         f"fixtures={stats.fixtures} "
+        f"legacy_fixtures={stats.legacy_fixtures} "
         f"retained_templates={stats.retained_templates} tests={stats.tests}"
     )
     return 0

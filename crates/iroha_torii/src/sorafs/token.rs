@@ -46,8 +46,7 @@ const MAX_TOKEN_RATE_LIMIT_BYTES: u64 = 1_073_741_824;
 const MAX_TOKEN_REQUESTS_PER_MINUTE: u32 = 10_000;
 /// Maximum tolerated positive clock skew for an otherwise valid token.
 pub(crate) const MAX_TOKEN_FUTURE_SKEW_SECS: u64 = 60;
-/// Payload-free failure categories exposed by a runtime-only stream-token
-/// signer.
+/// Payload-free failure categories exposed by a runtime-only stream-token signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum StreamTokenSigningError {
     /// The HSM/KMS provider could not complete the bounded signing operation.
@@ -66,8 +65,7 @@ pub struct StreamTokenRuntimeSignerQualificationV1 {
 impl StreamTokenRuntimeSignerQualificationV1 {
     /// Construct one public signer qualification.
     ///
-    /// Call [`Self::validate`] before trusting a value returned by an external
-    /// provider.
+    /// Call [`Self::validate`] before trusting a value returned by an external provider.
     #[must_use]
     pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
         Self {
@@ -151,16 +149,14 @@ pub struct StreamTokenIssuer {
 }
 /// Opaque, non-secret identity used for stream-token issuance accounting.
 ///
-/// The subject is derived only after the exact-network operator signature has
-/// been authenticated. Display labels such as `X-SoraFS-Client` must never be
-/// used to construct quota identities.
+/// The subject is derived only after the exact-network operator signature has been authenticated.
+/// Display labels such as `X-SoraFS-Client` must never be used to construct quota identities.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct StreamTokenQuotaSubject([u8; 32]);
 impl StreamTokenQuotaSubject {
     const DERIVATION_CONTEXT: &'static str =
         "iroha.torii.sorafs.stream-token.issuance-quota-subject.v1";
-    /// Derive a non-reversible quota subject from an authenticated operator
-    /// public key.
+    /// Derive a non-reversible quota subject from an authenticated operator public key.
     pub(crate) fn from_authenticated_operator(public_key: &PublicKey) -> Self {
         let mut hasher = blake3::Hasher::new_derive_key(Self::DERIVATION_CONTEXT);
         hasher.update(public_key.to_string().as_bytes());
@@ -309,9 +305,8 @@ impl StreamTokenIssuer {
     ///
     /// # Errors
     ///
-    /// Returns [`StreamTokenIssuerError`] when system time overflows, the
-    /// runtime signer fails, or the request violates the configured issuance
-    /// quotas.
+    /// Returns [`StreamTokenIssuerError`] when system time overflows, the runtime signer fails, or
+    /// the request violates the configured issuance quotas.
     pub(crate) fn issue_token(
         &self,
         quota_subject: StreamTokenQuotaSubject,
@@ -645,8 +640,7 @@ pub enum StreamTokenIssuerError {
     /// The HSM/KMS provider refused the canonical signing request.
     #[error("stream-token runtime signer refused request")]
     RuntimeSignerRefused,
-    /// The HSM/KMS output was malformed or did not verify under the configured
-    /// public key.
+    /// The HSM/KMS output was malformed or did not verify under the configured public key.
     #[error("stream-token runtime signer produced invalid output")]
     RuntimeSignerOutputInvalid,
     /// A configured or requested token policy was zero, unsafe, or above its ceiling.

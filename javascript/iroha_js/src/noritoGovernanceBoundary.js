@@ -1,35 +1,157 @@
+import {
+  JS_TYPE_BIGINT,
+  JS_TYPE_NUMBER,
+  JS_TYPE_OBJECT,
+  JS_TYPE_STRING,
+} from "./commonLiterals.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 import { ensureCanonicalAccountId } from "./normalizers.js";
 import { NumericV1 } from "./numericV1.js";
-import {
-  parseStrictLosslessIntegerJson,
-  stringifyStrictLosslessIntegerJson,
-} from "./strictLosslessJson.js";
 
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
-const GOVERNANCE_PRIVATE_KEY_FIELDS = new Set([
-  "private_key",
-  "privateKey",
-  "private_key_hex",
-  "privateKeyHex",
-  "private_key_bytes",
-  "privateKeyBytes",
-  "private_key_seed",
-  "privateKeySeed",
-  "private_key_multihash",
-  "privateKeyMultihash",
-  "private_key_algorithm",
-  "privateKeyAlgorithm",
-]);
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const PROPOSE_DEPLOY_CONTRACT = "ProposeDeployContract";
+const CAST_ZK_BALLOT = "CastZkBallot";
+const GOVERNANCE_INSTRUCTION_CONTEXT = "governance instruction";
+const ELECTION_ID_FIELD = "election_id";
+const PUBLIC_INPUTS_JSON_FIELD = "public_inputs_json";
+const CONTRACT_ADDRESS_FIELD = "contract_address";
+const DURATION_BLOCKS_FIELD = "duration_blocks";
+const CODE_HASH_FIELD = "code_hash_hex";
+const REFERENDUM_ID_FIELD = "referendum_id";
+const ABI_HASH_FIELD = "abi_hash_hex";
+const ABI_VERSION_FIELD = "abi_version";
+const PROOF_BASE64_FIELD = "proof_b64";
+const GOVERNANCE_PRIVATE_KEY_FIELD_RE =
+  /^private(?:_key(?:_(?:hex|bytes|seed|multihash|algorithm))?|Key(?:Hex|Bytes|Seed|Multihash|Algorithm)?)$/u;
 const GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS = Object.freeze([
   "root_hint",
   "owner",
   "amount",
-  "duration_blocks",
+  DURATION_BLOCKS_FIELD,
   "direction",
   "nullifier",
 ]);
+
+/**
+ * Parse the closed governance JSON profile while retaining integer tokens as
+ * canonical decimal strings. The downstream u64/Quantity validators consume
+ * those strings losslessly, so no JavaScript number rounding is possible.
+ */
+export function parseStrictGovernanceInstructionJson(text, context) {
+  if (typeof text !== JS_TYPE_STRING) {
+    throw new TypeError(`${context} JSON source must be a string`);
+  }
+  let index = 0;
+  let nodes = 0;
+  const scopes = [];
+  let rewritten = "";
+  const fail = (message, ErrorType = TypeError) => {
+    throw new ErrorType(
+      `${context} contains invalid JSON at character ${index}: ${message}`,
+    );
+  };
+  const consumeNode = () => {
+    nodes += 1;
+    if (nodes > 2_000_000) {
+      fail("value exceeds the 2000000-node limit", RangeError);
+    }
+    if (scopes.length > 128) {
+      fail("value exceeds the 128-level nesting limit", RangeError);
+    }
+  };
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '"') {
+      const start = index;
+      index += 1;
+      while (index < text.length) {
+        if (text[index] === "\\") {
+          index += 2;
+        } else if (text[index] === '"') {
+          index += 1;
+          break;
+        } else {
+          index += 1;
+        }
+      }
+      const token = text.slice(start, index);
+      let decoded;
+      try {
+        decoded = JSON.parse(token);
+      } catch {
+        fail("invalid string token");
+      }
+      for (let offset = 0; offset < decoded.length; offset += 1) {
+        const code = decoded.charCodeAt(offset);
+        if (code >= 0xd800 && code <= 0xdbff) {
+          const low = decoded.charCodeAt(offset + 1);
+          if (!(low >= 0xdc00 && low <= 0xdfff)) fail("unpaired high surrogate");
+          offset += 1;
+        } else if (code >= 0xdc00 && code <= 0xdfff) {
+          fail("unpaired low surrogate");
+        }
+      }
+      let cursor = index;
+      while (/\s/u.test(text[cursor] ?? "")) cursor += 1;
+      if (text[cursor] === ":") {
+        const keys = scopes[scopes.length - 1];
+        if (keys?.has(decoded)) {
+          fail(`duplicate object key ${JSON.stringify(decoded)}`);
+        }
+        keys?.add(decoded);
+      } else {
+        consumeNode();
+      }
+      rewritten += token;
+      continue;
+    }
+    if (character === "{" || character === "[") {
+      consumeNode();
+      scopes.push(character === "{" ? new Set() : null);
+      rewritten += character;
+      index += 1;
+      continue;
+    }
+    if (character === "}" || character === "]") {
+      scopes.pop();
+      rewritten += character;
+      index += 1;
+      continue;
+    }
+    if (character === "-" || /[0-9]/u.test(character)) {
+      const match = /^-?(?:0|[1-9][0-9]*)/u.exec(text.slice(index));
+      if (!match || match[0] === "-0") {
+        fail("numeric tokens must be canonical integers");
+      }
+      rewritten += JSON.stringify(match[0]);
+      index += match[0].length;
+      consumeNode();
+      continue;
+    }
+    let matchedLiteral = false;
+    for (const literal of ["true", "false", "null"]) {
+      if (text.startsWith(literal, index)) {
+        rewritten += literal;
+        index += literal.length;
+        consumeNode();
+        matchedLiteral = true;
+        break;
+      }
+    }
+    if (matchedLiteral) {
+      continue;
+    }
+    rewritten += character;
+    index += 1;
+  }
+  try {
+    return JSON.parse(rewritten);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : "invalid JSON");
+  }
+}
 
 /**
  * Bind strict governance validation to the low-level Norito codecs without
@@ -48,8 +170,8 @@ export function createNoritoGovernanceInstructionBoundary({
     return (
       isPlainObject(value) &&
       (
-        Object.prototype.hasOwnProperty.call(value, "ProposeDeployContract") ||
-        Object.prototype.hasOwnProperty.call(value, "CastZkBallot")
+        hasOwn(value, PROPOSE_DEPLOY_CONTRACT) ||
+        hasOwn(value, CAST_ZK_BALLOT)
       )
     );
   }
@@ -66,7 +188,7 @@ export function createNoritoGovernanceInstructionBoundary({
   function validateGovernanceSelectorPayload(payload, field, context) {
     if (
       !isPlainObject(payload) ||
-      !Object.prototype.hasOwnProperty.call(payload, field)
+      !hasOwn(payload, field)
     ) {
       return;
     }
@@ -78,9 +200,9 @@ export function createNoritoGovernanceInstructionBoundary({
       return;
     }
     for (const [variant, field] of [
-      ["CastZkBallot", "election_id"],
-      ["CastPlainBallot", "referendum_id"],
-      ["FinalizeReferendum", "referendum_id"],
+      [CAST_ZK_BALLOT, ELECTION_ID_FIELD],
+      ["CastPlainBallot", REFERENDUM_ID_FIELD],
+      ["FinalizeReferendum", REFERENDUM_ID_FIELD],
     ]) {
       validateGovernanceSelectorPayload(instruction[variant], field, variant);
     }
@@ -96,7 +218,7 @@ export function createNoritoGovernanceInstructionBoundary({
       ]) {
         validateGovernanceSelectorPayload(
           zk[variant],
-          "election_id",
+          ELECTION_ID_FIELD,
           `${zkKey}.${variant}`,
         );
       }
@@ -108,7 +230,7 @@ export function createNoritoGovernanceInstructionBoundary({
     const visited = new WeakSet();
     while (pending.length > 0) {
       const { value: candidate, path } = pending.pop();
-      if (candidate === null || typeof candidate !== "object") {
+      if (candidate === null || typeof candidate !== JS_TYPE_OBJECT) {
         continue;
       }
       if (visited.has(candidate)) {
@@ -119,7 +241,7 @@ export function createNoritoGovernanceInstructionBoundary({
         continue;
       }
       for (const key of Object.keys(candidate)) {
-        if (GOVERNANCE_PRIVATE_KEY_FIELDS.has(key)) {
+        if (GOVERNANCE_PRIVATE_KEY_FIELD_RE.test(key)) {
           throw new TypeError(
             `${path} does not accept private-key field ${key}; sign the transaction locally`,
           );
@@ -135,14 +257,14 @@ export function createNoritoGovernanceInstructionBoundary({
     }
     assertOnlyObjectKeys(value, allowed, context);
     for (const field of required) {
-      if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      if (!hasOwn(value, field)) {
         throw new TypeError(`${context}.${field} is required`);
       }
     }
   }
 
   function normalizeGovernanceHex32(value, context) {
-    if (typeof value !== "string" || value.length === 0) {
+    if (typeof value !== JS_TYPE_STRING || value.length === 0) {
       throw new TypeError(`${context} must be exactly 32-byte hexadecimal`);
     }
     let body = value;
@@ -167,14 +289,14 @@ export function createNoritoGovernanceInstructionBoundary({
 
   function normalizeGovernanceU64(value, context) {
     let integer;
-    if (typeof value === "bigint") {
+    if (typeof value === JS_TYPE_BIGINT) {
       integer = value;
-    } else if (typeof value === "number") {
+    } else if (typeof value === JS_TYPE_NUMBER) {
       if (!Number.isSafeInteger(value) || value < 0) {
         throw new TypeError(`${context} must be a lossless unsigned 64-bit integer`);
       }
       integer = BigInt(value);
-    } else if (typeof value === "string") {
+    } else if (typeof value === JS_TYPE_STRING) {
       if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) {
         throw new TypeError(`${context} must be a canonical unsigned 64-bit integer`);
       }
@@ -204,7 +326,7 @@ export function createNoritoGovernanceInstructionBoundary({
   }
 
   function normalizeGovernanceQuantity(value, context) {
-    if (typeof value !== "string") {
+    if (typeof value !== JS_TYPE_STRING) {
       throw new TypeError(`${context} must be a canonical Kotodama V1 quantity string`);
     }
     try {
@@ -222,10 +344,10 @@ export function createNoritoGovernanceInstructionBoundary({
   }
 
   function normalizeGovernanceZkPublicInputsJson(value, context) {
-    if (typeof value !== "string" || value.length === 0) {
+    if (typeof value !== JS_TYPE_STRING || value.length === 0) {
       throw new TypeError(`${context} must be a non-empty JSON object string`);
     }
-    const parsed = parseStrictLosslessIntegerJson(value, context);
+    const parsed = parseStrictGovernanceInstructionJson(value, context);
     if (!isPlainObject(parsed)) {
       throw new TypeError(`${context} must encode a JSON object`);
     }
@@ -234,7 +356,7 @@ export function createNoritoGovernanceInstructionBoundary({
 
     const normalized = {};
     for (const field of GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS) {
-      if (!Object.prototype.hasOwnProperty.call(parsed, field)) {
+      if (!hasOwn(parsed, field)) {
         continue;
       }
       const entry = parsed[field];
@@ -253,7 +375,7 @@ export function createNoritoGovernanceInstructionBoundary({
         case "amount":
           normalized.amount = normalizeGovernanceQuantity(entry, `${context}.amount`);
           break;
-        case "duration_blocks":
+        case DURATION_BLOCKS_FIELD:
           normalized.duration_blocks = normalizeGovernanceU64(
             entry,
             `${context}.duration_blocks`,
@@ -279,23 +401,35 @@ export function createNoritoGovernanceInstructionBoundary({
         `${context} must include owner, amount, and duration_blocks when providing lock hints`,
       );
     }
-    return stringifyStrictLosslessIntegerJson(normalized, context);
+    const fields = [];
+    for (const field of GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS) {
+      if (!hasOwn(normalized, field)) {
+        continue;
+      }
+      const entry = normalized[field];
+      fields.push(
+        `${JSON.stringify(field)}:${
+          typeof entry === JS_TYPE_BIGINT ? entry.toString(10) : JSON.stringify(entry)
+        }`,
+      );
+    }
+    return `{${fields.join(",")}}`;
   }
 
   function validateProposeDeployContractPayload(value) {
-    const context = "ProposeDeployContract";
+    const context = PROPOSE_DEPLOY_CONTRACT;
     assertExactGovernanceObjectKeys(
       value,
       [
-        "contract_address",
-        "code_hash_hex",
-        "abi_hash_hex",
-        "abi_version",
+        CONTRACT_ADDRESS_FIELD,
+        CODE_HASH_FIELD,
+        ABI_HASH_FIELD,
+        ABI_VERSION_FIELD,
         "window",
         "mode",
         "manifest_provenance",
       ],
-      ["contract_address", "code_hash_hex", "abi_hash_hex", "abi_version"],
+      [CONTRACT_ADDRESS_FIELD, CODE_HASH_FIELD, ABI_HASH_FIELD, ABI_VERSION_FIELD],
       context,
     );
     const contractAddress = assertExactNonEmptyString(
@@ -333,11 +467,11 @@ export function createNoritoGovernanceInstructionBoundary({
   }
 
   function validateCastZkBallotPayload(value) {
-    const context = "CastZkBallot";
+    const context = CAST_ZK_BALLOT;
     assertExactGovernanceObjectKeys(
       value,
-      ["election_id", "proof_b64", "public_inputs_json"],
-      ["election_id", "proof_b64", "public_inputs_json"],
+      [ELECTION_ID_FIELD, PROOF_BASE64_FIELD, PUBLIC_INPUTS_JSON_FIELD],
+      [ELECTION_ID_FIELD, PROOF_BASE64_FIELD, PUBLIC_INPUTS_JSON_FIELD],
       context,
     );
     assertCanonicalGovernanceSelectorV1(
@@ -357,15 +491,21 @@ export function createNoritoGovernanceInstructionBoundary({
     if (!isStrictGovernanceInstructionCandidate(instruction)) {
       return;
     }
-    rejectGovernancePrivateKeyFieldsDeep(instruction, "governance instruction");
-    if (Object.prototype.hasOwnProperty.call(instruction, "ProposeDeployContract")) {
-      assertOnlyObjectKeys(instruction, ["ProposeDeployContract"], "governance instruction");
+    rejectGovernancePrivateKeyFieldsDeep(instruction, GOVERNANCE_INSTRUCTION_CONTEXT);
+    if (hasOwn(instruction, PROPOSE_DEPLOY_CONTRACT)) {
+      assertOnlyObjectKeys(instruction, [PROPOSE_DEPLOY_CONTRACT], GOVERNANCE_INSTRUCTION_CONTEXT);
       validateProposeDeployContractPayload(instruction.ProposeDeployContract);
       return;
     }
-    assertOnlyObjectKeys(instruction, ["CastZkBallot"], "governance instruction");
+    assertOnlyObjectKeys(instruction, [CAST_ZK_BALLOT], GOVERNANCE_INSTRUCTION_CONTEXT);
     validateCastZkBallotPayload(instruction.CastZkBallot);
   }
 
-  return validateGovernanceInstructionBoundary;
+  return Object.freeze({
+    assertCanonicalGovernanceSelectorV1,
+    isStrictGovernanceInstructionCandidate,
+    validateCastZkBallotPayload,
+    validateGovernanceInstructionBoundary,
+    validateProposeDeployContractPayload,
+  });
 }

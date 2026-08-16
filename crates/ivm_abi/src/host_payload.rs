@@ -1,8 +1,7 @@
 //! Canonical request and response records for state-reading and VRF syscalls.
 //!
-//! These records live in the shared ABI crate so the compiler, standalone VM,
-//! and ledger host all use one nominal Norito schema at every protocol
-//! boundary.
+//! These records live in the shared ABI crate so the compiler, standalone VM, and ledger host all
+//! use one nominal Norito schema at every protocol boundary.
 use iroha_data_model::NetworkId;
 use norito::core::DecodeLimits;
 use norito::{Decode, Encode};
@@ -12,12 +11,11 @@ pub const MAX_VRF_VERIFY_PAYLOAD_BYTES_V1: usize = 64 * 1024;
 pub const MAX_VRF_VERIFY_BATCH_ITEMS_V1: usize = 16;
 /// Resource budget for decoding one attacker-controlled V1 VRF request frame.
 ///
-/// Byte-vector fields may consume the complete frame budget, while cumulative
-/// elements stay bounded by the same 64 KiB wire contract. The eightfold
-/// native-allocation allowance covers nested field accounting, owned byte
-/// vectors, and the outer batch vector without weakening the hard bound.
-/// Sixteen nested length-delimited scopes
-/// exceed the depth required by either the single or batch nominal schema.
+/// Byte-vector fields may consume the complete frame budget, while cumulative elements stay bounded
+/// by the same 64 KiB wire contract. The eightfold native-allocation allowance covers nested field
+/// accounting, owned byte vectors, and the outer batch vector without weakening the hard bound.
+/// Sixteen nested length-delimited scopes exceed the depth required by either the single or batch
+/// nominal schema.
 pub const VRF_VERIFY_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     MAX_VRF_VERIFY_PAYLOAD_BYTES_V1,
     MAX_VRF_VERIFY_PAYLOAD_BYTES_V1,
@@ -85,9 +83,8 @@ pub struct VrfVerifyRequest {
 }
 /// Batch verification request whose outputs preserve item order.
 ///
-/// Runtime admission requires `1..=MAX_VRF_VERIFY_BATCH_ITEMS_V1` items and a
-/// complete canonical frame no larger than
-/// [`MAX_VRF_VERIFY_PAYLOAD_BYTES_V1`].
+/// Runtime admission requires `1..=MAX_VRF_VERIFY_BATCH_ITEMS_V1` items and a complete canonical
+/// frame no larger than [`MAX_VRF_VERIFY_PAYLOAD_BYTES_V1`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(
     schema_name = "iroha.ivm.v1.VrfVerifyBatchRequest",

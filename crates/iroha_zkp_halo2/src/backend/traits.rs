@@ -1,6 +1,21 @@
 //! Backend trait hierarchy shared by all implementations.
-use crate::{constants::DST, errors::Error, hash::sha3_512, norito_types::ZkCurveId};
-use core::fmt;
+use crate::{constants::GENERATOR_HASH_TO_CURVE_DST, errors::Error, norito_types::ZkCurveId};
+use core::{fmt, mem::size_of};
+
+/// Build the canonical message mapped to one transparent IPA generator.
+pub(crate) fn generator_derivation_message(kind: &[u8], n: u64, i: u64) -> Vec<u8> {
+    let kind_len = u64::try_from(kind.len()).expect("generator kind length must fit u64");
+    let mut message = Vec::with_capacity(
+        GENERATOR_HASH_TO_CURVE_DST.len() + 1 + size_of::<u64>() * 3 + kind.len(),
+    );
+    message.extend_from_slice(GENERATOR_HASH_TO_CURVE_DST.as_bytes());
+    message.push(0);
+    message.extend_from_slice(&kind_len.to_le_bytes());
+    message.extend_from_slice(kind);
+    message.extend_from_slice(&n.to_le_bytes());
+    message.extend_from_slice(&i.to_le_bytes());
+    message
+}
 /// Scalar behaviour required by the IPA algorithms.
 pub trait IpaScalar: Copy + Clone + PartialEq + Eq + fmt::Debug + Default {
     /// Returns the additive identity.
@@ -60,26 +75,16 @@ pub trait IpaBackend {
     type Group: IpaGroup<Scalar = Self::Scalar> + Send + Sync + 'static;
     /// Curve identifier advertised over Norito payloads.
     const CURVE_ID: ZkCurveId;
-    /// Deterministically hash the DST, generator kind and indices into a group element.
-    fn derive_group_elem(kind: &[u8], n: u64, i: u64) -> Self::Group {
-        let mut buf = Vec::with_capacity(DST.len() + kind.len() + 16);
-        buf.extend_from_slice(DST.as_bytes());
-        buf.extend_from_slice(kind);
-        buf.extend_from_slice(&n.to_le_bytes());
-        buf.extend_from_slice(&i.to_le_bytes());
-        let wide = sha3_512(&buf);
-        let mut arr = [0u8; 64];
-        arr.copy_from_slice(&wide);
-        let scalar = Self::Scalar::from_uniform(&arr);
-        Self::group_from_scalar(scalar)
-    }
-    /// Convert a scalar to a group element (deterministic generator derivation helper).
-    fn group_from_scalar(scalar: Self::Scalar) -> Self::Group;
+    /// Deterministically map the generator kind and indices to a group element.
+    ///
+    /// Cryptographic backends must use a domain-separated hash-to-curve map. Multiplying a fixed
+    /// generator by a publicly derived scalar exposes the discrete-log relationships between the
+    /// IPA bases and destroys commitment binding.
+    fn derive_group_elem(kind: &[u8], n: u64, i: u64) -> Self::Group;
     /// Compute a variable-base multi-scalar multiplication.
     ///
-    /// Backends can override this with an optimized deterministic MSM. The
-    /// default path preserves correctness for simple backends by accumulating
-    /// one scalar multiplication per base.
+    /// Backends can override this with an optimized deterministic MSM. The default path preserves
+    /// correctness for simple backends by accumulating one scalar multiplication per base.
     fn msm(bases: &[Self::Group], scalars: &[Self::Scalar]) -> Result<Self::Group, Error> {
         if bases.len() != scalars.len() {
             return Err(Error::DimensionMismatch {

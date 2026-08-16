@@ -1016,8 +1016,7 @@ pub struct SoraContainerManifestV1 {
     pub args: Vec<String>,
     /// Environment variables supplied at launch.
     ///
-    /// Keys must use canonical POSIX environment-variable name syntax:
-    /// `[A-Za-z_][A-Za-z0-9_]*`.
+    /// Keys must use canonical POSIX environment-variable name syntax: `[A-Za-z_][A-Za-z0-9_]*`.
     #[norito(default)]
     pub env: std::collections::BTreeMap<String, String>,
     /// Optional Inrou microVM metadata required for hosted HTTP VM workloads.
@@ -1379,14 +1378,12 @@ pub struct SoraLeaseVolumeBindingV1 {
     pub max_total_bytes: NonZeroU64,
 }
 impl SoraLeaseVolumeBindingV1 {
-    /// Returns `true` when this binding is attached separately to each
-    /// hosted-HTTP replica.
+    /// Returns `true` when this binding is attached separately to each hosted-HTTP replica.
     #[must_use]
     pub const fn attaches_per_replica(&self) -> bool {
         self.kind.is_per_replica()
     }
-    /// Returns `true` when this binding is shared across replicas of the same
-    /// hosted-HTTP revision.
+    /// Returns `true` when this binding is shared across replicas of the same hosted-HTTP revision.
     #[must_use]
     pub const fn attaches_shared_across_replicas(&self) -> bool {
         self.kind.is_shared_across_replicas()
@@ -1558,8 +1555,7 @@ impl SoraServiceLeaseStateV1 {
     /// Validate lease-accounting invariants.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when required lifecycle or pricing
-    /// fields are invalid.
+    /// Returns [`SoracloudManifestError`] when required lifecycle or pricing fields are invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service lease state",
@@ -1639,8 +1635,7 @@ impl SoraServiceLeaseStateV1 {
     /// Estimated remaining nominal prepaid balance at the observed sequence.
     ///
     /// # Errors
-    /// Returns a bounded-domain error if an exact accounting intermediate is
-    /// unrepresentable.
+    /// Returns a bounded-domain error if an exact accounting intermediate is unrepresentable.
     pub fn remaining_balance(
         &self,
         current_sequence: u64,
@@ -1739,8 +1734,7 @@ impl SoraServiceLeaseVolumeStateV1 {
     /// Validate authoritative leased-volume metadata.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when lifecycle or mount invariants are
-    /// invalid.
+    /// Returns [`SoracloudManifestError`] when lifecycle or mount invariants are invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service lease volume state",
@@ -1993,8 +1987,7 @@ impl SoraArtifactRefV1 {
     /// Validate deterministic artifact-reference constraints.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when path fields are empty or contain
-    /// control characters.
+    /// Returns [`SoracloudManifestError`] when path fields are empty or contain control characters.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_soracloud_digest_hash("sora artifact ref", "artifact_hash", self.artifact_hash)?;
         validate_nonblank_field("sora artifact ref", "artifact_path", &self.artifact_path)?;
@@ -2028,8 +2021,7 @@ impl SoraMailboxContractV1 {
     /// Validate deterministic mailbox-contract constraints.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when the mailbox limits are
-    /// internally inconsistent.
+    /// Returns [`SoracloudManifestError`] when the mailbox limits are internally inconsistent.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         if self.max_message_bytes.get() < 16 {
             return Err(invalid_field(

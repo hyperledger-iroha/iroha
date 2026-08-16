@@ -7,8 +7,7 @@
 /// Immutable guest-stack policy selected by the IVM ABI.
 ///
 /// V1 is deliberately the only constructible policy.  A future policy must be
-/// introduced together with a new ABI version rather than as a local runtime
-/// setting.
+/// introduced together with a new ABI version rather than as a local runtime setting.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IvmStackPolicy {
     /// Canonical first-release IVM ABI policy.

@@ -92,9 +92,8 @@ pub struct LaneRelayEnvelope {
     pub manifest_root: Option<[u8; 32]>,
     /// Untrusted `FastPQ` proof metadata carried with the relay.
     ///
-    /// This metadata is progress evidence only. Merge authority additionally
-    /// requires the exact envelope to have a committed cryptographically
-    /// verified relay record.
+    /// This metadata is progress evidence only. Merge authority additionally requires the exact
+    /// envelope to have a committed cryptographically verified relay record.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
@@ -603,9 +602,8 @@ impl LaneRelayEnvelope {
     ///
     /// # Errors
     ///
-    /// Returns [`LaneRelayError::DaCommitmentHashMismatch`] when the DA commitment hash differs from the
-    /// header, or [`LaneRelayError::Encode`]
-    /// if hashing the settlement commitment fails.
+    /// Returns [`LaneRelayError::DaCommitmentHashMismatch`] when the DA commitment hash differs
+    /// from the header, or [`LaneRelayError::Encode`] if hashing the settlement commitment fails.
     pub fn new(
         block_header: BlockHeader,
         da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
@@ -1843,7 +1841,7 @@ mod tests {
             .nexus_fee_receipts
             .push(NexusFeeReceipt {
                 version: 1,
-                source_id: [0x11; 32],
+                source_id: [0xA5; 32],
                 debit_source: FeeDebitSource::Account(checked_account_id()),
                 fee_asset_id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
                     .parse()

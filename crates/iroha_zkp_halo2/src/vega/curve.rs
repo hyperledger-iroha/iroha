@@ -49,8 +49,7 @@ pub enum VegaCurveError {
     /// A decoded point did not belong to the prime-order group.
     #[error("T256 point is not in the prime-order subgroup")]
     WrongSubgroup,
-    /// A transcript attempted to absorb the identity, which has no affine
-    /// representation.
+    /// A transcript attempted to absorb the identity, which has no affine representation.
     #[error("cannot absorb the T256 identity into a Vega transcript")]
     IdentityTranscriptPoint,
     /// Generator derivation received an empty or excessively long label.
@@ -94,10 +93,9 @@ impl VegaT256PointV1 {
     }
     /// Decode one exact, non-identity canonical 33-byte proof point.
     ///
-    /// The format is one flag byte (`0x00` or `0x80`, the parity of `y`)
-    /// followed by the canonical big-endian x-coordinate. Infinity, x=0,
-    /// undefined flag bits, non-canonical coordinates, off-curve points,
-    /// alternate encodings, and trailing or truncated material are rejected.
+    /// The format is one flag byte (`0x00` or `0x80`, the parity of `y`) followed by the canonical
+    /// big-endian x-coordinate. Infinity, x=0, undefined flag bits, non-canonical coordinates,
+    /// off-curve points, alternate encodings, and trailing or truncated material are rejected.
     ///
     /// # Errors
     ///
@@ -162,27 +160,6 @@ impl VegaT256PointV1 {
         destination.copy_from_slice(self.0.to_bytes().as_ref());
         Ok(())
     }
-    /// Return this point's canonical big-endian affine coordinates.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`VegaCurveError::IdentityPoint`] for the group identity.
-    pub fn coordinates_be(self) -> Result<([u8; 32], [u8; 32]), VegaCurveError> {
-        if bool::from(self.0.is_identity()) {
-            return Err(VegaCurveError::IdentityPoint);
-        }
-        let affine = self.0.to_affine();
-        let coordinates = Option::<Coordinates<T256Affine>>::from(affine.coordinates())
-            .ok_or(VegaCurveError::IdentityPoint)?;
-        let mut x: [u8; 32] = coordinates.x().to_repr().into();
-        let mut y: [u8; 32] = coordinates.y().to_repr().into();
-        // `PrimeField::Repr` is little-endian for both linked fields even
-        // though T256 point compression uses its base field's big-endian
-        // `EndianRepr`. Keep the public coordinate boundary explicitly BE.
-        x.reverse();
-        y.reverse();
-        Ok((x, y))
-    }
     /// Return the exact upstream transcript representation `x_LE || y_LE`.
     ///
     /// # Errors
@@ -228,25 +205,6 @@ impl VegaT256PointV1 {
     pub fn mul_scalar(self, scalar: VegaT256ScalarV1) -> Self {
         Self(self.0 * scalar.0)
     }
-    /// Select `a` for zero and `b` for one without secret-dependent branches.
-    ///
-    /// Only the low bit of `choice` is used. Multiplication by that scalar uses
-    /// the linked curve's constant-time scalar multiplication and avoids a
-    /// secret-dependent branch or table lookup.
-    #[must_use]
-    pub fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
-        *a + (*b - *a).mul_scalar(VegaT256ScalarV1::from_u64(u64::from(choice & 1)))
-    }
-    /// Replace this complete projective point instance with the identity.
-    ///
-    /// This is best-effort safe erasure for a named value. The point is
-    /// [`Copy`], so compiler-created copies and register temporaries cannot be
-    /// guaranteed erased, and no destructor runs after process abort.
-    pub fn clear_secret(&mut self) {
-        *self = Self::identity();
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        let _ = core::hint::black_box(&mut *self);
-    }
     pub(super) fn identity() -> Self {
         Self(T256::identity())
     }
@@ -259,7 +217,7 @@ impl VegaT256PointV1 {
             for bit in (0..8).rev() {
                 result = result + result;
                 if byte & (1 << bit) != 0 {
-                    result += self;
+                    result = result + self;
                 }
             }
         }
@@ -296,15 +254,13 @@ impl fmt::Debug for VegaT256PointV1 {
 }
 /// Derive canonical nothing-up-my-sleeve T256 generators from a label.
 ///
-/// This is the pinned Vega derivation: SHAKE256 emits consecutive 32-byte
-/// messages, each mapped with the T256 RFC 9380 suite under the
-/// `from_uniform_bytes` domain prefix.
+/// This is the pinned Vega derivation: SHAKE256 emits consecutive 32-byte messages, each mapped
+/// with the T256 RFC 9380 suite under the `from_uniform_bytes` domain prefix.
 ///
 /// # Errors
 ///
-/// Rejects labels outside 1..=255 bytes, counts outside
-/// 1..=[`MAX_VEGA_T256_GENERATORS_V1`], or the cryptographically negligible
-/// event that hash-to-curve returns the identity.
+/// Rejects labels outside 1..=255 bytes, counts outside 1..=[`MAX_VEGA_T256_GENERATORS_V1`], or the
+/// cryptographically negligible event that hash-to-curve returns the identity.
 pub fn derive_t256_generators_v1(
     label: &[u8],
     count: usize,
@@ -382,18 +338,6 @@ mod tests {
         q_minus_one[31] -= 1;
         let minus_one = VegaT256ScalarV1::from_be_bytes_exact(q_minus_one).expect("q - 1 scalar");
         assert!((generator.mul_scalar(minus_one) + generator).is_identity());
-        let identity = VegaT256PointV1::identity();
-        assert_eq!(
-            VegaT256PointV1::conditional_select(&identity, &generator, 0),
-            identity
-        );
-        assert_eq!(
-            VegaT256PointV1::conditional_select(&identity, &generator, 1),
-            generator
-        );
-        let mut cleared = generator;
-        cleared.clear_secret();
-        assert_eq!(cleared, identity);
     }
     #[test]
     fn generator_derivation_matches_independent_rfc9380_vector() {

@@ -1,11 +1,10 @@
 //! Decode-compatible wire declarations for retired Sumeragi v1 block sync.
 //!
-//! These types remain in [`crate::NetworkMessage`] so archival tooling can
-//! identify historical envelopes. There is deliberately no synchronizer,
-//! request tracker, QC recovery path, roster heuristic, or network handler in
-//! this module. Production ingress rejects every `NetworkMessage::BlockSync`;
-//! Sumeragi v2 synchronizes only through its context-bound certified body and
-//! CommitQC services.
+//! These types remain in [`crate::NetworkMessage`] so archival tooling can identify historical
+//! envelopes. There is deliberately no synchronizer, request tracker, QC recovery path, roster
+//! heuristic, or network handler in this module. Production ingress rejects every
+//! `NetworkMessage::BlockSync`; Sumeragi v2 synchronizes only through its context-bound certified
+//! body and CommitQC services.
 use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 use iroha_crypto::HashOf;
 use iroha_data_model::{

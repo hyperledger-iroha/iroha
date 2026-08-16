@@ -723,10 +723,9 @@ impl Default for LaneManifestRegistry {
 }
 /// Deferred source locations or immutable parsed inputs from one bounded scan.
 ///
-/// The first bind materializes only active aliases. Catalog lifecycle rebinding
-/// then consumes the materialized snapshot and never reopens a path, so a
-/// post-startup file replacement cannot change admission semantics outside the
-/// explicit, digest-checked hot-reload path.
+/// The first bind materializes only active aliases. Catalog lifecycle rebinding then consumes the
+/// materialized snapshot and never reopens a path, so a post-startup file replacement cannot change
+/// admission semantics outside the explicit, digest-checked hot-reload path.
 #[derive(Debug)]
 pub struct LaneManifestSourceSnapshot {
     manifests_by_alias: BTreeMap<String, FrozenLaneManifestSource>,
@@ -2296,11 +2295,10 @@ impl LaneManifestRegistry {
     }
     /// Resolve the validator pool declared for a lane's physical dataspace.
     ///
-    /// Policy-only manifests do not declare authority and are skipped. Every
-    /// roster-bearing manifest in one dataspace must describe the same
-    /// validator accounts, account-to-peer bindings, and quorum. Binding URLs
-    /// and lane-local governance policy are deliberately not part of this
-    /// consistency check.
+    /// Policy-only manifests do not declare authority and are skipped. Every roster-bearing
+    /// manifest in one dataspace must describe the same validator accounts, account-to-peer
+    /// bindings, and quorum. Binding URLs and lane-local governance policy are deliberately not
+    /// part of this consistency check.
     pub(crate) fn dataspace_authority_rules(
         &self,
         lane_id: LaneId,

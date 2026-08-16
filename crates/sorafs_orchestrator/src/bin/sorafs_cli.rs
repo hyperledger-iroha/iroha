@@ -54,8 +54,6 @@ use reqwest::{
     header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE},
     redirect::Policy as RedirectPolicy,
 };
-#[cfg(test)]
-use rust_decimal::Decimal;
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerifier, CarWriteError, ChunkFetchSpec,
@@ -194,14 +192,14 @@ fn parse_i32_arg(flag: &str, raw: &str, context: &str) -> Result<i32, String> {
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 #[cfg(test)]
-fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
-    require_canonical_decimal_token(flag, raw, context)?;
+fn parse_decimal_arg(flag: &str, raw: &str, ctx: &str) -> Result<rust_decimal::Decimal, String> {
+    require_canonical_decimal_token(flag, raw, ctx)?;
     let value = raw
-        .parse::<Decimal>()
-        .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))?;
+        .parse::<rust_decimal::Decimal>()
+        .map_err(|err| format!("failed to parse `{flag}` for `{ctx}`: {err}"))?;
     if value.to_string() != raw {
         return Err(format!(
-            "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
+            "failed to parse `{flag}` for `{ctx}`: value must be a canonical decimal"
         ));
     }
     Ok(value)

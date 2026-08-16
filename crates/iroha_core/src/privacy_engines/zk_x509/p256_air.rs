@@ -1,11 +1,10 @@
 //! Exact nonnative P-256 integer arithmetic for the zk-X509 STARK.
 //!
-//! P-256 base- and scalar-field elements use sixteen little-endian 16-bit
-//! limbs.  Every limb and every signed carry is bit-decomposed.  Multiplication
-//! proves all 32 schoolbook coefficients of
-//! `a * b = c + q * modulus`; addition proves the analogous radix equation.
-//! The absolute value of every integer residue is below `2^43`, so equality in
-//! Goldilocks is equality over the integers rather than a field-wrap shortcut.
+//! P-256 base- and scalar-field elements use sixteen little-endian 16-bit limbs. Every limb and
+//! every signed carry is bit-decomposed. Multiplication proves all 32 schoolbook coefficients of `a
+//! * b = c + q * modulus`; addition proves the analogous radix equation. The absolute value of
+//! every integer residue is below `2^43`, so equality in Goldilocks is equality over the integers
+//! rather than a field-wrap shortcut.
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use p256::elliptic_curve::bigint::{Encoding as _, NonZero, U256, U512};
@@ -171,13 +170,11 @@ pub(crate) struct ZkX509P256ArithmeticTraceV1 {
     /// Committed base rows.
     pub(crate) base: Vec<[F; P256_ARITHMETIC_BASE_WIDTH_V1]>,
 }
-/// Project the selected `c`-limb bit decomposition from one opened arithmetic
-/// base row.
+/// Project the selected `c`-limb bit decomposition from one opened arithmetic base row.
 ///
-/// The coefficient fixed columns determine which limb this row represents.
-/// This helper deliberately performs no native row decoding: source-product
-/// evaluators consume these sixteen committed cells directly on the
-/// extension domain.
+/// The coefficient fixed columns determine which limb this row represents. This helper deliberately
+/// performs no native row decoding: source-product evaluators consume these sixteen committed cells
+/// directly on the extension domain.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_arithmetic_opened_c_limb_bits_v1(
     base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
@@ -186,10 +183,9 @@ pub(crate) fn p256_arithmetic_opened_c_limb_bits_v1(
 }
 /// Select the eight `c`-limb bit cells assigned to one scalar-source row.
 ///
-/// The first sixteen coefficients select bits 0 through 7 and the final
-/// sixteen select bits 8 through 15. Selection is a polynomial in
-/// verifier-preprocessed coefficient columns, so the extension evaluator does
-/// not branch on a native coefficient index.
+/// The first sixteen coefficients select bits 0 through 7 and the final sixteen select bits 8
+/// through 15. Selection is a polynomial in verifier-preprocessed coefficient columns, so the
+/// extension evaluator does not branch on a native coefficient index.
 pub(crate) fn p256_arithmetic_opened_scalar_source_bits_v1(
     base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
     fixed: &[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
@@ -201,13 +197,11 @@ pub(crate) fn p256_arithmetic_opened_scalar_source_bits_v1(
         base[C_BITS + bit].add(high.mul(base[C_BITS + LIMBS / 2 + bit].sub(base[C_BITS + bit])))
     })
 }
-/// Select the `a`, `b`, and `c` limb cells addressed by this opened
-/// coefficient row.
+/// Select the `a`, `b`, and `c` limb cells addressed by this opened coefficient row.
 ///
-/// The first sixteen verifier-preprocessed coefficient selectors form the
-/// limb selector. This projection is therefore a polynomial in the opened
-/// arithmetic row and fixed preprocessing; it never decodes a proof-supplied
-/// row index.
+/// The first sixteen verifier-preprocessed coefficient selectors form the limb selector. This
+/// projection is therefore a polynomial in the opened arithmetic row and fixed preprocessing; it
+/// never decodes a proof-supplied row index.
 pub(crate) fn p256_arithmetic_opened_operand_limbs_v1(
     base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
     fixed: &[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
@@ -270,8 +264,7 @@ pub(crate) struct P256ArithmeticStarkFixedProviderV1 {
     trace_size: usize,
 }
 impl P256ArithmeticStarkFixedProviderV1 {
-    /// Validate the deterministic topology and establish one padded native
-    /// domain.
+    /// Validate the deterministic topology and establish one padded native domain.
     pub(crate) fn new_v1(
         operations: &[ZkX509P256ArithmeticTopologyV1],
         trace_size: usize,
@@ -480,8 +473,7 @@ pub(crate) fn build_zk_x509_p256_arithmetic_trace_v1(
     trace.validate()?;
     Ok(trace)
 }
-/// Read the `a`, `b`, and `c` limbs constrained on one operation's
-/// corresponding coefficient row.
+/// Read the `a`, `b`, and `c` limbs constrained on one operation's corresponding coefficient row.
 ///
 /// This is the narrow source-binding surface used by value-copy buses.  It
 /// deliberately keeps the arithmetic column layout private.
@@ -511,9 +503,8 @@ pub(crate) fn p256_arithmetic_operand_limbs_v1(
 }
 /// Read the committed little-endian Boolean decomposition of one `c` limb.
 ///
-/// This is the narrow source-binding surface used by the scalar-bit copy bus.
-/// It deliberately exposes the constrained bit cells without exposing their
-/// private column offsets.
+/// This is the narrow source-binding surface used by the scalar-bit copy bus. It deliberately
+/// exposes the constrained bit cells without exposing their private column offsets.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_arithmetic_c_limb_bits_v1(
     trace: &ZkX509P256ArithmeticTraceV1,
@@ -739,9 +730,8 @@ pub(crate) fn evaluate_p256_arithmetic_row_constraints_v1(
 }
 /// Compile the exact numeric preprocessing rows used by the aggregate STARK.
 ///
-/// `operations` must come from the deterministic ECDSA topology compiler, not
-/// from proof bytes or a witness trace. The suffix through `trace_size` is the
-/// sole canonical padding schedule.
+/// `operations` must come from the deterministic ECDSA topology compiler, not from proof bytes or a
+/// witness trace. The suffix through `trace_size` is the sole canonical padding schedule.
 #[cfg(test)]
 pub(crate) fn compile_p256_arithmetic_stark_fixed_rows_v1(
     operations: &[ZkX509P256ArithmeticTopologyV1],
@@ -784,12 +774,10 @@ fn push_stark_range_residues_v1(
 }
 /// Evaluate one P-256 arithmetic row as a fixed-width polynomial vector.
 ///
-/// Unlike the native `evaluate_p256_arithmetic_row_constraints_v1` reference
-/// evaluator, this function never
-/// branches on a native enum or row number. Kind, coefficient, modulus, range
-/// slot, and boundary selectors are verifier-preprocessed polynomial
-/// openings. Consequently the same degree-four expressions are valid on the
-/// aggregate extension domain.
+/// Unlike the native `evaluate_p256_arithmetic_row_constraints_v1` reference evaluator, this
+/// function never branches on a native enum or row number. Kind, coefficient, modulus, range slot,
+/// and boundary selectors are verifier-preprocessed polynomial openings. Consequently the same
+/// degree-four expressions are valid on the aggregate extension domain.
 pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
     current: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
     next: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],

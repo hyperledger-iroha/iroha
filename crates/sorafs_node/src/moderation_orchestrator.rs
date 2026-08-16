@@ -477,10 +477,9 @@ impl ModerationNativeActionV1 {
 }
 /// Public, non-secret qualification for one moderation runtime provider.
 ///
-/// `revision` identifies the deployment-owned adapter and public policy
-/// revision. `policy_digest` binds that exact public policy. The orchestrator
-/// pins both values before opening durable state and requires the same values
-/// before and after every external provider operation.
+/// `revision` identifies the deployment-owned adapter and public policy revision. `policy_digest`
+/// binds that exact public policy. The orchestrator pins both values before opening durable state
+/// and requires the same values before and after every external provider operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModerationRuntimeProviderQualificationV1 {
     revision: u64,
@@ -564,10 +563,9 @@ pub enum ModerationRuntimeProviderReadinessErrorV1 {
 }
 /// Stable identity and readiness exposed by an external moderation provider.
 ///
-/// Implementations own credentials, signing keys, authentication material,
-/// and provider-specific diagnostics. `qualification` must fail when the
-/// provider is unavailable, revoked, stale, test-marked, or otherwise not
-/// production-ready.
+/// Implementations own credentials, signing keys, authentication material, and provider-specific
+/// diagnostics. `qualification` must fail when the provider is unavailable, revoked, stale,
+/// test-marked, or otherwise not production-ready.
 pub trait ModerationRuntimeProviderV1: Send + Sync + fmt::Debug {
     /// Return the stable opaque deployment handle for this provider.
     fn handle(&self) -> &str;
@@ -1267,10 +1265,9 @@ impl ModerationPanelNotificationKindV1 {
 }
 /// One payload-free notification derived from an exact finalized operation.
 ///
-/// The record intentionally contains no case identifier, evidence locator,
-/// reason, attestation, holder material, or message body. The recipient resolves
-/// current assignment details from the finalized ledger after receiving the
-/// stable notification identity.
+/// The record intentionally contains no case identifier, evidence locator, reason, attestation,
+/// holder material, or message body. The recipient resolves current assignment details from the
+/// finalized ledger after receiving the stable notification identity.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationPanelNotificationV1 {
     /// Stable delivery identity used for sink-side idempotency.
@@ -1383,11 +1380,10 @@ impl ModerationDeadLetterResolutionActionV1 {
 }
 /// Externally signed, exact-source authorization resolving one dead letter.
 ///
-/// The statement is bound to the current sealed checkpoint revision and the
-/// exact target record digest. It therefore cannot be replayed after any state
-/// transition or redirected to another incident. The same archive-lifetime
-/// checkpoint trust anchor used for terminal-set attestations authorizes the
-/// transition; private key material remains outside the process and checkpoint.
+/// The statement is bound to the current sealed checkpoint revision and the exact target record
+/// digest. It therefore cannot be replayed after any state transition or redirected to another
+/// incident. The same archive-lifetime checkpoint trust anchor used for terminal-set attestations
+/// authorizes the transition; private key material remains outside the process and checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationDeadLetterResolutionV1 {
     /// Resolution schema version.
@@ -1434,11 +1430,10 @@ impl ModerationDeadLetterResolutionV1 {
 }
 /// Exactly-once payload-free panel-notification delivery adapter.
 ///
-/// Implementations must atomically deduplicate
-/// [`ModerationPanelNotificationV1::notification_id`] against the exact
-/// canonical notification bytes before returning a receipt. A replay of the
-/// same identity and bytes must return the same stable receipt; a replay with
-/// different bytes must return [`ModerationPanelNotificationFailureV1::Permanent`].
+/// Implementations must atomically deduplicate [`ModerationPanelNotificationV1::notification_id`]
+/// against the exact canonical notification bytes before returning a receipt. A replay of the same
+/// identity and bytes must return the same stable receipt; a replay with different bytes must
+/// return [`ModerationPanelNotificationFailureV1::Permanent`].
 pub trait ModerationPanelNotificationSinkV1: ModerationRuntimeProviderV1 {
     /// Deliver one exact claimed notification.
     ///
@@ -1537,11 +1532,10 @@ impl fmt::Debug for ModerationPanelNotificationArchiveReadbackV1 {
 }
 /// Deployment-owned immutable archive for terminal panel-notification receipts.
 ///
-/// `install` must atomically bind an operation identifier to the exact receipt
-/// message and canonical artifact. Exact replay is idempotent; any substituted
-/// bytes or receipt message must be rejected. `read` returns only the exact
-/// durable bytes and their provider-issued Ed25519 signature. Credentials and
-/// private signing material remain behind this boundary.
+/// `install` must atomically bind an operation identifier to the exact receipt message and
+/// canonical artifact. Exact replay is idempotent; any substituted bytes or receipt message must be
+/// rejected. `read` returns only the exact durable bytes and their provider-issued Ed25519
+/// signature. Credentials and private signing material remain behind this boundary.
 pub trait ModerationPanelNotificationArchiveV1: ModerationRuntimeProviderV1 {
     /// Return the stable non-secret archive namespace identity.
     fn archive_id(&self) -> [u8; 32];
@@ -1596,16 +1590,14 @@ pub struct ModerationPanelNotificationArchiveSignerEpochV1 {
 impl ModerationPanelNotificationArchiveSignerEpochV1 {
     /// Derive the exact predecessor-key authorization message for this transition.
     ///
-    /// This method is safe to use before the two signatures and `epoch_digest`
-    /// are populated: neither signature nor the self-digest is part of the
-    /// authorization message. The returned digest is network-bound and commits
-    /// the new provider binding, key, predecessor epoch, and inclusive
-    /// predecessor revocation generation.
+    /// This method is safe to use before the two signatures and `epoch_digest` are populated:
+    /// neither signature nor the self-digest is part of the authorization message. The returned
+    /// digest is network-bound and commits the new provider binding, key, predecessor epoch, and
+    /// inclusive predecessor revocation generation.
     ///
     /// # Errors
     ///
-    /// Rejects bootstrap epochs and malformed, inert, or noncanonical rotation
-    /// coordinates.
+    /// Rejects bootstrap epochs and malformed, inert, or noncanonical rotation coordinates.
     pub fn rotation_authorization_message(
         &self,
         network_id: &iroha_data_model::NetworkId,
@@ -2689,10 +2681,9 @@ struct ModerationPanelNotificationArchivePayloadV1 {
 }
 /// Payload-minimal witness for archive-signer and predecessor validation.
 ///
-/// The checkpoint authority separately verifies terminal membership before it
-/// signs the source attestation. This manifest therefore carries no finalized
-/// snapshot, moderation scopes, authorities, native actions, outbox entries, or
-/// other checkpoint payloads.
+/// The checkpoint authority separately verifies terminal membership before it signs the source
+/// attestation. This manifest therefore carries no finalized snapshot, moderation scopes,
+/// authorities, native actions, outbox entries, or other checkpoint payloads.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationPanelNotificationArchiveSourceManifestV1 {
     version: u16,
@@ -3012,12 +3003,11 @@ impl ModerationOrchestratorV1 {
     }
     /// Run deterministic deadline maintenance after a finalized reconciliation.
     ///
-    /// Only native sortition, activation/failover, and finalization ISIs are
-    /// emitted. The injected operational identity must equal the authority in
-    /// the finalized policy or panel selection; configuration cannot override
-    /// ledger authority. Deadline evaluation uses only the signed creation time
-    /// of the exact finalized block retained in the snapshot. At most `limit`
-    /// actions are attempted.
+    /// Only native sortition, activation/failover, and finalization ISIs are emitted. The injected
+    /// operational identity must equal the authority in the finalized policy or panel selection;
+    /// configuration cannot override ledger authority. Deadline evaluation uses only the signed
+    /// creation time of the exact finalized block retained in the snapshot. At most `limit` actions
+    /// are attempted.
     ///
     /// # Errors
     ///
@@ -3325,8 +3315,7 @@ impl ModerationOrchestratorV1 {
     /// Atomically record one stable delivery receipt under the exact live claim.
     ///
     /// Calling this again with the same worker, lease token, and receipt returns
-    /// `AlreadyDelivered`; any substituted receipt or reclaimed lease fails
-    /// closed.
+    /// `AlreadyDelivered`; any substituted receipt or reclaimed lease fails closed.
     ///
     /// # Errors
     ///
@@ -3507,12 +3496,11 @@ impl ModerationOrchestratorV1 {
     /// Deliver a bounded batch of due panel notifications through the
     /// independently qualified durable sink.
     ///
-    /// Claims are checkpointed before the sink is called. The sink must
-    /// deduplicate the stable notification identity, so a crash after the
-    /// downstream effect but before receipt persistence replays the same
-    /// payload-free notification safely. The worker identity is derived from
-    /// the exact network and governed sink binding; no process-local randomness
-    /// or secret material participates.
+    /// Claims are checkpointed before the sink is called. The sink must deduplicate the stable
+    /// notification identity, so a crash after the downstream effect but before receipt persistence
+    /// replays the same payload-free notification safely. The worker identity is derived from the
+    /// exact network and governed sink binding; no process-local randomness or secret material
+    /// participates.
     ///
     /// # Errors
     ///
@@ -3608,10 +3596,9 @@ impl ModerationOrchestratorV1 {
     /// Prepare an exact current-checkpoint authorization statement for one
     /// unresolved durable dead letter.
     ///
-    /// The returned statement is unsigned. An independently administered HSM
-    /// holding the configured checkpoint-attestor key must sign
-    /// [`ModerationDeadLetterResolutionV1::signing_message`] before
-    /// [`Self::apply_dead_letter_resolution`] accepts it.
+    /// The returned statement is unsigned. An independently administered HSM holding the configured
+    /// checkpoint-attestor key must sign [`ModerationDeadLetterResolutionV1::signing_message`]
+    /// before [`Self::apply_dead_letter_resolution`] accepts it.
     ///
     /// # Errors
     ///
@@ -3680,10 +3667,9 @@ impl ModerationOrchestratorV1 {
     }
     /// Apply one externally signed, source-bound dead-letter resolution.
     ///
-    /// Resolution never erases the incident: durable incidents retain the
-    /// signed receipt until archive compaction, while panel incidents first
-    /// move an exact terminal record and signed receipt into resolution
-    /// history. Health stops counting only after this sealed transition.
+    /// Resolution never erases the incident: durable incidents retain the signed receipt until
+    /// archive compaction, while panel incidents first move an exact terminal record and signed
+    /// receipt into resolution history. Health stops counting only after this sealed transition.
     ///
     /// # Errors
     ///
@@ -3898,16 +3884,14 @@ impl ModerationOrchestratorV1 {
     }
     /// Archive and prune one bounded canonical batch of terminal moderation records.
     ///
-    /// The immutable archive is installed and read back under its exact
-    /// provider-issued Ed25519 signature before any checkpoint record is
-    /// removed. The batch is bound to the current sealed checkpoint revision
-    /// and predecessor archive head. The sealed checkpoint CAS is the sole
+    /// The immutable archive is installed and read back under its exact provider-issued Ed25519
+    /// signature before any checkpoint record is removed. The batch is bound to the current sealed
+    /// checkpoint revision and predecessor archive head. The sealed checkpoint CAS is the sole
     /// cross-replica commit fence; there is no process-local fallback.
     ///
-    /// Eligible records are delivered notifications, finalized native-operation
-    /// tombstones, successful handoff receipts, and externally signed resolved
-    /// dead letters. Active unresolved failures are never pruned.
-    /// `Ok(None)` means no terminal record is currently eligible.
+    /// Eligible records are delivered notifications, finalized native-operation tombstones,
+    /// successful handoff receipts, and externally signed resolved dead letters. Active unresolved
+    /// failures are never pruned. `Ok(None)` means no terminal record is currently eligible.
     ///
     /// # Errors
     ///
@@ -4571,10 +4555,9 @@ impl ModerationOrchestratorV1 {
     /// Start a bounded audit of the complete archive lineage from the current
     /// published head through generation one.
     ///
-    /// This operator-controlled rehearsal first seals a fresh audit cursor
-    /// with no trusted floor, making archive readiness fail closed until the
-    /// full lineage completes. The first bounded page is processed before this
-    /// call returns; if it is incomplete, continue it with
+    /// This operator-controlled rehearsal first seals a fresh audit cursor with no trusted floor,
+    /// making archive readiness fail closed until the full lineage completes. The first bounded
+    /// page is processed before this call returns; if it is incomplete, continue it with
     /// [`Self::audit_panel_notification_archive`].
     ///
     /// # Errors
@@ -4662,17 +4645,15 @@ impl ModerationOrchestratorV1 {
         drop(state);
         self.audit_panel_notification_archive(maximum_heads)
     }
-    /// Authenticate one bounded page of the archive suffix added since the
-    /// last completed audit.
+    /// Authenticate one bounded page of the archive suffix added since the last completed audit.
     ///
-    /// The sealed cursor advances from a fixed target head toward the last
-    /// authenticated head. Every page checks exact operation, generation, head
-    /// digest, chain accumulator, signature, and predecessor coordinates. The
-    /// initial audit reaches generation one; later audits verify only new
-    /// generations plus the previously trusted boundary head. A separate
+    /// The sealed cursor advances from a fixed target head toward the last authenticated head.
+    /// Every page checks exact operation, generation, head digest, chain accumulator, signature,
+    /// and predecessor coordinates. The initial audit reaches generation one; later audits verify
+    /// only new generations plus the previously trusted boundary head. A separate
     /// operator-controlled full-history rehearsal via
-    /// [`Self::audit_panel_notification_archive_full_history`] detects loss
-    /// outside the readiness-critical incremental suffix.
+    /// [`Self::audit_panel_notification_archive_full_history`] detects loss outside the
+    /// readiness-critical incremental suffix.
     ///
     /// # Errors
     ///
@@ -10113,10 +10094,9 @@ fn validate_moderation_panel_notification_archive_artifact_source_for_broker_v1(
 }
 /// Validate an installed historical archive artifact without pinning it to the current signer.
 ///
-/// Historical signer bindings are authenticated by the minimal embedded epoch
-/// log, anchored to `archive_bootstrap_public_key` and the stable archive id.
-/// The checkpoint-attestor binding is intentionally archive-lifetime-stable in
-/// V1 and remains pinned exactly.
+/// Historical signer bindings are authenticated by the minimal embedded epoch log, anchored to
+/// `archive_bootstrap_public_key` and the stable archive id. The checkpoint-attestor binding is
+/// intentionally archive-lifetime-stable in V1 and remains pinned exactly.
 ///
 /// # Errors
 ///

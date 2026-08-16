@@ -168,24 +168,21 @@ impl MlKemSuite {
     /// Validate a ciphertext encoding for this suite.
     ///
     /// # Errors
-    /// Returns an error when the byte string has the wrong length or is inert
-    /// all-zero material.
+    /// Returns an error when the byte string has the wrong length or is inert all-zero material.
     pub fn validate_ciphertext(self, bytes: &[u8]) -> Result<(), MlKemError> {
         validate_len(self.ciphertext_kind(), bytes.len(), self.ciphertext_len())?;
         self.validate_key_material_not_all_zero(self.ciphertext_kind(), bytes)
     }
     /// Return the public key embedded in a FIPS 203 decapsulation key.
     ///
-    /// ML-KEM decapsulation keys contain the matching encapsulation key near the
-    /// end of the secret-key byte string, followed by `H(ek)` and the implicit
-    /// rejection seed. This helper lets callers fail closed on mismatched
-    /// public/secret material before implicit rejection produces a traffic-key
-    /// mismatch at runtime.
+    /// ML-KEM decapsulation keys contain the matching encapsulation key near the end of the
+    /// secret-key byte string, followed by `H(ek)` and the implicit rejection seed. This helper
+    /// lets callers fail closed on mismatched public/secret material before implicit rejection
+    /// produces a traffic-key mismatch at runtime.
     ///
     /// # Errors
-    /// Returns an error when the secret-key byte string has the wrong length or
-    /// its private component or embedded public key/hash fields are
-    /// noncanonical or internally inconsistent.
+    /// Returns an error when the secret-key byte string has the wrong length or its private
+    /// component or embedded public key/hash fields are noncanonical or internally inconsistent.
     pub fn public_key_from_secret_key(self, secret_key: &[u8]) -> Result<&[u8], MlKemError> {
         self.validate_secret_key(secret_key)?;
         Ok(self.public_key_from_validated_secret_key(secret_key))
@@ -193,9 +190,8 @@ impl MlKemSuite {
     /// Return the public-key hash embedded in a FIPS 203 decapsulation key.
     ///
     /// # Errors
-    /// Returns an error when the secret-key byte string has the wrong length or
-    /// its private component or embedded public key/hash fields are
-    /// noncanonical or internally inconsistent.
+    /// Returns an error when the secret-key byte string has the wrong length or its private
+    /// component or embedded public key/hash fields are noncanonical or internally inconsistent.
     pub fn public_key_hash_from_secret_key(self, secret_key: &[u8]) -> Result<&[u8], MlKemError> {
         self.validate_secret_key(secret_key)?;
         Ok(self.public_key_hash_from_validated_secret_key(secret_key))
@@ -744,9 +740,8 @@ pub fn generate_mlkem_keypair(
 /// Generate an ML-KEM keypair using a seed plus live OS entropy when available.
 ///
 /// # Errors
-/// Returns [`MlKemError::Rng`] when the initial OS seed draw fails, or another
-/// ML-KEM error when generated material fails validation or the backend reports
-/// key-generation failure.
+/// Returns [`MlKemError::Rng`] when the initial OS seed draw fails, or another ML-KEM error when
+/// generated material fails validation or the backend reports key-generation failure.
 pub fn generate_mlkem_keypair_from_os(suite: MlKemSuite) -> Result<MlKemKeyPair, MlKemError> {
     let mut rng = rand::rngs::OsRng;
     generate_mlkem_keypair_from_rng(suite, &mut rng)
@@ -755,9 +750,8 @@ pub fn generate_mlkem_keypair_from_os(suite: MlKemSuite) -> Result<MlKemKeyPair,
 /// entropy when available.
 ///
 /// # Errors
-/// Returns [`MlKemError::Rng`] when the required seed draw fails, or another
-/// ML-KEM error when generated material fails validation or the backend reports
-/// key-generation failure.
+/// Returns [`MlKemError::Rng`] when the required seed draw fails, or another ML-KEM error when
+/// generated material fails validation or the backend reports key-generation failure.
 pub fn generate_mlkem_keypair_from_rng<R: TryCryptoRng + ?Sized>(
     suite: MlKemSuite,
     rng: &mut R,
@@ -780,9 +774,8 @@ pub fn try_generate_mlkem_keypair_from_seed(
 /// Deterministically generate an ML-KEM keypair from explicit seed material.
 ///
 /// # Errors
-/// Returns an error when seed material is all zero, generated key material
-/// fails ML-KEM key-pair validation, or the backend reports key-generation
-/// failure.
+/// Returns an error when seed material is all zero, generated key material fails ML-KEM key-pair
+/// validation, or the backend reports key-generation failure.
 pub fn generate_mlkem_keypair_from_seed(
     suite: MlKemSuite,
     seed: HedgedRngSeed,
@@ -816,9 +809,8 @@ fn validate_generated_mlkem_keypair(
 /// Encapsulate against a provided public key.
 ///
 /// # Errors
-/// Returns an error when the public key length is invalid or its field
-/// coefficients are noncanonical, or when the backend reports encapsulation
-/// failure.
+/// Returns an error when the public key length is invalid or its field coefficients are
+/// noncanonical, or when the backend reports encapsulation failure.
 pub fn encapsulate_mlkem(
     suite: MlKemSuite,
     public_key: &[u8],
@@ -832,10 +824,9 @@ pub fn encapsulate_mlkem(
 /// Encapsulate using seed material plus live OS entropy when available.
 ///
 /// # Errors
-/// Returns [`MlKemError::Rng`] when the initial OS seed draw fails, or
-/// [`MlKemError::BadEncoding`] or [`MlKemError::NonCanonicalEncoding`] when the
-/// public key encoding is invalid, or [`MlKemError::BackendFailure`] when the
-/// backend reports encapsulation failure.
+/// Returns [`MlKemError::Rng`] when the initial OS seed draw fails, or [`MlKemError::BadEncoding`]
+/// or [`MlKemError::NonCanonicalEncoding`] when the public key encoding is invalid, or
+/// [`MlKemError::BackendFailure`] when the backend reports encapsulation failure.
 pub fn encapsulate_mlkem_from_os(
     suite: MlKemSuite,
     public_key: &[u8],
@@ -843,14 +834,12 @@ pub fn encapsulate_mlkem_from_os(
     let mut rng = rand::rngs::OsRng;
     encapsulate_mlkem_from_rng(suite, public_key, &mut rng)
 }
-/// Encapsulate using caller-supplied seed entropy plus live OS entropy when
-/// available.
+/// Encapsulate using caller-supplied seed entropy plus live OS entropy when available.
 ///
 /// # Errors
-/// Returns [`MlKemError::Rng`] when the required seed draw fails, or
-/// [`MlKemError::BadEncoding`] or [`MlKemError::NonCanonicalEncoding`] when the
-/// public key encoding is invalid, or [`MlKemError::BackendFailure`] when the
-/// backend reports encapsulation failure.
+/// Returns [`MlKemError::Rng`] when the required seed draw fails, or [`MlKemError::BadEncoding`] or
+/// [`MlKemError::NonCanonicalEncoding`] when the public key encoding is invalid, or
+/// [`MlKemError::BackendFailure`] when the backend reports encapsulation failure.
 pub fn encapsulate_mlkem_from_rng<R: TryCryptoRng + ?Sized>(
     suite: MlKemSuite,
     public_key: &[u8],
@@ -863,9 +852,8 @@ pub fn encapsulate_mlkem_from_rng<R: TryCryptoRng + ?Sized>(
 /// Deterministically encapsulate from explicit seed material.
 ///
 /// # Errors
-/// Returns an error when the public key length is invalid, its field
-/// coefficients are noncanonical, the seed material is all zero, or when the
-/// backend reports encapsulation failure.
+/// Returns an error when the public key length is invalid, its field coefficients are noncanonical,
+/// the seed material is all zero, or when the backend reports encapsulation failure.
 pub fn encapsulate_mlkem_from_seed(
     suite: MlKemSuite,
     public_key: &[u8],
@@ -895,9 +883,8 @@ fn encapsulate_mlkem_from_coins(
 /// Decapsulate a ciphertext with the provided secret key.
 ///
 /// # Errors
-/// Returns an error when the secret key, embedded public key, or ciphertext
-/// encoding is invalid or inert, or when the backend reports decapsulation
-/// failure.
+/// Returns an error when the secret key, embedded public key, or ciphertext encoding is invalid or
+/// inert, or when the backend reports decapsulation failure.
 pub fn decapsulate_mlkem(
     suite: MlKemSuite,
     secret_key: &[u8],
@@ -930,17 +917,15 @@ pub fn validate_mlkem_public_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), 
 /// Validate the encoding of an ML-KEM secret key.
 ///
 /// # Errors
-/// Returns an error when the secret key length is invalid, its private
-/// component or embedded public key is noncanonical, or its embedded public-key
-/// hash is inconsistent.
+/// Returns an error when the secret key length is invalid, its private component or embedded public
+/// key is noncanonical, or its embedded public-key hash is inconsistent.
 pub fn validate_mlkem_secret_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
     suite.validate_secret_key(bytes)
 }
 /// Validate the encoding of an ML-KEM ciphertext.
 ///
 /// # Errors
-/// Returns an error when the ciphertext has the wrong length or is inert
-/// all-zero material.
+/// Returns an error when the ciphertext has the wrong length or is inert all-zero material.
 pub fn validate_mlkem_ciphertext(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
     suite.validate_ciphertext(bytes)
 }
@@ -948,11 +933,10 @@ pub fn validate_mlkem_ciphertext(suite: MlKemSuite, bytes: &[u8]) -> Result<(), 
 ///
 /// # Errors
 /// Returns [`MlKemError::BadEncoding`] for malformed lengths and
-/// [`MlKemError::NonCanonicalEncoding`] for noncanonical public-key field
-/// coefficients, [`MlKemError::KeyPairMismatch`] when the keys are
-/// individually well-formed but not paired, or
-/// [`MlKemError::KeyPairPublicHashMismatch`] when the secret key's embedded
-/// `H(ek)` value does not match its embedded public key.
+/// [`MlKemError::NonCanonicalEncoding`] for noncanonical public-key field coefficients,
+/// [`MlKemError::KeyPairMismatch`] when the keys are individually well-formed but not paired, or
+/// [`MlKemError::KeyPairPublicHashMismatch`] when the secret key's embedded `H(ek)` value does not
+/// match its embedded public key.
 pub fn validate_mlkem_key_pair(
     suite: MlKemSuite,
     public_key: &[u8],

@@ -1,12 +1,11 @@
 //! Native numeric RFC 5280 adapter for the closed first-release X5S1 profile.
 //!
-//! The owner trace in [`super::der_air`] parses values for witness
-//! construction, but none of its host Boolean decisions are proof inputs.
-//! This adapter consumes exact strict-DER byte and node events, derives
-//! semantic roles from a fixed parent/child/tag grammar, and recomputes the
-//! admitted path, validity, extension, serial, and complete-CRL predicates
-//! from committed operands. Fixed family ranges are reconstructed from one
-//! constant public registration; a witness cannot select a row family.
+//! The owner trace in [`super::der_air`] parses values for witness construction, but none of its
+//! host Boolean decisions are proof inputs. This adapter consumes exact strict-DER byte and node
+//! events, derives semantic roles from a fixed parent/child/tag grammar, and recomputes the
+//! admitted path, validity, extension, serial, and complete-CRL predicates from committed operands.
+//! Fixed family ranges are reconstructed from one constant public registration; a witness cannot
+//! select a row family.
 //!
 //! Four independently sampled Goldilocks lanes are used for every compressed
 //! relation.  Composition/FRI challenge counts are deliberately outside this
@@ -72,12 +71,10 @@ pub(crate) const ZK_X509_RFC5280_STARK_TRACE_LOG2_V1: u8 = 19;
 /// Native trace size.
 pub(crate) const ZK_X509_RFC5280_STARK_TRACE_SIZE_V1: usize =
     1 << ZK_X509_RFC5280_STARK_TRACE_LOG2_V1;
-/// Base columns, including committed private row-activity and chain-depth
-/// selectors.
+/// Base columns, including committed private row-activity and chain-depth selectors.
 pub(crate) const ZK_X509_RFC5280_STARK_BASE_WIDTH_V1: usize = 113;
-/// Six shared-bus product pairs, eighteen independent output-role products,
-/// one serial-copy product pair, and two zero-safe DER-backed serial lookups
-/// in four lanes.
+/// Six shared-bus product pairs, eighteen independent output-role products, one serial-copy product
+/// pair, and two zero-safe DER-backed serial lookups in four lanes.
 pub(crate) const ZK_X509_RFC5280_STARK_AUX_WIDTH_V1: usize = 264;
 /// Verifier-preprocessed family, boundary, address, and output-role columns.
 pub(crate) const ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1: usize = 81;
@@ -1557,10 +1554,9 @@ fn output_factor_v1(
 }
 /// Compress one downstream output event directly from constrained field cells.
 ///
-/// Downstream numeric adapters use this exact expression for their consumer
-/// products. Byte range, offset, and direction constraints remain owned by the
-/// calling adapter; this helper solely guarantees an identical typed tuple and
-/// challenge domain on both sides of the RFC relation.
+/// Downstream numeric adapters use this exact expression for their consumer products. Byte range,
+/// offset, and direction constraints remain owned by the calling adapter; this helper solely
+/// guarantees an identical typed tuple and challenge domain on both sides of the RFC relation.
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 pub(crate) fn zk_x509_rfc5280_opened_output_factor_v1(
@@ -3545,8 +3541,7 @@ fn compile_output_topology_v1(
     }
     Ok(entries)
 }
-/// Verifier-owned family ranges. It stores only O(1) boundaries, never
-/// `2^18` fixed rows.
+/// Verifier-owned family ranges. It stores only O(1) boundaries, never `2^18` fixed rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280StarkFixedScheduleV1 {
     pub(crate) shape: ZkX509Rfc5280StarkShapeV1,
@@ -3623,9 +3618,8 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
         }
         Err(ZkX509Rfc5280StarkErrorV1::Shape)
     }
-    /// Reconstruct every selector and expected cell from the row ordinal and
-    /// public statement projection. No committed witness value is accepted
-    /// as an input.
+    /// Reconstruct every selector and expected cell from the row ordinal and public statement
+    /// projection. No committed witness value is accepted as an input.
     pub(crate) fn fixed_row(
         &self,
         row: usize,
@@ -4266,8 +4260,7 @@ const fn output_role_aux_column_v1(role_index: usize, consumer: bool, lane: usiz
             * ZK_X509_RFC5280_STARK_BUS_LANES_V1
         + lane
 }
-/// One canonical role-addressed pair of independently committed RFC output
-/// products.
+/// One canonical role-addressed pair of independently committed RFC output products.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280OutputRoleTerminalClaimsV1 {
     pub(crate) role: ZkX509Rfc5280OutputRoleV1,
@@ -4582,10 +4575,9 @@ impl ZkX509Rfc5280StarkTerminalClaimsV1 {
 }
 /// Validate every terminal equality owned jointly by strict DER and RFC 5280.
 ///
-/// The role products are independently tied to verifier-fixed RFC AIR
-/// accumulators; this pure boundary check additionally fixes their canonical
-/// decomposition and the two DER-to-RFC hand-offs before MAIN samples
-/// composition coefficients.
+/// The role products are independently tied to verifier-fixed RFC AIR accumulators; this pure
+/// boundary check additionally fixes their canonical decomposition and the two DER-to-RFC hand-offs
+/// before MAIN samples composition coefficients.
 pub(crate) fn validate_zk_x509_der_rfc_terminal_equalities_v1(
     der: ZkX509DerStarkTerminalClaimsV1,
     rfc: ZkX509Rfc5280StarkTerminalClaimsV1,
@@ -4638,11 +4630,10 @@ const _: () = assert!(SHA_TERMINAL_CLAIM_RECORDS_V1 == 304);
 const _: () = assert!(ZK_X509_SHA_SEGMENT_TERMINAL_CLAIM_BYTES_V1 == 4_876);
 /// Ordered proof claims for all SHA call-bus products.
 ///
-/// The 29 fixed calls are packed whole into four verifier-owned physical
-/// segments. Each segment carries the source-word product, digest-word
-/// product, and four independently constrained RFC-consumer streams in four
-/// challenge lanes. No call identity, family, lane, or segment is selected by
-/// the prover: X5Q1 fixes all 304 addresses in this exact order.
+/// The 29 fixed calls are packed whole into four verifier-owned physical segments. Each segment
+/// carries the source-word product, digest-word product, and four independently constrained
+/// RFC-consumer streams in four challenge lanes. No call identity, family, lane, or segment is
+/// selected by the prover: X5Q1 fixes all 304 addresses in this exact order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509ShaSegmentTerminalClaimsV1 {
     /// Segment terminals in verifier-owned physical registration order.
@@ -4675,8 +4666,7 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
             }),
         }
     }
-    /// Construct claims only from the four terminals returned by the SHA AIR
-    /// segment providers.
+    /// Construct claims only from the four terminals returned by the SHA AIR segment providers.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn from_sha_air_terminals_v1(
         segments: [ZkX509ShaSegmentTerminalV1; ZK_X509_SHA_SEGMENT_COUNT_V1],
@@ -4974,9 +4964,8 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
 /// Compare proof-decoded X5Q1 claims with the four terminals already bound by
 /// the SHA opened-row evaluator.
 ///
-/// `committed` is verifier output, never witness metadata. The fixed record
-/// order makes every mismatch a distinct residue without a host-selected
-/// segment, family, or lane.
+/// `committed` is verifier output, never witness metadata. The fixed record order makes every
+/// mismatch a distinct residue without a host-selected segment, family, or lane.
 #[cfg(test)]
 pub(crate) fn evaluate_zk_x509_sha_segment_terminal_claim_residues_v1(
     committed: [ZkX509ShaSegmentTerminalV1; ZK_X509_SHA_SEGMENT_COUNT_V1],
@@ -5976,10 +5965,9 @@ fn grammar_ordinal_factor_v1(
 }
 /// Challenge-independent canonical RFC 5280 trace material.
 ///
-/// Rows are stored by fixed family and ordinal. Sparse fixed-capacity gaps are
-/// represented by absent vector entries and replay as the unique inactive
-/// zero row (apart from the carried private-depth selector). This keeps the
-/// prover bounded without allocating a `2^18 × 66` matrix.
+/// Rows are stored by fixed family and ordinal. Sparse fixed-capacity gaps are represented by
+/// absent vector entries and replay as the unique inactive zero row (apart from the carried
+/// private-depth selector). This keeps the prover bounded without allocating a `2^18 × 66` matrix.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280StarkBaseMaterialV1 {
@@ -7881,9 +7869,8 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
 }
 /// Evaluate the complete opened RFC row without a host semantic callback.
 ///
-/// Fixed family selectors are verifier-preprocessed. Every family contributes
-/// the same residue inventory on every row, so neither witness values nor
-/// roles can alter the composition shape.
+/// Fixed family selectors are verifier-preprocessed. Every family contributes the same residue
+/// inventory on every row, so neither witness values nor roles can alter the composition shape.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     current: &ZkX509Rfc5280StarkBaseRowV1,

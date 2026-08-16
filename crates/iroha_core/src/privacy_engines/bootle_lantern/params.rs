@@ -17,8 +17,7 @@ pub const PROOF_INVERSE_TWO_V1: u64 = 562_949_953_421_611;
 pub const PROOF_INVERSE_FOUR_V1: u64 = 844_424_930_132_416;
 /// Canonical inverse of the application modulus modulo the proof modulus.
 pub const APPLICATION_MODULUS_INVERSE_IN_PROOF_V1: u64 = 305_914_215_066_280;
-/// Exact quotient bound used when lifting the eight application equations
-/// from `R_p` into `R_q`.
+/// Exact quotient bound used when lifting the eight application equations from `R_p` into `R_q`.
 pub const APPLICATION_RELATION_QUOTIENT_BOUND_V1: u64 = 30_064;
 /// Encoded bit width of an internal proof residue.
 pub const PROOF_MODULUS_BITS_V1: u8 = 51;
@@ -76,8 +75,7 @@ pub const RANDOMNESS_NORM_SQUARED_BOUND_V1: u64 = 11_881;
 pub const SIGNATURE_NORM_SQUARED_BOUND_V1: u64 = 34_034_726;
 /// Response squared-norm bound.
 pub const RESPONSE_NORM_SQUARED_BOUND_V1: u64 = 143_158_532_224_272_924;
-/// `z1` squared-norm bound computed as
-/// `floor(2 * 50 * 64 * 962 * 2^(2*23) / 400)`.
+/// `z1` squared-norm bound computed as `floor(2 * 50 * 64 * 962 * 2^(2*23) / 400)`.
 pub const Z1_NORM_SQUARED_BOUND_V1: u64 = 1_083_115_710_382_604_288;
 /// `z3` squared-norm bound.
 pub const Z3_NORM_SQUARED_BOUND_V1: u64 = 113_676_554_463_109;
@@ -92,12 +90,11 @@ pub const GAUSSIAN_SIGMA_NUMERATOR_V1: u64 = 31;
 pub const GAUSSIAN_SIGMA_DENOMINATOR_V1: u64 = 20;
 /// Little-endian limbs of `ceil(M * 2^256)` for the four rejection decisions.
 ///
-/// The constants were generated at 600 decimal digits from the exact profile
-/// inputs.  In particular, the third value uses the integer squared witness
-/// bound `34_034_726`, rather than first rounding its square root through a
-/// machine-number parameter generator.  Ceiling is intentional: each encoded
-/// value is a one-sided upper bound on the theorem's rejection constant, with
-/// excess below `2^-256`.
+/// The constants were generated at 600 decimal digits from the exact profile inputs. In particular,
+/// the third value uses the integer squared witness bound `34_034_726`, rather than first rounding
+/// its square root through a machine-number parameter generator. Ceiling is intentional: each
+/// encoded value is a one-sided upper bound on the theorem's rejection constant, with excess below
+/// `2^-256`.
 pub const REJECTION_M_Q256_LIMBS_V1: [[u64; 5]; 4] = [
     [
         13_907_885_945_416_354_779,
@@ -158,14 +155,12 @@ pub const INTERNAL_CRT_RING_DEGREE_INVERSES_V1: [u64; 3] = [
 pub const INTERNAL_CRT_GARNER_INVERSES_V1: [u64; 2] = [963_800_478_288_205, 296_975_494_591_860];
 /// `(p0 * p1) mod q`, pinned to avoid any multi-limb arithmetic at runtime.
 pub const INTERNAL_CRT_FIRST_TWO_PRODUCT_MOD_PROOF_MODULUS_V1: u64 = 7_842_192;
-/// `(p0 * p1 * p2) mod q`, used when the centered CRT representative is
-/// negative.
+/// `(p0 * p1 * p2) mod q`, used when the centered CRT representative is negative.
 pub const INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1: u64 = 1_125_856_084_674_325;
 /// Shared maximum number of projection- and response-mask rejection draws
 /// across one top-level proof invocation.
 ///
-/// Nested proof stages must reserve from this single budget; this is not a
-/// per-loop allowance.
+/// Nested proof stages must reserve from this single budget; this is not a per-loop allowance.
 pub const MAX_PROOF_SAMPLING_ATTEMPTS_V1: u32 = 4_096;
 /// Maximum projection-mask draws before refreshing the whole-proof witness.
 ///
@@ -181,13 +176,11 @@ pub const MAX_RESPONSE_SAMPLING_ATTEMPTS_PER_PROVE_ATTEMPT_V1: u32 = 1_024;
 pub const MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1: u32 = 4_096;
 /// Pinned mathematical and implementation source profile.
 ///
-/// The issuer is a concrete Falcon-512/NTRU specialization of the BLNS
-/// application relation.  This label deliberately does not claim that the
-/// full BLNS main-construction security reduction applies to the
-/// specialization.  The portable Falcon key-generation and recursive
-/// ffSampling core is derived from the pinned Unlicense `rust-fn-dsa`
-/// workspace revision; the holder sampler and Lantern proof relation follow the pinned
-/// LaZeR revision.
+/// The issuer is a concrete Falcon-512/NTRU specialization of the BLNS application relation. This
+/// label deliberately does not claim that the full BLNS main-construction security reduction
+/// applies to the specialization. The portable Falcon key-generation and recursive ffSampling core
+/// is derived from the pinned Unlicense `rust-fn-dsa` workspace revision; the holder sampler and
+/// Lantern proof relation follow the pinned LaZeR revision.
 pub const SOURCE_PROFILE_V1: &[u8] = b"BLNS-specialization-no-main-construction-reduction:eprint-2023-560|LaZeR-10eafeca4cd53ff4fc54193dce904dbd0026fefd|rust-fn-dsa-workspace-0.3-daf14859b5aa3f8d75c42966ba7de83e6eb59997-Unlicense|portable-safe-rust-no-SIMD";
 #[cfg(test)]
 mod tests {

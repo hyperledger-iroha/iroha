@@ -1,10 +1,9 @@
 //! Proof-facing adapter for compact trust-anchor membership.
 //!
-//! The adapter registers one log-seven trace. Thirteen rows own the exact
-//! shared SHA calls for one occupied leaf and twelve internal nodes, and 91
-//! rows serialize the root SPKI with one reusable byte decomposition. Four
-//! independently challenged running products bind those bytes simultaneously
-//! to the leaf SHA input and strict-DER output consumer. Two SHA factors are
+//! The adapter registers one log-seven trace. Thirteen rows own the exact shared SHA calls for one
+//! occupied leaf and twelve internal nodes, and 91 rows serialize the root SPKI with one reusable
+//! byte decomposition. Four independently challenged running products bind those bytes
+//! simultaneously to the leaf SHA input and strict-DER output consumer. Two SHA factors are
 //! advanced per hash row, keeping the maximum committed-column degree at three.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::accumulator_air::{
@@ -126,8 +125,7 @@ pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_LOCAL_SCRATCH_BYTES_V1: usize = 256 
 /// The first-release producer materializes the complete local LDE.  This
 /// ceiling therefore includes that LDE instead of claiming the lower resident
 /// bound of a future streaming implementation.  It excludes only the generic
-/// Merkle/FRI engine, whose independent ceiling is enforced by the local
-/// subproof prover.
+/// Merkle/FRI engine, whose independent ceiling is enforced by the local subproof prover.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_ADAPTER_RESIDENT_BYTES_V1: usize = 128 << 20;
 /// Governed ceiling for native-to-local-LDE radix-2 butterflies.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_LDE_BUTTERFLIES_V1: usize = 250_000_000;
@@ -370,8 +368,7 @@ pub(crate) struct ZkX509CaAccumulatorResourceEnvelopeV1 {
     pub(crate) maximum_masked_trace_degree: usize,
     /// FRI degree cap implied by the local domain and governed rate.
     pub(crate) fri_degree_cap: usize,
-    /// Maximum fixed-selector-aware cubic quotient before coefficient
-    /// chunking.
+    /// Maximum fixed-selector-aware cubic quotient before coefficient chunking.
     pub(crate) maximum_quotient_degree: usize,
     /// Minimum safe local LDE rows before power-of-two rounding.
     pub(crate) minimum_safe_lde_rows: usize,
@@ -2997,8 +2994,7 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1_with_rng<R: TryCryptoRng + ?
         .map_err(|_| ZkX509CaAccumulatorProofErrorV1::ProverSelfCheckFailed)?;
     Ok(encoded)
 }
-/// Construct the canonical dedicated compact-CA proof with operating-system
-/// cryptographic entropy.
+/// Construct the canonical dedicated compact-CA proof with operating-system cryptographic entropy.
 #[cfg(test)]
 pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1(
     trace: &ZkX509CaAccumulatorTraceV1,
@@ -3014,9 +3010,8 @@ pub(crate) fn prove_zk_x509_ca_accumulator_stark_v1(
 }
 /// Decode the sole compact-CA base root needed by the joint X5S1 schedule.
 ///
-/// Decoding establishes canonical shape and bounds but is not proof
-/// verification. An outer verifier may use this root to construct the shared
-/// pre-auxiliary schedule only if it subsequently accepts
+/// Decoding establishes canonical shape and bounds but is not proof verification. An outer verifier
+/// may use this root to construct the shared pre-auxiliary schedule only if it subsequently accepts
 /// [`verify_zk_x509_ca_accumulator_stark_v1`] for the same exact proof bytes.
 pub(crate) fn ca_accumulator_base_root_from_proof_v1(
     proof_bytes: &[u8],

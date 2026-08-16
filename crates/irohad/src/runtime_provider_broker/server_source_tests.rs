@@ -1987,6 +1987,7 @@ fn source_fetch_v2_rejects_retired_operation_28_and_legacy_wire() {
         Err(BrokerError::BindingMismatch)
     );
 }
+#[test]
 fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_allocating() {
     assert_eq!(
         validate_source_metadata_lengths(sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1, 1),

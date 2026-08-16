@@ -115,10 +115,9 @@ pub struct VegaPrivacyActionPublicInputV1 {
 }
 /// Private document material needed before the final device signature exists.
 ///
-/// The holder-device signature is intentionally absent because `H_dev`
-/// includes the transaction-intent digest. The action API derives the intent,
-/// constructs final `H_dev`, and signs it with the separately supplied device
-/// key before native witness validation and proving.
+/// The holder-device signature is intentionally absent because `H_dev` includes the
+/// transaction-intent digest. The action API derives the intent, constructs final `H_dev`, and
+/// signs it with the separately supplied device key before native witness validation and proving.
 pub struct VegaPrivacyActionWitnessMaterialV1 {
     issuer_authentication_sig_structure: Zeroizing<Vec<u8>>,
     mobile_security_object_payload: Zeroizing<Vec<u8>>,
@@ -384,8 +383,7 @@ impl SignedVegaPrivacyActionV1 {
         VegaPrivacyActionEffectV1::ActionVerificationAndFinalityOnly
     }
 }
-/// Consensus field whose duplicated binding did not match the public
-/// statement.
+/// Consensus field whose duplicated binding did not match the public statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VegaBindingFieldV1 {
     /// Genesis-header-derived network identity.
@@ -512,8 +510,7 @@ pub enum VegaMdlError {
         /// Stable public-key label.
         field: &'static str,
     },
-    /// An ECDSA signature component is zero, non-canonical, or outside P-256's
-    /// scalar order.
+    /// An ECDSA signature component is zero, non-canonical, or outside P-256's scalar order.
     #[error("Vega {role:?} ES256 signature encoding is invalid")]
     InvalidSignatureEncoding {
         /// Signature role.
@@ -538,8 +535,7 @@ pub enum VegaMdlError {
     /// The credential is expired on the public presentation date.
     #[error("Vega credential validUntil date must be after presentation date")]
     CredentialExpired,
-    /// The issuer's signing timestamp follows the credential's activation
-    /// timestamp.
+    /// The issuer's signing timestamp follows the credential's activation timestamp.
     #[error("Vega credential signed timestamp must not follow validFrom timestamp")]
     CredentialSignedAfterValidFrom,
     /// The credential is not active on the public presentation date.
@@ -681,8 +677,7 @@ pub struct VegaMdlConsensusBindingV1<'a> {
     pub engine_manifest_digest: [u8; 32],
 }
 impl<'a> VegaMdlConsensusBindingV1<'a> {
-    /// Build a binding from a statement context plus the independently trusted
-    /// genesis hash.
+    /// Build a binding from a statement context plus the independently trusted genesis hash.
     #[must_use]
     pub fn from_context(context: &'a PrivacyStatementContextV1, genesis_hash: [u8; 32]) -> Self {
         Self {
@@ -846,17 +841,15 @@ impl<R: RngCore + CryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> 
 }
 /// Preflight and prove the complete closed Figure 9 mDL relation.
 ///
-/// The public statement is checked against the independently supplied
-/// consensus binding and trusted block date before private parsing. The same
-/// typed statement and binding are then passed to the circuit and
-/// Fiat--Shamir transcript; native preflight is never accepted as a substitute
-/// for the proof relation.
+/// The public statement is checked against the independently supplied consensus binding and trusted
+/// block date before private parsing. The same typed statement and binding are then passed to the
+/// circuit and Fiat--Shamir transcript; native preflight is never accepted as a substitute for the
+/// proof relation.
 ///
 /// # Errors
 ///
-/// Fails closed on malformed consensus context, a stale or malformed
-/// credential, invalid ES256 authentication, random-source failure, an
-/// unsatisfied circuit, or proof-system failure.
+/// Fails closed on malformed consensus context, a stale or malformed credential, invalid ES256
+/// authentication, random-source failure, an unsatisfied circuit, or proof-system failure.
 pub fn prove_mdl_figure9_v1<R: RngCore + CryptoRng>(
     statement: &VegaExistingCredentialStatementV1,
     binding: &VegaMdlConsensusBindingV1<'_>,
@@ -1138,11 +1131,10 @@ fn validate_vega_payload_integrity_v1(
 /// Prepare and prove one canonical direct Vega action using caller-provided
 /// cryptographically secure proof randomness.
 ///
-/// This pure proving half never receives the transaction signing key. The
-/// holder-device key is witness material: it signs only the final derived
-/// `H_dev`, after the proof-independent transaction intent has been computed.
-/// The final one-instruction payload is intrinsically validated, sealed by
-/// exact metrics, and revalidated against the original intent before return.
+/// This pure proving half never receives the transaction signing key. The holder-device key is
+/// witness material: it signs only the final derived `H_dev`, after the proof-independent
+/// transaction intent has been computed. The final one-instruction payload is intrinsically
+/// validated, sealed by exact metrics, and revalidated against the original intent before return.
 ///
 /// # Errors
 ///
@@ -1280,8 +1272,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns the same closed failures as
-/// [`prepare_vega_privacy_action_with_rng_v1`].
+/// Returns the same closed failures as [`prepare_vega_privacy_action_with_rng_v1`].
 pub fn prepare_vega_privacy_action_v1(
     context: VegaPrivacyActionTransactionContextV1,
     input: VegaPrivacyActionPublicInputV1,
@@ -1392,8 +1383,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns the same closed failures as
-/// [`build_signed_vega_privacy_action_with_rng_v1`].
+/// Returns the same closed failures as [`build_signed_vega_privacy_action_with_rng_v1`].
 #[allow(clippy::too_many_arguments)]
 pub fn build_signed_vega_privacy_action_v1(
     context: VegaPrivacyActionTransactionContextV1,
@@ -1521,8 +1511,7 @@ pub fn device_authentication_frame_v1(
 ///
 /// # Errors
 ///
-/// Returns [`VegaMdlError`] when the statement or duplicated binding is
-/// malformed.
+/// Returns [`VegaMdlError`] when the statement or duplicated binding is malformed.
 pub fn derive_device_authentication_digest_v1(
     statement: &VegaExistingCredentialStatementV1,
     binding: &VegaMdlConsensusBindingV1<'_>,
@@ -1532,13 +1521,11 @@ pub fn derive_device_authentication_digest_v1(
         Sha256::digest(frame).into(),
     ))
 }
-/// Require the statement's public date to equal the trusted block timestamp's
-/// UTC date.
+/// Require the statement's public date to equal the trusted block timestamp's UTC date.
 ///
 /// # Errors
 ///
-/// Returns [`VegaMdlError`] when the timestamp is outside the supported range
-/// or the dates differ.
+/// Returns [`VegaMdlError`] when the timestamp is outside the supported range or the dates differ.
 pub fn validate_trusted_presentation_date_v1(
     statement: &VegaExistingCredentialStatementV1,
     trusted_block_timestamp_ms: u64,

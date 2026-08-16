@@ -106,7 +106,6 @@ use reqwest::{
     blocking::Client as BlockingHttpClient,
     header::{self, HeaderValue},
 };
-use sha2::{Digest as _, Sha256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriter,
     bundle_archive::{
@@ -26772,7 +26771,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     }
     #[test]
     fn static_asset_bytes_order_and_reconstruction_are_stable() {
-        use sha2::Digest as _;
+        use sha2::{Digest as _, Sha256};
         let mut digest = Sha256::new();
         for asset in [WEBAPP_API_TAIL_V1, PII_API_TAIL_V1] {
             digest.update(Sha256::digest(asset.as_bytes()));

@@ -440,10 +440,9 @@ pub struct MusubiArchiveLocationPageV1 {
 }
 /// Authoritative cache-retention classification for one exact archive identity.
 ///
-/// An identity unknown to the queried registry is retained fail-closed because
-/// the user cache is content-addressed but not chain-scoped. Replication health
-/// never makes a published archive prunable: locked consumers may still need a
-/// cached below-quorum or unavailable archive.
+/// An identity unknown to the queried registry is retained fail-closed because the user cache is
+/// content-addressed but not chain-scoped. Replication health never makes a published archive
+/// prunable: locked consumers may still need a cached below-quorum or unavailable archive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
@@ -1419,9 +1418,8 @@ pub struct MusubiSearchQueryV1 {
 impl MusubiSearchQueryV1 {
     /// Return sorted, distinct, Unicode-lowercased exact search terms.
     ///
-    /// Hyphenated ASCII components contribute both their complete spelling and
-    /// their alphanumeric words. No prefix, edit-distance, or fuzzy expansion is
-    /// performed.
+    /// Hyphenated ASCII components contribute both their complete spelling and their alphanumeric
+    /// words. No prefix, edit-distance, or fuzzy expansion is performed.
     ///
     /// # Errors
     ///

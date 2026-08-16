@@ -1,0 +1,5 @@
+
+        module RemovedMapIteration {
+            fn g(Map<int, int> m) -> int { return keys_take2(m, 0, 1); }
+        }
+    

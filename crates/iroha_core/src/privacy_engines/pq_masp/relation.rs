@@ -1,10 +1,9 @@
 //! Canonical PQ-MASP note relation.
 //!
-//! The transparent proof establishes note membership, stable nullifiers,
-//! ownership by the ML-DSA key committed in the public statement, output
-//! commitments, and checked value conservation. ML-DSA verification and the
-//! ML-KEM/XChaCha output codec are separate native proof-wire checks; neither
-//! is represented by a caller-selectable backend tag.
+//! The transparent proof establishes note membership, stable nullifiers, ownership by the ML-DSA
+//! key committed in the public statement, output commitments, and checked value conservation.
+//! ML-DSA verification and the ML-KEM/XChaCha output codec are separate native proof-wire checks;
+//! neither is represented by a caller-selectable backend tag.
 use iroha_data_model::privacy::{
     PQ_MASP_MAX_INPUTS_V1, PQ_MASP_MAX_OUTPUTS_V1, PqMaspStarkStatementV1,
     PrivacyAuthorizationKeyDigestV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
@@ -516,9 +515,8 @@ pub fn derive_pq_masp_note_commitment_v1(
 }
 /// Derive a stable nullifier for a committed note.
 ///
-/// Transaction, action, anchor, and epoch data are intentionally absent.
-/// Including any of them would let the same note derive a fresh nullifier for
-/// a second spend.
+/// Transaction, action, anchor, and epoch data are intentionally absent. Including any of them
+/// would let the same note derive a fresh nullifier for a second spend.
 pub fn derive_pq_masp_nullifier_v1(
     statement: &PqMaspStarkStatementV1,
     nullifier_secret: &[u8; 32],

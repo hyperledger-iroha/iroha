@@ -1,9 +1,8 @@
 //! Finalized-ledger routing authority projection and bounded cache.
 //!
-//! SFM-1 routing authority is a deterministic join of approved pin manifests
-//! and completed replication orders. This module deliberately accepts only an
-//! immutable finalized-state source: provider adverts can add current
-//! connectivity details later, but cannot grant content authority.
+//! SFM-1 routing authority is a deterministic join of approved pin manifests and completed
+//! replication orders. This module deliberately accepts only an immutable finalized-state source:
+//! provider adverts can add current connectivity details later, but cannot grant content authority.
 use iroha_data_model::sorafs::pin_registry::{
     ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderId,
     ReplicationOrderRecord, ReplicationOrderStatus,
@@ -141,8 +140,7 @@ pub trait RoutingAuthoritySource {
     ///
     /// # Errors
     ///
-    /// Returns a routing-authority error when the view has no coherent
-    /// finalized identity.
+    /// Returns a routing-authority error when the view has no coherent finalized identity.
     fn finalized_identity(&self) -> Result<FinalizedStateIdentityV1, RoutingAuthorityError>;
     /// Rebuild the authority projection for `identity` from this same view.
     ///
@@ -180,11 +178,10 @@ struct CachedAuthorityProjection {
 }
 /// Bounded, single-flight cache for the SFM-1 finalized authority join.
 ///
-/// One projection (or deterministic failure) is retained. Older identities
-/// and same-height conflicting hashes fail closed without evicting the cached
-/// entry. A newer identity is rebuilt while holding the single-flight lock and
-/// atomically replaces the previous result; no local fallback can become
-/// authoritative.
+/// One projection (or deterministic failure) is retained. Older identities and same-height
+/// conflicting hashes fail closed without evicting the cached entry. A newer identity is rebuilt
+/// while holding the single-flight lock and atomically replaces the previous result; no local
+/// fallback can become authoritative.
 #[derive(Debug, Default)]
 pub struct RoutingAuthorityCache {
     cached: tokio::sync::Mutex<Option<CachedAuthorityProjection>>,
@@ -241,9 +238,8 @@ impl RoutingAuthorityCacheOutcome {
 impl RoutingAuthorityCache {
     /// Resolve or rebuild the projection from one immutable finalized source.
     ///
-    /// `open_source` is invoked after the single-flight lock is acquired. This
-    /// lets a service open one point-in-time ledger view without carrying that
-    /// view across an async suspension.
+    /// `open_source` is invoked after the single-flight lock is acquired. This lets a service open
+    /// one point-in-time ledger view without carrying that view across an async suspension.
     pub async fn get_or_rebuild<F, S>(
         &self,
         open_source: F,
@@ -329,15 +325,13 @@ fn increment(counter: &AtomicU64) {
 }
 /// Build the canonical SFM-1 projection from finalized ledger records.
 ///
-/// Input iteration order does not affect the projection or its canonical
-/// bytes. Only approved manifests and valid completed replication orders at
-/// `identity.height()` grant authority.
+/// Input iteration order does not affect the projection or its canonical bytes. Only approved
+/// manifests and valid completed replication orders at `identity.height()` grant authority.
 ///
 /// # Errors
 ///
-/// Returns [`RoutingAuthorityError::CapacityExceeded`] for bounded-resource
-/// violations and [`RoutingAuthorityError::Corrupt`] for non-canonical or
-/// inconsistent ledger state.
+/// Returns [`RoutingAuthorityError::CapacityExceeded`] for bounded-resource violations and
+/// [`RoutingAuthorityError::Corrupt`] for non-canonical or inconsistent ledger state.
 pub fn build_routing_authority_projection<'a, M, O>(
     identity: FinalizedStateIdentityV1,
     manifests: M,

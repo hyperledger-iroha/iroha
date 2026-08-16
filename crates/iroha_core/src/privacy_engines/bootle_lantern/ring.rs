@@ -102,8 +102,7 @@ impl ApplicationPolynomialV1 {
             coefficients: output,
         }
     }
-    /// Encode one direct 64-bit attribute as little-endian binary
-    /// coefficients.
+    /// Encode one direct 64-bit attribute as little-endian binary coefficients.
     #[must_use]
     pub fn from_direct_attribute(attribute: [u8; 8]) -> Self {
         let mut coefficients = [0_u16; APPLICATION_RING_DEGREE_V1];
@@ -748,9 +747,8 @@ fn equal_bit_u64_v1(lhs: u64, rhs: u64) -> u64 {
 }
 /// Return one exactly when `lhs > rhs`.
 ///
-/// Every caller supplies values below `2^63` whose absolute difference is
-/// below `2^63`, so the high bit of the wrapped reverse subtraction is the
-/// borrow bit.
+/// Every caller supplies values below `2^63` whose absolute difference is below `2^63`, so the high
+/// bit of the wrapped reverse subtraction is the borrow bit.
 fn greater_than_bit_u64_v1(lhs: u64, rhs: u64) -> u64 {
     rhs.wrapping_sub(lhs) >> 63
 }

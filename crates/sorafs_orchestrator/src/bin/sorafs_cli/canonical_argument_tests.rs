@@ -169,21 +169,21 @@ fn decimal_arg_parser_rejects_noncanonical_tokens() {
     }
     assert_eq!(
         parse_decimal_arg("deposit", "1.25", CONTEXT_APPEAL_SETTLE).expect("canonical decimal"),
-        Decimal::new(125, 2)
+        rust_decimal::Decimal::new(125, 2)
     );
     assert_eq!(
         parse_decimal_arg("deposit", "0", CONTEXT_APPEAL_SETTLE).expect("canonical zero"),
-        Decimal::ZERO
+        rust_decimal::Decimal::ZERO
     );
     assert_eq!(
         parse_decimal_arg("deposit", "0.25", CONTEXT_APPEAL_SETTLE)
             .expect("canonical fractional decimal"),
-        Decimal::new(25, 2)
+        rust_decimal::Decimal::new(25, 2)
     );
     assert_eq!(
         parse_decimal_arg("deposit", "-1.25", CONTEXT_APPEAL_SETTLE)
             .expect("canonical negative decimal remains a parser-level value"),
-        Decimal::new(-125, 2)
+        rust_decimal::Decimal::new(-125, 2)
     );
 }
 #[test]

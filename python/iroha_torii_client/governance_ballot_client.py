@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Optional, Tuple
 
 if TYPE_CHECKING:
     from .client import BallotSubmitResult, ToriiCanonicalRequestAuth
@@ -17,7 +17,6 @@ def create_governance_ballot_client_mixin(
     ballot_submit_result_type: type,
     offline_hash_literal: Callable[[Any, str], str],
     canonical_quantity: Callable[[Any, str], str],
-    build_canonical_request_headers: Callable[..., Dict[str, str]],
 ) -> type:
     """Bind client-local models and validators to ballot transport methods."""
 
@@ -27,7 +26,6 @@ def create_governance_ballot_client_mixin(
     _ballot_submit_result_type = ballot_submit_result_type
     _offline_hash_literal = offline_hash_literal
     _canonical_quantity = canonical_quantity
-    _build_canonical_request_headers = build_canonical_request_headers
 
     class GovernanceBallotClientMixin:
         def submit_plain_ballot(
@@ -59,7 +57,7 @@ def create_governance_ballot_client_mixin(
                 raise TypeError("plain ballot duration_blocks must be an unsigned 64-bit integer")
             if duration_blocks < 0 or duration_blocks > (1 << 64) - 1:
                 raise ValueError("plain ballot duration_blocks must fit unsigned 64-bit range")
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "authority": authority,
                 "network_id": network_id,
                 "referendum_id": referendum_id,
@@ -117,7 +115,7 @@ def create_governance_ballot_client_mixin(
                 election_id,
                 context="zk ballot v1 election_id",
             )
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "authority": authority,
                 "network_id": network_id,
                 "election_id": election_id,
@@ -217,28 +215,20 @@ def create_governance_ballot_client_mixin(
         ) -> Mapping[str, Any]:
             """Draft one exact-network ballot with one non-replayable request."""
 
-            network_literal, principal, canonical_auth = self._network_governance_ballot_identity(
+            _network_literal, _principal, canonical_auth = self._network_governance_ballot_identity(
                 network_id=network_id,
                 authority=authority,
                 canonical_auth=canonical_auth,
                 context=context,
             )
             data = self._encode_json_body(payload)
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
-            headers.update(
-                _build_canonical_request_headers(
-                    network_id=canonical_auth.network_id,
-                    account_id=principal,
-                    signer=canonical_auth.signer,
-                    method="POST",
-                    path=path,
-                    body=data,
-                    timestamp_ms=canonical_auth.timestamp_ms,
-                    nonce=canonical_auth.nonce,
-                )
+            headers = self._canonical_request_headers(
+                "POST",
+                path,
+                data,
+                canonical_auth=canonical_auth,
+                headers=None,
+                has_body=True,
             )
             response = self._request(
                 "POST",

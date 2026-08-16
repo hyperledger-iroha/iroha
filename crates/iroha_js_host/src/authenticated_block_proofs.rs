@@ -1,10 +1,9 @@
 //! Authenticated native verification for Torii block-entry proofs.
 //!
-//! The JavaScript SDK's pure Merkle helper deliberately cannot establish a
-//! trust anchor. This module accepts the exact executed block wire and Torii's
-//! canonical finality/proof archives, verifies Sumeragi-v2 finality under an
-//! application-pinned network context, and only then asks the data model to
-//! derive its non-serializable `TrustedBlockProofAnchor` capability.
+//! The JavaScript SDK's pure Merkle helper deliberately cannot establish a trust anchor. This
+//! module accepts the exact executed block wire and Torii's canonical finality/proof archives,
+//! verifies Sumeragi-v2 finality under an application-pinned network context, and only then asks
+//! the data model to derive its non-serializable `TrustedBlockProofAnchor` capability.
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
@@ -31,10 +30,9 @@ const AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1: usize = 9 * 1024 *
 const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Bounded inputs for one authenticated block-proof verification.
 ///
-/// `previous_finality_proof_norito` is the optional last proof in the
-/// application's already-pinned verifier state. When present, it must match
-/// `trusted_context_id` and the target proof must be its immediate successor.
-/// When absent, the target proof itself must match `trusted_context_id`.
+/// `previous_finality_proof_norito` is the optional last proof in the application's already-pinned
+/// verifier state. When present, it must match `trusted_context_id` and the target proof must be
+/// its immediate successor. When absent, the target proof itself must match `trusted_context_id`.
 #[napi(object, use_nullable = true)]
 pub struct JsAuthenticatedBlockProofInputV1 {
     /// Exact bridge ABI version. The first release requires `1`.
@@ -422,7 +420,7 @@ mod tests {
             },
             proofs::ExecutionReceiptProof,
         },
-        bridge::{BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeFinalityProof},
+        bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof},
         peer::PeerId,
         transaction::{
             FeePaymentIntent, TransactionResultInner,
@@ -513,7 +511,7 @@ mod tests {
             finalized_artifact_for_block(&block, network_id, execution_commitment, None, 1);
         let trusted_context_id = *artifact.context_id().0.as_ref();
         let finality = BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
             block_header: block.header(),
             finality_artifact: artifact,
         };
@@ -707,7 +705,7 @@ mod tests {
         );
         artifact.verify().expect("successor finality verifies");
         let proof = BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
             block_header: block.header(),
             finality_artifact: artifact,
         };
@@ -780,6 +778,42 @@ mod tests {
         .expect("valid authenticated block proof");
         assert!(verdict.valid);
         assert_eq!(verdict.block_height, 1);
+        assert_eq!(
+            verdict.height_context_id_hex,
+            hex::encode(fixture.trusted_context_id)
+        );
+    }
+    #[test]
+    fn exported_boundary_authenticates_fixture() {
+        let fixture = make_fixture();
+        let input = JsAuthenticatedBlockProofInputV1 {
+            version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
+            network_id: FIXTURE_NETWORK_ID.to_owned(),
+            trusted_context_id: Buffer::from(fixture.trusted_context_id.to_vec()),
+            expected_entry_hash: Buffer::from(fixture.block_proofs.entry_hash.as_ref().to_vec()),
+            previous_finality_proof_norito: None,
+            finality_proof_norito: Buffer::from(
+                norito::encode_canonical(&fixture.finality).expect("encode finality proof"),
+            ),
+            executed_block_wire: Buffer::from(
+                fixture
+                    .block
+                    .encode_wire()
+                    .expect("encode executed block wire"),
+            ),
+            block_proofs_norito: Buffer::from(
+                norito::encode_canonical(&fixture.block_proofs).expect("encode block proofs"),
+            ),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build test runtime");
+        let verdict = runtime
+            .block_on(block_proofs_verify_authenticated_v1(input))
+            .expect("authenticated exported boundary");
+        assert!(verdict.valid);
+        assert_eq!(verdict.code, "valid");
+        assert_eq!(verdict.block_height, "1");
         assert_eq!(
             verdict.height_context_id_hex,
             hex::encode(fixture.trusted_context_id)

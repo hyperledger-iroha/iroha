@@ -1,20 +1,16 @@
 /// Runtime-only daemon dependencies supplied by the deployment launcher.
 ///
-/// Implementations of the moderation wrapper, privacy-cycle PRF provider,
-/// stream-token and native proof/repair/reserve/orderbook/moderation signers,
-/// moderation durable handoffs, evidence-viewer checkpoint authority,
-/// appeal-finance transaction signers,
-/// role-separated `PoTR` signers, exact-view billing queries, threshold/HSM
-/// signers, immutable publication, acknowledgement, sealed witness storage,
-/// authenticated Governance DAG publication/readback/head updates, sealed
-/// monotonic Governance DAG checkpoints, externally sealed reputation journal
-/// checkpoints, the Soracloud mutation/provenance signer, and the authenticated
-/// Hugging Face credential provider, plus the reserved Musubi provider-
-/// attestation clock, approval signer, and authenticated inventory, are the
-/// reference-node boundaries for
-/// ledger access, PKCS#11, managed-KMS, and threshold services. Provider
-/// credentials, unwrapped keys, PRF shares, seeds, and outputs must stay inside
-/// those implementations and must never be sourced from `iroha_config`.
+/// Implementations of the moderation wrapper, privacy-cycle PRF provider, stream-token and native
+/// proof/repair/reserve/orderbook/moderation signers, moderation durable handoffs, evidence-viewer
+/// checkpoint authority, appeal-finance transaction signers, role-separated `PoTR` signers,
+/// exact-view billing queries, threshold/HSM signers, immutable publication, acknowledgement,
+/// sealed witness storage, authenticated Governance DAG publication/readback/head updates, sealed
+/// monotonic Governance DAG checkpoints, externally sealed reputation journal checkpoints, the
+/// Soracloud mutation/provenance signer, and the authenticated Hugging Face credential provider,
+/// plus the reserved Musubi provider- attestation clock, approval signer, and authenticated
+/// inventory, are the reference-node boundaries for ledger access, PKCS#11, managed-KMS, and
+/// threshold services. Provider credentials, unwrapped keys, PRF shares, seeds, and outputs must
+/// stay inside those implementations and must never be sourced from `iroha_config`.
 #[derive(Clone, Default)]
 pub struct IrohaRuntimeDeps {
     bootle_lantern_issuance_provider_registry: Option<
@@ -229,8 +225,7 @@ impl IrohaRuntimeDeps {
         self.bootle_lantern_issuance_provider_registry = Some(registry);
         self
     }
-    /// Attach the production PKCS#11/KMS wrapper for moderation quarantine
-    /// object data keys.
+    /// Attach the production PKCS#11/KMS wrapper for moderation quarantine object data keys.
     #[must_use]
     pub fn with_moderation_quarantine_key_wrapper(
         mut self,
@@ -239,8 +234,7 @@ impl IrohaRuntimeDeps {
         self.moderation_quarantine_key_wrapper = Some(key_wrapper);
         self
     }
-    /// Attach the production threshold-PRF provider for differential-privacy
-    /// publication cycles.
+    /// Attach the production threshold-PRF provider for differential-privacy publication cycles.
     #[must_use]
     pub fn with_privacy_cycle_prf_provider(
         mut self,
@@ -283,9 +277,8 @@ impl IrohaRuntimeDeps {
     /// Attach the authenticated authoritative-head reader paired with the
     /// fused privacy target writer.
     ///
-    /// Enabled privacy publication requires both roles to expose the exact
-    /// configured handle, revision, and policy digest; partial or mismatched
-    /// pairs fail startup.
+    /// Enabled privacy publication requires both roles to expose the exact configured handle,
+    /// revision, and policy digest; partial or mismatched pairs fail startup.
     #[must_use]
     pub fn with_sorafs_fenced_transparency_head_reader(
         mut self,
@@ -294,8 +287,7 @@ impl IrohaRuntimeDeps {
         self.sorafs_fenced_transparency_head_reader = Some(reader);
         self
     }
-    /// Attach the production HSM/KMS signer for the embedded `SoraFS`
-    /// Governance DAG publisher.
+    /// Attach the production HSM/KMS signer for the embedded `SoraFS` Governance DAG publisher.
     #[must_use]
     pub fn with_sorafs_governance_dag_signer(
         mut self,
@@ -375,12 +367,10 @@ impl IrohaRuntimeDeps {
         self.sorafs_appeal_finance_checkpoint_runtime = Some(runtime);
         self
     }
-    /// Attach a raw runtime-only signer for authoritative proof-outcome
-    /// transactions.
+    /// Attach a raw runtime-only signer for authoritative proof-outcome transactions.
     ///
-    /// The deployment registry resolver replaces this provider with an
-    /// immutable facade qualified against the exact configured role, authority,
-    /// algorithm, key, revision, and policy digest.
+    /// The deployment registry resolver replaces this provider with an immutable facade qualified
+    /// against the exact configured role, authority, algorithm, key, revision, and policy digest.
     #[must_use]
     pub fn with_sorafs_proof_outcome_signer(
         mut self,
@@ -391,9 +381,8 @@ impl IrohaRuntimeDeps {
     }
     /// Attach a raw runtime-only signer for native repair transactions.
     ///
-    /// The deployment registry resolver replaces this provider with an
-    /// immutable facade qualified against the exact configured role, authority,
-    /// algorithm, key, revision, and policy digest.
+    /// The deployment registry resolver replaces this provider with an immutable facade qualified
+    /// against the exact configured role, authority, algorithm, key, revision, and policy digest.
     #[must_use]
     pub fn with_sorafs_repair_transaction_signer(
         mut self,
@@ -404,9 +393,8 @@ impl IrohaRuntimeDeps {
     }
     /// Attach a raw runtime-only signer for native reserve/rent transactions.
     ///
-    /// The deployment registry resolver replaces this provider with an
-    /// immutable facade qualified against the exact configured role, authority,
-    /// algorithm, key, revision, and policy digest.
+    /// The deployment registry resolver replaces this provider with an immutable facade qualified
+    /// against the exact configured role, authority, algorithm, key, revision, and policy digest.
     #[must_use]
     pub fn with_sorafs_reserve_transaction_signer(
         mut self,
@@ -417,9 +405,8 @@ impl IrohaRuntimeDeps {
     }
     /// Attach a raw runtime-only signer for native orderbook transactions.
     ///
-    /// The deployment registry resolver replaces this provider with an
-    /// immutable facade qualified against the exact configured role, authority,
-    /// algorithm, key, revision, and policy digest.
+    /// The deployment registry resolver replaces this provider with an immutable facade qualified
+    /// against the exact configured role, authority, algorithm, key, revision, and policy digest.
     #[must_use]
     pub fn with_sorafs_orderbook_transaction_signer(
         mut self,
@@ -443,10 +430,9 @@ impl IrohaRuntimeDeps {
     }
     /// Attach the raw deployment-owned authenticated HF credential provider.
     ///
-    /// The registry resolver replaces this provider with an immutable facade
-    /// qualified against the exact configured handle, revision, policy digest,
-    /// active posture, and non-test posture. Bearer credentials remain inside
-    /// the provider.
+    /// The registry resolver replaces this provider with an immutable facade qualified against the
+    /// exact configured handle, revision, policy digest, active posture, and non-test posture.
+    /// Bearer credentials remain inside the provider.
     #[must_use]
     pub fn with_soracloud_hf_inference_credential_provider(
         mut self,
@@ -455,8 +441,7 @@ impl IrohaRuntimeDeps {
         self.soracloud_hf_inference_credential_provider = Some(provider);
         self
     }
-    /// Attach the runtime-only HSM/KMS signer for exact moderation native
-    /// transaction envelopes.
+    /// Attach the runtime-only HSM/KMS signer for exact moderation native transaction envelopes.
     #[must_use]
     pub fn with_sorafs_moderation_transaction_signer(
         mut self,
@@ -467,8 +452,7 @@ impl IrohaRuntimeDeps {
         self.sorafs_moderation_transaction_signer = Some(signer);
         self
     }
-    /// Attach the durable appeal-finance boundary for finalized moderation
-    /// settlement handoffs.
+    /// Attach the durable appeal-finance boundary for finalized moderation settlement handoffs.
     #[must_use]
     pub fn with_sorafs_moderation_settlement_handoff(
         mut self,
@@ -533,8 +517,7 @@ impl IrohaRuntimeDeps {
         self.sorafs_evidence_viewer_webauthn = Some(boundary);
         self
     }
-    /// Attach the finalized assignment/role grant authority for evidence
-    /// viewing.
+    /// Attach the finalized assignment/role grant authority for evidence viewing.
     #[must_use]
     pub fn with_sorafs_evidence_viewer_grants(
         mut self,
@@ -562,9 +545,8 @@ impl IrohaRuntimeDeps {
         self.sorafs_evidence_viewer_erasure = Some(boundary);
         self
     }
-    /// Attach the deployment-owned linearizable evidence-viewer checkpoint
-    /// authority. Its implementation owns all CAS credentials and sealed
-    /// persistence state.
+    /// Attach the deployment-owned linearizable evidence-viewer checkpoint authority. Its
+    /// implementation owns all CAS credentials and sealed persistence state.
     #[must_use]
     pub fn with_sorafs_evidence_viewer_checkpoint_store(
         mut self,
@@ -600,9 +582,8 @@ impl IrohaRuntimeDeps {
         self.sorafs_evidence_viewer_transparency_publisher = Some(publisher);
         self
     }
-    /// Attach the deployment-owned registry for all runtime-only `PoP`
-    /// enrollment, issuer, finalized-query, wallet, and authentication
-    /// providers.
+    /// Attach the deployment-owned registry for all runtime-only `PoP` enrollment, issuer,
+    /// finalized-query, wallet, and authentication providers.
     #[must_use]
     pub fn with_sorafs_pop_credential_provider_registry(
         mut self,
@@ -672,8 +653,7 @@ impl IrohaRuntimeDeps {
         self.sorafs_reputation_journal_checkpoint_provider = Some(provider);
         self
     }
-    /// Attach the external threshold-signing service for exact committed
-    /// reputation material.
+    /// Attach the external threshold-signing service for exact committed reputation material.
     #[must_use]
     pub fn with_sorafs_reputation_threshold_signer(
         mut self,
@@ -692,8 +672,7 @@ impl IrohaRuntimeDeps {
         self.sorafs_reputation_governance_dag = Some(governance_dag);
         self
     }
-    /// Attach the separate sealed monotonic finalized-reputation archive
-    /// retention authority.
+    /// Attach the separate sealed monotonic finalized-reputation archive retention authority.
     #[must_use]
     pub fn with_sorafs_reputation_retention_authority(
         mut self,

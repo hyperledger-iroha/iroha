@@ -22,3 +22,10 @@ fn reuse_archived_alias(attrs: &[Attribute]) -> bool {
         .expect("container attributes must be validated before code generation")
         .reuse_archived
 }
+
+fn u8_array_len(ty: &syn::Type) -> Option<&syn::Expr> {
+    let syn::Type::Array(array) = ty else {
+        return None;
+    };
+    matches!(&*array.elem, syn::Type::Path(path) if path.path.is_ident("u8")).then_some(&array.len)
+}

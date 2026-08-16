@@ -9,10 +9,9 @@ const INDENT: &str = "    ";
 const TARGET_COLUMNS: usize = 100;
 /// Format one syntactically valid Kotodama V1 source file.
 ///
-/// The formatter consumes the same lossless tokens used to build the compiler
-/// AST. Invalid sources are returned as diagnostics rather than being partly
-/// rewritten. Comments and literal spelling are preserved byte-for-byte;
-/// whitespace between tokens is canonicalized.
+/// The formatter consumes the same lossless tokens used to build the compiler AST. Invalid sources
+/// are returned as diagnostics rather than being partly rewritten. Comments and literal spelling
+/// are preserved byte-for-byte; whitespace between tokens is canonicalized.
 pub fn format_source(
     source: &SourceFile,
     budget: FrontendBudget,
@@ -393,11 +392,10 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
     }
     /// Project the canonical inline rendering through `close`.
     ///
-    /// Token ranges include discarded source whitespace and are measured in
-    /// bytes, so their raw width is not a formatter column count. This small
-    /// projection mirrors the formatter's token spacing and counts Unicode
-    /// scalar values, matching [`SourceFile::line_column`]. A construct that
-    /// necessarily emits a newline has no inline projection.
+    /// Token ranges include discarded source whitespace and are measured in bytes, so their raw
+    /// width is not a formatter column count. This small projection mirrors the formatter's token
+    /// spacing and counts Unicode scalar values, matching [`SourceFile::line_column`]. A construct
+    /// that necessarily emits a newline has no inline projection.
     fn projected_inline_column(&self, open: usize, close: usize) -> Option<usize> {
         let current_line = self.output.rsplit('\n').next().unwrap_or_default();
         let initial_column = if self.at_line_start {

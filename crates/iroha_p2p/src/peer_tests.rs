@@ -1,19 +1,20 @@
 // Peer transport regressions are included at module scope to preserve private-item access.
 #[cfg(test)]
 mod tests {
+    use super::{
+        Connection, SoranetHandshakeConfig, cryptographer::Cryptographer, state::*, test_network_id,
+    };
+    use crate::{ConfidentialHandshakeCaps, ConsensusConfigCaps, ConsensusMode, RelayRole};
+    use iroha_crypto::{Algorithm, KeyPair, Signature, encryption::ChaCha20Poly1305};
+    use iroha_primitives::addr::SocketAddr;
+    use norito::codec::{DecodeAll, Encode};
     use std::{
         pin::Pin,
         sync::Arc,
         task::{Context, Poll},
         time::Duration,
     };
-    use iroha_crypto::{Algorithm, KeyPair, Signature, encryption::ChaCha20Poly1305};
-    use iroha_primitives::addr::SocketAddr;
-    use norito::codec::{DecodeAll, Encode};
     use tokio::io::AsyncWrite;
-    use super::test_network_id;
-    use super::{Connection, SoranetHandshakeConfig, cryptographer::Cryptographer, state::*};
-    use crate::{ConfidentialHandshakeCaps, ConsensusConfigCaps, ConsensusMode, RelayRole};
     const TEST_SORANET_TRANSPORT_BINDING: [u8; iroha_crypto::Hash::LENGTH] =
         [0xD7; iroha_crypto::Hash::LENGTH];
     fn delegation_test_key(seed: u8, algorithm: Algorithm) -> KeyPair {
@@ -1142,7 +1143,6 @@ mod tests {
     async fn handshake_rejects_capabilities_changed_after_signing() {
         let key_pair = KeyPair::random();
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let network_id = test_network_id("test-chain");
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x4E; 32])
             .expect("valid key length");
         let mut hello = unsigned_handshake_hello(&key_pair, addr);
@@ -1816,7 +1816,6 @@ mod tests {
             let key_pair = KeyPair::random();
             let cryptographer =
                 Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32]).unwrap();
-            let network_id = test_network_id("test-chain");
             let mut hello = unsigned_handshake_hello(&key_pair, addr);
             let payload = handshake_signature_payload::<ChaCha20Poly1305>(
                 &cryptographer,
@@ -1869,7 +1868,6 @@ mod tests {
         .expect("derive checked ML-DSA handshake fixture keypair");
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[14u8; 32]).unwrap();
-        let network_id = test_network_id("test-chain");
         let mut hello = unsigned_handshake_hello(&key_pair, addr);
         let payload = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,

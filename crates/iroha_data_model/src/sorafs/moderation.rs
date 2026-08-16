@@ -1,10 +1,9 @@
 //! Moderation model, reproducibility, and ballot schemas (MINFO-1b / SFM-4).
 //!
-//! These types capture the governance-signed fingerprints that allow gateways
-//! to verify moderation runners, model artefacts, and threshold parameters, and
-//! the `SoraFS`-specific ballot context used by moderation panels. Validators use
-//! explicit helpers to enforce schema versioning, signature coverage, and
-//! commit/reveal binding before accepting moderation evidence.
+//! These types capture the governance-signed fingerprints that allow gateways to verify moderation
+//! runners, model artefacts, and threshold parameters, and the `SoraFS`-specific ballot context
+//! used by moderation panels. Validators use explicit helpers to enforce schema versioning,
+//! signature coverage, and commit/reveal binding before accepting moderation evidence.
 #[cfg(feature = "json")]
 pub(crate) use crate::json_helpers::fixed_bytes::option as json_option_digest32;
 use blake2::digest::Digest;
@@ -1017,9 +1016,8 @@ impl ModerationReproManifestV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`ModerationReproValidationError`] if the schema version mismatches,
-    /// models or signatures are missing, duplicate signer keys are present, or signature
-    /// verification fails.
+    /// Returns [`ModerationReproValidationError`] if the schema version mismatches, models or
+    /// signatures are missing, duplicate signer keys are present, or signature verification fails.
     pub fn validate(
         &self,
     ) -> Result<ModerationReproManifestSummary, ModerationReproValidationError> {
@@ -1222,10 +1220,9 @@ fn validate_repro_model_artifact(
 }
 /// Return whether `path` is a canonical platform-independent artefact path.
 ///
-/// Accepted paths are non-empty ASCII slash-separated components containing
-/// only letters, digits, `.`, `_`, and `-`. Absolute paths, empty components,
-/// traversal components, backslashes, drive prefixes, and control characters
-/// are rejected independent of the host platform.
+/// Accepted paths are non-empty ASCII slash-separated components containing only letters, digits,
+/// `.`, `_`, and `-`. Absolute paths, empty components, traversal components, backslashes, drive
+/// prefixes, and control characters are rejected independent of the host platform.
 #[must_use]
 pub fn is_canonical_moderation_artifact_path_v1(path: &str) -> bool {
     if path.is_empty()
@@ -2021,8 +2018,7 @@ impl ModerationSignedScreeningBodyV1 {
     }
 }
 impl ModerationReproBodyV1 {
-    /// Compute the deterministic screening-policy digest consumed by signed
-    /// runner results.
+    /// Compute the deterministic screening-policy digest consumed by signed runner results.
     ///
     /// This digest deliberately covers the complete canonical reproducibility
     /// body, including thresholds and model weights, so a committee cannot
@@ -2030,8 +2026,7 @@ impl ModerationReproBodyV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`norito::Error`] when the canonical reproducibility body cannot
-    /// be encoded.
+    /// Returns [`norito::Error`] when the canonical reproducibility body cannot be encoded.
     pub fn computed_screening_policy_digest(&self) -> Result<[u8; 32], norito::Error> {
         let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
@@ -2273,10 +2268,9 @@ impl ModerationCommitteeAggregateV1 {
     /// Build a deterministic aggregate from externally authorized, distinct,
     /// fresh runner signatures.
     ///
-    /// Policy authentication is intentionally part of this constructor. A
-    /// caller cannot obtain an aggregate by validating only policy-internal
-    /// signatures or by supplying a weaker quorum than the external trust
-    /// configuration requires.
+    /// Policy authentication is intentionally part of this constructor. A caller cannot obtain an
+    /// aggregate by validating only policy-internal signatures or by supplying a weaker quorum than
+    /// the external trust configuration requires.
     ///
     /// # Errors
     ///
@@ -3124,8 +3118,7 @@ impl AdversarialCorpusManifestV1 {
     /// # Errors
     ///
     /// Returns [`AdversarialCorpusValidationError`] when the schema version mismatches,
-    /// family/variant identifiers are missing or duplicated, or fingerprint metadata is
-    /// incomplete.
+    /// family/variant identifiers are missing or duplicated, or fingerprint metadata is incomplete.
     pub fn validate(&self) -> Result<(), AdversarialCorpusValidationError> {
         if self.schema_version != ADVERSARIAL_CORPUS_VERSION_V1 {
             return Err(AdversarialCorpusValidationError::UnsupportedVersion {

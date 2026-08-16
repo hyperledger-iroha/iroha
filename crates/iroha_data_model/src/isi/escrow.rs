@@ -367,9 +367,8 @@ isi! {
         pub amount: iroha_primitives::numeric::Quantity,
         /// Exact authoritative remaining amount observed before this drawdown.
         ///
-        /// The ledger rejects the instruction if another transaction changed
-        /// the lock first. This optimistic precondition makes independently
-        /// submitted retries economically exactly-once.
+        /// The ledger rejects the instruction if another transaction changed the lock first. This
+        /// optimistic precondition makes independently submitted retries economically exactly-once.
         pub expected_remaining_amount: iroha_primitives::numeric::Quantity,
     }
 }
@@ -543,14 +542,14 @@ impl_escrow_decode_from_slice!(ExpireAssetLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::isi::test_support::{
+        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+    };
     use crate::{domain::DomainId, name::Name};
     use core::num::{NonZeroU32, NonZeroU64};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
-    use norito::codec::Encode;
-    use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
-    };
+    use norito::{codec::Encode, core::DecodeFromSlice};
     #[derive(Encode)]
     struct ForgedOpenAssetEscrow {
         escrow_id: crate::escrow::EscrowId,

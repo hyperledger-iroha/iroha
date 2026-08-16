@@ -1,0 +1,5 @@
+
+            seiyaku Demo {
+              fn increment(int x) -> int { return x + 1; }
+            }
+            

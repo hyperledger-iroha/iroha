@@ -436,7 +436,7 @@ public final class ConfidentialAssetToriiClientTests {
 
   private static ToriiCanonicalRequestAuth canonicalAuth(final String nonce) {
     return new ToriiCanonicalRequestAuth(
-        "alice",
+        "alice@universal",
         message -> sign(message),
         Long.valueOf(1_700_000_000_000L),
         nonce);

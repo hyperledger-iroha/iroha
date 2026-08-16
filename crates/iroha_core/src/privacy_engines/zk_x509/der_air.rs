@@ -1,12 +1,10 @@
 //! Algebraic strict-DER execution trace for the closed zk-X509 profile.
 //!
-//! The native parser in [`super::der`] is the authoritative differential
-//! oracle.  This module deliberately implements an independent parser and
-//! witness compiler.  Its committed rows bind every input byte exactly once,
-//! constrain identifier and length minimality, reconstructed spans, nesting,
-//! primitive canonicality, and DER `SET OF` ordering.  The trace uses a fixed
-//! first-release capacity; no BER compatibility or alternate encoding path is
-//! accepted.
+//! The native parser in [`super::der`] is the authoritative differential oracle. This module
+//! deliberately implements an independent parser and witness compiler. Its committed rows bind
+//! every input byte exactly once, constrain identifier and length minimality, reconstructed spans,
+//! nesting, primitive canonicality, and DER `SET OF` ordering. The trace uses a fixed first-release
+//! capacity; no BER compatibility or alternate encoding path is accepted.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::der_limits::{
     ZK_X509_DER_MAX_DOCUMENT_BYTES_V1, ZK_X509_DER_MAX_NESTING_DEPTH_V1,
@@ -204,9 +202,8 @@ pub(crate) struct ZkX509DerPrimitiveRowV1 {
     /// Copied tag class/number.
     pub(crate) tag_class: ZkX509DerRangeWitnessV1<2>,
     pub(crate) tag_number: ZkX509DerRangeWitnessV1<32>,
-    /// Copied one-hot selector for an admitted universal tag. Keeping these
-    /// selectors in the committed row avoids witness-dependent branching in
-    /// the extension-domain evaluator.
+    /// Copied one-hot selector for an admitted universal tag. Keeping these selectors in the
+    /// committed row avoids witness-dependent branching in the extension-domain evaluator.
     pub(crate) universal_selectors: [F; ZK_X509_DER_AIR_UNIVERSAL_SELECTORS_V1],
     /// OID subidentifier-start state before/after this octet.
     pub(crate) oid_start_before: F,
@@ -1928,10 +1925,9 @@ pub(crate) enum ZkX509DerEkuV1 {
 }
 /// Verifier-fixed RFC 5280 predicates consumed by the DER/path segment.
 ///
-/// Certificate depth, encoded lengths, exact certificate validity intervals,
-/// and exact CRL update times are deliberately absent.  They are private
-/// witness data.  The public presentation interval is a short, non-empty
-/// interval inside which the credential may be presented; every private
+/// Certificate depth, encoded lengths, exact certificate validity intervals, and exact CRL update
+/// times are deliberately absent. They are private witness data. The public presentation interval
+/// is a short, non-empty interval inside which the credential may be presented; every private
 /// certificate/CRL interval must cover it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280StatementV1 {
@@ -1949,10 +1945,9 @@ pub(crate) struct ZkX509Rfc5280StatementV1 {
 }
 /// Verifier-recognized grammar state for one semantic DER node.
 ///
-/// These states are not parser annotations trusted by the proof.  The RFC
-/// adapter derives each state from the verifier-fixed document kind, the
-/// parent's state, the child ordinal, and the strict-DER node tuple.  The
-/// owner trace retains the resulting provenance so that no semantic output is
+/// These states are not parser annotations trusted by the proof. The RFC adapter derives each state
+/// from the verifier-fixed document kind, the parent's state, the child ordinal, and the strict-DER
+/// node tuple. The owner trace retains the resulting provenance so that no semantic output is
 /// detached from its unique source node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u16)]
@@ -4187,14 +4182,12 @@ pub(crate) fn certificate_slot_2_active_v1(
 }
 /// Emit the canonical strict-DER producer channels.
 ///
-/// The initial prefix is byte-for-byte topology-compatible with the
-/// projection segment: active-chain SPKIs, leaf serial length/value, then
-/// each disclosed subject-attribute content length/value.  Subsequent fixed
-/// channels bind three fixed certificate-TBS SHA slots, ECDSA inputs, the CRL
-/// TBS and complete signed-CRL SHA inputs, the issuer SPKI SHA input, and the
-/// root SPKI governed-CA membership input. Complete CRL non-revocation is
-/// proved from every parsed entry by the RFC 5280 segment, without a derived
-/// CRL root or witness-selectable serial table.
+/// The initial prefix is byte-for-byte topology-compatible with the projection segment:
+/// active-chain SPKIs, leaf serial length/value, then each disclosed subject-attribute content
+/// length/value. Subsequent fixed channels bind three fixed certificate-TBS SHA slots, ECDSA
+/// inputs, the CRL TBS and complete signed-CRL SHA inputs, the issuer SPKI SHA input, and the root
+/// SPKI governed-CA membership input. Complete CRL non-revocation is proved from every parsed entry
+/// by the RFC 5280 segment, without a derived CRL root or witness-selectable serial table.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn rfc5280_io_witnesses_v1(
     trace: &ZkX509Rfc5280TraceV1,
@@ -4457,8 +4450,7 @@ pub(crate) fn plan_zk_x509_rfc5280_air_v1(
             .ok_or(ZkX509DerAirErrorV1::Resource)?,
     })
 }
-/// Validate every strict-DER producer endpoint in an already validated global
-/// byte-copy trace.
+/// Validate every strict-DER producer endpoint in an already validated global byte-copy trace.
 #[cfg(test)]
 pub(crate) fn validate_rfc5280_io_v1(
     trace: &ZkX509Rfc5280TraceV1,

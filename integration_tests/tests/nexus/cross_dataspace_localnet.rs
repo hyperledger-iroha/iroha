@@ -8,7 +8,7 @@ use iroha::{
     client::Client,
     crypto::HashOf,
     data_model::{
-        ChainId, Level, NetworkId, ValidationFail,
+        Level, NetworkId, ValidationFail,
         account::{Account, AccountId},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::consensus::{
@@ -7225,7 +7225,7 @@ mod tests {
     };
     use iroha::crypto::{Hash, HashOf};
     use iroha::data_model::{
-        ChainId,
+        NetworkId,
         block::consensus::{
             COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
             COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,

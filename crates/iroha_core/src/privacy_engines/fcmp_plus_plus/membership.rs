@@ -96,11 +96,9 @@ pub(super) struct NativeParameters {
     pub(super) t: GeneratorTable<Field25519>,
     pub(super) u: GeneratorTable<Field25519>,
     pub(super) v: GeneratorTable<Field25519>,
-    /// Selene's Bulletproof blinding generator, embedded in the Helios
-    /// circuit's scalar field.
+    /// Selene's Bulletproof blinding generator, embedded in the Helios circuit's scalar field.
     pub(super) h_1: GeneratorTable<HelioseleneField>,
-    /// Helios's Bulletproof blinding generator, embedded in the Selene
-    /// circuit's scalar field.
+    /// Helios's Bulletproof blinding generator, embedded in the Selene circuit's scalar field.
     pub(super) h_2: GeneratorTable<Field25519>,
 }
 pub(super) fn native_parameters() -> &'static NativeParameters {
@@ -607,11 +605,10 @@ fn verify_membership(
 /// Verify the membership/SAL component of one already-structurally-decoded
 /// first-release FCMP++ transfer proof.
 ///
-/// `context_hash` must be a domain-separated hash of the authoritative
-/// transaction statement. It is bound by every per-input SAL proof. The
-/// membership transcript additionally binds the typed tree root, all
-/// rerandomized public input coordinates, and the root-blind nonce in the
-/// canonical upstream order.
+/// `context_hash` must be a domain-separated hash of the authoritative transaction statement. It is
+/// bound by every per-input SAL proof. The membership transcript additionally binds the typed tree
+/// root, all rerandomized public input coordinates, and the root-blind nonce in the canonical
+/// upstream order.
 pub(super) fn verify_fcmp_membership_parsed_v1(
     context_hash: [u8; 32],
     parsed: &ParsedFcmpPlusPlusWireV1,

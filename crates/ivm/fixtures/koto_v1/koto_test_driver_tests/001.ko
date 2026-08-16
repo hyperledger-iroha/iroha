@@ -1,0 +1,24 @@
+
+            seiyaku U64MaxOptionMatch {
+                error enum RegressionError {
+                    Invalid = 1,
+                }
+
+                fn validate(Json signed_json) {
+                    let key = Name::parse("source_change_sequence");
+                    let sequence = match signed_json.get_int(key) {
+                        Option::some(value) => value,
+                        Option::none => {
+                            require(false, RegressionError::Invalid);
+                            0
+                        },
+                    };
+                    require(sequence >= 0, RegressionError::Invalid);
+                }
+
+                #[test]
+                fn maximum_survives_helper_match() {
+                    validate(Json::parse("{\"source_change_sequence\":18446744073709551615}"));
+                }
+            }
+            

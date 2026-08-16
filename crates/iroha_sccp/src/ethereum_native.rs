@@ -1,10 +1,9 @@
 //! Protocol-native Ethereum consensus light-client verification for SCCP.
 //!
-//! The module models the fixed SSZ types used by Ethereum light-client updates,
-//! validates a governed fork schedule and genesis validators root, and advances
-//! a light-client state without consulting a wall clock. Accepted updates must
-//! carry finality, the next sync committee, and at least the Ethereum mainnet
-//! two-thirds sync-committee threshold (342 of 512 positions).
+//! The module models the fixed SSZ types used by Ethereum light-client updates, validates a
+//! governed fork schedule and genesis validators root, and advances a light-client state without
+//! consulting a wall clock. Accepted updates must carry finality, the next sync committee, and at
+//! least the Ethereum mainnet two-thirds sync-committee threshold (342 of 512 positions).
 //!
 //! This file is intentionally self-contained so it can be reviewed and tested
 //! before it is wired into the existing SCCP proof envelope.
@@ -236,8 +235,7 @@ impl ForkSchedule {
     ///
     /// # Errors
     ///
-    /// Returns an error for a zero genesis root, unordered activations, or
-    /// duplicate fork versions.
+    /// Returns an error for a zero genesis root, unordered activations, or duplicate fork versions.
     pub fn new(
         genesis_validators_root: Root,
         activations: [ForkActivation; 6],
@@ -708,8 +706,7 @@ pub struct BlsPublicKey([u8; 48]);
 impl BlsPublicKey {
     /// Wrap 48 compressed public-key bytes.
     ///
-    /// Curve and subgroup validation is performed when the containing sync
-    /// committee is admitted.
+    /// Curve and subgroup validation is performed when the containing sync committee is admitted.
     pub const fn new(bytes: [u8; 48]) -> Self {
         Self(bytes)
     }

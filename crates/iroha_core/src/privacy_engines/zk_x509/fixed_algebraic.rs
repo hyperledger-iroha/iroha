@@ -1800,10 +1800,9 @@ pub(crate) struct ZkX509FixedAlgebraicOpeningsV1 {
 impl ZkX509FixedAlgebraicOpeningsV1 {
     /// Concatenate independently capped child schedules in fixed column order.
     ///
-    /// Every child must have been evaluated at the identical canonical query
-    /// set. The caller supplies the typed composite digest that binds child
-    /// identity and order; this helper only performs the checked row-major
-    /// concatenation and cannot reorder or omit a child.
+    /// Every child must have been evaluated at the identical canonical query set. The caller
+    /// supplies the typed composite digest that binds child identity and order; this helper only
+    /// performs the checked row-major concatenation and cannot reorder or omit a child.
     pub(crate) fn concatenate_v1(
         schedule_digest: [u8; 32],
         parts: &[Self],

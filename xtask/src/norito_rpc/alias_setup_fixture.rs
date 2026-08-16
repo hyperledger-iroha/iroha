@@ -40,8 +40,8 @@ use norito::{
     json,
 };
 use norito_codegen_exporter::AliasSetupFixtureBytes;
-const PLAN_NETWORK_ID_V1: &str =
-    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+const PLAN_NETWORK_ID_V1_JSON: &str =
+    r#""hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0""#;
 const FIXTURE_PAYMENT_ASSET: &str = "4rPeAP6jAjiLVZThZYwwPRBuQagt";
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -168,8 +168,7 @@ fn build_fixture() -> Result<AliasSetupFixtureV1> {
         CompareAndSetPrimaryAccountAlias::new(first.clone(), None, Some(resolved_alias.clone()))
             .into(),
     )?;
-    let network_id = PLAN_NETWORK_ID_V1
-        .parse::<NetworkId>()
+    let network_id = json::from_str::<NetworkId>(PLAN_NETWORK_ID_V1_JSON)
         .wrap_err("parse canonical alias-plan NetworkId")?;
     let setup_plan = AliasTransactionPlanV1::new(AliasTransactionPlanBodyV1 {
         version: AliasTransactionPlanBodyV1::VERSION,

@@ -61,11 +61,10 @@ pub(super) fn decode(
 }
 /// Select the canonical weight format without cloning the full path list.
 ///
-/// Format precedence matches the first-release profile contract: GGUF, then
-/// SafeTensors, then PyTorch. Only selected strings are copied from the decoded
-/// tree; the full provider-controlled sibling list is never duplicated. Unique
-/// weight paths are capped by the same `import_max_files` source policy that
-/// bounds the runtime importer, preventing one draft from amplifying into an
+/// Format precedence matches the first-release profile contract: GGUF, then SafeTensors, then
+/// PyTorch. Only selected strings are copied from the decoded tree; the full provider-controlled
+/// sibling list is never duplicated. Unique weight paths are capped by the same `import_max_files`
+/// source policy that bounds the runtime importer, preventing one draft from amplifying into an
 /// unbounded sequence of provider HEAD requests.
 pub(super) fn select_weight_files(
     model_info: &norito::json::Value,

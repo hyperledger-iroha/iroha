@@ -1,4 +1,10 @@
 import { Buffer } from "buffer";
+import {
+  BASE58_ALPHABET_TEXT,
+  HEX_ENCODING,
+  JS_TYPE_NUMBER,
+  JS_TYPE_STRING,
+} from "./commonLiterals.js";
 import { blake3 } from "@noble/hashes/blake3";
 import {
   AccountAddress,
@@ -18,7 +24,7 @@ function fail(code, message, path) {
 }
 
 const BASE58_PATTERN = /^[1-9A-HJ-NP-Za-km-z]+$/;
-const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const BASE58_ALPHABET = BASE58_ALPHABET_TEXT;
 const BASE58_INDEX = new Map(Array.from(BASE58_ALPHABET, (symbol, index) => [symbol, index]));
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const ASSET_DEFINITION_ADDRESS_LEN = 21;
@@ -26,7 +32,7 @@ const ALIAS_LOCAL_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 const ALIAS_SCOPE_SEGMENT_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function assertString(value, name) {
-  if (typeof value !== "string" || value.length === 0) {
+  if (typeof value !== JS_TYPE_STRING || value.length === 0) {
     fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
   }
   return value;
@@ -99,7 +105,7 @@ export function canonicalizeMultihashHex(value, name) {
   }
   let bytes;
   try {
-    bytes = Buffer.from(trimmed, "hex");
+    bytes = Buffer.from(trimmed, HEX_ENCODING);
   } catch {
     fail(
       ValidationErrorCode.INVALID_HEX,
@@ -152,9 +158,9 @@ export function canonicalizeMultihashHex(value, name) {
     );
   }
 
-  const fnHex = bytes.subarray(0, fnEnd + 1).toString("hex").toUpperCase();
-  const lenHex = bytes.subarray(fnEnd + 1, lenEnd + 1).toString("hex").toUpperCase();
-  const payloadHex = payload.toString("hex").toUpperCase();
+  const fnHex = bytes.subarray(0, fnEnd + 1).toString(HEX_ENCODING).toUpperCase();
+  const lenHex = bytes.subarray(fnEnd + 1, lenEnd + 1).toString(HEX_ENCODING).toUpperCase();
+  const payloadHex = payload.toString(HEX_ENCODING).toUpperCase();
 
   return `${fnHex}${lenHex}${payloadHex}`;
 }
@@ -262,7 +268,7 @@ function normalizeAccountNumberIdentifier(raw, name) {
 }
 
 function looksLikeCanonicalI105Literal(raw) {
-  if (typeof raw !== "string") {
+  if (typeof raw !== JS_TYPE_STRING) {
     return false;
   }
   if (/\s/.test(raw) || raw.includes("@") || raw.includes("#") || raw.includes("$")) {
@@ -309,7 +315,7 @@ export function normalizeAccountId(value, name) {
 
   try {
     const { address, chainDiscriminant } = AccountAddress.parseEncoded(raw);
-    if (typeof chainDiscriminant === "number") {
+    if (typeof chainDiscriminant === JS_TYPE_NUMBER) {
       return address.toI105(chainDiscriminant);
     }
     return looksLikeCanonicalI105Literal(raw) ? raw : address.toI105();

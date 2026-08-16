@@ -11,17 +11,15 @@ fn update_framed(hasher: &mut Sha512, bytes: &[u8]) {
 }
 /// Derive a deterministic Ed25519 public point for a protocol-owned identity.
 ///
-/// This is deliberately not seeded key generation. It rejection-samples a
-/// canonical point in the prime-order subgroup from a domain-separated SHA-512
-/// transcript, so deriving the account identifier does not reveal a signing
-/// scalar. Under the discrete-log assumption, no private key for the returned
-/// point is known.
+/// This is deliberately not seeded key generation. It rejection-samples a canonical point in the
+/// prime-order subgroup from a domain-separated SHA-512 transcript, so deriving the account
+/// identifier does not reveal a signing scalar. Under the discrete-log assumption, no private key
+/// for the returned point is known.
 ///
-/// Use this only for identities whose state is exclusively controlled by
-/// protocol logic, such as custody accounts. It must not be used where any
-/// participant is expected to sign as the derived identity. `domain` must be a
-/// unique, versioned protocol constant. Fields are length-delimited, so their
-/// boundaries are part of the derivation.
+/// Use this only for identities whose state is exclusively controlled by protocol logic, such as
+/// custody accounts. It must not be used where any participant is expected to sign as the derived
+/// identity. `domain` must be a unique, versioned protocol constant. Fields are length-delimited,
+/// so their boundaries are part of the derivation.
 #[must_use]
 pub fn derive_non_signing_ed25519_public_key(domain: &[u8], fields: &[&[u8]]) -> PublicKey {
     for counter in 0_u64..=u64::MAX {

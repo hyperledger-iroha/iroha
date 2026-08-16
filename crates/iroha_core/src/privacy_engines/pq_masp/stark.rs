@@ -1,9 +1,8 @@
 //! Extension-domain adapter for the fixed native PQ-MASP AIR.
 //!
-//! The verifier reconstructs every selector and constant column from the
-//! public statement. The prover commits only witness-bearing base columns;
-//! the sole profile auxiliary column is reserved as a zero bridge so the
-//! shared first-release note proof driver has one exact topology.
+//! The verifier reconstructs every selector and constant column from the public statement. The
+//! prover commits only witness-bearing base columns; the sole profile auxiliary column is reserved
+//! as a zero bridge so the shared first-release note proof driver has one exact topology.
 use super::{
     air::{
         COPY_OFFSET, PQ_MASP_BASE_WIDTH_V1, PQ_MASP_COPY_WIDTH_V1, PQ_MASP_SHA_BIT_COLUMNS_V1,
@@ -735,10 +734,9 @@ pub(super) fn compile_pq_masp_prover_columns_v1(
 }
 /// Construct the canonical PQ-MASP proof with injected masking entropy.
 ///
-/// The witness is compiled and checked by the native interpreter before the
-/// shared proof driver sees any columns. The proof driver then checks the same
-/// relation algebraically on the native and extension domains and
-/// self-verifies the encoded proof before returning it.
+/// The witness is compiled and checked by the native interpreter before the shared proof driver
+/// sees any columns. The proof driver then checks the same relation algebraically on the native and
+/// extension domains and self-verifies the encoded proof before returning it.
 pub(super) fn prove_pq_masp_stark_v1_with_rng<R: TryRngCore>(
     statement: &PqMaspStarkStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,

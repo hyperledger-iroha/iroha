@@ -1,12 +1,11 @@
 #![deny(missing_docs)]
 //! Halo2 circuits and helpers for Kaigi privacy proofs.
 //!
-//! The roster join circuit checks that the public commitment and nullifier are
-//! domain-separated Poseidon hashes of one prover-supplied account and its
-//! private salts. The current roster root is a separate public state binding:
-//! a join creates a new roster leaf, so it is deliberately not a membership
-//! claim about the pre-join tree. Private leave remains disabled until a
-//! dedicated Merkle-membership circuit is available.
+//! The roster join circuit checks that the public commitment and nullifier are domain-separated
+//! Poseidon hashes of one prover-supplied account and its private salts. The current roster root is
+//! a separate public state binding: a join creates a new roster leaf, so it is deliberately not a
+//! membership claim about the pre-join tree. Private leave remains disabled until a dedicated
+//! Merkle-membership circuit is available.
 use core::array;
 use halo2_proofs::{
     circuit::{Cell, Layouter, Region, SimpleFloorPlanner, Value},

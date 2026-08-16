@@ -473,10 +473,9 @@ impl PotrReceiptV1 {
     }
     /// Validate both signers against runtime-governed key material.
     ///
-    /// Self-advertised receipt keys are never sufficient for production
-    /// acceptance. The provider key must come from a council-verified admission
-    /// capability and the gateway key must match the configured gateway trust
-    /// anchor.
+    /// Self-advertised receipt keys are never sufficient for production acceptance. The provider
+    /// key must come from a council-verified admission capability and the gateway key must match
+    /// the configured gateway trust anchor.
     pub fn validate_with_governed_keys(
         &self,
         gateway_public_key: &[u8; 32],

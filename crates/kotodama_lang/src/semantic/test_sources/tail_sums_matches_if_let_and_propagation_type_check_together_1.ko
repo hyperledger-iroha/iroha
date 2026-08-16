@@ -1,0 +1,25 @@
+
+            seiyaku Sums {
+                fn option(Option<int> input) -> Option<int> {
+                    let value = input?;
+                    Option::some(value)
+                }
+
+                fn result(Result<int, string> input) -> Result<int, string> {
+                    Result::ok(input?)
+                }
+
+                fn inspect(Option<int> input) -> int {
+                    match input {
+                        Option::some(value) => value,
+                        Option::none => 0,
+                    }
+                }
+
+                fn guarded(Option<int> input) -> int {
+                    if let Option::some(value) = input { value } else { 0 }
+                }
+
+                fn absent() -> Option<int> { Option::none }
+            }
+            

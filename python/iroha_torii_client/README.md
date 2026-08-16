@@ -100,6 +100,19 @@ client.delete_attachment(meta["id"], canonical_auth=auth)
 
 Use a fresh nonce per call (the default). A human chain label, foreign genesis
 hash, unsigned call, redirect replay, or missing canonical auth is rejected.
+Methods must be ASCII HTTP tokens and signed paths must be the exact
+root-relative ASCII wire spelling. `build_canonical_request_headers` first
+prepares that target with Requests and signs its `PreparedRequest.path_url`;
+the client sends that same prepared request. The pure canonical-message helpers
+continue to consume an already exact wire spelling. Operator header builders
+and authenticated operator reads use the same prepared-target ownership.
+Signer callbacks return 1--3,309 non-zero
+signature bytes. The complete `0x` account-header prefix is reserved for
+canonical address hex and is never emitted for an alias. Alias headers receive
+only a bounded lowercase-ASCII structural preflight; Torii remains authoritative
+for UTS-46, active-catalog resolution, and controller verification. The public Python client is signer-only: it neither forwards an
+externally constructed `X-Iroha-Witness` nor constructs a typed multisignature
+witness end to end.
 
 Space Directory publish/revoke drafts follow the same contract and additionally
 require the exact canonical I105 payload authority to equal `auth.account_id`:

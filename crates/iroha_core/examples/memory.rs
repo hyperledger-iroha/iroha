@@ -1,6 +1,5 @@
 #![allow(unused)]
-//! This code can be used to measure memory usage of
-//! structs like `Account`, `Asset` and `Nft`.
+//! This code can be used to measure memory usage of structs like `Account`, `Asset` and `Nft`.
 use iroha_core::prelude::*;
 use iroha_data_model::prelude::*;
 use util::*;

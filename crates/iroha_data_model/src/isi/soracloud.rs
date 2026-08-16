@@ -463,9 +463,8 @@ pub struct JoinSoracloudHfSharedLease {
     pub resource_profile: Option<SoraHfResourceProfileV1>,
     /// Exact first-release upper bound for the compute reservation charge.
     ///
-    /// The transaction signer reviews this value together with the derived
-    /// resource profile. Consensus rejects a join whose effective compute
-    /// charge would exceed this bound.
+    /// The transaction signer reviews this value together with the derived resource profile.
+    /// Consensus rejects a join whose effective compute charge would exceed this bound.
     pub max_compute_reservation_fee: Quantity,
     /// Provenance attestation over the join payload.
     pub provenance: ManifestProvenance,
@@ -1321,10 +1320,9 @@ impl PartialOrd for ReportSoracloudServiceLeaseUsage {
 }
 /// Persist an ordered Soracloud mailbox message.
 ///
-/// The source service must be deployed. `CanManageSoracloud` holders may
-/// reconcile any source; other callers must be active public-lane validators
-/// assigned to the source service's active revision. Recorded message
-/// identifiers are immutable and cannot be replaced.
+/// The source service must be deployed. `CanManageSoracloud` holders may reconcile any source;
+/// other callers must be active public-lane validators assigned to the source service's active
+/// revision. Recorded message identifiers are immutable and cannot be replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1342,10 +1340,9 @@ impl PartialOrd for RecordSoracloudMailboxMessage {
 }
 /// Persist an authoritative Soracloud runtime receipt.
 ///
-/// `CanManageSoracloud` holders may reconcile any service. Other callers must
-/// be active public-lane validators assigned to the exact service revision and
-/// must identify themselves as the selected validator in the receipt. Recorded
-/// receipt identifiers are immutable and cannot be replaced.
+/// `CanManageSoracloud` holders may reconcile any service. Other callers must be active public-lane
+/// validators assigned to the exact service revision and must identify themselves as the selected
+/// validator in the receipt. Recorded receipt identifiers are immutable and cannot be replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1363,9 +1360,8 @@ impl PartialOrd for RecordSoracloudRuntimeReceipt {
 }
 /// Persist an authoritative private uploaded-model execution receipt.
 ///
-/// This privileged ledger projection is restricted to
-/// `CanManageSoracloud` holders. Recorded receipt identifiers are immutable and
-/// cannot be replaced.
+/// This privileged ledger projection is restricted to `CanManageSoracloud` holders. Recorded
+/// receipt identifiers are immutable and cannot be replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",

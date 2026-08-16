@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, List, Tuple
 
 import pytest
+import requests
 from requests.adapters import HTTPAdapter
 
 from client_test_support import canonical_hash
@@ -19,6 +20,7 @@ if str(PACKAGE_ROOT) not in sys.path:
 from iroha_torii_client import (  # noqa: E402
     ToriiClient,
     ToriiOperatorSigningContext,
+    build_operator_request_headers,
     operator_network_request_signature_message,
 )
 
@@ -44,6 +46,62 @@ def operator_context(captured: List[bytes] | None = None) -> ToriiOperatorSignin
         public_key="ed0120" + "66" * 32,
         signer=signer,
     )
+
+
+def test_public_operator_header_builder_signs_the_requests_prepared_target() -> None:
+    caller_target = "/v1/%2e%2Fasset/%252e"
+    prepared = requests.Request(
+        "GET",
+        f"https://node.test{caller_target}",
+    ).prepare()
+    captured: List[bytes] = []
+    headers = build_operator_request_headers(
+        operator_context(captured),
+        "GET",
+        caller_target,
+        b"",
+    )
+
+    assert prepared.path_url == "/v1/.%2Fasset/%252e"
+    assert captured == [
+        operator_network_request_signature_message(
+            NETWORK_ID,
+            "GET",
+            prepared.path_url,
+            b"",
+            timestamp_ms=int(headers["X-Iroha-Operator-Timestamp-Ms"]),
+            nonce=headers["X-Iroha-Operator-Nonce"],
+        )
+    ]
+
+
+def test_operator_transport_signs_and_sends_one_prepared_target() -> None:
+    caller_target = "/v1/%2e%2Fasset/%252e"
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=503, text="unavailable"))
+    captured: List[bytes] = []
+    client = ToriiClient(
+        "https://node.test",
+        session=session,
+        operator_signing_context=operator_context(captured),
+    )
+
+    response = client._operator_get(caller_target)
+
+    assert response.status_code == 503
+    call = session.calls[0]
+    assert call["url"] == "https://node.test/v1/.%2Fasset/%252e"
+    headers = call["headers"]
+    assert captured == [
+        operator_network_request_signature_message(
+            NETWORK_ID,
+            "GET",
+            "/v1/.%2Fasset/%252e",
+            b"",
+            timestamp_ms=int(headers["X-Iroha-Operator-Timestamp-Ms"]),
+            nonce=headers["X-Iroha-Operator-Nonce"],
+        )
+    ]
 
 
 @pytest.mark.parametrize(("path", "invoke"), OPERATOR_READS)

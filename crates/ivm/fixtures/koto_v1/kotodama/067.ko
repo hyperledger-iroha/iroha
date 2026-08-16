@@ -1,0 +1,6 @@
+
+        seiyaku StateContains {
+            state StateMap<int, int> m;
+            view fn f(int k) -> bool { return m.contains(k); }
+        }
+    

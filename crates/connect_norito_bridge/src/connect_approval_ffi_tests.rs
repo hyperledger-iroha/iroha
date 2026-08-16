@@ -116,7 +116,7 @@ fn connect_approval_verifier_binds_exact_identity_account_and_relay() {
     let sid = connect_sdk::derive_session_id(&network_id, &app_pk, &nonce);
     let wallet_pk = [0x63u8; 32];
     let keypair =
-        KeyPair::try_from_seed([0x64u8; 32], Algorithm::Ed25519).expect("approval signer");
+        KeyPair::try_from_seed(vec![0x64u8; 32], Algorithm::Ed25519).expect("approval signer");
     let account = CString::new(AccountId::new(keypair.public_key().clone()).to_string())
         .expect("account c string");
     let relay_token = b"exact-relay-token";
@@ -267,7 +267,7 @@ fn connect_approval_verifier_binds_exact_identity_account_and_relay() {
         ),
         ERR_CONNECT_APPROVAL
     );
-    let other_keypair = KeyPair::try_from_seed([0x73u8; 32], Algorithm::Ed25519)
+    let other_keypair = KeyPair::try_from_seed(vec![0x73u8; 32], Algorithm::Ed25519)
         .expect("alternate approval signer");
     let substituted_account =
         CString::new(AccountId::new(other_keypair.public_key().clone()).to_string())

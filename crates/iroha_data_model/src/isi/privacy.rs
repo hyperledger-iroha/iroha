@@ -1,8 +1,7 @@
 //! Canonical first-release privacy governance and proof-admission instructions.
 //!
-//! These instructions expose only typed V1 privacy records. They intentionally
-//! have no string protocol selectors, compatibility aliases, or opaque proof
-//! bodies.
+//! These instructions expose only typed V1 privacy records. They intentionally have no string
+//! protocol selectors, compatibility aliases, or opaque proof bodies.
 use super::*;
 use crate::privacy::{
     BootleLanternIssuerPolicyV1, PrivacyBootleLanternIssuerPolicyDigestV1,
@@ -168,8 +167,7 @@ impl BootstrapPrivacyOrchardPoolV1 {
     }
 }
 isi! {
-    /// Bootstrap one governed FCMP++, private-IVM, or PQ-MASP pool at its
-    /// node-derived empty root.
+    /// Bootstrap one governed FCMP++, private-IVM, or PQ-MASP pool at its node-derived empty root.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

@@ -4,15 +4,13 @@ use super::{
     figure9::{VEGA_MDL_FIGURE9_SHA256_STEPS_V1, VegaMdlFigure9WitnessV1},
 };
 use thiserror::Error;
-/// Exact external privacy protocol label absorbed through the core public
-/// context values.
+/// Exact external privacy protocol label absorbed through the core public context values.
 pub const VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1: &[u8] = b"vega-existing-credential-zk-v0";
 /// Sole privacy-action index admitted by the first-release Vega profile.
 pub const VEGA_MDL_ACTION_INDEX_V1: u32 = 0;
 /// Exact transcript persona used by the pinned Microsoft implementation.
 pub const VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1: &[u8] = b"neutronnova_prove";
-/// Keccak-256 digest of the complete Figure 9 relation before its canonical
-/// two-hash MC split.
+/// Keccak-256 digest of the complete Figure 9 relation before its canonical two-hash MC split.
 pub const VEGA_MDL_CANONICAL_RELATION_DIGEST_V1: [u8; 32] = [
     0x8b, 0xf6, 0xa3, 0x11, 0x20, 0x6e, 0xf6, 0x78, 0x9b, 0x2b, 0x3d, 0x61, 0x3b, 0x4e, 0x98, 0xb9,
     0xfd, 0xc5, 0x8a, 0xcd, 0x02, 0x37, 0x3a, 0x9d, 0xbc, 0x2b, 0x7b, 0x64, 0xcb, 0x7e, 0xdf, 0xbc,
@@ -22,8 +20,7 @@ pub const VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1: [u8; 32] = [
     0x86, 0xd0, 0xce, 0x5b, 0x22, 0xf4, 0x63, 0x78, 0x5d, 0x07, 0x93, 0x60, 0x34, 0xdd, 0xef, 0xc4,
     0x87, 0x46, 0x16, 0x34, 0xf2, 0xfe, 0x2c, 0xfc, 0x47, 0x0b, 0xf3, 0x0b, 0xde, 0x3d, 0x68, 0x27,
 ];
-/// Canonical, newline-delimited manifest whose Keccak-256 is the compiled
-/// profile digest.
+/// Canonical, newline-delimited manifest whose Keccak-256 is the compiled profile digest.
 pub const VEGA_MDL_COMPILED_PROFILE_MANIFEST_V1: &[u8] = concat!(
     "iroha.vega.figure9.microsoft-mc.compiled-profile.v1\n",
     "upstream_commit=c0ee259053cd12eaf43ed71b5cde375452b3ee4d\n",
@@ -67,8 +64,7 @@ pub enum VegaRandomSourceErrorV1 {
     #[error("Vega cryptographic random source is unavailable")]
     Unavailable,
 }
-/// Fallible random-byte source used to seed the proof-scoped canonical Vega
-/// CSPRNG.
+/// Fallible random-byte source used to seed the proof-scoped canonical Vega CSPRNG.
 pub trait VegaRandomSourceV1 {
     /// Fill the entire destination or return an error.
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), VegaRandomSourceErrorV1>;
@@ -79,8 +75,7 @@ pub struct VegaMdlProverConfigV1 {
     worker_count: usize,
 }
 impl VegaMdlProverConfigV1 {
-    /// Select the exact Rayon pool size used by setup-independent preparation
-    /// and proving work.
+    /// Select the exact Rayon pool size used by setup-independent preparation and proving work.
     ///
     /// # Errors
     ///
@@ -176,10 +171,9 @@ pub enum VegaMdlProofErrorV1 {
 }
 /// Exact verifier-key-derived Microsoft Vega-MC proof dimensions.
 ///
-/// This is an owned first-party view of every sequence bound carried by the
-/// canonical proof. Keeping the dimensions in the public facade avoids making
-/// the released API depend on the implementation crate used to validate the
-/// original Microsoft vectors.
+/// This is an owned first-party view of every sequence bound carried by the canonical proof.
+/// Keeping the dimensions in the public facade avoids making the released API depend on the
+/// implementation crate used to validate the original Microsoft vectors.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VegaMdlProofDimensionsV1 {
     /// Number of uniform step instances.
@@ -279,14 +273,12 @@ pub fn vega_mdl_verifier_digest_v1() -> Result<[u8; 32], VegaMdlProofErrorV1> {
 }
 /// Validate one independent canonical Microsoft verifier-key/proof fixture.
 ///
-/// This low-level conformance hook exists for release-vector tests. Production
-/// callers should use [`verify_vega_mdl_figure9_v1`] with the governed Figure
-/// 9 profile instead.
+/// This low-level conformance hook exists for release-vector tests. Production callers should use
+/// [`verify_vega_mdl_figure9_v1`] with the governed Figure 9 profile instead.
 ///
 /// # Errors
 ///
-/// Rejects noncanonical key or proof bytes and any failed Microsoft proof
-/// equation.
+/// Rejects noncanonical key or proof bytes and any failed Microsoft proof equation.
 #[doc(hidden)]
 pub fn vega_microsoft_fixture_conformance_v1(
     verifier_key: &[u8],

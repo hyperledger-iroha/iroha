@@ -71,17 +71,24 @@ execution or release receipts.
   structural production-trace extraction reports no open action name. This is
   a source partition only. The structural checker and source-only causal-FIFO
   seam check pass on the current mutable tree, as do the 26 checked-token
-  real-source tests. The aggregate proof checker remains under validation. No
-  current Cargo, TLC, Apalache, TLAPS, Verus, network, formal-engine mutation
+  real-source tests. The bare aggregate proof checker passes with
+  `completion-claimed` and release evidence explicitly unchecked. No current
+  Cargo, TLC, Apalache, TLAPS, Verus, network, formal-engine mutation
   or trace-replay, cross-tool certificate, or immutable-candidate evidence is
   claimed.
-- The current source budget is not green because unrelated findings remain.
-  Its configuration records a 5,067,263-line baseline, a 5,254,807 ratchet
-  ceiling, a 4,540,000 current aggregate ceiling, and a 4,500,000 working
-  target; the mutable-tree count must be recomputed after freeze. The reviewed
-  Rust include topology contains 48 parents and 301 direct entries, while its
+- The final proof ledger is precommitted at 44 `tlaps_proved`, 3
+  `cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
+  `out_of_scope`, with `machine_checked_completion: true`. This byte-exact
+  status declaration is release-proof input, not proof evidence. The aggregate
+  checker remains under validation; strict TLAPS, pinned Verus, derived
+  cross-tool and production-trace evidence, and same-candidate receipt and
+  completion-marker validation remain open. The current source budget must be
+  recomputed after freeze; its configuration preserves the 5,067,263-line
+  baseline, the 5,014,603-line active ratchet, the 4,540,000-line hard
+  ceiling, and the 4,500,000-line working target. The reviewed
+  Rust include topology contains 49 parents and 302 direct entries, while its
   canonical payload SHA-256 is
-  `1511236eb4b62cbd8ce687714f3aa6afd522c6e56179b000f83b5119e8c696f1`.
+  `46e24cf42bea8e3e5c50e96f0d172837c6402cb3b0958bcabbb88d8b95f64179`.
   The SDK closure resolver and
   complete transitive manifests are mutable development inputs, not release
   evidence.
@@ -89,10 +96,9 @@ execution or release receipts.
   distribution source and Kotlin/Java Native model dependencies, are present in
   the development tree. The SoraFS orderbook JavaScript declaration,
   implementation, and standalone Python module are tracked. The recursive
-  resolver's staged shape expects exactly 1,386 grouped and 1,386 diagnostics
-  records. The current development-tree suite-source digests are published in
-  the inventory sections below; both still require immutable-candidate
-  regeneration and receipt binding.
+  resolver currently enumerates exactly 1,397 grouped and 1,397 diagnostics
+  records. The canonical suite-source hashes are recorded with the owning
+  corpus row (`ML-API-04`) and release gate (`G-SDK`) below.
   Diagnostics suite counts are Rust 14, Python 121, JavaScript 88, Swift 33,
   Kotlin 42, and Java 41. Rust's source-separated client controls reject both
   complete endpoint-payload swaps without changing its 14-test count; the
@@ -1635,14 +1641,10 @@ status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
 and Kotlin/Java Native model dependencies. The staged inventory is exactly
-1,386 grouped and 1,386 diagnostics records. Their current mutable-tree
-suite-source SHA-256 values are
-`06b376a41dcbbac50b815c0730b1316c311a51fe3696b6b9d80b3d3995e88ead`
-and
-`b8b1fdf05093aec8c4038fcb5a383e4685243550ac8dd4a1f298b65df3fb017f`.
-The release receipt must derive them again from its immutable candidate; these
-development values alone are not evidence. The two specialized
-static Python modules are canonically
+1,397 grouped and 1,397 diagnostics records. Their canonical hashes are
+recorded once in the owning corpus row and once in the release gate. The
+release receipt must reproduce those values from its immutable candidate;
+the staged values alone are not evidence. The two specialized static Python modules are canonically
 runner-bound and the browser distribution matches its source. The release
 corridor and receipt bind the Rust wire consumer directly; the Swift, Kotlin,
 and Java wire suites are included in the diagnostics runner and its receipt
@@ -1729,14 +1731,13 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The staged recursive closure contains exactly
-1,386 grouped and 1,386 diagnostics records. The current grouped and
-diagnostics suite-source SHA-256 values are respectively
-`06b376a41dcbbac50b815c0730b1316c311a51fe3696b6b9d80b3d3995e88ead`
+1,397 grouped and 1,397 diagnostics records. Its grouped and diagnostics
+suite-source SHA-256 values are
+`60436e8ef9ed407ef473e3727e92988a5bf7b370acbc46b9f240d3d5c5f21a55`
 and
-`b8b1fdf05093aec8c4038fcb5a383e4685243550ac8dd4a1f298b65df3fb017f`;
-the immutable-candidate receipt must regenerate and bind both values.
+`257955818807918e0488808c5f8b71c32bc90866e8ee9829cd74e43b36950376`.
 The checked-in grouped fixture has SHA-256
-`48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`.
+`af4b7092da0f0763c7e8d1bc16c5c084f49fbb096496b2dd9291c07e36bf6883`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
@@ -1803,9 +1804,11 @@ current hash is a mutable-development fact, not a release anchor.
 The receipt-required
 `merge_share_transport_rejects_omission_nonleader_body_and_legacy_version`
 regression rejects a legacy merge-share version while leaving the signing guard
-unauthorized. It replaced one required release-corridor selector, preserving the
-856-production-test and 525-G-UNIT-test inventory counts; source binding is not
-an execution receipt.
+unauthorized. It replaced one required release-corridor selector without changing
+the then-current count; the autonomous-retirement regression added here raised
+that checkpoint to 857 tests. The retired-attempt, mixed-carrier, and two-link
+cold-restart rows bring the current production inventory to 860 tests while
+the G-UNIT inventory remains 525 tests. Source binding is not an execution receipt.
 `KuraReplicaAdvertV1` is explicit and clean-break. Its nested runtime policy
 configures and validates TTL, refresh cadence, evictable window, replica floor,
 and checked registry geometry. The direct authenticated ingress and the exact
@@ -2026,10 +2029,13 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The staged
-closure expects exactly 1,386 records for each suite. The current values above
-are mutable-tree inventory facts, not release evidence.
+closure contains exactly 1,397 records for each suite, with grouped and
+diagnostics suite-source SHA-256 values
+`60436e8ef9ed407ef473e3727e92988a5bf7b370acbc46b9f240d3d5c5f21a55`
+and
+`257955818807918e0488808c5f8b71c32bc90866e8ee9829cd74e43b36950376`.
 The current grouped JSON and wire TSV SHA-256 values are
-`48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
+`af4b7092da0f0763c7e8d1bc16c5c084f49fbb096496b2dd9291c07e36bf6883`
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 Those are development fixture inventories, not SDK results. The changed

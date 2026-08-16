@@ -1,9 +1,8 @@
 //! Fail-closed Torii boundary for native Bootle/Lantern blind issuance.
 //!
-//! The HTTP surface accepts only the fixed first-release `ILA1`, `ILQ1`, and
-//! `ILR1` wires. Issuer keys and authentication policy are supplied by an
-//! explicitly qualified deployment runtime provider and never enter node
-//! configuration or response diagnostics.
+//! The HTTP surface accepts only the fixed first-release `ILA1`, `ILQ1`, and `ILR1` wires. Issuer
+//! keys and authentication policy are supplied by an explicitly qualified deployment runtime
+//! provider and never enter node configuration or response diagnostics.
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -118,9 +117,8 @@ impl BootleLanternIssuanceRuntimeConfigV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`BootleLanternIssuanceApiErrorV1::ConfigurationInvalid`] for
-    /// any incomplete, test-marked, unbounded, or internally inconsistent
-    /// configuration.
+    /// Returns [`BootleLanternIssuanceApiErrorV1::ConfigurationInvalid`] for any incomplete,
+    /// test-marked, unbounded, or internally inconsistent configuration.
     pub fn validate(&self) -> Result<(), BootleLanternIssuanceApiErrorV1> {
         if !self.state_dir.is_absolute()
             || self.state_dir.as_os_str().is_empty()
@@ -736,9 +734,8 @@ impl fmt::Debug for BootleLanternIssuanceToriiRuntimeV1 {
 impl BootleLanternIssuanceToriiRuntimeV1 {
     /// Validate governance and provider identity, then open and recover the durable store.
     ///
-    /// Recovery irreversibly fails every processing record observed at open;
-    /// pruning runs only after recovery at the same authoritative committed
-    /// height.
+    /// Recovery irreversibly fails every processing record observed at open; pruning runs only
+    /// after recovery at the same authoritative committed height.
     ///
     /// # Errors
     ///

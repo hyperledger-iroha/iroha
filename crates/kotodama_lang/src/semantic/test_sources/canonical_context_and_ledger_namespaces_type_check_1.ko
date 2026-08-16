@@ -1,0 +1,19 @@
+
+            seiyaku Payments {
+                kotoage fn transfer(
+                    AccountId recipient,
+                    AssetDefinitionId asset,
+                    quantity amount,
+                    DataSpaceId dataspace
+                ) authorize("TransferAsset") {
+                    let sender = context::authority();
+                    ledger::asset::transfer(
+                        source: sender,
+                        destination: recipient,
+                        asset_definition: asset,
+                        amount: amount,
+                        dataspace: dataspace,
+                    );
+                }
+            }
+            

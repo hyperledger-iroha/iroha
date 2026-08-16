@@ -1,9 +1,8 @@
 use curve25519_dalek::edwards::CompressedEdwardsY;
 /// Digital signature verification helpers used by the VM.
 ///
-/// This module provides wrappers around common signature libraries so that
-/// callers can choose between classical Ed25519 and post-quantum ML-DSA
-/// (Crystals Dilithium) verification.
+/// This module provides wrappers around common signature libraries so that callers can choose
+/// between classical Ed25519 and post-quantum ML-DSA (Crystals Dilithium) verification.
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey as Ed25519VerifyingKey};
 use iroha_crypto::{EcdsaSecp256k1Sha256, ed25519_parse_public_key};
 use pqcrypto_mldsa::mldsa65 as dilithium;
@@ -113,11 +112,10 @@ pub(crate) fn ed25519_challenge_scalar_bytes(
     hasher.update(message);
     Scalar::from_hash(hasher).to_bytes()
 }
-/// Verify `signature` on `message` with `public_key` using the selected
-/// `scheme`. Returns `true` if the signature is valid. For Ed25519, public keys
-/// must be canonical, non-weak compressed points and signatures must carry a
-/// canonical, non-small-order `R`. For secp256k1, only canonical compressed
-/// SEC1 public keys are accepted and high-S signatures are rejected.
+/// Verify `signature` on `message` with `public_key` using the selected `scheme`. Returns `true` if
+/// the signature is valid. For Ed25519, public keys must be canonical, non-weak compressed points
+/// and signatures must carry a canonical, non-small-order `R`. For secp256k1, only canonical
+/// compressed SEC1 public keys are accepted and high-S signatures are rejected.
 pub fn verify_signature(
     scheme: SignatureScheme,
     message: &[u8],
@@ -179,8 +177,7 @@ pub fn verify_signature(
         }
     }
 }
-/// Strictly verify ordered Ed25519 signatures, returning the first failing
-/// entry index on error.
+/// Strictly verify ordered Ed25519 signatures, returning the first failing entry index on error.
 pub fn verify_ed25519_batch(
     request: &Ed25519BatchRequest,
     max_entries: usize,

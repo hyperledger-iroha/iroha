@@ -1,15 +1,13 @@
 //! Utility to mark returned values as [`must_use`](https://doc.rust-lang.org/reference/attributes/diagnostics.html#the-must_use-attribute).
 //!
-//! Wrapping a value in [`MustUse`] triggers a compiler warning if the caller
-//! drops it without handling, preventing accidental omission of important
-//! results. This is particularly helpful for functions returning [`Result`]
-//! that might otherwise be ignored in tests or prototypes.
+//! Wrapping a value in [`MustUse`] triggers a compiler warning if the caller drops it without
+//! handling, preventing accidental omission of important results. This is particularly helpful for
+//! functions returning [`Result`] that might otherwise be ignored in tests or prototypes.
 use core::borrow::{Borrow, BorrowMut};
 use derive_more::{AsMut, AsRef, Constructor, Deref, Display};
 /// Wrapper type that propagates the `#[must_use]` attribute to any inner value.
 ///
-/// This is most commonly used with [`Result`] to ensure that error values are
-/// not dropped silently.
+/// This is most commonly used with [`Result`] to ensure that error values are not dropped silently.
 ///
 /// # Example
 /// ```

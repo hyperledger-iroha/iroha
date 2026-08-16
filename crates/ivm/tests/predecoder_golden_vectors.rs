@@ -1,6 +1,5 @@
-//! Predecoder golden vectors for the wide 32-bit encoding. These assertions
-//! ensure the cached decode stream preserves instruction words and lengths
-//! across metadata variations.
+//! Predecoder golden vectors for the wide 32-bit encoding. These assertions ensure the cached
+//! decode stream preserves instruction words and lengths across metadata variations.
 use ivm::{ProgramMetadata, VMError, encoding, instruction, ivm_cache::IvmCache};
 fn push_word(buf: &mut Vec<u8>, word: u32) {
     buf.extend_from_slice(&word.to_le_bytes());

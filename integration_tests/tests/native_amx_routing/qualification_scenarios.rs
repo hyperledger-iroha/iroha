@@ -228,14 +228,9 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         let commitment = musubi_fault_archive_commitment();
         let archive_id = commitment.archive_id();
         let (manifest, lock) = musubi_fault_release_manifest_and_lock();
-        let (_, genesis_hash, latest_time_ms) = musubi_fault_snapshot_and_time(&submitter)?;
-        let staging_receipt = musubi_fault_staging_receipt(
-            &submitter,
-            genesis_hash,
-            latest_time_ms,
-            &commitment,
-            &manifest,
-        );
+        let (_, latest_time_ms) = musubi_fault_snapshot_and_time(&submitter)?;
+        let staging_receipt =
+            musubi_fault_staging_receipt(&submitter, latest_time_ms, &commitment, &manifest);
         let archive_transaction = submitter.build_transaction(
             [InstructionBox::from(RegisterMusubiArchiveV1::new(
                 commitment,
@@ -252,7 +247,7 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             "register unavailable Musubi crash-replay archive",
         )
         .await?;
-        let (snapshot, _, _) = musubi_fault_snapshot_and_time(&submitter)?;
+        let (snapshot, _) = musubi_fault_snapshot_and_time(&submitter)?;
         let publication = MusubiPublicationV1 {
             manifest: manifest.clone(),
             resolution: MusubiResolutionProofV1 { snapshot, lock },
@@ -308,7 +303,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         wait_for_rejected_transaction(
             &restarted_client,
             &publish_transaction,
-            "finalized replication quorum",
             "replayed Musubi publication",
         )
         .await?;
@@ -381,7 +375,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         wait_for_rejected_transaction(
             &restarted_client,
             &publish_transaction,
-            "finalized replication quorum",
             "stable replayed Musubi publication status",
         )
         .await?;

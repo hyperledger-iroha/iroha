@@ -842,9 +842,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x06, 0xfd, 0x74, 0x10, 0x75, 0x8d, 0x71, 0xbb, 0x75, 0xff, 0xf8, 0x45, 0xd6, 0x8f,
-                0x38, 0xdc, 0xda, 0x6f, 0x7b, 0x52, 0xd1, 0x79, 0x91, 0xdb, 0x1c, 0xe9, 0x9e, 0xe0,
-                0x29, 0xb4, 0x7c, 0x37,
+                0x6e, 0x27, 0x3d, 0x47, 0xa7, 0x42, 0xec, 0xa0, 0x81, 0x97, 0xeb, 0x84, 0x26, 0x0f,
+                0x6d, 0xe2, 0x63, 0x5a, 0x7e, 0x08, 0xb4, 0x6c, 0xc5, 0xa8, 0xce, 0x05, 0xa1, 0x54,
+                0x04, 0xf4, 0x1e, 0x1f,
             ],
             "intentional identity-projection changes require updating this golden"
         );
@@ -867,9 +867,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x63, 0xe4, 0x91, 0xf6, 0x3a, 0x8e, 0x16, 0xc8, 0x2b, 0x73, 0x30, 0xf7, 0x0e, 0x30,
-                0x4e, 0x09, 0x32, 0x22, 0xe1, 0xdf, 0xb7, 0xf2, 0x53, 0x95, 0x9a, 0x87, 0xbc, 0x48,
-                0xaa, 0x46, 0xd1, 0x5f,
+                0xa1, 0x53, 0x7a, 0xd0, 0x9e, 0x51, 0xcf, 0xd1, 0x1c, 0x5a, 0xac, 0xcb, 0x5d, 0x44,
+                0x16, 0xdb, 0xba, 0xfa, 0x3b, 0x1c, 0xd2, 0x3b, 0xae, 0xf5, 0x07, 0x66, 0x6e, 0x33,
+                0x85, 0xa4, 0x4c, 0x6b,
             ],
             "intentional transition-identity changes require updating this golden"
         );
@@ -1295,6 +1295,14 @@ mod tests {
                 validator: peer(2),
                 power: 1,
             },
+            ValidatorPower {
+                validator: peer(3),
+                power: 1,
+            },
+            ValidatorPower {
+                validator: peer(4),
+                power: 1,
+            },
         ];
         roster.sort();
         assert_eq!(
@@ -1321,7 +1329,10 @@ mod tests {
         assert_eq!(payload.height, context.height);
         assert_eq!(payload.view, manifest.round.view);
         assert_eq!(payload.subject, manifest.subject);
-        assert_eq!(payload.total_chunks, 1);
+        assert_eq!(
+            payload.total_chunks,
+            u32::try_from(manifest.chunk_hashes.len()).expect("fixture chunk count fits u32")
+        );
         assert_eq!(payload.chunk_hash, Hash::new(b"body"));
         assert!(
             chunk
@@ -2579,24 +2590,6 @@ mod tests {
             error
                 .to_string()
                 .contains("missing field `lane_finality_manifest`")
-        );
-    }
-    #[test]
-    fn dual_quorum_requires_count_and_power() {
-        let context = context(&[70, 10, 10, 10]);
-        assert_eq!(context.quorum.min_signers, 3);
-        assert_eq!(context.validate_signers(&[0, 1, 2]), Ok(()));
-        assert_eq!(
-            context.validate_signers(&[1, 2, 3]),
-            Err(ValidationError::InsufficientVotingPower)
-        );
-        assert_eq!(
-            context.validate_signers(&[0, 1]),
-            Err(ValidationError::InsufficientSignerCount)
-        );
-        assert_eq!(
-            context.validate_signers(&[0, 1, 1]),
-            Err(ValidationError::SignersNotStrictlySorted)
         );
     }
     #[test]

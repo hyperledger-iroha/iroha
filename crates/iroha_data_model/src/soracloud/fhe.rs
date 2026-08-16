@@ -531,15 +531,13 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
     }
     /// Derive the public-key proof statement digest for the selected BFV mode.
     ///
-    /// The statement binds the transcript's public key to the BFV parameter
-    /// set and public-key digest under the exact-lift or bounded-noise crypto
-    /// domain. It is the public-input hash that future proof-carrying public
-    /// key admission must verify before accepting key material.
+    /// The statement binds the transcript's public key to the BFV parameter set and public-key
+    /// digest under the exact-lift or bounded-noise crypto domain. It is the public-input hash that
+    /// future proof-carrying public key admission must verify before accepting key material.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when the public key is malformed,
-    /// parameter capacity is insufficient for the selected mode, or canonical
-    /// statement digesting fails.
+    /// Returns [`SoracloudManifestError`] when the public key is malformed, parameter capacity is
+    /// insufficient for the selected mode, or canonical statement digesting fails.
     pub fn public_key_proof_statement_digest_with_mode(
         &self,
         params: &iroha_crypto::fhe_bfv::BfvParameters,
@@ -592,11 +590,10 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
     }
     /// Derive the ciphertext proof statement digest for the selected BFV mode.
     ///
-    /// The statement binds the transcript's public key, public-key digest,
-    /// ciphertext bytes, ciphertext digest, and declared residual/noise bound
-    /// under exact-lift or bounded-noise crypto domains. This is the
-    /// verifier-facing public-input hash for ciphertext admission; it does not
-    /// replace the attached proof.
+    /// The statement binds the transcript's public key, public-key digest, ciphertext bytes,
+    /// ciphertext digest, and declared residual/noise bound under exact-lift or bounded-noise
+    /// crypto domains. This is the verifier-facing public-input hash for ciphertext admission; it
+    /// does not replace the attached proof.
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the public key is malformed,
@@ -2802,9 +2799,8 @@ fn validate_soracloud_fhe_open_verify_envelope(
 
 /// Return shared `OpenVerifyEnvelope` bounds for Soracloud FHE input admission.
 ///
-/// Data-model validation and Core runtime admission both use these limits so
-/// outer envelope, STARK wrapper, canonical metadata, and auxiliary-byte policy
-/// cannot drift.
+/// Data-model validation and Core runtime admission both use these limits so outer envelope, STARK
+/// wrapper, canonical metadata, and auxiliary-byte policy cannot drift.
 #[must_use]
 pub fn soracloud_fhe_input_admission_open_verify_bounds() -> OpenVerifyEnvelopeBounds {
     OpenVerifyEnvelopeBounds {
@@ -2818,9 +2814,8 @@ pub fn soracloud_fhe_input_admission_open_verify_bounds() -> OpenVerifyEnvelopeB
 }
 /// Return shared `OpenVerifyEnvelope` bounds for Soracloud FHE public-key proofs.
 ///
-/// Data-model validation and Core runtime admission both use these limits so
-/// outer envelope, STARK wrapper, canonical metadata, and auxiliary-byte policy
-/// cannot drift.
+/// Data-model validation and Core runtime admission both use these limits so outer envelope, STARK
+/// wrapper, canonical metadata, and auxiliary-byte policy cannot drift.
 #[must_use]
 pub fn soracloud_fhe_public_key_proof_open_verify_bounds() -> OpenVerifyEnvelopeBounds {
     OpenVerifyEnvelopeBounds {
@@ -2834,9 +2829,8 @@ pub fn soracloud_fhe_public_key_proof_open_verify_bounds() -> OpenVerifyEnvelope
 }
 /// Return shared `OpenVerifyEnvelope` bounds for Soracloud FHE bootstrap-key proofs.
 ///
-/// Data-model validation and Core runtime admission both use these limits so
-/// outer envelope, STARK wrapper, canonical metadata, and auxiliary-byte policy
-/// cannot drift.
+/// Data-model validation and Core runtime admission both use these limits so outer envelope, STARK
+/// wrapper, canonical metadata, and auxiliary-byte policy cannot drift.
 #[must_use]
 pub fn soracloud_fhe_bootstrap_key_proof_open_verify_bounds() -> OpenVerifyEnvelopeBounds {
     OpenVerifyEnvelopeBounds {
@@ -2850,9 +2844,8 @@ pub fn soracloud_fhe_bootstrap_key_proof_open_verify_bounds() -> OpenVerifyEnvel
 }
 /// Return shared `OpenVerifyEnvelope` bounds for full-bootstrap execution proofs.
 ///
-/// Data-model validation and Core runtime admission both use these limits so
-/// outer envelope, STARK wrapper, canonical metadata, and auxiliary-byte policy
-/// cannot drift.
+/// Data-model validation and Core runtime admission both use these limits so outer envelope, STARK
+/// wrapper, canonical metadata, and auxiliary-byte policy cannot drift.
 #[must_use]
 pub fn soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds() -> OpenVerifyEnvelopeBounds
 {
@@ -3116,10 +3109,9 @@ pub enum FheJobOperationV1 {
     Multiply,
     /// Deterministic left-rotation over one ciphertext input.
     ///
-    /// Single-ciphertext packed BFV envelopes use public Galois key switching,
-    /// including masked key schedules for rotations that are not one
-    /// automorphism. Multi-slot identifier envelopes use the outer
-    /// ciphertext-slot rotation path.
+    /// Single-ciphertext packed BFV envelopes use public Galois key switching, including masked key
+    /// schedules for rotations that are not one automorphism. Multi-slot identifier envelopes use
+    /// the outer ciphertext-slot rotation path.
     RotateLeft,
     /// Deterministic bootstrap/relinearization refresh over one input.
     Bootstrap,
@@ -4127,9 +4119,8 @@ impl CiphertextQueryResponseV1 {
     /// Validate ciphertext query response constraints.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when schema versions mismatch,
-    /// result counts diverge, projection constraints are violated, or any
-    /// nested result/proof item fails validation.
+    /// Returns [`SoracloudManifestError`] when schema versions mismatch, result counts diverge,
+    /// projection constraints are violated, or any nested result/proof item fails validation.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         if self.schema_version != CIPHERTEXT_QUERY_RESPONSE_VERSION_V1 {
             return Err(SoracloudManifestError::UnsupportedVersion {

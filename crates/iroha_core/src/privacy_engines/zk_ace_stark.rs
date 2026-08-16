@@ -1,11 +1,9 @@
 //! Sound transparent STARK used by the first-release ZK-ACE engine.
 //!
-//! The generic historical `zk_stark` helper commits raw trace rows and then
-//! deliberately excludes the only witness-bearing row from every query.  That
-//! construction cannot establish knowledge: a malicious prover can commit an
-//! unrelated zero composition vector and no verifier query ever reconnects it
-//! to the private row.  ZK-ACE therefore uses the self-contained construction
-//! below:
+//! The generic historical `zk_stark` helper commits raw trace rows and then deliberately excludes
+//! the only witness-bearing row from every query. That construction cannot establish knowledge: a
+//! malicious prover can commit an unrelated zero composition vector and no verifier query ever
+//! reconnects it to the private row. ZK-ACE therefore uses the self-contained construction below:
 //!
 //! - every witness byte is range constrained through a bit decomposition;
 //! - the two Poseidon2 sponge computations are represented by a complete
@@ -63,9 +61,8 @@ use thiserror::Error;
 /// Internal, fixed AIR projection of the typed privacy statement.
 ///
 /// This type is deliberately not exported from `iroha_core`: callers submit
-/// [`iroha_data_model::zk::ZkAcePrivacyPublicInputsV1`] through the typed
-/// privacy envelope, while this exact projection exists only between the
-/// dedicated prover and verifier.
+/// [`iroha_data_model::zk::ZkAcePrivacyPublicInputsV1`] through the typed privacy envelope, while
+/// this exact projection exists only between the dedicated prover and verifier.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct ZkAceAirRelationInputsV1 {
     pub(super) version: u16,
@@ -120,10 +117,9 @@ impl ZkAceAirRelationInputsV1 {
 }
 /// Exact, type-name-independent public transcript schema.
 ///
-/// The schema descriptor is itself the first framed part. Every following part
-/// is ordered and independently length-framed by
-/// [`zk_ace_poseidon2_domain_hash`], whose byte packing is fixed to seven-byte
-/// little-endian Goldilocks limbs.
+/// The schema descriptor is itself the first framed part. Every following part is ordered and
+/// independently length-framed by [`zk_ace_poseidon2_domain_hash`], whose byte packing is fixed to
+/// seven-byte little-endian Goldilocks limbs.
 pub(super) const AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1: &[u8] = b"framing=poseidon2-domain-words:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=version:u16be|part2=identity-commitment:bytes32|part3=transfer-digest:bytes32|part4=authorization-digest:bytes32|part5=network-id:bytes32|part6=fixed-domain:utf8|part7=fixed-action:utf8|part8=replay-nullifier:bytes32|part9=policy-digest:bytes32|part10=source:account-canonical-hex-v1-utf8|part11=destination:account-canonical-hex-v1-utf8|part12=asset-definition-id:uuid-bytes16|part13=amount:u128be|part14=fixed-verifier-backend:utf8|part15=fixed-verifier-circuit:utf8";
 const AIR_PUBLIC_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ace:air-public-digest:v1";
 fn air_public_transcript_parts_v1(
@@ -243,8 +239,7 @@ pub(crate) const CANONICAL_PROOF_BYTES_V1: usize = PROOF_WIRE_MAGIC_V1.len()
 pub(crate) const MAX_PROOF_BYTES: usize = CANONICAL_PROOF_BYTES_V1;
 /// Work-normalized random-oracle security established by the compiled bound.
 pub(crate) const PROVABLE_SOUNDNESS_BITS_V1: u16 = 128;
-/// Largest adversarial random-oracle work budget covered by the compiled BCS
-/// inequality.
+/// Largest adversarial random-oracle work budget covered by the compiled BCS inequality.
 pub(crate) const MAX_ROM_QUERY_LOG2_V1: u8 = 124;
 /// Exact maximum total degree of any compiled AIR constraint.
 pub(crate) const AIR_TOTAL_DEGREE_V1: usize = maximum_air_constraint_degree_v1();
@@ -301,12 +296,11 @@ const PROOF_VERSION: u16 = 1;
 const MAX_QUERY_DERIVATION_ATTEMPTS: usize = LDE_SIZE * 2;
 /// Hard fail-closed bound for deriving one unbiased extension-field challenge.
 ///
-/// Each of the four uniformly random 64-bit coefficients rejects exactly when
-/// it is at least the Goldilocks modulus, a `2^-32` fraction.  Thus one tuple
-/// rejects with probability below `2^-30`, and all 256 domain-separated
-/// attempts fail with probability below `2^-7680` in the random-oracle model.
-/// Zero is admitted here; the separate DEEP sampler additionally rejects zero
-/// and every point in either evaluation domain.
+/// Each of the four uniformly random 64-bit coefficients rejects exactly when it is at least the
+/// Goldilocks modulus, a `2^-32` fraction. Thus one tuple rejects with probability below `2^-30`,
+/// and all 256 domain-separated attempts fail with probability below `2^-7680` in the random-oracle
+/// model. Zero is admitted here; the separate DEEP sampler additionally rejects zero and every
+/// point in either evaluation domain.
 const MAX_FIELD_CHALLENGE_DERIVATION_ATTEMPTS: usize = 256;
 const STATE_OFFSET: usize = 0;
 const A_OFFSET: usize = STATE_OFFSET + 3;
@@ -2585,10 +2579,9 @@ fn proof_query(
 }
 /// Construct a canonical masked proof using a caller-supplied fallible RNG.
 ///
-/// The injected RNG exists for deterministic known-answer tests and explicit
-/// entropy-failure tests. Product callers use [`rand::rngs::OsRng`]. All
-/// deterministic profile, public-input, and witness checks complete before one
-/// shared checked entropy session is opened for both masking phases.
+/// The injected RNG exists for deterministic known-answer tests and explicit entropy-failure tests.
+/// Product callers use [`rand::rngs::OsRng`]. All deterministic profile, public-input, and witness
+/// checks complete before one shared checked entropy session is opened for both masking phases.
 pub(super) fn prove_zk_ace_stark_v1_with_rng<R: TryCryptoRng + ?Sized>(
     public_inputs: &ZkAceAirRelationInputsV1,
     witness: &ZkAcePrivacyWitnessV1,

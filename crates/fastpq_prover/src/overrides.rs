@@ -1,9 +1,8 @@
 //! Runtime overrides for GPU-related FASTPQ knobs.
 //!
-//! These helpers let hosts configure Metal tuning parameters via configuration
-//! before the GPU backend initialises, avoiding ad-hoc runtime environment
-//! shims in production. Environment fallbacks are still available for
-//! development tools and benches when no override is supplied.
+//! These helpers let hosts configure Metal tuning parameters via configuration before the GPU
+//! backend initialises, avoiding ad-hoc runtime environment shims in production. Environment
+//! fallbacks are still available for development tools and benches when no override is supplied.
 use std::sync::{
     OnceLock,
     atomic::{AtomicBool, Ordering},

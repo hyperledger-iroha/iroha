@@ -1,18 +1,15 @@
 //! Production SFM-4b3 moderation evidence-viewer service.
 //!
-//! This module deliberately keeps authentication secrets, WebAuthn assertions,
-//! bearer grants, and evidence bytes outside durable state. The authoritative
-//! checkpoint contains only finalized authorization anchors, one-way
-//! token/assertion digests, and Ed25519-authenticated payload-free receipts.
-//! Runtime providers are injected by the embedding daemon; there is no file,
-//! environment, or in-process key fallback. The local checkpoint file is a
-//! revalidated cache of the qualified external CAS authority and can never seed
-//! or replace it. Expired challenge/session records are pruned only after an
-//! exact signer-authenticated artifact is durably installed and read back from
-//! a qualified immutable archive. Production audit/readback comes from the
-//! exact signed receipt checkpoint and
-//! [`EvidenceViewerTransparencyProjectionV1`]; the older `NodeHandle`
-//! session/access registry is intentionally not fed by this service.
+//! This module deliberately keeps authentication secrets, WebAuthn assertions, bearer grants, and
+//! evidence bytes outside durable state. The authoritative checkpoint contains only finalized
+//! authorization anchors, one-way token/assertion digests, and Ed25519-authenticated payload-free
+//! receipts. Runtime providers are injected by the embedding daemon; there is no file, environment,
+//! or in-process key fallback. The local checkpoint file is a revalidated cache of the qualified
+//! external CAS authority and can never seed or replace it. Expired challenge/session records are
+//! pruned only after an exact signer-authenticated artifact is durably installed and read back from
+//! a qualified immutable archive. Production audit/readback comes from the exact signed receipt
+//! checkpoint and [`EvidenceViewerTransparencyProjectionV1`]; the older `NodeHandle` session/access
+//! registry is intentionally not fed by this service.
 use crate::{
     ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerSessionInput,
     ModerationEvidenceViewerSessionRecord, ModerationQuarantineObjectError,
@@ -331,10 +328,9 @@ pub enum EvidenceViewerExternalErrorV1 {
 }
 /// Public, non-secret qualification for an evidence-viewer runtime provider.
 ///
-/// `revision` identifies the deployment-owned adapter and public policy
-/// revision. `policy_digest` binds that exact public policy. The evidence
-/// viewer pins both values before opening durable state and requires the same
-/// values before and after every external security-provider operation.
+/// `revision` identifies the deployment-owned adapter and public policy revision. `policy_digest`
+/// binds that exact public policy. The evidence viewer pins both values before opening durable
+/// state and requires the same values before and after every external security-provider operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvidenceViewerRuntimeProviderQualificationV1 {
     revision: u64,
@@ -343,8 +339,7 @@ pub struct EvidenceViewerRuntimeProviderQualificationV1 {
 impl EvidenceViewerRuntimeProviderQualificationV1 {
     /// Construct one provider qualification observation.
     ///
-    /// The evidence-viewer service rejects zero revisions and all-zero policy
-    /// digests.
+    /// The evidence-viewer service rejects zero revisions and all-zero policy digests.
     #[must_use]
     pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
         Self {
@@ -368,9 +363,8 @@ impl EvidenceViewerRuntimeProviderQualificationV1 {
 }
 /// Stable, payload-free evidence-viewer provider qualification failures.
 ///
-/// Provider implementations retain credentials, key identifiers, and vendor
-/// diagnostics behind the typed readiness boundary. Startup and per-operation
-/// checks expose only these fixed classes.
+/// Provider implementations retain credentials, key identifiers, and vendor diagnostics behind the
+/// typed readiness boundary. Startup and per-operation checks expose only these fixed classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum EvidenceViewerRuntimeProviderQualificationErrorV1 {
     /// The configured opaque provider handle is malformed.
@@ -501,8 +495,7 @@ pub trait EvidenceViewerGrantBoundaryV1: EvidenceViewerRuntimeProviderV1 {
         claims: &EvidenceViewerGrantClaimsV1,
         now_unix_ms: u64,
     ) -> Result<(), EvidenceViewerExternalErrorV1>;
-    /// Revoke a previously issued token digest. Implementations must be
-    /// idempotent.
+    /// Revoke a previously issued token digest. Implementations must be idempotent.
     fn revoke(&self, token_digest: [u8; 32]) -> Result<(), EvidenceViewerExternalErrorV1>;
 }
 include!("evidence_viewer/receipt_signing.rs");
@@ -510,11 +503,10 @@ include!("evidence_viewer/receipt_signing.rs");
 pub trait EvidenceViewerErasureBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     /// Irreversibly erase or cryptographically destroy one exact object.
     ///
-    /// The service records success only after this boundary reports a definite
-    /// committed result. `operation_id` is stable across crash recovery and
-    /// implementations must make exact replays idempotent, returning the same
-    /// commit digest without repeating the irreversible operation. Ambiguous
-    /// results must be returned as unavailable.
+    /// The service records success only after this boundary reports a definite committed result.
+    /// `operation_id` is stable across crash recovery and implementations must make exact replays
+    /// idempotent, returning the same commit digest without repeating the irreversible operation.
+    /// Ambiguous results must be returned as unavailable.
     fn erase(
         &self,
         operation_id: [u8; 32],
@@ -538,11 +530,10 @@ pub enum EvidenceViewerCheckpointStoreExternalErrorV1 {
 }
 /// Signed canonical record retained by the authoritative checkpoint store.
 ///
-/// The record carries no credentials or private material. Its generation and
-/// predecessor fields form the monotonic lineage, `checkpoint_digest` binds the
-/// current payload-free checkpoint, `revision` is the deterministic CAS
-/// identity, and the existing governed receipt signer authenticates the whole
-/// public record.
+/// The record carries no credentials or private material. Its generation and predecessor fields
+/// form the monotonic lineage, `checkpoint_digest` binds the current payload-free checkpoint,
+/// `revision` is the deterministic CAS identity, and the existing governed receipt signer
+/// authenticates the whole public record.
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerCheckpointStoreRecordV1 {
     /// Record schema version.
@@ -600,10 +591,9 @@ impl fmt::Debug for EvidenceViewerCheckpointStoreRecordV1 {
 }
 /// Runtime-only linearizable authority for evidence-viewer checkpoints.
 ///
-/// Implementations must retain exact records across restarts and enforce CAS
-/// over the deterministic `revision`. Durable implementations must encode
-/// records with canonical Norito. Credentials, signing keys, vendor
-/// diagnostics, and private provider state must never cross this interface.
+/// Implementations must retain exact records across restarts and enforce CAS over the deterministic
+/// `revision`. Durable implementations must encode records with canonical Norito. Credentials,
+/// signing keys, vendor diagnostics, and private provider state must never cross this interface.
 pub trait EvidenceViewerCheckpointStoreV1: EvidenceViewerRuntimeProviderV1 {
     /// Load the exact current authoritative record.
     ///
@@ -618,9 +608,8 @@ pub trait EvidenceViewerCheckpointStoreV1: EvidenceViewerRuntimeProviderV1 {
     >;
     /// Install `next` only when the current deterministic revision matches.
     ///
-    /// Implementations must return
-    /// [`EvidenceViewerCheckpointStoreExternalErrorV1::Ambiguous`] whenever the
-    /// commit result is not definite.
+    /// Implementations must return [`EvidenceViewerCheckpointStoreExternalErrorV1::Ambiguous`]
+    /// whenever the commit result is not definite.
     ///
     /// # Errors
     ///
@@ -651,14 +640,13 @@ impl fmt::Debug for EvidenceViewerCompactionArchiveReadbackV1 {
 }
 /// Deployment-owned immutable archive for signed compaction artifacts.
 ///
-/// `install` must durably bind one exact canonical artifact to `operation_id`
-/// before returning success. Repeating the same identifier and bytes must be
-/// idempotent and return the same signature; the same identifier with
-/// substituted bytes or receipt message must be rejected. The signature
-/// authenticates the exact operation/head commitment carried by the artifact
-/// and must only be emitted after durable installation. `read` must return the
-/// exact installed bytes and signature. Credentials, private keys, vendor
-/// diagnostics, and evidence payloads must never cross this boundary.
+/// `install` must durably bind one exact canonical artifact to `operation_id` before returning
+/// success. Repeating the same identifier and bytes must be idempotent and return the same
+/// signature; the same identifier with substituted bytes or receipt message must be rejected. The
+/// signature authenticates the exact operation/head commitment carried by the artifact and must
+/// only be emitted after durable installation. `read` must return the exact installed bytes and
+/// signature. Credentials, private keys, vendor diagnostics, and evidence payloads must never cross
+/// this boundary.
 pub trait EvidenceViewerCompactionArchiveV1: EvidenceViewerRuntimeProviderV1 {
     /// Return the stable non-secret archive namespace identity.
     fn archive_id(&self) -> [u8; 32];
@@ -666,9 +654,8 @@ pub trait EvidenceViewerCompactionArchiveV1: EvidenceViewerRuntimeProviderV1 {
     fn signing_public_key(&self) -> [u8; 32];
     /// Durably install one exact signed archive artifact.
     ///
-    /// `receipt_message` is the service-derived fixed digest bound to the
-    /// archive namespace, verification key, operation identifier, and signed
-    /// archive head.
+    /// `receipt_message` is the service-derived fixed digest bound to the archive namespace,
+    /// verification key, operation identifier, and signed archive head.
     ///
     /// # Errors
     ///
@@ -681,10 +668,9 @@ pub trait EvidenceViewerCompactionArchiveV1: EvidenceViewerRuntimeProviderV1 {
     ) -> Result<[u8; 64], EvidenceViewerExternalErrorV1>;
     /// Read back the exact artifact bound to `operation_id`.
     ///
-    /// `Ok(None)` is valid only when the identifier has never been installed.
-    /// A qualified current provider must retain historical operations and
-    /// return each operation's original epoch signature; callers authenticate
-    /// that historical key through the governed signed lineage.
+    /// `Ok(None)` is valid only when the identifier has never been installed. A qualified current
+    /// provider must retain historical operations and return each operation's original epoch
+    /// signature; callers authenticate that historical key through the governed signed lineage.
     ///
     /// # Errors
     ///
@@ -1042,8 +1028,7 @@ impl OpaqueEvidenceViewerSecretV1 {
     ///
     /// # Errors
     ///
-    /// Rejects empty, over-sized, whitespace-containing, or control-bearing
-    /// values.
+    /// Rejects empty, over-sized, whitespace-containing, or control-bearing values.
     pub fn new(value: String) -> Result<Self, EvidenceViewerExternalErrorV1> {
         if value.is_empty()
             || value.len() > EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1
@@ -1385,9 +1370,8 @@ impl EvidenceViewerSignedReceiptV1 {
 }
 /// Exact cursor into the durable signed evidence-viewer receipt chain.
 ///
-/// Consumers must persist both fields. A sequence without its exact digest is
-/// not a valid continuation cursor because it cannot detect checkpoint
-/// substitution or rollback.
+/// Consumers must persist both fields. A sequence without its exact digest is not a valid
+/// continuation cursor because it cannot detect checkpoint substitution or rollback.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
@@ -1436,13 +1420,11 @@ pub struct EvidenceViewerSignedCheckpointAnchorV1 {
     pub signature: [u8; 64],
 }
 impl EvidenceViewerSignedCheckpointAnchorV1 {
-    /// Verify the exact signer identity, structural head/count binding, and
-    /// Ed25519 signature.
+    /// Verify the exact signer identity, structural head/count binding, and Ed25519 signature.
     ///
     /// # Errors
     ///
-    /// Returns an invalid-checkpoint error for any malformed, substituted, or
-    /// forged anchor.
+    /// Returns an invalid-checkpoint error for any malformed, substituted, or forged anchor.
     pub fn verify(
         &self,
         expected_signer_handle: &str,
@@ -1519,9 +1501,8 @@ pub struct EvidenceViewerSignedCompactionArchiveHeadV1 {
     pub predecessor_head_digest: Option<[u8; 32]>,
     /// Exact predecessor archive operation, absent only at generation one.
     ///
-    /// Retaining the content-addressed operation identity makes every
-    /// historical generation recoverable and permits authenticated lineage
-    /// verification after restart.
+    /// Retaining the content-addressed operation identity makes every historical generation
+    /// recoverable and permits authenticated lineage verification after restart.
     pub predecessor_operation_id: Option<[u8; 32]>,
     /// Stable deterministic identifier used for exact external replay.
     pub operation_id: [u8; 32],
@@ -1582,10 +1563,9 @@ impl EvidenceViewerSignedCompactionArchiveHeadV1 {
 }
 /// Bounded payload-free projection for transparency and durable readback.
 ///
-/// `receipts` is a contiguous suffix of the authoritative signed checkpoint
-/// chain. It contains only receipt metadata and one-way actor/idempotency
-/// digests; evidence bytes, assertions, bearer grants, holder secrets, and raw
-/// viewer identities are never projected.
+/// `receipts` is a contiguous suffix of the authoritative signed checkpoint chain. It contains only
+/// receipt metadata and one-way actor/idempotency digests; evidence bytes, assertions, bearer
+/// grants, holder secrets, and raw viewer identities are never projected.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerTransparencyProjectionV1 {
     /// Transparency projection schema version.
@@ -1610,8 +1590,7 @@ pub struct EvidenceViewerTransparencyProjectionV1 {
     pub next_cursor: Option<EvidenceViewerReceiptCursorV1>,
     /// Whether another bounded page is available.
     pub has_more: bool,
-    /// Domain-separated digest of the exact cursor, page, and continuation
-    /// marker.
+    /// Domain-separated digest of the exact cursor, page, and continuation marker.
     pub projection_digest: [u8; 32],
 }
 impl EvidenceViewerTransparencyProjectionV1 {
@@ -1772,8 +1751,7 @@ pub struct EvidenceViewerAuditStatusV1 {
     pub erasure_count: u64,
     /// Retained signed retention-decision count.
     pub retention_count: u64,
-    /// Exact signed checkpoint and receipt-chain head represented by the
-    /// counters above.
+    /// Exact signed checkpoint and receipt-chain head represented by the counters above.
     pub checkpoint_anchor: EvidenceViewerSignedCheckpointAnchorV1,
 }
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -1803,10 +1781,9 @@ struct IdempotencyRecordV1 {
 }
 /// Durable write-ahead intent for one irreversible erasure.
 ///
-/// The intent is committed before crossing the KMS/object-store boundary and
-/// is retained until the signed receipt and terminal erasure record are
-/// durably committed. This makes crash recovery an exact idempotent replay
-/// instead of a second irreversible operation.
+/// The intent is committed before crossing the KMS/object-store boundary and is retained until the
+/// signed receipt and terminal erasure record are durably committed. This makes crash recovery an
+/// exact idempotent replay instead of a second irreversible operation.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerErasureIntentV1 {
     operation_id: [u8; 32],
@@ -1832,8 +1809,7 @@ struct EvidenceViewerCompactionArchiveArtifactV1 {
     head: EvidenceViewerSignedCompactionArchiveHeadV1,
     payload: EvidenceViewerCompactionArchivePayloadV1,
 }
-/// Payload-free minimum default-retention boundary retained after session
-/// compaction.
+/// Payload-free minimum default-retention boundary retained after session compaction.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerDefaultRetentionFloorV1 {
     quarantine_id: [u8; 16],
@@ -1997,10 +1973,9 @@ impl EvidenceViewerServiceV1 {
     ///
     /// # Errors
     ///
-    /// Fails closed before local checkpoint access when any provider is
-    /// missing, substituted, stale, test-marked, or otherwise unqualified.
-    /// Also rejects forged, non-canonical, rolled-back, forked, or
-    /// ambiguously committed checkpoint state.
+    /// Fails closed before local checkpoint access when any provider is missing, substituted,
+    /// stale, test-marked, or otherwise unqualified. Also rejects forged, non-canonical,
+    /// rolled-back, forked, or ambiguously committed checkpoint state.
     pub fn open_with_checkpoint_store(
         config: EvidenceViewerConfigV1,
         deps: EvidenceViewerRuntimeDepsV1,
@@ -2079,9 +2054,8 @@ impl EvidenceViewerServiceV1 {
     ///
     /// # Errors
     ///
-    /// Rejects malformed requests, missing objects, unauthorized finalized
-    /// assignments, reused idempotency keys, resource exhaustion, provider
-    /// failure, and checkpoint failure.
+    /// Rejects malformed requests, missing objects, unauthorized finalized assignments, reused
+    /// idempotency keys, resource exhaustion, provider failure, and checkpoint failure.
     pub fn issue_challenge(
         &self,
         request: EvidenceViewerChallengeRequestV1,
@@ -2211,9 +2185,8 @@ impl EvidenceViewerServiceV1 {
     ///
     /// # Errors
     ///
-    /// Fails closed for replay, stale challenge, substituted assignment,
-    /// invalid assertion, resource exhaustion, signer/grant failure, local
-    /// object mismatch, or checkpoint failure.
+    /// Fails closed for replay, stale challenge, substituted assignment, invalid assertion,
+    /// resource exhaustion, signer/grant failure, local object mismatch, or checkpoint failure.
     pub fn create_session(
         &self,
         request: EvidenceViewerSessionRequestV1,
@@ -2521,9 +2494,8 @@ impl EvidenceViewerServiceV1 {
     ///
     /// # Errors
     ///
-    /// Rejects unknown/inactive sessions, invalid or replayed grants,
-    /// substituted accounts, authorization revocation, resource exhaustion,
-    /// and checkpoint/provider failures.
+    /// Rejects unknown/inactive sessions, invalid or replayed grants, substituted accounts,
+    /// authorization revocation, resource exhaustion, and checkpoint/provider failures.
     pub fn manifest(
         &self,
         session_id: [u8; 16],
@@ -2646,15 +2618,13 @@ impl EvidenceViewerServiceV1 {
     }
     /// Authenticate, decrypt, durably log, and return one bounded range.
     ///
-    /// The decrypted bytes are returned only after the signed access receipt is
-    /// committed. A crash before checkpoint completion therefore cannot release
-    /// an unlogged response.
+    /// The decrypted bytes are returned only after the signed access receipt is committed. A crash
+    /// before checkpoint completion therefore cannot release an unlogged response.
     ///
     /// # Errors
     ///
-    /// Rejects invalid ranges, inactive sessions, stale/replayed grants,
-    /// authorization changes, object substitution, provider failures, and
-    /// checkpoint failures.
+    /// Rejects invalid ranges, inactive sessions, stale/replayed grants, authorization changes,
+    /// object substitution, provider failures, and checkpoint failures.
     #[allow(clippy::too_many_arguments)]
     pub fn read_range(
         &self,
@@ -2879,8 +2849,7 @@ impl EvidenceViewerServiceV1 {
         let _ = self.deps.grants.revoke(grant.digest());
         Ok((rotated.token, receipt))
     }
-    /// Place a legal hold. Only an exact finalized legal authorization is
-    /// accepted.
+    /// Place a legal hold. Only an exact finalized legal authorization is accepted.
     ///
     /// # Errors
     ///
@@ -3093,8 +3062,7 @@ impl EvidenceViewerServiceV1 {
         }
         Ok((released, receipt))
     }
-    /// Record one signed retention decision under an exact finalized legal
-    /// authorization.
+    /// Record one signed retention decision under an exact finalized legal authorization.
     ///
     /// An active legal hold is captured as precedence in the signed record and
     /// always keeps the object out of the due-erasure projection.
@@ -3205,16 +3173,14 @@ impl EvidenceViewerServiceV1 {
     }
     /// Erase an object unless an active legal hold has precedence.
     ///
-    /// Both successful erasure and legal-hold denial produce signed,
-    /// payload-free receipts.
+    /// Both successful erasure and legal-hold denial produce signed, payload-free receipts.
     ///
     /// # Errors
     ///
-    /// Returns [`EvidenceViewerErrorV1::LegalHoldPrecedence`] after durably
-    /// recording a denial receipt, returns
-    /// [`EvidenceViewerErrorV1::RetentionActive`] without calling the erasure
-    /// boundary before the governed deadline, and fails closed for
-    /// authorization, dependency, signing, or checkpoint failures.
+    /// Returns [`EvidenceViewerErrorV1::LegalHoldPrecedence`] after durably recording a denial
+    /// receipt, returns [`EvidenceViewerErrorV1::RetentionActive`] without calling the erasure
+    /// boundary before the governed deadline, and fails closed for authorization, dependency,
+    /// signing, or checkpoint failures.
     #[allow(clippy::too_many_arguments)]
     pub fn erase(
         &self,
@@ -3478,9 +3444,8 @@ impl EvidenceViewerServiceV1 {
         state.default_retention_floors.remove(&intent.quarantine_id);
         Ok((erasure, receipt))
     }
-    /// Return a bounded deterministic list of evidence objects whose governed
-    /// retention deadline has elapsed and which are not protected by a legal
-    /// hold.
+    /// Return a bounded deterministic list of evidence objects whose governed retention deadline
+    /// has elapsed and which are not protected by a legal hold.
     ///
     /// This method does not erase data. A supervised worker must pass each
     /// candidate through [`Self::erase`], preserving finalized legal
@@ -3555,21 +3520,18 @@ impl EvidenceViewerServiceV1 {
     }
     /// Refresh one fenced replica from the exact authoritative checkpoint head.
     ///
-    /// The current in-memory head and the local cache must each be either the
-    /// authoritative record or its exact signed predecessor. This explicit
-    /// handoff never accepts an unrelated replacement or an unverified local
-    /// checkpoint. Any current compaction head and its complete historical
-    /// lineage are read back and verified before the local cache is replaced or
-    /// the in-memory state becomes visible. Any retained erasure intent is then
-    /// reconciled through its stable external operation identifier before
-    /// success.
+    /// The current in-memory head and the local cache must each be either the authoritative record
+    /// or its exact signed predecessor. This explicit handoff never accepts an unrelated
+    /// replacement or an unverified local checkpoint. Any current compaction head and its complete
+    /// historical lineage are read back and verified before the local cache is replaced or the
+    /// in-memory state becomes visible. Any retained erasure intent is then reconciled through its
+    /// stable external operation identifier before success.
     ///
     /// # Errors
     ///
     /// Fails closed for a missing, forged, rolled-back, forked, unavailable, or
-    /// more-than-one-generation-ahead authoritative head, missing or corrupt
-    /// compaction history, a local-cache write failure, or an erasure-intent
-    /// reconciliation failure.
+    /// more-than-one-generation-ahead authoritative head, missing or corrupt compaction history, a
+    /// local-cache write failure, or an erasure-intent reconciliation failure.
     pub fn refresh_authoritative_checkpoint(
         &self,
     ) -> Result<EvidenceViewerSignedCheckpointAnchorV1, EvidenceViewerErrorV1> {
@@ -3603,13 +3565,12 @@ impl EvidenceViewerServiceV1 {
     }
     /// Durably archive and then prune a bounded expired-record prefix.
     ///
-    /// The caller fences the exact signed checkpoint and archive predecessor.
-    /// The deployment-owned archive is independently qualified before use. A
-    /// deterministic operation identifier and signer-authenticated monotonic
-    /// head bind the source checkpoint, predecessor, provider identity, cutoff,
-    /// work bound, and exact canonical payload. The service requires exact
-    /// canonical readback before changing local state or attempting the
-    /// authoritative checkpoint CAS.
+    /// The caller fences the exact signed checkpoint and archive predecessor. The deployment-owned
+    /// archive is independently qualified before use. A deterministic operation identifier and
+    /// signer-authenticated monotonic head bind the source checkpoint, predecessor, provider
+    /// identity, cutoff, work bound, and exact canonical payload. The service requires exact
+    /// canonical readback before changing local state or attempting the authoritative checkpoint
+    /// CAS.
     ///
     /// Exact retries after an ambiguous archive install or a failed checkpoint
     /// commit reuse the same operation identifier and artifact. A completed
@@ -3618,10 +3579,9 @@ impl EvidenceViewerServiceV1 {
     ///
     /// # Errors
     ///
-    /// Rejects invalid bounds, stale/forked fences, substituted or stale
-    /// archives, forged/non-canonical/trailing readback, generation overflow,
-    /// unavailable signing/archive/checkpoint providers, and empty eligible
-    /// record sets.
+    /// Rejects invalid bounds, stale/forked fences, substituted or stale archives,
+    /// forged/non-canonical/trailing readback, generation overflow, unavailable
+    /// signing/archive/checkpoint providers, and empty eligible record sets.
     pub fn compact_expired_with_archive(
         &self,
         request: EvidenceViewerCompactionArchiveRequestV1,
@@ -4064,8 +4024,7 @@ impl EvidenceViewerServiceV1 {
     ///
     /// # Errors
     ///
-    /// Fails if state is unavailable, durability is uncertain, or canonical
-    /// status encoding fails.
+    /// Fails if state is unavailable, durability is uncertain, or canonical status encoding fails.
     pub fn audit_status(&self) -> Result<EvidenceViewerAuditStatusV1, EvidenceViewerErrorV1> {
         let state = self
             .state

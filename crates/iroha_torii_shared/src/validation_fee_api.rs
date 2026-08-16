@@ -668,9 +668,8 @@ impl ValidationFeeCurrentPolicyProofV1 {
     }
     /// Verify the proof and project it under an immutable deployment binding.
     ///
-    /// This is deliberately stricter than [`Self::verify_against`]: an
-    /// unconfigured registry is rejected because it cannot authenticate the
-    /// caller-pinned policy-chain genesis hash.
+    /// This is deliberately stricter than [`Self::verify_against`]: an unconfigured registry is
+    /// rejected because it cannot authenticate the caller-pinned policy-chain genesis hash.
     ///
     /// # Errors
     ///
@@ -904,9 +903,8 @@ pub fn encode_validation_fee_proposal_cursor_v1(
 ///
 /// # Errors
 ///
-/// Returns a stable validation message when the cursor is oversized,
-/// non-canonical, belongs to another collection/version, or has the wrong
-/// fixed-width payload.
+/// Returns a stable validation message when the cursor is oversized, non-canonical, belongs to
+/// another collection/version, or has the wrong fixed-width payload.
 pub fn decode_validation_fee_proposal_cursor_v1(encoded: &str) -> Result<(u64, [u8; 32]), String> {
     if encoded.is_empty() || encoded.len() > VALIDATION_FEE_PROPOSAL_CURSOR_MAX_ENCODED_LEN_V1 {
         return Err(

@@ -1,21 +1,17 @@
 # Sumeragi v2 safety and liveness argument
 
-## Release-ledger status protocol
+## Current proof-ledger status
 
 The final ledger is precommitted at 44 `tlaps_proved`, 3
 `cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
-`out_of_scope`, with `machine_checked_completion: true`. This ordering is
-intentional: TLAPS, Verus, cross-tool, and trace evidence all bind the
-byte-exact final ledger, so changing statuses after proof execution would
-invalidate the evidence that justified them.
-
-The status precommit is not sufficient release evidence. The release wrapper
-must run every strict promotion target and its dependency cone against one
-clean signed commit, verify pinned Verus without cheating, derive the three
-cross-tool records and production-trace certificate, and validate the receipt
-and completion marker against the same commit, source manifest, and ledger
-digest. Historical sections below describe the earlier unproved states and
-remain provenance, not the current release claim.
+`out_of_scope`, with `machine_checked_completion: true`. This declaration is
+the byte-exact input to the release proof wave, not proof evidence by itself.
+Release completion still requires strict TLAPS, pinned Verus, derived
+cross-tool and production-trace evidence, and receipt/completion-marker checks
+against one frozen signed candidate. Mechanization-status statements below
+that report the earlier 35/12 split, call an obligation `specified_unproved`,
+or set `machine_checked_completion: false` are historical snapshots retained
+as provenance; they do not override this current precommit.
 
 ## Revision-4 argument
 
@@ -970,14 +966,15 @@ source/log/tool-bound evidence under `target/formal/sumeragi_v2/`. Checked-in
 backend counts are intentionally prohibited because they become stale as
 proofs change.
 
-The reviewed top-level inventory contains exactly 54 obligations: 35
+The historical pre-precommit inventory contained exactly 54 obligations: 35
 `tlaps_proved`, 12 `specified_unproved`, 6 `trusted_contract`, and 1
 `out_of_scope`. Sixteen source-bound proof/evidence decomposition leaves remain
 checked transitively through those top-level obligations and are not additional
 ledger rows. Machine-checked completion covers the same exact 54 obligations
 and must contain 44 `tlaps_proved`, 3 `cross_tool_proved`, 6
-`trusted_contract`, and 1 `out_of_scope`. Those are completion requirements,
-not current proof claims; `machine_checked_completion` remains false.
+`trusted_contract`, and 1 `out_of_scope`. At that checkpoint those were
+completion requirements rather than proof claims, and
+`machine_checked_completion` remained false.
 
 The module set covers quorum algebra, availability, crash recovery,
 reconfiguration, compositional safety, agreement, full action induction,
@@ -1248,12 +1245,13 @@ consume progress ownership, while all three rank leaves consume their exact
 proved fair-action prerequisites. The aggregate
 `protected-service-rank` obligation waits for every leaf, while production
 admission, runtime, ingress, and actor-to-flush ownership remain outside these
-abstract results. The 54-entry top-level ledger contains 35 `tlaps_proved`, 12
+abstract results. At that historical pre-precommit checkpoint, the 54-entry
+top-level ledger contained 35 `tlaps_proved`, 12
 `specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope`; completion
 expects 44 `tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
 `out_of_scope`. Sixteen decomposition declarations remain source-bound and
 transitively checked through their reviewed top-level consumers rather than
-appearing as extra claims, so `machine_checked_completion` remains false.
+appearing as extra claims, so `machine_checked_completion` remained false.
 The aggregate temporal closure now gives
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` pinned source proof
@@ -1654,7 +1652,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`43488145df2b3d502786684c24ce5ebf7c709289f6b76bc667f22484daff5746`.
+`d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5`.
 The separate source-sealed G-UNIT inventory contains 525 focused tests,
 including 319 `iroha_core` tests. Its 526-line canonical TSV has SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`;
@@ -1694,7 +1692,7 @@ anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
-The five integration names share a module-filtered leg; the pre-network corridor
+The four integration names share a module-filtered leg; the pre-network corridor
 now has 88 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
@@ -1783,7 +1781,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 856-name tree still requires a clean committed, detached,
+names; the current 860-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

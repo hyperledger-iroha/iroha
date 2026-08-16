@@ -11,9 +11,8 @@
 //! - a bounded durable read projection populated only after authoritative
 //!   Governance DAG readback and projector acknowledgement.
 //!
-//! Every external dependency is identity pinned. No implementation in this
-//! module accepts a private key, mutates a local reputation authority, or
-//! treats submission success as finality.
+//! Every external dependency is identity pinned. No implementation in this module accepts a private
+//! key, mutates a local reputation authority, or treats submission success as finality.
 use super::{
     REPUTATION_INGEST_MAX_PAGES_PER_BATCH_V1, ReputationCommittedEventIdentityV1,
     ReputationCommittedFeedCursorV1, ReputationCommittedFeedV1, ReputationFinalizedBatchV1,
@@ -112,10 +111,9 @@ pub const REPUTATION_COMMITTED_READ_MAX_EVENTS_V1: usize = 1_024;
 pub const REPUTATION_STREAM_TOKEN_GATEWAY_HEADS_MAX_V1: usize = 1_024;
 /// Maximum canonical counted-token admissions retained for bounded replay.
 ///
-/// The dedicated 4,096-row cap is large enough to pin one authenticated head
-/// for every allowed gateway while bounding the complete canonical entries
-/// retained behind those heads. It is intentionally independent of the much
-/// larger generic completed-tombstone limit.
+/// The dedicated 4,096-row cap is large enough to pin one authenticated head for every allowed
+/// gateway while bounding the complete canonical entries retained behind those heads. It is
+/// intentionally independent of the much larger generic completed-tombstone limit.
 pub const REPUTATION_STREAM_TOKEN_GATEWAY_ADMISSIONS_MAX_V1: usize = 4_096;
 /// Canonical durable journal-producer checkpoint file.
 pub const REPUTATION_JOURNAL_PRODUCER_CHECKPOINT_FILE_NAME_V1: &str =
@@ -194,10 +192,9 @@ impl ReputationExternalFailureV1 {
 }
 /// Public, non-secret qualification for one reputation runtime provider.
 ///
-/// The revision identifies the V1 provider contract. The digest is supplied
-/// by an independently constructed runtime policy rather than learned from the
-/// provider at first use. Runtime components require both values to match
-/// before and after every external operation.
+/// The revision identifies the V1 provider contract. The digest is supplied by an independently
+/// constructed runtime policy rather than learned from the provider at first use. Runtime
+/// components require both values to match before and after every external operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReputationRuntimeProviderQualificationV1 {
     revision: u64,
@@ -295,8 +292,7 @@ impl ReputationJournalCheckpointSealingPolicyV1 {
     ///
     /// # Errors
     ///
-    /// Fails when the handle, revision, policy digest, or provider readiness
-    /// changed.
+    /// Fails when the handle, revision, policy digest, or provider readiness changed.
     pub fn revalidate_provider(
         &self,
         provider: &dyn ReputationJournalCheckpointRuntimeV1,
@@ -328,10 +324,9 @@ pub enum ReputationJournalCheckpointExternalErrorV1 {
 }
 /// Canonical externally sealed record for one complete journal checkpoint.
 ///
-/// The record carries the exact canonical checkpoint bytes rather than a
-/// local-store fingerprint. Its deterministic revision authenticates the
-/// sequence, predecessor, checkpoint digest, and every checkpoint field,
-/// including the compacted replay floor and cumulative eviction count.
+/// The record carries the exact canonical checkpoint bytes rather than a local-store fingerprint.
+/// Its deterministic revision authenticates the sequence, predecessor, checkpoint digest, and every
+/// checkpoint field, including the compacted replay floor and cumulative eviction count.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationJournalSealedCheckpointRecordV1 {
     version: u8,
@@ -475,8 +470,7 @@ pub trait ReputationJournalCheckpointRuntimeV1: ReputationRuntimeProviderV1 {
     >;
     /// Replace the sealed head only if the exact revision is unchanged.
     ///
-    /// An uncertain write must return
-    /// [`ReputationJournalCheckpointExternalErrorV1::Ambiguous`].
+    /// An uncertain write must return [`ReputationJournalCheckpointExternalErrorV1::Ambiguous`].
     ///
     /// # Errors
     ///
@@ -513,10 +507,9 @@ impl ReputationFinalizedAnchorV1 {
 }
 /// One source-indexed journal lookup resolved from an immutable finalized view.
 ///
-/// `event = None` is authoritative only when the query provider can prove that
-/// the complete source index was available at `anchor`. Providers whose
-/// retained archive cannot distinguish absence from pruned history must fail
-/// externally instead of returning this view.
+/// `event = None` is authoritative only when the query provider can prove that the complete source
+/// index was available at `anchor`. Providers whose retained archive cannot distinguish absence
+/// from pruned history must fail externally instead of returning this view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationJournalSourceFinalizedViewV1 {
     /// Exact network, block identity, and block timestamp of the immutable view.
@@ -580,11 +573,9 @@ impl ReputationJournalSourceFinalizedViewV1 {
 }
 /// Policy and journal page read from one immutable finalized state view.
 ///
-/// The query adapter must execute
-/// [`FindSorafsReputationJournalAuthorityPolicy`] and the journal event query
-/// before releasing the same state-view guard. Echoing the finalized cursor
-/// makes an accidental current-head/historical-page mix detectable by the
-/// worker.
+/// The query adapter must execute [`FindSorafsReputationJournalAuthorityPolicy`] and the journal
+/// event query before releasing the same state-view guard. Echoing the finalized cursor makes an
+/// accidental current-head/historical-page mix detectable by the worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationJournalDeliveryFinalizedViewV1 {
     /// Exact network, block identity, and block timestamp of the immutable view.
@@ -707,10 +698,9 @@ pub trait ReputationFinalizedQueryV1: ReputationRuntimeProviderV1 {
     /// Execute the typed active-policy, complete bounded policy-history, and
     /// journal-page queries in one view.
     ///
-    /// Implementations must hold one immutable state-view/archive-generation
-    /// guard while resolving all three projections. They must not assemble
-    /// this response from separate current-head reads, even when those reads
-    /// report the same height.
+    /// Implementations must hold one immutable state-view/archive-generation guard while resolving
+    /// all three projections. They must not assemble this response from separate current-head
+    /// reads, even when those reads report the same height.
     fn reputation_journal_delivery_view(
         &self,
         network_id: &NetworkId,
@@ -719,8 +709,7 @@ pub trait ReputationFinalizedQueryV1: ReputationRuntimeProviderV1 {
         after: Option<ReputationJournalFinalizedEventCursorV1>,
         limit: u32,
     ) -> Result<ReputationJournalDeliveryFinalizedViewV1, ReputationExternalFailureV1>;
-    /// Resolve the latest event for one source together with its immutable
-    /// finalized anchor.
+    /// Resolve the latest event for one source together with its immutable finalized anchor.
     ///
     /// The source lookup and anchor selection must occur under one immutable
     /// state-view/archive-generation guard. A provider that cannot prove
@@ -957,9 +946,8 @@ impl ReputationCommittedProjectorRuntimeV1 {
     ///
     /// # Errors
     ///
-    /// Fails closed for handle substitution, anchor rollback/fork, missed
-    /// release target, malformed continuation, resource exhaustion, external
-    /// query failure, or projector rejection.
+    /// Fails closed for handle substitution, anchor rollback/fork, missed release target, malformed
+    /// continuation, resource exhaustion, external query failure, or projector rejection.
     pub fn reconcile_once(
         &self,
     ) -> Result<ReputationFinalizedPollOutcomeV1, ReputationRuntimeError> {
@@ -1603,8 +1591,7 @@ pub struct ReputationJournalSubmissionV1 {
 ///
 /// The native instruction is deliberately absent. Call
 /// [`ReputationJournalProducerOutboxV1::begin_submission`] to durably enter
-/// [`ReputationJournalDeliveryStateV1::Ambiguous`] before exact transaction
-/// material is exposed.
+/// [`ReputationJournalDeliveryStateV1::Ambiguous`] before exact transaction material is exposed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReputationJournalPendingV1 {
     /// Monotonic local outbox sequence.
@@ -1869,10 +1856,9 @@ struct ReputationJournalCheckpointSealingContextV1 {
 }
 /// Durable native PoR and authenticated stream-token journal outbox.
 ///
-/// Production stream-token admission consumes an externally authenticated,
-/// already sequenced outcome. This outbox never allocates a gateway sequence;
-/// it only advances the bounded per-gateway high-water mark inside the same
-/// externally sealed checkpoint as the journal row.
+/// Production stream-token admission consumes an externally authenticated, already sequenced
+/// outcome. This outbox never allocates a gateway sequence; it only advances the bounded
+/// per-gateway high-water mark inside the same externally sealed checkpoint as the journal row.
 #[derive(Debug)]
 pub struct ReputationJournalProducerOutboxV1 {
     policy: ReputationJournalProducerPolicyV1,
@@ -1932,11 +1918,10 @@ impl ReputationJournalProducerOutboxV1 {
     /// Open the production outbox against an identity-pinned externally
     /// sealed monotonic checkpoint.
     ///
-    /// The external sealed record is authoritative. The local atomic file is
-    /// only a recoverable cache and may be absent, exact, or the one direct
-    /// predecessor named by the sealed head. A local file outside that suffix,
-    /// a local fork, or a missing external head for existing local state fails
-    /// closed.
+    /// The external sealed record is authoritative. The local atomic file is only a recoverable
+    /// cache and may be absent, exact, or the one direct predecessor named by the sealed head. A
+    /// local file outside that suffix, a local fork, or a missing external head for existing local
+    /// state fails closed.
     ///
     /// # Errors
     ///
@@ -2111,14 +2096,12 @@ impl ReputationJournalProducerOutboxV1 {
     /// Open a retained checkpoint and atomically apply an immutable finalized
     /// authority-policy history before returning the outbox.
     ///
-    /// Unlike [`Self::open`], this recovery entry point may decode a checkpoint
-    /// whose retained active revision predates the supplied producer policy.
-    /// It does not trust that difference: the bounded history must begin at
-    /// revision one, contain the retained checkpoint lineage byte-for-byte,
-    /// advance by direct revision and predecessor-digest links, and end at the
-    /// exact policy configured for this process. Every missing successor is
-    /// applied in one durable checkpoint commit before the caller can expose an
-    /// active runtime.
+    /// Unlike [`Self::open`], this recovery entry point may decode a checkpoint whose retained
+    /// active revision predates the supplied producer policy. It does not trust that difference:
+    /// the bounded history must begin at revision one, contain the retained checkpoint lineage
+    /// byte-for-byte, advance by direct revision and predecessor-digest links, and end at the exact
+    /// policy configured for this process. Every missing successor is applied in one durable
+    /// checkpoint commit before the caller can expose an active runtime.
     ///
     /// # Errors
     ///
@@ -2333,11 +2316,10 @@ impl ReputationJournalProducerOutboxV1 {
     }
     /// Bind new Ready material to the exact chain-authoritative recorder policy.
     ///
-    /// Only a byte-identical record or the direct predecessor-bound successor
-    /// is accepted. Ambiguous and submitted rows are immutable because exact
-    /// signed bytes may already have escaped; they continue to reconcile under
-    /// their captured authority and policy digest. Rotation fails closed if
-    /// such bytes fall in the successor's source-time interval. Only
+    /// Only a byte-identical record or the direct predecessor-bound successor is accepted.
+    /// Ambiguous and submitted rows are immutable because exact signed bytes may already have
+    /// escaped; they continue to reconcile under their captured authority and policy digest.
+    /// Rotation fails closed if such bytes fall in the successor's source-time interval. Only
     /// never-exposed Ready rows are reconstructed under the successor.
     ///
     /// # Errors
@@ -2364,11 +2346,10 @@ impl ReputationJournalProducerOutboxV1 {
     /// Atomically synchronize every missed recorder-policy revision from one
     /// immutable finalized view.
     ///
-    /// The complete bounded history must start at revision one and end at the
-    /// finalized active record. The retained checkpoint lineage must be an
-    /// exact contiguous subrange of that history. Missing successors are
-    /// applied to one candidate and persisted once, so startup never exposes a
-    /// partially recovered policy head.
+    /// The complete bounded history must start at revision one and end at the finalized active
+    /// record. The retained checkpoint lineage must be an exact contiguous subrange of that
+    /// history. Missing successors are applied to one candidate and persisted once, so startup
+    /// never exposes a partially recovered policy head.
     ///
     /// Returns the number of direct rotations applied. Initial binding of an
     /// existing policy record is not counted as a rotation.
@@ -2660,24 +2641,20 @@ impl ReputationJournalProducerOutboxV1 {
             .ok_or(ReputationRuntimeError::UnknownJournalEvent)?;
         entry.submission(&self.policy.network_id)
     }
-    /// Bind one never-exposed Ready row to its source-time-valid policy and
-    /// enter ambiguity.
+    /// Bind one never-exposed Ready row to its source-time-valid policy and enter ambiguity.
     ///
-    /// This is the rotation-safe worker entrypoint. The caller supplies the
-    /// digest read from the same exact finalized view used as the absence
-    /// baseline, including that view's authoritative block time. A source
-    /// observation not strictly earlier than the finalized view is not exposed
-    /// for signing; this ensures a later block with the same timestamp cannot
-    /// rotate policy and retroactively invalidate Ambiguous bytes. Rows that
-    /// have ever entered Ambiguous or Submitted are never rewritten. A row
-    /// sourced before the active policy's activation retains its historical
-    /// policy bytes; only source material in the active interval is rebound.
+    /// This is the rotation-safe worker entrypoint. The caller supplies the digest read from the
+    /// same exact finalized view used as the absence baseline, including that view's authoritative
+    /// block time. A source observation not strictly earlier than the finalized view is not exposed
+    /// for signing; this ensures a later block with the same timestamp cannot rotate policy and
+    /// retroactively invalidate Ambiguous bytes. Rows that have ever entered Ambiguous or Submitted
+    /// are never rewritten. A row sourced before the active policy's activation retains its
+    /// historical policy bytes; only source material in the active interval is rebound.
     ///
     /// # Errors
     ///
-    /// Rejects a stale policy digest, invalid or source-incomplete baseline,
-    /// non-Ready row, collision, exhausted retry budget, or persistence
-    /// failure.
+    /// Rejects a stale policy digest, invalid or source-incomplete baseline, non-Ready row,
+    /// collision, exhausted retry budget, or persistence failure.
     pub fn begin_submission_against_active_policy(
         &self,
         event_id: ReputationJournalEventIdV1,
@@ -2782,13 +2759,11 @@ impl ReputationJournalProducerOutboxV1 {
     }
     /// Record a payload-free failure proven to precede queue submission.
     ///
-    /// Replaying the same receipt is idempotent and never consumes another
-    /// attempt.
+    /// Replaying the same receipt is idempotent and never consumes another attempt.
     ///
     /// # Errors
     ///
-    /// Rejects an inert receipt, unknown event, unsafe transition, or durable
-    /// persistence failure.
+    /// Rejects an inert receipt, unknown event, unsafe transition, or durable persistence failure.
     pub fn record_not_submitted(
         &self,
         event_id: ReputationJournalEventIdV1,
@@ -3319,8 +3294,7 @@ impl PorReputationJournalProducerV1 {
     ///
     /// # Errors
     ///
-    /// Rejects invalid terminal material, source conflicts, or persistence
-    /// failures.
+    /// Rejects invalid terminal material, source conflicts, or persistence failures.
     pub fn enqueue_terminal(
         &self,
         provider_id: ProviderId,
@@ -3339,12 +3313,11 @@ impl PorReputationJournalProducerV1 {
 }
 /// Production adapter for authenticated, externally sequenced stream-token outcomes.
 ///
-/// The gateway owner must verify the token result and allocate the non-zero
-/// monotonic sequence from its deployment-owned sealed state before invoking
-/// this adapter. This component never derives or rewrites a binding. It
-/// atomically enforces the retained gateway high-water mark with the journal
-/// row and consults the immutable finalized source index before admitting a
-/// source whose local replay tombstone may have compacted.
+/// The gateway owner must verify the token result and allocate the non-zero monotonic sequence from
+/// its deployment-owned sealed state before invoking this adapter. This component never derives or
+/// rewrites a binding. It atomically enforces the retained gateway high-water mark with the journal
+/// row and consults the immutable finalized source index before admitting a source whose local
+/// replay tombstone may have compacted.
 #[derive(Debug, Clone)]
 pub struct StreamTokenReputationJournalProducerV1 {
     outbox: Arc<ReputationJournalProducerOutboxV1>,
@@ -5216,9 +5189,8 @@ impl ReputationJournalDeliveryPolicyV1 {
 }
 /// Derive the public V1 policy digest for a network-bound journal submitter.
 ///
-/// The handle remains an independently configured identity; including its
-/// digest here prevents the same qualification from authorizing a substituted
-/// submitter role.
+/// The handle remains an independently configured identity; including its digest here prevents the
+/// same qualification from authorizing a substituted submitter role.
 ///
 /// # Errors
 ///
@@ -5876,9 +5848,8 @@ pub struct ReputationThresholdSigningRequestV1 {
 }
 /// Identity-pinned external threshold-signing client.
 ///
-/// The client must reconcile by `idempotency_key`: returning `None` means the
-/// operation remains pending, and a later call must never sign different
-/// material under the same key.
+/// The client must reconcile by `idempotency_key`: returning `None` means the operation remains
+/// pending, and a later call must never sign different material under the same key.
 pub trait ReputationThresholdSignerClientV1: ReputationRuntimeProviderV1 {
     /// Submit or reconcile one exact unsigned-material operation.
     fn reconcile_signature(
@@ -5902,13 +5873,11 @@ pub struct ReputationGovernanceDagPublicationRequestV1 {
     /// Exact canonical bytes of `signed_result`.
     pub canonical_signed_result: Vec<u8>,
 }
-/// Authenticated bounded proof that one publication is included below a signed
-/// Governance DAG head.
+/// Authenticated bounded proof that one publication is included below a signed Governance DAG head.
 ///
-/// `inclusion_path` is in ascending block order, contains the exact requested
-/// snapshot exactly once, and ends at `head.head_block_cid`. After the first
-/// acknowledgement, its first block must be the immediate successor of the
-/// previously authenticated head.
+/// `inclusion_path` is in ascending block order, contains the exact requested snapshot exactly
+/// once, and ends at `head.head_block_cid`. After the first acknowledgement, its first block must
+/// be the immediate successor of the previously authenticated head.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationGovernanceDagReadbackV1 {
     /// Schema version.
@@ -5938,8 +5907,7 @@ pub trait ReputationGovernanceDagClientV1: ReputationRuntimeProviderV1 {
 ///
 /// # Errors
 ///
-/// Rejects an empty or oversized peer identity and an inert or malformed
-/// Ed25519 public key.
+/// Rejects an empty or oversized peer identity and an inert or malformed Ed25519 public key.
 pub fn reputation_governance_dag_policy_digest_v1(
     publisher_peer_id: &[u8],
     publisher_public_key: [u8; 32],
@@ -6130,8 +6098,7 @@ impl ReputationPublicationPolicyV1 {
     ///
     /// # Errors
     ///
-    /// Rejects invalid trust material, handles, peer identity, key, or storage
-    /// bound.
+    /// Rejects invalid trust material, handles, peer identity, key, or storage bound.
     pub fn try_new(
         trust_policy: &ReputationSnapshotTrustPolicyV1,
         threshold_signer_handle: impl Into<String>,
@@ -6265,8 +6232,7 @@ struct StoredReputationPublicationV1 {
     governance_acknowledgement: Option<ReputationGovernanceDagAcknowledgementV1>,
     governance_readback: Option<StoredReputationGovernanceDagReadbackV1>,
 }
-/// Exact threshold-signed snapshot proven present in the authoritative
-/// Governance DAG.
+/// Exact threshold-signed snapshot proven present in the authoritative Governance DAG.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationCommittedSnapshotV1 {
     /// Stable projector delivery sequence.
@@ -6333,10 +6299,9 @@ impl ReputationCommittedSnapshotV1 {
 }
 /// Bounded durable public projection of authoritative reputation publication.
 ///
-/// `latest` retains the exact signed snapshot and authenticated Governance DAG
-/// acknowledgement. `events` is a consecutive retained suffix derived from
-/// committed snapshots only; it never records signer submission or
-/// submitter-side publication success.
+/// `latest` retains the exact signed snapshot and authenticated Governance DAG acknowledgement.
+/// `events` is a consecutive retained suffix derived from committed snapshots only; it never
+/// records signer submission or submitter-side publication success.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationCommittedReadProjectionV1 {
     /// Schema version.
@@ -6439,9 +6404,8 @@ impl ReputationCommittedReadProjectionV1 {
 }
 /// Object-safe read boundary for the authoritative reputation projection.
 ///
-/// Implementations must return only durable snapshots that completed
-/// authenticated Governance DAG readback. The boundary intentionally exposes
-/// no mutation or signing operation.
+/// Implementations must return only durable snapshots that completed authenticated Governance DAG
+/// readback. The boundary intentionally exposes no mutation or signing operation.
 pub trait ReputationCommittedReadApiV1: Send + Sync + fmt::Debug {
     /// Return an exact clone of the durable committed projection.
     ///
@@ -6451,8 +6415,7 @@ pub trait ReputationCommittedReadApiV1: Send + Sync + fmt::Debug {
     fn committed_read_projection(
         &self,
     ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError>;
-    /// Return the exact retained authoritative snapshot identified by
-    /// `snapshot_id`.
+    /// Return the exact retained authoritative snapshot identified by `snapshot_id`.
     ///
     /// Unknown and evicted identifiers return `None`; implementations must not
     /// substitute the latest snapshot.
@@ -6516,9 +6479,8 @@ pub trait ReputationNativeOutcomeAdmissionApiV1: Send + Sync + fmt::Debug {
     ///
     /// # Errors
     ///
-    /// Returns a validation, source-conflict, runtime-binding, finalized-query,
-    /// or durable checkpoint error. No success may be reported for best-effort
-    /// admission.
+    /// Returns a validation, source-conflict, runtime-binding, finalized-query, or durable
+    /// checkpoint error. No success may be reported for best-effort admission.
     fn record_authenticated_stream_token_validation(
         &self,
         provider_id: ProviderId,
@@ -6741,9 +6703,8 @@ impl ReputationPublicationReconcilerV1 {
     ///
     /// # Errors
     ///
-    /// Rejects dependency identity changes, signer substitution, mismatched
-    /// material, forged/wrong-publisher DAG blocks, durable conflicts, and
-    /// persistence uncertainty.
+    /// Rejects dependency identity changes, signer substitution, mismatched material,
+    /// forged/wrong-publisher DAG blocks, durable conflicts, and persistence uncertainty.
     pub fn reconcile_once(&self) -> Result<ReputationPublicationOutcomeV1, ReputationRuntimeError> {
         let _guard = self
             .reconcile_lock
@@ -6889,8 +6850,7 @@ impl ReputationPublicationReconcilerV1 {
     }
     /// Return only the bounded committed-event suffix after `sequence`.
     ///
-    /// This avoids cloning the signed provider projection for every live-stream
-    /// poll.
+    /// This avoids cloning the signed provider projection for every live-stream poll.
     pub fn committed_events_after(
         &self,
         sequence: u64,

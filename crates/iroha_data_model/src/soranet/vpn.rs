@@ -1,11 +1,10 @@
 //! SoraNet VPN cell layout, control-plane metadata, and billing receipts.
 //!
-//! This module pins the fixed 1024-byte cell format used by the native SoraNet
-//! VPN overlay so that control-plane surfaces, SDKs, and harnesses share the
-//! same framing. Cells carry a compact header (flow label + sequence/ack +
-//! padding budget) followed by a padded payload. Control-plane envelopes
-//! describe DNS/route pushes, guard/exit selection, and metering receipts so
-//! exit gateways can emit deterministic Norito payloads for governance.
+//! This module pins the fixed 1024-byte cell format used by the native SoraNet VPN overlay so that
+//! control-plane surfaces, SDKs, and harnesses share the same framing. Cells carry a compact header
+//! (flow label + sequence/ack + padding budget) followed by a padded payload. Control-plane
+//! envelopes describe DNS/route pushes, guard/exit selection, and metering receipts so exit
+//! gateways can emit deterministic Norito payloads for governance.
 use super::RelayId;
 use crate::{NetworkId, account::AccountId, asset::AssetDefinitionId};
 use blake3;
@@ -45,10 +44,9 @@ const VPN_SESSION_IPV6_BASE: u128 = 0xfd53_7261_6574_0000_0000_0000_0000_0000u12
 pub const VPN_ADDRESS_SLOT_COUNT_V1: u32 = VPN_SESSION_IPV4_SUBNET_COUNT;
 /// Typed index of a deterministic VPN point-to-point address allocation.
 ///
-/// The index is signed by the operator and claimed in consensus state. Keeping
-/// it separate from quote and session identifiers makes address uniqueness an
-/// explicit protocol invariant instead of an accidental property of a
-/// truncated hash.
+/// The index is signed by the operator and claimed in consensus state. Keeping it separate from
+/// quote and session identifiers makes address uniqueness an explicit protocol invariant instead of
+/// an accidental property of a truncated hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -238,9 +236,8 @@ impl VpnFlowLabelV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`VpnCellError::InvalidFlowLabelBits`] when `bits` exceeds the
-    /// supported width or [`VpnCellError::FlowLabelOverflow`] when `value` does
-    /// not fit into the requested width.
+    /// Returns [`VpnCellError::InvalidFlowLabelBits`] when `bits` exceeds the supported width or
+    /// [`VpnCellError::FlowLabelOverflow`] when `value` does not fit into the requested width.
     pub fn from_u32_with_bits(value: u32, bits: u8) -> Result<Self, VpnCellError> {
         let max = Self::max_value_for_bits(bits)?;
         if value > max {
@@ -358,10 +355,9 @@ impl VpnCellV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`VpnCellError::PayloadTooLarge`] if the payload exceeds the
-    /// available space after accounting for the header, or
-    /// [`VpnCellError::PayloadLengthMismatch`] when `payload_len` would be
-    /// truncated.
+    /// Returns [`VpnCellError::PayloadTooLarge`] if the payload exceeds the available space after
+    /// accounting for the header, or [`VpnCellError::PayloadLengthMismatch`] when `payload_len`
+    /// would be truncated.
     pub fn into_padded_frame(mut self) -> Result<VpnPaddedCellV1, VpnCellError> {
         let max_payload = Self::max_payload_len();
         if self.payload.len() > max_payload {
@@ -416,12 +412,11 @@ impl VpnPaddedCellV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`VpnCellError::FrameLengthMismatch`] if the frame length differs
-    /// from the pinned cell size, [`VpnCellError::UnsupportedVersion`] or
-    /// [`VpnCellError::InvalidClass`] for malformed headers,
-    /// [`VpnCellError::InvalidFlags`] for unsupported flag bits, or
-    /// [`VpnCellError::PayloadOverrun`] when the declared payload length exceeds
-    /// the available bytes.
+    /// Returns [`VpnCellError::FrameLengthMismatch`] if the frame length differs from the pinned
+    /// cell size, [`VpnCellError::UnsupportedVersion`] or [`VpnCellError::InvalidClass`] for
+    /// malformed headers, [`VpnCellError::InvalidFlags`] for unsupported flag bits, or
+    /// [`VpnCellError::PayloadOverrun`] when the declared payload length exceeds the available
+    /// bytes.
     pub fn parse(&self) -> Result<VpnCellV1, VpnCellError> {
         Self::parse_bytes(&self.bytes)
     }
@@ -1345,11 +1340,10 @@ impl VpnHelperTicketV1 {
     }
     /// Decode the client-visible ticket metadata without authenticating its MAC.
     ///
-    /// This is only for the local client helper, which needs the metering key and
-    /// tariff in order to sign usage vouchers but does not possess the relay's
-    /// MAC secret. It must never be used to authorize service; relays must call
-    /// [`Self::parse`] so the MAC and expiry are verified before trusting any
-    /// decoded field.
+    /// This is only for the local client helper, which needs the metering key and tariff in order
+    /// to sign usage vouchers but does not possess the relay's MAC secret. It must never be used to
+    /// authorize service; relays must call [`Self::parse`] so the MAC and expiry are verified
+    /// before trusting any decoded field.
     ///
     /// # Errors
     /// Returns an error when the frame length, magic prefix, metering key, or a

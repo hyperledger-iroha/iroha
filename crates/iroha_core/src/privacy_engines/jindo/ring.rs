@@ -1,10 +1,9 @@
 //! Fixed RNS arithmetic for the Jindo application rings.
 //!
 //! Both rings are `Z_q[X]/(X^1024 + 1)`.  The two inner 46-bit primes and two
-//! outer 36-bit primes are pinned, prime, pairwise distinct, and congruent to
-//! one modulo 2048. Their pinned primitive 2048th roots make negacyclic NTT
-//! multiplication deterministic across every target without native-width
-//! overflow.
+//! outer 36-bit primes are pinned, prime, pairwise distinct, and congruent to one modulo 2048.
+//! Their pinned primitive 2048th roots make negacyclic NTT multiplication deterministic across
+//! every target without native-width overflow.
 use super::JINDO_RING_DEGREE_V1;
 use zeroize::Zeroize;
 /// One pinned NTT prime and primitive `2d`-th root.
@@ -65,8 +64,7 @@ impl JindoRnsPolynomialV1 {
         }
         Some(Self { residues })
     }
-    /// Build from balanced coefficients whose magnitudes fit below both RNS
-    /// products.
+    /// Build from balanced coefficients whose magnitudes fit below both RNS products.
     pub(crate) fn from_balanced_coefficients(
         coefficients: [i128; JINDO_RING_DEGREE_V1],
         moduli: [JindoPrimeModulusV1; 2],

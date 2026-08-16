@@ -1,9 +1,8 @@
 //! Authoritative SoraFS proof-of-personhood issuer and registry records.
 //!
-//! Private credential bodies stay in holder/issuer storage. The ledger keeps
-//! only issuer-attested credential and revocation-nonce commitments together
-//! with the exact signed public root and revocation-list publications needed by
-//! verifiers.
+//! Private credential bodies stay in holder/issuer storage. The ledger keeps only issuer-attested
+//! credential and revocation-nonce commitments together with the exact signed public root and
+//! revocation-list publications needed by verifiers.
 use crate::account::AccountId;
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_schema::IntoSchema;
@@ -321,9 +320,8 @@ impl PopCredentialCommitmentBatchV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for an unsupported version, inert policy digest,
-    /// invalid payload or batch bounds, invalid commitments, non-canonical
-    /// ordering, or duplicate revocation commitments.
+    /// Returns an error for an unsupported version, inert policy digest, invalid payload or batch
+    /// bounds, invalid commitments, non-canonical ordering, or duplicate revocation commitments.
     pub fn validate(&self) -> Result<(), PopCredentialCommitmentBatchValidationError> {
         if self.version != POP_CREDENTIAL_COMMITMENT_BATCH_VERSION_V1 {
             return Err(

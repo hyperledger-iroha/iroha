@@ -762,10 +762,9 @@ pub fn selector_for_dataspace_alias(alias: &str) -> Result<NameSelectorV1, NameS
 }
 /// Derive the deterministic dataspace id for a SNS dataspace alias.
 ///
-/// Configured Nexus dataspaces keep their explicit catalog ids. SNS-only
-/// dataspaces use the same stable name hash that keys the ledger record, so
-/// every peer can route a newly registered dataspace without an out-of-band
-/// catalog update.
+/// Configured Nexus dataspaces keep their explicit catalog ids. SNS-only dataspaces use the same
+/// stable name hash that keys the ledger record, so every peer can route a newly registered
+/// dataspace without an out-of-band catalog update.
 #[must_use]
 pub fn dataspace_id_for_sns_alias(alias: &str) -> Option<DataSpaceId> {
     let selector = selector_for_dataspace_alias(alias.trim()).ok()?;
@@ -1108,11 +1107,10 @@ fn seed_alias_manage_permissions_if_missing(
 }
 /// Seed bootstrap alias state required by aliases referenced directly in genesis instructions.
 ///
-/// Genesis cannot rely on the normal registrar flow because the namespace policies and
-/// bootstrap authority are only coming online while the block executes. This helper
-/// pre-seeds the leases and alias-management permissions that the first block itself
-/// consumes, mirroring how operators would pre-register those names before normal
-/// operation.
+/// Genesis cannot rely on the normal registrar flow because the namespace policies and bootstrap
+/// authority are only coming online while the block executes. This helper pre-seeds the leases and
+/// alias-management permissions that the first block itself consumes, mirroring how operators would
+/// pre-register those names before normal operation.
 pub fn seed_genesis_alias_bootstrap(
     world: &mut World,
     block: &iroha_data_model::block::SignedBlock,
@@ -1940,8 +1938,7 @@ pub fn quote_account_alias_registration_with_configured_fee_asset(
 ///
 /// # Errors
 ///
-/// Returns [`SnsError`] when the alias is missing, immutable, or no longer
-/// eligible for renewal.
+/// Returns [`SnsError`] when the alias is missing, immutable, or no longer eligible for renewal.
 pub fn quote_account_alias_renewal(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -2106,9 +2103,8 @@ fn ensure_record_renewable(record: &NameRecordV1) -> Result<(), SnsError> {
 ///
 /// # Errors
 ///
-/// Returns [`SnsError`] when the selector or policy is invalid, the current
-/// expiry differs, the record is frozen/tombstoned, or the target does not add
-/// an allowed whole-year term.
+/// Returns [`SnsError`] when the selector or policy is invalid, the current expiry differs, the
+/// record is frozen/tombstoned, or the target does not add an allowed whole-year term.
 pub fn quote_resolved_name_renewal(
     world: &impl WorldReadOnly,
     selector: NameSelectorV1,
@@ -2341,8 +2337,7 @@ fn set_name_lease_expiry(
 ///
 /// # Errors
 ///
-/// Returns [`SnsError`] when the mutation fails or the state block cannot be
-/// committed.
+/// Returns [`SnsError`] when the mutation fails or the state block cannot be committed.
 #[cfg(test)]
 pub fn apply_with_state_block<T>(
     state: &State,
@@ -2687,10 +2682,9 @@ fn resolve_active_dataspace_by_id(
 ///
 /// # Errors
 ///
-/// Returns [`SnsError::NotFound`] when neither directory knows the alias,
-/// [`SnsError::BadRequest`] when the alias is not canonical, and
-/// [`SnsError::Conflict`] with [`ALIAS_CATALOG_MAPPING_CONFLICT_CODE`] when the
-/// two directories disagree.
+/// Returns [`SnsError::NotFound`] when neither directory knows the alias, [`SnsError::BadRequest`]
+/// when the alias is not canonical, and [`SnsError::Conflict`] with
+/// [`ALIAS_CATALOG_MAPPING_CONFLICT_CODE`] when the two directories disagree.
 pub fn resolve_active_dataspace_id_by_alias(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,

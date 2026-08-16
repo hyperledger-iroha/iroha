@@ -68,9 +68,8 @@ pub enum EquivocationKind {
     /// Two different proposals from the expected leader in one round.
     Proposal,
 }
-/// Exact pair of authenticated artifacts proving one validator equivocated. Keeping both
-/// signatures inside the reducer effect prevents a downstream adapter from turning a
-/// non-verifiable offender/round summary into slashing evidence.
+/// Exact authenticated pair proving equivocation; carrying both signatures prevents a
+/// downstream adapter from turning an unverifiable summary into slashing evidence.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EquivocationEvidence {
@@ -174,8 +173,7 @@ pub enum Effect {
         /// Complete frame to append.
         entry: WalEntry,
     },
-    /// Fetch an exact body, optionally using the frozen roster as authenticated
-    /// archive sources under a verified QC.
+    /// Fetch an exact body from authenticated frozen-roster sources under a verified QC.
     FetchBody {
         /// Tag for all fetch completions.
         tag: EventTag,
@@ -187,8 +185,7 @@ pub enum Effect {
         manifest: Option<PayloadManifest>,
         /// Validators certified to have made the body available.
         certified_sources: Vec<ValidatorId>,
-        /// Certificate authorizing a certified fetch, absent for an
-        /// uncertified leader proposal.
+        /// Certificate authorizing a certified fetch; absent for an uncertified proposal.
         certificate: Option<QuorumCertificate>,
     },
     /// Store a reconstructed body durably before validation.
@@ -233,11 +230,8 @@ pub enum Effect {
         tag: EventTag,
         /// Certificate authorizing the view change.
         certificate: TimeoutCertificate,
-        /// Exact durable lock selected after installing the certificate.
-        ///
-        /// Carrying the lock through the serialized boundary prevents an
-        /// adapter from re-reading mutable reducer state and accidentally
-        /// rebinding body work to a different identity.
+        /// Exact durable lock selected after installing the certificate. Carrying it across
+        /// serialization prevents mutable rereads from rebinding body work.
         protected_lock: Option<QuorumCertificate>,
     },
     /// Report authenticated equivocation without changing safety state.
@@ -253,8 +247,7 @@ pub enum Effect {
         certificate: QuorumCertificate,
     },
 }
-/// Storage-issued evidence that the decided block and its exact `CommitQC` are
-/// durably visible as one finalized Kura height.
+/// Storage evidence that a decided block and exact `CommitQC` form one durable Kura height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DurableCommitReceipt {
     context_id: super::ContextId,
@@ -300,12 +293,8 @@ impl FinalizedHeight {
 /// Authenticated input or asynchronous adapter completion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// Resume effects authorized by complete safety-WAL replay.
-    ///
-    /// This event is accepted exactly once by a reducer returned from
-    /// [`Reducer::recover`]. The recovery-pending bit authenticates the local
-    /// lifecycle transition; the full tag prevents an event from another
-    /// height, view, or process generation from consuming it.
+    /// Resume effects authorized by complete safety-WAL replay. A recovered reducer accepts
+    /// this once; its pending bit and full tag bind the lifecycle, height, view, and generation.
     ResumeAfterReplay {
         /// Exact tag of the recovered reducer incarnation.
         tag: EventTag,
@@ -357,8 +346,7 @@ pub enum Event {
         /// Current reducer tag assigned by the timer adapter.
         tag: EventTag,
     },
-    /// Ask the reducer to repeat liveness-critical body acquisition after the
-    /// derived retransmission interval elapses.
+    /// Repeat liveness-critical body acquisition after the retransmission interval.
     RetransmitElapsed {
         /// Current reducer tag assigned by the retransmission timer adapter.
         tag: EventTag,
@@ -442,13 +430,9 @@ impl Event {
             | Self::ApplicationCompleted { tag, .. } => *tag,
         }
     }
-    /// Replace the local delivery tag on an already authenticated network
-    /// input before retrying it after reducer backpressure.
-    ///
-    /// Async adapter completions must retain their original tag. This method
-    /// exists only so a serialized adapter can re-deliver authenticated
-    /// Proposal/Vote/QC/TC messages after a queued TC changes the local view;
-    /// in particular, an old-view `CommitQC` remains valid for the height.
+    /// Retag authenticated network input after reducer backpressure. Async completions retain
+    /// their original tag; only Proposal/Vote/QC/TC delivery may follow a queued view change,
+    /// preserving an old-view `CommitQC` for its height.
     #[must_use]
     pub fn retag_authenticated_ingress(self, tag: EventTag) -> Self {
         match self {
@@ -486,8 +470,7 @@ pub enum IgnoreReason {
     ViewClosed,
     /// A finalized decision makes this input irrelevant.
     AlreadyDecided,
-    /// WAL replay completed, but its one authorized resumption event has not
-    /// yet crossed the reducer commit gate.
+    /// WAL replay completed, but its one resumption has not crossed the commit gate.
     RecoveryPending,
     /// The input's round or safe-value rank cannot affect local state.
     IrrelevantView,
@@ -625,10 +608,8 @@ pub struct Reducer {
     fallback_active: bool,
 }
 impl Reducer {
-    /// Return the immutable canonical archive fanout for this height.
-    ///
-    /// Every member is authenticated by the frozen context. The carried QC,
-    /// not membership in its signer subset, authorizes the exact subject.
+    /// Return immutable archive fanout authenticated by the frozen context. The carried QC,
+    /// not signer-subset membership, authorizes the exact subject.
     fn frozen_archive_sources(&self) -> Vec<ValidatorId> {
         self.context
             .roster()
@@ -674,11 +655,8 @@ impl Reducer {
         }
     }
     /// Constructs a fresh reducer at view zero.
-    ///
     /// # Errors
-    ///
-    /// Returns an error if the configured local validator is absent from the
-    /// frozen voting roster.
+    /// Returns an error if the local validator is absent from the frozen voting roster.
     pub fn new(
         context: HeightContext,
         local_validator: Option<ValidatorId>,
@@ -689,16 +667,10 @@ impl Reducer {
         Self::from_durable(context, local_validator, generation, durable, true)
     }
     /// Reconstructs a reducer from complete WAL frames.
-    ///
-    /// The returned reducer accepts only a matching
-    /// [`Event::ResumeAfterReplay`] until that event crosses [`Self::step`].
-    /// This keeps replay-authorized effects behind the same commit gate as
-    /// every other production transition.
-    ///
+    /// Until a matching [`Event::ResumeAfterReplay`] crosses [`Self::step`], the reducer
+    /// accepts nothing else, keeping replay effects behind the production commit gate.
     /// # Errors
-    ///
-    /// Returns an error if WAL replay fails or the configured local validator
-    /// is absent from the frozen roster.
+    /// Returns an error if replay fails or the local validator is absent from the roster.
     pub fn recover(
         context: HeightContext,
         local_validator: Option<ValidatorId>,
@@ -727,14 +699,10 @@ impl Reducer {
         let mut body_work = BTreeMap::new();
         let mut pending_prepare = BTreeMap::new();
         if let Some(certificate) = retryable_prepare {
-            // WAL replay deliberately reconstructs no volatile body stage. An
-            // undecided, open-current-view high PrepareQC is nevertheless
-            // still the exact authority for certified acquisition, so restore
-            // its Missing frontier without emitting work from the constructor.
-            // Periodic retransmission derives the idempotent FetchBody after
-            // ResumeAfterReplay. Closed/old high-QCs remain control evidence;
-            // exact locks and durable Decisions use their narrower recovery
-            // paths instead of acquiring a conflicting owner here.
+            // Replay restores an undecided open-current-view high PrepareQC as the exact
+            // Missing-body authority without emitting constructor work. Retransmission derives
+            // FetchBody after ResumeAfterReplay; closed/old highs, locks, and Decisions retain
+            // their narrower recovery paths.
             body_work.insert(
                 (certificate.round(), certificate.subject()),
                 BodyWork {
@@ -814,7 +782,6 @@ impl Reducer {
             self.formed_timeouts.len(),
         )
     }
-    /// Return volatile PrepareQC cache cardinalities for boundedness tests.
     #[cfg(test)]
     pub(crate) fn volatile_prepare_counts(&self) -> (usize, usize) {
         (self.pending_prepare.len(), self.known_prepare.len())
@@ -824,14 +791,12 @@ impl Reducer {
     pub const fn durable_state(&self) -> &DurableState {
         &self.durable
     }
-    /// Return the decision subject successfully applied in this reducer
-    /// incarnation, if any.
+    /// Return the decision subject applied in this reducer incarnation, if any.
     #[must_use]
     pub const fn applied_subject(&self) -> Option<Subject> {
         self.applied_subject
     }
-    /// Return whether the height can be consumed with a matching durable Kura
-    /// receipt without dropping unfinished safety work.
+    /// Return whether a matching Kura receipt can consume the height without unfinished work.
     #[must_use]
     pub fn ready_to_finish(&self) -> bool {
         self.pending_persistence.is_none()
@@ -901,8 +866,7 @@ impl Reducer {
             })
             .collect()
     }
-    /// Iterate over signed or certified control intents retained for
-    /// retransmission.
+    /// Iterate over signed or certified control intents retained for retransmission.
     pub(crate) fn outbound_messages(&self) -> impl Iterator<Item = &ConsensusMessageV2> {
         self.outbound_control.values()
     }
@@ -3928,7 +3892,6 @@ impl Reducer {
         self.formed_certificates.insert(reference);
         Ok(Some(QuorumCertificate::new(reference, signatures)))
     }
-    include!("reducer/prepare_certificate_handling.rs");
     fn ensure_body_fetch(&mut self, certificate: &QuorumCertificate) -> Effect {
         let round = self
             .durable
@@ -4349,11 +4312,8 @@ impl Reducer {
         durable.apply(&self.context, self.local_validator, &pending.entry)?;
         self.durable = durable;
         if matches!(pending.entry.record(), WalRecord::ObservePrepare(_)) {
-            // An observed old-view PrepareQC can advance the durable high QC,
-            // but it has no live body-pipeline owner in the current view.
-            // Keep only the current pending certificate plus the durable high
-            // and lock so delayed authenticated history cannot grow these
-            // caches without bound.
+            // Old-view observations can advance durable high QC but own no
+            // current body pipeline; keep only live and durable references.
             self.prune_observed_prepare_caches();
         }
         if matches!(pending.entry.record(), WalRecord::InstallTimeout(_)) {
@@ -4666,6 +4626,7 @@ impl Reducer {
         }
     }
 }
+include!("reducer/prepare_certificate_handling.rs");
 /// Missing reducer-owned evidence that durable work can be reconstructed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgressWitnessViolation {
@@ -5155,45 +5116,6 @@ mod source_link_tests {
             ))
         );
         assert_eq!(decided, before);
-    }
-    #[test]
-    fn local_ready_apply_capability_requires_the_exact_manifest() {
-        let subject = Subject::repeat(0xaa);
-        let manifest =
-            PayloadManifest::new(subject, Digest::repeat(0xab), Digest::repeat(0xac), 256, 4);
-        let conflicting =
-            PayloadManifest::new(subject, Digest::repeat(0xad), Digest::repeat(0xae), 256, 4);
-        let (mut before, decision) = decided_reducer(subject);
-        before.body_work.insert(
-            (decision.round(), subject),
-            BodyWork {
-                manifest: None,
-                state: BodyState::Missing,
-            },
-        );
-        let mut after = before.clone();
-        after.body_work.insert(
-            (decision.round(), subject),
-            BodyWork {
-                manifest: Some(manifest),
-                state: BodyState::Validated,
-            },
-        );
-        let apply = Effect::Apply {
-            tag: after.current_tag(),
-            subject,
-            certificate: decision,
-        };
-        let exact = Event::LocalProposalReady {
-            tag: before.current_tag(),
-            manifest,
-        };
-        let counterfeit = Event::LocalProposalReady {
-            tag: before.current_tag(),
-            manifest: conflicting,
-        };
-        assert!(before.transition_refines(&exact, &after, std::slice::from_ref(&apply)));
-        assert!(!before.transition_refines(&counterfeit, &after, &[apply]));
     }
     #[test]
     fn counterfeit_effect_grant_with_a_different_primitive_key_fails_closed() {

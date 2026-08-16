@@ -1,10 +1,9 @@
 //! Server-owned memory admission for ordinary Torii queries.
 //!
-//! This module is deliberately opt-in. IVM and other in-process callers keep
-//! the existing query behavior unless they attach [`OrdinaryQueryExecutionLimits`]
-//! to [`super::QueryLimits`]. Torii admits every singular producer only with
-//! the source-specific preflight and output limits installed below. Iterable
-//! admission is coupled to source-specific immutable-world adapters in
+//! This module is deliberately opt-in. IVM and other in-process callers keep the existing query
+//! behavior unless they attach [`OrdinaryQueryExecutionLimits`] to [`super::QueryLimits`]. Torii
+//! admits every singular producer only with the source-specific preflight and output limits
+//! installed below. Iterable admission is coupled to source-specific immutable-world adapters in
 //! `ordinary_iterable` before a query implementation can clone any row.
 use super::{QueryCountMode, QueryExecutionBudget, QueryLimits, STREAMING_SORTED_PREFIX_LIMIT};
 use crate::state::{StateReadOnly, WorldReadOnly};
@@ -49,8 +48,7 @@ const ORDINARY_SOURCE_FRAME_TRAVERSALS: u64 = 6;
 /// Fixed failure categories for invalid ordinary-query memory geometry.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum OrdinaryQueryExecutionLimitError {
-    /// A page cannot contain zero items because bounded scans need an `F + 1`
-    /// continuation probe.
+    /// A page cannot contain zero items because bounded scans need an `F + 1` continuation probe.
     ZeroPageItems,
     /// A checked geometry calculation overflowed.
     GeometryOverflow,
@@ -62,8 +60,7 @@ pub enum OrdinaryQueryExecutionLimitError {
     /// The retained request-graph ceiling exceeds the schema-audited allocation
     /// ceiling used when replaying its canonical Start archive.
     RequestGraphExceedsDecodeLimit,
-    /// The configured peak reservation does not cover source, page, response,
-    /// and encoding overlap.
+    /// The configured peak reservation does not cover source, page, response, and encoding overlap.
     ExecutionHeadroomTooSmall,
     /// The configured cursor reservation does not cover retained values, the
     /// archived Start request, and deterministic container overhead.
@@ -96,11 +93,10 @@ impl fmt::Display for OrdinaryQueryExecutionLimitError {
 impl std::error::Error for OrdinaryQueryExecutionLimitError {}
 /// A weighted reservation owned by the embedding server.
 ///
-/// Core never assumes how the reservation is implemented. Torii may back it
-/// with a weighted byte pool, while tests may use a counter. Splitting must be
-/// allocation-accounting neutral: the returned reservation owns `bytes`, the
-/// receiver owns that many fewer bytes, and the aggregate reserved weight must
-/// not change until either reservation is dropped.
+/// Core never assumes how the reservation is implemented. Torii may back it with a weighted byte
+/// pool, while tests may use a counter. Splitting must be allocation-accounting neutral: the
+/// returned reservation owns `bytes`, the receiver owns that many fewer bytes, and the aggregate
+/// reserved weight must not change until either reservation is dropped.
 pub trait OrdinaryQueryMemoryReservation: fmt::Debug + Send + Sync + 'static {
     /// Number of aggregate pool bytes represented by this reservation.
     fn reserved_bytes(&self) -> u64;
@@ -109,8 +105,7 @@ pub trait OrdinaryQueryMemoryReservation: fmt::Debug + Send + Sync + 'static {
     /// Pool replacement or reconfiguration must advance this value. Every
     /// child returned by [`Self::split_off`] must report the same generation.
     fn pool_generation(&self) -> u64;
-    /// Transfer `bytes` from this reservation into a new independently
-    /// releasable reservation.
+    /// Transfer `bytes` from this reservation into a new independently releasable reservation.
     ///
     /// Returning `None` must leave this reservation unchanged.
     fn split_off(&mut self, bytes: u64) -> Option<Box<dyn OrdinaryQueryMemoryReservation>>;
@@ -185,10 +180,9 @@ pub struct OrdinaryQueryExecutionLimits {
 impl OrdinaryQueryExecutionLimits {
     /// Construct and validate the complete Core-side limit set.
     ///
-    /// `execution_headroom_bytes` and `max_cursor_retained_bytes` are accepted
-    /// reservations, not independent tuning knobs: construction fails unless
-    /// they cover the checked phase envelopes returned by
-    /// [`Self::required_execution_headroom_bytes`] and
+    /// `execution_headroom_bytes` and `max_cursor_retained_bytes` are accepted reservations, not
+    /// independent tuning knobs: construction fails unless they cover the checked phase envelopes
+    /// returned by [`Self::required_execution_headroom_bytes`] and
     /// [`Self::required_cursor_retained_bytes`].
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
@@ -268,15 +262,13 @@ impl OrdinaryQueryExecutionLimits {
             revalidation_decode_limits,
         })
     }
-    /// Compute the minimum fresh execution reservation for the decoded request,
-    /// source/work, page materialization, response ownership, and encoding
-    /// overlap.
+    /// Compute the minimum fresh execution reservation for the decoded request, source/work, page
+    /// materialization, response ownership, and encoding overlap.
     ///
-    /// The decoded request graph is bounded by the same server-supplied
-    /// allocation ceiling used to decode a canonical Start archive. Stored
-    /// Start execution concurrently owns its canonical archive, but that archive
-    /// is already included in [`Self::required_cursor_retained_bytes`]; Torii
-    /// reserves both returned parts before decoding or execution begins.
+    /// The decoded request graph is bounded by the same server-supplied allocation ceiling used to
+    /// decode a canonical Start archive. Stored Start execution concurrently owns its canonical
+    /// archive, but that archive is already included in [`Self::required_cursor_retained_bytes`];
+    /// Torii reserves both returned parts before decoding or execution begins.
     pub fn required_execution_headroom_bytes(
         max_page_items: u64,
         max_source_item_bytes: u64,
@@ -425,8 +417,7 @@ impl OrdinaryQueryExecutionLimits {
     pub const fn max_request_graph_bytes(self) -> u64 {
         self.max_request_graph_bytes
     }
-    /// Schema-audited limits for decoding a stored Start archive during
-    /// continuation revalidation.
+    /// Schema-audited limits for decoding a stored Start archive during continuation revalidation.
     #[must_use]
     pub const fn revalidation_decode_limits(self) -> norito::DecodeLimits {
         self.revalidation_decode_limits
@@ -434,10 +425,9 @@ impl OrdinaryQueryExecutionLimits {
 }
 /// Immutable policy identity archived alongside one ordinary stored cursor.
 ///
-/// Exact equality is intentional. A continuation may not combine retained
-/// memory admitted under an old configuration with execution headroom from a
-/// different policy or weighted-pool generation, even when the new values look
-/// individually wider.
+/// Exact equality is intentional. A continuation may not combine retained memory admitted under an
+/// old configuration with execution headroom from a different policy or weighted-pool generation,
+/// even when the new values look individually wider.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) struct OrdinaryQueryCursorPolicy {
     limits: OrdinaryQueryExecutionLimits,

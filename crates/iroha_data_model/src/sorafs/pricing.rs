@@ -1,12 +1,11 @@
 //! Pricing schedule and credit policy records for SoraFS (SF-8a).
 //!
-//! These types describe the governance-controlled pricing surface for storage
-//! providers together with the collateral and credit settlement policies used by
-//! native orderbook, reserve/rent, and billing services. The schedule is stored
-//! on-ledger so governance proposals can update pricing deterministically without
-//! relying on out-of-band config.
-//! Public pin admission fees are computed here, while provider credit deposits,
-//! settlement, and slashing remain separate authority-checked ledger flows.
+//! These types describe the governance-controlled pricing surface for storage providers together
+//! with the collateral and credit settlement policies used by native orderbook, reserve/rent, and
+//! billing services. The schedule is stored on-ledger so governance proposals can update pricing
+//! deterministically without relying on out-of-band config. Public pin admission fees are computed
+//! here, while provider credit deposits, settlement, and slashing remain separate authority-checked
+//! ledger flows.
 use crate::{
     metadata::Metadata,
     sorafs::{capacity::ProviderId, pin_registry::StorageClass},
@@ -255,9 +254,8 @@ impl PricingScheduleRecord {
     ///
     /// # Errors
     ///
-    /// Returns [`PricingComputationError`] when the schedule is invalid or the
-    /// requested class is missing. First-release pricing never silently falls
-    /// back to another storage class.
+    /// Returns [`PricingComputationError`] when the schedule is invalid or the requested class is
+    /// missing. First-release pricing never silently falls back to another storage class.
     pub fn tier_rate(&self, class: StorageClass) -> Result<&TierRate, PricingComputationError> {
         self.validate()?;
         self.tier_rate_validated(class)

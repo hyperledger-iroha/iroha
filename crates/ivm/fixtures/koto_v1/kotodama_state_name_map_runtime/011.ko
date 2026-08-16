@@ -1,0 +1,41 @@
+
+        seiyaku C {
+            struct PolicyState {
+                int version,
+                bytes document,
+                bytes document_hash,
+                AccountId approved_by,
+                int applied_at_ms,
+                Name change_id,
+            }
+            struct Envelope { PolicyState policy, bool enabled }
+            state StateMap<Name, Envelope> Policies;
+
+            fn default_envelope() -> Envelope {
+                return Envelope {
+                    policy: PolicyState {
+                        version: 3,
+                        document: b"nested",
+                        document_hash: b"nested-hash",
+                        approved_by: context::authority(),
+                        applied_at_ms: 55,
+                        change_id: Name::parse("nested-change"),
+                    },
+                    enabled: true,
+                };
+            }
+
+            view fn main() -> bool {
+                let envelope = Policies.get(Name::parse("offline")).unwrap_or(
+                    default_envelope(),
+                );
+                return envelope.enabled
+                    && envelope.policy.version == 3
+                    && envelope.policy.document == b"nested"
+                    && envelope.policy.document_hash == b"nested-hash"
+                    && envelope.policy.approved_by == context::authority()
+                    && envelope.policy.applied_at_ms == 55
+                    && envelope.policy.change_id == Name::parse("nested-change");
+            }
+        }
+    

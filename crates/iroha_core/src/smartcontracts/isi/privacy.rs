@@ -5837,11 +5837,10 @@ mod tests {
     use iroha_data_model::{
         NetworkId, Registrable,
         account::Account,
-        asset::{AssetDefinition, AssetDefinitionId, AssetId},
+        asset::{AssetDefinition, AssetDefinitionId},
         block::BlockHeader,
         domain::{Domain, DomainId},
         name::Name,
-        prelude::Mint,
         privacy::{
             AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
@@ -8539,15 +8538,15 @@ mod tests {
         );
         let mut block = state.block(header);
         let mut transaction = block.transaction();
-        let source_asset_id = AssetId::new(
+        let source_asset_id = iroha_data_model::asset::AssetId::new(
             statement.asset_definition_id.clone(),
             statement.source.clone(),
         );
-        let destination_asset_id = AssetId::new(
+        let destination_asset_id = iroha_data_model::asset::AssetId::new(
             statement.asset_definition_id.clone(),
             statement.destination.clone(),
         );
-        Mint::asset_quantity(100_u32, source_asset_id.clone())
+        iroha_data_model::prelude::Mint::asset_quantity(100_u32, source_asset_id.clone())
             .execute(&ALICE_ID, &mut transaction)
             .expect("fund ZK-ACE source");
         let instruction = SubmitPrivacyProofV1::new(fixture.envelope.clone());

@@ -68,9 +68,8 @@ impl LanePrivacyProof {
     }
     /// Validate the complete first-release lane privacy witness shape.
     ///
-    /// This is applied after untrusted JSON/Norito decoding as well as by the
-    /// raw-path constructor so no transport can admit a sparse, impossible,
-    /// oversized, or non-canonical Merkle path.
+    /// This is applied after untrusted JSON/Norito decoding as well as by the raw-path constructor
+    /// so no transport can admit a sparse, impossible, oversized, or non-canonical Merkle path.
     ///
     /// # Errors
     ///

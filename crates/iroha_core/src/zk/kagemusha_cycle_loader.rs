@@ -77,11 +77,9 @@ type AssignedCoordinate<C> = ProperCrtUint<Inner<C>>;
 /// Canonical non-native coordinate whose integer limbs are known to be below
 /// the represented Pasta modulus.
 ///
-/// Witness coordinates acquire this invariant through
-/// [`FpChip::enforce_less_than`]. Constant coordinates acquire it directly
-/// from [`FpChip::load_constant`], which decomposes the canonical host field
-/// element into fixed circuit constants and therefore needs no prover-facing
-/// comparison.
+/// Witness coordinates acquire this invariant through [`FpChip::enforce_less_than`]. Constant
+/// coordinates acquire it directly from [`FpChip::load_constant`], which decomposes the canonical
+/// host field element into fixed circuit constants and therefore needs no prover-facing comparison.
 #[derive(Clone, Debug)]
 pub(super) struct CanonicalCoordinate<C>(AssignedCoordinate<C>)
 where
@@ -132,10 +130,9 @@ impl<F: BigPrimeField> NativePastaFieldPoint<F> {
 }
 /// Native-field adapter used only for reciprocal Pasta curve arithmetic.
 ///
-/// Every operation is an ordinary gate operation modulo `F`.  Canonical byte
-/// encodings are deliberately handled by the existing fixed-width CRT bridge
-/// at the audit boundary, where integer uniqueness rather than field
-/// arithmetic is required.
+/// Every operation is an ordinary gate operation modulo `F`. Canonical byte encodings are
+/// deliberately handled by the existing fixed-width CRT bridge at the audit boundary, where integer
+/// uniqueness rather than field arithmetic is required.
 #[derive(Clone, Debug)]
 struct NativePastaFieldChip<'range, F: BigPrimeField> {
     range: &'range halo2_base::gates::RangeChip<F>,
@@ -384,13 +381,11 @@ impl<F: BigPrimeField> Selectable<F, NativePastaFieldPoint<F>> for NativePastaFi
         ))
     }
 }
-/// Decompose one canonical Pasta integer into its exact 32-byte little-endian
-/// representation.
+/// Decompose one canonical Pasta integer into its exact 32-byte little-endian representation.
 ///
-/// The 32 byte witnesses are range-checked once, split exactly where byte
-/// boundaries cross the three 86-bit limbs, and linearly recomposed back to
-/// those limbs. The final limb has no source for bits 256 and 257, constraining
-/// both to zero without a 258-bit Boolean decomposition.
+/// The 32 byte witnesses are range-checked once, split exactly where byte boundaries cross the
+/// three 86-bit limbs, and linearly recomposed back to those limbs. The final limb has no source
+/// for bits 256 and 257, constraining both to zero without a 258-bit Boolean decomposition.
 pub(super) fn proper_uint_le_bytes<F: BigPrimeField>(
     ctx: &mut halo2_base::Context<F>,
     range: &halo2_base::gates::RangeChip<F>,
@@ -671,12 +666,11 @@ where
 }
 /// Native-scalar/symbolic-point instructions for one fixed verifier half.
 ///
-/// Scalar arithmetic, transcript challenges, and residual coefficients are
-/// constrained in `C::Scalar`.  Curve operations are retained as exact linear
-/// equations over canonical point sources.  A reciprocal
-/// [`PastaCycleEccChip`] circuit consumes those equations and performs the real
-/// point arithmetic.  This avoids both the unsound host-receipt shortcut and
-/// the multi-million-cell generic non-native verifier.
+/// Scalar arithmetic, transcript challenges, and residual coefficients are constrained in
+/// `C::Scalar`. Curve operations are retained as exact linear equations over canonical point
+/// sources. A reciprocal [`PastaCycleEccChip`] circuit consumes those equations and performs the
+/// real point arithmetic. This avoids both the unsound host-receipt shortcut and the
+/// multi-million-cell generic non-native verifier.
 #[derive(Clone, Debug)]
 pub(super) struct DeferredScalarEccChip<'chip, C>
 where
@@ -942,14 +936,12 @@ where
         }
         Ok(limbs)
     }
-    /// Select between two non-identity symbolic points using an assigned
-    /// Boolean scalar.
+    /// Select between two non-identity symbolic points using an assigned Boolean scalar.
     ///
-    /// The selected host value is used only as a coordinate witness. Its fresh
-    /// canonical source is tied to
-    /// `selector * when_true + (1 - selector) * when_false` by a deferred
-    /// equation, so changing either the selector or the coordinate witness is
-    /// caught by the reciprocal point half.
+    /// The selected host value is used only as a coordinate witness. Its fresh canonical source is
+    /// tied to `selector * when_true + (1 - selector) * when_false` by a deferred equation, so
+    /// changing either the selector or the coordinate witness is caught by the reciprocal point
+    /// half.
     pub(super) fn select_point(
         &self,
         ctx: &mut ScalarContext<C>,
@@ -1566,9 +1558,8 @@ where
             .limbs()
             .to_vec()
     }
-    /// Assign the `halo2_ecc` canonical `(0, 0)` representation of the point
-    /// at infinity without passing `C::identity()` through the affine-only
-    /// constant-point loader.
+    /// Assign the `halo2_ecc` canonical `(0, 0)` representation of the point at infinity without
+    /// passing `C::identity()` through the affine-only constant-point loader.
     fn assign_identity(&self, ctx: &mut SinglePhaseCoreManager<Outer<C>>) -> Point<C> {
         let zero = self.native_base.load_constant(ctx.main(), Outer::<C>::ZERO);
         AssignedEcPoint::new(zero, zero)
@@ -1585,11 +1576,10 @@ where
     }
     /// Assign and canonicalize every deferred source and coefficient.
     ///
-    /// Assignment is deliberately separate from enforcement. The complete
-    /// assigned audit must first be committed with the compact V6
-    /// Poseidon-then-SHA construction; only then may
-    /// [`Self::constrain_deferred_equation_batch_v5`] derive its unpredictable
-    /// batching challenge from that digest.
+    /// Assignment is deliberately separate from enforcement. The complete assigned audit must first
+    /// be committed with the compact V6 Poseidon-then-SHA construction; only then may
+    /// [`Self::constrain_deferred_equation_batch_v5`] derive its unpredictable batching challenge
+    /// from that digest.
     pub(super) fn assign_deferred_equations_with_selectors(
         &self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
@@ -1744,11 +1734,10 @@ where
     }
     /// Enforce all selector-gated equations with one dense normalized-GLV MSM.
     ///
-    /// The power advances for every equation, including disabled equations.
-    /// Coefficients are accumulated by stable source index, constrained as
-    /// canonical scalars in the Base graph, and copied once into the dedicated
-    /// source-major machine. The dense machine requires their aggregate to be
-    /// the group identity without allocating the generic variable-base MSM.
+    /// The power advances for every equation, including disabled equations. Coefficients are
+    /// accumulated by stable source index, constrained as canonical scalars in the Base graph, and
+    /// copied once into the dedicated source-major machine. The dense machine requires their
+    /// aggregate to be the group identity without allocating the generic variable-base MSM.
     pub(super) fn constrain_deferred_equation_batch_v5(
         &mut self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
@@ -1944,10 +1933,9 @@ where
         let y = self.canonical_coordinate(ctx.main(), point.y);
         compressed_point_bytes(ctx.main(), self.base.range, &x, &y)
     }
-    /// Convert a canonical base-field coordinate to the exact residue
-    /// used by the native Poseidon transcript.  The quotient and every
-    /// radix carry are boolean-constrained, so an outer-field wrap
-    /// cannot create a second reduction witness.
+    /// Convert a canonical base-field coordinate to the exact residue used by the native Poseidon
+    /// transcript. The quotient and every radix carry are boolean-constrained, so an outer-field
+    /// wrap cannot create a second reduction witness.
     pub(super) fn coordinate_to_scalar(
         &self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,

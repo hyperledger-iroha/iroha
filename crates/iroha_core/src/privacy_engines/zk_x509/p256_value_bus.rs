@@ -1,24 +1,21 @@
 //! Fixed-topology value-copy bus for exact P-256 arithmetic.
 //!
-//! Arithmetic operands are SSA values.  Every input or constant value is
-//! written exactly once in the spare coefficient rows of one arithmetic
-//! operation, and every derived value is written exactly once by that
-//! operation's `c` operand.  The first sixteen coefficient rows expose
-//! pointwise `a`/`b` reads and `c` writes.  A verifier-fixed sorted endpoint
-//! then proves, with four independently challenged products, that every read
-//! sees the unique writer for the same `(value id, limb, modulus, value kind)`.
+//! Arithmetic operands are SSA values. Every input or constant value is written exactly once in the
+//! spare coefficient rows of one arithmetic operation, and every derived value is written exactly
+//! once by that operation's `c` operand. The first sixteen coefficient rows expose pointwise
+//! `a`/`b` reads and `c` writes. A verifier-fixed sorted endpoint then proves, with four
+//! independently challenged products, that every read sees the unique writer for the same `(value
+//! id, limb, modulus, value kind)`.
 //!
-//! Ordinary equality assertions add two memory reads per limb and an explicit
-//! limb equality.  Boolean bridges do the same across the scalar/base modulus
-//! boundary, while additionally proving that both represented integers are
-//! canonical bits.  Neither assertion form creates a writer.
+//! Ordinary equality assertions add two memory reads per limb and an explicit limb equality.
+//! Boolean bridges do the same across the scalar/base modulus boundary, while additionally proving
+//! that both represented integers are canonical bits. Neither assertion form creates a writer.
 //!
-//! Rows in this module are product-factor slots.  The AIR embedding packs
-//! exactly two consecutive slots into one physical row using one intermediate
-//! product; each individual transition remains degree two.  Keeping segment
-//! boundaries in factor-slot units also permits a later source-bound external
-//! read stream to concatenate complete 16-limb values without per-value
-//! padding.  No unconstrained external-read API is exposed here.
+//! Rows in this module are product-factor slots. The AIR embedding packs exactly two consecutive
+//! slots into one physical row using one intermediate product; each individual transition remains
+//! degree two. Keeping segment boundaries in factor-slot units also permits a later source-bound
+//! external read stream to concatenate complete 16-limb values without per-value padding. No
+//! unconstrained external-read API is exposed here.
 use super::p256_air::ZkX509P256ModulusV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
@@ -161,8 +158,7 @@ pub(crate) struct P256InitialValueTopologyV1 {
 }
 /// Verifier-owned metadata for one arithmetic SSA instruction.
 ///
-/// Operand and result values are committed elsewhere and never enter this
-/// topology object.
+/// Operand and result values are committed elsewhere and never enter this topology object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256LinkedOperationTopologyV1 {
     /// First existing operand.
@@ -287,10 +283,9 @@ pub(crate) struct P256ValueBusTraceV1 {
 }
 /// One challenge-independent value-bus cell.
 ///
-/// Product accumulators are deliberately absent. The 16-bit decomposition is
-/// regenerated when a committed base row is requested, so the retained
-/// private material is the addressed field cell and nothing challenge
-/// dependent can exist before X5B1.
+/// Product accumulators are deliberately absent. The 16-bit decomposition is regenerated when a
+/// committed base row is requested, so the retained private material is the addressed field cell
+/// and nothing challenge dependent can exist before X5B1.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ValueBusBaseCellV1 {
@@ -348,10 +343,9 @@ impl P256ValueBusBaseEndpointTraceV1 {
 }
 /// Complete challenge-independent P-256 value-memory material.
 ///
-/// This is the only production input to the value-bus base commitment. It is
-/// constructed from a witness only after independently compiling and matching
-/// the verifier's role-specific SSA topology. Fixed rows are never retained
-/// here; they are regenerated from [`P256EcdsaTopologyV1`].
+/// This is the only production input to the value-bus base commitment. It is constructed from a
+/// witness only after independently compiling and matching the verifier's role-specific SSA
+/// topology. Fixed rows are never retained here; they are regenerated from [`P256EcdsaTopologyV1`].
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256ValueBusBaseMaterialV1 {
     role: P256EcdsaRoleV1,
@@ -654,12 +648,11 @@ pub(crate) fn build_zk_x509_p256_value_bus_trace_v1(
 }
 /// Read one unique writer cell from the committed execution endpoint.
 ///
-/// The caller supplies the verifier-owned initial-value count, modulus, and
-/// value kind.  Initial writers occupy rows 48 through 63 of the segment whose
-/// index is their value ID.  Derived writers occupy the `c` slot of their
-/// producing arithmetic operation.  This accessor regenerates that address
-/// and rejects any fixed-row, endpoint, segment, range, or provenance
-/// mismatch; it never searches for a proof-supplied address.
+/// The caller supplies the verifier-owned initial-value count, modulus, and value kind. Initial
+/// writers occupy rows 48 through 63 of the segment whose index is their value ID. Derived writers
+/// occupy the `c` slot of their producing arithmetic operation. This accessor regenerates that
+/// address and rejects any fixed-row, endpoint, segment, range, or provenance mismatch; it never
+/// searches for a proof-supplied address.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_value_bus_writer_location_v1(
     initial_value_count: usize,
@@ -701,10 +694,9 @@ fn p256_value_bus_writer_location_v1(
 }
 /// Read one unique writer cell from the challenged execution endpoint.
 ///
-/// This compatibility-free internal projection exists only for differential
-/// tests of the challenged trace. Production cross-chip consumers must use
-/// [`p256_value_bus_base_writer_limb_cell_v1`] so no challenge-dependent
-/// material is needed before the joint MAIN base roots are committed.
+/// This compatibility-free internal projection exists only for differential tests of the challenged
+/// trace. Production cross-chip consumers must use [`p256_value_bus_base_writer_limb_cell_v1`] so
+/// no challenge-dependent material is needed before the joint MAIN base roots are committed.
 #[cfg(test)]
 pub(crate) fn p256_value_bus_writer_limb_cell_v1(
     trace: &P256ValueBusTraceV1,
@@ -741,8 +733,7 @@ pub(crate) fn p256_value_bus_writer_limb_cell_v1(
     }
     Ok(row.value)
 }
-/// Read one unique writer cell from a challenge-independent execution
-/// endpoint.
+/// Read one unique writer cell from a challenge-independent execution endpoint.
 ///
 /// The address is regenerated from the verifier-owned SSA topology. The
 /// endpoint is never searched and no challenged product column participates,
@@ -785,11 +776,10 @@ pub(crate) fn p256_value_bus_base_writer_limb_cell_v1(
 }
 /// Exact committed execution cell at one flattened factor-row ordinal.
 ///
-/// This is the narrow source projection used while constructing auxiliary
-/// cross-trace products. It checks the execution endpoint and canonical
-/// segment addressing before returning the verifier-fixed access and its
-/// committed value. The cross-trace AIR consumes the corresponding opened
-/// `value` column directly; this native locator is not a verification oracle.
+/// This is the narrow source projection used while constructing auxiliary cross-trace products. It
+/// checks the execution endpoint and canonical segment addressing before returning the
+/// verifier-fixed access and its committed value. The cross-trace AIR consumes the corresponding
+/// opened `value` column directly; this native locator is not a verification oracle.
 #[cfg(test)]
 pub(crate) fn p256_value_bus_execution_source_cell_v1(
     trace: &P256ValueBusTraceV1,
@@ -1975,8 +1965,7 @@ pub(crate) struct P256ValueBusStarkFixedProviderV1 {
     trace_size: usize,
 }
 impl P256ValueBusStarkFixedProviderV1 {
-    /// Validate the complete SSA address topology and establish a padded
-    /// native domain.
+    /// Validate the complete SSA address topology and establish a padded native domain.
     pub(crate) fn new_v1(
         endpoint: P256ValueBusStarkEndpointV1,
         initial_values: &[P256InitialValueTopologyV1],
@@ -2418,9 +2407,8 @@ impl<'a> P256ValueBusStarkBaseRowProviderV1<'a> {
 }
 /// Challenge-bound product replay for one endpoint.
 ///
-/// Construction is private to [`P256ValueBusBoundSourceV1`], so raw
-/// challenges cannot create an auxiliary stream before the X5B1 phase
-/// transition.
+/// Construction is private to [`P256ValueBusBoundSourceV1`], so raw challenges cannot create an
+/// auxiliary stream before the X5B1 phase transition.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ValueBusStarkAuxSourceV1<'a> {
     endpoint: &'a P256ValueBusBaseEndpointTraceV1,
@@ -2531,9 +2519,8 @@ fn compute_base_endpoint_terminal_v1(
 }
 /// Pre-commitment value-bus capability.
 ///
-/// Binding is poison-on-attempt: the sole transition is consumed before any
-/// fallible validation. A malformed base source therefore cannot be retried
-/// with a different transcript token.
+/// Binding is poison-on-attempt: the sole transition is consumed before any fallible validation. A
+/// malformed base source therefore cannot be retried with a different transcript token.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ValueBusBaseSourceV1 {
     material: Option<Arc<P256ValueBusBaseMaterialV1>>,
@@ -2553,8 +2540,7 @@ impl core::fmt::Debug for P256ValueBusBaseSourceV1 {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ValueBusBaseSourceV1 {
-    /// Validate canonical witness material and enter the challenge-independent
-    /// base phase.
+    /// Validate canonical witness material and enter the challenge-independent base phase.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn new_v1(material: &P256EcdsaTraceMaterialV1) -> Result<Self, P256ValueBusErrorV1> {
         Self::from_base_material_v1(P256ValueBusBaseMaterialV1::from_trace_material_v1(
@@ -2585,8 +2571,7 @@ impl P256ValueBusBaseSourceV1 {
             Ok(())
         }
     }
-    /// Verifier-selected role while the pre-commitment capability remains
-    /// live.
+    /// Verifier-selected role while the pre-commitment capability remains live.
     pub(crate) fn role_v1(&self) -> Result<P256EcdsaRoleV1, P256ValueBusErrorV1> {
         self.ensure_base_phase_v1()?;
         Ok(self
@@ -2595,8 +2580,7 @@ impl P256ValueBusBaseSourceV1 {
             .ok_or(P256ValueBusErrorV1::Phase)?
             .role_v1())
     }
-    /// Challenge-independent execution endpoint while the pre-commitment
-    /// capability remains live.
+    /// Challenge-independent execution endpoint while the pre-commitment capability remains live.
     pub(crate) fn execution_endpoint_v1(
         &self,
     ) -> Result<&P256ValueBusBaseEndpointTraceV1, P256ValueBusErrorV1> {
@@ -2626,8 +2610,7 @@ impl P256ValueBusBaseSourceV1 {
         )?
         .base_row_v1(row)
     }
-    /// One verifier-owned fixed row. No witness value is accepted by this
-    /// path.
+    /// One verifier-owned fixed row. No witness value is accepted by this path.
     #[cfg(test)]
     pub(crate) fn fixed_row_v1(
         &self,
@@ -2715,9 +2698,8 @@ impl Drop for P256ValueBusBaseSourceV1 {
 }
 /// Post-X5B1 value-bus capability.
 ///
-/// It retains the base commitment material for constraint and cross-source
-/// projection, while challenge-dependent products are exposed only through
-/// replay objects minted here.
+/// It retains the base commitment material for constraint and cross-source projection, while
+/// challenge-dependent products are exposed only through replay objects minted here.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ValueBusBoundSourceV1 {
     material: Option<Arc<P256ValueBusBaseMaterialV1>>,
@@ -2817,8 +2799,7 @@ impl P256ValueBusBoundSourceV1 {
         }
         Ok(source)
     }
-    /// Verifier-owned fixed execution row retained across the phase
-    /// transition.
+    /// Verifier-owned fixed execution row retained across the phase transition.
     #[cfg(test)]
     pub(crate) fn execution_fixed_row_v1(
         &self,
@@ -2829,8 +2810,7 @@ impl P256ValueBusBoundSourceV1 {
             .ok_or(P256ValueBusErrorV1::Phase)?
             .row_v1(row)
     }
-    /// Recursively overwrite the retained bound value material and
-    /// challenge-derived terminals.
+    /// Recursively overwrite the retained bound value material and challenge-derived terminals.
     ///
     /// The bound capability uniquely owns its material in production. The
     /// `Arc::get_mut` check keeps this idempotent and prevents clearing through
@@ -2998,16 +2978,14 @@ impl<'a> P256ValueBusStarkRowProviderV1<'a> {
         }
         Ok(aux)
     }
-    /// One challenge-dependent product cell without retaining an auxiliary
-    /// row matrix.
+    /// One challenge-dependent product cell without retaining an auxiliary row matrix.
     pub(crate) fn aux_cell_v1(self, index: usize, column: usize) -> Result<F, P256ValueBusErrorV1> {
         if index >= self.trace_size || column >= P256_VALUE_BUS_STARK_AUX_WIDTH_V1 {
             return Err(P256ValueBusErrorV1::Topology);
         }
         Ok(self.aux_row_v1(index)?[column])
     }
-    /// Copy one complete challenge-dependent auxiliary column into
-    /// caller-owned storage.
+    /// Copy one complete challenge-dependent auxiliary column into caller-owned storage.
     pub(crate) fn fill_aux_column_v1(
         self,
         column: usize,
@@ -3030,9 +3008,8 @@ pub(crate) fn p256_value_bus_opened_values_v1(
 }
 /// Evaluate one numeric value-bus row on the aggregate extension domain.
 ///
-/// All topology, endpoint ordering, adjacency, assertion, and boundary
-/// selectors are numeric verifier preprocessing. No proof cell is decoded as
-/// an enum or native row index.
+/// All topology, endpoint ordering, adjacency, assertion, and boundary selectors are numeric
+/// verifier preprocessing. No proof cell is decoded as an enum or native row index.
 pub(crate) fn evaluate_p256_value_bus_stark_residues_v1(
     current: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
     next: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],

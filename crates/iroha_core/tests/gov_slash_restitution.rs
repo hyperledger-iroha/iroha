@@ -1,8 +1,7 @@
 //! Governance lock slashing and restitution flows.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //!
-//! Verifies manual slashing/restitution of governance bonds updates locks,
-//! ledgers, and balances.
+//! Verifies manual slashing/restitution of governance bonds updates locks, ledgers, and balances.
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,

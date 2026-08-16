@@ -1,11 +1,10 @@
 //! Hijiri reputation system data structures.
 //!
-//! This module defines the portable data types used by the Hijiri peer and
-//! account reputation pipelines. The initial focus is on account-level positive
-//! attestations: observer registries describe which external parties may issue
-//! them, and incentives determine how much an attestation can boost the
-//! `S_attestation` component of the global risk score as well as how registries
-//! are compensated.
+//! This module defines the portable data types used by the Hijiri peer and account reputation
+//! pipelines. The initial focus is on account-level positive attestations: observer registries
+//! describe which external parties may issue them, and incentives determine how much an attestation
+//! can boost the `S_attestation` component of the global risk score as well as how registries are
+//! compensated.
 use crate::{account::AccountId, metadata::Metadata, name::Name};
 use derive_more::{AsRef, Deref};
 use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity};

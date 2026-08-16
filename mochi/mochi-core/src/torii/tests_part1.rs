@@ -1,9 +1,7 @@
 use std::{
     collections::VecDeque,
-    fs,
     io::{ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener as StdTcpListener},
-    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -1002,7 +1000,7 @@ async fn submit_query_does_not_follow_redirects() {
         .await
         .expect_err("redirect must be returned instead of followed");
     original.assert();
-    target.assert_hits(0);
+    target.assert_calls(0);
     match error {
         ToriiError::UnexpectedStatus { status, .. } => {
             assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
