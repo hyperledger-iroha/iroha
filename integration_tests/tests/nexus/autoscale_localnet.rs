@@ -26,6 +26,7 @@ use iroha::{
         merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
         metadata::Metadata,
         nexus::{DataSpaceId, LaneCatalog, LaneId},
+        peer::PeerId,
         prelude::{
             FindAccountById, HashOf, Name, QueryBuilderExt, SignedTransaction,
             TransactionEntrypoint,
@@ -55,7 +56,10 @@ use iroha_core::{
     sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_primitives::json::Json;
-use iroha_test_network::{NetworkBuilder, NetworkPeer};
+use iroha_test_network::{
+    ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
+    NetworkBuilder, NetworkPeer,
+};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::{DecodeAll, Encode};
 use std::{
@@ -171,6 +175,7 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
         .with_peers(TOTAL_PEERS)
         .with_block_cadence(Duration::from_millis(300))
         .with_npos_consensus()
+        .with_consensus_message_control()
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "enabled"], true)
@@ -2373,10 +2378,8 @@ fn committed_lane_block_has_canonical_quorum_metadata(block: &CommittedLaneBlock
     }
     let expected_quorum = commit_quorum_from_len(validator_count).max(1);
     min_quorum == expected_quorum
-        && prepare_qc_signer_count >= min_quorum
-        && prepare_qc_signer_count <= validator_count
-        && commit_qc_signer_count >= min_quorum
-        && commit_qc_signer_count <= validator_count
+        && prepare_qc_signer_count == min_quorum
+        && commit_qc_signer_count == min_quorum
 }
 fn committed_lane_block_is_certified(block: &CommittedLaneBlockSnapshot) -> bool {
     committed_lane_block_targets_default_dataspace(block)
@@ -4391,8 +4394,8 @@ fn validate_lane_drain_certificate_evidence(
         }
     }
     ensure!(
-        signer_indices.len() >= usize::try_from(intent.min_quorum).unwrap_or(usize::MAX),
-        "drain certificate is below its committed quorum"
+        signer_indices.len() == usize::try_from(intent.min_quorum).unwrap_or(usize::MAX),
+        "drain certificate does not carry its exact committed quorum"
     );
     ensure!(
         certificate.signer_proofs.len() == signer_indices.len(),
@@ -5144,38 +5147,13 @@ fn evict_historical_block_body_offline(peer: &NetworkPeer, height: u64) -> Resul
     );
     Ok(payload_len)
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FourPeerByzantineFault {
-    ConflictingReady,
-    DuplicateInits,
-}
-fn four_peer_byzantine_fault_layer(fault: FourPeerByzantineFault) -> Table {
-    let mut rbc = Table::new();
-    match fault {
-        FourPeerByzantineFault::ConflictingReady => {
-            rbc.insert(
-                "conflicting_ready_mask".to_owned(),
-                TomlValue::Integer((1_i64 << TOTAL_PEERS) - 1),
-            );
-        }
-        FourPeerByzantineFault::DuplicateInits => {
-            rbc.insert("duplicate_inits".to_owned(), TomlValue::Boolean(true));
-        }
-    }
-    let mut debug = Table::new();
-    debug.insert("rbc".to_owned(), TomlValue::Table(rbc));
-    let mut sumeragi = Table::new();
-    sumeragi.insert("debug".to_owned(), TomlValue::Table(debug));
-    let mut layer = Table::new();
-    layer.insert("sumeragi".to_owned(), TomlValue::Table(sumeragi));
-    layer
-}
+include!("autoscale_localnet_consensus_fault.rs");
+
 fn restart_four_peer_validator(
     network: &sandbox::SerializedNetwork,
     runtime: &tokio::runtime::Runtime,
     peer_index: usize,
     base_layers: &[Table],
-    extra_layer: Option<Table>,
     catch_up_height: u64,
     context: &str,
 ) -> Result<()> {
@@ -5184,12 +5162,8 @@ fn restart_four_peer_validator(
         .get(peer_index)
         .ok_or_else(|| eyre!("{context}: missing peer {peer_index}"))?;
     runtime.block_on(peer.shutdown_if_started());
-    let mut layers = base_layers.to_vec();
-    if let Some(extra_layer) = extra_layer {
-        layers.push(extra_layer);
-    }
     runtime
-        .block_on(peer.start_checked(layers.iter().map(Cow::Borrowed), None))
+        .block_on(peer.start_checked(base_layers.iter().map(Cow::Borrowed), None))
         .map_err(|err| eyre!("{context}: restart peer {peer_index}: {err}"))?;
     if catch_up_height > 0 {
         runtime.block_on(async {
@@ -5230,8 +5204,8 @@ fn wait_for_certified_elastic_lane(
                             && block.validator_count > 0
                             && block.min_quorum > 0
                             && block.min_quorum <= block.validator_count
-                            && block.prepare_qc_signer_count >= block.min_quorum
-                            && block.commit_qc_signer_count >= block.min_quorum
+                            && block.prepare_qc_signer_count == block.min_quorum
+                            && block.commit_qc_signer_count == block.min_quorum
                     }) =>
                 {
                     last_observed = last_observed.saturating_add(1);
@@ -5278,8 +5252,8 @@ fn wait_for_certified_elastic_lane_incarnation(
                             && block.validator_count > 0
                             && block.min_quorum > 0
                             && block.min_quorum <= block.validator_count
-                            && block.prepare_qc_signer_count >= block.min_quorum
-                            && block.commit_qc_signer_count >= block.min_quorum
+                            && block.prepare_qc_signer_count == block.min_quorum
+                            && block.commit_qc_signer_count == block.min_quorum
                     }) {
                         last_observed = last_observed.saturating_add(1);
                     }
@@ -5366,7 +5340,7 @@ fn validate_autonomous_merge_execution(
         .map_err(|err| eyre!("invalid autonomous current proposal: {err}"))?;
     ensure!(
         execution.prepare_qc.payload_availability_qc.is_some(),
-        "autonomous prepare QC omitted its DA/RBC availability certificate"
+        "autonomous prepare QC omitted its DA payload-availability certificate"
     );
     let signer_pops = execution
         .signer_proofs
@@ -5784,8 +5758,8 @@ fn validate_merge_qc_evidence(network_id: &NetworkId, entry: &MergeLedgerEntry) 
         }
     }
     ensure!(
-        signer_indices.len() >= commit_quorum_from_len(qc.validator_set.len()),
-        "merge QC is below quorum: signers={}, roster={}",
+        signer_indices.len() == commit_quorum_from_len(qc.validator_set.len()),
+        "merge QC cardinality mismatch: signers={}, roster={}",
         signer_indices.len(),
         qc.validator_set.len()
     );
@@ -5875,9 +5849,9 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
 fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts_impl()
 -> Result<()> {
     const TARGET_LANE: LaneId = LaneId::new(ELASTIC_LANE_ID);
-    const FIRST_BYZANTINE_PEER: usize = 3;
+    const FIRST_FAULT_SENDER: usize = 3;
     const RECREATION_RESTART_PEER: usize = 2;
-    const SECOND_BYZANTINE_PEER: usize = 1;
+    const SECOND_FAULT_SENDER: usize = 1;
     const OFFLINE_DRAIN_PEER: usize = 0;
     let context = stringify!(
         nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts
@@ -5928,13 +5902,10 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     restart_four_peer_validator(
         &network,
         &runtime,
-        FIRST_BYZANTINE_PEER,
+        FIRST_FAULT_SENDER,
         &base_layers,
-        Some(four_peer_byzantine_fault_layer(
-            FourPeerByzantineFault::ConflictingReady,
-        )),
         initial_height,
-        "install first rotating Byzantine validator",
+        "restart first rotating validator before authenticated vote hold",
     )?;
     submitters = network
         .peers()
@@ -5944,10 +5915,22 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     wait_for_submission_ready(
         &submitters,
         SUBMISSION_READY_TIMEOUT,
-        "first Byzantine window",
+        "first authenticated vote-hold window",
+    )?;
+    let first_fault = arm_four_peer_authenticated_vote_fault(
+        &network,
+        &runtime,
+        FIRST_FAULT_SENDER,
+        ConsensusMessageControlAction::Hold,
+        "install first rotating authenticated vote hold",
     )?;
     let marker_a =
         expand_elastic_lane_for_release_cycle(&network, &submitters, quorum_required, 1)?;
+    wait_for_four_peer_authenticated_fault_activation(
+        &network,
+        &first_fault,
+        "first rotating authenticated vote hold",
+    )?;
     let autonomous_a =
         execute_autonomous_release_cycle_transaction(&network, &submitters, marker_a.clone(), 1)?;
     ensure!(
@@ -6004,14 +5987,19 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     )?;
     let archive_a_paths =
         assert_archived_incarnation_on_all_peers(&network, TARGET_LANE, marker_a.incarnation)?;
+    heal_four_peer_authenticated_vote_fault(
+        &network,
+        &runtime,
+        &first_fault,
+        "heal first rotating authenticated vote hold",
+    )?;
     restart_four_peer_validator(
         &network,
         &runtime,
-        FIRST_BYZANTINE_PEER,
+        FIRST_FAULT_SENDER,
         &base_layers,
-        None,
         retirement_a_height,
-        "heal first rotating Byzantine validator",
+        "restart first rotating vote-fault sender after heal",
     )?;
     submitters = network
         .peers()
@@ -6025,12 +6013,12 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     )?;
     ensure!(
         wait_for_committed_transaction(
-            &submitters[FIRST_BYZANTINE_PEER],
+            &submitters[FIRST_FAULT_SENDER],
             autonomous_a.entrypoint_hash,
             SCALE_IN_WAIT_TIMEOUT,
-            "healed first Byzantine autonomous proof",
+            "healed first vote-fault sender autonomous proof",
         )? == autonomous_a.committed,
-        "healed first Byzantine peer reconstructed another autonomous proof"
+        "healed first vote-fault sender reconstructed another autonomous proof"
     );
     let marker_b =
         expand_elastic_lane_for_release_cycle(&network, &submitters, quorum_required, 2)?;
@@ -6060,7 +6048,6 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         &runtime,
         RECREATION_RESTART_PEER,
         &base_layers,
-        None,
         recreation_height,
         "restart recreated incarnation after stale-marker rejection",
     )?;
@@ -6100,13 +6087,10 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     restart_four_peer_validator(
         &network,
         &runtime,
-        SECOND_BYZANTINE_PEER,
+        SECOND_FAULT_SENDER,
         &base_layers,
-        Some(four_peer_byzantine_fault_layer(
-            FourPeerByzantineFault::DuplicateInits,
-        )),
         pre_second_fault_height,
-        "rotate Byzantine behavior to a second validator",
+        "restart second rotating validator before authenticated vote drop",
     )?;
     submitters = network
         .peers()
@@ -6116,23 +6100,40 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
     wait_for_submission_ready(
         &submitters,
         SUBMISSION_READY_TIMEOUT,
-        "second Byzantine window",
+        "second authenticated vote-drop window",
+    )?;
+    let second_fault = arm_four_peer_authenticated_vote_fault(
+        &network,
+        &runtime,
+        SECOND_FAULT_SENDER,
+        ConsensusMessageControlAction::Drop,
+        "install second rotating authenticated vote drop",
     )?;
     let autonomous_b =
         execute_autonomous_release_cycle_transaction(&network, &submitters, marker_b.clone(), 2)?;
+    wait_for_four_peer_authenticated_fault_activation(
+        &network,
+        &second_fault,
+        "second rotating authenticated vote drop",
+    )?;
     ensure!(
         autonomous_b.merge_entry != autonomous_a.merge_entry
             && autonomous_b.entrypoint_hash != autonomous_a.entrypoint_hash,
         "recreated lane reused incarnation A's autonomous source identity"
     );
+    heal_four_peer_authenticated_vote_fault(
+        &network,
+        &runtime,
+        &second_fault,
+        "heal second rotating authenticated vote drop",
+    )?;
     restart_four_peer_validator(
         &network,
         &runtime,
-        SECOND_BYZANTINE_PEER,
+        SECOND_FAULT_SENDER,
         &base_layers,
-        None,
         autonomous_b.merge_entry.merge_qc.carrier_height,
-        "heal second rotating Byzantine validator",
+        "restart second rotating vote-fault sender after heal",
     )?;
     submitters = network
         .peers()
@@ -6141,12 +6142,12 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         .collect();
     ensure!(
         wait_for_committed_transaction(
-            &submitters[SECOND_BYZANTINE_PEER],
+            &submitters[SECOND_FAULT_SENDER],
             autonomous_b.entrypoint_hash,
             SCALE_IN_WAIT_TIMEOUT,
-            "healed second Byzantine autonomous proof",
+            "healed second vote-fault sender autonomous proof",
         )? == autonomous_b.committed,
-        "healed second Byzantine peer reconstructed another autonomous proof"
+        "healed second vote-fault sender reconstructed another autonomous proof"
     );
     let intent_b = wait_for_new_uncommitted_lane_drain_intent_on_all_peers(
         &network,
@@ -6210,7 +6211,6 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         &runtime,
         OFFLINE_DRAIN_PEER,
         &base_layers,
-        None,
         retirement_b_height,
         "recover validator rotated offline during recreated-lane drain",
     )?;
@@ -6253,7 +6253,6 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         &runtime,
         OFFLINE_DRAIN_PEER,
         &base_layers,
-        None,
         retirement_b_height,
         "restart after authenticated historical body eviction",
     )?;
@@ -6534,7 +6533,7 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         .map_err(|err| eyre!("invalid certified lane proposal: {err}"))?;
     ensure!(
         execution.prepare_qc.payload_availability_qc.is_some(),
-        "autonomous prepare QC omitted DA/RBC payload availability proof"
+        "autonomous prepare QC omitted DA payload-availability proof"
     );
     let lane_pops = execution
         .signer_proofs
@@ -7635,22 +7634,21 @@ mod tests {
         AutoscaleSoakCycleEvent, AutoscaleSoakReporter, AutoscaleSoakRunSummary,
         AutoscaleTransitionStats, CommitQuorumObservation, CommitQuorumSource,
         CommittedLaneBlockSnapshot, ElasticLaneStorageStats, ExpandContractCycleOutcome,
-        FourPeerByzantineFault, LaneCommitmentSnapshot, LaneDrainCommitmentLogEvidence,
-        LaneDrainIntentLogEvidence, LaneDrainLifecycleLogEvidence, LaneIncarnationMarkerV3,
-        LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
-        PUBLIC_PROFILE_ELASTIC_LANE_ID, PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
-        PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES, PeerStatusSnapshot, SoakTimingSummary,
-        autoscale_soak_duration_from_env_value, commit_quorum_observation,
-        committed_lane_block_has_canonical_quorum_metadata, committed_lane_block_is_certified,
-        contraction_observed_on_quorum_peers, contraction_observed_on_quorum_peers_for_profile,
-        decode_block_index_entry, elastic_lane_storage_progressed,
-        expansion_observed_on_quorum_or_scale_out_transition,
+        LaneCommitmentSnapshot, LaneDrainCommitmentLogEvidence, LaneDrainIntentLogEvidence,
+        LaneDrainLifecycleLogEvidence, LaneIncarnationMarkerV3, LaneRelaySnapshot,
+        LaneStatusSnapshot, LaneValidatorSnapshot, PUBLIC_PROFILE_ELASTIC_LANE_ID,
+        PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES, PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+        PeerStatusSnapshot, SoakTimingSummary, autoscale_soak_duration_from_env_value,
+        commit_quorum_observation, committed_lane_block_has_canonical_quorum_metadata,
+        committed_lane_block_is_certified, contraction_observed_on_quorum_peers,
+        contraction_observed_on_quorum_peers_for_profile, decode_block_index_entry,
+        elastic_lane_storage_progressed, expansion_observed_on_quorum_or_scale_out_transition,
         expansion_observed_on_quorum_or_scale_out_transition_for_lane,
         expansion_observed_on_quorum_peers, expansion_observed_on_quorum_peers_for_lane,
         expansion_observed_on_storage, expansion_observed_on_storage_for_count,
         expansion_observed_on_storage_for_lane_count, expansion_probe_ready,
         expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
-        expansion_top_up_tx_count, first_retirement_height_after, four_peer_byzantine_fault_layer,
+        expansion_top_up_tx_count, first_retirement_height_after,
         is_autoscale_elastic_storage_segment, lifecycle_advanced_after_intent,
         parse_autoscale_transition_stats, parse_autoscale_transition_stats_for_lane,
         parse_lane_drain_lifecycle_log_evidence, peer_committed_lane_block_snapshot,
@@ -12993,41 +12991,6 @@ mod tests {
             Some(102),
             "the recreated-lane observer must select the first strictly post-carrier retirement"
         );
-    }
-    #[test]
-    fn four_peer_byzantine_layers_enable_one_exact_fault_class() {
-        let conflicting = four_peer_byzantine_fault_layer(FourPeerByzantineFault::ConflictingReady);
-        let conflicting_rbc = conflicting
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| sumeragi.get("debug"))
-            .and_then(toml::Value::as_table)
-            .and_then(|debug| debug.get("rbc"))
-            .and_then(toml::Value::as_table)
-            .expect("conflicting READY layer has an RBC table");
-        assert_eq!(
-            conflicting_rbc
-                .get("conflicting_ready_mask")
-                .and_then(toml::Value::as_integer),
-            Some(0b1111)
-        );
-        assert!(!conflicting_rbc.contains_key("duplicate_inits"));
-        let duplicate = four_peer_byzantine_fault_layer(FourPeerByzantineFault::DuplicateInits);
-        let duplicate_rbc = duplicate
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| sumeragi.get("debug"))
-            .and_then(toml::Value::as_table)
-            .and_then(|debug| debug.get("rbc"))
-            .and_then(toml::Value::as_table)
-            .expect("duplicate INIT layer has an RBC table");
-        assert_eq!(
-            duplicate_rbc
-                .get("duplicate_inits")
-                .and_then(toml::Value::as_bool),
-            Some(true)
-        );
-        assert!(!duplicate_rbc.contains_key("conflicting_ready_mask"));
     }
     #[test]
     fn block_index_decoder_requires_an_exact_positive_height_entry() {

@@ -226,5 +226,6 @@ The fixed-width composed state/action relation and source-bound transition
 checks therefore do not prove that every concrete execution refines
 `InFlightFirstReleaseSpec`, nor do they replace immutable-candidate TLC,
 Apalache, TLAPS, Verus, mutation, trace-replay, and cross-tool receipts. Do not
-upgrade `proof_coverage.json` or release status until those obligations are
-executed and archived against one immutable candidate.
+treat the checked-in promoted `proof_coverage.json` status vector as release
+evidence. Release status and receipts remain blocked until those obligations
+are executed and archived against one immutable candidate.

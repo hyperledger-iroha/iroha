@@ -54,6 +54,40 @@ DualQuorum(epoch, signers) ==
   /\ CountQuorum(epoch, signers)
   /\ PowerQuorum(epoch, signers)
 
+(***************************************************************************
+DualQuorum is the monotone mathematical sufficiency predicate used by the
+intersection proofs.  Revision-4 wire certificates are narrower: they carry
+the minimum strict count quorum, never every vote accumulated by a collector.
+Keep those two concepts separate so a signer superset remains a mathematical
+quorum without becoming a valid serialized certificate.
+
+RosterSequence is the frozen canonical validator order.  Selecting candidates
+whose one-based roster rank is at most q is the formal counterpart of the
+production collector's ordered `.take(minimum_signer_count())` projection.
+Intersecting with the roster makes the operator total even for an untyped
+candidate set; the exact wire predicate prevents an incomplete projection from
+being admitted as a certificate.
+***************************************************************************)
+CertificateSignerCount(epoch) ==
+  (2 * Cardinality(VotingRoster(epoch))) \div 3 + 1
+
+ExactCertificateQuorum(epoch, signers) ==
+  /\ DualQuorum(epoch, signers)
+  /\ Cardinality(signers) = CertificateSignerCount(epoch)
+
+RosterIndex(epoch, validator) ==
+  CHOOSE index \in 1..Len(RosterSequence(epoch)):
+    RosterSequence(epoch)[index] = validator
+
+CanonicalCertificateSigners(epoch, candidates) ==
+  LET eligible == candidates \cap VotingRoster(epoch)
+      quorumSize == CertificateSignerCount(epoch)
+  IN {validator \in eligible:
+       Cardinality(
+         {other \in eligible:
+           RosterIndex(epoch, other) <= RosterIndex(epoch, validator)})
+         <= quorumSize}
+
 QuorumConfiguration ==
   /\ N \in Nat \ {0}
   /\ MaxEpoch \in Nat

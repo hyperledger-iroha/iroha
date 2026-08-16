@@ -191,11 +191,11 @@ struct PreparedLifecycleSuccessorV1 {
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum ProductionLifecyclePreActivationHeightV1 {
     Ordinary {
-        launched: LaunchedProductionLifecycleV1,
+        launched: Box<LaunchedProductionLifecycleV1>,
         activation: ProductionLifecycleRunnerActivationV1,
     },
     CompleteTip {
-        launched: LaunchedRecoveredCompleteTipSuccessorLifecycleV1,
+        launched: Box<LaunchedRecoveredCompleteTipSuccessorLifecycleV1>,
         activation: ProductionLifecycleCompleteTipRunnerActivationV1,
     },
 }
@@ -326,6 +326,40 @@ impl ProductionLifecyclePreActivationHeightV1 {
     }
 }
 
+#[inline(never)]
+fn launch_ordinary_lifecycle_height(
+    owner: crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
+    inputs: ProductionLifecycleLaunchInputsV1,
+    activation: ProductionLifecycleRunnerActivationV1,
+) -> Result<ProductionLifecyclePreActivationHeightV1, V2RunnerError> {
+    Ok(ProductionLifecyclePreActivationHeightV1::Ordinary {
+        launched: owner.launch(inputs)?,
+        activation,
+    })
+}
+
+#[inline(never)]
+fn launch_recovered_complete_tip_lifecycle_height(
+    owner: crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
+    inputs: ProductionLifecycleLaunchInputsV1,
+    authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
+    ingress_ready: &Arc<AtomicBool>,
+    block_ingress: &Arc<FairV2Ingress>,
+) -> Result<ProductionLifecyclePreActivationHeightV1, V2RunnerError> {
+    let predecessor = authority.predecessor();
+    let bound = authority
+        .bind_successor_owner(owner)
+        .map_err(|_| V2RunnerError::CompleteTipSuccessorAuthorityInvalid { predecessor })?;
+    Ok(ProductionLifecyclePreActivationHeightV1::CompleteTip {
+        launched: bound.launch(inputs)?,
+        activation: ProductionLifecycleCompleteTipRunnerActivationV1::mint_for_recovered_runner(
+            Arc::clone(ingress_ready),
+            Arc::clone(block_ingress),
+        ),
+    })
+}
+
+#[inline(never)]
 fn launch_non_pending_lifecycle_height(
     owner: crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
     inputs: ProductionLifecycleLaunchInputsV1,
@@ -334,48 +368,46 @@ fn launch_non_pending_lifecycle_height(
     block_ingress: &Arc<FairV2Ingress>,
 ) -> Result<ProductionLifecyclePreActivationHeightV1, V2RunnerError> {
     match activation {
-        None => Ok(ProductionLifecyclePreActivationHeightV1::Ordinary {
-            launched: owner.launch(inputs)?,
-            activation: ProductionLifecycleRunnerActivationV1::current_height(
+        None => launch_ordinary_lifecycle_height(
+            owner,
+            inputs,
+            ProductionLifecycleRunnerActivationV1::current_height(
                 Arc::clone(ingress_ready),
                 Arc::clone(block_ingress),
             ),
-        }),
+        ),
         Some(PendingSuccessorActivation::Applied {
             expected_predecessor,
             authority,
-        }) => Ok(ProductionLifecyclePreActivationHeightV1::Ordinary {
-            launched: owner.launch(inputs)?,
-            activation: ProductionLifecycleRunnerActivationV1::applied(
+        }) => launch_ordinary_lifecycle_height(
+            owner,
+            inputs,
+            ProductionLifecycleRunnerActivationV1::applied(
                 Arc::clone(ingress_ready),
                 Arc::clone(block_ingress),
                 expected_predecessor,
                 authority,
             ),
-        }),
+        ),
         Some(PendingSuccessorActivation::SnapshotBootstrap { authority }) => {
-            Ok(ProductionLifecyclePreActivationHeightV1::Ordinary {
-                launched: owner.launch(inputs)?,
-                activation: ProductionLifecycleRunnerActivationV1::snapshot_bootstrap(
+            launch_ordinary_lifecycle_height(
+                owner,
+                inputs,
+                ProductionLifecycleRunnerActivationV1::snapshot_bootstrap(
                     Arc::clone(ingress_ready),
                     Arc::clone(block_ingress),
                     authority,
                 ),
-            })
+            )
         }
         Some(PendingSuccessorActivation::RecoveredCompleteTip { authority }) => {
-            let predecessor = authority.predecessor();
-            let bound = authority
-                .bind_successor_owner(owner)
-                .map_err(|_| V2RunnerError::CompleteTipSuccessorAuthorityInvalid { predecessor })?;
-            Ok(ProductionLifecyclePreActivationHeightV1::CompleteTip {
-                launched: bound.launch(inputs)?,
-                activation:
-                    ProductionLifecycleCompleteTipRunnerActivationV1::mint_for_recovered_runner(
-                        Arc::clone(ingress_ready),
-                        Arc::clone(block_ingress),
-                    ),
-            })
+            launch_recovered_complete_tip_lifecycle_height(
+                owner,
+                inputs,
+                authority,
+                ingress_ready,
+                block_ingress,
+            )
         }
     }
 }
@@ -447,7 +479,10 @@ fn recover_canonical_bodies_before_activation(
                     bounded_needs.to_vec(),
                 )?;
                 let mut next_retry = Instant::now();
-                while body_recovery.has_pending() {
+                while canonical_recovery_source_work_remains(
+                    body_recovery.has_pending(),
+                    body_recovery.effect_count(),
+                ) {
                     if output_guard.restart_required() {
                         return Err(V2RunnerError::RestartRequired);
                     }
@@ -455,30 +490,56 @@ fn recover_canonical_bodies_before_activation(
                         return Ok(CanonicalRecoveryControlV1::Shutdown);
                     }
                     let now = Instant::now();
-                    if now >= next_retry {
-                        body_recovery.service_next()?;
-                        next_retry = deadline_after(now, retransmit_interval);
+                    if body_recovery.has_pending() && now >= next_retry {
+                        let request_queued = body_recovery.service_next()?;
+                        let serviced_at = Instant::now();
+                        refresh_canonical_recovery_retry_deadline(
+                            &mut next_retry,
+                            serviced_at,
+                            retransmit_interval,
+                            request_queued,
+                        );
                     }
-                    let drained = drain_canonical_executed_block_recovery_ingress(
-                        aperture.ingress(),
-                        &mut body_recovery,
-                        control_queue_capacity,
-                    )?;
-                    if drained != 0 && body_recovery.has_pending() {
-                        body_recovery.service_next()?;
+                    let ingress = if body_recovery.has_pending() {
+                        drain_canonical_executed_block_recovery_ingress(
+                            aperture.ingress(),
+                            &mut body_recovery,
+                            control_queue_capacity,
+                        )?
+                    } else {
+                        CanonicalRecoveryIngressDrain::default()
+                    };
+                    if ingress.exact_response_progress && body_recovery.has_pending() {
+                        let request_queued = body_recovery.service_next()?;
+                        let serviced_at = Instant::now();
+                        refresh_canonical_recovery_retry_deadline_after_progress(
+                            &mut next_retry,
+                            serviced_at,
+                            retransmit_interval,
+                            request_queued,
+                        );
                     }
-                    let dispatched = dispatch_canonical_executed_block_recovery_effects(
+                    let dispatch = dispatch_canonical_executed_block_recovery_effects(
                         &mut body_recovery,
                         services,
                         control_queue_capacity,
                     )?;
-                    if body_recovery.has_pending() && drained == 0 && dispatched == 0 {
-                        let wait = next_retry
-                            .saturating_duration_since(Instant::now())
-                            .min(IDLE_POLL);
-                        if !wait.is_zero() {
-                            let _ = wake_rx.recv_timeout(wait);
-                        }
+                    if dispatch.request_dispatched {
+                        refresh_canonical_recovery_retry_deadline(
+                            &mut next_retry,
+                            Instant::now(),
+                            retransmit_interval,
+                            true,
+                        );
+                    }
+                    if canonical_recovery_source_work_remains(
+                        body_recovery.has_pending(),
+                        body_recovery.effect_count(),
+                    ) && ingress.drained == 0
+                        && dispatch.handled == 0
+                    {
+                        let wait = canonical_recovery_idle_wait(next_retry, Instant::now());
+                        let _ = wake_rx.recv_timeout(wait);
                     }
                 }
             }

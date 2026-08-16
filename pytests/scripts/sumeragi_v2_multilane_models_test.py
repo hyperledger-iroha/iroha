@@ -175,18 +175,14 @@ def canonical_models() -> list[dict]:
 
 
 def copy_stable_generation_diagnostics_fixture(
-    tmp_path: Path,
+    tmp_path: Path, module
 ) -> tuple[Path, Path]:
-    destinations = []
-    for relative in (
+    relatives = (
         Path("crates/iroha_core/src/state.rs"),
         Path("crates/iroha_core/src/state/diagnostic_state_generation.rs"),
-    ):
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
-        destinations.append(destination)
-    return destinations[0], destinations[1]
+    )
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, set(relatives))
+    return tmp_path / relatives[0], tmp_path / relatives[1]
 
 
 def validate_stable_generation_diagnostics_fixture(
@@ -292,7 +288,10 @@ def test_kura_replica_retention_contract_rejects_relayed_ingress_drift(
 ) -> None:
     module = load_checker()
     contract = copy_kura_retention_fixture(tmp_path, module)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+    )
     replace_once(
         path,
         "authenticated_via.as_ref() != Some(&advertised_keeper)",
@@ -661,10 +660,7 @@ def copy_native_exact_object_prune_fixture(
         Path(relative)
         for relative, _, _, _ in module.NATIVE_EXACT_OBJECT_PRUNE_BINDINGS
     }
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return models
 
 
@@ -690,10 +686,7 @@ def copy_native_participant_classifier_fixture(
             module.NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_BINDINGS
         )
     }
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return models
 
 
@@ -705,7 +698,6 @@ def validate_native_participant_classifier_fixture(
         tmp_path, models, errors
     )
     return tuple(errors)
-
 
 
 def copy_queue_plan_pending_membership_fixture(
@@ -722,10 +714,11 @@ def copy_queue_plan_pending_membership_fixture(
         Path(relative)
         for relative, _, _ in module.QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS
     )
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    relatives.update(
+        Path(row[0])
+        for row in module.QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS
+    )
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return models
 
 
@@ -1004,7 +997,7 @@ def test_queue_plan_pending_membership_contract_rejects_decode_before_bound(
     swap_ordered_once_after(
         path,
         "fn decode_exact_queue_plan_pending_route_member_marker(",
-        "if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {",
+        "payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES",
         "norito::decode_from_bytes::<QueuePlanPendingRouteMemberV1>(payload)",
     )
     errors = validate_queue_plan_pending_membership_fixture(
@@ -1570,8 +1563,12 @@ def test_inflight_composed_contract_rejects_rehydrate_without_kura_ownership(
     copy_layout_fixture(tmp_path, module, contract)
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
     ownership_guard = "(before.carrier.kura_active & projection.actor) != 0u128"
-    replace_once(path, ownership_guard, "projection.actor != 0u128")
-    replace_once(path, ownership_guard, "projection.actor != 0u128")
+    replace_once_after(
+        path,
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY\n                )",
+        ownership_guard,
+        "projection.actor != 0u128",
+    )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "production_in_flight_first_release_transition_body" in error
@@ -1619,8 +1616,12 @@ def test_inflight_composed_contract_rejects_rehydrate_ready_tampering(
         "after.session.ready_authorized "
         "== (before.session.ready_authorized | projection.actor)"
     )
-    replace_once(path, ready_guard, weakened)
-    replace_once(path, ready_guard, weakened)
+    replace_once_after(
+        path,
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY\n                )",
+        ready_guard,
+        weakened,
+    )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "production_in_flight_first_release_transition_body" in error
@@ -1637,8 +1638,12 @@ def test_inflight_composed_contract_rejects_terminal_rehydrate_resurrection(
     copy_layout_fixture(tmp_path, module, contract)
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
     retirement_guard = "!before.release.kura_retired"
-    replace_once(path, retirement_guard, "before.release.kura_retired == before.release.kura_retired")
-    replace_once(path, retirement_guard, "before.release.kura_retired == before.release.kura_retired")
+    replace_once_after(
+        path,
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY",
+        retirement_guard,
+        "before.release.kura_retired == before.release.kura_retired",
+    )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "production_in_flight_first_release_transition_body" in error
@@ -1841,7 +1846,7 @@ def test_inflight_layout_contract_rejects_queue_cleanup_before_evidence_repair(
     copy_layout_fixture(tmp_path, module, contract)
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
     source = path.read_text(encoding="utf-8")
-    start = source.index("    pub(crate) fn execute(")
+    start = source.index("    fn execute_exact_apply(")
     end = source.index("\n    fn finish_durable_apply_completion_against(", start)
     method = source[start:end]
     promote = "promote_kagemusha_topup_finality_sidecar"
@@ -1855,7 +1860,7 @@ def test_inflight_layout_contract_rejects_queue_cleanup_before_evidence_repair(
     path.write_text(source[:start] + method + source[end:], encoding="utf-8")
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
-        "ordered in-flight item V2ApplyService::execute" in error
+        "ordered in-flight item V2ApplyService::execute_exact_apply" in error
         and "missing or reorders token" in error
         for error in errors
     ), errors
@@ -1912,11 +1917,12 @@ def test_inflight_layout_contract_rejects_partial_ordinary_carrier_filter(
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_candidate.rs"
     replace_once(
         path,
-        "                certified_execution_selected,\n                report,\n            ) {\n",
-        "                certified_execution_selected\n"
-        "                    && transaction.creation_time() >= Duration::from_millis(1_000),\n"
-        "                report,\n"
-        "            ) {\n",
+        "if record_ordinary_execution_carrier_exclusion(certified_execution_selected, report) {",
+        "if record_ordinary_execution_carrier_exclusion(\n"
+        "    certified_execution_selected\n"
+        "        && transaction.creation_time() >= Duration::from_millis(1_000),\n"
+        "    report,\n"
+        ") {",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
@@ -1995,10 +2001,10 @@ def test_inflight_layout_contract_rejects_execution_provider_releasing_pending_a
             "matches!(self, Self::Any)",
         ),
         (
-            "proposal_state.heartbeat_only = None",
-            "proposal_state.heartbeat_only = proposal_state.heartbeat_only",
-            "claim_certified_execution_proposal_turn",
-            "proposal_state.heartbeat_only = None",
+            "work_provider: &mut *lane_work",
+            "work_provider: &mut *unchecked_lane_work",
+            "schedule_local_proposal",
+            "work_provider: &mut *lane_work",
         ),
     ),
 )
@@ -2979,7 +2985,7 @@ def test_stable_generation_diagnostics_rejects_unwrapped_projection(
     consumer_anchor: str,
 ) -> None:
     module = load_checker()
-    state, _helper = copy_stable_generation_diagnostics_fixture(tmp_path)
+    state, _helper = copy_stable_generation_diagnostics_fixture(tmp_path, module)
     replace_once_after(
         state,
         consumer_anchor,

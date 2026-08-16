@@ -81,8 +81,9 @@ historical recovery is already an ordinary per-context Async transition, so
 this adapter needs no shadow receipt or stage action. The separate proofless
 source-refinement gate must still bind the successor actions and the exact
 OpenHistoricalRecovery/decision/body/store/validate/apply corridor to the
-executable Rust transitions before the proof ledger may promote the Rust-to-
-TLA production refinement obligation.
+executable Rust transitions. The ledger records the Rust-to-TLA production-
+refinement obligation as `cross_tool_proved`; fresh exact-source cross-tool
+evidence remains mandatory for release.
 ***************************************************************************)
 THEOREM AbstractSuccessorActivationAndExactHistoricalRecoveryInvariant ==
   IndexedChainSpec
@@ -120,8 +121,9 @@ Published tier into a fresh absent-owner attempt. Failed resets require a
 currently latched failure and therefore precede the suffix. The final rank
 zero is publication or legitimate supersession by a later height. All
 temporal rank and starvation clauses quantify Responsive rather than
-ValidatorIds. The proof is retained as explicit proof debt until its strict
-TLAPS run succeeds; source checks alone do not promote the ledger.
+ValidatorIds. The ledger records this obligation as `tlaps_proved`; source
+checks alone are not release evidence, and release acceptance still requires a
+fresh strict TLAPS run.
 ***************************************************************************)
 SuccessorActivationRankCarrier == 0..21
 

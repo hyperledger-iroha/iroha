@@ -2774,7 +2774,7 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
         "SignRequest::TimeoutVote(vote)",
         "self.wal.recovered_records().iter().rev()",
         "self.authenticate_recovered_wal_frame(frame)",
-        "body_store.has_exact_recovered_decision_fetch_parent(&fetch)",
+        "startup_effects.as_slice() != [expected.clone()]",
     ] {
         assert!(
             control_classifier.contains(required),
@@ -2955,7 +2955,7 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     for required in [
         "RecoveredWalDecisionFetch",
         "fn authenticate_recovered_wal_decision_fetch(",
-        "startup_effects.as_slice() != [expected.clone()]",
+        "body_store.has_exact_recovered_decision_fetch_parent(&fetch)",
         "return Err((AdapterError::RecoveredStartupEffectMismatch, self))",
     ] {
         assert!(

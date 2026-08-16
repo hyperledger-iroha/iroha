@@ -217,10 +217,9 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "ordinary_writes_root": _canonical_hash(0x36),
         "topup_anchor_count": 0,
         "native_amx_application_manifest_version": 1,
-        "native_amx_application_manifest_root": (
-            _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
-        ),
+        "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
         "native_amx_application_manifest_count": 0,
+        "lane_finality_manifest": None,
         "merge_carrier": None,
         "executed_block_wire_len": 123,
         "executed_block_wire_hash": _canonical_hash(0x37),
@@ -4891,16 +4890,15 @@ def test_get_sumeragi_diagnostics_rejects_nested_receipt_coordinate_and_qc_tampe
     wrong_coordinate["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match="receipt coordinates do not match"):
         _get_sumeragi_diagnostics(wrong_coordinate)
-
-    under_quorum = _sumeragi_diagnostics_payload()
-    settlement = _lane_settlement_payload()
-    native = _native_amx_receipt_payload()
-    native["legs"][0]["prepare_qc"]["signers_bitmap"] = [0x03]
-    settlement["native_amx_receipts"] = [native]
-    under_quorum["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="signers_bitmap does not meet quorum"):
-        _get_sumeragi_diagnostics(under_quorum)
-
+    for bitmap in ([0x03], [0x0F]):
+        invalid_quorum = _sumeragi_diagnostics_payload()
+        settlement = _lane_settlement_payload()
+        native = _native_amx_receipt_payload()
+        native["legs"][0]["prepare_qc"]["signers_bitmap"] = bitmap
+        settlement["native_amx_receipts"] = [native]
+        invalid_quorum["lane_settlement_commitments"] = [settlement]
+        with pytest.raises(RuntimeError, match="signers_bitmap does not carry the exact quorum"):
+            _get_sumeragi_diagnostics(invalid_quorum)
     malformed_pop = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     native = _native_amx_receipt_payload()
@@ -5014,18 +5012,19 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     ] = 2
     with pytest.raises(RuntimeError, match="proposal_round must equal round"):
         _get_sumeragi_status(future_proposal_round)
-
     underpowered = _sumeragi_v2_status_payload()
     underpowered["last_commit_qc"]["signed_power"] = 2
-    with pytest.raises(RuntimeError, match="does not satisfy its frozen dual quorum"):
+    with pytest.raises(RuntimeError, match="exact frozen certificate quorum"):
         _get_sumeragi_status(underpowered)
-
+    overcomplete = _sumeragi_v2_status_payload()
+    overcomplete["last_commit_qc"].update(signer_count=4, signed_power=4)
+    with pytest.raises(RuntimeError, match="exact frozen certificate quorum"):
+        _get_sumeragi_status(overcomplete)
     weighted_npos = _sumeragi_v2_status_payload()
     weighted_npos["height_context"]["mode"] = {"mode": "npos", "details": None}
     weighted_npos["height_context"]["quorum"]["total_power"] = 5
     with pytest.raises(RuntimeError, match="quorum is not canonical"):
         _get_sumeragi_status(weighted_npos)
-
     invalid_geometry = _sumeragi_v2_status_payload()
     invalid_geometry["height_context"]["validator_count"] = 5
     invalid_geometry["height_context"]["quorum"]["min_signers"] = 4
@@ -6532,10 +6531,9 @@ def test_offline_finality_execution_commitment_requires_executed_wire_identity()
         "ordinary_writes_root": _canonical_hash(0x93),
         "topup_anchor_count": 0,
         "native_amx_application_manifest_version": 1,
-        "native_amx_application_manifest_root": (
-            _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
-        ),
+        "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
         "native_amx_application_manifest_count": 0,
+        "lane_finality_manifest": None,
         "merge_carrier": None,
         "executed_block_wire_len": 321,
         "executed_block_wire_hash": _canonical_hash(0x94),
@@ -6595,10 +6593,9 @@ def test_offline_finality_execution_commitment_requires_exact_merge_carrier() ->
             "ordinary_writes_root": _canonical_hash(0x93),
             "topup_anchor_count": 0,
             "native_amx_application_manifest_version": 1,
-            "native_amx_application_manifest_root": (
-                _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
-            ),
+            "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
             "native_amx_application_manifest_count": 0,
+            "lane_finality_manifest": None,
             "merge_carrier": None,
             "executed_block_wire_len": 321,
             "executed_block_wire_hash": _canonical_hash(0x94),
@@ -6699,10 +6696,9 @@ def test_offline_finality_execution_commitment_rejects_invalid_native_manifest(
         "ordinary_writes_root": _canonical_hash(0x93),
         "topup_anchor_count": 0,
         "native_amx_application_manifest_version": 1,
-        "native_amx_application_manifest_root": (
-            _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
-        ),
+        "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
         "native_amx_application_manifest_count": 0,
+        "lane_finality_manifest": None,
         "merge_carrier": None,
         "executed_block_wire_len": 321,
         "executed_block_wire_hash": _canonical_hash(0x94),

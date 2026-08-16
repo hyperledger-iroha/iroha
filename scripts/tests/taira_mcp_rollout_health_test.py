@@ -12,6 +12,26 @@ SCRIPT = ROOT / "configs" / "soranexus" / "taira" / "check_mcp_rollout.sh"
 DPN_COMMIT = "d" * 40
 
 
+def test_rollout_has_one_absolute_deadline_for_network_and_canary_waits() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'ROLLOUT_DEADLINE_SECONDS="${ROLLOUT_DEADLINE_SECONDS:-240}"' in source
+    assert "--deadline-seconds)" in source
+    assert "ROLLOUT_DEADLINE_AT_SECONDS - SECONDS" in source
+    assert source.count("clamp_seconds_to_rollout_deadline") >= 3
+    assert source.count("clamp_status_timeout_ms_to_rollout_deadline") >= 4
+    assert '--status-timeout-ms "$status_timeout_ms"' in source
+    assert '"$status_timeout_ms"\n  write_msg=' in source
+
+    direct_sleeps = [
+        line.strip()
+        for line in source.splitlines()
+        if re.match(r"^\s*sleep(?:\s|$)", line)
+    ]
+    assert direct_sleeps == ['sleep "$requested"']
+    assert 'VALIDATOR_ALIGNMENT_ATTEMPTS="${VALIDATOR_ALIGNMENT_ATTEMPTS:-2}"' in source
+
+
 def _embedded_checker_source(function: str, invocation: str) -> str:
     source = SCRIPT.read_text(encoding="utf-8")
     match = re.search(

@@ -76,6 +76,7 @@
       "pytests/scripts/sumeragi_v2_sdk_source_closure_test.py"
     ],
     "diagnostics-suite": [
+      "IrohaSwift/Tests/IrohaSwiftTests/ExactCertificateCardinalityTests.swift",
       "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift",
       "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
       "ci/run_sumeragi_v2_sdk_diagnostics.sh",
@@ -95,6 +96,7 @@
       "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiStatusModelsTest.kt",
       "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt",
       "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+      "python/iroha_torii_client/tests/exact_certificate_cardinality_test.py",
       "python/iroha_torii_client/tests/sumeragi_exact_json_test_support.py",
       "python/iroha_torii_client/tests/test_client.py"
     ],
@@ -1344,6 +1346,7 @@
       "python/iroha_python/src/iroha_python/sorafs_replication.py",
       "python/iroha_python/src/iroha_python/stream_events.py",
       "python/iroha_python/src/iroha_python/sumeragi_native_amx_models.py",
+      "python/iroha_python/src/iroha_python/sumeragi_v2_status_types.py",
       "python/iroha_python/src/iroha_python/torii_client_config_normalization.py",
       "python/iroha_python/src/iroha_python/torii_client_expensive_query_auth.py",
       "python/iroha_python/src/iroha_python/torii_client_explorer_pagination.py",

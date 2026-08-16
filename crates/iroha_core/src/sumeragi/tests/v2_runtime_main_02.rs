@@ -474,8 +474,8 @@ fn class_aware_ingress_is_bounded_and_reserves_progress_and_completion_slots() {
     }
     assert_eq!(
         runtime.driver.delivered,
-        vec![(initial, 1), (initial, 2), (initial, 3), (initial, 4)],
-        "class reserves protect admission capacity but cannot overtake an older lifecycle"
+        vec![(initial, 4), (initial, 2), (initial, 1), (initial, 3)],
+        "the persistent Completion/Progress/Normal cursor bounds service debt while preserving reserved capacity"
     );
 }
 #[test]

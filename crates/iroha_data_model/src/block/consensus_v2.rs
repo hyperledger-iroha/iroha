@@ -253,13 +253,35 @@ impl DualQuorum {
         signers: &[ValidatorIndex],
         roster: &[ValidatorPower],
     ) -> Result<(), ValidationError> {
-        if signers.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err(ValidationError::SignersNotStrictlySorted);
-        }
-        let signed_count =
-            u32::try_from(signers.len()).map_err(|_| ValidationError::TooManySigners)?;
+        let signed_count = self.validate_signer_set(signers, roster)?;
         if signed_count < self.min_signers {
             return Err(ValidationError::InsufficientSignerCount);
+        }
+        Ok(())
+    }
+    fn validate_certificate_signers(
+        &self,
+        signers: &[ValidatorIndex],
+        roster: &[ValidatorPower],
+    ) -> Result<(), ValidationError> {
+        let signed_count = self.validate_signer_set(signers, roster)?;
+        if signed_count != self.min_signers {
+            return Err(ValidationError::SignerCountMismatch {
+                expected: self.min_signers,
+                actual: signed_count,
+            });
+        }
+        Ok(())
+    }
+    fn validate_signer_set(
+        &self,
+        signers: &[ValidatorIndex],
+        roster: &[ValidatorPower],
+    ) -> Result<u32, ValidationError> {
+        let signed_count =
+            u32::try_from(signers.len()).map_err(|_| ValidationError::TooManySigners)?;
+        if signers.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(ValidationError::SignersNotStrictlySorted);
         }
         for signer in signers {
             let index = usize::try_from(*signer).map_err(|_| ValidationError::SignerOutOfRange)?;
@@ -268,7 +290,7 @@ impl DualQuorum {
                 return Err(ValidationError::VotingPowerNotOne);
             }
         }
-        Ok(())
+        Ok(signed_count)
     }
 }
 /// Payload chunking parameters frozen for one block height.
@@ -593,6 +615,20 @@ impl HeightContext {
     pub fn validate_signers(&self, signers: &[ValidatorIndex]) -> Result<(), ValidationError> {
         self.validate()?;
         self.quorum.validate_signers(signers, &self.roster)
+    }
+    /// Validate that a canonical wire-certificate signer list has exactly `2f + 1` members.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural or exact-cardinality error when the context or
+    /// signer list is invalid.
+    pub fn validate_certificate_signers(
+        &self,
+        signers: &[ValidatorIndex],
+    ) -> Result<(), ValidationError> {
+        self.validate()?;
+        self.quorum
+            .validate_certificate_signers(signers, &self.roster)
     }
     /// Return the deterministic leader index for `view`.
     ///
@@ -1327,9 +1363,7 @@ impl QuorumCertificate {
         validate_round(self.round, context)?;
         validate_proposal_round(self.proposal_round, self.round, context)?;
         self.execution_commitment.validate()?;
-        context
-            .quorum
-            .validate_signers(&self.signers, &context.roster)?;
+        context.validate_certificate_signers(&self.signers)?;
         require_aggregate_signature(&self.aggregate_signature)
     }
     /// Reconstruct the canonical vote preimage for one certified signer.
@@ -1557,9 +1591,7 @@ impl TimeoutCertificate {
             }
         }
         let all_signers: Vec<_> = all_signers.into_iter().collect();
-        context
-            .quorum
-            .validate_signers(&all_signers, &context.roster)
+        context.validate_certificate_signers(&all_signers)
     }
 }
 /// Stable reference to a full timeout certificate.
@@ -3138,7 +3170,7 @@ impl SumeragiV2Status {
             let canonical_min_signers = DualQuorum::count_threshold(summary.validator_count);
             if !usize::try_from(summary.validator_count).is_ok_and(is_valid_committee_size)
                 || canonical_min_signers != Some(summary.min_signers)
-                || summary.signer_count < summary.min_signers
+                || summary.signer_count != summary.min_signers
                 || summary.signer_count > summary.validator_count
                 || summary.total_power != u64::from(summary.validator_count)
                 || summary.signed_power != u64::from(summary.signer_count)
@@ -3655,6 +3687,13 @@ pub enum ValidationError {
     WrongHeightContext,
     /// Signer count cannot be represented on the wire.
     TooManySigners,
+    /// A wire certificate does not carry exactly the canonical signer count.
+    SignerCountMismatch {
+        /// Canonical signer count required by the height context.
+        expected: u32,
+        /// Signer count carried by the certificate.
+        actual: u32,
+    },
     /// Signer indices are duplicated or not in strictly increasing order.
     SignersNotStrictlySorted,
     /// A signer index lies outside the frozen roster.
@@ -3831,6 +3870,10 @@ impl fmt::Display for ValidationError {
             }
             Self::WrongHeightContext => f.write_str("message is bound to another height context"),
             Self::TooManySigners => f.write_str("signer count exceeds the wire range"),
+            Self::SignerCountMismatch { expected, actual } => write!(
+                f,
+                "certificate signer count mismatch: expected exactly {expected}, got {actual}"
+            ),
             Self::SignersNotStrictlySorted => {
                 f.write_str("signer indices are not strictly increasing")
             }

@@ -22,7 +22,7 @@ LOCKED_WGET = FORMAL_SCRIPTS / "sumeragi_v2_tlapm_locked_wget.sh"
 SOURCE_BUILDER = FORMAL_SCRIPTS / "build_sumeragi_v2_tlapm_from_source.sh"
 FIXTURE_BYTES = b"bounded Isabelle derivation fixture\n"
 MANIFEST_BYTES = b"Isabelle/bin/isabelle Isabelle/lib/runtime\n"
-CRITICAL_SPAN_SHA256 = "c97d94e7b8bf2bc503af8a5565d85b651a848bb8a88a09a962d187a373b4f42d"
+CRITICAL_SPAN_SHA256 = "859e47d5f99a3c467d8d7b7cbbb53d32eb62dc85951ef745f6a03f1883a7d802"
 
 
 def _materialize(
@@ -252,8 +252,18 @@ def _mutate_derivation(case: str, fixture: dict[str, Path]) -> None:
             fixture["package_manifest"],
             b"Isabelle/lib/runtime Isabelle/bin/isabelle\n",
         )
+    elif case == "manifest-noncanonical":
+        for path in (fixture["build_manifest"], fixture["package_manifest"]):
+            _replace_file(path, MANIFEST_BYTES.rstrip(b"\n"))
+    elif case == "manifest-writable":
+        fixture["package_manifest"].chmod(0o620)
+    elif case == "manifest-hardlink":
+        fixture["package_manifest"].unlink()
+        os.link(fixture["build_manifest"], fixture["package_manifest"])
     elif case == "listed-package-file-not-executable":
         (package / "lib/runtime").chmod(0o600)
+    elif case == "package-extra-executable":
+        (package / "etc/settings").chmod(0o700)
     elif case == "missing-manifest":
         fixture["package_manifest"].unlink()
     elif case == "build-extra-executable":
@@ -279,7 +289,11 @@ def _mutate_derivation(case: str, fixture: dict[str, Path]) -> None:
         "manifest-duplicate",
         "manifest-unsafe",
         "manifest-mismatch",
+        "manifest-noncanonical",
+        "manifest-writable",
+        "manifest-hardlink",
         "listed-package-file-not-executable",
+        "package-extra-executable",
         "missing-manifest",
         "build-extra-executable",
     ),
@@ -309,7 +323,8 @@ def _assert_static_projection_contract(source: str) -> None:
     assert 'derivation["projection"] = _ISABELLE_DERIVATION_PROJECTION' in critical
     assert "if built_digest != packaged_digest:" in critical
     assert "if built_manifest != packaged_manifest:" in critical
-    assert "require_exact_executable_set=True" in critical
+    assert critical.count("require_exact_executable_set=True") == 2
+    assert "require_exact_executable_set=False" not in critical
     assert 'tree_root.joinpath(*relative.parts[1:])' in critical
 
 
@@ -321,13 +336,17 @@ def test_isabelle_derivation_static_contract_is_exact() -> None:
     ("old", "new"),
     (
         ("include_directories=False", "include_directories=True"),
-        ("_tree_digest(\n                    build_path,", "_tree_digest(\n                    package_path,"),
+        (
+            "_tree_digest(\n                    build_path,",
+            "_tree_digest(\n                    package_path,",
+        ),
         ("if built_digest != packaged_digest:", "if False:"),
         ("if built_manifest != packaged_manifest:", "if False:"),
         ("require_exact_executable_set=True", "require_exact_executable_set=False"),
         (
             'return _tree_digest(directory / "tlapm", include_modes=False)',
-            'return _tree_digest(directory / "tlapm", include_modes=False, include_directories=False)',
+            'return _tree_digest(directory / "tlapm", include_modes=False, '
+            "include_directories=False)",
         ),
         ("or not metadata.st_mode & 0o111", "or False"),
         ("derivations.append(derivation)", "derivations.append({**derivation})"),

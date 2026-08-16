@@ -11,7 +11,6 @@ set -euo pipefail
 #   IROHA_BIN        Path to the `iroha` CLI binary (default: <target-dir>/<profile>/iroha).
 #   SKIP_TOOL_BUILD  Skip cargo build and reuse existing binaries (default: false).
 #   IROHA_LOCALNET_NOFILE_MIN Minimum RLIMIT_NOFILE for localnet peers (default: 4096).
-#   IROHA_LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS Override [sumeragi.persistence].commit_inflight_timeout_ms in generated peer configs.
 #   IROHA_LOCALNET_KURA_BLOCKS_IN_MEMORY Override [kura].blocks_in_memory in generated peer configs.
 
 usage() {
@@ -120,7 +119,6 @@ USE_CARGO_FAST=false
 FAST_ZERO_DEBUG=false
 FAST_NO_INCREMENTAL=false
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS="${IROHA_LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS:-}"
 KURA_BLOCKS_IN_MEMORY="${IROHA_LOCALNET_KURA_BLOCKS_IN_MEMORY:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -759,50 +757,6 @@ if [[ -n "$LOGGER_LEVEL" || -n "$LOGGER_FILTER" ]]; then
       }
       END {
         flush_logger()
-      }
-    ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
-  done
-fi
-
-if [[ -n "$LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS" ]]; then
-  echo "Applying commit inflight timeout override in peer configs..."
-  for cfg in "$OUT_DIR"/peer*.toml; do
-    [[ -f "$cfg" ]] || continue
-    awk -v timeout="$LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS" '
-      function flush_persistence() {
-        if (in_persistence && !seen_timeout) {
-          print "commit_inflight_timeout_ms = " timeout
-        }
-        in_persistence = 0
-      }
-      /^\[[^]]+\]$/ {
-        flush_persistence()
-        if ($0 == "[sumeragi.persistence]") {
-          in_persistence = 1
-          saw_persistence = 1
-          seen_timeout = 0
-        }
-        print
-        next
-      }
-      {
-        if (in_persistence && $1 == "commit_inflight_timeout_ms") {
-          print "commit_inflight_timeout_ms = " timeout
-          seen_timeout = 1
-          next
-        }
-        print
-      }
-      END {
-        if (in_persistence) {
-          if (!seen_timeout) {
-            print "commit_inflight_timeout_ms = " timeout
-          }
-        } else if (!saw_persistence) {
-          print ""
-          print "[sumeragi.persistence]"
-          print "commit_inflight_timeout_ms = " timeout
-        }
       }
     ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
   done

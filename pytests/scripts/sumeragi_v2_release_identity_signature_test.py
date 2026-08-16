@@ -1622,8 +1622,8 @@ def test_real_git_ssh_signature_and_copied_apple_tools_are_executable(
         ]
     ).split()[1]
     assert archived_fingerprint == case["fingerprint"]
-    transcript = json.loads(case["outputs"]["transcript"].read_bytes())
-    verify_argv = transcript["commands"]["verify_commit"]["argv"]
+    provenance = json.loads(case["outputs"]["private_provenance"].read_bytes())
+    verify_argv = provenance["execution"]["commands"]["verify_commit"]["argv"]
     assert verify_argv[-1] == case["identity"]["head_commit"]
     assert any(value == "gpg.format=ssh" for value in verify_argv)
 

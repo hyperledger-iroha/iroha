@@ -82,8 +82,8 @@ def _production_liveness_release_inventory_errors(
 
     canonical_grouped_sdk_suites = (
         ("openapi", 7),
-        ("python", 62),
-        ("javascript", 60),
+        ("python", 63),
+        ("javascript", 61),
         ("swift", 4),
         ("kotlin", 6),
         ("java", 5),
@@ -230,11 +230,11 @@ def _production_liveness_release_inventory_errors(
         )
 
     canonical_sdk_diagnostics_suites = (
-        ("python", 121),
+        ("python", 129),
         ("javascript", 88),
-        ("swift", 33),
-        ("kotlin", 42),
-        ("java", 41),
+        ("swift", 34),
+        ("kotlin", 43),
+        ("java", 42),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"
@@ -1624,16 +1624,16 @@ def _production_liveness_release_inventory_errors(
                 )
             expected_receipt_component_sha256 = {
                 "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-                    "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
+                    "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "8eacf29414f086c4df8ba469a2dce3a71ad247d1d18f6295cefa277a342c6e07"
+                    "1848bd131e3dca9bb3ebab62974e6c7a79216f9ad125e450fd9e969cd98cfe41"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    "da76e1fadb876b9b1da0fa67a6ec33b93b10587a5a157a8c1ab6f42f53d86277"
+                    "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
-                    "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
+                    "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
                 ),
             }
             if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [
@@ -1665,6 +1665,7 @@ def _production_liveness_release_inventory_errors(
                     "_sdk_suite_source_manifest",
                     "_test_count_from_log",
                     "_prebuilt_artifact_root",
+                    "_require_pruned_private_root",
                     "_prebuilt_release_roots",
                     "_prebuilt_directory",
                     "_publish_receipt_validation_ack",
@@ -1720,6 +1721,7 @@ def _production_liveness_release_inventory_errors(
                     "_runtime_tool_probe_evidence",
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
+                    "_require_pruned_build_roots",
                     "build_receipt",
                     "_iter_artifact_records",
                     "_capture_path_contract",

@@ -303,7 +303,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
     grouped_record_lines = grouped_records.stdout.splitlines()
-    assert len(grouped_record_lines) == 1_398
+    assert len(grouped_record_lines) == 1_399
     diagnostics_records = _run_resolver(
         ROOT,
         "--suite",
@@ -311,7 +311,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert diagnostics_records.returncode == 0, diagnostics_records.stderr
-    assert len(diagnostics_records.stdout.splitlines()) == 1_398
+    assert len(diagnostics_records.stdout.splitlines()) == 1_401
     assert sum(
         line.startswith("ci/check_openapi_spec.sh\t")
         for line in grouped_record_lines
@@ -698,6 +698,9 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
             "IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift"
         ),
         module.PurePosixPath(
+            "IrohaSwift/Tests/IrohaSwiftTests/ExactCertificateCardinalityTests.swift"
+        ),
+        module.PurePosixPath(
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/"
             "SumeragiV2WireFixtureTest.kt"
         ),
@@ -707,6 +710,9 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
         ),
         module.PurePosixPath(
             "python/iroha_torii_client/tests/sumeragi_exact_json_test_support.py"
+        ),
+        module.PurePosixPath(
+            "python/iroha_torii_client/tests/exact_certificate_cardinality_test.py"
         ),
         module.PurePosixPath(
             "fixtures/sumeragi_v2/native_amx_v2_grouped.json"

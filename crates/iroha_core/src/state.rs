@@ -2177,9 +2177,9 @@ pub enum MergeLedgerCommitError {
         /// Signer index whose PoP failed.
         signer: u32,
     },
-    /// Merge QC does not meet the quorum threshold.
-    #[error("merge ledger qc quorum not met: observed={observed}, required={required}")]
-    MergeQCInsufficientQuorum {
+    /// Merge QC does not carry exactly the canonical signer count.
+    #[error("merge ledger qc signer count mismatch: expected exactly {required}, got {observed}")]
+    MergeQCSignerCountMismatch {
         /// Number of signers observed.
         observed: usize,
         /// Minimum quorum required.
@@ -40368,8 +40368,8 @@ impl State {
             }
         }
         let required = crate::sumeragi::network_topology::commit_quorum_from_len(roster_len);
-        if signers.len() < required {
-            return Err(MergeLedgerCommitError::MergeQCInsufficientQuorum {
+        if signers.len() != required {
+            return Err(MergeLedgerCommitError::MergeQCSignerCountMismatch {
                 observed: signers.len(),
                 required,
             });

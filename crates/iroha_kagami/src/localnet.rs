@@ -482,7 +482,7 @@ const LOCALNET_PERF_QUEUE_CAPACITY: usize = 4_096;
 /// Runtime proposal cap used by perf-profile localnets.
 ///
 /// The on-chain block parameter remains 10k for throughput targets, but local
-/// development nodes should not assemble thousand-transaction DA/RBC proposals
+/// development nodes should not assemble thousand-transaction RS16 proposals
 /// while the queue is saturated.
 const LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS: usize = 256;
 /// Default transaction TTL in the queue for localnet (ms).
@@ -874,7 +874,7 @@ pub struct Args {
     /// custody; use `--seed` only for reproducible development fixtures.
     #[arg(long, conflicts_with = "seed")]
     fresh_random_keys: bool,
-    /// Select the build line (`iroha2` or `iroha3`) for DA/RBC defaults.
+    /// Select the build line (`iroha2` or `iroha3`) for genesis compatibility.
     /// Defaults to `iroha3`; consensus still defaults to `permissioned` unless a profile or
     /// perf preset requires `npos`.
     #[arg(long, value_enum, value_name = "LINE", default_value_t = BuildLineArg::Iroha3)]
@@ -1036,7 +1036,7 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
     let validator_count = usize::from(opts.peers.get());
     if opts.peers.get() < LOCALNET_MIN_PEERS {
         return Err(eyre!(
-            "`--peers` must be at least {LOCALNET_MIN_PEERS} so generated localnets exercise a representative four-validator DA/RBC topology"
+            "`--peers` must be at least {LOCALNET_MIN_PEERS} so generated localnets exercise a representative revision-4 committee with mandatory RS16 data availability"
         ));
     }
     if validator_count > MAX_VALIDATORS_PER_HEIGHT {

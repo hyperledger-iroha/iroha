@@ -9365,61 +9365,6 @@ def _async_liveness_shard_contract(
     return errors, providers
 
 
-def _async_liveness_source(formal_dir: Path) -> str:
-    """Read the virtual façade source, falling back for compact test fixtures."""
-
-    shard_paths = [formal_dir / f"{module}.tla" for module, _ in ASYNC_LIVENESS_SHARDS]
-    if all(path.is_file() for path in shard_paths):
-        return "\n".join(path.read_text(encoding="utf-8") for path in shard_paths)
-    return (formal_dir / f"{ASYNC_LIVENESS_FACADE}.tla").read_text(encoding="utf-8")
-
-
-def _facade_provider_entries(
-    formal_dir: Path, root_dir: Path = ROOT_DIR
-) -> list[dict[str, Any]]:
-    """Resolve every ledger-facing façade symbol to its unique physical shard."""
-
-    sources = {
-        module: (formal_dir / f"{module}.tla").read_text(encoding="utf-8")
-        for module, _ in ASYNC_LIVENESS_SHARDS
-    }
-    errors, providers = _async_liveness_shard_contract(
-        {
-            **sources,
-            ASYNC_LIVENESS_FACADE: (
-                formal_dir / f"{ASYNC_LIVENESS_FACADE}.tla"
-            ).read_text(encoding="utf-8"),
-        }
-    )
-    if errors:
-        raise ValueError("invalid async liveness shard contract: " + "; ".join(errors))
-    ledger = load_ledger(formal_dir / "proof_coverage.json")
-    obligations = ledger.get("obligations")
-    if not isinstance(obligations, list):
-        raise ValueError("proof coverage obligations must be an array")
-    entries: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for obligation in obligations:
-        if not isinstance(obligation, dict) or obligation.get("module") != ASYNC_LIVENESS_FACADE:
-            continue
-        for symbol in _symbol_names(obligation.get("symbol", "")):
-            if symbol in seen:
-                continue
-            seen.add(symbol)
-            provider = providers.get(symbol)
-            if provider is None:
-                raise ValueError(
-                    f"facade ledger symbol {symbol} has no unique async shard provider"
-                )
-            log = (
-                _formal_evidence_logical_path("tlaps", f"{provider}.log")
-                if provider in RELEASE_PROOF_MODULES
-                else None
-            )
-            entries.append({"symbol": symbol, "module": provider, "log": log})
-    return entries
-
-
 def _module_sources(formal_dir: Path) -> tuple[dict[str, str], list[str]]:
     sources: dict[str, str] = {}
     errors: list[str] = []
@@ -9442,10 +9387,21 @@ def _module_sources(formal_dir: Path) -> tuple[dict[str, str], list[str]]:
         sources[module] = source
     shard_errors, _ = _async_liveness_shard_contract(sources)
     errors.extend(shard_errors)
+    chain_shard_errors, _ = _chain_epoch_refinement_shard_contract(sources)
+    errors.extend(chain_shard_errors)
     if all(module in sources for module, _ in ASYNC_LIVENESS_SHARDS):
         sources[ASYNC_LIVENESS_FACADE] = "\n".join(
             sources[module] for module, _ in ASYNC_LIVENESS_SHARDS
         )
+    if all(module in sources for module in CHAIN_EPOCH_REFINEMENT_SHARDS):
+        bodies, framing_errors = _chain_epoch_refinement_shard_bodies(sources)
+        errors.extend(framing_errors)
+        if len(bodies) == len(CHAIN_EPOCH_REFINEMENT_SHARDS):
+            sources[CHAIN_EPOCH_REFINEMENT_FACADE] = (
+                f"---- MODULE {CHAIN_EPOCH_REFINEMENT_FACADE} ----\n"
+                + "".join(bodies)
+                + "=============================================================================\n"
+            )
     return sources, errors
 
 
@@ -57961,7 +57917,7 @@ if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {
 
 
 _OWNERSHIP_N1_MODEL_SHA256 = (
-    "68468b4869ddee1da8c59916e968a87b8d522e4523b5bfe2141ea2aa145f7c14"
+    "e17ccb5ece6ab20e132328f8f462b2506a9d0674c60bb030a18806551e5d4664"
 )
 _OWNERSHIP_N1_CONFIG_SHA256 = (
     "0171f01d126953564035f963a51f4d9c396b1e53adcac62c2d92f42b71ea637a"
@@ -58030,7 +57986,7 @@ _OWNERSHIP_N1_STRUCTURAL_OPERATOR_SHA256 = {
         "0b25822c163eaa8a042d1593e95e02c0a32fdb2a28560ce43d90b6df90a2384c"
     ),
     "OwnershipExecuteFormPrepareQCReady": (
-        "622e358c046d38442545a780e00b9daa58d42f847b29e095ade126e43943327b"
+        "fdce904950cf60f923b7c1ae6f0769177bad4c01ed84480201424b122b178041"
     ),
     "OwnershipExecuteSignTimeoutReady": (
         "bae4e432c56235b48c6eb6a261acfe925aeb7d4a2977049bdc01b14ddeb9af5a"
@@ -59115,7 +59071,7 @@ fn require_peeked_lane_work_effect(
     dispatch_effects = _require_rust_item(
         runner_path,
         runner_source,
-        "dispatch_lane_work_effects",
+        "dispatch_lane_work_effects_with_progress",
         errors,
     )
     _require_rust_item_context(
@@ -61970,26 +61926,21 @@ if self.pending_server_closures.is_empty() {
         (
             "PendingExactFanout",
             (
-                "classified_with_route_history",
-                "classified_with_reply_routes",
+                "classified_with_route_history", "classified_with_reply_routes",
                 "retain_active_unowned_reply_targets",
-                "reply_target_merge_plan",
-                "reply_target_merge_plan_with_hooks",
-                "preview_coalesce_plan",
-                "commit_coalesce_plan",
+                "reply_target_merge_plan", "reply_target_merge_plan_with_hooks",
+                "preview_coalesce_plan", "commit_coalesce_plan",
                 "retryable_certified_sidecar_responder_control_target",
             ),
         ),
         (
             "PendingExactOutput",
             (
-                "new",
-                "is_pending",
-                "close_certified_sidecar_prefix",
-                "pending_sidecar_flushes",
-                "sidecar_control_units",
-                "restore_pending_flush",
-                "poll_reply_flushes",
+                "new", "is_pending", "remove_fanouts_matching",
+                "close_certified_sidecar_prefix", "cancel_historical_lane_recovery_requests",
+                "cancel_certified_merge_sidecar_requests", "cancel_acknowledged_certified_merge_sidecar_closes",
+                "pending_sidecar_flushes", "sidecar_control_units",
+                "restore_pending_flush", "poll_reply_flushes",
                 "validate_owned_reply_transfer",
                 "can_enqueue_owned_reply_transfer",
                 "enqueue",
@@ -62025,7 +61976,8 @@ if self.pending_server_closures.is_empty() {
                 "retry_pending_exact_output",
                 "has_pending_exact_output",
                 "drain_certified_merge_sidecar_chunk_admissions",
-                "close_certified_merge_sidecar_prefix",
+                "close_certified_merge_sidecar_prefix", "cancel_historical_lane_recovery_requests",
+                "cancel_certified_merge_sidecar_requests", "cancel_acknowledged_certified_merge_sidecar_closes",
                 "can_retain_lane_work_effect",
                 "handoff_applied_height_output_to_durable_reconstruction",
                 "seal_applied_height_output_handoff",
@@ -62079,6 +62031,10 @@ if self.pending_server_closures.is_empty() {
         "drain_closed_sidecar_prefixes",
         "requeue_closed_sidecar_prefixes",
         "confirm_closed_sidecar_prefix_handoff",
+        "drain_retired_historical_recovery_request_hashes", "requeue_retired_historical_recovery_request_hashes",
+        "retire_inactive_merge_sidecar_requests", "drain_retired_merge_sidecar_request_hashes",
+        "requeue_retired_merge_sidecar_request_hashes", "coalesce_acknowledged_merge_sidecar_close",
+        "retire_acknowledged_merge_sidecar_close", "drain_acknowledged_merge_sidecar_closes", "requeue_acknowledged_merge_sidecar_closes",
         "stranded_retryable_sidecar_control_index",
         "replace_stranded_retryable_sidecar_control",
         "service_next_certified_merge_sidecar_materialization",
@@ -62160,8 +62116,11 @@ if self.pending_server_closures.is_empty() {
         "apply_certified_merge_sidecar_closed_prefixes",
         "apply_certified_merge_sidecar_closed_prefixes_with",
         "retry_exact_output_and_apply_sidecar_admissions",
-        "rollover_finalized_height_outputs",
-        "dispatch_lane_work_effects",
+        "apply_retired_historical_recovery_requests",
+        "apply_retired_merge_sidecar_requests",
+        "apply_acknowledged_merge_sidecar_closes",
+        "rollover_finalized_height_outputs", "dispatch_lane_work_effects",
+        "dispatch_lane_work_effects_with_progress", "drain_finalized_lane_work_output",
         "retain_active_owned_reply_routes",
         "retain_active_owned_reply_routes_with_snapshot_hook",
         "dispatch_lane_work_effect",
@@ -66842,30 +66801,18 @@ let covered = |fanout: &PendingExactFanout| {
             )
     )
 };
-""",
-        "worker close-prefix projection must bind the exact requester, service generation, stream epoch, and semantic sequence from the immutable rollover claim",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        worker_ack_items.get("PendingExactOutput::close_certified_sidecar_prefix"),
-        """
-if current_sources != self.source_fifo_owners
-    || current_reservations != self.reservation_owner_counts
-{
-    return Err(
-        "Sumeragi v2 sidecar close found inconsistent exact-output ownership".to_owned(),
-    );
-}
-""",
-        "worker close-prefix application must validate the complete pre-mutation FIFO and reservation projection",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        worker_ack_items.get("PendingExactOutput::close_certified_sidecar_prefix"),
-        """
-self.fanouts.retain(|fanout| !covered(fanout));
+let removed = self.remove_fanouts_matching(
+    covered,
+    |fanout| {
+        fanout
+            .is_certified_sidecar_chunk_fanout()
+            .then_some(())
+            .ok_or_else(|| {
+                "Sumeragi v2 sidecar close claim covers a different output kind".to_owned()
+            })
+    },
+    "sidecar close",
+)?;
 self.admitted_sidecar_chunks.retain(|admission| {
     let projection = admission.projection();
     !certified_sidecar_prefix_covers_occurrence(
@@ -66876,6 +66823,30 @@ self.admitted_sidecar_chunks.retain(|admission| {
         projection.semantic_sequence,
     )
 });
+""",
+        "worker close-prefix projection must validate the exact immutable claim before atomically removing its fanout and flushed admissions",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get("PendingExactOutput::remove_fanouts_matching"),
+        """
+if current_sources != self.source_fifo_owners
+    || current_reservations != self.reservation_owner_counts
+{
+    return Err(format!(
+        "Sumeragi v2 {operation} found inconsistent exact-output ownership"
+    ));
+}
+""",
+        "worker cancellation must validate the complete pre-mutation FIFO and reservation projection",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        worker_ack_items.get("PendingExactOutput::remove_fanouts_matching"),
+        """
+self.fanouts.retain(|fanout| !covered(fanout));
 self.source_fifo_owners = retained_sources;
 self.reservation_owner_counts = retained_reservations;
 self.ownership_units = retained_units;
@@ -66886,7 +66857,7 @@ self.next_fanout_index = if self.fanouts.is_empty() {
     self.next_fanout_index % self.fanouts.len()
 };
 """,
-        "worker close-prefix mutation must atomically remove covered fanouts and admissions then install the recomputed ownership and fair-service cursors",
+        "worker cancellation must atomically remove covered fanouts and install the recomputed ownership and fair-service cursors",
         errors,
     )
     _require_rust_token_sequence(
@@ -66955,22 +66926,28 @@ fn apply_certified_merge_sidecar_closed_prefixes_with(
         runner_path,
         runner_ack_items.get("retry_exact_output_and_apply_sidecar_admissions"),
         """
+let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
+let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
 apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
 let pending = services
     .retry_pending_exact_output()
     .map_err(V2RunnerError::Service)?;
 """,
-        "runner retry must apply all authenticated close prefixes before any exact-output retransmission",
+        "runner retry must apply all retired source owners and authenticated close prefixes before exact-output retransmission",
         errors,
     )
     _require_rust_token_sequence(
         runner_path,
-        runner_ack_items.get("dispatch_lane_work_effects"),
+        runner_ack_items.get("dispatch_lane_work_effects_with_progress"),
         """
+let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
+let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
 apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
 apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
 """,
-        "runner lane dispatch must cancel closed prefixes before admitting or dispatching later chunks",
+        "runner lane dispatch must cancel retired source owners and close prefixes before admitting or dispatching later chunks",
         errors,
     )
     _require_rust_token_sequence(
@@ -67482,15 +67459,17 @@ let operation = output_guard
         lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::schedule_retransmission_at"),
         """
+let active_requests = self.merge_sidecars.active_request_hashes();
 let sidecar_posts = self
     .merge_sidecars
     .tick_bounded(&self.local_peer, now, self.sidecar_effect_slots())
     .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+let _ = self.retire_inactive_merge_sidecar_requests(active_requests)?;
 for post in sidecar_posts {
     self.push_merge_sidecar_post_or_restart(post)?;
 }
 """,
-        "sidecar retransmission must preserve bounded transport fairness through fail-stop handoff",
+        "sidecar retransmission must cancel every retired transport attempt before handing off bounded successor posts",
         errors,
     )
     _require_rust_token_sequence(
@@ -67562,16 +67541,18 @@ self.authorize_autonomous_ready_from_durable_input(
 self.merge_entries.clear();
 self.merge_claims.clear();
 self.purge_queued_merge_broadcasts();
+let active_requests = self.merge_sidecars.active_request_hashes();
 self.merge_sidecars
     .retain_pending_blocks(&BTreeSet::new(), self.context.height)
     .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+let _ = self.retire_inactive_merge_sidecar_requests(active_requests)?;
 self.kura
     .prune_finalized_pending_certified_merge_entries(self.context.height)
     .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
 operation.complete();
 Ok(())
 """,
-        "finalized sidecar pruning must remain fail-stop and Kura-bound without fabricating a cursor receipt",
+        "finalized sidecar pruning must retire exact requester output before Kura cleanup without fabricating a cursor receipt",
         errors,
     )
     _require_rust_token_sequence(
@@ -67842,7 +67823,7 @@ retained != 0
     )
     _require_rust_token_sequence(
         runner_path,
-        runner_ack_items.get("dispatch_lane_work_effects"),
+        runner_ack_items.get("dispatch_lane_work_effects_with_progress"),
         """
 apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
 let scan_limit = lane_work.effect_count();
@@ -67852,7 +67833,7 @@ let scan_limit = lane_work.effect_count();
     )
     _require_rust_token_sequence(
         runner_path,
-        runner_ack_items.get("dispatch_lane_work_effects"),
+        runner_ack_items.get("dispatch_lane_work_effects_with_progress"),
         """
 match dispatch_lane_work_effect(services, next_effect)? {
     LaneWorkEffectDispatch::Complete => {
@@ -67964,41 +67945,47 @@ lane_work.prepare_canonical_lane_rollover(artifact)?;
     )
     _require_rust_token_sequence(
         runner_path,
-        runner_ack_items.get("rollover_finalized_height_outputs"),
+        runner_ack_items.get("drain_finalized_lane_work_output"),
         """
 loop {
-    apply_certified_merge_sidecar_closed_prefixes(&mut lane_work, services)?;
+    let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+    let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
+    apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
     apply_certified_merge_sidecar_chunk_admissions(
-        &mut lane_work,
+        lane_work,
         services,
         control_queue_capacity,
     )?;
     let retired = services
         .handoff_applied_height_output_to_durable_reconstruction(
-        receipt,
-        artifact,
-        &durable_lane_authority,
-    )
-    .map_err(V2RunnerError::Service)?;
+            receipt,
+            artifact,
+            durable_lane_authority,
+        )
+        .map_err(V2RunnerError::Service)?;
     apply_certified_merge_sidecar_chunk_admissions(
-        &mut lane_work,
+        lane_work,
         services,
         control_queue_capacity,
     )?;
-    if !services
+    let before = lane_work.effect_count();
+    let dispatched =
+        dispatch_lane_work_effects_with_progress(lane_work, services, control_queue_capacity)?;
+    let after = lane_work.effect_count();
+    let pending = services
         .has_pending_exact_output()
-        .map_err(V2RunnerError::Service)?
-    {
-        break;
+        .map_err(V2RunnerError::Service)?;
+    if retired == 0 && dispatched == 0 && after == 0 && !pending {
+        return Ok(());
     }
-    if retired == 0 {
+    if retired == 0 && dispatched == 0 && after >= before {
         return Err(V2RunnerError::Service(
-            "finalized exact output has no durable or move-only successor source".to_owned(),
+            "finalized lane output made no progress toward exact handoff".to_owned(),
         ));
     }
 }
 """,
-        "durable finalization must apply receipt acknowledgements on both sides of every exact handoff and reject a non-descending retry loop",
+        "durable finalization must cancel retired sources, apply receipts on both sides of handoff, drain dispatchable work, and reject a non-descending loop",
         errors,
     )
     fanout_items = {
@@ -70758,9 +70745,9 @@ assert_eq!(
     )
 
     expected_exact_output_runner_items = {
-        "drain_v2_ingress",
-        "rollover_finalized_height_outputs",
-        "dispatch_lane_work_effects",
+        "drain_v2_ingress", "rollover_finalized_height_outputs",
+        "dispatch_lane_work_effects", "dispatch_lane_work_effects_with_progress",
+        "drain_finalized_lane_work_output",
         "dispatch_lane_work_effect",
     }
     observed_exact_output_runner_items = set(
@@ -70887,47 +70874,16 @@ let durable_lane_authority = lane_work
     })?;
 lane_work.prune_finalized_merge_sidecars()?;
 lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;
-
-loop {
-    apply_certified_merge_sidecar_closed_prefixes(&mut lane_work, services)?;
-    apply_certified_merge_sidecar_chunk_admissions(
-        &mut lane_work,
-        services,
-        control_queue_capacity,
-    )?;
-    let retired = services
-        .handoff_applied_height_output_to_durable_reconstruction(
-            receipt,
-            artifact,
-            &durable_lane_authority,
-        )
-        .map_err(V2RunnerError::Service)?;
-    apply_certified_merge_sidecar_chunk_admissions(
-        &mut lane_work,
-        services,
-        control_queue_capacity,
-    )?;
-    if !services
-        .has_pending_exact_output()
-        .map_err(V2RunnerError::Service)?
-    {
-        break;
-    }
-    if retired == 0 {
-        return Err(V2RunnerError::Service(
-            "finalized exact output has no durable or move-only successor source".to_owned(),
-        ));
-    }
-}
-
-let _ = services
-    .handoff_applied_height_output_to_durable_reconstruction(
-        receipt,
-        artifact,
-        &durable_lane_authority,
-    )
-    .map_err(V2RunnerError::Service)?;
+drain_finalized_lane_work_output(
+    &mut lane_work,
+    services,
+    receipt,
+    artifact,
+    &durable_lane_authority,
+    control_queue_capacity,
+)?;
 if lane_work.has_pending_committed_output_handoff()
+    || lane_work.effect_count() != 0
     || services
         .has_pending_exact_output()
         .map_err(V2RunnerError::Service)?
@@ -70943,7 +70899,7 @@ lane_work
     .into_retained_merge_sidecars(exact_output_handoff, artifact, successor)
     .map_err(V2RunnerError::from)
 """,
-        "finalized output rollover must durably reconstruct every predecessor owner, reject a non-descending handoff loop, seal the exact output, and transfer it into successor-retained sidecars",
+        "finalized output rollover must reconstruct every predecessor owner, drain through the checked helper, seal the exact output, and transfer successor sidecars",
         errors,
     )
     _require_rust_token_sequence(
@@ -71353,7 +71309,7 @@ fn require_peeked_lane_work_effect(
     )
     _require_rust_token_sequence(
         runner_path,
-        runner_items.get("dispatch_lane_work_effects"),
+        runner_items.get("dispatch_lane_work_effects_with_progress"),
         """
 let scan_limit = lane_work.effect_count();
 let mut dispatched = 0usize;
@@ -71387,7 +71343,7 @@ for _ in 0..scan_limit {
     )
     _require_rust_token_sequence(
         runner_path,
-        runner_items.get("dispatch_lane_work_effects"),
+        runner_items.get("dispatch_lane_work_effects_with_progress"),
         """
 let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
 drop(effect);
@@ -71763,8 +71719,8 @@ def _local_runner_service_contract_source_fidelity_errors(
     for item_name in (
         "advance_executor",
         "outer_ingress_turns",
-        "apply_bounded_sidecar_admissions",
-        "dispatch_lane_work_effects",
+        "apply_bounded_sidecar_admissions", "dispatch_lane_work_effects",
+        "dispatch_lane_work_effects_with_progress",
         "drain_lane_relay_ingress",
         "service_certified_serve_barrier_liveness_turn",
     ):
@@ -73507,7 +73463,7 @@ CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode
     )
     _require_rust_token_sequence(
         runner_path,
-        runner_items.get("dispatch_lane_work_effects"),
+        runner_items.get("dispatch_lane_work_effects_with_progress"),
         "let scan_limit = lane_work.effect_count();\n"
         "let mut dispatched = 0usize;\n"
         "for _ in 0..scan_limit {",
@@ -74750,11 +74706,10 @@ def validate_ledger(
         )
     )
     errors.extend(
-        _retained_response_escape_latch_formal_source_fidelity_errors(
-            formal_dir
-        )
+        _retained_response_escape_latch_formal_source_fidelity_errors(formal_dir)
     )
     errors.extend(_reachable_oracle_guard_errors(formal_dir))
+    errors.extend(_exact_certificate_cardinality_source_fidelity_errors(formal_dir))
     errors.extend(_generalized_context_init_errors(formal_dir))
     errors.extend(_safety_property_source_fidelity_errors(formal_dir))
     errors.extend(_historical_timeout_derivation_errors(formal_dir))
@@ -75072,7 +75027,11 @@ def validate_ledger(
             if (
                 status == "tlaps_proved"
                 and module not in RELEASE_PROOF_MODULES
-                and module != ASYNC_LIVENESS_FACADE
+                and module
+                not in {
+                    ASYNC_LIVENESS_FACADE,
+                    CHAIN_EPOCH_REFINEMENT_FACADE,
+                }
             ):
                 errors.append(
                     f"{where} claims TLAPS proof in non-release module {module}"

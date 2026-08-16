@@ -727,7 +727,7 @@ def _backend_derivations(
                 _isabelle_executable_manifest(
                     package_path,
                     package_path.parent / "Isabelle.exec-files",
-                    require_exact_executable_set=False,
+                    require_exact_executable_set=True,
                 )
             )
             if build_path is not None:

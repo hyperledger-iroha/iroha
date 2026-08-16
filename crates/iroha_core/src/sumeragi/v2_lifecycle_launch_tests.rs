@@ -381,7 +381,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         .find("struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1")
         .expect("the typed post-launch wrapper stays opaque");
     assert!(bound_launch.contains(
-            "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {\n    launched: super::launch::LaunchedProductionLifecycleV1,\n    retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,\n}"
+            "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {\n    launched: Box<super::launch::LaunchedProductionLifecycleV1>,\n    retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,\n}"
         ));
     let activation_impl = bound_launch
         .find("impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1")
@@ -622,8 +622,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         .split_once("pub(in crate::sumeragi) fn into_serialized_runtime(")
         .expect("adapter startup has one runtime conversion")
         .1
-        .split_once("#[cfg(test)]\n    pub(in crate::sumeragi) const fn fixture_for_test")
-        .expect("runtime conversion ends before fixture helpers")
+        .split_once(
+            "#[cfg_attr(not(test), allow(dead_code))]\nimpl PreparedRecoveredPendingKuraApplyReplayV1",
+        )
+        .expect("runtime conversion ends before pending-Kura replay installation")
         .0;
     assert!(runtime_conversion.contains("leader_wire_launch_prepared: true"));
     let adapter_open = adapter_source
@@ -759,7 +761,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             && worker < identity
             && identity < complete
     );
-    assert!(take_apply < worker_permit && worker_permit < worker);
+    assert!(take_apply < worker && worker < worker_permit);
     assert!(!launch.contains("inputs.block_cadence"));
     assert!(!launch.contains("genesis_account_for_launch"));
     assert!(launch.contains(

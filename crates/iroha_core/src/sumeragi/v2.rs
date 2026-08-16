@@ -1,7 +1,5 @@
-//! Production boundary for the executable Sumeragi v2 reducer.
-//!
-//! The reducer crate intentionally has no codec, cryptography, filesystem, or
-//! networking dependencies.  This module is the narrow adapter which binds it
+//! Production boundary for the executable Sumeragi v2 reducer. The reducer crate has no
+//! codec, cryptography, filesystem, or networking dependencies. This module is the adapter binding it
 //! to the canonical data-model wire types and the crash-safe safety WAL.  WAL
 //! effects are handled synchronously: a complete frame is encoded, appended,
 //! flushed, and synchronised, and only then is the exact persistence identifier
@@ -2502,7 +2500,9 @@ impl VerifiedHeightContext {
             || context.mode != parent_artifact.height_context.mode
             || context.da_layout != parent_artifact.height_context.da_layout
             || context.execution_policy_hash != parent_artifact.height_context.execution_policy_hash
-            || parent_qc.subject != parent_artifact.subject
+            || !parent_qc
+                .as_ref()
+                .same_commit_decision(parent_artifact.commit_qc.as_ref())
             || parent_receipt.height() != parent_artifact.height
             || parent_receipt.context_id() != parent_artifact.context_id()
             || parent_receipt.block_hash() != parent_artifact.block_hash

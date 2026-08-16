@@ -20369,12 +20369,12 @@ public struct ToriiNativeAmxAttestationQc: Decodable, Sendable, Equatable {
         let requiredQuorum = Int(body.participantMinQuorum)
         guard signersBitmap.count == expectedLength,
               outOfRangeBits == 0,
-              signerCount >= requiredQuorum
+              signerCount == requiredQuorum
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .signersBitmap,
                 in: container,
-                debugDescription: "native AMX signer bitmap has invalid length, range, or quorum."
+                debugDescription: "native AMX signer bitmap has invalid length, range, or exact quorum."
             )
         }
         blsAggregateSignature = try container.decode(

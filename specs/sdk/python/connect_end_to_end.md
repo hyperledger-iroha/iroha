@@ -307,7 +307,14 @@ phases = client.get_sumeragi_phases()
 print("Pipeline latency (ms):", phases.pipeline_total_ms)
 
 params = client.get_sumeragi_params()
-print("DA enabled:", params.da_enabled, "chain height:", params.chain_height)
+print(
+    "Signed block cadence:", params["block_cadence_ms"],
+    "chain height:", params["chain_height"],
+)
+```
+
+Consensus mode and DA geometry come from signed chain context, not from a local
+Sumeragi switch or an observability field.
 
 ### Capture admin evidence with one helper
 

@@ -1,9 +1,9 @@
 {
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
-  "generated_at": "2026-08-15T19:26:44Z",
+  "generated_at": "2026-08-15T23:30:02Z",
   "root": "iroha",
-  "total_refs": 792,
-  "unique_vars": 205,
+  "total_refs": 790,
+  "unique_vars": 203,
   "variables": {
     "ANDROID_SDK_ROOT": {
       "counts": {
@@ -658,19 +658,19 @@
         },
         {
           "context": "let config_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 601,
+          "line": 611,
           "path": "crates/iroha_config/tests/fixtures.rs",
           "scope": "test"
         },
         {
           "context": "let config_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 743,
+          "line": 753,
           "path": "crates/iroha_config/tests/fixtures.rs",
           "scope": "test"
         },
         {
           "context": "let config_path = Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 1607,
+          "line": 1617,
           "path": "crates/iroha_config/tests/fixtures.rs",
           "scope": "test"
         },
@@ -778,7 +778,7 @@
         },
         {
           "context": "let manifest_dir = env::var(\"CARGO_MANIFEST_DIR\").ok()?;",
-          "line": 502,
+          "line": 503,
           "path": "crates/iroha_core/build.rs",
           "scope": "build"
         },
@@ -898,7 +898,7 @@
         },
         {
           "context": "Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 62,
+          "line": 68,
           "path": "crates/iroha_core/tests/sumeragi_doc_sync.rs",
           "scope": "test"
         },
@@ -2146,7 +2146,7 @@
         },
         {
           "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 259,
+          "line": 258,
           "path": "integration_tests/tests/asset.rs",
           "scope": "test"
         },
@@ -3448,7 +3448,7 @@
       "paths": [
         {
           "context": "let commit = env::var(\"IROHA_GIT_COMMIT_HASH\").ok()?;",
-          "line": 493,
+          "line": 494,
           "path": "crates/iroha_core/build.rs",
           "scope": "build"
         },
@@ -3715,7 +3715,7 @@
       "paths": [
         {
           "context": "let Some(raw) = std::env::var(\"IROHA_REALISTIC_30TPS_LOAD_KIND\")",
-          "line": 522,
+          "line": 518,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         }
@@ -3728,7 +3728,7 @@
       "paths": [
         {
           "context": "std::env::var(\"IROHA_REALISTIC_30TPS_LOG_LEVEL\").unwrap_or_else(|_| \"WARN\".into());",
-          "line": 2748,
+          "line": 2585,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         }
@@ -4206,31 +4206,31 @@
       "paths": [
         {
           "context": "let previous_ttl = std::env::var_os(\"IROHA_TEST_CLIENT_TTL_MS\");",
-          "line": 2728,
+          "line": 2565,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         },
         {
           "context": "let previous_ttl = std::env::var_os(\"IROHA_TEST_CLIENT_TTL_MS\");",
-          "line": 3911,
+          "line": 3695,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         },
         {
           "context": "let previous_ttl = std::env::var_os(\"IROHA_TEST_CLIENT_TTL_MS\");",
-          "line": 4159,
+          "line": 3934,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         },
         {
           "context": "let previous_ttl = std::env::var_os(\"IROHA_TEST_CLIENT_TTL_MS\");",
-          "line": 4420,
+          "line": 4153,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         },
         {
           "context": "let previous_ttl = std::env::var_os(\"IROHA_TEST_CLIENT_TTL_MS\");",
-          "line": 5059,
+          "line": 4742,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         }
@@ -4295,7 +4295,7 @@
         },
         {
           "context": "if std::env::var_os(\"IROHA_TEST_SERIALIZE_NETWORKS\").is_none() {",
-          "line": 249,
+          "line": 248,
           "path": "integration_tests/tests/asset.rs",
           "scope": "test"
         }
@@ -4340,19 +4340,19 @@
       "paths": [
         {
           "context": "if let Some(artifact_root) = std::env::var_os(\"IROHA_THROUGHPUT_ARTIFACT_DIR\") {",
-          "line": 3564,
+          "line": 3348,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         },
         {
           "context": "if let Some(artifact_root) = std::env::var_os(\"IROHA_THROUGHPUT_ARTIFACT_DIR\") {",
-          "line": 5010,
+          "line": 4693,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         },
         {
           "context": "if let Some(artifact_root) = std::env::var_os(\"IROHA_THROUGHPUT_ARTIFACT_DIR\") {",
-          "line": 5621,
+          "line": 5277,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         }
@@ -4365,20 +4365,7 @@
       "paths": [
         {
           "context": "if let Ok(delay) = std::env::var(\"IROHA_THROUGHPUT_DELAY_MS\") {",
-          "line": 475,
-          "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
-          "scope": "test"
-        }
-      ]
-    },
-    "IROHA_THROUGHPUT_RBC_ENCODING": {
-      "counts": {
-        "test": 1
-      },
-      "paths": [
-        {
-          "context": "std::env::var(\"IROHA_THROUGHPUT_RBC_ENCODING\").unwrap_or_else(|_| \"plain\".to_owned());",
-          "line": 4426,
+          "line": 471,
           "path": "integration_tests/tests/sumeragi_localnet_smoke.rs",
           "scope": "test"
         }
@@ -5800,22 +5787,9 @@
       "paths": [
         {
           "context": "if env::var(\"SOURCE_DATE_EPOCH\").ok().as_deref() != Some(&source_date_epoch_text) {",
-          "line": 115,
+          "line": 116,
           "path": "crates/iroha_core/build.rs",
           "scope": "build"
-        }
-      ]
-    },
-    "SUMERAGI_ADVERSARIAL_ARTIFACT_DIR": {
-      "counts": {
-        "test": 1
-      },
-      "paths": [
-        {
-          "context": "let Ok(dir) = std::env::var(\"SUMERAGI_ADVERSARIAL_ARTIFACT_DIR\") else {",
-          "line": 2158,
-          "path": "integration_tests/tests/sumeragi_adversarial.rs",
-          "scope": "test"
         }
       ]
     },
@@ -5833,7 +5807,7 @@
         },
         {
           "context": "let dir = match std::env::var(\"SUMERAGI_BASELINE_ARTIFACT_DIR\") {",
-          "line": 1092,
+          "line": 741,
           "path": "integration_tests/tests/sumeragi_npos_performance.rs",
           "scope": "test"
         }

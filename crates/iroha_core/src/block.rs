@@ -1497,9 +1497,9 @@ fn validate_native_amx_attestation_qc(
     if body_min_quorum != required_quorum {
         return Err("native AMX attestation signed quorum policy mismatch".to_owned());
     }
-    if signer_count < required_quorum {
+    if signer_count != required_quorum {
         return Err(format!(
-            "native AMX attestation quorum not met: expected {required_quorum}, got {signer_count}"
+            "native AMX attestation signer count mismatch: expected exactly {required_quorum}, got {signer_count}"
         ));
     }
     if qc.bls_aggregate_signature.is_empty() {
@@ -8192,8 +8192,12 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             let signer_count = signers.len();
             let required = crate::sumeragi::network_topology::commit_quorum_from_len(roster_len);
-            if signer_count < required
-                || qc.signer_proofs.len() != signer_count
+            if signer_count != required {
+                return Err(Self::execution_context_error(format!(
+                    "certified merge reference signer count mismatch: expected exactly {required}, got {signer_count}"
+                )));
+            }
+            if qc.signer_proofs.len() != signer_count
                 || qc
                     .signer_proofs
                     .iter()
@@ -8204,7 +8208,7 @@ pub(crate) mod valid {
                     })
             {
                 return Err(Self::execution_context_error(
-                    "certified merge reference lacks exact quorum proof material",
+                    "certified merge reference lacks canonical signer proof material",
                 ));
             }
             if let Some(validation_context) = validation_profile.v2_context() {
@@ -8246,10 +8250,10 @@ pub(crate) mod valid {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 height_context
-                    .validate_signers(&signer_indices)
+                    .validate_certificate_signers(&signer_indices)
                     .map_err(|error| {
                         Self::execution_context_error(format!(
-                            "certified merge reference fails authenticated Sumeragi v2 dual quorum: {error}"
+                            "certified merge reference fails authenticated Sumeragi v2 certificate cardinality: {error}"
                         ))
                     })?;
             }
@@ -16171,23 +16175,7 @@ pub(crate) mod valid {
                 profile,
             )
         }
-        #[test]
-        fn merge_reference_rejects_equal_vote_subquorum() {
-            let (state, block, bundle, profile) = equal_vote_merge_reference_fixture(&[1, 2]);
-            let error = ValidBlock::validate_execution_context_merge_reference(
-                &block,
-                state.network_id_ref(),
-                &bundle,
-                &profile,
-            )
-            .expect_err("two signers do not satisfy the three-vote quorum");
-            assert!(matches!(
-                error,
-                BlockValidationError::ExecutionContextInvalid(reason)
-                    if reason.contains("dual quorum")
-                        && reason.contains("insufficient signer count")
-            ));
-        }
+        include!("block/exact_quorum_cardinality_tests.rs");
         #[test]
         fn merge_reference_accepts_distinct_merge_epoch_with_equal_vote_quorum() {
             let (state, block, bundle, profile) = equal_vote_merge_reference_fixture(&[0, 1, 3]);
@@ -27762,13 +27750,15 @@ mod tests {
         block_height: u64,
         keypairs: &[KeyPair],
     ) -> NativeAmxReceipt {
+        let signer_count =
+            crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len()).max(1);
         signed_native_amx_receipt_with_signer_count(
             source_id,
             tx_entrypoint_hash,
             routing_plan,
             block_height,
             keypairs,
-            keypairs.len(),
+            signer_count,
         )
     }
     fn signed_native_amx_receipt_with_signer_count(
@@ -27914,13 +27904,15 @@ mod tests {
         );
         let mut source_id = [0_u8; iroha_crypto::Hash::LENGTH];
         source_id.copy_from_slice(tx_hash.as_ref());
+        let signer_count =
+            crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len()).max(1);
         let receipt = signed_native_amx_receipt_for_coordinator(
             source_id,
             entrypoint_hash,
             &routing_plan,
             coordinator_proposal.clone(),
             &keypairs,
-            keypairs.len(),
+            signer_count,
         );
         let accepted =
             AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
@@ -28834,59 +28826,7 @@ mod tests {
             "tampered historical PoP must fail closed"
         );
     }
-    #[test]
-    fn native_amx_receipt_validation_accepts_quorum_signed_four_member_qcs() {
-        let paynet = DataSpaceId::new(7);
-        let cbuae = DataSpaceId::new(8);
-        let (tx, tx_hash) =
-            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
-        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
-        let routing_plan = crate::queue::RoutingPlan::native_amx(
-            crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
-            vec![
-                crate::queue::RouteLeg::new(
-                    crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
-                    crate::queue::RouteLegRole::Participant,
-                ),
-                crate::queue::RouteLeg::new(
-                    crate::queue::RoutingDecision::new(LaneId::new(2), cbuae),
-                    crate::queue::RouteLegRole::Participant,
-                ),
-            ],
-        );
-        let (world, keypairs) = native_amx_test_world_with_keys();
-        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
-        source_id.copy_from_slice(tx_hash.as_ref());
-        let receipt = signed_native_amx_receipt_with_signer_count(
-            source_id,
-            tx.hash_as_entrypoint(),
-            &routing_plan,
-            42,
-            &keypairs,
-            3,
-        );
-        let coordinator_proposal = native_amx_test_coordinator_proposal(
-            routing_plan.coordinator_route(),
-            tx.hash_as_entrypoint(),
-            42,
-            &keypairs,
-        );
-        let authority = native_amx_test_authority(world, &keypairs);
-        validate_native_amx_receipt_against_plan(
-            &receipt,
-            &coordinator_proposal,
-            tx.hash_as_entrypoint(),
-            &routing_plan,
-            source_id,
-            native_amx_test_network_id(),
-            &dataspace_catalog,
-            &authority,
-            Some(expected_native_amx_test_context(42)),
-        )
-        .expect("3-of-4 AMX QCs should validate");
-        assert_eq!(receipt.legs[0].prepare_qc.validator_set().len(), 4);
-        assert_eq!(receipt.legs[0].prepare_qc.signers_bitmap, vec![0b0000_0111]);
-    }
+    include!("block/native_amx_exact_quorum_cardinality_tests.rs");
     #[test]
     fn native_amx_receipt_validation_rejects_malformed_qcs() {
         let paynet = DataSpaceId::new(7);

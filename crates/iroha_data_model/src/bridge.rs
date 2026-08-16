@@ -2945,7 +2945,10 @@ mod tests {
             err,
             V2QuorumCertificateVerificationError::InvalidArtifact(
                 V2FinalityValidationError::InvalidCommitCertificate(
-                    ValidationError::InsufficientSignerCount
+                    ValidationError::SignerCountMismatch {
+                        expected: 3,
+                        actual: 2,
+                    }
                 )
             )
         ));

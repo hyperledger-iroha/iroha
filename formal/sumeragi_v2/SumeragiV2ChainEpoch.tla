@@ -46,7 +46,7 @@ HistoricalCommitCertificate(qc) ==
   /\ qc.context.epoch \in Epochs
   /\ qc.phase = "Commit"
   /\ qc.subject \in ValidSubjects
-  /\ DualQuorum(qc.context.epoch, qc.signers)
+  /\ ExactCertificateQuorum(qc.context.epoch, qc.signers)
 
 DurableCommitDecision(decision) ==
   /\ decision \in DecisionEvidenceSet
@@ -65,7 +65,7 @@ CandidateHistoricalCommitCertificateSet ==
 
 HistoricalCommitCertificateSet ==
   {qc \in CandidateHistoricalCommitCertificateSet:
-    DualQuorum(qc.context.epoch, qc.signers)}
+    ExactCertificateQuorum(qc.context.epoch, qc.signers)}
 
 CandidateDurableDecisionEvidenceSet ==
   {[node |-> node, qc |-> qc]:

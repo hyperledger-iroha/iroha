@@ -429,13 +429,13 @@ fn is_submission_accepted_duplicate(err: &eyre::Report) -> bool {
             || text.to_ascii_lowercase().contains("already committed")
     })
 }
-fn allow_supply_resubmit(faulty_peers: usize, force_soft_fork: bool) -> bool {
-    faulty_peers > 0 || force_soft_fork
+fn allow_supply_resubmit(faulty_peers: usize) -> bool {
+    faulty_peers > 0
 }
-fn allow_round_supply_deadline_slip(faulty_peers: usize, force_soft_fork: bool) -> bool {
+fn allow_round_supply_deadline_slip(faulty_peers: usize) -> bool {
     // Under partitioned rounds, transaction dissemination can lag one round behind while
     // still converging globally; defer strictness to the final supply assertion.
-    force_soft_fork || faulty_peers > 0
+    faulty_peers > 0
 }
 fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
     let hash = Hash::new(chain_id.as_str().as_bytes());
@@ -928,7 +928,6 @@ struct UnstableNetwork {
     n_peers: usize,
     n_faulty_peers: usize,
     n_rounds: usize,
-    force_soft_fork: bool,
 }
 impl UnstableNetwork {
     async fn run(self) -> Result<()> {
@@ -1017,7 +1016,6 @@ impl UnstableNetwork {
             &asset_definition_id,
             self.n_rounds,
             expected_height,
-            self.force_soft_fork,
         )
         .await?;
         Ok(())
@@ -1110,46 +1108,24 @@ impl UnstableNetwork {
             .with_config_layer(|cfg| {
                 // Keep handshake PoW enabled while reducing its Argon2 work to the supported
                 // minimum. This test targets consensus partitions, not handshake-puzzle cost.
-                if self.force_soft_fork {
-                    cfg.write(["sumeragi", "debug", "force_soft_fork"], true)
-                        .write(
-                            [
-                                "network",
-                                "soranet_handshake",
-                                "pow",
-                                "puzzle",
-                                "memory_kib",
-                            ],
-                            i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
-                        )
-                        .write(
-                            ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
-                            1_i64,
-                        )
-                        .write(
-                            ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
-                            1_i64,
-                        );
-                } else {
-                    cfg.write(
-                        [
-                            "network",
-                            "soranet_handshake",
-                            "pow",
-                            "puzzle",
-                            "memory_kib",
-                        ],
-                        i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
-                    )
-                    .write(
-                        ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
-                        1_i64,
-                    )
-                    .write(
-                        ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
-                        1_i64,
-                    );
-                }
+                cfg.write(
+                    [
+                        "network",
+                        "soranet_handshake",
+                        "pow",
+                        "puzzle",
+                        "memory_kib",
+                    ],
+                    i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                    1_i64,
+                )
+                .write(
+                    ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                    1_i64,
+                );
             })
             .with_genesis_instruction(SetParameter::new(Parameter::Block(
                 BlockParameter::MaxTransactions(nonzero!(1u64)),
@@ -1528,7 +1504,7 @@ impl UnstableNetwork {
         let supply_deadline = supply_start + sync_timeout;
         let initial_resubmit_at =
             supply_start + initial_resubmit_delay(sync_timeout, network.block_cadence());
-        let allow_resubmit = allow_supply_resubmit(self.n_faulty_peers, self.force_soft_fork);
+        let allow_resubmit = allow_supply_resubmit(self.n_faulty_peers);
         let supply_peers: Vec<_> = peers
             .iter()
             .filter(|peer| !faulty_ids.contains(&peer.id()))
@@ -1599,7 +1575,7 @@ impl UnstableNetwork {
                 next_resubmit_at = Instant::now() + submit_retry_backoff(attempt);
             }
             if now >= supply_deadline {
-                if allow_round_supply_deadline_slip(self.n_faulty_peers, self.force_soft_fork) {
+                if allow_round_supply_deadline_slip(self.n_faulty_peers) {
                     iroha_logger::warn!(
                         ?expected_supply,
                         ?last_seen,
@@ -1668,15 +1644,9 @@ impl UnstableNetwork {
         asset_definition_id: &AssetDefinitionId,
         rounds: usize,
         expected_height: u64,
-        force_soft_fork: bool,
     ) -> Result<()> {
         let peers = network.peers();
         let expected = Quantity::from(rounds as u128);
-        let expected_floor = if force_soft_fork {
-            Quantity::from(rounds.saturating_sub(1) as u128)
-        } else {
-            expected.clone()
-        };
         let deadline =
             Instant::now() + scaled_timeout(network.sync_timeout(), network.peers().len());
         loop {
@@ -1714,8 +1684,7 @@ impl UnstableNetwork {
                     };
                 let asset_value = asset.as_ref().map(|asset| asset.value().clone());
                 if let Some(asset) = asset.as_ref() {
-                    let supply_matches = asset.value() == &expected
-                        || (force_soft_fork && asset.value() == &expected_floor);
+                    let supply_matches = asset.value() == &expected;
                     let height_matches =
                         observed_height.is_some_and(|height| height.non_empty >= expected_height);
                     if supply_matches && height_matches {
@@ -1730,7 +1699,7 @@ impl UnstableNetwork {
             }
             if Instant::now() >= deadline {
                 return Err(eyre!(
-                    "total supply did not reach expected range [{expected_floor}, {expected}] with expected height >= {expected_height}; last seen value: {last_seen:?}; last height: {last_height:?}"
+                    "total supply did not reach expected {expected} with expected height >= {expected_height}; last seen value: {last_seen:?}; last height: {last_height:?}"
                 ));
             }
             sleep(Duration::from_millis(200)).await;
@@ -1882,17 +1851,15 @@ mod tests {
         assert!(!should_resubmit_tx(true, now, now + Duration::from_secs(1)));
     }
     #[test]
-    fn supply_resubmit_allowed_for_faults_or_soft_fork() {
-        assert!(!allow_supply_resubmit(0, false));
-        assert!(allow_supply_resubmit(1, false));
-        assert!(allow_supply_resubmit(0, true));
+    fn supply_resubmit_is_reserved_for_faulted_rounds() {
+        assert!(!allow_supply_resubmit(0));
+        assert!(allow_supply_resubmit(1));
     }
     #[test]
-    fn round_supply_deadline_slip_allowed_for_fault_or_soft_fork() {
-        assert!(!allow_round_supply_deadline_slip(0, false));
-        assert!(allow_round_supply_deadline_slip(1, false));
-        assert!(allow_round_supply_deadline_slip(2, false));
-        assert!(allow_round_supply_deadline_slip(0, true));
+    fn round_supply_deadline_slip_is_reserved_for_faulted_rounds() {
+        assert!(!allow_round_supply_deadline_slip(0));
+        assert!(allow_round_supply_deadline_slip(1));
+        assert!(allow_round_supply_deadline_slip(2));
     }
     #[test]
     fn submit_acceptance_accepts_enqueued_or_committed_duplicate() {
@@ -1939,18 +1906,6 @@ async fn unstable_network_4_peers_1_fault() -> Result<()> {
         n_peers: 4,
         n_faulty_peers: 1,
         n_rounds: 5,
-        force_soft_fork: false,
-    }
-    .run()
-    .await
-}
-#[tokio::test]
-async fn soft_fork() -> Result<()> {
-    UnstableNetwork {
-        n_peers: 4,
-        n_faulty_peers: 0,
-        n_rounds: 5,
-        force_soft_fork: true,
     }
     .run()
     .await
@@ -1961,7 +1916,6 @@ async fn unstable_network_7_peers_1_fault() -> Result<()> {
         n_peers: 7,
         n_faulty_peers: 1,
         n_rounds: 3,
-        force_soft_fork: false,
     }
     .run()
     .await
@@ -1972,7 +1926,6 @@ async fn unstable_network_7_peers_2_faults() -> Result<()> {
         n_peers: 7,
         n_faulty_peers: 2,
         n_rounds: 3,
-        force_soft_fork: false,
     }
     .run()
     .await
@@ -1985,7 +1938,6 @@ async fn unstable_network_10_peers_3_faults() -> Result<()> {
         // Keep this high-fault scenario to two rounds to reduce host-load flakiness in the
         // grouped `network_functional` harness while still exercising repeated partition recovery.
         n_rounds: 2,
-        force_soft_fork: false,
     }
     .run()
     .await
@@ -1996,7 +1948,6 @@ async fn unstable_network_13_peers_4_faults() -> Result<()> {
         n_peers: 13,
         n_faulty_peers: 4,
         n_rounds: 1,
-        force_soft_fork: false,
     }
     .run()
     .await
@@ -2007,7 +1958,6 @@ async fn unstable_network_rejects_non_revision4_committee_geometry() {
         n_peers: 5,
         n_faulty_peers: 1,
         n_rounds: 1,
-        force_soft_fork: false,
     }
     .run()
     .await

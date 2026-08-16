@@ -236,6 +236,10 @@ pub(crate) struct MergeSidecarLimits {
     server_request_gates_per_source: usize,
 }
 impl MergeSidecarLimits {
+    /// Maximum concurrent requester-side assemblies and live request attempts.
+    pub(crate) const fn inbound_session_capacity(&self) -> usize {
+        self.inbound_session_capacity
+    }
     /// Construct a geometry which retains disjoint decided and ordinary
     /// full-entry corridors and cannot weaken per-source ownership.
     #[allow(clippy::too_many_arguments)]
@@ -514,6 +518,16 @@ impl CertifiedMergeSidecarCloseAckV1 {
             responder: self.responder.clone(),
         }
         .canonical_close_id()
+    }
+    /// Return whether this cumulative acknowledgement retires an exact
+    /// requester-side Close occurrence.
+    pub(crate) fn covers_requester_close(&self, close: &CertifiedMergeSidecarCloseV1) -> bool {
+        self.version == close.version
+            && self.requester == close.requester
+            && self.responder == close.responder
+            && self.service_generation == close.service_generation
+            && self.stream_epoch == close.stream_epoch
+            && close.closed_through <= self.closed_through
     }
 }
 /// Authenticated responder fence returned for a stale service generation.
@@ -5696,6 +5710,19 @@ impl MergeSidecarTransport {
             reply_route: None,
             message: Arc::new(CertifiedMergeSidecarMessage::Request(request)),
         }))
+    }
+    /// Snapshot every requester-owned network occurrence still backed by a live attempt.
+    ///
+    /// The lane adapter compares this bounded set across one transport
+    /// mutation so output already transferred to the exact-output worker can
+    /// be cancelled when its semantic attempt times out, completes, or is
+    /// otherwise retired.
+    pub(crate) fn active_request_hashes(&self) -> BTreeSet<HashOf<CertifiedMergeSidecarRequestV1>> {
+        self.inbound
+            .values()
+            .filter_map(|assembly| assembly.current.as_ref())
+            .map(|attempt| HashOf::from_untyped_unchecked(attempt.message_hash.clone()))
+            .collect()
     }
     /// Return a request to the idle state when the caller's bounded outbound
     /// queue could not retain the post. No network attempt occurred, so a
@@ -19344,74 +19371,6 @@ mod tests {
             Err(MergeSidecarError::LocalSigningEquivocation),
             "equal digest cannot substitute different canonical candidate bytes"
         );
-    }
-    #[test]
-    fn signing_guard_rejects_legacy_journal_without_implicit_recovery() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        fs::create_dir(temp.path().join(LEGACY_SIGNING_GUARD_DIRS[0]))
-            .expect("create legacy journal");
-        assert!(matches!(
-            MergeSigningGuard::open(temp.path()),
-            Err(MergeSidecarError::SigningGuard(message))
-                if message.contains("authenticated candidate-body recovery")
-        ));
-        assert!(!temp.path().join(SIGNING_GUARD_DIR).exists());
-    }
-    #[test]
-    fn signing_guard_rejects_aggregate_oversize_before_recovery_scan() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
-        let path = guard.directory.join(format!(
-            "{}.{}",
-            Hash::new(b"oversized signing guard"),
-            SIGNING_GUARD_RECORD_EXT
-        ));
-        let file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&path)
-            .expect("create sparse oversized artifact");
-        file.set_len(
-            u64::try_from(MAX_SIGNING_GUARD_TOTAL_BYTES)
-                .expect("aggregate bound fits u64")
-                .saturating_add(1),
-        )
-        .expect("size sparse oversized artifact");
-        drop(file);
-        drop(guard);
-        assert!(matches!(
-            MergeSigningGuard::open(temp.path()),
-            Err(MergeSidecarError::SigningGuard(message))
-                if message.contains("aggregate bytes")
-        ));
-    }
-    #[test]
-    fn signing_guard_rejects_oversized_candidate_temp() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
-        let path = guard.directory.join(format!(
-            "{}.{}",
-            Hash::new(b"oversized signing guard temp"),
-            SIGNING_GUARD_TEMP_EXT
-        ));
-        let file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-            .expect("create sparse oversized temp");
-        file.set_len(
-            u64::try_from(MAX_SIGNING_GUARD_RECORD_BYTES)
-                .expect("record bound fits u64")
-                .saturating_add(1),
-        )
-        .expect("size sparse oversized temp");
-        drop(file);
-        drop(guard);
-        assert!(matches!(
-            MergeSigningGuard::open(temp.path()),
-            Err(MergeSidecarError::SigningGuard(message))
-                if message.contains("unsafe signing-guard record temp")
-        ));
     }
     include!("merge_sidecar_signing_guard_tests.rs");
 }

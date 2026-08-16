@@ -200,8 +200,10 @@ The QC also embeds the exact historical roster, canonical LSB-first signer
 bitmap, ordered signer PoPs, and aggregate BLS-normal signature. Validation
 rejects duplicate validators, wrong roster hashes or versions, bitmap length or
 padding drift, out-of-range/duplicate signer indices, missing/misordered PoPs,
-quorum shortfall, invalid aggregate signatures, and any mismatch in the exact
-carrier height, parent, or view.
+any signer count other than the exact canonical quorum, invalid aggregate
+signatures, and any mismatch in the exact carrier height, parent, or view.
+Local formation validates all supplied shares and selects the canonical first
+quorum in signer order before building the wire certificate.
 
 ### Leader body transfer and anti-equivocation
 

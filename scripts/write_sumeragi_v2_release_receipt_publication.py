@@ -1,5 +1,21 @@
 # Executed lexically in write_sumeragi_v2_release_receipt.py after exact digest authentication.
 
+
+def _require_pruned_build_roots(release_root: Path) -> None:
+    """Require every bootstrap-private disposable build root to be absent."""
+
+    invocation = release_root.parent
+    output = invocation / "output"
+    for path, label in (
+        *((invocation / name, f"release {name} root") for name in (
+            "runtime", "sdk-inputs", "sdk-work", "target",
+        )),
+        *((output / name, f"release {name} root") for name in (
+            "home", "tmp", "cache", "cargo-home",
+        )),
+    ):
+        _require_pruned_private_root(path, label)
+
 def build_receipt(
     *,
     candidate_identity_path: Path,
@@ -41,6 +57,7 @@ def build_receipt(
     runtime_tool_probe_manifest_path: Path,
     runtime_tool_probe_result_path: Path,
     runtime_tool_probe_runtime_available: bool,
+    private_build_roots_available: bool,
     bootstrap_private_inputs_available: bool,
     expected_scaling_trial_harness_sha256: str,
     expected_scaling_configuration_sha256: str,
@@ -55,6 +72,9 @@ def build_receipt(
     list[PathContract | DirectoryContract],
 ]:
     """Validate every completion artifact and return one aggregate receipt."""
+
+    if not private_build_roots_available:
+        _require_pruned_build_roots(release_root_path)
 
     repo_root = repository_root_path.resolve(strict=True)
     if (
@@ -223,12 +243,14 @@ def build_receipt(
         sealed,
         repo_root,
         bootstrap_authentication["runner"]["tools"],
+        bootstrap_authentication["trusted_input_digests"],
         expected_artifact_root=(
             release_root_path.parent / "output"
         ),
         expected_cargo_target_root=(
             release_root_path.parent / "target"
         ),
+        private_build_roots_available=private_build_roots_available,
     )
     prebuilt_manifest_sha256 = prebuilt_binary_bundle["manifest"]["sha256"]
     prebuilt_invocation_id = prebuilt_binary_bundle["archive_id"].partition(":")[2]
@@ -270,7 +292,14 @@ def build_receipt(
         formal_tlaps_resource_jsonl,
         formal_tlaps_resource_summary,
     ) = _formal_artifacts(
-        formal_path, formal_completion, sealed, checker_environment, repo_root
+        formal_path,
+        formal_completion,
+        sealed,
+        checker_environment,
+        repo_root,
+        bootstrap_authentication["runner"]["tools"],
+        corridor_completion,
+        private_build_roots_available,
     )
     seed_path, seed = _load_tsv(seed_completion_path, "seed completion")
     seed_manifest_fields = {
@@ -689,6 +718,7 @@ def _snapshot_receipt_inputs(
     candidate_root: Path,
     release_root: Path,
     bootstrap_runtime_contracts: list[PathContract | DirectoryContract],
+    private_build_roots_available: bool = True,
 ) -> list[PathContract | DirectoryContract]:
     records = list(_iter_artifact_records(receipt["authentication"])) + list(
         _iter_artifact_records(receipt["evidence"])
@@ -1247,7 +1277,9 @@ def _snapshot_receipt_inputs(
         release_root,
     }
     directory_paths.update(family_roots)
-    directory_paths.update(cargo_cache_directories)
+    directory_paths.add(artifact_root)
+    if private_build_roots_available:
+        directory_paths.update(cargo_cache_directories)
     directory_paths.update(family_directories)
     directory_paths.update(prebuilt_directories)
     directory_paths.update(
@@ -1735,6 +1767,7 @@ def main() -> int:
             runtime_tool_probe_manifest_path=args.runtime_tool_probe_manifest,
             runtime_tool_probe_result_path=args.runtime_tool_probe_result,
             runtime_tool_probe_runtime_available=(not args.replay_existing),
+            private_build_roots_available=(not args.replay_existing),
             bootstrap_private_inputs_available=(not args.replay_existing),
             expected_scaling_trial_harness_sha256=(
                 args.expected_scaling_trial_harness_sha256
@@ -1760,6 +1793,7 @@ def main() -> int:
             candidate_root=args.bootstrap_candidate_root,
             release_root=args.release_root,
             bootstrap_runtime_contracts=bootstrap_runtime_contracts,
+            private_build_roots_available=(not args.replay_existing),
         )
         expected_output = (
             args.release_root.parent
@@ -1777,6 +1811,8 @@ def main() -> int:
             verification_snapshots = [*snapshots, terminal]
             _fsync_receipt_inputs(verification_snapshots)
             _revalidate_receipt_inputs(verification_snapshots)
+            if args.replay_existing:
+                _require_pruned_build_roots(args.release_root)
             if args.verify_existing:
                 _receipt_validation_ack(args, verification_snapshots)
             elif any((args.validation_ack, args.source_manifest_sha256)):

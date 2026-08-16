@@ -9264,7 +9264,8 @@ PersistLockCommitReady(request) ==
      /\ retained \in RetainedLockedBodyRecordSet
 
 FormCommitQCReady(node, roundView, subject) ==
-  LET signers == VoteSignersAt(node, roundView, "Commit", subject)
+  LET signers ==
+        ProjectedVoteSignersAt(node, roundView, "Commit", subject)
       qc == QC(context, roundView, "Commit", subject, signers)
   IN /\ node \in up
      /\ CommitRoundAdmissible(node, roundView, subject)
@@ -9316,7 +9317,8 @@ CompleteVoteSignatureReady(request) ==
   /\ VoteRoundAdmissible(request.node, request.vote)
 
 FormPrepareQCReady(node, roundView, subject) ==
-  LET signers == VoteSignersAt(node, roundView, "Prepare", subject)
+  LET signers ==
+        ProjectedVoteSignersAt(node, roundView, "Prepare", subject)
       qc == QC(context, roundView, "Prepare", subject, signers)
   IN /\ node \in up
      /\ roundView = nodeView[node]
@@ -9671,8 +9673,9 @@ ExecuteSignVote(command) ==
                  asyncHistoricalRecoveryTargets>>
 
 ExecuteFormPrepareQC(command) ==
-  LET signers == VoteSignersAt(command.node, command.view, "Prepare",
-                               command.subject)
+  LET signers ==
+        ProjectedVoteSignersAt(
+          command.node, command.view, "Prepare", command.subject)
       qc == QC(context, command.view, "Prepare", command.subject, signers)
       items == QcOutbox(command.node, qc)
   IN /\ command.kind = "FormPrepareQC"
@@ -9984,8 +9987,9 @@ ExecuteSignVoteReady(command) ==
                item.kind \in AsyncControlKinds}
 
 ExecuteFormPrepareQCReady(command) ==
-  LET signers == VoteSignersAt(command.node, command.view, "Prepare",
-                               command.subject)
+  LET signers ==
+        ProjectedVoteSignersAt(
+          command.node, command.view, "Prepare", command.subject)
       qc == QC(context, command.view, "Prepare", command.subject, signers)
       items == QcOutbox(command.node, qc)
   IN /\ command.kind = "FormPrepareQC"

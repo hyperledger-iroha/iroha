@@ -233,6 +233,11 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
         .expect("mint independently admitted retry carrier");
     let retry = bind_fetch(&ordinary_fetch, retry_ordinal);
     assert_ne!(retry.owner(), incumbent.owner());
+    let (retry, retry_relation) = incumbent
+        .adopt_incumbent_fetch_for_retry_or_authority(&retry, &ordinary_fetch)
+        .expect("the exact retry adopts the incumbent physical Fetch owner");
+    assert_eq!(retry_relation, RuntimeFetchAuthorityRelation::Same);
+    assert_eq!(retry.owner(), incumbent.owner());
     let coalesced_retry = runtime
         .reserve_body_available_with_owner(tag, manifest.clone(), &retry)
         .expect("an exact late Fetch retry keeps the queued incumbent");
@@ -263,6 +268,11 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
         .expect("mint independently admitted certified carrier");
     let upgrade = bind_fetch(&certified_fetch, upgrade_ordinal);
     assert_ne!(upgrade.owner(), incumbent.owner());
+    let (upgrade, upgrade_relation) = incumbent
+        .adopt_incumbent_fetch_for_retry_or_authority(&upgrade, &certified_fetch)
+        .expect("the certified retry upgrades the incumbent physical Fetch owner");
+    assert_eq!(upgrade_relation, RuntimeFetchAuthorityRelation::Upgrade);
+    assert_eq!(upgrade.owner(), incumbent.owner());
     let coalesced_upgrade = runtime
         .reserve_body_available_with_owner(tag, manifest.clone(), &upgrade)
         .expect("a late certified Fetch keeps the exact queued completion owner");

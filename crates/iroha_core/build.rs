@@ -1,6 +1,7 @@
 //! Embeds source identity into `iroha_core` binaries.
 //!
-//! Ordinary builds retain the lightweight Git-commit marker used by RBC. The opt-in Kagemusha
+//! Ordinary builds retain the lightweight Git-commit marker used by the Sumeragi v2 adapter
+//! build fingerprint. The opt-in Kagemusha
 //! candidate-build feature additionally requires and verifies an independently pinned reviewed
 //! clean signed source closure and the exact Cargo/rustc binaries supplied by the dedicated build
 //! helper.
@@ -62,7 +63,7 @@ fn main() {
     } else {
         println!(
             "cargo:warning=iroha_core build.rs: unable to determine git commit hash; \
-             persisted RBC sessions will be discarded across restarts"
+             the Sumeragi v2 build fingerprint will use the `unknown` source marker"
         );
     }
 }

@@ -1,3 +1,54 @@
+fn drain_finalized_lane_work_output(
+    lane_work: &mut V2LaneWorkAdapter,
+    services: &ProductionV2Services,
+    receipt: &KuraV2CommitReceipt,
+    artifact: &wire::finality::V2FinalityArtifact,
+    durable_lane_authority: &DurableLaneRolloverAuthority,
+    control_queue_capacity: usize,
+) -> Result<(), V2RunnerError> {
+    loop {
+        let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+        let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
+        apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
+        apply_certified_merge_sidecar_chunk_admissions(
+            lane_work,
+            services,
+            control_queue_capacity,
+        )?;
+        let retired = services
+            .handoff_applied_height_output_to_durable_reconstruction(
+                receipt,
+                artifact,
+                durable_lane_authority,
+            )
+            .map_err(V2RunnerError::Service)?;
+        apply_certified_merge_sidecar_chunk_admissions(
+            lane_work,
+            services,
+            control_queue_capacity,
+        )?;
+
+        let before = lane_work.effect_count();
+        let dispatched =
+            dispatch_lane_work_effects_with_progress(lane_work, services, control_queue_capacity)?;
+        let after = lane_work.effect_count();
+        let pending = services
+            .has_pending_exact_output()
+            .map_err(V2RunnerError::Service)?;
+        // Seal only after one quiescent pass. A just-dispatched reply route can
+        // become parked and therefore report no dispatchable pending work even
+        // though its move-only fanout still needs the next durable handoff.
+        if retired == 0 && dispatched == 0 && after == 0 && !pending {
+            return Ok(());
+        }
+        if retired == 0 && dispatched == 0 && after >= before {
+            return Err(V2RunnerError::Service(
+                "finalized lane output made no progress toward exact handoff".to_owned(),
+            ));
+        }
+    }
+}
+
 fn rollover_finalized_height_outputs(
     mut lane_work: V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -28,45 +79,16 @@ fn rollover_finalized_height_outputs(
         })?;
     lane_work.prune_finalized_merge_sidecars()?;
     lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;
-    loop {
-        apply_certified_merge_sidecar_closed_prefixes(&mut lane_work, services)?;
-        apply_certified_merge_sidecar_chunk_admissions(
-            &mut lane_work,
-            services,
-            control_queue_capacity,
-        )?;
-        let retired = services
-            .handoff_applied_height_output_to_durable_reconstruction(
-                receipt,
-                artifact,
-                &durable_lane_authority,
-            )
-            .map_err(V2RunnerError::Service)?;
-        apply_certified_merge_sidecar_chunk_admissions(
-            &mut lane_work,
-            services,
-            control_queue_capacity,
-        )?;
-        if !services
-            .has_pending_exact_output()
-            .map_err(V2RunnerError::Service)?
-        {
-            break;
-        }
-        if retired == 0 {
-            return Err(V2RunnerError::Service(
-                "finalized exact output has no durable or move-only successor source".to_owned(),
-            ));
-        }
-    }
-    let _ = services
-        .handoff_applied_height_output_to_durable_reconstruction(
-            receipt,
-            artifact,
-            &durable_lane_authority,
-        )
-        .map_err(V2RunnerError::Service)?;
+    drain_finalized_lane_work_output(
+        &mut lane_work,
+        services,
+        receipt,
+        artifact,
+        &durable_lane_authority,
+        control_queue_capacity,
+    )?;
     if lane_work.has_pending_committed_output_handoff()
+        || lane_work.effect_count() != 0
         || services
             .has_pending_exact_output()
             .map_err(V2RunnerError::Service)?

@@ -3,10 +3,13 @@
 Kagami ships presets for Iroha 3 networks so operators can stamp deterministic
 genesis manifests without juggling per-network knobs.
 
-- Profiles: `iroha3-dev` (chain `iroha3-dev.local`, collectors k=1 r=1, VRF seed derived from the chain id when NPoS is selected), `iroha3-taira` (chain `iroha3-taira`, collectors k=3 r=3, requires `--vrf-seed-hex` when NPoS is selected), `iroha3-nexus` (chain `iroha3-nexus`, collectors k=5 r=3, requires `--vrf-seed-hex` when NPoS is selected).
+- Profiles: `iroha3-dev` uses chain `iroha3-dev.local` and derives its VRF seed
+  from the chain id when NPoS is selected. `iroha3-taira` uses chain
+  `iroha3-taira`, and `iroha3-nexus` uses chain `iroha3-nexus`; both public
+  profiles require `--vrf-seed-hex` when NPoS is selected.
 - Consensus: Sora profile networks (Nexus + dataspaces) require NPoS and disallow staged cutovers; permissioned Iroha3 deployments must run without a Sora profile.
 - Generation: `cargo run -p iroha_kagami -- genesis generate --profile <profile> --ivm-dir . --genesis-public-key <pk> --consensus-mode <npos|permissioned> [--vrf-seed-hex <hex>] [--xor-asset-definition-id <BASE58>]`. Use `--consensus-mode npos` for Nexus; `--vrf-seed-hex` is only valid for NPoS (required for taira/nexus). Public Taira defaults `xor#universal` to the live canonical XOR id `6TEAJqbb8oEPmLncoNiMRbLEK6tw`; public Nexus requires `--xor-asset-definition-id` because the canonical Nexus XOR id is operator-supplied.
-- Verification: `cargo run -p iroha_kagami -- verify --profile <profile> --genesis <path> [--vrf-seed-hex <hex>]` replays profile expectations (chain id, DA/RBC, collectors, PoP coverage, consensus fingerprint). Supply `--vrf-seed-hex` only when verifying an NPoS manifest for taira/nexus.
+- Verification: `cargo run -p iroha_kagami -- verify --profile <profile> --genesis <path> [--vrf-seed-hex <hex>]` replays profile expectations for chain id, cadence, consensus mode and VRF seed, PoP coverage, and the normalized consensus fingerprint. Supply `--vrf-seed-hex` only when verifying an NPoS manifest for taira/nexus.
 - Signed fixture bundles pass an explicit `--creation-time-ms` to `kagami genesis sign`; this fixes transaction and block timestamps so repeated profile generation produces identical `genesis.signed.nrt` bytes.
 - Every generated validator config allocates one isolated body-ingress byte partition per frozen validator, configured authenticated non-validator source, and anonymous source. The aggregate therefore scales with the complete generated committee instead of inheriting the four-validator default floor.
 - Topology: the Taira fixture renders seven logical lanes over the five catalogued

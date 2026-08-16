@@ -301,9 +301,9 @@ AutoscaleLifecycleSafetyInvariant ==
 LifecycleSpec == Init /\ [][Next]_vars
 
 (***************************************************************************
-This is deliberately ledgered as specified_unproved.  TLC checks the finite
-kernel and its mutations; a future cross-tool proof must establish the trace
-mapping from the source-bound Rust entry points.
+This support operator is not an independent proof-ledger row.  TLC checks the
+finite kernel and its mutations; release still requires source-bound evidence
+for every production trace mapping that consumes this operator.
 ***************************************************************************)
 AutoscaleLifecycleProductionRefinementObligation ==
   LifecycleSpec => []AutoscaleLifecycleSafetyInvariant

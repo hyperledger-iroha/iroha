@@ -1561,19 +1561,20 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
     /// successful launch cannot be detached from its retirement authority or
     /// used to publish the generic adapter status.
     #[allow(dead_code, clippy::result_large_err)]
+    #[inline(never)]
     pub(in crate::sumeragi) fn launch(
         self,
         inputs: super::launch::ProductionLifecycleLaunchInputsV1,
     ) -> Result<
-        LaunchedRecoveredCompleteTipSuccessorLifecycleV1,
+        Box<LaunchedRecoveredCompleteTipSuccessorLifecycleV1>,
         super::launch::ProductionLifecycleLaunchErrorV1,
     > {
         let Self { owner, retirement } = self;
         let launched = owner.launch(inputs)?;
-        Ok(LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+        Ok(Box::new(LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
             launched,
             retirement,
-        })
+        }))
     }
 }
 /// Opaque running H+1 lifecycle stack joined to its retired-H authority.
@@ -1585,7 +1586,7 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
 #[must_use = "the launched CompleteTip successor must remain sealed until final activation"]
 #[allow(dead_code)]
 pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
-    launched: super::launch::LaunchedProductionLifecycleV1,
+    launched: Box<super::launch::LaunchedProductionLifecycleV1>,
     retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
 }
 

@@ -208,7 +208,7 @@ has been loaded.
 | Field | Default | Purpose |
 |-------|---------|---------|
 | `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
-| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
+| `max_archive_len` | `512 MiB` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon clamps it to at least `network.max_frame_bytes` so admitted network frames remain decodable. |
 | `combo_no_delta_small_n_if_empty` | `2` rows | Prevents enabling u32/id delta encodings when 1–2 rows contain empty cells. |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Deltas kick in only once there are at least two rows. |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | All delta transforms are enabled by default for well-behaved inputs. |

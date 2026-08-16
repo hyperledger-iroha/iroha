@@ -940,7 +940,7 @@ object NativeAmxV2 {
                 body.participantMinQuorum == expectedQuorum &&
                 body.participantValidatorSetHash == validatorSetHash &&
                 validatorSetHash == computeValidatorSetHash(validators) &&
-                bitmap.countOneBits() >= expectedQuorum,
+                bitmap.countOneBits() == expectedQuorum,
         ) { "$path contains inconsistent validator count, quorum, hash, or bitmap" }
         val signature = Bytes.fromJson(
             record["bls_aggregate_signature"],

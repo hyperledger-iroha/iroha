@@ -157,6 +157,38 @@ public struct SumeragiV2BlockSubject: Equatable, Sendable {
     }
 }
 
+/// Exact Merkle root and non-zero leaf count of canonical lane-finality statements.
+public struct SumeragiV2LaneFinalityManifestCommitment: Equatable, Sendable {
+    public static let maximumLeafCount: UInt64 = 1024
+
+    public let root: SumeragiV2Hash
+    public let leafCount: UInt64
+
+    public init(root: SumeragiV2Hash, leafCount: UInt64) throws {
+        guard leafCount > 0, leafCount <= Self.maximumLeafCount else {
+            throw SumeragiV2WireError.invalid(
+                "lane-finality manifest leaf count exceeds the non-empty consensus bound"
+            )
+        }
+        self.root = root
+        self.leafCount = leafCount
+    }
+
+    public func encode() -> Data {
+        sumeragiV2Struct(root.bytes, sumeragiV2U64(leafCount))
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            root: SumeragiV2Hash(reader.field("lane-finality manifest root")),
+            leafCount: sumeragiV2DecodeU64(reader.field("lane-finality manifest leaf count"))
+        )
+        try reader.finish("lane-finality manifest commitment")
+        return value
+    }
+}
+
 /// Exact merge-ledger entry identity authenticated by global finality.
 public struct SumeragiV2MergeCarrierCommitment: Equatable, Sendable {
     public static let canonicalVersion: UInt16 = 1
@@ -206,6 +238,7 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
     public let nativeAmxApplicationManifestVersion: UInt16
     public let nativeAmxApplicationManifestRoot: SumeragiV2Hash
     public let nativeAmxApplicationManifestCount: UInt32
+    public let laneFinalityManifest: SumeragiV2LaneFinalityManifestCommitment?
     public let mergeCarrier: SumeragiV2MergeCarrierCommitment?
     public let executedBlockWireLen: UInt64
     public let executedBlockWireHash: SumeragiV2Hash
@@ -219,6 +252,7 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         nativeAmxApplicationManifestVersion: UInt16,
         nativeAmxApplicationManifestRoot: SumeragiV2Hash,
         nativeAmxApplicationManifestCount: UInt32,
+        laneFinalityManifest: SumeragiV2LaneFinalityManifestCommitment? = nil,
         mergeCarrier: SumeragiV2MergeCarrierCommitment? = nil,
         executedBlockWireLen: UInt64,
         executedBlockWireHash: SumeragiV2Hash
@@ -276,6 +310,7 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         self.nativeAmxApplicationManifestVersion = nativeAmxApplicationManifestVersion
         self.nativeAmxApplicationManifestRoot = nativeAmxApplicationManifestRoot
         self.nativeAmxApplicationManifestCount = nativeAmxApplicationManifestCount
+        self.laneFinalityManifest = laneFinalityManifest
         self.mergeCarrier = mergeCarrier
         self.executedBlockWireLen = executedBlockWireLen
         self.executedBlockWireHash = executedBlockWireHash
@@ -291,6 +326,7 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             sumeragiV2U16(nativeAmxApplicationManifestVersion),
             nativeAmxApplicationManifestRoot.bytes,
             sumeragiV2U32(nativeAmxApplicationManifestCount),
+            sumeragiV2Option(laneFinalityManifest?.encode()),
             sumeragiV2Option(mergeCarrier?.encode()),
             sumeragiV2U64(executedBlockWireLen),
             executedBlockWireHash.bytes
@@ -320,6 +356,10 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             ),
             nativeAmxApplicationManifestCount: sumeragiV2DecodeU32(
                 reader.field("execution commitment Native AMX application-manifest count")
+            ),
+            laneFinalityManifest: sumeragiV2DecodeOption(
+                reader.field("execution commitment lane-finality manifest"),
+                decode: SumeragiV2LaneFinalityManifestCommitment.decode
             ),
             mergeCarrier: sumeragiV2DecodeOption(
                 reader.field("execution commitment merge carrier"),

@@ -11,7 +11,7 @@ def test_release_inventory_constants_match_current_source_seal(
         "fc038b30180549cc6002db8ec5630ebf8ad5bb04a06be6dd19774d2b6ea5f433"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "70034e3368c9a9b369851e529e31f49c38899441bba723619e04e34f388ace77"
+        "75702e6c87f81d5e8b20cb353cadb0ab8af9cad216d3281f85825a1bca326611"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -19,10 +19,10 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 525
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 526
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 532
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 533
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352"
+        "f1590363a43024969a7fceb947654e2afd1d7cad877dc8dcba5b863ba185d431"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
@@ -183,7 +183,7 @@ def test_release_inventory_constants_match_current_source_seal(
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
     assert receipt_module._PRODUCTION_TEST_COUNT == 857
-    assert receipt_module._G_UNIT_TEST_COUNT == 525
+    assert receipt_module._G_UNIT_TEST_COUNT == 532
     assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 857
     receipt_module_counts = {
         module_name: count
@@ -198,9 +198,8 @@ def test_release_inventory_constants_match_current_source_seal(
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 525
+        == 532
     )
-
 
 @pytest.mark.parametrize(
     "mutation_name",
@@ -254,7 +253,6 @@ def test_kura_production_source_boundary_rejects_hostile_test_suffix_mutations(
     _, _, _, errors = module._kura_production_source_inventory(repo_root)
     assert any(diagnostic in error for error in errors), errors
 
-
 def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     tmp_path: Path,
 ) -> None:
@@ -269,12 +267,20 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
 
     def read_reviewed_source_bundle(relative_path: str) -> str:
         """Mirror the complete source-sealed include manifest for one Rust parent."""
-        parent = Path(relative_path)
-        components = module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative_path, ())
-        return read_source_bundle(
-            relative_path,
-            *((parent.parent / component).as_posix() for component in components),
-        )
+        pending = [Path(relative_path)]
+        reviewed: list[Path] = []
+        while pending:
+            parent = pending.pop(0)
+            if parent in reviewed:
+                continue
+            reviewed.append(parent)
+            pending.extend(
+                parent.parent / component
+                for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
+                    parent.as_posix(), ()
+                )
+            )
+        return read_source_bundle(*(path.as_posix() for path in reviewed))
 
     seed_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_seed_matrix.sh"
@@ -1903,9 +1909,12 @@ kura.claim_autonomous_lifecycle_process_generation(
         )
         if f"{item[0]}{item[1]}"
         not in module._PRODUCTION_LIVENESS_RETIRED_REGRESSIONS
-    )
+        )
     for module_name, test_name, source in production_inventory_additions:
-        declaration_count = source.count(f"fn {test_name}(")
+        declaration_count = sum(
+            source.count(marker)
+            for marker in (f"fn {test_name}(", f"state_test! {{ sync {test_name}")
+        )
         assert declaration_count == 1, (
             module_name,
             test_name,
@@ -2163,7 +2172,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         "sumeragi::v2_worker::tests::certified_serve_receiver_close_aborts_reserved_replacement_without_orphan",
         "sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect",
     }
-    assert len(exact_certified_serve_regressions) == 37
+    assert len(exact_certified_serve_regressions) == 38
     assert exact_certified_serve_regressions <= set(production_inventory)
     assert exact_certified_serve_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
@@ -2509,8 +2518,8 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert "preflight-release-bootstrap pytest 258" in release_source
     assert "did not run exactly 44 passing tests" in release_source
     assert "preflight-release-bootstrap-validator pytest 44" in release_source
-    assert "did not run exactly 367 passing tests" in release_source
-    assert "preflight-release-receipt pytest 367" in release_source
+    assert "did not run exactly 368 passing tests" in release_source
+    assert "preflight-release-receipt pytest 368" in release_source
     assert (
         "pytests/scripts/sumeragi_v2_release_receipt_components_test.py"
         in release_source
@@ -2541,7 +2550,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                367,'
+        '"preflight-release-receipt",\n                "pytest",\n                368,'
         in receipt_source
     )
     assert "did not run exactly 5291 passing tests" in release_source
@@ -2839,7 +2848,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert expected_flag in release_source
 
     g4p_fidelity_root = tmp_path / "g4p-validator-argument-source-fidelity"
-    for relative in (
+    for relative in _release_inventory_fixture_paths(module, (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -2858,7 +2867,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-    ):
+    )):
         destination = g4p_fidelity_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
@@ -3372,7 +3381,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     successful_skip = taira_source.index("return Ok(());", fail_closed)
     assert finalizer < fail_closed < successful_skip
 
-
 def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> None:
     release_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
@@ -3524,7 +3532,6 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
     )
     assert '${IROHA_RELEASE_HOST_ROOT:-${repo_root}/target}' not in release_source
 
-
 def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
     inventory_source = (
         ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
@@ -3558,7 +3565,6 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
     for name in obsolete_dense_names:
         assert name in inventory_source
         assert name not in kura_source
-
 
 def test_multilane_inventory_checker_rejects_weakened_production_count(
     tmp_path: Path,
@@ -3751,7 +3757,6 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         for error in errors
     ), errors
 
-
 def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_digest(
     tmp_path: Path,
 ) -> None:
@@ -3873,7 +3878,6 @@ def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_di
         oversupplied.stderr
     )
 
-
 def test_tlaps_runner_rejects_backend_failure_even_when_tlapm_exits_zero() -> None:
     source = (
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlaps.sh"
@@ -3886,7 +3890,6 @@ def test_tlaps_runner_rejects_backend_failure_even_when_tlapm_exits_zero() -> No
     assert completion_check < exact_count < runner_marker
     assert completion_check < final_line < runner_marker
     assert "TLAPM did not report exact strict completion" in source
-
 
 def test_tla2tools_and_replay_share_the_same_pin() -> None:
     scripts = [
@@ -3905,7 +3908,6 @@ def test_tla2tools_and_replay_share_the_same_pin() -> None:
     # `-noGenerateSpecTE` was introduced after the immutable v1.7.4 release.
     # Keep both TLC entry points executable with the toolchain pinned above.
     assert all("-noGenerateSpecTE" not in source for source in sources[1:])
-
 
 def test_tlc_entrypoints_use_the_pinned_tlapm_function_library() -> None:
     scripts = [
@@ -3932,7 +3934,6 @@ def test_tlc_entrypoints_use_the_pinned_tlapm_function_library() -> None:
     )
     assert all('readonly TLC_MAX_SET_SIZE="1000000"' in source for source in sources)
     assert all('-maxSetSize "$TLC_MAX_SET_SIZE"' in source for source in sources)
-
 
 def test_tlapm_corridor_uses_one_pinned_identity() -> None:
     commit = "3ab43c7ff31db4ced850619d4746fa4c841a7681"
@@ -3964,7 +3965,6 @@ def test_tlapm_corridor_uses_one_pinned_identity() -> None:
         ROOT_DIR / "formal" / "sumeragi_v2" / "PROOF.md"
     ).read_text(encoding="utf-8")
     assert commit[:7] in proof_source
-
 
 def test_liveness_tlc_ceilings_fit_pinned_evaluator_and_service_budget() -> None:
     source = (
@@ -4588,8 +4588,7 @@ def test_tlapm_immutable_source_build_lock_is_exact_and_self_validating(
         else:
             for root, relative in ((package_root, backend["package_path"]), (build_tree, backend["build_path"])):
                 materialize(root, f"{relative}/bin/isabelle", executable=True)
-    for path in (package_root / "lib/tlapm/backends/Isabelle.exec-files", build_tree / "_build/default/deps/isabelle/Isabelle.exec-files"):
-        path.write_text("Isabelle/bin/isabelle\n", encoding="utf-8")
+    for path in (package_root / "lib/tlapm/backends/Isabelle.exec-files", build_tree / "_build/default/deps/isabelle/Isabelle.exec-files"): path.write_text("Isabelle/bin/isabelle\n", encoding="utf-8")
     for build_relative, package_relative in (
         ("_build/default/translate/main.exe", "lib/tlapm/backends/bin/ptl_to_trp"),
         ("_build/default/deps/zenon/zenon", "lib/tlapm/backends/bin/zenon"),

@@ -56,6 +56,12 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
         "ControlSign(RecoveredWalControlSign)",
         "ProductionLifecycleOwnerV1::open_storage_only_recovered_startup(",
         ".persist_repair()",
+        "fn authenticate_recovered_phase_vote_stage<'registry>(",
+        "fn persist_recovered_phase_vote_stage<'registry>(",
+        "fn prepare_recovered_phase_vote_cold_adapter_stage<'registry>(",
+        "fn install_recovered_phase_vote_sign_stage<'registry>(",
+        "fn open_recovered_phase_vote_seals_stage(",
+        "fn finish_recovered_phase_vote_owner_stage(",
         ".install_recovered_sign()",
         ".open_production_owner_seals(",
         ".into_owner(registry, payload_store, body_store)",
@@ -81,6 +87,24 @@ fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
             token.contains(required),
             "recovery token omitted {required}"
         );
+    }
+    let phase_branch = production
+        .split_once("fn open_recovered_phase_vote_branch(")
+        .expect("locate recovered phase-vote branch")
+        .1;
+    let mut cursor = 0;
+    for required in [
+        "Self::authenticate_recovered_phase_vote_stage(",
+        "Self::persist_recovered_phase_vote_stage(authenticated)",
+        "Self::prepare_recovered_phase_vote_cold_adapter_stage(persisted, &body_store)",
+        "Self::install_recovered_phase_vote_sign_stage(prepared)",
+        "Self::open_recovered_phase_vote_seals_stage(",
+        "Self::finish_recovered_phase_vote_owner_stage(",
+    ] {
+        let offset = phase_branch[cursor..]
+            .find(required)
+            .unwrap_or_else(|| panic!("recovered phase-vote branch omitted {required}"));
+        cursor += offset + required.len();
     }
     assert_eq!(
         token

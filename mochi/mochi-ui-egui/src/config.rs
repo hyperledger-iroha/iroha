@@ -603,7 +603,7 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
         };
         if sumeragi.contains_key("da_enabled") {
             return Err(ConfigError::new(format!(
-                "config {} contains retired `sumeragi.da_enabled`; DA/RBC is always enabled in the first-release profile",
+                "config {} contains retired `sumeragi.da_enabled`; revision-4 DA layout comes from signed chain context and has no local switch",
                 path.display()
             )));
         }
@@ -1109,8 +1109,8 @@ index = 0
 alias = "core"
 dataspace = "universal"
 
-[sumeragi]
-msg_channel_cap_votes = 16
+[sumeragi.queues]
+commands = 1024
 
 [torii]
   [torii.da_ingest]
@@ -1126,9 +1126,11 @@ msg_channel_cap_votes = 16
         let sumeragi = config.sumeragi.expect("sumeragi config");
         assert_eq!(
             sumeragi
-                .get("msg_channel_cap_votes")
+                .get("queues")
+                .and_then(Value::as_table)
+                .and_then(|queues| queues.get("commands"))
                 .and_then(Value::as_integer),
-            Some(16)
+            Some(1024)
         );
         let torii = config.torii.expect("torii config");
         let da_ingest = torii
@@ -1259,7 +1261,9 @@ data_root = "./env-data"
         );
         config.nexus = Some(nexus);
         let mut sumeragi = Map::new();
-        sumeragi.insert("msg_channel_cap_votes".into(), Value::Integer(16));
+        let mut queues = Map::new();
+        queues.insert("commands".into(), Value::Integer(1024));
+        sumeragi.insert("queues".into(), Value::Table(queues));
         config.sumeragi = Some(sumeragi);
         let mut torii = Map::new();
         let mut da_ingest = Map::new();

@@ -1,11 +1,8 @@
-//! First-release lifecycle recovery seams retained by production Sumeragi v2.
+//! Split-module import seam for production Sumeragi v2 lifecycle recovery.
 //!
-//! The generic lifecycle-coordinator staging island is not a production
-//! scheduler.  This module is the narrow ownership boundary for the recovery
-//! and replay values that are already consumed by first-release runtime paths.
-//! Phase A keeps the definitions delegated to the reviewed implementation so
-//! callers can move without changing bytes or behavior; Phase B moves the
-//! closed implementation here before retiring the unwired staging island.
+//! [`super::v2_lifecycle_coordinator`] is the sole production lifecycle
+//! authority. This module re-exports the recovery/replay types used by split
+//! runtime components without introducing a second scheduler or ledger owner.
 pub(in crate::sumeragi) use super::v2_lifecycle_coordinator::{
     AuthenticatedCompleteTipPredecessorStorageV1, CompleteTipPredecessorStorageErrorV1,
     LifecycleContext, LifecycleDigest, LifecycleReplayAuthorityV1, LocalBodyPreIntentReplaySealV1,

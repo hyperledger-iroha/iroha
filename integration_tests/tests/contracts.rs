@@ -531,10 +531,8 @@ async fn wait_for_cross_peer_rbc_diagnostics(
                                 )
                                 && record.validator_count == expected_validator_count
                                 && record.min_quorum == expected_min_quorum
-                                && record.prepare_qc_signer_count >= record.min_quorum
-                                && record.prepare_qc_signer_count <= record.validator_count
-                                && record.commit_qc_signer_count >= record.min_quorum
-                                && record.commit_qc_signer_count <= record.validator_count
+                                && record.prepare_qc_signer_count == record.min_quorum
+                                && record.commit_qc_signer_count == record.min_quorum
                                 && record.descriptor_hash != zero_hash
                                 && record.proposal_hash != zero_hash
                                 && record.subject_hash != zero_hash

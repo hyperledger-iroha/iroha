@@ -112,14 +112,44 @@ public final class SumeragiStatusModelsTests {
         payload.replace(
             "\"native_amx_application_manifest_count\": 0",
             "\"native_amx_application_manifest_count\": 1"));
+    assertRejected(payload.replace("\"lane_finality_manifest\": null,", ""));
+    final String laneRoot = hash(0x38);
+    final SumeragiV2Status withLane =
+        SumeragiStatusModels.parseStatus(
+            payload.replace(
+                "\"lane_finality_manifest\": null",
+                "\"lane_finality_manifest\":{\"root\":\""
+                    + laneRoot
+                    + "\",\"leaf_count\":1}"));
+    assertEquals(
+        laneRoot,
+        withLane.lastCommitQc().certificate().executionCommitment()
+            .laneFinalityManifest().root());
+    assertEquals(
+        BigInteger.ONE,
+        withLane.lastCommitQc().certificate().executionCommitment()
+            .laneFinalityManifest().leafCount());
+    for (int count : new int[] {0, 1_025}) {
+      assertRejected(
+          payload.replace(
+              "\"lane_finality_manifest\": null",
+              "\"lane_finality_manifest\":{\"root\":\""
+                  + laneRoot
+                  + "\",\"leaf_count\":"
+                  + count
+                  + "}"));
+    }
     assertRejected(payload.replace("\"merge_carrier\": null,", ""));
     assertRejected(payload.replace("\"executed_block_wire_len\": 123", "\"executed_block_wire_len\": 0"));
     assertRejected(payload.replaceFirst("\"signed_power\":3", "\"signed_power\":2"));
+    assertRejected(
+        payload.replaceFirst("\"signer_count\":3", "\"signer_count\":4")
+            .replaceFirst("\"signed_power\":3", "\"signed_power\":4"));
     assertRejected(payload.replaceFirst("\"depth\": 1, \"capacity\": 4", "\"depth\": 5, \"capacity\": 4"));
     assertRejected(
         payload.replace(
-            "\"ignore_counts\": [" + ignoreCount() + "]",
-            "\"ignore_counts\": [" + ignoreCount() + "," + ignoreCount() + "]"));
+            "\"ignore_counts\":[" + ignoreCount() + "]",
+            "\"ignore_counts\":[" + ignoreCount() + "," + ignoreCount() + "]"));
   }
 
   @Test
@@ -212,6 +242,7 @@ public final class SumeragiStatusModelsTests {
         + "\"native_amx_application_manifest_version\": 1,"
         + "\"native_amx_application_manifest_root\":\"" + EMPTY_MANIFEST_ROOT + "\","
         + "\"native_amx_application_manifest_count\": 0,"
+        + "\"lane_finality_manifest\": null,"
         + "\"merge_carrier\": null,"
         + "\"executed_block_wire_len\": " + executedWireLen + ","
         + "\"executed_block_wire_hash\":\"" + hash(0x37) + "\"}";

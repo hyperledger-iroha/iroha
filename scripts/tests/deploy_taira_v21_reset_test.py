@@ -412,6 +412,7 @@ def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
         runner=runner,
     )
 
+    assert MODULE.CONFIG_CHECK_TIMEOUT_SECONDS == 30
     assert [command for command, _kwargs in calls] == [
         [
             str(binary),
@@ -2225,13 +2226,12 @@ def test_admission_failure_precedes_every_deployment_preflight(
         minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         maximum_fsync_latency_ms=250,
         allow_absent_old_child=False,
+        operator_network_id="taira", operator_private_key_file=Path("/operator.key"),
         apply=apply,
     )
 
     with pytest.raises(MODULE.DeploymentError, match="admission refusal"):
-        MODULE._execute_after_provisioned_authority_contracts(
-            args, ops=MODULE.SystemOps()
-        )
+        MODULE._execute_after_provisioned_authority_contracts(args, ops=MODULE.SystemOps())
 
     assert events == ["admission-verify"]
 
@@ -2317,6 +2317,7 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
 
     monkeypatch.setattr(MODULE, "exclusive_deployment_lock", lock)
     monkeypatch.setattr(MODULE, "consume_admission_receipt", consume)
+    monkeypatch.setattr(MODULE, "build_operator_http_getter", lambda *_args: object())
     args = argparse.Namespace(
         bundle=Path("/bundle"),
         binary=Path("/binary"),
@@ -2339,12 +2340,11 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         maximum_fsync_latency_ms=250,
         allow_absent_old_child=True,
+        operator_network_id="taira", operator_private_key_file=Path("/operator.key"),
         apply=True,
     )
 
-    assert MODULE._execute_after_provisioned_authority_contracts(
-        args, ops=MODULE.SystemOps()
-    ) == {
+    assert MODULE._execute_after_provisioned_authority_contracts(args, ops=MODULE.SystemOps()) == {
         "admission_archive_sha256": "0" * 64,
         "admission_receipt_consumed": True,
         "admission_receipt_id": "f" * 64,

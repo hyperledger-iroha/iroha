@@ -252,18 +252,18 @@ require_exact_token \
   "    native_amx_grouped_fixture_sha256 \"\$native_amx_grouped_fixture_sha256\" \\"
 require_exact_token \
   "$release_runner" \
-  "    native_amx_grouped_negative_control_count 55 \\"
+  "    native_amx_grouped_negative_control_count 56 \\"
 require_exact_token \
   "$grouped_parity_harness" \
-  "readonly expected_negative_control_count=55"
-for grouped_test_count in 7 62 60 4 6 5; do
+  "readonly expected_negative_control_count=56"
+for grouped_test_count in 7 63 61 4 6 5; do
   require_exact_token \
     "$grouped_parity_harness" \
     "    observed_test_count=${grouped_test_count}"
 done
 require_exact_token \
   "$release_receipt_writer" \
-  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 55"
+  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56"
 require_exact_token \
   "$release_receipt_writer" \
   "_G_UNIT_TEST_COUNT = 532"
@@ -299,22 +299,22 @@ require_exact_token \
   '        "native_grouped_pruning_evidence": "passed",'
 for grouped_suite in \
   '    ("openapi", 7),' \
-  '    ("python", 62),' \
-  '    ("javascript", 60),' \
+  '    ("python", 63),' \
+  '    ("javascript", 61),' \
   '    ("swift", 4),' \
   '    ("kotlin", 6),' \
   '    ("java", 5),'; do
   require_exact_token "$release_receipt_writer" "$grouped_suite"
 done
 for sdk_diagnostics_suite in \
-  '    ("python", 121),' \
+  '    ("python", 129),' \
   '    ("javascript", 88),' \
-  '    ("swift", 33),' \
-  '    ("kotlin", 42),' \
-  '    ("java", 41),'; do
+  '    ("swift", 34),' \
+  '    ("kotlin", 43),' \
+  '    ("java", 42),'; do
   require_exact_token "$release_receipt_writer" "$sdk_diagnostics_suite"
 done
-for sdk_diagnostics_test_count in 121 88 33 42 41; do
+for sdk_diagnostics_test_count in 129 88 34 43 42; do
   require_exact_token \
     "$sdk_diagnostics_harness" \
     "    observed_test_count=${sdk_diagnostics_test_count}"
@@ -715,6 +715,7 @@ expected_receipt_corridor_component_symbols = (
     "_sdk_suite_source_manifest",
     "_test_count_from_log",
     "_prebuilt_artifact_root",
+    "_require_pruned_private_root",
     "_prebuilt_release_roots",
     "_prebuilt_directory",
     "_publish_receipt_validation_ack",
@@ -744,7 +745,8 @@ expected_receipt_gate_component_symbols = (
     "_runtime_tool_probe_evidence",
 )
 expected_receipt_publication_component_symbols = (
-    "build_receipt", "_iter_artifact_records", "_capture_path_contract",
+    "_require_pruned_build_roots", "build_receipt", "_iter_artifact_records",
+    "_capture_path_contract",
     "_snapshot_receipt_inputs", "_capture_directory_contract",
     "_revalidate_receipt_inputs", "_fsync_receipt_inputs",
     "_existing_receipt_contract", "_complete_write",
@@ -1073,8 +1075,8 @@ native_amx_parity_inventory = """\
   )
   native_amx_grouped_parity_test_counts=(
     7
-    62
-    60
+    63
+    61
     4
     6
     5

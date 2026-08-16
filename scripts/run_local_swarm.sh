@@ -394,10 +394,7 @@ store_dir = "$store_dir/snapshot"
 enabled = false
 [confidential]
 enabled = true
-[sumeragi]
-consensus_mode = "npos"
-enable_bls = true
-da_enabled = true
+# Consensus mode, validator set, and DA geometry come from the signed genesis.
 [logger]
 format = "compact"
 level = "info"

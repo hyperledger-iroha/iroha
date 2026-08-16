@@ -43,13 +43,15 @@ public final class SumeragiV2WireFixtureTests {
               "commit_certificate_response"));
 
   @Test
-  public void executionCommitmentsCarryAnExactMandatoryMergeCarrierOption() {
+  public void executionCommitmentsCarryExactMandatoryLaneFinalityAndMergeCarrierOptions() {
     SumeragiV2Wire.Hash32 parent = testHash(0x21);
     SumeragiV2Wire.Hash32 post = testHash(0x23);
     SumeragiV2Wire.Hash32 ordinary = testHash(0x25);
     SumeragiV2Wire.Hash32 executed = testHash(0x27);
     SumeragiV2Wire.ExecutionCommitment base =
         SumeragiV2Wire.ExecutionCommitment.withoutTopups(parent, post, ordinary, 123, executed);
+    SumeragiV2Wire.LaneFinalityManifestCommitment laneFinality =
+        new SumeragiV2Wire.LaneFinalityManifestCommitment(testHash(0x2b), 1);
     SumeragiV2Wire.MergeCarrierCommitment carrier =
         new SumeragiV2Wire.MergeCarrierCommitment(1, testHash(0x29));
     SumeragiV2Wire.ExecutionCommitment carried =
@@ -62,15 +64,28 @@ public final class SumeragiV2WireFixtureTests {
             base.nativeAmxApplicationManifestVersion,
             base.nativeAmxApplicationManifestRoot,
             base.nativeAmxApplicationManifestCount,
+            laneFinality,
             carrier,
             base.executedBlockWireLen,
             executed);
 
-    assertEquals(null, SumeragiV2Wire.ExecutionCommitment.decode(base.encode()).mergeCarrier);
+    SumeragiV2Wire.ExecutionCommitment decodedBase =
+        SumeragiV2Wire.ExecutionCommitment.decode(base.encode());
+    assertEquals(null, decodedBase.laneFinalityManifest);
+    assertEquals(null, decodedBase.mergeCarrier);
     assertEquals(
         123L, SumeragiV2Wire.ExecutionCommitment.decode(base.encode()).executedBlockWireLen);
     assertEquals(
         carrier, SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).mergeCarrier);
+    assertEquals(
+        laneFinality,
+        SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).laneFinalityManifest);
+    for (long count :
+        new long[] {0, SumeragiV2Wire.MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK + 1}) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> new SumeragiV2Wire.LaneFinalityManifestCommitment(testHash(0x2b), count));
+    }
     assertThrows(
         IllegalArgumentException.class,
         () -> new SumeragiV2Wire.MergeCarrierCommitment(2, testHash(0x29)));

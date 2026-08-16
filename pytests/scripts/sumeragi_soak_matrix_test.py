@@ -64,7 +64,5 @@ def test_default_stress_tests_exist_in_the_revision4_harness() -> None:
     assert STRESS.DEFAULT_TESTS == (
         "npos_baseline_1s_captures_metrics",
         "npos_queue_backpressure_triggers_metrics",
-        "npos_rbc_store_backpressure_records_metrics",
-        "npos_rbc_chunk_loss_fault_reports_backlog",
     )
     assert all(f"fn {name}(" in source for name in STRESS.DEFAULT_TESTS)

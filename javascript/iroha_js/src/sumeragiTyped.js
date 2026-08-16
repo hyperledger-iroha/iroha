@@ -672,8 +672,8 @@ function parseSumeragiNativeAmxQc(value, context) {
   if (trailingBits !== 0 && (bitmap[bitmap.length - 1] & ~((1 << trailingBits) - 1)) !== 0) {
     throw new TypeError(`${context}.signers_bitmap addresses an unknown validator`);
   }
-  if (countSumeragiBitmapSigners(bitmap) < expectedQuorum) {
-    throw new RangeError(`${context}.signers_bitmap does not meet quorum`);
+  if (countSumeragiBitmapSigners(bitmap) !== expectedQuorum) {
+    throw new RangeError(`${context}.signers_bitmap does not carry the exact quorum`);
   }
   const signature = parseSumeragiByteVector(
     record.bls_aggregate_signature,
@@ -3118,6 +3118,8 @@ const SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1;
 
 const SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024;
 
+const SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES = 1024;
+
 const SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1;
 
 const SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT =
@@ -3134,6 +3136,7 @@ function parseSumeragiExecutionCommitment(value, context) {
     "native_amx_application_manifest_version",
     "native_amx_application_manifest_root",
     "native_amx_application_manifest_count",
+    "lane_finality_manifest",
     "merge_carrier",
     "executed_block_wire_len",
     "executed_block_wire_hash",
@@ -3142,8 +3145,10 @@ function parseSumeragiExecutionCommitment(value, context) {
   if (unknown !== undefined) {
     throw new TypeError(`${context} contains unknown field ${unknown}`);
   }
-  if (!Object.prototype.hasOwnProperty.call(record, "merge_carrier")) {
-    throw new TypeError(`${context}.merge_carrier is required`);
+  for (const field of ["lane_finality_manifest", "merge_carrier"]) {
+    if (!Object.prototype.hasOwnProperty.call(record, field)) {
+      throw new TypeError(`${context}.${field} is required`);
+    }
   }
   const topupAnchorCount = parseSumeragiUnsigned(
     record.topup_anchor_count,
@@ -3185,6 +3190,32 @@ function parseSumeragiExecutionCommitment(value, context) {
     throw new RangeError(
       `${context}.native_amx_application_manifest_count must be zero exactly for the canonical empty root`,
     );
+  }
+  let laneFinalityManifest = null;
+  if (record.lane_finality_manifest !== null) {
+    const laneContext = `${context}.lane_finality_manifest`;
+    const laneRecord = ensureRecord(record.lane_finality_manifest, laneContext);
+    const laneFields = new Set(["root", "leaf_count"]);
+    const missingLaneField = [...laneFields].find(
+      (field) => !Object.prototype.hasOwnProperty.call(laneRecord, field),
+    );
+    if (missingLaneField !== undefined) {
+      throw new TypeError(`${laneContext}.${missingLaneField} is required`);
+    }
+    const unknownLaneField = Object.keys(laneRecord).find(
+      (field) => !laneFields.has(field),
+    );
+    if (unknownLaneField !== undefined) {
+      throw new TypeError(`${laneContext} contains unknown field ${unknownLaneField}`);
+    }
+    laneFinalityManifest = Object.freeze({
+      root: parseSumeragiHash(laneRecord.root, `${laneContext}.root`),
+      leaf_count: parseSumeragiUnsigned(
+        laneRecord.leaf_count,
+        `${laneContext}.leaf_count`,
+        { max: SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES, positive: true },
+      ),
+    });
   }
   let mergeCarrier = null;
   if (record.merge_carrier !== null) {
@@ -3239,6 +3270,7 @@ function parseSumeragiExecutionCommitment(value, context) {
     native_amx_application_manifest_version: nativeManifestVersion,
     native_amx_application_manifest_root: nativeManifestRoot,
     native_amx_application_manifest_count: nativeManifestCount,
+    lane_finality_manifest: laneFinalityManifest,
     merge_carrier: mergeCarrier,
     executed_block_wire_len: parseSumeragiUnsigned(
       record.executed_block_wire_len,
@@ -3378,10 +3410,10 @@ function parseSumeragiCommitQcStatus(value, context) {
     minSigners !== Math.floor((validatorCount * 2) / 3) + 1 ||
     signedPower !== signerCount ||
     totalPower !== validatorCount ||
-    signerCount < minSigners ||
+    signerCount !== minSigners ||
     BigInt(signedPower) * 3n <= BigInt(totalPower) * 2n
   ) {
-    throw new RangeError(`${context} does not satisfy its frozen dual quorum`);
+    throw new RangeError(`${context} does not satisfy its exact frozen certificate quorum`);
   }
   return Object.freeze({
     certificate: parseSumeragiQcReference(record.certificate, `${context}.certificate`),
@@ -3615,10 +3647,8 @@ function parseSumeragiCommittedLaneBlocks(value) {
     }
     if (
       minQuorum > validatorCount ||
-      prepareSigners < minQuorum ||
-      commitSigners < minQuorum ||
-      prepareSigners > validatorCount ||
-      commitSigners > validatorCount
+      prepareSigners !== minQuorum ||
+      commitSigners !== minQuorum
     ) {
       throw new RangeError(`${itemContext} carries an impossible certified quorum`);
     }

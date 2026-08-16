@@ -37768,18 +37768,18 @@ state_test! { sync commit_merge_entry_rejects_qc_digest_mismatch
         MergeLedgerCommitError::MergeQCDigestMismatch { .. }
     ));
 }
-state_test! { sync commit_merge_entry_rejects_qc_insufficient_quorum
+state_test! { sync commit_merge_entry_rejects_qc_signer_superset
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
-    let keypairs = configure_commit_topology(&state, 3);
+    let keypairs = configure_commit_topology(&state, 4);
     let candidate = merge_candidate_with_lanes(1, 1);
-    let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
+    let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0, 1, 2, 3]);
     let entry = merge_entry_from_candidate(candidate, qc);
-    let_row! { err = state .commit_merge_entry(entry) .expect_err("quorum shortfall must be rejected") };
+    let_row! { err = state .commit_merge_entry(entry) .expect_err("signer superset must be rejected") };
     assert!(matches!(
         err,
-        MergeLedgerCommitError::MergeQCInsufficientQuorum { .. }
+        MergeLedgerCommitError::MergeQCSignerCountMismatch { observed: 4, required: 3 }
     ));
 }
 state_test! { sync commit_merge_entry_rejects_invalid_aggregate_signature

@@ -2,169 +2,98 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Sumeragi NPoS Chaos & Performance Validation Runbook
+# Sumeragi revision-4 performance and fault validation
 
-This runbook closes the Milestone A6 requirement in `roadmap.md` by
-documenting how to execute the Sumeragi chaos/performance harness, capture
-evidence, and wire the resulting telemetry dashboards/alerts. Pair it with
-`specs/sumeragi.md`, the soak matrix (`specs/sumeragi_soak_matrix.md`),
-and the A6 tracker in `specs/project_tracker/npos_sumeragi_phase_a.md`.
+This runbook maps release evidence to the live revision-4 protocol. Pair it
+with `specs/sumeragi.md`, `specs/sumeragi_soak_matrix.md`, and
+`specs/sumeragi_pacemaker.md`.
 
-Finite Sumeragi diagnostic reads require a fresh exact-`NetworkId` operator
-signature. For brevity, each `iroha_cli ... ops sumeragi ...` command below
-assumes the global
+Finite Sumeragi reads require a fresh exact-`NetworkId` operator signature.
+Examples assume the global runtime-only
 `--operator-private-key-file /absolute/runtime/operator.key` option; account
-keys, tokens, redirects, and retries are not fallbacks.
+keys, bearer tokens, environment variables, and client TOML are not fallbacks.
 
-## 1. Scope & Success Criteria
+## Evidence classes
 
-- **Coverage.** Run the baseline throughput harness, targeted chaos tests, and
-  the multi-peer soak matrix so every RBC, pacemaker, DA, and redundant-send
-  path is exercised.
-- **Evidence.** Produce refreshed Markdown/JSON reports, Grafana snapshots, and
-  zipped artefact packs that can be attached to the GA sign-off packet.
-- **Telemetry.** Ensure the dashboards fed by
-  `specs/grafana_sumeragi_overview.json` and the alert rules in
-  `specs/references/prometheus.rules.sumeragi_vrf.yml` are populated with
-  current data. Alerts must fire (and be acknowledged) when thresholds are
-  breached during fault injection.
-- **Reporting.** Update `status.md` and the Phase A tracker with the artefact
-  paths and dates after every full run.
+Use separate evidence for distinct properties:
 
-## 2. Prerequisites
+- baseline throughput and latency: `npos_baseline_1s_captures_metrics`;
+- finite transaction-queue saturation and producer deferral:
+  `npos_queue_backpressure_triggers_metrics`;
+- authenticated safety/message-ordering faults: the controlled message-release
+  scenarios in `integration_tests/tests/sumeragi_v2_runner.rs`;
+- process recovery and sustained liveness:
+  `npos_localnet_realistic_30tps_2h_rotating_validator_outage`;
+- admissible committee scaling: the 4/7/10-peer soak matrix.
 
-1. **Hardware.** Dedicated host with ≥16 physical cores, 64 GiB RAM, and fast
-   local SSD. Disable background workloads that could mask pacemaker timing.
-2. **Build profile.** `cargo build --profile release --workspace` (matching the
-   commit you intend to certify) and ensure `iroha`, `iroha3d`, and the
-   integration test binaries are available.
-3. **Environment.** Export `SUMERAGI_NPOS_STRESS_*` overrides only when testing
-   bespoke matrices; the helpers set them automatically. Keep `RUST_LOG` at
-   `info,iroha=debug`.
-4. **Dashboards & alerts.** Import
-   `specs/grafana_sumeragi_overview.json` into the staging Grafana, and
-   deploy the Prometheus alert rules via
-   `scripts/check_prometheus_rules.sh --apply` (or lint-only with `--lint`).
-5. **Paths.** Use a dedicated artifact root (e.g.,
-   `artifacts/sumeragi-a6-$(date +%Y%m%d-%H%M)`); all commands below assume the
-   caller has write access to that directory.
+The V1 global RBC store/chunk, collector fan-out, jitter/EMA pacemaker, and
+debug-message scenarios are not revision-4 release evidence.
 
-## 3. Baseline Throughput & DA Harness
+## Baseline and queue pressure
 
-1. Execute the deterministic baseline run:
-
-   ```bash
-   SUMERAGI_BASELINE_ARTIFACT_DIR=artifacts/sumeragi-baseline-live \
-     python3 scripts/run_sumeragi_baseline.py \
-     --fail-on-fixture \
-     --report-dest specs/generated/sumeragi_baseline_report.md
-   ```
-
-2. Capture the DA-specific metrics:
-
-   ```bash
-   python3 scripts/run_sumeragi_da.py \
-     --artifacts artifacts/sumeragi-da-$(date +%Y%m%d-%H%M) \
-     --report-dest specs/generated/sumeragi_da_report.md
-   ```
-
-3. Verify the reports now show the expected budgets listed in
-   `specs/sumeragi.md` (30 s base RBC delivery budget plus 60 s
-   per peer beyond four and a 40 s RS16 premium, commit headroom ≤ 40 s,
-   throughput ≥ min(payload/delivery-budget, 0.1 MiB/s), queue depth ≤ 32,
-   and zero P2P drops). Commit the regenerated
-   Markdown to keep the public evidence bundle current.
-
-## 4. Targeted Chaos & Stress Harness
-
-Run each stress scenario individually so failures are easy to triage:
+Build the exact binaries under review, then run:
 
 ```bash
 python3 scripts/run_sumeragi_stress.py \
   --artifacts artifacts/sumeragi-stress-$(date +%Y%m%d-%H%M)
 ```
 
-The helper executes the tests in
-`integration_tests/tests/sumeragi_npos_performance.rs`
-(queue backpressure, RBC overflow, redundant send retries, jitter, chunk loss)
-and appends pass/fail rows to `summary.json`. When a scenario fails:
+The helper invokes only the two current NPoS performance tests and records
+stdout/stderr plus a JSON summary. Use `SUMERAGI_NPOS_STRESS_PEERS` only for an
+admissible exact `3f + 1` committee. Mode, cadence, Set A/B, quorum, and DA
+layout come from signed genesis/current-height context and are not environment
+or local-config dimensions.
 
-1. Fetch the linked stdout/stderr logs from the artifact directory.
-2. Correlate the timestamp with Grafana (phases, RBC backlog, redundant-send
-   counts, VRF deadlines).
-3. File a regression ticket referencing the scenario label and attach the logs.
+Capture:
 
-Once green, render the Markdown summary:
+- authenticated `/v1/sumeragi/status` before and after the run;
+- shared configuration and height-context fingerprints;
+- transaction/adapter queue capacities, depths, saturation, and deferrals;
+- committed height/transaction deltas and wall-clock run bounds;
+- host, binary digest, repository commit, and generated genesis digest.
 
-```bash
-python3 scripts/render_sumeragi_stress_report.py \
-  --summary artifacts/sumeragi-stress-*/summary.json \
-  --out specs/generated/sumeragi_stress_report.md
-```
+## Authenticated protocol faults
 
-## 5. Multi-Peer Soak Matrix
+Use `integration_tests/tests/sumeragi_v2_runner.rs` for conflicting or reordered
+consensus evidence. Its control plane holds and releases real authenticated
+revision-4 Proposal/Vote/QC/TimeoutCertificate traffic. Verify exact certified
+body convergence, sign-once/lock behavior, and common durable successor state.
 
-Follow the soak matrix instructions verbatim; this step proves the stress
-signals hold across realistic peer counts:
+Do not create protocol faults through node-local TOML. A config layer cannot
+forge a valid message, lower `q`, disable mandatory DA, or install a view.
 
-```bash
-python3 scripts/run_sumeragi_soak_matrix.py \
-  --artifacts-root artifacts/sumeragi-soak-$(date +%Y%m%d-%H%M) \
-  --pack artifacts/sumeragi-soak-$(date +%Y%m%d-%H%M)/signoff.zip
-```
+## Validator outage and recovery
 
-Review `matrix_report.md` to ensure every scenario row shows `pass`. Store the
-`.zip` bundle alongside the Grafana screenshots for auditability.
+The ignored rotating-outage localnet test stops one validator process at a
+time, keeps the other `2f + 1` validators live, restarts the stopped validator
+with the unchanged base configuration, and verifies status recovery, body/state
+catch-up, and convergence before the next outage when strict bounds are enabled.
 
-## 6. Telemetry & Alert Validation
+Run it on a dedicated host and preserve its throughput artifact directory.
+Treat missed recovery/convergence bounds as liveness failures; do not respond by
+adding retired timeout or recovery knobs.
 
-During the runs above (especially the chaos suite), confirm:
+## Triage
 
-- `sumeragi_phase_latency_ms` and `sumeragi_qc_assembly_latency_ms` stay within
-  the configured pacemaker budgets.
-- DA and RBC counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`,
-  legacy `sumeragi_rbc_da_reschedule_total`, `_backpressure_deferrals_total`,
-  `_evictions_total`) match the fault you injected.
-- Alert rules from `prometheus.rules.sumeragi_vrf.yml` fire once when their
-  respective conditions trigger (e.g., `VRFNoParticipation`, `SumeragiCommitStall`).
-  Capture the firing notification plus the acknowledgement screenshot.
-- The Sumeragi Grafana overview dashboard shows the hardware, commit hash, and
-  success counters for the current run.
+1. Confirm every peer advertises protocol version 4 and the expected signed
+   height-context/shared-config fingerprints.
+2. Confirm committee geometry is exact `3f + 1` and at least `2f + 1` members
+   are responsive.
+3. Inspect authoritative height/view/phase, QC/TC references, body/persistence
+   state, and latest durable commit in `/v1/sumeragi/status`.
+4. Correlate transaction/body/chunk/adapter queue pressure with P2P drop and
+   ingress-rejection metrics.
+5. Preserve consensus logs and exact controlled-message/outage timestamps.
 
-Document alert firings and dashboard URLs in the artefact README for later
-audits.
+Collector/RBC/DA/adaptive-pacemaker fields in legacy-labeled telemetry endpoints
+and Prometheus catalog entries are non-authoritative observations. They may
+remain zero and must not override authoritative revision-4 status.
 
-## 7. Evidence Packaging & Reporting
+## Sign-off
 
-1. Gather the following into the run’s artifact directory:
-   - `summary.json`, `matrix_report.{md,json}`, zipped soak pack.
-   - Updated generated reports:
-     `specs/generated/sumeragi_{baseline,da,stress}_report.md`.
-   - Grafana snapshot `.json`/`.png` exports and alert acknowledgement logs.
-2. Update `status.md` with a bullet summarising the run and linking to the
-   artefact root.
-3. Append the run entry to
-   `specs/project_tracker/npos_sumeragi_phase_a.md` so the tracker shows
-   the fresh date/host/commit triple.
-4. Share the ZIP + note with the SRE governance mailing list; archive the email
-   under `specs/sdk/android/readiness/archive/` if it contains runbook
-   decisions.
-
-## 8. Failure Triage Checklist
-
-When a scenario breaches its budget:
-
-1. Consult the relevant section in `specs/sumeragi.md` (collector &
-   witness telemetry, VRF pipeline, DA retry cadence) for the metric-driven
-   triage flow.
-2. Inspect `/v1/sumeragi/status` and `/v1/sumeragi/telemetry` using
-   `iroha_cli --output-format text ops sumeragi status` for hot-path validation.
-3. For DA-specific stalls, pair the logs with
-   `specs/sumeragi_da.md` so operators can differentiate between RBC
-   backlog and witness upload failures.
-4. Record the remediation (tuning knobs, restarts, manifest fixes) in the
-   incident record and mirror the root cause in `status.md`.
-
-Following this runbook ensures every chaos and performance deliverable spelled
-out in Milestone A6 has reproducible evidence, alert coverage, and clear
-operator guidance.
+A release evidence pack must identify every executed scenario and show that no
+retired test name or local Sumeragi protocol/timing/DA/debug field was used.
+Baseline and queue-pressure rows must pass for each requested committee size;
+authenticated safety cases must converge on one certified body; outage runs
+must demonstrate bounded recovery. Record any skipped ignored soak as remaining
+runtime uncertainty rather than inferring success from static checks.
