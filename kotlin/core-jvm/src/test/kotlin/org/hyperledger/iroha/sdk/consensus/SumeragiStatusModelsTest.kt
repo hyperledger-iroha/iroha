@@ -123,6 +123,34 @@ class SumeragiStatusModelsTest {
             )
         }
         assertFails {
+            SumeragiV2Status.parseJson(payload.replace("\"lane_finality_manifest\": null,", ""))
+        }
+        val laneRoot = hash(0x38)
+        val withLane = SumeragiV2Status.parseJson(
+            payload.replace(
+                "\"lane_finality_manifest\": null",
+                "\"lane_finality_manifest\": {\"root\": \"$laneRoot\", \"leaf_count\": 1}",
+            ),
+        )
+        assertEquals(
+            laneRoot,
+            withLane.lastCommitQc?.certificate?.executionCommitment?.laneFinalityManifest?.root,
+        )
+        assertEquals(
+            BigInteger.ONE,
+            withLane.lastCommitQc?.certificate?.executionCommitment?.laneFinalityManifest?.leafCount,
+        )
+        listOf(0, 1_025).forEach { count ->
+            assertFails {
+                SumeragiV2Status.parseJson(
+                    payload.replace(
+                        "\"lane_finality_manifest\": null",
+                        "\"lane_finality_manifest\": {\"root\": \"$laneRoot\", \"leaf_count\": $count}",
+                    ),
+                )
+            }
+        }
+        assertFails {
             SumeragiV2Status.parseJson(payload.replace("\"merge_carrier\": null,", ""))
         }
         assertFails {
@@ -136,6 +164,12 @@ class SumeragiStatusModelsTest {
                     "\"signed_power\": 3",
                     "\"signed_power\": 2",
                 ),
+            )
+        }
+        assertFails {
+            SumeragiV2Status.parseJson(
+                payload.replaceFirst("\"signer_count\": 3", "\"signer_count\": 4")
+                    .replaceFirst("\"signed_power\": 3", "\"signed_power\": 4"),
             )
         }
         assertFails {
@@ -312,6 +346,7 @@ class SumeragiStatusModelsTest {
           "native_amx_application_manifest_version": 1,
           "native_amx_application_manifest_root": "$EMPTY_MANIFEST_ROOT",
           "native_amx_application_manifest_count": 0,
+          "lane_finality_manifest": null,
           "merge_carrier": null,
           "executed_block_wire_len": $executedWireLen,
           "executed_block_wire_hash": "${hash(0x37)}"

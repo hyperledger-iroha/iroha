@@ -3876,6 +3876,7 @@ impl Reducer {
         }
         let signatures = ordered
             .into_iter()
+            .take(self.context.minimum_signer_count())
             .map(|signer| {
                 let signed = pool
                     .get(&signer)
@@ -4302,7 +4303,7 @@ impl Reducer {
         let Some(pool) = self.timeout_votes.get(&round) else {
             return Ok(None);
         };
-        let (quorum, _) = Quorum::from_iter(
+        let (quorum, ordered) = Quorum::from_iter(
             &self.context,
             pool.values().map(|signed| signed.vote().signer()),
         )?;
@@ -4313,7 +4314,13 @@ impl Reducer {
             Option<CertificateRef>,
             (Option<QuorumCertificate>, Vec<SignatureShare>),
         > = BTreeMap::new();
-        for signed in pool.values() {
+        for signer in ordered
+            .into_iter()
+            .take(self.context.minimum_signer_count())
+        {
+            let signed = pool
+                .get(&signer)
+                .expect("ordered timeout signer originated in the vote pool");
             let vote = signed.vote();
             grouped
                 .entry(vote.highest_prepare_ref())
@@ -5045,51 +5052,6 @@ mod source_link_tests {
     }
     include!("tests/reducer_timeout_and_projection.rs");
     include!("tests/v2_core_reducer_primitive_projection.rs");
-    #[test]
-    fn enter_view_effect_cannot_substitute_an_equal_reference_certificate() {
-        let fixture = reducer();
-        let subject = Subject::repeat(0xb6);
-        let high = certificate(&fixture.context, 0, Phase::Prepare, subject, 0xb7);
-        let substitute = certificate(&fixture.context, 0, Phase::Prepare, subject, 0xb8);
-        assert_eq!(high.reference(), substitute.reference());
-        assert_ne!(high, substitute);
-        let (before, event) = pending_timeout_install(Some(high));
-        let mut after = before.clone();
-        let outcome = after
-            .step_in_place(event.clone())
-            .expect("materialize persisted-TC candidate");
-        let mut effects = outcome.into_effects();
-        let Some(Effect::EnterView { protected_lock, .. }) = effects.first_mut() else {
-            panic!("first install effect must enter the view")
-        };
-        *protected_lock = Some(substitute);
-        let projection = before.transition_projection(&event, &after, &effects);
-        assert_eq!(
-            projection.enter_view.effect_protected_lock.evidence_class,
-            CERTIFICATE_EVIDENCE_FOREIGN
-        );
-        assert_eq!(
-            projection.enter_view.effect_protected_lock.signer_bitmap,
-            projection.enter_view.durable_lock_after.signer_bitmap
-        );
-        assert_eq!(
-            projection.enter_view.effect_protected_lock.signer_count,
-            projection.enter_view.durable_lock_after.signer_count
-        );
-        assert_eq!(
-            projection
-                .enter_view
-                .effect_protected_lock
-                .signer_bitmap_count,
-            projection.enter_view.durable_lock_after.signer_bitmap_count
-        );
-        assert_eq!(
-            projection.enter_view.effect_protected_lock.voting_power,
-            projection.enter_view.durable_lock_after.voting_power
-        );
-        assert!(!refinement::accepts(projection));
-        assert!(!before.transition_refines(&event, &after, &effects));
-    }
     #[test]
     fn certificate_evidence_priority_and_signer_bitmap_match_the_roster_bound() {
         assert!(MAX_VOTING_ROSTER_LEN <= u128::BITS as usize);

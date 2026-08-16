@@ -32,6 +32,8 @@ public final class SumeragiV2Wire {
   public static final int MERGE_CARRIER_COMMITMENT_VERSION = 1;
   /** Maximum participant route/incarnation leaves committed by one global block. */
   public static final long MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES = 1_024;
+  /** Maximum lane-finality statements committed by one global block. */
+  public static final long MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK = 1_024;
   private static final byte[] NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN =
       "iroha:sumeragi:v2:native-amx-application-manifest:v1:empty"
           .getBytes(StandardCharsets.UTF_8);
@@ -254,6 +256,36 @@ public final class SumeragiV2Wire {
     }
   }
 
+  /** Exact Merkle root and non-zero leaf count of canonical lane-finality statements. */
+  public static final class LaneFinalityManifestCommitment extends WireValue {
+    public final Hash32 root;
+    public final long leafCount;
+
+    public LaneFinalityManifestCommitment(Hash32 root, long leafCount) {
+      this.root = nonNull(root, "root");
+      require(
+          leafCount > 0 && leafCount <= MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK,
+          "lane-finality manifest leaf count exceeds the non-empty consensus bound");
+      this.leafCount = leafCount;
+    }
+
+    @Override
+    public byte[] encode() {
+      return struct(root.bytes(), u64(leafCount));
+    }
+
+    static LaneFinalityManifestCommitment decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      LaneFinalityManifestCommitment value =
+          new LaneFinalityManifestCommitment(
+              new Hash32(
+                  reader.field("lane finality manifest root", SumeragiV2Wire::decodeHash)),
+              reader.field("lane finality manifest leaf count", SumeragiV2Wire::decodeU64));
+      reader.finish("lane finality manifest commitment");
+      return value;
+    }
+  }
+
   /** Deterministic state-transition result authenticated by votes and certificates. */
   public static final class ExecutionCommitment extends WireValue {
     public final Hash32 parentStateRoot;
@@ -264,6 +296,7 @@ public final class SumeragiV2Wire {
     public final int nativeAmxApplicationManifestVersion;
     public final Hash32 nativeAmxApplicationManifestRoot;
     public final long nativeAmxApplicationManifestCount;
+    public final LaneFinalityManifestCommitment laneFinalityManifest;
     public final MergeCarrierCommitment mergeCarrier;
     public final long executedBlockWireLen;
     public final Hash32 executedBlockWireHash;
@@ -289,6 +322,7 @@ public final class SumeragiV2Wire {
           nativeAmxApplicationManifestRoot,
           nativeAmxApplicationManifestCount,
           null,
+          null,
           executedBlockWireLen,
           executedBlockWireHash);
     }
@@ -302,6 +336,7 @@ public final class SumeragiV2Wire {
         int nativeAmxApplicationManifestVersion,
         Hash32 nativeAmxApplicationManifestRoot,
         long nativeAmxApplicationManifestCount,
+        LaneFinalityManifestCommitment laneFinalityManifest,
         MergeCarrierCommitment mergeCarrier,
         long executedBlockWireLen,
         Hash32 executedBlockWireHash) {
@@ -316,6 +351,7 @@ public final class SumeragiV2Wire {
           nonNull(nativeAmxApplicationManifestRoot, "nativeAmxApplicationManifestRoot");
       requireU32(nativeAmxApplicationManifestCount, "nativeAmxApplicationManifestCount");
       this.nativeAmxApplicationManifestCount = nativeAmxApplicationManifestCount;
+      this.laneFinalityManifest = laneFinalityManifest;
       this.mergeCarrier = mergeCarrier;
       require(executedBlockWireLen != 0, "executed block wire length must be non-zero");
       this.executedBlockWireLen = executedBlockWireLen;
@@ -399,6 +435,7 @@ public final class SumeragiV2Wire {
           u16(nativeAmxApplicationManifestVersion),
           nativeAmxApplicationManifestRoot.bytes(),
           u32(nativeAmxApplicationManifestCount),
+          option(laneFinalityManifest == null ? null : laneFinalityManifest.encode()),
           option(mergeCarrier == null ? null : mergeCarrier.encode()),
           u64(executedBlockWireLen),
           executedBlockWireHash.bytes());
@@ -431,6 +468,10 @@ public final class SumeragiV2Wire {
           reader.field(
               "execution Native AMX application manifest count",
               SumeragiV2Wire::decodeU32);
+      LaneFinalityManifestCommitment laneFinalityManifest =
+          reader.field(
+              "execution lane finality manifest",
+              payload -> decodeOption(payload, LaneFinalityManifestCommitment::decode));
       MergeCarrierCommitment mergeCarrier =
           reader.field(
               "execution merge carrier",
@@ -450,6 +491,7 @@ public final class SumeragiV2Wire {
               manifestVersion,
               manifestRoot,
               manifestCount,
+              laneFinalityManifest,
               mergeCarrier,
               executedBlockWireLen,
               executedBlockWireHash);

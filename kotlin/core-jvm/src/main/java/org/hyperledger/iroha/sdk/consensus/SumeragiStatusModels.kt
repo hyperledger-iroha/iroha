@@ -57,6 +57,14 @@ class SumeragiStatusBlockSubject internal constructor(
         listOf(parentBlockHash, blockHash, payloadHash)
 }
 
+/** Exact Merkle root and non-zero leaf count of canonical lane-finality statements. */
+class SumeragiStatusLaneFinalityManifestCommitment internal constructor(
+    @JvmField val root: String,
+    @JvmField val leafCount: BigInteger,
+) : SumeragiStatusValue() {
+    override fun equalityFields(): List<Any?> = listOf(root, leafCount)
+}
+
 /** Exact merge-ledger entry identity authenticated by a global certificate. */
 class SumeragiStatusMergeCarrierCommitment internal constructor(
     @JvmField val version: Int,
@@ -75,6 +83,7 @@ class SumeragiStatusExecutionCommitment internal constructor(
     @JvmField val nativeAmxApplicationManifestVersion: Int,
     @JvmField val nativeAmxApplicationManifestRoot: String,
     @JvmField val nativeAmxApplicationManifestCount: BigInteger,
+    @JvmField val laneFinalityManifest: SumeragiStatusLaneFinalityManifestCommitment?,
     @JvmField val mergeCarrier: SumeragiStatusMergeCarrierCommitment?,
     @JvmField val executedBlockWireLen: BigInteger,
     @JvmField val executedBlockWireHash: String,
@@ -88,6 +97,7 @@ class SumeragiStatusExecutionCommitment internal constructor(
         nativeAmxApplicationManifestVersion,
         nativeAmxApplicationManifestRoot,
         nativeAmxApplicationManifestCount,
+        laneFinalityManifest,
         mergeCarrier,
         executedBlockWireLen,
         executedBlockWireHash,
@@ -761,7 +771,8 @@ private object SumeragiStatusParser {
                 "parent_state_root", "post_state_root", "ordinary_writes_root",
                 "topup_anchor_count", "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root", "native_amx_application_manifest_count",
-                "merge_carrier", "executed_block_wire_len", "executed_block_wire_hash",
+                "lane_finality_manifest", "merge_carrier", "executed_block_wire_len",
+                "executed_block_wire_hash",
             ),
             setOf("topup_anchor_root"),
             context,
@@ -799,6 +810,23 @@ private object SumeragiStatusParser {
             "$context.native_amx_application_manifest_count must be zero exactly for the " +
                 "canonical empty root"
         }
+        val laneFinalityManifest = if (record["lane_finality_manifest"] == null) {
+            null
+        } else {
+            val laneContext = "$context.lane_finality_manifest"
+            val lane = SumeragiJsonPrimitives.exactObject(
+                record["lane_finality_manifest"], setOf("root", "leaf_count"), laneContext,
+            )
+            SumeragiStatusLaneFinalityManifestCommitment(
+                SumeragiJsonPrimitives.hash(lane["root"], "$laneContext.root"),
+                SumeragiJsonPrimitives.unsigned(
+                    lane["leaf_count"],
+                    BigInteger.valueOf(LANE_FINALITY_MANIFEST_MAX_LEAVES.toLong()),
+                    "$laneContext.leaf_count",
+                    positive = true,
+                ),
+            )
+        }
         val mergeCarrier = if (record["merge_carrier"] == null) {
             null
         } else {
@@ -830,6 +858,7 @@ private object SumeragiStatusParser {
             nativeAmxApplicationManifestVersion = manifestVersion,
             nativeAmxApplicationManifestRoot = manifestRoot,
             nativeAmxApplicationManifestCount = manifestCount,
+            laneFinalityManifest = laneFinalityManifest,
             mergeCarrier = mergeCarrier,
             executedBlockWireLen = SumeragiJsonPrimitives.positiveU64(
                 record["executed_block_wire_len"], "$context.executed_block_wire_len",
@@ -953,11 +982,11 @@ private object SumeragiStatusParser {
         val canonicalMinSigners = validatorCount.multiply(BigInteger.valueOf(2))
             .divide(BigInteger.valueOf(3)).add(BigInteger.ONE)
         require(
-            signerCount >= minSigners && minSigners == canonicalMinSigners &&
+            signerCount == minSigners && minSigners == canonicalMinSigners &&
                 signedPower == signerCount && totalPower == validatorCount &&
                 signedPower.multiply(BigInteger.valueOf(3)) >
                     totalPower.multiply(BigInteger.valueOf(2)),
-        ) { "$context does not satisfy its frozen dual quorum" }
+        ) { "$context does not satisfy its exact frozen certificate quorum" }
         return SumeragiStatusCommitQc(
             qcReference(record["certificate"], "$context.certificate"),
             validatorCount,
@@ -1324,6 +1353,8 @@ private object SumeragiStatusParser {
         left.nativeAmxApplicationManifestVersion == right.nativeAmxApplicationManifestVersion &&
         left.nativeAmxApplicationManifestRoot == right.nativeAmxApplicationManifestRoot &&
         left.nativeAmxApplicationManifestCount == right.nativeAmxApplicationManifestCount &&
+        left.laneFinalityManifest?.root == right.laneFinalityManifest?.root &&
+        left.laneFinalityManifest?.leafCount == right.laneFinalityManifest?.leafCount &&
         left.mergeCarrier?.version == right.mergeCarrier?.version &&
         left.mergeCarrier?.entryHash == right.mergeCarrier?.entryHash &&
         left.executedBlockWireLen == right.executedBlockWireLen &&
@@ -1336,6 +1367,7 @@ private object SumeragiStatusParser {
 
     private const val NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
     private const val NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1_024
+    private const val LANE_FINALITY_MANIFEST_MAX_LEAVES = 1_024
     private const val MERGE_CARRIER_COMMITMENT_VERSION = 1
     private const val NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT =
         "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"

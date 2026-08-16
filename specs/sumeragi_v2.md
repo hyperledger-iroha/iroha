@@ -102,9 +102,11 @@ canonical Nexus XOR asset-definition ID. Generation fails closed without
 
 Permissioned and NPoS modes both assign one consensus vote to every committee
 member. NPoS stake selects and backs the finalized committee; it never weights
-Prepare, Commit, timeout, or certificate votes. A certificate contains at
-least `2f + 1` distinct validators. Observers are never committee members and
-do not contribute to quorum.
+Prepare, Commit, timeout, or certificate votes. A wire certificate contains
+exactly `2f + 1` distinct validators. A local collector may retain more valid
+votes, but it deterministically projects the first `2f + 1` validators in
+canonical signer order; certificate supersets are rejected. Observers are
+never committee members and do not contribute to quorum.
 
 Leadership rotates through the entire frozen roster:
 
@@ -497,9 +499,10 @@ broadcast does not loop back to the sender.
 
 A TimeoutCertificate contains individually verifiable votes, optionally aggregated in groups that
 reported the same high QC. Groups are canonically sorted, their signer sets are disjoint, and their
-union contains at least `2f + 1` committee members. The deterministic maximum valid PrepareQC is selected across every
-group. A TC is persisted before entering the next view and any validator may form and rebroadcast
-it; there is no correctness-critical collector.
+union contains exactly `2f + 1` committee members. Local formation projects the canonical first
+`2f + 1` signers before grouping them. The deterministic maximum valid PrepareQC is selected across
+every group. A TC is persisted before entering the next view and any validator may form and
+rebroadcast it; there is no correctness-critical collector.
 
 Another valid TC for the immediately preceding timed-out round may arrive after view entry with a
 PrepareQC that the first quorum omitted. The node persists this certificate only when its selected
@@ -610,7 +613,9 @@ BLS proof of possession for every validator. The data model enforces this
 one-to-one alignment during construction and during both binary and JSON
 decoding, and exposes the material through read-only slices and paired
 iteration. Signature, proof length, ordering, committee authority, bitmap, and
-quorum checks remain admission-time semantic validation.
+exact quorum-cardinality checks remain admission-time semantic validation.
+Local formation validates every supplied vote and deterministically selects
+the canonical first quorum; an otherwise valid signer superset is not a wire QC.
 
 Grouped participant application is atomic and bounded to 1–4,096 ordered,
 unique sources. The group must match the exact transaction count and timestamp,
@@ -738,10 +743,12 @@ Lane `NewView` certificates rotate only a synthetic, durable retransmission curs
 retarget the proposal certified by Prepare, Commit, READY, the certified sidecar, or merge
 execution. Every Commit signature before and after a cursor change is therefore byte-identical and
 remains compatible with the crash-safe per-incarnation signing guard. The cursor chain is checked
-for contiguous quorum-authorized transitions and may be compacted into a restart checkpoint, but a
-later-view READY certificate is invalid. Failed cursor persistence is retried by re-aggregating the
-retained quorum votes; installing a cursor simply re-fans the immutable origin payload, proposal,
-votes, and QCs.
+for contiguous quorum-authorized transitions and may be compacted into a restart checkpoint. Lane
+availability, drain, NewView, and lane-block wire certificates each carry exactly the canonical
+quorum signer count; local aggregation projects the canonical first quorum and validation rejects
+supersets. A later-view READY certificate is invalid. Failed cursor persistence is retried by
+re-aggregating the retained quorum votes; installing a cursor simply re-fans the immutable origin
+payload, proposal, votes, and QCs.
 
 Fast global finality does not reset unfinished canonical lane consensus. At each global-height
 boundary the runner carries only the bounded lane-session cache whose proposal identity matches the

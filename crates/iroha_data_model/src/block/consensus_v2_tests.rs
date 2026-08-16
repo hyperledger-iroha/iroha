@@ -600,6 +600,27 @@ mod tests {
         assert_eq!(context.quorum.min_signers, 3);
         assert_eq!(context.validate_signers(&[0, 1, 2]), Ok(()));
         assert_eq!(context.validate_signers(&[1, 2, 3]), Ok(()));
+        assert_eq!(context.validate_signers(&[0, 1, 2, 3]), Ok(()));
+        assert_eq!(context.validate_certificate_signers(&[0, 1, 2]), Ok(()));
+        assert_eq!(
+            ValidationError::TooManySigners.to_string(),
+            "signer count exceeds the wire range"
+        );
+        assert_eq!(
+            ValidationError::SignerCountMismatch {
+                expected: 3,
+                actual: 4,
+            }
+            .to_string(),
+            "certificate signer count mismatch: expected exactly 3, got 4"
+        );
+        assert_eq!(
+            context.validate_certificate_signers(&[0, 1, 2, 3]),
+            Err(ValidationError::SignerCountMismatch {
+                expected: 3,
+                actual: 4,
+            })
+        );
         assert_eq!(
             context.validate_signers(&[0, 1]),
             Err(ValidationError::InsufficientSignerCount)
@@ -607,6 +628,13 @@ mod tests {
         assert_eq!(
             context.validate_signers(&[0, 1, 1]),
             Err(ValidationError::SignersNotStrictlySorted)
+        );
+        assert_eq!(
+            qc(&context, 0, GlobalPhase::Commit, vec![0, 1, 2, 3]).validate(&context),
+            Err(ValidationError::SignerCountMismatch {
+                expected: 3,
+                actual: 4,
+            })
         );
     }
     #[test]
@@ -1033,6 +1061,15 @@ mod tests {
         };
         assert_eq!(certificate.validate(&context), Ok(()));
         assert_eq!(certificate.highest_prepare_qc(), Some(&prepare));
+        let mut superset = certificate.clone();
+        superset.groups[1].signers.push(3);
+        assert_eq!(
+            superset.validate(&context),
+            Err(ValidationError::SignerCountMismatch {
+                expected: 3,
+                actual: 4,
+            })
+        );
         let mut overlapping = certificate.clone();
         overlapping.groups[1].signers = vec![0, 2];
         assert_eq!(

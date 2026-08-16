@@ -9,6 +9,78 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple,
 
 
 @dataclass(frozen=True)
+class SumeragiV2Round:
+    """Consensus round bound to one frozen v2 height context."""
+
+    context_id: Tuple[str]
+    height: int
+    view: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2BlockSubject:
+    """Exact block and payload identity certified by Sumeragi v2."""
+
+    parent_block_hash: Optional[str]
+    block_hash: str
+    payload_hash: str
+
+
+@dataclass(frozen=True)
+class SumeragiV2LaneFinalityManifestCommitment:
+    """Exact Merkle root and non-zero lane-finality leaf count."""
+
+    root: str
+    leaf_count: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2MergeCarrierCommitment:
+    """Exact merge-ledger entry identity authenticated by a v2 QC."""
+
+    version: Literal[1]
+    entry_hash: str
+
+
+@dataclass(frozen=True)
+class SumeragiV2ExecutionCommitment:
+    """Exact deterministic execution commitment authenticated by a v2 QC."""
+
+    parent_state_root: str
+    post_state_root: str
+    ordinary_writes_root: str
+    topup_anchor_root: Optional[str]
+    topup_anchor_count: int
+    native_amx_application_manifest_version: int
+    native_amx_application_manifest_root: str
+    native_amx_application_manifest_count: int
+    lane_finality_manifest: Optional[SumeragiV2LaneFinalityManifestCommitment]
+    merge_carrier: Optional[SumeragiV2MergeCarrierCommitment]
+    executed_block_wire_len: int
+    executed_block_wire_hash: str
+
+
+@dataclass(frozen=True)
+class SumeragiV2QcReference:
+    """Stable semantic reference to a v2 quorum certificate."""
+
+    round: SumeragiV2Round
+    proposal_round: SumeragiV2Round
+    phase: str
+    subject: SumeragiV2BlockSubject
+    execution_commitment: SumeragiV2ExecutionCommitment
+
+
+@dataclass(frozen=True)
+class SumeragiV2TimeoutReference:
+    """Stable reference to the latest installed timeout certificate."""
+
+    round: SumeragiV2Round
+    highest_prepare_qc: Optional[SumeragiV2QcReference]
+    certificate_hash: str
+
+
+@dataclass(frozen=True)
 class ConnectPerIpSessions:
     """Per-IP session counter inside a Connect status snapshot."""
 

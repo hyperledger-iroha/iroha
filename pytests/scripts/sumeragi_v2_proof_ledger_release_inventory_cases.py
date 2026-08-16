@@ -549,26 +549,26 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=525",
-            "readonly expected_multilane_focus_test_count=520",
-            "multilane G-UNIT source count must be sealed as 525",
+            "readonly expected_multilane_focus_test_count=532",
+            "readonly expected_multilane_focus_test_count=527",
+            "multilane G-UNIT source count must be sealed as 532",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 526 ]]; then""",
+                """'[:space:]')" != 533 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 525 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 525 focus rows",
+                """'[:space:]')" != 532 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 532 focus rows",
         ),
         (
-            "The canonical 525-row TSV is",
-            "The canonical 520-row TSV is",
-            "G-UNIT inventory comment must seal 525 rows",
+            "The canonical 532-row TSV is",
+            "The canonical 527-row TSV is",
+            "G-UNIT inventory comment must seal 532 rows",
         ),
         (
-            "including exact 525/525 G-UNIT,",
-            "including exact 524/525 G-UNIT,",
-            "terminal success text must seal exact 525/525 G-UNIT",
+            "including exact 532/532 G-UNIT,",
+            "including exact 531/532 G-UNIT,",
+            "terminal success text must seal exact 532/532 G-UNIT",
         ),
         (
             "  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable\n",
@@ -782,24 +782,24 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
             "  native_amx_grouped_parity_test_counts=(\n"
             "    7\n"
-            "    62\n"
-            "    60\n",
+            "    63\n"
+            "    61\n",
             "  native_amx_grouped_parity_test_counts=(\n"
             "    7\n"
-            "    61\n"
-            "    60\n",
+            "    62\n"
+            "    61\n",
             "grouped Native AMX SDK runner suite inventory must equal",
         ),
         (
             Path("ci/run_native_amx_v2_grouped_sdk_parity.sh"),
+            "  python)\n    observed_test_count=63\n",
             "  python)\n    observed_test_count=62\n",
-            "  python)\n    observed_test_count=61\n",
             "grouped Native AMX SDK harness suite inventory must equal",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '    ("python", 63),\n',
             '    ("python", 62),\n',
-            '    ("python", 61),\n',
             "grouped Native AMX SDK receipt suite inventory must equal",
         ),
     ),
@@ -852,23 +852,23 @@ def test_production_release_inventory_rejects_grouped_sdk_count_drift(
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
             "  sumeragi_v2_sdk_diagnostics_test_counts=(\n"
-            "    121\n"
+            "    129\n"
             "    88\n",
             "  sumeragi_v2_sdk_diagnostics_test_counts=(\n"
-            "    120\n"
+            "    125\n"
             "    88\n",
             "Sumeragi SDK diagnostics runner suite inventory must equal",
         ),
         (
             Path("ci/run_sumeragi_v2_sdk_diagnostics.sh"),
-            "  python)\n    observed_test_count=121\n",
-            "  python)\n    observed_test_count=120\n",
+            "  python)\n    observed_test_count=129\n",
+            "  python)\n    observed_test_count=125\n",
             "Sumeragi SDK diagnostics harness suite inventory must equal",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '    ("python", 121),\n',
-            '    ("python", 120),\n',
+            '    ("python", 129),\n',
+            '    ("python", 125),\n',
             "Sumeragi SDK diagnostics receipt suite inventory must equal",
         ),
         (

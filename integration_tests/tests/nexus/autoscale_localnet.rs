@@ -2378,10 +2378,8 @@ fn committed_lane_block_has_canonical_quorum_metadata(block: &CommittedLaneBlock
     }
     let expected_quorum = commit_quorum_from_len(validator_count).max(1);
     min_quorum == expected_quorum
-        && prepare_qc_signer_count >= min_quorum
-        && prepare_qc_signer_count <= validator_count
-        && commit_qc_signer_count >= min_quorum
-        && commit_qc_signer_count <= validator_count
+        && prepare_qc_signer_count == min_quorum
+        && commit_qc_signer_count == min_quorum
 }
 fn committed_lane_block_is_certified(block: &CommittedLaneBlockSnapshot) -> bool {
     committed_lane_block_targets_default_dataspace(block)
@@ -4396,8 +4394,8 @@ fn validate_lane_drain_certificate_evidence(
         }
     }
     ensure!(
-        signer_indices.len() >= usize::try_from(intent.min_quorum).unwrap_or(usize::MAX),
-        "drain certificate is below its committed quorum"
+        signer_indices.len() == usize::try_from(intent.min_quorum).unwrap_or(usize::MAX),
+        "drain certificate does not carry its exact committed quorum"
     );
     ensure!(
         certificate.signer_proofs.len() == signer_indices.len(),
@@ -5206,8 +5204,8 @@ fn wait_for_certified_elastic_lane(
                             && block.validator_count > 0
                             && block.min_quorum > 0
                             && block.min_quorum <= block.validator_count
-                            && block.prepare_qc_signer_count >= block.min_quorum
-                            && block.commit_qc_signer_count >= block.min_quorum
+                            && block.prepare_qc_signer_count == block.min_quorum
+                            && block.commit_qc_signer_count == block.min_quorum
                     }) =>
                 {
                     last_observed = last_observed.saturating_add(1);
@@ -5254,8 +5252,8 @@ fn wait_for_certified_elastic_lane_incarnation(
                             && block.validator_count > 0
                             && block.min_quorum > 0
                             && block.min_quorum <= block.validator_count
-                            && block.prepare_qc_signer_count >= block.min_quorum
-                            && block.commit_qc_signer_count >= block.min_quorum
+                            && block.prepare_qc_signer_count == block.min_quorum
+                            && block.commit_qc_signer_count == block.min_quorum
                     }) {
                         last_observed = last_observed.saturating_add(1);
                     }
@@ -5760,8 +5758,8 @@ fn validate_merge_qc_evidence(network_id: &NetworkId, entry: &MergeLedgerEntry) 
         }
     }
     ensure!(
-        signer_indices.len() >= commit_quorum_from_len(qc.validator_set.len()),
-        "merge QC is below quorum: signers={}, roster={}",
+        signer_indices.len() == commit_quorum_from_len(qc.validator_set.len()),
+        "merge QC cardinality mismatch: signers={}, roster={}",
         signer_indices.len(),
         qc.validator_set.len()
     );

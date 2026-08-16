@@ -82,8 +82,8 @@ def _production_liveness_release_inventory_errors(
 
     canonical_grouped_sdk_suites = (
         ("openapi", 7),
-        ("python", 62),
-        ("javascript", 60),
+        ("python", 63),
+        ("javascript", 61),
         ("swift", 4),
         ("kotlin", 6),
         ("java", 5),
@@ -230,11 +230,11 @@ def _production_liveness_release_inventory_errors(
         )
 
     canonical_sdk_diagnostics_suites = (
-        ("python", 121),
+        ("python", 129),
         ("javascript", 88),
-        ("swift", 33),
-        ("kotlin", 42),
-        ("java", 41),
+        ("swift", 34),
+        ("kotlin", 43),
+        ("java", 42),
     )
     runner_sdk_diagnostics_surfaces = indented_shell_array(
         "sumeragi_v2_sdk_diagnostics_surfaces"

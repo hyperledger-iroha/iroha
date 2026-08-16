@@ -13,6 +13,17 @@ The production protocol admits only unit-vote committees with exact
 validators with quorum `q = 2f + 1`. Stake may affect election or eligibility;
 it never weights a consensus or timeout vote.
 
+The deductive Core corridor separates mathematical quorum sufficiency from the
+wire representation. `DualQuorum` remains monotone (`>=` the strict count and
+power thresholds), while `ExactCertificateQuorum` additionally requires the
+minimum strict count threshold. `VoteSignersAt` is therefore the raw collected
+pool used by monotone reasoning; QC and TC construction use
+`CanonicalCertificateSigners`, which takes the first `q` eligible identities
+in `RosterSequence` order. Weighted sufficiency of that prefix remains an
+explicit `PowerQuorum` premise rather than a consequence of ordering alone.
+The exact-cardinality source closure requires fresh strict TLAPS evidence after
+any of these definitions or constructors change.
+
 The production source guard also binds the durable adapter seam to one opened
 post-open safety-WAL directory owner. WAL append and the serviced-candidate and
 leader-wire sibling snapshots use descriptor-relative, bounded operations;

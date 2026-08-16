@@ -11,7 +11,7 @@ def test_release_inventory_constants_match_current_source_seal(
         "fc038b30180549cc6002db8ec5630ebf8ad5bb04a06be6dd19774d2b6ea5f433"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "70034e3368c9a9b369851e529e31f49c38899441bba723619e04e34f388ace77"
+        "75702e6c87f81d5e8b20cb353cadb0ab8af9cad216d3281f85825a1bca326611"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -19,10 +19,10 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 525
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 526
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 532
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 533
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352"
+        "f1590363a43024969a7fceb947654e2afd1d7cad877dc8dcba5b863ba185d431"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
@@ -183,7 +183,7 @@ def test_release_inventory_constants_match_current_source_seal(
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
     assert receipt_module._PRODUCTION_TEST_COUNT == 857
-    assert receipt_module._G_UNIT_TEST_COUNT == 525
+    assert receipt_module._G_UNIT_TEST_COUNT == 532
     assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 857
     receipt_module_counts = {
         module_name: count
@@ -198,7 +198,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 525
+        == 532
     )
 
 

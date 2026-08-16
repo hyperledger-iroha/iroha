@@ -1,0 +1,144 @@
+name: Update Taira Testnet (fast)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TAIRA_TESTNET_UPDATER: /usr/local/libexec/iroha-taira-testnet-update-v1
+
+jobs:
+  # A missing self-hosted runner used to sit queued for 24 hours. This job is
+  # not a release gate; it only makes queue time part of the 30-minute SLO.
+  budget:
+    name: Taira update deadline
+    runs-on: ubuntu-latest
+    timeout-minutes: 31
+    permissions:
+      actions: write
+      contents: none
+    steps:
+      - name: Cancel runner stalls and over-budget updates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          deadline=$((SECONDS + 30 * 60))
+          queue_deadline=$((SECONDS + 2 * 60))
+          while (( SECONDS < deadline )); do
+            jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100")"
+            status="$(jq -r '.jobs[] | select(.name == "Taira testnet update") | .status' <<<"$jobs")"
+            if [[ "$status" == "completed" ]]; then
+              exit 0
+            fi
+            if [[ "$status" == "in_progress" ]]; then
+              queue_deadline=$((SECONDS + 2 * 60))
+            elif (( SECONDS >= queue_deadline )); then
+              echo "::error::The taira-deploy runner did not start within two minutes"
+              jq -r '.jobs[] | select(.name == "Taira testnet update") | "::error::runner=\(if (.runner_name // "") == "" then "unassigned" else .runner_name end) labels=\(.labels | join(","))"' <<<"$jobs"
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/cancel"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::Taira build and update exceeded 30 minutes"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/cancel"
+          exit 1
+
+  update:
+    name: Taira testnet update
+    runs-on: [self-hosted, macOS, ARM64, taira-deploy]
+    timeout-minutes: 30
+    # Keep the hosted deadline watcher runnable while this job waits behind an
+    # exceptional reset or another update using the same fleet-wide lock.
+    concurrency:
+      group: taira-validator-rollout
+      cancel-in-progress: false
+    steps:
+      - name: Start the local update budget
+        shell: bash
+        run: date +%s >"$RUNNER_TEMP/taira-update-started-at"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Confirm the fixed testnet updater
+        shell: bash
+        env:
+          EXPECTED_UPDATER_SHA256: ${{ vars.TAIRA_TESTNET_UPDATER_SHA256 }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$EXPECTED_UPDATER_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test -x "$TAIRA_TESTNET_UPDATER"
+          test ! -L "$TAIRA_TESTNET_UPDATER"
+          test "$(shasum -a 256 "$TAIRA_TESTNET_UPDATER" | awk '{print $1}')" = "$EXPECTED_UPDATER_SHA256"
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Build only the deployable validator
+        shell: bash
+        env:
+          TAIRA_BUILD_JOBS: ${{ vars.TAIRA_NATIVE_BUILD_JOBS || '6' }}
+          TAIRA_CARGO_TARGET_DIR: ${{ vars.TAIRA_TESTNET_CARGO_TARGET_DIR }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TAIRA_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]
+          (( TAIRA_BUILD_JOBS <= 16 ))
+          target_dir="${TAIRA_CARGO_TARGET_DIR:-$RUNNER_TOOL_CACHE/iroha-taira-testnet-target}"
+          [[ "$target_dir" == /* ]]
+          test ! -L "$target_dir"
+          mkdir -p "$target_dir"
+          test ! -L "$target_dir"
+          CARGO_BUILD_JOBS="$TAIRA_BUILD_JOBS" \
+          CARGO_TARGET_DIR="$target_dir" \
+          VERGEN_GIT_SHA="$GITHUB_SHA" \
+            cargo build --locked --release -p irohad --bin iroha3d \
+              --features embedded-soracloud-runtime,zk-stark
+          candidate="$target_dir/release/iroha3d"
+          test -x "$candidate"
+          printf '%s\n' "$candidate" >"$RUNNER_TEMP/taira-candidate-path"
+
+      - name: Roll four validators without resetting state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          candidate="$(<"$RUNNER_TEMP/taira-candidate-path")"
+          candidate_sha="$(shasum -a 256 "$candidate" | awk '{print $1}')"
+          [[ "$candidate_sha" =~ ^[0-9a-f]{64}$ ]]
+          started_at="$(<"$RUNNER_TEMP/taira-update-started-at")"
+          [[ "$started_at" =~ ^[1-9][0-9]*$ ]]
+          elapsed=$(( $(date +%s) - started_at ))
+          helper_budget=$((27 * 60 - elapsed))
+          if (( helper_budget > 600 )); then helper_budget=600; fi
+          if (( helper_budget < 420 )); then
+            echo "::error::Build left less than seven minutes; refusing to start a rolling cutover"
+            exit 1
+          fi
+          sudo -n "$TAIRA_TESTNET_UPDATER" \
+            --binary "$candidate" \
+            --expected-sha256 "$candidate_sha" \
+            --expected-source-commit "$GITHUB_SHA" \
+            --deadline-seconds "$helper_budget" \
+            --health-timeout-seconds 30 \
+            --apply | tee "$RUNNER_TEMP/taira-testnet-update.json"
+
+      - name: Record the deployed commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          /usr/bin/python3 -I -S - "$RUNNER_TEMP/taira-testnet-update.json" "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1], encoding="ascii"))
+          if result.get("applied") is not True:
+              raise SystemExit("testnet updater did not report an applied rollout")
+          with open(sys.argv[2], "a", encoding="utf-8") as summary:
+              summary.write(
+                  f"Taira now runs `{result['source_commit']}` on all four validators.\n"
+              )
+          PY

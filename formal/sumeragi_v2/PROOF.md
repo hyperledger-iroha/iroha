@@ -14,6 +14,16 @@ committee members may be Byzantine. Stake affects election and eligibility,
 but it does not weight a Prepare, Commit, or timeout vote. Every certificate
 uses `q` distinct validator identities from the one frozen committee.
 
+The broader deductive quorum library deliberately keeps `DualQuorum` as a
+monotone sufficiency predicate: signer supersets remain useful in intersection
+and liveness arguments. They are not valid serialized certificates. The Core
+wire predicates require the exact minimum count, and every QC/TC constructor
+projects a raw collected pool to the first `q` eligible identities in frozen
+`RosterSequence` order. The projection theorem proves exact count when at least
+`q` roster candidates exist; deriving the full dual predicate additionally
+retains the explicit power-quorum premise because roster order alone cannot
+establish weighted sufficiency.
+
 A height-seeded permutation of `V` is rotated cyclically by view. In each view,
 Set A is the first `q` validators, including the leader at its head and the
 proxy tail at its end; Set B is the remaining `f` validators. The proxy tail is

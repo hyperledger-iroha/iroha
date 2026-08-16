@@ -2296,7 +2296,7 @@ fn validate_native_amx_qc_shape(
             .any(|pop| pop.len() != NATIVE_AMX_BLS_PROOF_BYTES || !native_amx_nonzero(pop))
         || qc.signers_bitmap.len() != expected_bitmap_len
         || !trailing_bits_clear
-        || signer_count < expected_quorum
+        || signer_count != expected_quorum
         || qc.bls_aggregate_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES
         || !native_amx_nonzero(&qc.bls_aggregate_signature)
     {

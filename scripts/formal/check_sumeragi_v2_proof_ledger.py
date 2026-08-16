@@ -57917,7 +57917,7 @@ if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {
 
 
 _OWNERSHIP_N1_MODEL_SHA256 = (
-    "68468b4869ddee1da8c59916e968a87b8d522e4523b5bfe2141ea2aa145f7c14"
+    "e17ccb5ece6ab20e132328f8f462b2506a9d0674c60bb030a18806551e5d4664"
 )
 _OWNERSHIP_N1_CONFIG_SHA256 = (
     "0171f01d126953564035f963a51f4d9c396b1e53adcac62c2d92f42b71ea637a"
@@ -57986,7 +57986,7 @@ _OWNERSHIP_N1_STRUCTURAL_OPERATOR_SHA256 = {
         "0b25822c163eaa8a042d1593e95e02c0a32fdb2a28560ce43d90b6df90a2384c"
     ),
     "OwnershipExecuteFormPrepareQCReady": (
-        "622e358c046d38442545a780e00b9daa58d42f847b29e095ade126e43943327b"
+        "fdce904950cf60f923b7c1ae6f0769177bad4c01ed84480201424b122b178041"
     ),
     "OwnershipExecuteSignTimeoutReady": (
         "bae4e432c56235b48c6eb6a261acfe925aeb7d4a2977049bdc01b14ddeb9af5a"
@@ -74706,11 +74706,10 @@ def validate_ledger(
         )
     )
     errors.extend(
-        _retained_response_escape_latch_formal_source_fidelity_errors(
-            formal_dir
-        )
+        _retained_response_escape_latch_formal_source_fidelity_errors(formal_dir)
     )
     errors.extend(_reachable_oracle_guard_errors(formal_dir))
+    errors.extend(_exact_certificate_cardinality_source_fidelity_errors(formal_dir))
     errors.extend(_generalized_context_init_errors(formal_dir))
     errors.extend(_safety_property_source_fidelity_errors(formal_dir))
     errors.extend(_historical_timeout_derivation_errors(formal_dir))

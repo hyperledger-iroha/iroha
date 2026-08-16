@@ -4416,8 +4416,8 @@ PROOF
                 /\ ExecuteFormPrepareQC(command)
          PROVE AsyncTransportContentTypeInvariant'
     <2> DEFINE Signers ==
-          VoteSignersAt(command.node, command.view, "Prepare",
-                        command.subject)
+          ProjectedVoteSignersAt(
+            command.node, command.view, "Prepare", command.subject)
     <2> DEFINE Certificate ==
           QC(context, command.view, "Prepare", command.subject, Signers)
     <2> DEFINE Items == QcOutbox(command.node, Certificate)

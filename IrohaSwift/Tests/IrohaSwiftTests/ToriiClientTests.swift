@@ -15584,11 +15584,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
             "topup_anchor_count": 0,
             "native_amx_application_manifest_version":
-                ToriiSumeragiV2ExecutionCommitment
-                    .canonicalNativeAmxApplicationManifestVersion,
+                ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
             "native_amx_application_manifest_root":
                 ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot,
             "native_amx_application_manifest_count": 0,
+            "lane_finality_manifest": NSNull(),
             "merge_carrier": NSNull(),
             "executed_block_wire_len": 123,
             "executed_block_wire_hash": nativeAmxTestHash(0xC7),
@@ -15745,18 +15745,17 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     func testSumeragiExecutionCommitmentRejectsNoncanonicalNativeAmxManifest() throws {
-        let emptyRoot =
-            ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot
+        let emptyRoot = ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot
         let base: [String: Any] = [
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
             "topup_anchor_count": 0,
             "native_amx_application_manifest_version":
-                ToriiSumeragiV2ExecutionCommitment
-                    .canonicalNativeAmxApplicationManifestVersion,
+                ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
             "native_amx_application_manifest_root": emptyRoot,
             "native_amx_application_manifest_count": 0,
+            "lane_finality_manifest": NSNull(),
             "merge_carrier": NSNull(),
             "executed_block_wire_len": 123,
             "executed_block_wire_hash": nativeAmxTestHash(0xC7),
@@ -15801,6 +15800,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "native_amx_application_manifest_version": 1,
             "native_amx_application_manifest_root": emptyRoot,
             "native_amx_application_manifest_count": 0,
+            "lane_finality_manifest": NSNull(),
             "merge_carrier": NSNull(),
             "executed_block_wire_len": 123,
             "executed_block_wire_hash": nativeAmxTestHash(0xC7),

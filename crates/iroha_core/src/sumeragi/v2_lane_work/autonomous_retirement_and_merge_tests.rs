@@ -278,20 +278,25 @@ fn canonical_kura_anchor_cannot_bypass_route_reset_or_incarnation_guards() {
     }
 }
 #[test]
-fn merge_signers_must_meet_the_equal_vote_quorum() {
-    let (adapter, keys) = fixture(wire::ConsensusMode::Npos);
-    assert!(!adapter.frozen_dual_quorum_met(&[0, 1]));
-    assert!(adapter.frozen_dual_quorum_met(&[1, 2, 3]));
-    assert!(adapter.frozen_dual_quorum_met(&[0, 1, 3]));
-    assert!(adapter.frozen_dual_quorum_met(&[0, 1, 2, 3]));
+fn merge_certificates_require_exact_equal_vote_quorum() {
+    let (adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    assert!(!adapter.frozen_certificate_quorum_met(&[0, 1]));
+    assert!(adapter.frozen_certificate_quorum_met(&[1, 2, 3]));
+    assert!(adapter.frozen_certificate_quorum_met(&[0, 1, 3]));
+    assert!(!adapter.frozen_certificate_quorum_met(&[0, 1, 2, 3]));
     let subquorum = missing_sidecar_reference_with_signers(&adapter, &keys, 0, &[1, 2]);
     assert!(matches!(
         authenticate_bounded_merge_sidecar_holders(&adapter.context, &subquorum),
-        Err(reason) if reason.contains("equal-vote quorum")
+        Err(reason) if reason.contains("signer count mismatch")
     ));
     let quorum = missing_sidecar_reference_with_signers(&adapter, &keys, 0, &[0, 1, 3]);
     authenticate_bounded_merge_sidecar_holders(&adapter.context, &quorum)
         .expect("the same verifier accepts any three distinct committee votes");
+    let superset = missing_sidecar_reference_with_signers(&adapter, &keys, 0, &[0, 1, 2, 3]);
+    assert!(matches!(
+        authenticate_bounded_merge_sidecar_holders(&adapter.context, &superset),
+        Err(reason) if reason.contains("expected exactly 3, got 4")
+    ));
 }
 fn merge_candidate_for_persistence_retry(
     adapter: &V2LaneWorkAdapter,
@@ -1521,6 +1526,16 @@ fn quorate_merge_persistence_failure_latches_restart_required() {
         }
     };
     assert_eq!(certified_entry.merge_qc.message_digest, key.digest);
+    assert_eq!(certified_entry.merge_qc.signers_bitmap, vec![0b0000_0111]);
+    assert_eq!(
+        certified_entry
+            .merge_qc
+            .signer_proofs
+            .iter()
+            .map(|proof| proof.signer)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
     assert_eq!(certified_entry.epoch_id, candidate.epoch_id);
     assert_eq!(certified_entry.lane_snapshots, candidate.lane_snapshots);
     assert_eq!(certified_entry.active_lanes, candidate.active_lanes);

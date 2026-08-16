@@ -482,7 +482,7 @@ QcWireValid(qc) ==
   /\ qc.view \in Views
   /\ qc.phase \in Phases
   /\ qc.subject \in Subjects
-  /\ DualQuorum(CurrentEpoch, qc.signers)
+  /\ ExactCertificateQuorum(CurrentEpoch, qc.signers)
 
 \* An authenticated future PrepareQC is consumed as a reducer stutter.  It
 \* cannot create local receipt/ownership until a separately authenticated TC
@@ -527,6 +527,11 @@ TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote) ==
         => timeoutVote.highSubject = commitVote.subject)
 
 TimeoutSignerSet(votes) == {vote.signer: vote \in votes}
+
+CanonicalTimeoutVotes(epoch, votes) ==
+  LET signers ==
+        CanonicalCertificateSigners(epoch, TimeoutSignerSet(votes))
+  IN {vote \in votes: vote.signer \in signers}
 
 TimeoutVotesDisjoint(votes) ==
   Cardinality(TimeoutSignerSet(votes)) = Cardinality(votes)
@@ -575,7 +580,8 @@ TCValid(tc) ==
        /\ vote.highRank <= tc.view
   /\ TimeoutVotesDisjoint(tc.votes)
   /\ TimeoutHighsConflictFree(tc.votes)
-  /\ DualQuorum(CurrentEpoch, TimeoutSignerSet(tc.votes))
+  /\ ExactCertificateQuorum(
+       CurrentEpoch, TimeoutSignerSet(tc.votes))
   /\ tc.highestPrepareQc =
        (HighestTimeoutVote(tc.votes)).highestPrepareQc
 
@@ -794,6 +800,13 @@ VoteSignersAt(node, roundView, phase, subject) ==
       /\ entry.vote.phase = phase
       /\ entry.vote.subject = subject}}
 
+\* A collector may retain every authenticated vote, while a wire QC carries
+\* only the canonical first q signers in the frozen roster order.
+ProjectedVoteSignersAt(node, roundView, phase, subject) ==
+  CanonicalCertificateSigners(
+    CurrentEpoch,
+    VoteSignersAt(node, roundView, phase, subject))
+
 (***************************************************************************
 Vote admission across a view installation.
 
@@ -876,7 +889,9 @@ TimeoutReceiptsAfter(node, vote) ==
 
 TimeoutCertificateAfterReceipt(node, vote) ==
   TC(context, vote.view,
-     TimeoutVotesIn(TimeoutReceiptsAfter(node, vote), node, vote.view))
+     CanonicalTimeoutVotes(
+       CurrentEpoch,
+       TimeoutVotesIn(TimeoutReceiptsAfter(node, vote), node, vote.view)))
 
 TimeoutInstallRequestAfterReceipt(node, vote) ==
   InstallTcWal(node, TimeoutCertificateAfterReceipt(node, vote), TRUE)
@@ -952,7 +967,11 @@ ModelConfiguration ==
   /\ ValidSubjects # {}
   /\ Responsive \subseteq Honest
   /\ \A epoch \in Epochs:
-       DualQuorum(epoch, Responsive \cap VotingRoster(epoch))
+       /\ DualQuorum(epoch, Responsive \cap VotingRoster(epoch))
+       /\ ExactCertificateQuorum(
+            epoch,
+            CanonicalCertificateSigners(
+              epoch, Responsive \cap VotingRoster(epoch)))
 
 BootstrapParentContext(initialContext) ==
   ContextRecord(initialContext.height - 1,
@@ -960,8 +979,9 @@ BootstrapParentContext(initialContext) ==
                    initialContext.lineage[index]])
 
 BootstrapParentSigners(initialContext) ==
-  Responsive
-    \cap VotingRoster(BootstrapParentContext(initialContext).epoch)
+  LET parentEpoch == BootstrapParentContext(initialContext).epoch
+  IN CanonicalCertificateSigners(
+       parentEpoch, Responsive \cap VotingRoster(parentEpoch))
 
 BootstrapParentPrepareQC(initialContext) ==
   QC(BootstrapParentContext(initialContext), 0, "Prepare",
@@ -1584,7 +1604,8 @@ DeliverVote(envelope) ==
                     decisions, applied>>
 
 FormPrepareQC(node, roundView, subject) ==
-  LET signers == VoteSignersAt(node, roundView, "Prepare", subject)
+  LET signers ==
+        ProjectedVoteSignersAt(node, roundView, "Prepare", subject)
       qc == QC(context, roundView, "Prepare", subject, signers)
       received == QcAt(node, qc)
   IN /\ node \in up
@@ -1774,7 +1795,8 @@ PersistLockCommit(request) ==
                     tcNetwork, decisions, applied>>
 
 FormCommitQC(node, roundView, subject) ==
-  LET signers == VoteSignersAt(node, roundView, "Commit", subject)
+  LET signers ==
+        ProjectedVoteSignersAt(node, roundView, "Commit", subject)
       qc == QC(context, roundView, "Commit", subject, signers)
       request == DecisionWal(node, qc, TRUE)
   IN /\ node \in up

@@ -75,7 +75,7 @@ execution or release receipts.
 
 - The bound inventory contains exactly 857 production tests across 40 modules,
   including 438 source-sealed ownership/regression names, plus 532 G-UNIT
-  tests and 55 grouped Native negative controls. Its source-sealed pre-network
+  tests and 56 grouped Native negative controls. Its source-sealed pre-network
   corridor contains 89 legs. These are source counts, not claims that any suite
   was executed for this reconciliation.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
@@ -107,11 +107,11 @@ execution or release receipts.
   distribution source and Kotlin/Java Native model dependencies, are present in
   the development tree. The SoraFS orderbook JavaScript declaration,
   implementation, and standalone Python module are tracked. The recursive
-  resolver currently enumerates exactly 1,397 grouped and 1,397 diagnostics
+  resolver currently enumerates exactly 1,399 grouped and 1,401 diagnostics
   records. The canonical suite-source hashes are recorded with the owning
   corpus row (`ML-API-04`) and release gate (`G-SDK`) below.
-  Diagnostics suite counts are Rust 14, Python 121, JavaScript 88, Swift 33,
-  Kotlin 42, and Java 41. Rust's source-separated client controls reject both
+  Diagnostics suite counts are Rust 14, Python 129, JavaScript 88, Swift 34,
+  Kotlin 43, and Java 42. Rust's source-separated client controls reject both
   complete endpoint-payload swaps without changing its 14-test count; the
   Swift/Kotlin/Java wire suites are diagnostics-runner/receipt-bound. Those are
   source-inventory facts, not SDK execution. The five checked-in OpenAPI
@@ -1643,16 +1643,16 @@ nondeterministic order. Run source and generated/distribution JavaScript tests,
 Swift tests, Kotlin core-jvm tests, and mirrored Java tests.
 
 The mutable source inventory contains exact diagnostics-parity counts for the
-Rust client (`14`), both Python client layers (`121`), JavaScript source and
-distribution (`88`), Swift (`33`), Kotlin core-jvm (`42`), and mirrored Java
-(`41`). JavaScript uses the dedicated
+Rust client (`14`), both Python client layers (`129`), JavaScript source and
+distribution (`88`), Swift (`34`), Kotlin core-jvm (`43`), and mirrored Java
+(`42`). JavaScript uses the dedicated
 `sumeragiDiagnosticsContract.test.js` entrypoint instead of a monolithic
 name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
 and Kotlin/Java Native model dependencies. The staged inventory is exactly
-1,397 grouped and 1,397 diagnostics records. Their canonical hashes are
+1,399 grouped and 1,401 diagnostics records. Their canonical hashes are
 recorded once in the owning corpus row and once in the release gate. The
 release receipt must reproduce those values from its immutable candidate;
 the staged values alone are not evidence. The two specialized static Python modules are canonically
@@ -1732,23 +1732,23 @@ explicit production builder; single-source construction is labelled as a test
 fixture.
 `ci/run_native_amx_v2_grouped_sdk_parity.sh` source-binds the exact fixture and
 OpenAPI, Python, JavaScript source/distribution, Swift, Kotlin, and Java
-consumers. The checked-in mutable-development corpus inventories 55 negative
-controls: 45 validate receipt groups and 10 validate application evidence. The
+consumers. The checked-in mutable-development corpus inventories 56 negative
+controls: 46 validate receipt groups and 10 validate application evidence. The
 corpus includes
 `execution_commitment_merge_carrier_wrong_version` and
 `execution_commitment_missing_merge_carrier_field`, plus the four-mutation
 `coherent_duplicate_validator_set` and
 `coherent_over_quorum_requirement` controls; `bounds.validators_max` is 128.
 The harness and source-bound release inventory both require that exact count.
-The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
+The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 4, Kotlin 6, and Java 5 tests. The staged recursive closure contains exactly
-1,397 grouped and 1,397 diagnostics records. Its grouped and diagnostics
+1,399 grouped and 1,401 diagnostics records. Its grouped and diagnostics
 suite-source SHA-256 values are
-`5c2cc9cc85e441b4c94c04e5ed5d41ef7cb2d9ae31b98cb8c6d890d444c30ed3`
+`0530f710c43718b4b0666f59d3efd8774bb761a1d74805c8bb6a9b2e05859beb`
 and
-`5083f88f2eee5ef42a87c5b2878c9a4773495734868584656fe5e206fbdd8bc2`.
+`44c4c6127fd43e0f61b1f95d602052d4650b7870b7c94b9aea6dbffaeb97d7a9`.
 The checked-in grouped fixture has SHA-256
-`65187ba2cb0ce05d13fa59bd83062e9b2c1d026d7bcbf986de9464cfd6cc1bb3`.
+`87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
@@ -2033,22 +2033,22 @@ Swift, Kotlin core-jvm, and mirrored Java suites against the same Rust-owned
 grouped corpus. Archive the corpus hash and per-SDK results. No SDK may skip a
 negative or substitute a hand-authored fixture.
 
-The mutable grouped inventory is OpenAPI `7`, Python `62`, JavaScript `60`,
-Swift `4`, Kotlin `6`, and Java `5`, with exactly 55 grouped Native negative
-controls. The diagnostics inventory is Rust `14`, Python `121`, JavaScript
-source/distribution `88`, Swift `33`, Kotlin `42`, and Java `41`. The recursive
+The mutable grouped inventory is OpenAPI `7`, Python `63`, JavaScript `61`,
+Swift `4`, Kotlin `6`, and Java `5`, with exactly 56 grouped Native negative
+controls. The diagnostics inventory is Rust `14`, Python `129`, JavaScript
+source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42`. The recursive
 source-closure design covers every transitive production input, including the
 browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The staged
-closure contains exactly 1,397 records for each suite, with grouped and
+closure contains exactly 1,399 grouped and 1,401 diagnostics records, with
 diagnostics suite-source SHA-256 values
-`5c2cc9cc85e441b4c94c04e5ed5d41ef7cb2d9ae31b98cb8c6d890d444c30ed3`
+`0530f710c43718b4b0666f59d3efd8774bb761a1d74805c8bb6a9b2e05859beb`
 and
-`5083f88f2eee5ef42a87c5b2878c9a4773495734868584656fe5e206fbdd8bc2`.
+`44c4c6127fd43e0f61b1f95d602052d4650b7870b7c94b9aea6dbffaeb97d7a9`.
 The current grouped JSON and wire TSV SHA-256 values are
-`65187ba2cb0ce05d13fa59bd83062e9b2c1d026d7bcbf986de9464cfd6cc1bb3`
+`87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`
 and
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 Those are development fixture inventories, not SDK results. The changed
@@ -2106,7 +2106,7 @@ diagnostics must be added here or mapped to a ledger row before release.
 - The former first-release autonomous and drain limitations are retired in the
   canonical English architecture/operator documents. Historical entries in
   `status.md` and `roadmap.md` remain historical and are not evidence.
-- The Rust-owned grouped and wire generators and the 55-control corpus are
+- The Rust-owned grouped and wire generators and the 56-control corpus are
   present. Current checked-in fixtures, OpenAPI files, JavaScript distribution,
   and parity hashes remain mutable artifacts awaiting immutable-candidate
   regeneration, so `ML-API-04`, `ML-WIRE-01`, and `G-SDK` stay Open.

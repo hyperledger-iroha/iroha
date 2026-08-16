@@ -35,6 +35,7 @@ export function browserSumeragiStatusFixture() {
     native_amx_application_manifest_root:
       "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F",
     native_amx_application_manifest_count: 0,
+    lane_finality_manifest: null,
     merge_carrier: null,
     executed_block_wire_len: 123,
     executed_block_wire_hash: browserSumeragiHash(0x37),

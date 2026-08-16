@@ -253,6 +253,7 @@ from .sumeragi_native_amx_models import (
     SumeragiNativeAmxSourceId,
     SumeragiNativeAmxTransactionEntrypointHash,
 )
+from .sumeragi_v2_status_types import SumeragiV2BodyState, SumeragiV2GlobalPhase, SumeragiV2LaneFinalityManifestCommitment, SumeragiV2StatusPhase
 from .torii_client_governance_ballots import (
     bind_governance_ballot_network_id,
     create_torii_client_governance_ballot_mixin,
@@ -9028,9 +9029,9 @@ class SumeragiNativeAmxAttestationQc:
         if trailing_bits and bitmap[-1] & ~((1 << trailing_bits) - 1):
             raise ValueError(f"{context} signer bitmap addresses an out-of-range validator")
         signer_count = sum(bin(byte).count("1") for byte in bitmap)
-        if signer_count < expected_quorum:
+        if signer_count != expected_quorum:
             raise ValueError(
-                f"{context} signer bitmap has {signer_count} signers; {expected_quorum} required"
+                f"{context} signer bitmap has {signer_count} signers; exactly {expected_quorum} required"
             )
 
         signature = _strict_byte_vector(
@@ -9958,37 +9959,9 @@ class SumeragiLaneRelayEnvelope:
         )
 
 
-class SumeragiV2StatusPhase(str, Enum):
-    """High-level state of the authoritative Sumeragi v2 reducer."""
-
-    AWAITING_PROPOSAL = "awaiting_proposal"
-    RECONSTRUCTING_PAYLOAD = "reconstructing_payload"
-    VALIDATING_PAYLOAD = "validating_payload"
-    PREPARE = "prepare"
-    COMMIT = "commit"
-    PENDING_APPLY = "pending_apply"
-
-
-class SumeragiV2BodyState(str, Enum):
-    """Local state of the proposal body reported by Sumeragi v2."""
-
-    MISSING = "missing"
-    RECONSTRUCTING = "reconstructing"
-    STORED = "stored"
-    VALIDATED = "validated"
-    PENDING_APPLY = "pending_apply"
-    APPLIED = "applied"
-
-
-class SumeragiV2GlobalPhase(str, Enum):
-    """Global two-phase consensus phase."""
-
-    PREPARE = "prepare"
-    COMMIT = "commit"
-
-
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
+_SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES = 1024
 _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
@@ -10142,6 +10115,7 @@ class SumeragiV2ExecutionCommitment:
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int
+    lane_finality_manifest: Optional[SumeragiV2LaneFinalityManifestCommitment]
     merge_carrier: Optional[SumeragiV2MergeCarrierCommitment]
     executed_block_wire_len: int
     executed_block_wire_hash: str
@@ -10161,14 +10135,16 @@ class SumeragiV2ExecutionCommitment:
                 "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root",
                 "native_amx_application_manifest_count",
+                "lane_finality_manifest",
                 "merge_carrier",
                 "executed_block_wire_len",
                 "executed_block_wire_hash",
             ),
             context,
         )
-        if "merge_carrier" not in payload:
-            raise TypeError(f"{context}.merge_carrier is required")
+        for field in ("lane_finality_manifest", "merge_carrier"):
+            if field not in payload:
+                raise TypeError(f"{context}.{field} is required")
         topup_anchor_count = _sumeragi_v2_uint(
             payload.get("topup_anchor_count"),
             f"{context}.topup_anchor_count",
@@ -10212,6 +10188,24 @@ class SumeragiV2ExecutionCommitment:
                 f"{context}.native_amx_application_manifest_count must be zero "
                 "exactly for the canonical empty root"
             )
+        lane_manifest_payload = payload["lane_finality_manifest"]
+        lane_finality_manifest = None
+        if lane_manifest_payload is not None:
+            lane_context = f"{context}.lane_finality_manifest"
+            if not isinstance(lane_manifest_payload, Mapping):
+                raise TypeError(f"{lane_context} must be an object")
+            _sumeragi_v2_exact_fields(lane_manifest_payload, ("root", "leaf_count"), lane_context)
+            if set(lane_manifest_payload) != {"root", "leaf_count"}:
+                raise TypeError(f"{lane_context} requires root and leaf_count")
+            lane_finality_manifest = SumeragiV2LaneFinalityManifestCommitment(
+                root=_strict_hash_literal(lane_manifest_payload, "root", lane_context),
+                leaf_count=_sumeragi_v2_uint(
+                    lane_manifest_payload["leaf_count"],
+                    f"{lane_context}.leaf_count",
+                    positive=True,
+                    maximum=_SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES,
+                ),
+            )
         merge_carrier_payload = payload["merge_carrier"]
         merge_carrier = (
             None
@@ -10236,6 +10230,7 @@ class SumeragiV2ExecutionCommitment:
             native_amx_application_manifest_version=native_manifest_version,
             native_amx_application_manifest_root=native_manifest_root,
             native_amx_application_manifest_count=native_manifest_count,
+            lane_finality_manifest=lane_finality_manifest,
             merge_carrier=merge_carrier,
             executed_block_wire_len=_sumeragi_v2_uint(
                 payload.get("executed_block_wire_len"),
@@ -10382,6 +10377,7 @@ class SumeragiStatusSnapshot:
             native_amx_application_manifest_count=(
                 execution_commitment.native_amx_application_manifest_count
             ),
+            lane_finality_manifest=None if execution_commitment.lane_finality_manifest is None else SumeragiV2LaneFinalityManifestCommitment(execution_commitment.lane_finality_manifest.root, execution_commitment.lane_finality_manifest.leaf_count),
             merge_carrier=(
                 None
                 if execution_commitment.merge_carrier is None

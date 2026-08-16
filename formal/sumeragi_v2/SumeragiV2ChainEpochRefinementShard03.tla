@@ -582,19 +582,35 @@ without asking a backend to normalize an entire StrongInductiveInvariant at
 once.  They import no theorem through the parameterized production instance.
 ***************************************************************************)
 THEOREM IndexedQuorumOperatorsMatchBase ==
-  \A initialContext, epoch, signers:
+  \A initialContext, epoch, signers, candidates, validator:
     /\ IndexedAsync(initialContext)!Epochs = Epochs
     /\ IndexedAsync(initialContext)!VotingRoster(epoch)
          = VotingRoster(epoch)
+    /\ IndexedAsync(initialContext)!CertificateSignerCount(epoch)
+         = CertificateSignerCount(epoch)
+    /\ IndexedAsync(initialContext)!RosterIndex(epoch, validator)
+         = RosterIndex(epoch, validator)
+    /\ IndexedAsync(initialContext)!
+         CanonicalCertificateSigners(epoch, candidates)
+         = CanonicalCertificateSigners(epoch, candidates)
     /\ (IndexedAsync(initialContext)!DualQuorum(epoch, signers)
           <=> DualQuorum(epoch, signers))
+    /\ (IndexedAsync(initialContext)!
+          ExactCertificateQuorum(epoch, signers)
+          <=> ExactCertificateQuorum(epoch, signers))
 BY DEF IndexedAsync!Epochs,
        IndexedAsync!VotingRoster, IndexedAsync!RosterSequence,
+       IndexedAsync!CertificateSignerCount,
+       IndexedAsync!RosterIndex,
+       IndexedAsync!CanonicalCertificateSigners,
+       IndexedAsync!ExactCertificateQuorum,
        IndexedAsync!DualQuorum, IndexedAsync!CountQuorum,
        IndexedAsync!PowerQuorum, IndexedAsync!PowerOf,
        IndexedAsync!PowerUnits, IndexedAsync!VotingPower,
        IndexedAsync!Cardinality,
        Epochs, VotingRoster, RosterSequence,
+       CertificateSignerCount, RosterIndex,
+       CanonicalCertificateSigners, ExactCertificateQuorum,
        DualQuorum, CountQuorum, PowerQuorum, PowerOf, PowerUnits,
        VotingPower, Cardinality
 

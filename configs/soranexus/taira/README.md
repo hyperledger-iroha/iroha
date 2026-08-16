@@ -260,6 +260,12 @@ barriers into multi-second stalls.
   legacy testnet Homebrew supervisor whose same-framework Python.app rewrite,
   remaining argv, parent/UID, child, and rollback identity all match exactly;
   it is refused by default.
+- `scripts/deploy_taira_testnet_update.py`: is the small routine-update
+  controller for this testnet. A preinstalled root-owned copy changes only the
+  content-addressed `iroha3d` path and its supervisor stat seal, restarts one
+  peer at a time, and preserves every live config, genesis, working directory,
+  and storage inode. It is deliberately separate from release admission and
+  fresh-reset tooling.
 - `scripts/migrate_taira_peer_supervision.py`: creates a sealed, read-only
   adoption plan for an existing four-peer macOS deployment, then performs an
   explicitly confirmed maintenance-window cutover from `run-canonical.sh` or
@@ -1576,7 +1582,49 @@ the signed SCCP release-evidence corridor all succeed. The retired
 `/v1/sccp/manifests` route readiness check and the old Nile route-config script
 are not part of the first-release operator workflow.
 
-## Dual-target archive publication
+## Routine testnet updates (30-minute path)
+
+Use `.github/workflows/update_taira_testnet.yml` for ordinary Taira code
+updates. It is the default operational path. It checks out the selected exact
+workflow commit on the existing
+`[self-hosted, macOS, ARM64, taira-deploy]` runner, builds only `iroha3d` with
+`embedded-soracloud-runtime,zk-stark`, and rolls the four validators in place.
+There is no Linux build, privacy/BOI qualification, candidate authority,
+cross-job artifact handoff, OCI publication, or empty-state reset in this
+path. A parallel hosted watchdog cancels an unavailable runner after two
+minutes and cancels the whole build-and-update after 30 minutes.
+
+Provision the fixed updater once on the deployment Mac; never run its checkout
+copy through `sudo`:
+
+```bash
+sudo install -o root -g wheel -m 0555 \
+  scripts/deploy_taira_testnet_update.py \
+  /usr/local/libexec/iroha-taira-testnet-update-v1
+shasum -a 256 /usr/local/libexec/iroha-taira-testnet-update-v1
+```
+
+Allow the Actions runner to execute only that installed command without a
+password, and set the resulting digest as the repository or organization
+Actions variable `TAIRA_TESTNET_UPDATER_SHA256`. The fast job deliberately has
+no protected release environment or approval wait. `TAIRA_NATIVE_BUILD_JOBS`
+may override the default six Cargo jobs, and `TAIRA_TESTNET_CARGO_TARGET_DIR`
+may select the persistent target directory. That writable cache belongs only
+on the protected testnet deployment runner; do not share it with pull-request
+or other untrusted jobs.
+
+The updater hashes the candidate, validates all four existing configs in
+parallel, installs the binary under
+`/Library/SORA/Taira/binaries/<sha256>/iroha3d`, and updates one launchd job at
+a time. After each peer it requires loopback `/health`, `/readyz`, and the
+exact workflow commit in `/status`. If a peer does not return, every touched
+peer is restored in reverse order before the updater exits. The updater never
+replaces or clears config, genesis, working-directory, or storage paths. Keep
+old content-addressed binaries until the operator decides they are no longer
+needed. Changes that intentionally migrate an incompatible storage format need
+a separately planned testnet migration; they are not ordinary binary updates.
+
+## Dual-target archive publication (exceptional reset)
 
 The first Taira release is archive-only. The manual
 `.github/workflows/publish_taira_validator.yml` workflow does not build or push
@@ -1591,7 +1639,7 @@ that commit with persisted Git credentials disabled, and runs with
 One dispatch performs these two native builds from one authenticated source
 identity:
 
-- The `[self-hosted, Linux, ARM64, iroha2]` job reconstructs the reviewed DPN
+- The `[self-hosted, Linux, ARM64, taira-untrusted-build]` job reconstructs the reviewed DPN
   source closure and exact `Cargo.lock` only after sealing its controller
   closure, checks the canonical workspace-source manifest, snapshots exactly
   four secret-free privacy inputs, then builds the unsigned Linux/aarch64
@@ -1599,16 +1647,67 @@ identity:
   evidence generation finish does the sealed finalizer authenticate the
   immutable archive and sign its exact-12 authority plus controller manifest.
   An amd64 or emulated build is rejected.
-- The `[self-hosted, macOS, ARM64, taira-release]` job reconstructs that same
-  commit, lock, and source manifest independently after sealing its controller
-  closure. It byte-compares the source identity transferred from Linux before
-  compiling the macOS/arm64 `irohad` and the public-only onboarding-token hash
-  tool. No source-built genesis signer is compiled or invoked. The exact binary
+- The `[self-hosted, macOS, ARM64, taira-untrusted-build]` job reconstructs that
+  same commit, lock, and source manifest independently. It starts concurrently
+  with the Linux path because it does not consume Linux authority bytes; the
+  later secret-free qualification job performs the first cross-target identity
+  comparison. No source-built genesis signer is compiled or invoked. The exact binary
   then boots exactly four native peers, proves consensus advancement, replaces
   each peer child in turn through the shipped supervisor, and proves fleet
   advancement after every restart. Both the candidate binary and supervisor
   run from temporary root-controlled, content-addressed validation paths so a
   child cannot rewrite its own harness.
+
+The workflow has one 30-minute wall-clock watchdog. Historical image dispatches
+spent entire 24-hour windows queued against an unassigned `iroha2` runner and
+executed zero steps; repeated serialized dispatches accounted for the apparent
+roughly 100-hour rollout. The watchdog cancels after two minutes with no active
+job, or at the overall budget boundary, and reports each pending job, runner
+name, and requested labels. Keep every listed authority runner online before
+dispatch.
+
+Before any self-hosted job or Cargo invocation, the hosted `release-readiness`
+job runs `scripts/check_taira_release_prerequisites.py`. It reports and rejects
+any critical-path authority that remains an unconditional source-level refusal.
+This is intentionally the current result until the independent native-evidence,
+protocol-receipt, Exact12-governance, BOI, deploy-issuance, and rollout-observation
+authorities, plus the distinct public 24-hour soak observation authority, are
+implemented and provisioned. The gate
+prevents an unavailable release from spending build hours merely to reach the
+same refusal later.
+
+The release corridor's fixed 24-hour Taira-profile soak is a four-process local
+fault-profile gate; it is not evidence that the deployed public validator cohort
+served sustained workload. Public deployment evidence uses the separate
+`scripts/check_taira_public_v2_24h_soak_evidence.py` contract: exactly four
+validators, quorum three, an exact 86,400-second monotonic workload window, and
+432,000 individually inventoried signed transfers scheduled at five per second,
+followed by a bounded application/finality drain. The evidence distinguishes
+typed Iroha hashes from artifact digests and binds submission, global Applied,
+executed-block, finality, deploy-descendant, and zero-lifecycle-drift evidence.
+It publishes no authority itself. Admission remains source-disabled until an
+independent Ed25519 verifier, pinned native evidence verifier, and atomic replay
+broker provision the dedicated public-soak authority contract and durable
+admission receipt; no live public-soak receipt is currently claimed.
+
+Both untrusted native builders default to six Cargo jobs and reuse a Cargo
+target outside the authenticated source checkout only for retries of the same
+workspace-manifest, DPN commit, and Rust compiler identity. Different source or
+toolchain identities never share writable target state. Set
+`TAIRA_NATIVE_BUILD_JOBS` to a positive value no greater than 16 when host
+memory requires another bound. `TAIRA_LINUX_BUILD_CACHE_ROOT` and
+`TAIRA_MACOS_BUILD_CACHE_ROOT` may select owner-private absolute cache roots;
+otherwise the jobs use distinct paths beneath `RUNNER_TOOL_CACHE`. These
+source-keyed caches never cross into an authority job. Every produced byte
+remains hostile until the existing signed authority and native qualification
+stages accept it. The seven immutable DPN source inputs download concurrently;
+both curl's per-transfer and retry-window limits are 120 seconds.
+
+This workflow remains the exceptional first-release archive,
+privacy-evidence, and empty-v21-reset path. It is not used for routine testnet
+updates: the reset controller authenticates four empty storage trees and
+replaces the fleet as one cohort. Use `update_taira_testnet.yml` for the normal
+state-preserving rolling path above.
 
 Neither source reconstruction nor either native Cargo step receives protected
 authority, privacy-source, reset-source, staging-root, or external-genesis-signer
@@ -1984,6 +2083,13 @@ TAIRA_VALIDATOR_ARGS=(
 
 - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --expected-dpn-validator-release-commit "${EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT}"`
 
+The MCP smoke has one absolute 240-second deadline, including all validator
+alignment retries, HTTP calls, retry delays, signer bootstrap, faucet work, and
+the signed canary. `--deadline-seconds N` changes that positive bound. Every
+curl and transaction status timeout is clamped to the remaining budget, and
+fleet alignment makes at most two attempts per sample by default. This replaces
+the former pathological 200-minute nested retry bound.
+
 Then gate the SoraFS path on the same public node:
 
 - `bash configs/soranexus/taira/check_sorafs_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
@@ -2231,8 +2337,8 @@ CLI binds it inside `fee_payment`. Do not put `fee_sponsor`, `gas_asset_id`, or
 ## Development-only containerized validator deployment
 
 This path is excluded from first-release Taira publication and admission. No
-release OCI image is produced by `publish_taira_validator.yml`; use the signed
-macOS deployment archive for the testnet rollout. The primary local wrapper is
+release OCI image is produced by `publish_taira_validator.yml`; use
+`update_taira_testnet.yml` for a routine deployed-network update. The primary local wrapper is
 `taira-validator-container.sh`, which uses plain `docker` and therefore works
 on hosts that lack the Compose plugin. `docker-compose.validator.yml` remains
 available as an optional convenience for environments that do have Compose.

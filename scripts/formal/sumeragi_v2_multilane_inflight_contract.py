@@ -1171,7 +1171,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "check_production_in_flight_reservation_transition",
         (
             "production_in_flight_reservation_transition_kernel(projection)",
-            "Some(CheckedProductionTransition { projection })",
+            "Some(CheckedProductionTransition::unwitnessed(projection))",
             "None",
         ),
     ),
@@ -1336,7 +1336,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         "check_production_in_flight_first_release_transition",
         (
             "production_in_flight_first_release_transition_kernel(projection)",
-            "Some(CheckedProductionTransition { projection })",
+            "Some(CheckedProductionTransition::unwitnessed(projection))",
             "None",
         ),
     ),
@@ -2736,7 +2736,7 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
         "method",
-        "V2ApplyService::execute",
+        "V2ApplyService::execute_exact_apply",
         (
             "store_v2_finality_artifact",
             "persist_post_apply_metadata",
@@ -3306,7 +3306,7 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
         "check_production_in_flight_reservation_transition",
         (
             "production_in_flight_reservation_transition_kernel(projection)",
-            "Some(CheckedProductionTransition { projection })",
+            "Some(CheckedProductionTransition::unwitnessed(projection))",
             "None",
         ),
     ),
@@ -3888,7 +3888,7 @@ INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
         "method",
-        "V2ApplyService::execute",
+        "V2ApplyService::execute_exact_apply",
         (
             "store_v2_finality_artifact",
             "persist_post_apply_metadata",

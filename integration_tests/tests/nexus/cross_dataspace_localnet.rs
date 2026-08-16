@@ -1149,10 +1149,8 @@ fn committed_lane_block_has_expected_quorum(
     let expected_quorum = commit_quorum_from_len(expected_validator_count).max(1);
     validator_count == expected_validator_count
         && min_quorum == expected_quorum
-        && prepare_qc_signer_count >= expected_quorum
-        && prepare_qc_signer_count <= validator_count
-        && commit_qc_signer_count >= expected_quorum
-        && commit_qc_signer_count <= validator_count
+        && prepare_qc_signer_count == expected_quorum
+        && commit_qc_signer_count == expected_quorum
 }
 fn lane_payload_ownership_has_expected_quorum(
     ownership: &SumeragiLanePayloadOwnership,
@@ -4288,8 +4286,8 @@ fn wait_for_active_autoscale_diagnostics_convergence(
                                     == u32::try_from(VALIDATORS_PER_LANE).unwrap_or(u32::MAX)
                                 && usize::try_from(row.min_quorum).ok()
                                     == Some(commit_quorum_from_len(VALIDATORS_PER_LANE))
-                                && row.prepare_qc_signer_count >= row.min_quorum
-                                && row.commit_qc_signer_count >= row.min_quorum
+                                && row.prepare_qc_signer_count == row.min_quorum
+                                && row.commit_qc_signer_count == row.min_quorum
                         })
                         .collect::<Vec<_>>();
                     if matching.len() != 1 {
@@ -4462,9 +4460,9 @@ fn validate_autoscale_drain_certificate(
         }
     }
     ensure!(
-        signer_indices.len() >= commit_quorum_from_len(certificate.validator_set.len())
+        signer_indices.len() == commit_quorum_from_len(certificate.validator_set.len())
             && certificate.signer_proofs.len() == signer_indices.len(),
-        "lane-3 drain certificate is below quorum or has unaligned signer proofs"
+        "lane-3 drain certificate lacks exact quorum or has unaligned signer proofs"
     );
     let mut public_keys = Vec::with_capacity(signer_indices.len());
     let mut proof_refs = Vec::with_capacity(signer_indices.len());
@@ -4609,7 +4607,7 @@ fn validate_autoscale_merge_qc_height_context_binding(
         .collect::<std::result::Result<Vec<_>, _>>()
         .wrap_err("merge QC signer index exceeds the historical context range")?;
     context
-        .validate_signers(&signers)
+        .validate_certificate_signers(&signers)
         .map_err(|err| eyre!("merge QC fails the historical equal-vote quorum: {err}"))
 }
 fn validate_autoscale_merge_qc(
@@ -4669,9 +4667,9 @@ fn validate_autoscale_merge_qc(
         }
     }
     ensure!(
-        signer_indices.len() >= commit_quorum_from_len(qc.validator_set.len())
+        signer_indices.len() == commit_quorum_from_len(qc.validator_set.len())
             && qc.signer_proofs.len() == signer_indices.len(),
-        "merge QC is below quorum or has unaligned signer proofs"
+        "merge QC lacks exact quorum or has unaligned signer proofs"
     );
     validate_autoscale_merge_qc_height_context_binding(
         network_id,
@@ -4762,7 +4760,7 @@ fn validate_autoscale_retirement_evidence(
         .map(|byte| byte.count_ones() as usize)
         .sum::<usize>();
     ensure!(
-        signer_count >= commit_quorum_from_len(VALIDATORS_PER_LANE)
+        signer_count == commit_quorum_from_len(VALIDATORS_PER_LANE)
             && certificate.signer_proofs.len() == signer_count,
         "drain certificate does not carry an aligned lane quorum"
     );

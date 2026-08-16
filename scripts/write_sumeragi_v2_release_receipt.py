@@ -759,22 +759,22 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 55
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 56
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 62),
-    ("javascript", 60),
+    ("python", 63),
+    ("javascript", 61),
     ("swift", 4),
     ("kotlin", 6),
     ("java", 5),
 )
 _SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
 _SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
-    ("python", 121),
+    ("python", 129),
     ("javascript", 88),
-    ("swift", 33),
-    ("kotlin", 42),
-    ("java", 41),
+    ("swift", 34),
+    ("kotlin", 43),
+    ("java", 42),
 )
 _SDK_SOURCE_CLOSURE_RESOLVER = "ci/resolve_sumeragi_v2_sdk_source_closure.py"
 _SDK_SOURCE_CLOSURE_MANIFEST = "ci/sumeragi_v2_sdk_source_closure.json"

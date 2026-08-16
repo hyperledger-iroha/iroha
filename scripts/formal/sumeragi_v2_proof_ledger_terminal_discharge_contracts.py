@@ -420,10 +420,10 @@ def _exact_tla_call_statement_tokens(
 
 _SAME_ROUND_STRICT_TLA_SOURCE_SHA256 = {
     "SumeragiV2InductiveProofs.tla": (
-        "95847dd312a0ab74744303f4b4e55d09a56acec11731490aa0d9e917cbb22981"
+        "e641c31e18446f5ac7b5b9e0e432c15f7c97b428682807041b59c1d92e1f475e"
     ),
     "SumeragiV2Proofs.tla": (
-        "98d4af84143ef116ea96872bca81c6b79b606f5936718f69d6f28b7fda7b2ab2"
+        "8bab200abaa84098646b781e185811fd59573842adc56c36454901dfe9212048"
     ),
 }
 
@@ -458,7 +458,7 @@ _READINESS_TOOL_SOURCE_SHA256 = {
         "bb69d0d022c3111db49f6016220122c3617b2c701d5127ee73eb81140b981cbe"
     ),
     "scripts/formal/check_sumeragi_v2_command_execution_ready_contract.py": (
-        "2979beaad191ae886b39370afef4168c3cee05e2cd6d8a42bf0e25cf8939e147"
+        "fbc5909058dc2eb7ba9097a93b7a8aa28e9c60fb321d2985a75d0c3546a2cdb0"
     ),
     "scripts/formal/run_sumeragi_v2_command_execution_ready_mutation.sh": (
         "42da6f28bcd5a980acd2eae792f2a730a06de4373e7eb25d5c1fcfcd6a8a9efe"
@@ -789,8 +789,9 @@ def _atomic_timeout_completion_source_fidelity_errors(
         ),
         "TimeoutCertificateAfterReceipt": (
             "TC(context, vote.view, "
+            "CanonicalTimeoutVotes( CurrentEpoch, "
             "TimeoutVotesIn(TimeoutReceiptsAfter(node, vote), "
-            "node, vote.view))"
+            "node, vote.view)))"
         ),
         "TimeoutInstallRequestAfterReceipt": (
             "InstallTcWal(node, "
@@ -964,10 +965,10 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "aa06911b636a9c048ea61d0819271bc15f111eefa5d90c553280fb8a030c0caa"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "33a6920b857f4672bb436ea8d40b11f8198cdd1945bb8911a1482a4ee10ac7a6"
+        "ee93bae7536bc201db1c0dcdbe72774dec4c58ef760b2bcaf2dccb7d1def8346"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
-        "0f614047f766802dd95ffb30e73a748c9cc0520f077527959b1ea99648f52197"
+        "8fd2bbface65035fe2acc59274c514f88233875161915e02229851a3d08852a0"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
@@ -3323,4 +3324,360 @@ def _locked_body_reproposal_mutation_runner_errors(
             f"{runner}: locked-body reproposal and historical recovery cases "
             "must retain reviewed order"
         )
+    return errors
+
+
+_EXACT_CERTIFICATE_OPERATOR_SHA256: dict[tuple[str, str], str] = {
+    # Filled from normalized, comment-free top-level operator bodies.  These
+    # body-level seals permit unrelated proof-module edits while rejecting any
+    # drift in exact wire cardinality or canonical projection.
+    ("SumeragiV2Quorums.tla", "CertificateSignerCount"): (
+        "02268b2a2bf6902e6b236d45e436e5b8814cd2403112919c661b398dbda8c2e7"
+    ),
+    ("SumeragiV2Quorums.tla", "ExactCertificateQuorum"): (
+        "f21e4c340e1622581a3933b8c655be988f11858aa4987d27a85a060b24e82a8c"
+    ),
+    ("SumeragiV2Quorums.tla", "RosterIndex"): (
+        "9a617edb823a0c7ed1f8d7ab5e6d7cfb6fe0f3e6728ff1dadeedf7c2c9558745"
+    ),
+    ("SumeragiV2Quorums.tla", "CanonicalCertificateSigners"): (
+        "7e29678e6bcec2df3f8a7edaaedf2369cc496aaa03ea3b97e61cf4248bd5708e"
+    ),
+    ("SumeragiV2Core.tla", "QcWireValid"): (
+        "03f004f0bebb9c96fa9180686e9b13ccef3034fafd2060d244095be2d5a2e14e"
+    ),
+    ("SumeragiV2Core.tla", "CanonicalTimeoutVotes"): (
+        "7a85678deec869de86c6dd37c7245d7c4a8aadc19b740f7fa9988979d55671a1"
+    ),
+    ("SumeragiV2Core.tla", "TCValid"): (
+        "c2c4198275453c318f28b6e6e58709a688d6e09e9044f943726a5071e58cbe9f"
+    ),
+    ("SumeragiV2Core.tla", "VoteSignersAt"): (
+        "bb0549cb6d4c43d3ad23a81f2a4268094df94d9e4922ec40887ebbd750a70fb1"
+    ),
+    ("SumeragiV2Core.tla", "ProjectedVoteSignersAt"): (
+        "df8fa3057bea568666aa29d28e140a541ad465cd1dc70571c3f67cf25aefd435"
+    ),
+    ("SumeragiV2Core.tla", "TimeoutCertificateAfterReceipt"): (
+        "9b33cf37b4a169defd11ab4b393e9b8365613723313ca6d5c146a43831d42a30"
+    ),
+    ("SumeragiV2Core.tla", "ModelConfiguration"): (
+        "74f23be7a057681a2cf1ae380c72e547cc6f71a29a1cc9c0115ef36365f739f4"
+    ),
+    ("SumeragiV2Core.tla", "BootstrapParentSigners"): (
+        "c2c2ed2267bed5745ebd1c833cd182113e2cfdbb265f66dc46bd50000ca7f94a"
+    ),
+    ("SumeragiV2Core.tla", "FormPrepareQC"): (
+        "95874904b707c67fb8abb91130f9578b8afd4119c43919d0802be2f1e60891f3"
+    ),
+    ("SumeragiV2Core.tla", "FormCommitQC"): (
+        "b6469885d80e36766fd7da7aee97732efdc0b0f6b1eb91936f14423da36753bf"
+    ),
+    ("SumeragiV2Inductive.tla", "HistoricalQcValid"): (
+        "ab4814121ebbdf0d32a4969173a2a073135e86bf482b5f29c642d79dc1eb5fa3"
+    ),
+    ("SumeragiV2Inductive.tla", "FormedTimeoutCertificatesSound"): (
+        "b6b1f2c9cea12ffb8c75cec9187cc975b4a6ab17cf93b051e83d42ad96cd13b8"
+    ),
+    ("SumeragiV2ChainEpoch.tla", "HistoricalCommitCertificate"): (
+        "144624abe5a217d91c65e9662f290ccad76973cf6e4a2f1702d4b9184d6499fb"
+    ),
+    ("SumeragiV2ChainEpoch.tla", "HistoricalCommitCertificateSet"): (
+        "7de6ebb15e3e35786522be0db9dbd8958758fa2682cf00b1983baae27669aa4a"
+    ),
+    ("SumeragiV2AsyncNetwork.tla", "FormCommitQCReady"): (
+        "b90117d95432614d387eaff6b0d4917b585a1cb089f51e3324eb88ff027e228a"
+    ),
+    ("SumeragiV2AsyncNetwork.tla", "FormPrepareQCReady"): (
+        "38c2189ebae4a8f82bae70770bde08b8927cbfb28e1aeeaa0d23adb1f5fabf58"
+    ),
+    ("SumeragiV2AsyncNetwork.tla", "ExecuteFormPrepareQC"): (
+        "a758fae0edacdecc2f2f2dc4dde7939cfc944eec77c8a07cc4aec0342d472165"
+    ),
+    ("SumeragiV2AsyncNetwork.tla", "ExecuteFormPrepareQCReady"): (
+        "3479eab1fd90948eb34063ec753df694d2b1ece36d80878f51b98cf11f940f01"
+    ),
+    (
+        "SumeragiV2OwnershipInvariantCheck.tla",
+        "OwnershipExecuteFormPrepareQCReady",
+    ): "fdce904950cf60f923b7c1ae6f0769177bad4c01ed84480201424b122b178041",
+}
+
+
+_EXACT_CERTIFICATE_THEOREM_SHA256: dict[tuple[str, str], str] = {
+    (
+        "SumeragiV2QuorumProofs.tla",
+        "ExactCertificateQuorumCarriesSufficiencyAndCardinality",
+    ): (
+        "0c7b1f4567ba36c39e4e6bd9dc5f700485fc00095dea04291a23a4398f56b7eb"
+    ),
+    (
+        "SumeragiV2QuorumProofs.tla",
+        "CanonicalCertificateSignersStayWithinCandidatesAndRoster",
+    ): (
+        "e6a2094ff7e40ecf817b44f628a7d469aa0e1ed5efac1a596ff9e108c3998a85"
+    ),
+    (
+        "SumeragiV2QuorumProofs.tla",
+        "FiniteInjectiveRankPrefixHasRequestedCardinality",
+    ): (
+        "e254124a3d8390f6cc1c9453e84c8afee0f3e4bf27e58fd2bcd4d0eddf0e87eb"
+    ),
+    ("SumeragiV2QuorumProofs.tla", "RosterIndexSelectsTheUniqueRosterPosition"): (
+        "2f665af52dc1723b1f3cad89a9e41109a1c0a3e9e2472e5ff76dc80d23a2c4cd"
+    ),
+    ("SumeragiV2QuorumProofs.tla", "RosterIndexIsInjectiveOnRoster"): (
+        "b797794a5e3db21aa94e7f6a2881da5890df11a4d65dcc7b08feaaa7d63bf0d9"
+    ),
+    (
+        "SumeragiV2QuorumProofs.tla",
+        "CanonicalCertificateSignersHaveThresholdCardinality",
+    ): (
+        "0ebc8aebee36118a021e59be3e6d5ac7faaf14976ac08e15a6c7afe518b20f2d"
+    ),
+    ("SumeragiV2QuorumProofs.tla", "CertificateSignerCountIsStrictCountThreshold"): (
+        "c8ba14b732eec156893785b85d9ca1003f12d33a961aa58021c28cf3744a8ae6"
+    ),
+    (
+        "SumeragiV2QuorumProofs.tla",
+        "CanonicalCertificateSignersAreExactUnderPowerPremise",
+    ): (
+        "23f98ed004456b9e9b4df3cf8b6db4e7186bcc0d2f651e25342fbb88c7ff8cf2"
+    ),
+    ("SumeragiV2Proofs.tla", "QcValidityCarriesExactCertificateQuorum"): (
+        "aea77116be001b7cf6d4297e9e9128cb17b0fdd097c33ade9dd9a2c8464884fb"
+    ),
+    ("SumeragiV2Proofs.tla", "TcValidityCarriesDisjointExactCertificateQuorum"): (
+        "008f3bb506797241b291772c414e5cb701134e34d1e285a8d24186d0891ecd7c"
+    ),
+    (
+        "SumeragiV2AsyncInstallRunnerProofs.tla",
+        "ExecuteFormPrepareQcPreservesTransportContentType",
+    ): (
+        "9f26feb5428f370927d7027420b12514611f05a73dec08b47946c024c36fe435"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+        "ExactLeaderSchedulerReadinessFramePreservesFormPrepareQCReady",
+    ): (
+        "0c9d4756ba0b55f7546552dda210161bd93768240b2f261ffc75c5ec79006389"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+        "ExactLeaderSchedulerReadinessFramePreservesFormCommitQCReady",
+    ): (
+        "a3f8ddd389d8261d017a6782c3a8348ab5e6d4dfa84ac6653b31130dd720d2f7"
+    ),
+    (
+        "SumeragiV2AsyncTimeoutOwnershipProofs.tla",
+        "ResponsiveReceiptQuorumBuildsValidTc",
+    ): (
+        "0552daf4b5a838456fd84ca7f98f33aaa5301bb2e7fa4fada42141659303c71f"
+    ),
+}
+
+
+_EXACT_CERTIFICATE_PROOF_FILE_SHA256 = {
+    "SumeragiV2InductiveProofs.tla": (
+        "e641c31e18446f5ac7b5b9e0e432c15f7c97b428682807041b59c1d92e1f475e"
+    ),
+}
+
+
+def _exact_certificate_cardinality_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Seal exact wire certificates without weakening monotone quorum algebra."""
+
+    errors: list[str] = []
+    sources: dict[str, tuple[Path, str]] = {}
+    required_files = {
+        name for name, _symbol in _EXACT_CERTIFICATE_OPERATOR_SHA256
+    } | {
+        name for name, _symbol in _EXACT_CERTIFICATE_THEOREM_SHA256
+    } | set(_EXACT_CERTIFICATE_PROOF_FILE_SHA256) | {
+        "SumeragiV2Quorums.tla",
+        "SumeragiV2Core.tla",
+        "SumeragiV2Inductive.tla",
+        "SumeragiV2ChainEpoch.tla",
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2OwnershipInvariantCheck.tla",
+        "SumeragiV2QuorumProofs.tla",
+        "SumeragiV2Proofs.tla",
+    }
+    for name in sorted(required_files):
+        path = formal_dir / name
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: exact-certificate source must be one regular file"
+            )
+            continue
+        try:
+            sources[name] = (path, path.read_text(encoding="utf-8"))
+        except UnicodeDecodeError:
+            errors.append(f"{path}: exact-certificate source must be UTF-8")
+
+    for name, expected_sha256 in _EXACT_CERTIFICATE_PROOF_FILE_SHA256.items():
+        path_source = sources.get(name)
+        if path_source is None:
+            continue
+        path, _source = path_source
+        observed_sha256 = _sha256_file(path)
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}: exact-certificate proof source must match reviewed "
+                f"SHA-256 {expected_sha256}; found {observed_sha256}"
+            )
+
+    for (name, symbol), expected_sha256 in (
+        _EXACT_CERTIFICATE_OPERATOR_SHA256.items()
+    ):
+        path_source = sources.get(name)
+        if path_source is None:
+            continue
+        path, source = path_source
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed exact-certificate operator {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        observed_sha256 = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}:{line}: {symbol} must match reviewed exact-certificate "
+                f"operator SHA-256 {expected_sha256}; found {observed_sha256}"
+            )
+
+    for (name, symbol), expected_sha256 in (
+        _EXACT_CERTIFICATE_THEOREM_SHA256.items()
+    ):
+        path_source = sources.get(name)
+        if path_source is None:
+            continue
+        path, source = path_source
+        extracted = _top_level_theorem_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed exact-certificate theorem {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        observed_sha256 = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{path}:{line}: {symbol} must match reviewed exact-certificate "
+                f"theorem SHA-256 {expected_sha256}; found {observed_sha256}"
+            )
+
+    quorums_path_source = sources.get("SumeragiV2Quorums.tla")
+    if quorums_path_source is not None:
+        path, source = quorums_path_source
+        dual = _top_level_operator_body(source, "DualQuorum")
+        if dual is None:
+            errors.append(f"{path}: missing mathematical DualQuorum operator")
+        else:
+            body, line = dual
+            normalized = " ".join(body.split())
+            expected = (
+                "/\\ CountQuorum(epoch, signers) "
+                "/\\ PowerQuorum(epoch, signers)"
+            )
+            if normalized != expected:
+                errors.append(
+                    f"{path}:{line}: DualQuorum must remain the monotone "
+                    f"mathematical count-and-power predicate {expected!r}; "
+                    f"found {normalized!r}"
+                )
+
+    core_path_source = sources.get("SumeragiV2Core.tla")
+    if core_path_source is not None:
+        path, source = core_path_source
+        raw = _top_level_operator_body(source, "VoteSignersAt")
+        if raw is None:
+            errors.append(f"{path}: missing raw collected VoteSignersAt pool")
+        elif "CanonicalCertificateSigners" in " ".join(raw[0].split()):
+            errors.append(
+                f"{path}:{raw[1]}: VoteSignersAt must remain the raw monotone "
+                "collected vote pool"
+            )
+
+        constructor_contracts = {
+            "FormPrepareQC": "ProjectedVoteSignersAt(",
+            "FormCommitQC": "ProjectedVoteSignersAt(",
+            "TimeoutCertificateAfterReceipt": "CanonicalTimeoutVotes(",
+            "BootstrapParentSigners": "CanonicalCertificateSigners(",
+        }
+        for symbol, required in constructor_contracts.items():
+            extracted = _top_level_operator_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{path}: missing exact-certificate constructor {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if required not in normalized:
+                errors.append(
+                    f"{path}:{line}: {symbol} must use canonical exact "
+                    f"certificate projection {required!r}"
+                )
+            if symbol in {"FormPrepareQC", "FormCommitQC"} and (
+                "LET signers == VoteSignersAt(" in normalized
+            ):
+                errors.append(
+                    f"{path}:{line}: {symbol} may not serialize the raw "
+                    "collected vote pool"
+                )
+
+    network_path_source = sources.get("SumeragiV2AsyncNetwork.tla")
+    if network_path_source is not None:
+        path, source = network_path_source
+        for symbol in (
+            "FormPrepareQCReady",
+            "FormCommitQCReady",
+            "ExecuteFormPrepareQC",
+            "ExecuteFormPrepareQCReady",
+        ):
+            extracted = _top_level_operator_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{path}: missing projected readiness/execution operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if "ProjectedVoteSignersAt(" not in normalized:
+                errors.append(
+                    f"{path}:{line}: {symbol} must construct/readiness-check "
+                    "the projected signer subset"
+                )
+
+    ownership_path_source = sources.get("SumeragiV2OwnershipInvariantCheck.tla")
+    if ownership_path_source is not None:
+        path, source = ownership_path_source
+        symbol = "OwnershipExecuteFormPrepareQCReady"
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing projected ownership operator {symbol}")
+        else:
+            body, line = extracted
+            if "ProjectedVoteSignersAt(" not in " ".join(body.split()):
+                errors.append(
+                    f"{path}:{line}: {symbol} must inspect the projected signer subset"
+                )
+
     return errors

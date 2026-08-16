@@ -115,9 +115,9 @@ structural and cryptographic checks:
 6. Require the artifact to embed one BLS-normal PoP per roster entry and verify
    every PoP against the corresponding public key.
 7. Require strictly increasing, in-range signer indices. The certificate must
-   satisfy both quorum thresholds: at least `floor(2n/3) + 1` distinct roster
-   members and signed voting power strictly greater than two thirds of total
-   power.
+   contain exactly `floor(2n/3) + 1` distinct roster members; because revision 4
+   is equal-vote, this exact count also has signed voting power strictly greater
+   than two thirds of total power. Signer supersets are rejected.
 8. Reconstruct the exact Sumeragi-v2 vote preimage and verify the selected-key
    BLS aggregate signature.
 

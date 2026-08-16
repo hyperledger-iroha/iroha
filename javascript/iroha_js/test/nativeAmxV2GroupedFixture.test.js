@@ -141,6 +141,7 @@ function validateApplicationEvidence(document) {
   const execution = evidence.execution_commitment;
   const artifacts = evidence.manifest_artifacts;
   assert.equal(execution.native_amx_application_manifest_version, 1);
+  assert.equal(execution.lane_finality_manifest, null);
   assert.equal(
     typeof execution.merge_carrier,
     "object",

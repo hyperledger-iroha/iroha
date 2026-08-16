@@ -25,7 +25,7 @@ export const SUMERAGI_DIAGNOSTICS_CONTRACT_TESTS = Object.freeze([
   "getSumeragiStatusTyped validates and normalizes authoritative v2 status",
   "getSumeragiStatusTyped accepts a non-empty Native AMX application manifest",
   "getSumeragiStatusTyped rejects invalid Native AMX application manifests",
-  "getSumeragiStatusTyped requires an exact merge carrier projection",
+  "getSumeragiStatusTyped requires exact lane-finality and merge projections",
   "getSumeragiStatusTyped requires an exact executed block wire length",
   "Sumeragi execution commitment declarations expose current mandatory fields",
   "getSumeragiStatusTyped preserves exact proposal rounds",

@@ -91,17 +91,36 @@ curl_args=(
   --show-error
   --location
   --retry 3
+  --retry-max-time 120
   --connect-timeout 30
-  --max-time 300
+  --max-time 120
 )
+# These immutable, commit-addressed inputs are independent.  Fetching them
+# serially multiplied a slow connection's latency and seven separate five-
+# minute timeout windows on both native build hosts.
+download_pids=()
 curl "${curl_args[@]}" --output "$release_dir/iroha_source_bundle.py" \
-  "$base_url/scripts/iroha_source_bundle.py"
+  "$base_url/scripts/iroha_source_bundle.py" &
+download_pids+=("$!")
 for component in provenance.json tracked.patch untracked.tar untracked.manifest.json source.manifest.json; do
   curl "${curl_args[@]}" --output "$bundle_dir/$component" \
-    "$base_url/ops/iroha/taira-validator-source/$component"
+    "$base_url/ops/iroha/taira-validator-source/$component" &
+  download_pids+=("$!")
 done
 curl "${curl_args[@]}" --output "$OUTPUT_DIR/Cargo.lock.download" \
-  "$base_url/ops/iroha/taira-validator.Cargo.lock"
+  "$base_url/ops/iroha/taira-validator.Cargo.lock" &
+download_pids+=("$!")
+
+download_failed=0
+for download_pid in "${download_pids[@]}"; do
+  if ! wait "$download_pid"; then
+    download_failed=1
+  fi
+done
+if [[ $download_failed -ne 0 ]]; then
+  echo "one or more authenticated Taira release inputs could not be downloaded" >&2
+  exit 1
+fi
 
 python3 -I -S - \
   "$OUTPUT_DIR/Cargo.lock.download" \

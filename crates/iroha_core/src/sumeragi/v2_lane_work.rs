@@ -578,8 +578,8 @@ fn authenticate_bounded_merge_sidecar_holders(
         })
         .collect::<Result<Vec<_>, _>>()?;
     context
-        .validate_signers(&validator_indices)
-        .map_err(|_| "certified merge QC does not meet the frozen dual quorum".to_owned())?;
+        .validate_certificate_signers(&validator_indices)
+        .map_err(|error| format!("certified merge QC has invalid signer cardinality: {error}"))?;
     if qc.signer_proofs.len() != signer_indices.len() {
         return Err("certified merge QC signer proofs do not match its bitmap".to_owned());
     }
@@ -16006,8 +16006,13 @@ impl V2LaneWorkAdapter {
         {
             return Ok(());
         }
-        let signers = pending.signatures.keys().copied().collect::<Vec<_>>();
-        if !self.frozen_dual_quorum_met(&signers) {
+        let signers = pending
+            .signatures
+            .keys()
+            .copied()
+            .take(self.context.quorum.min_signers as usize)
+            .collect::<Vec<_>>();
+        if !self.frozen_certificate_quorum_met(&signers) {
             return Ok(());
         }
         let signatures = signers
@@ -16103,8 +16108,8 @@ impl V2LaneWorkAdapter {
         self.merge_entries.remove(&key);
         Ok(())
     }
-    fn frozen_dual_quorum_met(&self, signers: &[wire::ValidatorIndex]) -> bool {
-        self.context.validate_signers(signers).is_ok()
+    fn frozen_certificate_quorum_met(&self, signers: &[wire::ValidatorIndex]) -> bool {
+        self.context.validate_certificate_signers(signers).is_ok()
     }
     fn local_validator_index(&self) -> Option<wire::ValidatorIndex> {
         if !self.voting_enabled {
@@ -17662,12 +17667,6 @@ pub(super) mod tests {
             )
             .expect("valid explicit Native AMX signing limits"),
         )
-    }
-    #[test]
-    fn native_amx_signing_guard_capacity_preserves_explicit_runtime_bound() {
-        let capacity = native_amx_signing_guard_capacity(limits_with_native_capacity(128))
-            .expect("explicit capacity");
-        assert_eq!(capacity.get(), 128);
     }
     #[test]
     fn merge_carrier_context_header_is_deterministic_and_view_scoped() {

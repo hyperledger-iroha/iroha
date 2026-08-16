@@ -282,20 +282,23 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
     (
         "ci/run_sumeragi_v2_sdk_diagnostics.sh",
         (
-            "observed_test_count=33",
+            "observed_test_count=34",
+            "ExactCertificateCardinalityTests",
             "SumeragiV2WireFixtureTests'",
-            "observed_test_count=42",
+            "observed_test_count=43",
             "--tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTest",
-            "observed_test_count=41",
+            "observed_test_count=42",
             "--tests org.hyperledger.iroha.android.consensus.SumeragiV2WireFixtureTests",
         ),
     ),
     (
         "ci/sumeragi_v2_sdk_source_closure.json",
         (
+            '"IrohaSwift/Tests/IrohaSwiftTests/ExactCertificateCardinalityTests.swift"',
             '"IrohaSwift/Tests/IrohaSwiftTests/SumeragiV2WireFixtureTests.swift"',
             '"kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/SumeragiV2WireFixtureTest.kt"',
             '"java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiV2WireFixtureTests.java"',
+            '"python/iroha_torii_client/tests/exact_certificate_cardinality_test.py"',
         ),
     ),
     (
@@ -312,9 +315,9 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
     (
         "scripts/write_sumeragi_v2_release_receipt.py",
         (
-            '("swift", 33)',
-            '("kotlin", 42)',
-            '("java", 41)',
+            '("swift", 34)',
+            '("kotlin", 43)',
+            '("java", 42)',
         ),
     ),
     (
@@ -325,7 +328,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             "native-amx-rust-fixture-check command 0",
             "regenerate Native AMX Rust fixture authority twice into disjoint "
             "private roots and byte-authenticate both outputs",
-            "for sdk_diagnostics_test_count in 121 88 33 42 41; do",
+            "for sdk_diagnostics_test_count in 129 88 34 43 42; do",
             "SumeragiV2WireFixtureTest",
         ),
     ),

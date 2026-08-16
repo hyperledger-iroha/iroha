@@ -4034,8 +4034,8 @@ if [[ "$profile" == "--release" ]]; then
   )
   native_amx_grouped_parity_test_counts=(
     7
-    62
-    60
+    63
+    61
     4
     6
     5
@@ -4110,11 +4110,11 @@ if [[ "$profile" == "--release" ]]; then
     java
   )
   sumeragi_v2_sdk_diagnostics_test_counts=(
-    121
+    129
     88
-    33
+    34
+    43
     42
-    41
   )
   for sumeragi_v2_sdk_diagnostics_index in \
     "${!sumeragi_v2_sdk_diagnostics_surfaces[@]}"; do
@@ -4628,7 +4628,7 @@ publish_corridor_completion() {
     native_amx_grouped_fixture_sha256 "$native_amx_grouped_fixture_sha256" \
     native_amx_grouped_suite_source_manifest_sha256 \
       "$native_amx_grouped_suite_source_manifest_sha256" \
-    native_amx_grouped_negative_control_count 55 \
+    native_amx_grouped_negative_control_count 56 \
     tlc_profile "$SUMERAGI_V2_TLC_PROFILE" \
     tlaps_threads "$SUMERAGI_TLAPS_THREADS" \
     >"$corridor_completion_tmp"

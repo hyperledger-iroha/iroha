@@ -900,6 +900,7 @@ def test_lane_relay_preserves_the_exact_embedded_native_amx_receipt() -> None:
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "signers_bitmap"), []),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "signers_bitmap"), [0b1000_0111]),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "signers_bitmap"), [0b0000_0011]),
+        _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "signers_bitmap"), [0b0000_1111]),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "bls_aggregate_signature"), "zz" * 96),
         _set(("native_amx_receipts", 0, "legs", 0, "prepare_qc", "bls_aggregate_signature"), [0] * 96),
         _set(("native_amx_receipts", 0, "legs"), []),

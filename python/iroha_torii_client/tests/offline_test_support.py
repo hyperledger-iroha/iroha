@@ -162,6 +162,7 @@ def offline_top_up_finality_proof(
                 _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
             ),
             "native_amx_application_manifest_count": 0,
+            "lane_finality_manifest": None,
             "merge_carrier": None,
             "executed_block_wire_len": 123,
             "executed_block_wire_hash": _canonical_hash(seed + 3),

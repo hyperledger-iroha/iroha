@@ -365,3 +365,134 @@ fn enter_view_without_a_lock_carries_and_fetches_nothing() {
         outcome.effects()
     ));
 }
+#[test]
+fn local_qc_formation_projects_four_votes_to_canonical_three() {
+    let mut reducer = reducer();
+    let round = Round::new(reducer.context.height(), 0);
+    let subject = Subject::repeat(0xd1);
+    let phase = Phase::Prepare;
+    let pool = [4_u8, 2, 1, 3]
+        .into_iter()
+        .map(|signer| {
+            let validator = ValidatorId::repeat(signer);
+            (
+                validator,
+                SignedVote::new(
+                    Vote::new(reducer.context.id(), round, phase, subject, validator),
+                    OpaqueSignature::new(vec![signer; 8]),
+                ),
+            )
+        })
+        .collect();
+    reducer.votes.insert((round, phase, round), pool);
+    let certificate = reducer
+        .try_form_certificate(round, round, phase, subject)
+        .expect("four valid votes are sufficient")
+        .expect("certificate forms");
+    assert_eq!(
+        certificate
+            .signatures()
+            .iter()
+            .map(SignatureShare::signer)
+            .collect::<Vec<_>>(),
+        [1_u8, 2, 3]
+            .map(ValidatorId::repeat)
+            .into_iter()
+            .collect::<Vec<_>>()
+    );
+    certificate
+        .validate(&reducer.context)
+        .expect("locally formed QC has exact cardinality");
+}
+#[test]
+fn local_tc_formation_projects_four_votes_to_canonical_three() {
+    let mut reducer = reducer();
+    let round = Round::new(reducer.context.height(), 0);
+    let highest = certificate(
+        &reducer.context,
+        0,
+        Phase::Prepare,
+        Subject::repeat(0xd2),
+        0xd2,
+    );
+    let pool = [4_u8, 2, 1, 3]
+        .into_iter()
+        .map(|signer| {
+            let validator = ValidatorId::repeat(signer);
+            let highest = (signer >= 3).then(|| highest.clone());
+            (
+                validator,
+                SignedTimeoutVote::new(
+                    TimeoutVote::new(reducer.context.id(), round, validator, highest),
+                    OpaqueSignature::new(vec![signer; 8]),
+                ),
+            )
+        })
+        .collect();
+    reducer.timeout_votes.insert(round, pool);
+    let certificate = reducer
+        .try_form_timeout_certificate(round)
+        .expect("four valid timeout votes are sufficient")
+        .expect("timeout certificate forms");
+    let signers = certificate
+        .groups()
+        .iter()
+        .flat_map(TimeoutSignatureGroup::signatures)
+        .map(SignatureShare::signer)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        signers,
+        [1_u8, 2, 3]
+            .map(ValidatorId::repeat)
+            .into_iter()
+            .collect()
+    );
+    certificate
+        .validate(&reducer.context)
+        .expect("locally formed TC has exact cardinality");
+}
+#[test]
+fn enter_view_effect_cannot_substitute_an_equal_reference_certificate() {
+    let fixture = reducer();
+    let subject = Subject::repeat(0xb6);
+    let high = certificate(&fixture.context, 0, Phase::Prepare, subject, 0xb7);
+    let substitute = certificate(&fixture.context, 0, Phase::Prepare, subject, 0xb8);
+    assert_eq!(high.reference(), substitute.reference());
+    assert_ne!(high, substitute);
+    let (before, event) = pending_timeout_install(Some(high));
+    let mut after = before.clone();
+    let outcome = after
+        .step_in_place(event.clone())
+        .expect("materialize persisted-TC candidate");
+    let mut effects = outcome.into_effects();
+    let Some(Effect::EnterView { protected_lock, .. }) = effects.first_mut() else {
+        panic!("first install effect must enter the view")
+    };
+    *protected_lock = Some(substitute);
+    let projection = before.transition_projection(&event, &after, &effects);
+    assert_eq!(
+        projection.enter_view.effect_protected_lock.evidence_class,
+        CERTIFICATE_EVIDENCE_FOREIGN
+    );
+    assert_eq!(
+        projection.enter_view.effect_protected_lock.signer_bitmap,
+        projection.enter_view.durable_lock_after.signer_bitmap
+    );
+    assert_eq!(
+        projection.enter_view.effect_protected_lock.signer_count,
+        projection.enter_view.durable_lock_after.signer_count
+    );
+    assert_eq!(
+        projection
+            .enter_view
+            .effect_protected_lock
+            .signer_bitmap_count,
+        projection.enter_view.durable_lock_after.signer_bitmap_count
+    );
+    assert_eq!(
+        projection.enter_view.effect_protected_lock.voting_power,
+        projection.enter_view.durable_lock_after.voting_power
+    );
+    assert!(!refinement::accepts(projection));
+    assert!(!before.transition_refines(&event, &after, &effects));
+}

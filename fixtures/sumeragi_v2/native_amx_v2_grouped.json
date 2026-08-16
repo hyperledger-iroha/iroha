@@ -9627,6 +9627,20 @@
     },
     {
       "expectation": "reject",
+      "id": "over_quorum_bitmap",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/signers_bitmap",
+          "value": [
+            15
+          ]
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
       "id": "out_of_range_bitmap",
       "mutations": [
         {

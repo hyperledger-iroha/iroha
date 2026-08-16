@@ -15,6 +15,7 @@ from iroha_python.client import (
     SumeragiV2BodyState,
     SumeragiV2ExecutionCommitment,
     SumeragiV2GlobalPhase,
+    SumeragiV2LaneFinalityManifestCommitment,
     SumeragiV2MergeCarrierCommitment,
     SumeragiV2StatusPhase,
     ToriiClient,
@@ -69,6 +70,7 @@ def _execution_commitment(seed: int = 0x51) -> dict[str, object]:
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
         ),
         "native_amx_application_manifest_count": 0,
+        "lane_finality_manifest": None,
         "merge_carrier": None,
         "executed_block_wire_len": 512,
         "executed_block_wire_hash": _canonical_hash(seed + 3),
@@ -433,6 +435,7 @@ def test_qc_reference_preserves_execution_commitment() -> None:
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
         ),
         native_amx_application_manifest_count=0,
+        lane_finality_manifest=None,
         merge_carrier=None,
         executed_block_wire_len=512,
         executed_block_wire_hash=_canonical_hash(0x54),
@@ -450,6 +453,44 @@ def test_execution_commitment_accepts_nonempty_native_manifest() -> None:
 
     assert commitment.native_amx_application_manifest_root == _canonical_hash(0x55)
     assert commitment.native_amx_application_manifest_count == 1
+
+
+def test_execution_commitment_requires_exact_lane_finality_manifest() -> None:
+    payload = _execution_commitment()
+    assert (
+        SumeragiV2ExecutionCommitment.from_payload(payload, "test_commitment")
+        .lane_finality_manifest
+        is None
+    )
+    payload["lane_finality_manifest"] = {
+        "root": _canonical_hash(0x56),
+        "leaf_count": 1024,
+    }
+    commitment = SumeragiV2ExecutionCommitment.from_payload(
+        payload, "test_commitment"
+    )
+    assert commitment.lane_finality_manifest == SumeragiV2LaneFinalityManifestCommitment(
+        root=_canonical_hash(0x56), leaf_count=1024
+    )
+    invalid_manifests: tuple[object, ...] = (
+        [],
+        {},
+        {"root": _canonical_hash(0x56), "leaf_count": 0},
+        {"root": _canonical_hash(0x56), "leaf_count": 1025},
+        {"root": "not-a-hash", "leaf_count": 1},
+        {"root": _canonical_hash(0x56), "leaf_count": 1, "future": True},
+    )
+    invalid_payloads = []
+    missing = _execution_commitment()
+    del missing["lane_finality_manifest"]
+    invalid_payloads.append(missing)
+    for manifest in invalid_manifests:
+        invalid = _execution_commitment()
+        invalid["lane_finality_manifest"] = manifest
+        invalid_payloads.append(invalid)
+    for invalid in invalid_payloads:
+        with pytest.raises((TypeError, ValueError)):
+            SumeragiV2ExecutionCommitment.from_payload(invalid, "test_commitment")
 
 
 def test_execution_commitment_requires_exact_merge_carrier_projection() -> None:
@@ -737,7 +778,13 @@ def test_retained_rbc_store_telemetry_models_parse_snapshot() -> None:
         ),
         (
             lambda payload: payload["last_commit_qc"].update(signed_power=2),
-            "does not satisfy its frozen dual quorum",
+            "exact frozen certificate quorum",
+        ),
+        (
+            lambda payload: payload["last_commit_qc"].update(
+                signer_count=4, signed_power=4
+            ),
+            "exact frozen certificate quorum",
         ),
         (
             lambda payload: payload["locked_prepare_qc"].pop("proposal_round"),

@@ -68,21 +68,21 @@ public final class SumeragiHttpTransportTests {
   public void responsesRequireExactContentTypeCanonicalLengthAndBoundedBody() {
     final byte[] body = statusJson().getBytes(StandardCharsets.UTF_8);
     assertThrows(
+        "status endpoint must reject a diagnostics-shaped payload",
         RuntimeException.class,
         () ->
             transport(
                     new OneResponseExecutor(
                         jsonResponse(diagnosticsJson().getBytes(StandardCharsets.UTF_8))))
                 .getSumeragiStatus()
-                .join(),
-        "status endpoint must reject a diagnostics-shaped payload");
+                .join());
     assertThrows(
+        "diagnostics endpoint must reject a status-shaped payload",
         RuntimeException.class,
         () ->
             transport(new OneResponseExecutor(jsonResponse(body)))
                 .getSumeragiDiagnostics()
-                .join(),
-        "diagnostics endpoint must reject a status-shaped payload");
+                .join());
     for (final Map<String, List<String>> headers :
         List.<Map<String, List<String>>>of(
             Collections.emptyMap(),

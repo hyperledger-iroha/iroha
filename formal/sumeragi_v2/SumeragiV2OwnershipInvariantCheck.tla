@@ -99,8 +99,9 @@ OwnershipExecuteSignVoteReady(command) ==
        /\ OwnershipControlItemsTyped(VoteOutbox(request))
 
 OwnershipExecuteFormPrepareQCReady(command) ==
-  LET signers == VoteSignersAt(command.node, command.view, "Prepare",
-                               command.subject)
+  LET signers ==
+        ProjectedVoteSignersAt(
+          command.node, command.view, "Prepare", command.subject)
       qc == QC(context, command.view, "Prepare", command.subject, signers)
       items == QcOutbox(command.node, qc)
   IN /\ command.kind = "FormPrepareQC"

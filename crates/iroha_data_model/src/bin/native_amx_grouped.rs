@@ -1264,6 +1264,14 @@ fn negative_controls(
             ),
         ),
         control(
+            "over_quorum_bitmap",
+            mutation(
+                "replace",
+                &format!("{prepare}/signers_bitmap"),
+                Some(norito::json!([15])),
+            ),
+        ),
+        control(
             "out_of_range_bitmap",
             mutation(
                 "replace",

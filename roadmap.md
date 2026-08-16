@@ -135,6 +135,17 @@ regeneration from a clean exact candidate; the dirty development checkout
 without the required release-authorized SSH signature is not release
 provenance. The outstanding revision-4 work is limited to:
 
+- Run a fresh strict source-bound TLAPS wave over the exact-cardinality change
+  closure. The TLA model now preserves `DualQuorum` as mathematical
+  `>= 2f + 1` count-and-power sufficiency, separately validates exact wire
+  cardinality, and projects QC/TC construction through the canonical frozen-
+  roster threshold subset while retaining raw vote pools for monotone liveness
+  reasoning. All 433 substantive obligations in the direct quorum-proof module,
+  including the ordered-prefix cardinality and explicit-power proof chain,
+  pass a fresh strict no-fingerprint TLAPS run. Static source seals and
+  independent exact-to-dual, projected-to-raw, and reversed-order mutations
+  cover the distinction, but neither targeted result replaces fresh backend
+  evidence for every dependent proof root.
 - Run the strict source-bound TLAPS wave for all sixteen physical
   `SumeragiV2ChainEpochRefinementShard*` roots and archive the new shard 3
   genesis-handoff and shard 16 successor exact-recovery promotion logs. Static
@@ -1170,9 +1181,9 @@ reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
 The static release inventory now matches `857/857` production tests across 40
-modules and `525/525` focused `G-UNIT` entries. Its canonical 526-line TSV has
+modules and `532/532` focused `G-UNIT` entries. Its canonical 533-line TSV has
 SHA-256
-`dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
+`f1590363a43024969a7fceb947654e2afd1d7cad877dc8dcba5b863ba185d431`.
 The separate canonical production module/test TSV has SHA-256
 `fc038b30180549cc6002db8ec5630ebf8ad5bb04a06be6dd19774d2b6ea5f433`;
 the newest rows bind crash-safe autonomous lifecycle terminal completion,
@@ -1200,25 +1211,25 @@ transport is intentionally fail-closed at applied-height handoff; formal
 operational correspondence plus drain/restart/liveness evidence remain
 mandatory.
 
-The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
+The Rust-owned protocol-4 grouped fixture contains 56 negative controls and
 hashes to
-`48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
-its staged grouped and diagnostics suite-source manifests each contain 1,397
-records and hash respectively to
-`a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
+`87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`;
+its staged grouped and diagnostics suite-source manifests contain 1,399 and
+1,401 records respectively and hash to
+`0530f710c43718b4b0666f59d3efd8774bb761a1d74805c8bb6a9b2e05859beb`
 and
-`1bec39d7d0b9a08bf151c90e52a1d7d46d30bce2857a7726d939bf9ed1daf6ee`;
+`44c4c6127fd43e0f61b1f95d602052d4650b7870b7c94b9aea6dbffaeb97d7a9`;
 the synchronized 48-line wire TSV hashes to
-`aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
-The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
-`60`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
+`79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
+The current grouped harness inventories OpenAPI `7`, Python `63`, JavaScript
+`61`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
 OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
 fixture and do not attest it; one archived aggregate source/distribution replay
 remains open under `G-SDK`. The release receipt must reproduce the exact staged
 record totals and suite-source SHA-256 values above from its immutable
 candidate; the staged values are not execution evidence. The
-diagnostics runner inventories Rust `14`, Python `121`, JavaScript
-source/distribution `88`, Swift `33`, Kotlin `42`, and Java `41` tests. Its
+diagnostics runner inventories Rust `14`, Python `129`, JavaScript
+source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required legacy-version-before-signing regression preserves the exact
@@ -1292,28 +1303,28 @@ The remaining work is evidence-driven and must stay in order:
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 525 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 532 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
-  `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 55 negative controls,
+  `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 56 negative controls,
   fixture SHA-256
-  `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
-  staged grouped/diagnostics suite-source manifests at exactly 1,397 records
-  each with SHA-256 values
-  `a478e8f96dd2838e0a414d070ad8be375d29a9b5681954ea9c8d5211882b515d`
+  `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`,
+  staged grouped/diagnostics suite-source manifests at exactly 1,399 and 1,401
+  records with SHA-256 values
+  `0530f710c43718b4b0666f59d3efd8774bb761a1d74805c8bb6a9b2e05859beb`
   and
-  `1bec39d7d0b9a08bf151c90e52a1d7d46d30bce2857a7726d939bf9ed1daf6ee`,
+  `44c4c6127fd43e0f61b1f95d602052d4650b7870b7c94b9aea6dbffaeb97d7a9`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
-  `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
-  The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,
+  `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
+  The current harness inventories OpenAPI `7`, Python `63`, JavaScript `61`,
   Swift `4`, Kotlin `6`, and Java `5` tests. Earlier direct subset results are
   not an archived all-surface replay and do not attest this
   corpus; the aggregate source/distribution harness remains required. The
-  separate diagnostics harness inventories Rust `14`, Python `121`, JavaScript
-  `88`, Swift `33`, Kotlin `42`, and Java `41`; these mutable source counts are
+  separate diagnostics harness inventories Rust `14`, Python `129`, JavaScript
+  `88`, Swift `34`, Kotlin `43`, and Java `42`; these mutable source counts are
   not receipts. Exact-five replay is source- and receipt-bound to the protected
   schema-v3 OpenAPI Node closure, but do not promote this gate from the dirty
   unsigned artifacts without immutable-candidate execution.
@@ -27590,6 +27601,14 @@ runtime premise on the final signed source.
   manifest, Git revision, daemon, Kagami, test binary, generated configuration,
   and initial/final status quorums, and retain its hash-bound completion in the
   aggregate release receipt.
+- After an authorized fresh four-validator public cutover, run the distinct
+  deployed-public soak under its independently provisioned observation and
+  replay authority. Archive exactly 432,000 five-per-second scheduled-transfer
+  lineage records, the bounded confirmation/finality drain, quorum-aligned
+  attestation and zero-drift lifecycle evidence, and the candidate/publication/
+  deploy-bound `TAIRA_PUBLIC_V2_24H_COMPLETED.json` plus durable admission
+  receipt; the local fault-profile receipt above is not a substitute for this
+  public-cohort evidence.
 
 Transaction inclusion and censorship fairness are outside the consensus
 height-progress theorem. The proof conditions height progress on a valid

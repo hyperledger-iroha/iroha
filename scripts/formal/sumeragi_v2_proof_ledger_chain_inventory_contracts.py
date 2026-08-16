@@ -184,7 +184,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "HistoricalCommitCertificateSet": (
                 "{qc \\in CandidateHistoricalCommitCertificateSet: "
-                "DualQuorum(qc.context.epoch, qc.signers)}"
+                "ExactCertificateQuorum(qc.context.epoch, qc.signers)}"
             ),
             "CandidateDurableDecisionEvidenceSet": (
                 "{[node |-> node, qc |-> qc]: node \\in ValidatorIds, "

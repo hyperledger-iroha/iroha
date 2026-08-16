@@ -230,10 +230,10 @@ fn rotation_signer_indices_match_expected_set_a() -> Result<()> {
     let (_f, q) = quorum(n);
     let hv = height_to_qc_signer_indices(&certs);
     for (h, idxs) in hv.into_iter().filter(|(h, _)| *h >= 2) {
-        // Expect at least quorum signatures; certificate may include more than threshold
+        // The wire certificate carries the canonical exact threshold subset.
         assert!(
-            idxs.len() >= q,
-            "height {h}: expected >= quorum signatures, got {} < {q}",
+            idxs.len() == q,
+            "height {h}: expected exactly {q} quorum signatures, got {}",
             idxs.len()
         );
         // Signer indices are bitmap positions over the validator roster.
@@ -279,10 +279,10 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
     let hv = height_to_qc_signer_indices(&certs);
     let mut checked = 0usize;
     for (h, idxs) in hv.into_iter().filter(|(h, _)| *h >= 2).take(12) {
-        // At least quorum signatures
+        // The wire certificate carries the canonical exact threshold subset.
         assert!(
-            idxs.len() >= q,
-            "height {h}: signatures {} < quorum {q}",
+            idxs.len() == q,
+            "height {h}: signatures {} != exact quorum {q}",
             idxs.len()
         );
         // Signer indices are bitmap positions over the validator roster.
@@ -329,8 +329,8 @@ fn canonical_certificate_identical_across_peers() -> Result<()> {
             signer_indices_from_bitmap(&cert.aggregate.signers_bitmap, cert.validator_set.len());
         idxs.sort_unstable();
         assert!(
-            idxs.len() >= required_quorum,
-            "height {}: signatures {} < quorum {}",
+            idxs.len() == required_quorum,
+            "height {}: signatures {} != exact quorum {}",
             cert.height,
             idxs.len(),
             required_quorum

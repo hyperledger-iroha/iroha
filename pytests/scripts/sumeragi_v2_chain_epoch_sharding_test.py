@@ -67,7 +67,7 @@ def test_checked_in_chain_epoch_shards_reconstruct_exact_source() -> None:
         + "=============================================================================\n"
     )
     assert hashlib.sha256(virtual_source.encode("utf-8")).hexdigest() == (
-        "8d8e6d3f9e75b99b68eae4d5b662834bd2c355c8c910262a8219facce465a457"
+        "37cc24f314caa35b6f29ddf5c3bd8d9e3cc58daf7bb44c0d13f8e46c18858050"
     )
 
 
